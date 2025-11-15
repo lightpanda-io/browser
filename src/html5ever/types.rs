@@ -57,6 +57,8 @@ pub type AddAttrsIfMissingCallback = unsafe extern "C" fn(
     attributes: *mut c_void,
 ) -> ();
 
+pub type GetTemplateContentsCallback = unsafe extern "C" fn(ctx: Ref, target: Ref) -> Ref;
+
 pub type Ref = *const c_void;
 
 #[repr(C)]

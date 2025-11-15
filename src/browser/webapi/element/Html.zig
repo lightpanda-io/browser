@@ -45,6 +45,7 @@ pub const Form = @import("html/Form.zig");
 pub const Heading = @import("html/Heading.zig");
 pub const Unknown = @import("html/Unknown.zig");
 pub const Generic = @import("html/Generic.zig");
+pub const Template = @import("html/Template.zig");
 pub const TextArea = @import("html/TextArea.zig");
 pub const Paragraph = @import("html/Paragraph.zig");
 pub const Select = @import("html/Select.zig");
@@ -81,6 +82,7 @@ pub const Type = union(enum) {
     script: *Script,
     select: Select,
     style: Style,
+    template: *Template,
     text_area: *TextArea,
     title: Title,
     ul: UL,
@@ -119,6 +121,7 @@ pub fn className(self: *const HtmlElement) []const u8 {
         .generic => "[object HTMLElement]",
         .script => "[object HtmlScriptElement]",
         .select => "[object HTMLSelectElement]",
+        .template => "[object HTMLTemplateElement]",
         .option => "[object HTMLOptionElement]",
         .text_area => "[object HtmlTextAreaElement]",
         .input => "[object HtmlInputElement]",

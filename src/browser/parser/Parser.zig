@@ -66,6 +66,7 @@ const Error = struct {
         create_comment,
         append_doctype_to_document,
         add_attrs_if_missing,
+        get_template_content,
     };
 };
 
@@ -83,6 +84,7 @@ pub fn parse(self: *Parser, html: []const u8) void {
         createCommentCallback,
         appendDoctypeToDocument,
         addAttrsIfMissingCallback,
+        getTemplateContentsCallback
     );
 }
 
@@ -100,6 +102,7 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         createCommentCallback,
         appendDoctypeToDocument,
         addAttrsIfMissingCallback,
+        getTemplateContentsCallback
     );
 }
 
@@ -134,6 +137,7 @@ pub const Streaming = struct {
             createCommentCallback,
             appendDoctypeToDocument,
             addAttrsIfMissingCallback,
+            getTemplateContentsCallback
         ) orelse return error.ParserCreationFailed;
     }
 
@@ -243,6 +247,28 @@ fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.Attrib
         // putNew only adds if the attribute doesn't already exist
         try attr_list.putNew(name, value, page);
     }
+}
+
+fn getTemplateContentsCallback(ctx: *anyopaque, target_ref: *anyopaque) callconv(.c) ?*anyopaque {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    return self._getTemplateContentsCallback(getNode(target_ref)) catch |err| {
+        self.err = .{ .err = err, .source = .get_template_content };
+        return null;
+    };
+}
+
+fn _getTemplateContentsCallback(self: *Parser, node: *Node) !*anyopaque {
+    const element = node.as(Element);
+    const template = element._type.html.is(Element.Html.Template) orelse unreachable;
+    const content_node = template.getContent().asNode();
+
+    // Create a ParsedNode wrapper for the content DocumentFragment
+    const pn = try self.arena.create(ParsedNode);
+    pn.* = .{
+        .data = null,
+        .node = content_node,
+    };
+    return pn;
 }
 
 fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {

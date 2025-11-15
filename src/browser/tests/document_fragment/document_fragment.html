@@ -100,3 +100,79 @@
     testing.expectEqual(test2, document.getElementById("test2"));
   }
 </script>
+
+<script id=cloneNode_shallow>
+{
+  const df = document.createDocumentFragment();
+  const div1 = document.createElement("div");
+  div1.textContent = "Content 1";
+  const div2 = document.createElement("div");
+  div2.textContent = "Content 2";
+  df.appendChild(div1);
+  df.appendChild(div2);
+
+  const clone = df.cloneNode(false);
+  testing.expectEqual("DocumentFragment", clone.constructor.name);
+  testing.expectEqual(0, clone.childElementCount);
+  testing.expectEqual(2, df.childElementCount);
+}
+</script>
+
+<script id=cloneNode_deep>
+{
+  const df = document.createDocumentFragment();
+  const div1 = document.createElement("div");
+  div1.id = "original1";
+  div1.className = "test";
+  div1.textContent = "Content 1";
+  const div2 = document.createElement("div");
+  div2.id = "original2";
+  div2.textContent = "Content 2";
+  df.appendChild(div1);
+  df.appendChild(div2);
+
+  const clone = df.cloneNode(true);
+  testing.expectEqual("DocumentFragment", clone.constructor.name);
+  testing.expectEqual(2, clone.childElementCount);
+
+  const clonedDiv1 = clone.firstElementChild;
+  testing.expectEqual("DIV", clonedDiv1.tagName);
+  testing.expectEqual("original1", clonedDiv1.id);
+  testing.expectEqual("test", clonedDiv1.className);
+  testing.expectEqual("Content 1", clonedDiv1.textContent);
+
+  const clonedDiv2 = clone.lastElementChild;
+  testing.expectEqual("original2", clonedDiv2.id);
+  testing.expectEqual("Content 2", clonedDiv2.textContent);
+
+  testing.expectFalse(div1.isSameNode(clonedDiv1));
+  testing.expectFalse(div2.isSameNode(clonedDiv2));
+
+  testing.expectEqual(2, df.childElementCount);
+}
+</script>
+
+<script id=cloneNode_nested>
+{
+  const df = document.createDocumentFragment();
+  const outer = document.createElement("div");
+  outer.id = "outer";
+  const inner = document.createElement("span");
+  inner.id = "inner";
+  inner.textContent = "Nested content";
+  outer.appendChild(inner);
+  df.appendChild(outer);
+
+  const clone = df.cloneNode(true);
+  testing.expectEqual(1, clone.childElementCount);
+
+  const clonedOuter = clone.firstElementChild;
+  testing.expectEqual("outer", clonedOuter.id);
+  testing.expectEqual(1, clonedOuter.childElementCount);
+
+  const clonedInner = clonedOuter.firstElementChild;
+  testing.expectEqual("SPAN", clonedInner.tagName);
+  testing.expectEqual("inner", clonedInner.id);
+  testing.expectEqual("Nested content", clonedInner.textContent);
+}
+</script>

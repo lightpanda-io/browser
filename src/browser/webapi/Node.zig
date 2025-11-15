@@ -196,7 +196,7 @@ pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
     }
 }
 
-pub fn getNodeName(self: *const Node, page: *Page) ![]const u8 {
+pub fn getNodeName(self: *const Node, page: *Page) []const u8 {
     return switch (self._type) {
         .element => |el| el.getTagNameSpec(&page.buf),
         .cdata => |cd| switch (cd._type) {
@@ -428,7 +428,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, Str
         .element => |el| return el.cloneElement(deep, page),
         .document => return error.NotSupported,
         .document_type => return error.NotSupported,
-        .document_fragment => return error.NotImplemented,
+        .document_fragment => |frag| return frag.cloneFragment(deep, page),
         .attribute => return error.NotSupported,
     }
 }

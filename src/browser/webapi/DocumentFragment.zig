@@ -136,6 +136,24 @@ pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, 
     }
 }
 
+pub fn cloneFragment(self: *DocumentFragment, deep: bool, page: *Page) !*Node {
+    const fragment = try DocumentFragment.init(page);
+    const fragment_node = fragment.asNode();
+
+    if (deep) {
+        const node = self.asNode();
+        const self_is_connected = node.isConnected();
+
+        var child_it = node.childrenIterator();
+        while (child_it.next()) |child| {
+            const cloned_child = try child.cloneNode(true, page);
+            try page.appendNode(fragment_node, cloned_child, .{ .child_already_connected = self_is_connected });
+        }
+    }
+
+    return fragment_node;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DocumentFragment);
 

@@ -56,6 +56,7 @@ pub struct Sink<'arena> {
     pub create_comment_callback: CreateCommentCallback,
     pub append_doctype_to_document: AppendDoctypeToDocumentCallback,
     pub add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
+    pub get_template_contents_callback: GetTemplateContentsCallback,
 }
 
 impl<'arena> TreeSink for Sink<'arena> {
@@ -101,8 +102,9 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn get_template_contents(&self, target: &Ref) -> Ref {
-        _ = target;
-        panic!("get_template_contents")
+        unsafe {
+            return (self.get_template_contents_callback)(self.ctx, *target);
+        }
     }
 
     fn is_mathml_annotation_xml_integration_point(&self, target: &Ref) -> bool {

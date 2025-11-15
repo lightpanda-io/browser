@@ -722,7 +722,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Page, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getTag(), .err = err });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(self), .err = err });
         return err;
     };
     return self.nodeIsReady(true, node);
@@ -979,6 +979,12 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined },
             ),
+            asUint("template") => return self.createHtmlElementT(
+                Element.Html.Template,
+                namespace,
+                attribute_iterator,
+                .{ ._proto = undefined, ._content = undefined },
+            ),
             else => {},
         },
         else => {},
@@ -1015,7 +1021,7 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
         @call(.auto, @field(E.Build, "created"), .{ node, self }) catch |err| {
-            log.err(.page, "build.created", .{ .tag = node.getTag(), .err = err });
+            log.err(.page, "build.created", .{ .tag = node.getNodeName(self), .err = err });
             return err;
         };
     }
