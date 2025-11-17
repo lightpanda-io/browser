@@ -105,6 +105,7 @@ pub fn build(b: *Build) !void {
         // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
+            .use_llvm = true,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
         const run_tests = b.addRunArtifact(tests);
