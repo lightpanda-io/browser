@@ -44,6 +44,7 @@ pub fn processMessage(cmd: anytype) !void {
         grantPermissions,
         getWindowForTarget,
         setDownloadBehavior,
+        close,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -54,6 +55,7 @@ pub fn processMessage(cmd: anytype) !void {
         .grantPermissions => return grantPermissions(cmd),
         .getWindowForTarget => return getWindowForTarget(cmd),
         .setDownloadBehavior => return setDownloadBehavior(cmd),
+        .close => return cmd.sendResult(null, .{}),
     }
 }
 
