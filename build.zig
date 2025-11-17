@@ -87,7 +87,7 @@ pub fn build(b: *Build) !void {
                 .sanitize_c = enable_csan,
                 .sanitize_thread = enable_tsan,
                 .imports = &.{
-                  .{.name = "lightpanda", .module = lightpanda_module},
+                    .{ .name = "lightpanda", .module = lightpanda_module },
                 },
             }),
         });
@@ -125,7 +125,7 @@ pub fn build(b: *Build) !void {
                 .sanitize_c = enable_csan,
                 .sanitize_thread = enable_tsan,
                 .imports = &.{
-                  .{.name = "lightpanda", .module = lightpanda_module},
+                    .{ .name = "lightpanda", .module = lightpanda_module },
                 },
             }),
         });
@@ -151,7 +151,7 @@ pub fn build(b: *Build) !void {
                 .sanitize_c = enable_csan,
                 .sanitize_thread = enable_tsan,
                 .imports = &.{
-                  .{.name = "lightpanda", .module = lightpanda_module},
+                    .{ .name = "lightpanda", .module = lightpanda_module },
                 },
             }),
         });
@@ -658,6 +658,8 @@ fn buildCurl(b: *Build, m: *Build.Module) !void {
 
     curl.addIncludePath(b.path(root ++ "lib"));
     curl.addIncludePath(b.path(root ++ "include"));
+    curl.addIncludePath(b.path("vendor/zlib"));
+
     curl.addCSourceFiles(.{
         .flags = &.{},
         .files = &.{
