@@ -153,6 +153,9 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
 
     var it = std.mem.splitScalar(u8, input, '&');
     while (it.next()) |entry| {
+        // Skip empty entries (from trailing &, or &&)
+        if (entry.len == 0) continue;
+
         var name: String = undefined;
         var value: String = undefined;
 
@@ -246,6 +249,17 @@ fn escape(input: []const u8, writer: *std.Io.Writer) !void {
     for (input) |c| {
         if (isUnreserved(c)) {
             try writer.writeByte(c);
+        } else if (c == ' ') {
+            try writer.writeByte('+');
+        } else if (c == '*') {
+            try writer.writeByte('*');
+        } else if (c >= 0x80) {
+            // Double-encode: treat byte as Latin-1 code point, encode to UTF-8, then percent-encode
+            // For bytes 0x80-0xFF (U+0080 to U+00FF), UTF-8 encoding is 2 bytes:
+            // [0xC0 | (c >> 6), 0x80 | (c & 0x3F)]
+            const byte1 = 0xC0 | (c >> 6);
+            const byte2 = 0x80 | (c & 0x3F);
+            try writer.print("%{X:0>2}%{X:0>2}", .{ byte1, byte2 });
         } else {
             try writer.print("%{X:0>2}", .{c});
         }

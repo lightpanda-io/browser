@@ -12,6 +12,15 @@ pub fn main() !void {
 
     const allocator = gpa.allocator();
 
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+    _ = args.next(); // executable name
+
+    var filter: ?[]const u8 = null;
+    if (args.next()) |n| {
+        filter = n;
+    }
+
     var http_server = try TestHTTPServer.init();
     defer http_server.deinit();
 
@@ -51,6 +60,11 @@ pub fn main() !void {
 
         if (!std.mem.endsWith(u8, entry.basename, ".html")) {
             continue;
+        }
+        if (filter) |f| {
+            if (std.mem.indexOf(u8, entry.path, f) == null) {
+                continue;
+            }
         }
         std.debug.print("\n===={s}====\n", .{entry.path});
         current_test = entry.path;

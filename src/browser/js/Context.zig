@@ -681,6 +681,7 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
                     .js_obj = js_value.castTo(v8.Object),
                 };
             }
+
             if (js_value.isNullOrUndefined()) {
                 return null;
             }

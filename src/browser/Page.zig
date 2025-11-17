@@ -187,6 +187,8 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_styles = .{};
     self._element_datasets = .{};
     self._element_class_lists = .{};
+    self._notified_network_idle = .init;
+    self._notified_network_almost_idle = .init;
 
     try polyfill.preload(self.arena, self.js);
     try self.registerBackgroundTasks();
