@@ -543,6 +543,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/storage/storage.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/Window.zig"),
+    @import("../webapi/Performance.zig"),
     @import("../webapi/MutationObserver.zig"),
     @import("../webapi/IntersectionObserver.zig"),
 });

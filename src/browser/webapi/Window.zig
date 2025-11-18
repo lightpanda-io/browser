@@ -25,6 +25,7 @@ const Page = @import("../Page.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Navigator = @import("Navigator.zig");
+const Performance = @import("Performance.zig");
 const Document = @import("Document.zig");
 const Location = @import("Location.zig");
 const Fetch = @import("net/Fetch.zig");
@@ -39,6 +40,7 @@ _proto: *EventTarget,
 _document: *Document,
 _console: Console = .init,
 _navigator: Navigator = .init,
+_performance: Performance,
 _history: History,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function = null,
@@ -68,6 +70,10 @@ pub fn getConsole(_: *const Window) Console {
 
 pub fn getNavigator(_: *const Window) Navigator {
     return .{};
+}
+
+pub fn getPerformance(self: *Window) *Performance {
+    return &self._performance;
 }
 
 pub fn getLocalStorage(self: *const Window) *storage.Lookup {
@@ -134,11 +140,14 @@ pub fn requestAnimationFrame(self: *Window, cb: js.Function, page: *Page) !u32 {
         .repeat = false,
         .params = &.{},
         .low_priority = false,
+        .animation_frame = true,
         .name = "window.requestAnimationFrame",
     }, page);
 }
 
-// queueMicrotask: quickjs implements this directly
+pub fn queueMicrotask(_: *Window, cb: js.Function, page: *Page) void {
+    page.js.queueMicrotaskFunc(cb);
+}
 
 pub fn clearTimeout(self: *Window, id: u32) void {
     var sc = self._timers.get(id) orelse return;
@@ -208,6 +217,7 @@ const ScheduleOpts = struct {
     params: []js.Object,
     name: []const u8,
     low_priority: bool = false,
+    animation_frame: bool = false,
 };
 fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
     if (self._timers.count() > 512) {
@@ -235,6 +245,7 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
         .name = opts.name,
         .timer_id = timer_id,
         .params = opts.params,
+        .animation_frame = opts.animation_frame,
         .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
     });
     gop.value_ptr.* = callback;
@@ -266,6 +277,8 @@ const ScheduleCallback = struct {
 
     removed: bool = false,
 
+    animation_frame: bool = false,
+
     fn deinit(self: *ScheduleCallback) void {
         self.page._factory.destroy(self);
     }
@@ -278,10 +291,17 @@ const ScheduleCallback = struct {
             return null;
         }
 
-        self.cb.call(void, .{self.params}) catch |err| {
-            // a non-JS error
-            log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
-        };
+        if (self.animation_frame) {
+            self.cb.call(void, .{self.page.window._performance.now()}) catch |err| {
+                // a non-JS error
+                log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
+            };
+        } else {
+            self.cb.call(void, .{self.params}) catch |err| {
+                // a non-JS error
+                log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
+            };
+        }
 
         if (self.repeat_ms) |ms| {
             return ms;
@@ -302,11 +322,13 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const top = bridge.accessor(Window.getWindow, null, .{ .cache = "top" });
     pub const self = bridge.accessor(Window.getWindow, null, .{ .cache = "self" });
     pub const window = bridge.accessor(Window.getWindow, null, .{ .cache = "window" });
     pub const parent = bridge.accessor(Window.getWindow, null, .{ .cache = "parent" });
     pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = "console" });
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{ .cache = "navigator" });
+    pub const performance = bridge.accessor(Window.getPerformance, null, .{ .cache = "performance" });
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{ .cache = "localStorage" });
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
@@ -314,6 +336,7 @@ pub const JsApi = struct {
     pub const history = bridge.accessor(Window.getHistory, null, .{ .cache = "history" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
+    pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});
     pub const clearTimeout = bridge.function(Window.clearTimeout, .{});
     pub const setInterval = bridge.function(Window.setInterval, .{});
@@ -326,6 +349,17 @@ pub const JsApi = struct {
     pub const btoa = bridge.function(Window.btoa, .{});
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
+    pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
+    pub const length = bridge.accessor(struct{
+        fn wrap(_: *const Window) u32 { return 0; }
+    }.wrap, null, .{ .cache = "length" });
+
+    pub const innerWidth = bridge.accessor(struct{
+        fn wrap(_: *const Window) u32 { return 1920; }
+    }.wrap, null, .{ .cache = "innerWidth" });
+    pub const innerHeight = bridge.accessor(struct{
+        fn wrap(_: *const Window) u32 { return 1080; }
+    }.wrap, null, .{ .cache = "innerHeight" });
 };
 
 const testing = @import("../../testing.zig");

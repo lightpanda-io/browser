@@ -23,7 +23,7 @@
     parent.appendChild(child2);
 
     Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length, {script_id: 'childlist'});
+      testing.expectEqual(1, mutations.length);
       testing.expectEqual('childList', mutations[0].type);
       testing.expectEqual(parent, mutations[0].target);
       testing.expectEqual(1, mutations[0].addedNodes.length);
@@ -51,7 +51,7 @@
     emptyParent.appendChild(firstChild);
 
     Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length, {script_id: 'childlist_empty_parent'});
+      testing.expectEqual(1, mutations.length);
       testing.expectEqual('childList', mutations[0].type);
       testing.expectEqual(emptyParent, mutations[0].target);
       testing.expectEqual(1, mutations[0].addedNodes.length);
@@ -78,7 +78,7 @@
     removeParent.removeChild(onlyChild);
 
     Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length, {script_id: 'childlist_remove_last'});
+      testing.expectEqual(1, mutations.length);
       testing.expectEqual('childList', mutations[0].type);
       testing.expectEqual(removeParent, mutations[0].target);
       testing.expectEqual(0, mutations[0].addedNodes.length);
@@ -105,7 +105,7 @@
     textParent.appendChild(textNode);
 
     Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length, {script_id: 'childlist_text_node'});
+      testing.expectEqual(1, mutations.length);
       testing.expectEqual('childList', mutations[0].type);
       testing.expectEqual(textParent, mutations[0].target);
       testing.expectEqual(1, mutations[0].addedNodes.length);
@@ -133,7 +133,7 @@
     middleParent.removeChild(middle);
 
     Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length, {script_id: 'childlist_remove_middle'});
+      testing.expectEqual(1, mutations.length);
       testing.expectEqual('childList', mutations[0].type);
       testing.expectEqual(middleParent, mutations[0].target);
       testing.expectEqual(0, mutations[0].addedNodes.length);
@@ -165,7 +165,7 @@
     insertParent.insertBefore(insertMiddle, insertLast);
 
     Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length, {script_id: 'childlist_insert_before'});
+      testing.expectEqual(1, mutations.length);
       testing.expectEqual('childList', mutations[0].type);
       testing.expectEqual(insertParent, mutations[0].target);
       testing.expectEqual(1, mutations[0].addedNodes.length);
@@ -199,7 +199,7 @@
       // replaceChild generates two separate mutation records in modern spec:
       // 1. First record for insertBefore (new node added)
       // 2. Second record for removeChild (old node removed)
-      testing.expectEqual(2, mutations.length, {script_id: 'childlist_replace_child'});
+      testing.expectEqual(2, mutations.length);
 
       // First mutation: insertion of new node
       testing.expectEqual('childList', mutations[0].type);
@@ -248,7 +248,7 @@
     multipleParent.appendChild(child3);
 
     Promise.resolve().then(() => {
-      testing.expectEqual(3, mutations.length, {script_id: 'childlist_multiple_mutations'});
+      testing.expectEqual(3, mutations.length);
 
       testing.expectEqual('childList', mutations[0].type);
       testing.expectEqual(child1, mutations[0].addedNodes[0]);
@@ -289,7 +289,7 @@
       // innerHTML triggers mutations for both removals and additions
       // With tri-state: from_parser=true + parse_mode=fragment -> mutations fire
       // HTML wrapper element is filtered out, so: 3 removals + 3 additions = 6
-      testing.expectEqual(6, mutations.length, {script_id: 'childlist_inner_html'});
+      testing.expectEqual(6, mutations.length);
 
       // First 3: removals
       testing.expectEqual('childList', mutations[0].type);

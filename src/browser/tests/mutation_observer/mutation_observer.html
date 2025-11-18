@@ -21,7 +21,7 @@
     element.removeAttribute('data-foo');
 
     Promise.resolve().then(() => {
-      testing.expectEqual(3, mutations.length, {script_id: 'mutation_observer'});
+      testing.expectEqual(3, mutations.length);
 
       testing.expectEqual('attributes', mutations[0].type);
       testing.expectEqual(element, mutations[0].target);
@@ -57,7 +57,7 @@
     element.removeAttribute('data-test');
 
     Promise.resolve().then(() => {
-      testing.expectEqual(3, mutations.length, {script_id: 'mutation_observer_old_value'});
+      testing.expectEqual(3, mutations.length);
 
       testing.expectEqual('data-test', mutations[0].attributeName);
       testing.expectEqual(null, mutations[0].oldValue);
@@ -86,7 +86,7 @@
     element.setAttribute('data-disconnected', 'test');
 
     Promise.resolve().then(() => {
-      testing.expectEqual(false, callbackCalled, {script_id: 'mutation_observer_disconnect'});
+      testing.expectEqual(false, callbackCalled);
     });
   });
 </script>

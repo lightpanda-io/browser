@@ -46,7 +46,8 @@ pub const ObserveOptions = struct {
     childList: bool = false,
     characterData: bool = false,
     characterDataOldValue: bool = false,
-    // Future: subtree, attributeFilter
+    subtree: bool = false,
+    attributeFilter: ?[]const []const u8 = null,
 };
 
 pub fn init(callback: js.Function, page: *Page) !*MutationObserver {
@@ -56,10 +57,20 @@ pub fn init(callback: js.Function, page: *Page) !*MutationObserver {
 }
 
 pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
+    // Deep copy attributeFilter if present
+    var copied_options = options;
+    if (options.attributeFilter) |filter| {
+        const filter_copy = try page.arena.alloc([]const u8, filter.len);
+        for (filter, 0..) |name, i| {
+            filter_copy[i] = try page.arena.dupe(u8, name);
+        }
+        copied_options.attributeFilter = filter_copy;
+    }
+
     // Check if already observing this target
     for (self._observing.items) |*obs| {
         if (obs.target == target) {
-            obs.options = options;
+            obs.options = copied_options;
             return;
         }
     }
@@ -71,7 +82,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 
     try self._observing.append(page.arena, .{
         .target = target,
-        .options = options,
+        .options = copied_options,
     });
 }
 
@@ -99,10 +110,24 @@ pub fn notifyAttributeChange(
 
     for (self._observing.items) |obs| {
         if (obs.target != target_node) {
-            continue;
+            if (!obs.options.subtree) {
+                continue;
+            }
+            if (!obs.target.contains(target_node)) {
+                continue;
+            }
         }
         if (!obs.options.attributes) {
             continue;
+        }
+        if (obs.options.attributeFilter) |filter| {
+            for (filter) |name| {
+                if (std.mem.eql(u8, name, attribute_name)) {
+                    break;
+                }
+            } else {
+                continue;
+            }
         }
 
         const record = try page._factory.create(MutationRecord{
@@ -135,7 +160,12 @@ pub fn notifyCharacterDataChange(
 ) !void {
     for (self._observing.items) |obs| {
         if (obs.target != target) {
-            continue;
+            if (!obs.options.subtree) {
+                continue;
+            }
+            if (!obs.target.contains(target)) {
+                continue;
+            }
         }
         if (!obs.options.characterData) {
             continue;
@@ -174,7 +204,12 @@ pub fn notifyChildListChange(
 ) !void {
     for (self._observing.items) |obs| {
         if (obs.target != target) {
-            continue;
+            if (!obs.options.subtree) {
+                continue;
+            }
+            if (!obs.target.contains(target)) {
+                continue;
+            }
         }
         if (!obs.options.childList) {
             continue;

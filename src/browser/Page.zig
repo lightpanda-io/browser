@@ -50,6 +50,7 @@ const Element = @import("webapi/Element.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
+const Performance = @import("webapi/Performance.zig");
 const HtmlScript = @import("webapi/Element.zig").Html.Script;
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
@@ -179,6 +180,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
         ._document = self.document,
         ._storage_bucket = storage_bucket,
         ._history = History.init(self),
+        ._performance = Performance.init(),
         ._proto = undefined,
         ._location = &default_location,
     });
@@ -624,7 +626,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                             // Look, we want to exit ASAP, but we don't want
                             // to exit so fast that we've run none of the
                             // background jobs.
-                            break :blk if (comptime builtin.is_test) 5 else 50;
+                            break :blk if (comptime builtin.is_test) 1 else 50;
                         }
                         // No http transfers, no cdp extra socket, no
                         // scheduled tasks, we're done.
@@ -678,6 +680,13 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
         }
         ms_remaining -= @intCast(ms_elapsed);
     }
+}
+
+pub fn tick(self: *Page) void {
+    self._session.browser.runMicrotasks();
+    _ = self.scheduler.run() catch |err| {
+        log.err(.page, "tick", .{ .err = err });
+    };
 }
 
 pub fn scriptAddedCallback(self: *Page, script: *HtmlScript) !void {

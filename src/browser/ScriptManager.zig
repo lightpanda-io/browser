@@ -742,6 +742,8 @@ const Script = struct {
             break :blk true;
         };
 
+        defer page.tick();
+
         if (success) {
             self.executeCallback(script_element._on_load, page);
             return;

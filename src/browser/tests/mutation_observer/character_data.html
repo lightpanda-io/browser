@@ -19,7 +19,7 @@
     textNode.data = 'Changed text';
 
     Promise.resolve().then(() => {
-      testing.expectEqual(1, mutations.length, {script_id: 'character_data'});
+      testing.expectEqual(1, mutations.length);
       testing.expectEqual('characterData', mutations[0].type);
       testing.expectEqual(textNode, mutations[0].target);
       testing.expectEqual(null, mutations[0].oldValue);
@@ -43,7 +43,7 @@
     textNode.data = 'Second change';
 
     Promise.resolve().then(() => {
-      testing.expectEqual(2, mutations.length, {script_id: 'character_data_old_value'});
+      testing.expectEqual(2, mutations.length);
 
       testing.expectEqual('characterData', mutations[0].type);
       testing.expectEqual(textNode, mutations[0].target);

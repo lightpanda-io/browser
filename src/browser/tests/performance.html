@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=performance>
+  testing.expectEqual(performance, window.performance);
+</script>
+
+<script id=now_returns_number>
+  const t = performance.now();
+  testing.expectEqual('number', typeof t);
+  testing.expectEqual(true, t >= 0);
+</script>
+
+<script id=now_increases>
+  const t1 = performance.now();
+  const t2 = performance.now();
+  testing.expectEqual(true, t2 >= t1);
+</script>
+
+<script id=timeOrigin>
+  const origin = performance.timeOrigin;
+  testing.expectEqual('number', typeof origin);
+  testing.expectEqual(true, origin > 0);
+</script>
+
+<script id=now_relative_to_origin>
+  {
+    const t = performance.now();
+    const now = Date.now();
+    testing.expectEqual(true, t < now);
+  }
+</script>
+
+<script id=multiple_calls>
+  {
+    const times = [];
+    for (let i = 0; i < 5; i++) {
+      times.push(performance.now());
+    }
+
+    for (let i = 1; i < times.length; i++) {
+      testing.expectEqual(true, times[i] >= times[i-1]);
+    }
+  }
+</script>

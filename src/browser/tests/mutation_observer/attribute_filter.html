@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<div id="test-element-1" data-status="active" data-username="john" data-role="admin">Test</div>
+<div id="test-element-2" class="initial">Test</div>
+<div id="test-element-3">
+  <div id="child-element" data-foo="bar" data-baz="qux">Child</div>
+</div>
+
+<script src="../testing.js"></script>
+<script id="attribute_filter_single">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-1');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ['data-status']
+    });
+
+    element.setAttribute('data-status', 'inactive');
+    element.setAttribute('data-username', 'jane');
+    element.setAttribute('data-role', 'user');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length);
+      testing.expectEqual('attributes', mutations[0].type);
+      testing.expectEqual('data-status', mutations[0].attributeName);
+    });
+  });
+</script>
+
+<script id="attribute_filter_multiple">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-1');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ['data-status', 'data-username']
+    });
+
+    element.setAttribute('data-status', 'active');
+    element.setAttribute('data-username', 'alice');
+    element.setAttribute('data-role', 'moderator');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(2, mutations.length);
+      testing.expectEqual('data-status', mutations[0].attributeName);
+      testing.expectEqual('data-username', mutations[1].attributeName);
+    });
+  });
+</script>
+
+<script id="attribute_filter_with_old_value">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-2');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeOldValue: true,
+      attributeFilter: ['class']
+    });
+
+    element.setAttribute('class', 'changed');
+    element.setAttribute('data-ignored', 'value');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length);
+      testing.expectEqual('class', mutations[0].attributeName);
+      testing.expectEqual('initial', mutations[0].oldValue);
+    });
+  });
+</script>
+
+<script id="attribute_filter_no_match">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-2');
+
+    let callbackCalled = false;
+    const observer = new MutationObserver(() => {
+      callbackCalled = true;
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ['data-filtered']
+    });
+
+    element.setAttribute('class', 'another-change');
+    element.setAttribute('data-other', 'value');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(false, callbackCalled);
+      observer.disconnect();
+    });
+  });
+</script>
+
+<script id="attribute_filter_with_subtree">
+  testing.async(async () => {
+    const parent = document.getElementById('test-element-3');
+    const child = document.getElementById('child-element');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(parent, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ['data-foo']
+    });
+
+    child.setAttribute('data-foo', 'changed');
+    child.setAttribute('data-baz', 'ignored');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length);
+      testing.expectEqual('data-foo', mutations[0].attributeName);
+      testing.expectEqual(child, mutations[0].target);
+    });
+  });
+</script>
+
+<script id="attribute_filter_empty_array">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-2');
+
+    let callbackCalled = false;
+    const observer = new MutationObserver(() => {
+      callbackCalled = true;
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: []
+    });
+
+    element.setAttribute('class', 'yet-another-change');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(false, callbackCalled);
+      observer.disconnect();
+    });
+  });
+</script>

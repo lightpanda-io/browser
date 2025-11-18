@@ -29,7 +29,7 @@
       // After first microtask, first callback should have run and triggered second mutation
     }).then(() => {
       // After second microtask, second callback should have run
-      testing.expectEqual(2, callCount, {script_id: 'mutations_during_callback'});
+      testing.expectEqual(2, callCount);
       testing.expectEqual(1, firstRecords.length);
       testing.expectEqual('data-first', firstRecords[0].attributeName);
       testing.expectEqual(1, secondRecords.length);

@@ -45,7 +45,6 @@ const MemoryPoolAligned = std.heap.MemoryPoolAligned;
 // (and alignment) based pools.
 const Factory = @This();
 _page: *Page,
-_size_1_8: MemoryPoolAligned([1]u8, .@"8"),
 _size_8_8: MemoryPoolAligned([8]u8, .@"8"),
 _size_16_8: MemoryPoolAligned([16]u8, .@"8"),
 _size_24_8: MemoryPoolAligned([24]u8, .@"8"),
@@ -55,24 +54,18 @@ _size_40_8: MemoryPoolAligned([40]u8, .@"8"),
 _size_48_16: MemoryPoolAligned([48]u8, .@"16"),
 _size_56_8: MemoryPoolAligned([56]u8, .@"8"),
 _size_64_16: MemoryPoolAligned([64]u8, .@"16"),
-_size_72_8: MemoryPoolAligned([72]u8, .@"8"),
 _size_80_16: MemoryPoolAligned([80]u8, .@"16"),
 _size_88_8: MemoryPoolAligned([88]u8, .@"8"),
 _size_96_16: MemoryPoolAligned([96]u8, .@"16"),
-_size_104_8: MemoryPoolAligned([104]u8, .@"8"),
-_size_112_8: MemoryPoolAligned([112]u8, .@"8"),
-_size_120_8: MemoryPoolAligned([120]u8, .@"8"),
 _size_128_8: MemoryPoolAligned([128]u8, .@"8"),
 _size_144_8: MemoryPoolAligned([144]u8, .@"8"),
 _size_152_8: MemoryPoolAligned([152]u8, .@"8"),
-_size_456_8: MemoryPoolAligned([456]u8, .@"8"),
-_size_520_8: MemoryPoolAligned([520]u8, .@"8"),
+_size_160_8: MemoryPoolAligned([160]u8, .@"8"),
 _size_648_8: MemoryPoolAligned([648]u8, .@"8"),
 
 pub fn init(page: *Page) Factory {
     return .{
         ._page = page,
-        ._size_1_8 = MemoryPoolAligned([1]u8, .@"8").init(page.arena),
         ._size_8_8 = MemoryPoolAligned([8]u8, .@"8").init(page.arena),
         ._size_16_8 = MemoryPoolAligned([16]u8, .@"8").init(page.arena),
         ._size_24_8 = MemoryPoolAligned([24]u8, .@"8").init(page.arena),
@@ -82,18 +75,13 @@ pub fn init(page: *Page) Factory {
         ._size_48_16 = MemoryPoolAligned([48]u8, .@"16").init(page.arena),
         ._size_56_8 = MemoryPoolAligned([56]u8, .@"8").init(page.arena),
         ._size_64_16 = MemoryPoolAligned([64]u8, .@"16").init(page.arena),
-        ._size_72_8 = MemoryPoolAligned([72]u8, .@"8").init(page.arena),
         ._size_80_16 = MemoryPoolAligned([80]u8, .@"16").init(page.arena),
         ._size_88_8 = MemoryPoolAligned([88]u8, .@"8").init(page.arena),
         ._size_96_16 = MemoryPoolAligned([96]u8, .@"16").init(page.arena),
-        ._size_104_8 = MemoryPoolAligned([104]u8, .@"8").init(page.arena),
-        ._size_112_8 = MemoryPoolAligned([112]u8, .@"8").init(page.arena),
-        ._size_120_8 = MemoryPoolAligned([120]u8, .@"8").init(page.arena),
         ._size_128_8 = MemoryPoolAligned([128]u8, .@"8").init(page.arena),
         ._size_144_8 = MemoryPoolAligned([144]u8, .@"8").init(page.arena),
         ._size_152_8 = MemoryPoolAligned([152]u8, .@"8").init(page.arena),
-        ._size_456_8 = MemoryPoolAligned([456]u8, .@"8").init(page.arena),
-        ._size_520_8 = MemoryPoolAligned([520]u8, .@"8").init(page.arena),
+        ._size_160_8 = MemoryPoolAligned([160]u8, .@"8").init(page.arena),
         ._size_648_8 = MemoryPoolAligned([648]u8, .@"8").init(page.arena),
     };
 }
@@ -230,7 +218,6 @@ pub fn create(self: *Factory, value: anytype) !*@TypeOf(value) {
 
 pub fn createT(self: *Factory, comptime T: type) !*T {
     const SO = @sizeOf(T);
-    if (comptime SO == 1) return @ptrCast(try self._size_1_8.create());
     if (comptime SO == 8) return @ptrCast(try self._size_8_8.create());
     if (comptime SO == 16) return @ptrCast(try self._size_16_8.create());
     if (comptime SO == 24) return @ptrCast(try self._size_24_8.create());
@@ -242,18 +229,12 @@ pub fn createT(self: *Factory, comptime T: type) !*T {
     if (comptime SO == 48) return @ptrCast(try self._size_48_16.create());
     if (comptime SO == 56) return @ptrCast(try self._size_56_8.create());
     if (comptime SO == 64) return @ptrCast(try self._size_64_16.create());
-    if (comptime SO == 72) return @ptrCast(try self._size_72_8.create());
     if (comptime SO == 80) return @ptrCast(try self._size_80_16.create());
     if (comptime SO == 88) return @ptrCast(try self._size_88_8.create());
     if (comptime SO == 96) return @ptrCast(try self._size_96_16.create());
-    if (comptime SO == 104) return @ptrCast(try self._size_104_8.create());
-    if (comptime SO == 112) return @ptrCast(try self._size_112_8.create());
-    if (comptime SO == 120) return @ptrCast(try self._size_120_8.create());
     if (comptime SO == 128) return @ptrCast(try self._size_128_8.create());
-    if (comptime SO == 144) return @ptrCast(try self._size_144_8.create());
     if (comptime SO == 152) return @ptrCast(try self._size_152_8.create());
-    if (comptime SO == 456) return @ptrCast(try self._size_456_8.create());
-    if (comptime SO == 520) return @ptrCast(try self._size_520_8.create());
+    if (comptime SO == 160) return @ptrCast(try self._size_160_8.create());
     if (comptime SO == 648) return @ptrCast(try self._size_648_8.create());
     @compileError(std.fmt.comptimePrint("No pool configured for @sizeOf({d}), @alignOf({d}): ({s})", .{ SO, @alignOf(T), @typeName(T) }));
 }
@@ -308,7 +289,6 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
     // be (cannot be) freed. But we'll still free the chain.
     if (comptime wasAllocated(S)) {
         switch (@sizeOf(S)) {
-            1 => self._size_1_8.destroy(@ptrCast(@alignCast(value))),
             8 => self._size_8_8.destroy(@ptrCast(@alignCast(value))),
             16 => self._size_16_8.destroy(@ptrCast(value)),
             24 => self._size_24_8.destroy(@ptrCast(value)),
@@ -323,18 +303,13 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
             48 => self._size_48_16.destroy(@ptrCast(@alignCast(value))),
             56 => self._size_56_8.destroy(@ptrCast(value)),
             64 => self._size_64_16.destroy(@ptrCast(@alignCast(value))),
-            72 => self._size_72_8.destroy(@ptrCast(@alignCast(value))),
             80 => self._size_80_16.destroy(@ptrCast(@alignCast(value))),
             88 => self._size_88_8.destroy(@ptrCast(@alignCast(value))),
             96 => self._size_96_16.destroy(@ptrCast(@alignCast(value))),
-            104 => self._size_104_8.destroy(@ptrCast(value)),
-            112 => self._size_112_8.destroy(@ptrCast(value)),
-            120 => self._size_120_8.destroy(@ptrCast(value)),
             128 => self._size_128_8.destroy(@ptrCast(value)),
             144 => self._size_144_8.destroy(@ptrCast(value)),
             152 => self._size_152_8.destroy(@ptrCast(value)),
-            456 => self._size_456_8.destroy(@ptrCast(value)),
-            520 => self._size_520_8.destroy(@ptrCast(value)),
+            160 => self._size_160_8.destroy(@ptrCast(value)),
             648 => self._size_648_8.destroy(@ptrCast(value)),
             else => |SO| @compileError(std.fmt.comptimePrint("Don't know what I'm being asked to destroy @sizeOf({d}), @alignOf({d}): ({s})", .{ SO, @alignOf(S), @typeName(S) })),
         }

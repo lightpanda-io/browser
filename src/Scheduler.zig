@@ -74,6 +74,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
 
     const now = timestamp(.monotonic);
 
+    std.debug.print("running: {s}\n", .{task.name});
     while (queue.peek()) |*task_| {
         if (task_.run_at > now) {
             return @intCast(task_.run_at - now);

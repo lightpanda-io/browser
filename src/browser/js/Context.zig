@@ -1926,6 +1926,10 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
     }.run, self.page);
 }
 
+pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
+    self.isolate.enqueueMicrotaskFunc(cb.func.castToFunction());
+}
+
 
 // == Misc ==
 // An interface for types that want to have their jsDeinit function to be
