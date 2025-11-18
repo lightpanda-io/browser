@@ -199,11 +199,9 @@ fn attachToTarget(cmd: anytype) !void {
         return error.UnknownTargetId;
     }
 
-    if (bc.session_id != null) {
-        return error.SessionAlreadyLoaded;
+    if (bc.session_id == null) {
+        try doAttachtoTarget(cmd, target_id);
     }
-
-    try doAttachtoTarget(cmd, target_id);
 
     return cmd.sendResult(
         .{ .sessionId = bc.session_id },
