@@ -166,13 +166,25 @@ fn createTarget(cmd: anytype) !void {
     // if target_id is null, we should never have a session_id
     std.debug.assert(bc.session_id == null);
 
-    const target_id = cmd.cdp.target_id_gen.next();
+    const target_id = try doCreateTarget(cmd, params.url);
 
+    try cmd.sendResult(.{
+        .targetId = target_id,
+    }, .{});
+}
+
+fn doCreateTarget(cmd: anytype, url: []const u8) ![]const u8 {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const target_id = cmd.cdp.target_id_gen.next();
     bc.target_id = target_id;
 
     var page = try bc.session.createPage();
     {
-        const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        const aux_data = try std.fmt.allocPrint(
+            cmd.arena,
+            "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}",
+            .{target_id},
+        );
         bc.inspector.contextCreated(
             page.js,
             "",
@@ -205,15 +217,13 @@ fn createTarget(cmd: anytype) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    if (!std.mem.eql(u8, "about:blank", params.url)) {
-        try page.navigate(params.url, .{
+    if (!std.mem.eql(u8, "about:blank", url)) {
+        try page.navigate(url, .{
             .reason = .address_bar,
         });
     }
 
-    try cmd.sendResult(.{
-        .targetId = target_id,
-    }, .{});
+    return target_id;
 }
 
 fn attachToTarget(cmd: anytype) !void {
@@ -413,6 +423,13 @@ fn setAutoAttach(cmd: anytype) !void {
         return;
     }
 
+    _ = cmd.createBrowserContext() catch |err| switch (err) {
+        error.AlreadyExists => unreachable,
+        else => return err,
+    };
+
+    _ = try doCreateTarget(cmd, "about:blank");
+
     // This is a hack. Puppeteer, and probably others, expect the Browser to
     // automatically started creating targets. Things like an empty tab, or
     // a blank page. And they block until this happens. So we send an event
@@ -421,16 +438,16 @@ fn setAutoAttach(cmd: anytype) !void {
     // there.
     // This hack requires the main cdp dispatch handler to special case
     // messages from this "STARTUP" session.
-    try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
-        .sessionId = "STARTUP",
-        .targetInfo = TargetInfo{
-            .type = "page",
-            .targetId = "TID-STARTUP-P",
-            .title = "New Private Tab",
-            .url = "chrome://newtab/",
-            .browserContextId = "BID-STARTUP",
-        },
-    }, .{});
+    // try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+    //     .sessionId = "STARTUP",
+    //     .targetInfo = TargetInfo{
+    //         .type = "page",
+    //         .targetId = "TID-STARTUP-P",
+    //         .title = "New Private Tab",
+    //         .url = "chrome://newtab/",
+    //         .browserContextId = "BID-STARTUP",
+    //     },
+    // }, .{});
 }
 
 fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
