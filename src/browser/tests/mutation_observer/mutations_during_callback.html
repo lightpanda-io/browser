@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<div id="target">Test</div>
+
+<script src="../testing.js"></script>
+<script id="mutations_during_callback">
+  testing.async(async () => {
+    const element = document.getElementById('target');
+
+    let callCount = 0;
+    let firstRecords = null;
+    let secondRecords = null;
+
+    const observer = new MutationObserver((records) => {
+      callCount++;
+      if (callCount === 1) {
+        firstRecords = records;
+        element.setAttribute('data-second', 'from-callback');
+      } else if (callCount === 2) {
+        secondRecords = records;
+        observer.disconnect();
+      }
+    });
+
+    observer.observe(element, { attributes: true });
+
+    element.setAttribute('data-first', 'initial');
+
+    Promise.resolve().then(() => {
+      // After first microtask, first callback should have run and triggered second mutation
+    }).then(() => {
+      // After second microtask, second callback should have run
+      testing.expectEqual(2, callCount, {script_id: 'mutations_during_callback'});
+      testing.expectEqual(1, firstRecords.length);
+      testing.expectEqual('data-first', firstRecords[0].attributeName);
+      testing.expectEqual(1, secondRecords.length);
+      testing.expectEqual('data-second', secondRecords[0].attributeName);
+    });
+  });
+</script>

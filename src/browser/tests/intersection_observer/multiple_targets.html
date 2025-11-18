@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="target1" style="width: 100px; height: 100px;">Target 1</div>
+<div id="target2" style="width: 100px; height: 100px;">Target 2</div>
+
+<script id="multiple">
+    const target1 = document.getElementById('target1');
+    const target2 = document.getElementById('target2');
+    let entryCount = 0;
+    const seenTargets = new Set();
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            entryCount++;
+            seenTargets.add(entry.target);
+        });
+    });
+
+    observer.observe(target1);
+    observer.observe(target2);
+
+    testing.eventually(() => {
+        testing.expectEqual(2, entryCount);
+        testing.expectTrue(seenTargets.has(target1));
+        testing.expectTrue(seenTargets.has(target2));
+
+        observer.disconnect();
+    });
+</script>

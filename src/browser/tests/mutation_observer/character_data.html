@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<div id="test-element-1">Initial text</div>
+<div id="test-element-2">Test</div>
+<div id="test-element-3">Test</div>
+
+<script src="../testing.js"></script>
+<script id="character_data">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-1');
+    const textNode = element.firstChild;
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(textNode, { characterData: true });
+
+    textNode.data = 'Changed text';
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length, {script_id: 'character_data'});
+      testing.expectEqual('characterData', mutations[0].type);
+      testing.expectEqual(textNode, mutations[0].target);
+      testing.expectEqual(null, mutations[0].oldValue);
+    });
+  });
+</script>
+
+<script id="character_data_old_value">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-2');
+    const textNode = element.firstChild;
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(textNode, { characterData: true, characterDataOldValue: true });
+
+    textNode.data = 'First change';
+    textNode.data = 'Second change';
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(2, mutations.length, {script_id: 'character_data_old_value'});
+
+      testing.expectEqual('characterData', mutations[0].type);
+      testing.expectEqual(textNode, mutations[0].target);
+      testing.expectEqual('Test', mutations[0].oldValue);
+
+      testing.expectEqual('characterData', mutations[1].type);
+      testing.expectEqual(textNode, mutations[1].target);
+      testing.expectEqual('First change', mutations[1].oldValue);
+    });
+  });
+</script>
+
+<script id="character_data_no_observe">
+  testing.async(async () => {
+    const element = document.getElementById('test-element-3');
+    const textNode = element.firstChild;
+
+    let callbackCalled = false;
+    const observer = new MutationObserver(() => {
+      callbackCalled = true;
+    });
+
+    // Observe for attributes, not characterData
+    observer.observe(element, { attributes: true });
+
+    // Change text node data (should not trigger)
+    textNode.data = 'Changed but not observed';
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(false, callbackCalled);
+    });
+  });
+</script>

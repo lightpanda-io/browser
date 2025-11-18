@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="target" style="width: 100px; height: 100px;">Target Element</div>
+
+<script id="disconnect">
+    const target = document.getElementById('target');
+    let callCount = 0;
+
+    const observer = new IntersectionObserver(() => {
+        callCount++;
+    });
+
+    observer.observe(target);
+
+    testing.eventually(() => {
+        testing.expectEqual(1, callCount);
+
+        observer.disconnect();
+
+        // Create a new observer to trigger another check
+        // If disconnect worked, the old observer won't fire
+        const observer2 = new IntersectionObserver(() => {});
+        observer2.observe(target);
+
+        testing.eventually(() => {
+            observer2.disconnect();
+            testing.expectEqual(1, callCount);
+        });
+    });
+</script>

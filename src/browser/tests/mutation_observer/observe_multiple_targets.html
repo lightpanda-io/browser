@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<div id="target1">Test1</div>
+<div id="target2">Test2</div>
+
+<script src="../testing.js"></script>
+<script id="observe_multiple_targets">
+  testing.async(async () => {
+    const element1 = document.getElementById('target1');
+    const element2 = document.getElementById('target2');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+
+    observer.observe(element1, { attributes: true });
+    observer.observe(element2, { attributes: true });
+
+    element1.setAttribute('data-one', 'value1');
+    element2.setAttribute('data-two', 'value2');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(2, mutations.length);
+      testing.expectEqual(element1, mutations[0].target);
+      testing.expectEqual('data-one', mutations[0].attributeName);
+      testing.expectEqual(element2, mutations[1].target);
+      testing.expectEqual('data-two', mutations[1].attributeName);
+    });
+  });
+</script>

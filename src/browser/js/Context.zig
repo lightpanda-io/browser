@@ -1907,6 +1907,26 @@ fn zigJsonToJs(isolate: v8.Isolate, v8_context: v8.Context, value: std.json.Valu
     }
 }
 
+// Microtasks
+pub fn queueMutationDelivery(self: *Context) !void {
+    self.isolate.enqueueMicrotask(struct {
+        fn run(data: ?*anyopaque) callconv(.c) void {
+            const page: *Page = @ptrCast(@alignCast(data.?));
+            page.deliverMutations();
+        }
+    }.run, self.page);
+}
+
+pub fn queueIntersectionDelivery(self: *Context) !void {
+    self.isolate.enqueueMicrotask(struct {
+        fn run(data: ?*anyopaque) callconv(.c) void {
+            const page: *Page = @ptrCast(@alignCast(data.?));
+            page.deliverIntersections();
+        }
+    }.run, self.page);
+}
+
+
 // == Misc ==
 // An interface for types that want to have their jsDeinit function to be
 // called when the call context ends

@@ -37,6 +37,7 @@ const Scheduler = @import("Scheduler.zig");
 const History = @import("webapi/History.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
+
 const polyfill = @import("polyfill/polyfill.zig");
 
 const Parser = @import("parser/Parser.zig");
@@ -50,6 +51,8 @@ const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
 const HtmlScript = @import("webapi/Element.zig").Html.Script;
+const MutationObserver = @import("webapi/MutationObserver.zig");
+const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const storage = @import("webapi/storage/storage.zig");
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -88,6 +91,14 @@ _element_datasets: Element.DatasetLookup = .{},
 _element_class_lists: Element.ClassListLookup = .{},
 
 _script_manager: ScriptManager,
+
+// List of active MutationObservers
+_mutation_observers: std.ArrayList(*MutationObserver) = .{},
+_mutation_delivery_scheduled: bool = false,
+
+// List of active IntersectionObservers
+_intersection_observers: std.ArrayList(*IntersectionObserver) = .{},
+_intersection_delivery_scheduled: bool = false,
 
 _polyfill_loader: polyfill.Loader = .{},
 
@@ -189,6 +200,11 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_class_lists = .{};
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
+
+    self._mutation_observers = .{};
+    self._mutation_delivery_scheduled = false;
+    self._intersection_observers = .{};
+    self._intersection_delivery_scheduled = false;
 
     try polyfill.preload(self.arena, self.js);
     try self.registerBackgroundTasks();
@@ -677,6 +693,94 @@ pub fn domChanged(self: *Page) void {
     self.version += 1;
 }
 
+pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
+    try self._mutation_observers.append(self.arena, observer);
+}
+
+pub fn unregisterMutationObserver(self: *Page, observer: *MutationObserver) void {
+    for (self._mutation_observers.items, 0..) |obs, i| {
+        if (obs == observer) {
+            _ = self._mutation_observers.swapRemove(i);
+            return;
+        }
+    }
+}
+
+pub fn registerIntersectionObserver(self: *Page, observer: *IntersectionObserver) !void {
+    try self._intersection_observers.append(self.arena, observer);
+}
+
+pub fn unregisterIntersectionObserver(self: *Page, observer: *IntersectionObserver) void {
+    for (self._intersection_observers.items, 0..) |obs, i| {
+        if (obs == observer) {
+            _ = self._intersection_observers.swapRemove(i);
+            return;
+        }
+    }
+}
+
+pub fn checkIntersections(self: *Page) !void {
+    for (self._intersection_observers.items) |observer| {
+        try observer.checkIntersections(self);
+    }
+}
+
+pub fn scheduleMutationDelivery(self: *Page) !void {
+    // Only queue if not already scheduled
+    if (self._mutation_delivery_scheduled) {
+        return;
+    }
+    self._mutation_delivery_scheduled = true;
+
+    // Queue mutation delivery as a microtask
+    try self.js.queueMutationDelivery();
+}
+
+pub fn scheduleIntersectionDelivery(self: *Page) !void {
+    // Only queue if not already scheduled
+    if (self._intersection_delivery_scheduled) {
+        return;
+    }
+    self._intersection_delivery_scheduled = true;
+
+    // Queue intersection delivery as a microtask
+    try self.js.queueIntersectionDelivery();
+}
+
+pub fn deliverIntersections(self: *Page) void {
+    if (!self._intersection_delivery_scheduled) {
+        return;
+    }
+    self._intersection_delivery_scheduled = false;
+
+    // Iterate backwards to handle observers that disconnect during their callback
+    var i = self._intersection_observers.items.len;
+    while (i > 0) {
+        i -= 1;
+        const observer = self._intersection_observers.items[i];
+        observer.deliverEntries(self) catch |err| {
+            log.err(.page, "page.deliverIntersections", .{ .err = err });
+        };
+    }
+}
+
+pub fn deliverMutations(self: *Page) void {
+    if (!self._mutation_delivery_scheduled) {
+        return;
+    }
+    self._mutation_delivery_scheduled = false;
+
+    // Iterate backwards to handle observers that disconnect during their callback
+    var i = self._mutation_observers.items.len;
+    while (i > 0) {
+        i -= 1;
+        const observer = self._mutation_observers.items[i];
+        observer.deliverRecords(self) catch |err| {
+            log.err(.page, "page.deliverMutations", .{ .err = err });
+        };
+    }
+}
+
 fn notifyNetworkIdle(self: *Page) void {
     std.debug.assert(self._notified_network_idle == .done);
     self._session.browser.notification.dispatch(.page_network_idle, &.{
@@ -1106,6 +1210,10 @@ const RemoveNodeOpts = struct {
     will_be_reconnected: bool,
 };
 pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts) void {
+    // Capture siblings before removing
+    const previous_sibling = child.previousSibling();
+    const next_sibling = child.nextSibling();
+
     const children = parent._children.?;
     switch (children.*) {
         .one => |n| {
@@ -1131,6 +1239,11 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
 
     child._parent = null;
     child._child_link = .{};
+
+    if (self.hasMutationObservers()) {
+        const removed = [_]*Node{child};
+        self.childListChange(parent, &.{}, &removed, previous_sibling, next_sibling);
+    }
 
     if (opts.will_be_reconnected) {
         // We might be removing the node only to re-insert it. If the node will
@@ -1232,10 +1345,30 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
     }
     child._parent = parent;
 
-    if (comptime from_parser == false) {
-        // When the parser adds the node, nodeIsReady is only called when the
-        // nodeComplete() callback is executed.
-        try self.nodeIsReady(false, child);
+    // Tri-state behavior for mutations:
+    // 1. from_parser=true, parse_mode=document -> no mutations (initial document parse)
+    // 2. from_parser=true, parse_mode=fragment -> mutations (innerHTML additions)
+    // 3. from_parser=false, parse_mode=document -> mutation (js manipulation)
+    // split like this because from_parser can be comptime known.
+    const should_notify = if (comptime from_parser)
+        self._parse_mode == .fragment
+    else
+        true;
+
+    if (should_notify) {
+        if (comptime from_parser == false) {
+            // When the parser adds the node, nodeIsReady is only called when the
+            // nodeComplete() callback is executed.
+            try self.nodeIsReady(false, child);
+        }
+
+        // Notify mutation observers about childList change
+        if (self.hasMutationObservers()) {
+            const previous_sibling = child.previousSibling();
+            const next_sibling = child.nextSibling();
+            const added = [_]*Node{child};
+            self.childListChange(parent, &added, &.{}, previous_sibling, next_sibling);
+        }
     }
 
     var document_by_id = &self.document._elements_by_id;
@@ -1276,16 +1409,71 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
     }
 }
 
-pub fn attributeChange(self: *Page, element: *Element, name: []const u8, value: []const u8) void {
+pub fn attributeChange(self: *Page, element: *Element, name: []const u8, value: []const u8, old_value: ?[]const u8) void {
     _ = Element.Build.call(element, "attributeChange", .{ element, name, value, self }) catch |err| {
         log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err });
     };
+
+    for (self._mutation_observers.items) |observer| {
+        observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
+            log.err(.page, "attributeChange.notifyObserver", .{ .err = err });
+        };
+    }
 }
 
-pub fn attributeRemove(self: *Page, element: *Element, name: []const u8) void {
+pub fn attributeRemove(self: *Page, element: *Element, name: []const u8, old_value: []const u8) void {
     _ = Element.Build.call(element, "attributeRemove", .{ element, name, self }) catch |err| {
         log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err });
     };
+
+    for (self._mutation_observers.items) |observer| {
+        observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
+            log.err(.page, "attributeRemove.notifyObserver", .{ .err = err });
+        };
+    }
+}
+
+pub fn hasMutationObservers(self: *const Page) bool {
+    return self._mutation_observers.items.len > 0;
+}
+
+pub fn characterDataChange(
+    self: *Page,
+    target: *Node,
+    old_value: []const u8,
+) void {
+    // Notify mutation observers
+    for (self._mutation_observers.items) |observer| {
+        observer.notifyCharacterDataChange(target, old_value, self) catch |err| {
+            log.err(.page, "cdataChange.notifyObserver", .{ .err = err });
+        };
+    }
+}
+
+pub fn childListChange(
+    self: *Page,
+    target: *Node,
+    added_nodes: []const *Node,
+    removed_nodes: []const *Node,
+    previous_sibling: ?*Node,
+    next_sibling: ?*Node,
+) void {
+    // Filter out HTML wrapper element during fragment parsing (html5ever quirk)
+    if (self._parse_mode == .fragment and added_nodes.len == 1) {
+        if (added_nodes[0].is(Element.Html.Html) != null) {
+            // This is the temporary HTML wrapper, added by html5ever
+            // that will be unwrapped, see:
+            // https://github.com/servo/html5ever/issues/583
+            return;
+        }
+    }
+
+    // Notify mutation observers
+    for (self._mutation_observers.items) |observer| {
+        observer.notifyChildListChange(target, added_nodes, removed_nodes, previous_sibling, next_sibling, self) catch |err| {
+            log.err(.page, "childListChange.notifyObserver", .{ .err = err });
+        };
+    }
 }
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
@@ -1302,9 +1490,22 @@ pub fn parseHtmlAsChildren(self: *Page, node: *Node, html: []const u8) !void {
     const first = children.one;
     std.debug.assert(first.is(Element.Html.Html) != null);
     node._children = first._children;
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        child._parent = node;
+
+    if (self.hasMutationObservers()) {
+        var it = node.childrenIterator();
+        while (it.next()) |child| {
+            child._parent = node;
+            // Notify mutation observers for each unwrapped child
+            const previous_sibling = child.previousSibling();
+            const next_sibling = child.nextSibling();
+            const added = [_]*Node{child};
+            self.childListChange(node, &added, &.{}, previous_sibling, next_sibling);
+        }
+    } else {
+        var it = node.childrenIterator();
+        while (it.next()) |child| {
+            child._parent = node;
+        }
     }
 }
 

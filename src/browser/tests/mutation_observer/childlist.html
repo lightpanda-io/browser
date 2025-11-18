@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<div id="parent"><div id="child1">Child 1</div></div>
+<div id="empty-parent"></div>
+<div id="remove-parent"><div id="only-child">Only</div></div>
+<div id="text-parent"></div>
+<div id="middle-parent"><div id="first">First</div><div id="middle">Middle</div><div id="last">Last</div></div>
+
+<script src="../testing.js"></script>
+<script id="childlist">
+  testing.async(async () => {
+    const parent = document.getElementById('parent');
+    const child1 = document.getElementById('child1');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(parent, { childList: true });
+
+    const child2 = document.createElement('div');
+    child2.textContent = 'Child 2';
+    parent.appendChild(child2);
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length, {script_id: 'childlist'});
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(parent, mutations[0].target);
+      testing.expectEqual(1, mutations[0].addedNodes.length);
+      testing.expectEqual(child2, mutations[0].addedNodes[0]);
+      testing.expectEqual(0, mutations[0].removedNodes.length);
+      testing.expectEqual(child1, mutations[0].previousSibling);
+      testing.expectEqual(null, mutations[0].nextSibling);
+    });
+  });
+</script>
+
+<script id="childlist_empty_parent">
+  testing.async(async () => {
+    const emptyParent = document.getElementById('empty-parent');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(emptyParent, { childList: true });
+
+    const firstChild = document.createElement('div');
+    firstChild.textContent = 'First child';
+    emptyParent.appendChild(firstChild);
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length, {script_id: 'childlist_empty_parent'});
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(emptyParent, mutations[0].target);
+      testing.expectEqual(1, mutations[0].addedNodes.length);
+      testing.expectEqual(firstChild, mutations[0].addedNodes[0]);
+      testing.expectEqual(0, mutations[0].removedNodes.length);
+      testing.expectEqual(null, mutations[0].previousSibling);
+      testing.expectEqual(null, mutations[0].nextSibling);
+    });
+  });
+</script>
+
+<script id="childlist_remove_last">
+  testing.async(async () => {
+    const removeParent = document.getElementById('remove-parent');
+    const onlyChild = document.getElementById('only-child');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(removeParent, { childList: true });
+
+    removeParent.removeChild(onlyChild);
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length, {script_id: 'childlist_remove_last'});
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(removeParent, mutations[0].target);
+      testing.expectEqual(0, mutations[0].addedNodes.length);
+      testing.expectEqual(1, mutations[0].removedNodes.length);
+      testing.expectEqual(onlyChild, mutations[0].removedNodes[0]);
+      testing.expectEqual(null, mutations[0].previousSibling);
+      testing.expectEqual(null, mutations[0].nextSibling);
+    });
+  });
+</script>
+
+<script id="childlist_text_node">
+  testing.async(async () => {
+    const textParent = document.getElementById('text-parent');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(textParent, { childList: true });
+
+    const textNode = document.createTextNode('Hello world');
+    textParent.appendChild(textNode);
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length, {script_id: 'childlist_text_node'});
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(textParent, mutations[0].target);
+      testing.expectEqual(1, mutations[0].addedNodes.length);
+      testing.expectEqual(textNode, mutations[0].addedNodes[0]);
+      testing.expectEqual(null, mutations[0].previousSibling);
+      testing.expectEqual(null, mutations[0].nextSibling);
+    });
+  });
+</script>
+
+<script id="childlist_remove_middle">
+  testing.async(async () => {
+    const middleParent = document.getElementById('middle-parent');
+    const first = document.getElementById('first');
+    const middle = document.getElementById('middle');
+    const last = document.getElementById('last');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(middleParent, { childList: true });
+
+    middleParent.removeChild(middle);
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length, {script_id: 'childlist_remove_middle'});
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(middleParent, mutations[0].target);
+      testing.expectEqual(0, mutations[0].addedNodes.length);
+      testing.expectEqual(1, mutations[0].removedNodes.length);
+      testing.expectEqual(middle, mutations[0].removedNodes[0]);
+      testing.expectEqual(first, mutations[0].previousSibling);
+      testing.expectEqual(last, mutations[0].nextSibling);
+    });
+  });
+</script>
+
+<div id="insert-parent"><div id="insert-first">First</div><div id="insert-last">Last</div></div>
+
+<script id="childlist_insert_before">
+  testing.async(async () => {
+    const insertParent = document.getElementById('insert-parent');
+    const insertFirst = document.getElementById('insert-first');
+    const insertLast = document.getElementById('insert-last');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(insertParent, { childList: true });
+
+    const insertMiddle = document.createElement('div');
+    insertMiddle.textContent = 'Middle';
+    insertParent.insertBefore(insertMiddle, insertLast);
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(1, mutations.length, {script_id: 'childlist_insert_before'});
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(insertParent, mutations[0].target);
+      testing.expectEqual(1, mutations[0].addedNodes.length);
+      testing.expectEqual(insertMiddle, mutations[0].addedNodes[0]);
+      testing.expectEqual(0, mutations[0].removedNodes.length);
+      testing.expectEqual(insertFirst, mutations[0].previousSibling);
+      testing.expectEqual(insertLast, mutations[0].nextSibling);
+    });
+  });
+</script>
+
+<div id="replace-parent"><div id="replace-old">Old</div></div>
+
+<script id="childlist_replace_child">
+  testing.async(async () => {
+    const replaceParent = document.getElementById('replace-parent');
+    const replaceOld = document.getElementById('replace-old');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(replaceParent, { childList: true });
+
+    const replaceNew = document.createElement('div');
+    replaceNew.textContent = 'New';
+    replaceParent.replaceChild(replaceNew, replaceOld);
+
+    Promise.resolve().then(() => {
+      // replaceChild generates two separate mutation records in modern spec:
+      // 1. First record for insertBefore (new node added)
+      // 2. Second record for removeChild (old node removed)
+      testing.expectEqual(2, mutations.length, {script_id: 'childlist_replace_child'});
+
+      // First mutation: insertion of new node
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(replaceParent, mutations[0].target);
+      testing.expectEqual(1, mutations[0].addedNodes.length);
+      testing.expectEqual(replaceNew, mutations[0].addedNodes[0]);
+      testing.expectEqual(0, mutations[0].removedNodes.length);
+      testing.expectEqual(null, mutations[0].previousSibling);
+      testing.expectEqual(replaceOld, mutations[0].nextSibling);
+
+      // Second mutation: removal of old node
+      testing.expectEqual('childList', mutations[1].type);
+      testing.expectEqual(replaceParent, mutations[1].target);
+      testing.expectEqual(0, mutations[1].addedNodes.length);
+      testing.expectEqual(1, mutations[1].removedNodes.length);
+      testing.expectEqual(replaceOld, mutations[1].removedNodes[0]);
+      testing.expectEqual(replaceNew, mutations[1].previousSibling);
+      testing.expectEqual(null, mutations[1].nextSibling);
+    });
+  });
+</script>
+
+<div id="multiple-parent"></div>
+
+<script id="childlist_multiple_mutations">
+  testing.async(async () => {
+    const multipleParent = document.getElementById('multiple-parent');
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(multipleParent, { childList: true });
+
+    const child1 = document.createElement('div');
+    child1.textContent = 'Child 1';
+    multipleParent.appendChild(child1);
+
+    const child2 = document.createElement('div');
+    child2.textContent = 'Child 2';
+    multipleParent.appendChild(child2);
+
+    const child3 = document.createElement('div');
+    child3.textContent = 'Child 3';
+    multipleParent.appendChild(child3);
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(3, mutations.length, {script_id: 'childlist_multiple_mutations'});
+
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(child1, mutations[0].addedNodes[0]);
+      testing.expectEqual(null, mutations[0].previousSibling);
+      testing.expectEqual(null, mutations[0].nextSibling);
+
+      testing.expectEqual('childList', mutations[1].type);
+      testing.expectEqual(child2, mutations[1].addedNodes[0]);
+      testing.expectEqual(child1, mutations[1].previousSibling);
+      testing.expectEqual(null, mutations[1].nextSibling);
+
+      testing.expectEqual('childList', mutations[2].type);
+      testing.expectEqual(child3, mutations[2].addedNodes[0]);
+      testing.expectEqual(child2, mutations[2].previousSibling);
+      testing.expectEqual(null, mutations[2].nextSibling);
+    });
+  });
+</script>
+
+<div id="inner-html-parent"><div>Old 1</div><div>Old 2</div><div>Old 3</div></div>
+
+<script id="childlist_inner_html">
+  testing.async(async () => {
+    const innerHtmlParent = document.getElementById('inner-html-parent');
+    const oldChildren = Array.from(innerHtmlParent.children);
+
+    let mutations = null;
+    const observer = new MutationObserver((records) => {
+      observer.disconnect();
+      mutations = records;
+    });
+    observer.observe(innerHtmlParent, { childList: true });
+
+    // No whitespace between tags to avoid text node mutations
+    innerHtmlParent.innerHTML = '<span>New 1</span><span>New 2</span><span>New 3</span>';
+
+    Promise.resolve().then(() => {
+      // innerHTML triggers mutations for both removals and additions
+      // With tri-state: from_parser=true + parse_mode=fragment -> mutations fire
+      // HTML wrapper element is filtered out, so: 3 removals + 3 additions = 6
+      testing.expectEqual(6, mutations.length, {script_id: 'childlist_inner_html'});
+
+      // First 3: removals
+      testing.expectEqual('childList', mutations[0].type);
+      testing.expectEqual(1, mutations[0].removedNodes.length);
+      testing.expectEqual(oldChildren[0], mutations[0].removedNodes[0]);
+      testing.expectEqual(0, mutations[0].addedNodes.length);
+
+      testing.expectEqual('childList', mutations[1].type);
+      testing.expectEqual(1, mutations[1].removedNodes.length);
+      testing.expectEqual(oldChildren[1], mutations[1].removedNodes[0]);
+      testing.expectEqual(0, mutations[1].addedNodes.length);
+
+      testing.expectEqual('childList', mutations[2].type);
+      testing.expectEqual(1, mutations[2].removedNodes.length);
+      testing.expectEqual(oldChildren[2], mutations[2].removedNodes[0]);
+      testing.expectEqual(0, mutations[2].addedNodes.length);
+
+      // Last 3: additions (unwrapped span elements)
+      testing.expectEqual('childList', mutations[3].type);
+      testing.expectEqual(0, mutations[3].removedNodes.length);
+      testing.expectEqual(1, mutations[3].addedNodes.length);
+      testing.expectEqual('SPAN', mutations[3].addedNodes[0].nodeName);
+
+      testing.expectEqual('childList', mutations[4].type);
+      testing.expectEqual(0, mutations[4].removedNodes.length);
+      testing.expectEqual(1, mutations[4].addedNodes.length);
+      testing.expectEqual('SPAN', mutations[4].addedNodes[0].nodeName);
+
+      testing.expectEqual('childList', mutations[5].type);
+      testing.expectEqual(0, mutations[5].removedNodes.length);
+      testing.expectEqual(1, mutations[5].addedNodes.length);
+      testing.expectEqual('SPAN', mutations[5].addedNodes[0].nodeName);
+    });
+  });
+</script>

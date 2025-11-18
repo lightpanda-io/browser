@@ -61,11 +61,15 @@ pub fn getData(self: *const CData) []const u8 {
 }
 
 pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
+    const old_value = self._data;
+
     if (value) |v| {
         self._data = try page.dupeString(v);
     } else {
         self._data = "";
     }
+
+    page.characterDataChange(self.asNode(), old_value);
 }
 
 pub fn format(self: *const CData, writer: *std.io.Writer) !void {

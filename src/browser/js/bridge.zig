@@ -544,4 +544,5 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/URL.zig"),
     @import("../webapi/Window.zig"),
     @import("../webapi/MutationObserver.zig"),
+    @import("../webapi/IntersectionObserver.zig"),
 });

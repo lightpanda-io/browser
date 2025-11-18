@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<div id="target">Test</div>
+
+<script src="../testing.js"></script>
+<script id="multiple_observers">
+  testing.async(async () => {
+    const element = document.getElementById('target');
+
+    let records1 = null;
+    let records2 = null;
+    let callbackCount = 0;
+
+    const observer1 = new MutationObserver((records) => {
+      records1 = records;
+      observer1.disconnect();
+      callbackCount++;
+    });
+
+    const observer2 = new MutationObserver((records) => {
+      records2 = records;
+      observer2.disconnect();
+      callbackCount++;
+    });
+
+    observer1.observe(element, { attributes: true });
+    observer2.observe(element, { attributes: true, attributeOldValue: true });
+
+    element.setAttribute('data-foo', 'bar');
+    element.setAttribute('data-foo', 'baz');
+
+    Promise.resolve().then(() => {
+      testing.expectEqual(2, callbackCount);
+      testing.expectEqual(2, records1.length);
+      testing.expectEqual(2, records2.length);
+
+      testing.expectEqual('data-foo', records1[0].attributeName);
+      testing.expectEqual(null, records1[0].oldValue);
+      testing.expectEqual('data-foo', records1[1].attributeName);
+      testing.expectEqual(null, records1[1].oldValue);
+
+      testing.expectEqual('data-foo', records2[0].attributeName);
+      testing.expectEqual(null, records2[0].oldValue);
+      testing.expectEqual('data-foo', records2[1].attributeName);
+      testing.expectEqual('bar', records2[1].oldValue);
+    });
+  });
+</script>

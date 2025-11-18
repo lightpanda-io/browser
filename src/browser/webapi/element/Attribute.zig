@@ -156,7 +156,9 @@ pub const List = struct {
         const is_id = isIdForConnected(result.normalized, element);
 
         var entry: *Entry = undefined;
+        var old_value: ?[]const u8 = null;
         if (result.entry) |e| {
+            old_value = try page.call_arena.dupe(u8, e._value.str());
             if (is_id) {
                 _ = page.document._elements_by_id.remove(e._value.str());
             }
@@ -174,7 +176,7 @@ pub const List = struct {
         if (is_id) {
             try page.document._elements_by_id.put(page.arena, entry._value.str(), element);
         }
-        page.attributeChange(element, result.normalized, entry._value.str());
+        page.attributeChange(element, result.normalized, entry._value.str(), old_value);
         return entry;
     }
 
@@ -226,12 +228,13 @@ pub const List = struct {
         const entry = result.entry orelse return;
 
         const is_id = isIdForConnected(result.normalized, element);
+        const old_value = entry._value.str();
 
         if (is_id) {
             _ = page.document._elements_by_id.remove(entry._value.str());
         }
 
-        page.attributeRemove(element, result.normalized);
+        page.attributeRemove(element, result.normalized, old_value);
         _ = page._attribute_lookup.remove(@intFromPtr(entry));
         self._list.remove(&entry._node);
         page._factory.destroy(entry);

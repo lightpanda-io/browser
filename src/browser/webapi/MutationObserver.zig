@@ -16,17 +16,270 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+const Node = @import("Node.zig");
+const Element = @import("Element.zig");
 
-// @ZIGDOM (haha, bet you wish you hadn't opened this file)
-// puppeteer's startup script creates a MutationObserver, even if it doesn't use
-// it in simple scripts. This not-even-a-skeleton is required for puppeteer/cdp.js
-// to run
+pub fn registerTypes() []const type {
+    return &.{
+        MutationObserver,
+        MutationRecord,
+    };
+}
+
 const MutationObserver = @This();
 
-pub fn init() MutationObserver {
-    return .{};
+_callback: js.Function,
+_observing: std.ArrayList(Observing) = .{},
+_pending_records: std.ArrayList(*MutationRecord) = .{},
+
+const Observing = struct {
+    target: *Node,
+    options: ObserveOptions,
+};
+
+pub const ObserveOptions = struct {
+    attributes: bool = false,
+    attributeOldValue: bool = false,
+    childList: bool = false,
+    characterData: bool = false,
+    characterDataOldValue: bool = false,
+    // Future: subtree, attributeFilter
+};
+
+pub fn init(callback: js.Function, page: *Page) !*MutationObserver {
+    return page._factory.create(MutationObserver{
+        ._callback = callback,
+    });
 }
+
+pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
+    // Check if already observing this target
+    for (self._observing.items) |*obs| {
+        if (obs.target == target) {
+            obs.options = options;
+            return;
+        }
+    }
+
+    // Register with page if this is our first observation
+    if (self._observing.items.len == 0) {
+        try page.registerMutationObserver(self);
+    }
+
+    try self._observing.append(page.arena, .{
+        .target = target,
+        .options = options,
+    });
+}
+
+pub fn disconnect(self: *MutationObserver, page: *Page) void {
+    page.unregisterMutationObserver(self);
+    self._observing.clearRetainingCapacity();
+    self._pending_records.clearRetainingCapacity();
+}
+
+pub fn takeRecords(self: *MutationObserver, page: *Page) ![]*MutationRecord {
+    const records = try page.call_arena.dupe(*MutationRecord, self._pending_records.items);
+    self._pending_records.clearRetainingCapacity();
+    return records;
+}
+
+// Called when an attribute changes on any element
+pub fn notifyAttributeChange(
+    self: *MutationObserver,
+    target: *Element,
+    attribute_name: []const u8,
+    old_value: ?[]const u8,
+    page: *Page,
+) !void {
+    const target_node = target.asNode();
+
+    for (self._observing.items) |obs| {
+        if (obs.target != target_node) {
+            continue;
+        }
+        if (!obs.options.attributes) {
+            continue;
+        }
+
+        const record = try page._factory.create(MutationRecord{
+            ._type = .attributes,
+            ._target = target_node,
+            ._attribute_name = try page.arena.dupe(u8, attribute_name),
+            ._old_value = if (obs.options.attributeOldValue and old_value != null)
+                try page.arena.dupe(u8, old_value.?)
+            else
+                null,
+            ._added_nodes = &.{},
+            ._removed_nodes = &.{},
+            ._previous_sibling = null,
+            ._next_sibling = null,
+        });
+
+        try self._pending_records.append(page.arena, record);
+
+        try page.scheduleMutationDelivery();
+        break;
+    }
+}
+
+// Called when character data changes on a text node
+pub fn notifyCharacterDataChange(
+    self: *MutationObserver,
+    target: *Node,
+    old_value: ?[]const u8,
+    page: *Page,
+) !void {
+    for (self._observing.items) |obs| {
+        if (obs.target != target) {
+            continue;
+        }
+        if (!obs.options.characterData) {
+            continue;
+        }
+
+        const record = try page._factory.create(MutationRecord{
+            ._type = .characterData,
+            ._target = target,
+            ._attribute_name = null,
+            ._old_value = if (obs.options.characterDataOldValue and old_value != null)
+                try page.arena.dupe(u8, old_value.?)
+            else
+                null,
+            ._added_nodes = &.{},
+            ._removed_nodes = &.{},
+            ._previous_sibling = null,
+            ._next_sibling = null,
+        });
+
+        try self._pending_records.append(page.arena, record);
+
+        try page.scheduleMutationDelivery();
+        break;
+    }
+}
+
+// Called when children are added or removed from a node
+pub fn notifyChildListChange(
+    self: *MutationObserver,
+    target: *Node,
+    added_nodes: []const *Node,
+    removed_nodes: []const *Node,
+    previous_sibling: ?*Node,
+    next_sibling: ?*Node,
+    page: *Page,
+) !void {
+    for (self._observing.items) |obs| {
+        if (obs.target != target) {
+            continue;
+        }
+        if (!obs.options.childList) {
+            continue;
+        }
+
+        const record = try page._factory.create(MutationRecord{
+            ._type = .childList,
+            ._target = target,
+            ._attribute_name = null,
+            ._old_value = null,
+            ._added_nodes = try page.arena.dupe(*Node, added_nodes),
+            ._removed_nodes = try page.arena.dupe(*Node, removed_nodes),
+            ._previous_sibling = previous_sibling,
+            ._next_sibling = next_sibling,
+        });
+
+        try self._pending_records.append(page.arena, record);
+
+        try page.scheduleMutationDelivery();
+        break;
+    }
+}
+
+pub fn deliverRecords(self: *MutationObserver, page: *Page) !void {
+    if (self._pending_records.items.len == 0) {
+        return;
+    }
+
+    // Take a copy of the records and clear the list before calling callback
+    // This ensures mutations triggered during the callback go into a fresh list
+    const records = try self.takeRecords(page);
+    try self._callback.call(void, .{ records, self });
+}
+
+pub const MutationRecord = struct {
+    _type: Type,
+    _target: *Node,
+    _attribute_name: ?[]const u8,
+    _old_value: ?[]const u8,
+    _added_nodes: []const *Node,
+    _removed_nodes: []const *Node,
+    _previous_sibling: ?*Node,
+    _next_sibling: ?*Node,
+
+    pub const Type = enum {
+        attributes,
+        childList,
+        characterData,
+    };
+
+    pub fn getType(self: *const MutationRecord) []const u8 {
+        return switch (self._type) {
+            .attributes => "attributes",
+            .childList => "childList",
+            .characterData => "characterData",
+        };
+    }
+
+    pub fn getTarget(self: *const MutationRecord) *Node {
+        return self._target;
+    }
+
+    pub fn getAttributeName(self: *const MutationRecord) ?[]const u8 {
+        return self._attribute_name;
+    }
+
+    pub fn getOldValue(self: *const MutationRecord) ?[]const u8 {
+        return self._old_value;
+    }
+
+    pub fn getAddedNodes(self: *const MutationRecord) []const *Node {
+        return self._added_nodes;
+    }
+
+    pub fn getRemovedNodes(self: *const MutationRecord) []const *Node {
+        return self._removed_nodes;
+    }
+
+    pub fn getPreviousSibling(self: *const MutationRecord) ?*Node {
+        return self._previous_sibling;
+    }
+
+    pub fn getNextSibling(self: *const MutationRecord) ?*Node {
+        return self._next_sibling;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(MutationRecord);
+
+        pub const Meta = struct {
+            pub const name = "MutationRecord";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const @"type" = bridge.accessor(MutationRecord.getType, null, .{});
+        pub const target = bridge.accessor(MutationRecord.getTarget, null, .{});
+        pub const attributeName = bridge.accessor(MutationRecord.getAttributeName, null, .{});
+        pub const oldValue = bridge.accessor(MutationRecord.getOldValue, null, .{});
+        pub const addedNodes = bridge.accessor(MutationRecord.getAddedNodes, null, .{});
+        pub const removedNodes = bridge.accessor(MutationRecord.getRemovedNodes, null, .{});
+        pub const previousSibling = bridge.accessor(MutationRecord.getPreviousSibling, null, .{});
+        pub const nextSibling = bridge.accessor(MutationRecord.getNextSibling, null, .{});
+    };
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MutationObserver);
@@ -38,4 +291,13 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(MutationObserver.init, .{});
+
+    pub const observe = bridge.function(MutationObserver.observe, .{});
+    pub const disconnect = bridge.function(MutationObserver.disconnect, .{});
+    pub const takeRecords = bridge.function(MutationObserver.takeRecords, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: MutationObserver" {
+    try testing.htmlRunner("mutation_observer", .{});
+}

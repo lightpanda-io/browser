@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="target" style="width: 100px; height: 100px;">Target Element</div>
+
+<script id="basic">
+    const target = document.getElementById('target');
+    let callbackCalled = false;
+    let entries = null;
+
+    const observer = new IntersectionObserver((observerEntries, obs) => {
+        callbackCalled = true;
+        entries = observerEntries;
+    });
+
+    observer.observe(target);
+
+    testing.eventually(() => {
+        testing.expectEqual(true, callbackCalled);
+        testing.expectEqual(1, entries.length);
+
+        const entry = entries[0];
+
+        testing.expectEqual(target, entry.target);
+        testing.expectEqual('boolean', typeof entry.isIntersecting);
+        testing.expectEqual('number', typeof entry.intersectionRatio);
+        testing.expectEqual('object', typeof entry.boundingClientRect);
+        testing.expectEqual('object', typeof entry.intersectionRect);
+
+        observer.disconnect();
+    });
+</script>

@@ -642,6 +642,19 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             };
         }
 
+        // debugger events
+
+
+        pub fn onRunMessageLoopOnPause(_: *anyopaque, _: u32) void {
+            // onRunMessageLoopOnPause is called when a breakpoint is hit.
+            // Until quit pause, we must continue to run a nested message loop
+            // to interact with the the debugger ony (ie. Chrome DevTools).
+        }
+
+        pub fn onQuitMessageLoopOnPause(_: *anyopaque) void {
+            // Quit breakpoint pause.
+        }
+
         // This is hacky x 2. First, we create the JSON payload by gluing our
         // session_id onto it. Second, we're much more client/websocket aware than
         // we should be.
