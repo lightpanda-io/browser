@@ -178,9 +178,11 @@ fn createTarget(cmd: anytype) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    try page.navigate(params.url, .{
-        .reason = .address_bar,
-    });
+    if (!std.mem.eql(u8, "about:blank", params.url)) {
+        try page.navigate(params.url, .{
+            .reason = .address_bar,
+        });
+    }
 
     try cmd.sendResult(.{
         .targetId = target_id,
