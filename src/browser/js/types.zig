@@ -27,104 +27,127 @@ const Interfaces = generate.Tuple(.{
 
 pub const Types = @typeInfo(Interfaces).@"struct".fields;
 
-// Imagine we have a type Cat which has a getter:
-//
-//    fn get_owner(self: *Cat) *Owner {
-//        return self.owner;
-//    }
-//
-// When we execute caller.getter, we'll end up doing something like:
-//   const res = @call(.auto, Cat.get_owner, .{cat_instance});
-//
-// How do we turn `res`, which is an *Owner, into something we can return
-// to v8? We need the ObjectTemplate associated with Owner. How do we
-// get that? Well, we store all the ObjectTemplates in an array that's
-// tied to env. So we do something like:
-//
-//    env.templates[index_of_owner].initInstance(...);
-//
-// But how do we get that `index_of_owner`? `Lookup` is a struct
-// that looks like:
-//
-// const Lookup = struct {
-//     comptime cat: usize = 0,
-//     comptime owner: usize = 1,
-//     ...
-// }
-//
-// So to get the template index of `owner`, we can do:
-//
-//  const index_id = @field(type_lookup, @typeName(@TypeOf(res));
-//
-pub const Lookup = blk: {
-    var fields: [Types.len]std.builtin.Type.StructField = undefined;
+/// Integer type we use for `Index` enum. Can be u8 at min.
+pub const BackingInt = std.math.IntFittingRange(0, @max(std.math.maxInt(u8), Types.len));
+
+/// Imagine we have a type `Cat` which has a getter:
+///
+///    fn get_owner(self: *Cat) *Owner {
+///        return self.owner;
+///    }
+///
+/// When we execute `caller.getter`, we'll end up doing something like:
+///
+///    const res = @call(.auto, Cat.get_owner, .{cat_instance});
+///
+/// How do we turn `res`, which is an *Owner, into something we can return
+/// to v8? We need the ObjectTemplate associated with Owner. How do we
+/// get that? Well, we store all the ObjectTemplates in an array that's
+/// tied to env. So we do something like:
+///
+///    env.templates[index_of_owner].initInstance(...);
+///
+/// But how do we get that `index_of_owner`? `Index` is an enum
+/// that looks like:
+///
+///    pub const Index = enum(BackingInt) {
+///        cat = 0,
+///        owner = 1,
+///        ...
+///    }
+///
+/// (`BackingInt` is calculated at comptime regarding to interfaces we have)
+/// So to get the template index of `owner`, simply do:
+///
+///    const index_id = types.getId(@TypeOf(res));
+pub const Index = blk: {
+    var fields: [Types.len]std.builtin.Type.EnumField = undefined;
     for (Types, 0..) |s, i| {
-
-        // This prototype type check has nothing to do with building our
-        // Lookup. But we put it here, early, so that the rest of the
-        // code doesn't have to worry about checking if Struct.prototype is
-        // a pointer.
         const Struct = s.defaultValue().?;
-        if (@hasDecl(Struct, "prototype") and @typeInfo(Struct.prototype) != .pointer) {
-            @compileError(std.fmt.comptimePrint("Prototype '{s}' for type '{s} must be a pointer", .{ @typeName(Struct.prototype), @typeName(Struct) }));
-        }
-
-        fields[i] = .{
-            .name = @typeName(Receiver(Struct)),
-            .type = usize,
-            .is_comptime = true,
-            .alignment = @alignOf(usize),
-            .default_value_ptr = &i,
-        };
+        fields[i] = .{ .name = @typeName(Receiver(Struct)), .value = i };
     }
-    break :blk @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .decls = &.{},
-        .is_tuple = false,
-        .fields = &fields,
-    } });
+
+    break :blk @Type(.{
+        .@"enum" = .{
+            .fields = &fields,
+            .tag_type = BackingInt,
+            .is_exhaustive = true,
+            .decls = &.{},
+        },
+    });
 };
 
-pub const LOOKUP = Lookup{};
+/// Returns a boolean indicating if a type exist in the `Index`.
+pub inline fn has(t: type) bool {
+    return @hasField(Index, @typeName(t));
+}
 
-// Creates a list where the index of a type contains its prototype index
-//   const Animal = struct{};
-//   const Cat = struct{
-//       pub const prototype = *Animal;
-// };
-//
-// Would create an array: [0, 0]
-// Animal, at index, 0, has no prototype, so we set it to itself
-// Cat, at index 1, has an Animal prototype, so we set it to 0.
-//
-// When we're trying to pass an argument to a Zig function, we'll know the
-// target type (the function parameter type), and we'll have a
-// TaggedAnyOpaque which will have the index of the type of that parameter.
-// We'll use the PROTOTYPE_TABLE to see if the TaggedAnyType should be
-// cast to a prototype.
-pub const PROTOTYPE_TABLE = blk: {
-    var table: [Types.len]u16 = undefined;
+/// Returns the `Index` for the given type.
+pub inline fn getIndex(t: type) Index {
+    return @field(Index, @typeName(t));
+}
+
+/// Returns the ID for the given type.
+pub inline fn getId(t: type) BackingInt {
+    return @intFromEnum(getIndex(t));
+}
+
+/// Creates a list where the index of a type contains its prototype index.
+///    const Animal = struct{};
+///    const Cat = struct{
+///        pub const prototype = *Animal;
+///    };
+///
+/// Would create an array of indexes:
+///    [Index.Animal, Index.Animal]
+///
+/// `Animal`, at index, 0, has no prototype, so we set it to itself.
+/// `Cat`, at index 1, has an `Animal` prototype, so we set it to `Animal`.
+///
+/// When we're trying to pass an argument to a Zig function, we'll know the
+/// target type (the function parameter type), and we'll have a
+/// TaggedAnyOpaque which will have the index of the type of that parameter.
+/// We'll use the `PrototypeTable` to see if the TaggedAnyType should be
+/// cast to a prototype.
+pub const PrototypeTable = blk: {
+    var table: [Types.len]BackingInt = undefined;
     for (Types, 0..) |s, i| {
-        var prototype_index = i;
         const Struct = s.defaultValue().?;
-        if (@hasDecl(Struct, "prototype")) {
-            const TI = @typeInfo(Struct.prototype);
-            const proto_name = @typeName(Receiver(TI.pointer.child));
-            prototype_index = @field(LOOKUP, proto_name);
-        }
-        table[i] = prototype_index;
+        table[i] = proto_index: {
+            if (@hasDecl(Struct, "prototype")) {
+                const prototype_field = @field(Struct, "prototype");
+                // This prototype type check has nothing to do with building our
+                // Lookup. But we put it here, early, so that the rest of the
+                // code doesn't have to worry about checking if Struct.prototype is
+                // a pointer.
+                break :proto_index switch (@typeInfo(prototype_field)) {
+                    .pointer => |pointer| getId(Receiver(pointer.child)),
+                    inline else => @compileError(std.fmt.comptimePrint("Prototype '{s}' for type '{s}' must be a pointer", .{
+                        prototype_field,
+                        @typeName(Struct),
+                    })),
+                };
+            }
+
+            break :proto_index i;
+        };
     }
+
     break :blk table;
 };
 
-// This is essentially meta data for each type. Each is stored in env.meta_lookup
-// The index for a type can be retrieved via:
-//   const index = @field(TYPE_LOOKUP, @typeName(Receiver(Struct)));
-//   const meta = env.meta_lookup[index];
+/// This is essentially meta data for each type. Each is stored in `env.meta_lookup`.
+/// The index for a type can be retrieved via:
+///    const index = types.getIndex(Receiver(Struct));
+///    const meta = env.meta_lookup[@intFromEnum(index)];
+///
+/// Or:
+///    const id = types.getId(Receiver(Struct));
+///    const meta = env.meta_lookup[id];
 pub const Meta = struct {
     // Every type is given a unique index. That index is used to lookup various
     // things, i.e. the prototype chain.
-    index: u16,
+    index: BackingInt,
 
     // We store the type's subtype here, so that when we create an instance of
     // the type, and bind it to JavaScript, we can store the subtype along with

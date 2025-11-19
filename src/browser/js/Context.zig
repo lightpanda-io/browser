@@ -409,9 +409,8 @@ pub fn zigValueToJs(self: *Context, value: anytype) !v8.Value {
         },
         .pointer => |ptr| switch (ptr.size) {
             .one => {
-                const type_name = @typeName(ptr.child);
-                if (@hasField(types.Lookup, type_name)) {
-                    const template = self.templates[@field(types.LOOKUP, type_name)];
+                if (types.has(ptr.child)) {
+                    const template = self.templates[types.getId(ptr.child)];
                     const js_obj = try self.mapZigInstanceToJs(template, value);
                     return js_obj.toValue();
                 }
@@ -445,9 +444,8 @@ pub fn zigValueToJs(self: *Context, value: anytype) !v8.Value {
             else => {},
         },
         .@"struct" => |s| {
-            const type_name = @typeName(T);
-            if (@hasField(types.Lookup, type_name)) {
-                const template = self.templates[@field(types.LOOKUP, type_name)];
+            if (types.has(T)) {
+                const template = self.templates[types.getId(T)];
                 const js_obj = try self.mapZigInstanceToJs(template, value);
                 return js_obj.toValue();
             }
@@ -583,8 +581,7 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_or_template: anytype, value: an
                 // well as any meta data we'll need to use it later.
                 // See the TaggedAnyOpaque struct for more details.
                 const tao = try arena.create(TaggedAnyOpaque);
-                const meta_index = @field(types.LOOKUP, @typeName(ptr.child));
-                const meta = self.meta_lookup[meta_index];
+                const meta = self.meta_lookup[types.getId(ptr.child)];
 
                 tao.* = .{
                     .ptr = value,
@@ -664,7 +661,7 @@ pub fn jsValueToZig(self: *Context, comptime named_function: NamedFunction, comp
                 if (!js_value.isObject()) {
                     return error.InvalidArgument;
                 }
-                if (@hasField(types.Lookup, @typeName(ptr.child))) {
+                if (types.has(ptr.child)) {
                     const js_obj = js_value.castTo(v8.Object);
                     return self.typeTaggedAnyOpaque(named_function, *types.Receiver(ptr.child), js_obj);
                 }
@@ -1454,14 +1451,13 @@ pub fn typeTaggedAnyOpaque(self: *const Context, comptime named_function: NamedF
         return error.InvalidArgument;
     }
 
-    const type_name = @typeName(T);
-    if (@hasField(types.Lookup, type_name) == false) {
+    if (!types.has(T)) {
         @compileError(named_function.full_name ++ "has an unknown Zig type: " ++ @typeName(R));
     }
 
     const op = js_obj.getInternalField(0).castTo(v8.External).get();
     const tao: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
-    const expected_type_index = @field(types.LOOKUP, type_name);
+    const expected_type_index = types.getId(T);
 
     var type_index = tao.index;
     if (type_index == expected_type_index) {
@@ -1489,7 +1485,7 @@ pub fn typeTaggedAnyOpaque(self: *const Context, comptime named_function: NamedF
             total_offset += @intCast(proto_offset);
         }
 
-        const prototype_index = types.PROTOTYPE_TABLE[type_index];
+        const prototype_index = types.PrototypeTable[type_index];
         if (prototype_index == expected_type_index) {
             return @ptrFromInt(base_ptr + total_offset);
         }
@@ -1582,7 +1578,7 @@ fn probeJsValueToZig(self: *Context, comptime named_function: NamedFunction, com
                 if (!js_value.isObject()) {
                     return .{ .invalid = {} };
                 }
-                if (@hasField(types.Lookup, @typeName(ptr.child))) {
+                if (types.has(ptr.child)) {
                     const js_obj = js_value.castTo(v8.Object);
                     // There's a bit of overhead in doing this, so instead
                     // of having a version of typeTaggedAnyOpaque which
