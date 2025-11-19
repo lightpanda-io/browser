@@ -230,6 +230,11 @@ pub fn CDPT(comptime TypeProvider: type) type {
                     asUint(u88, "Performance") => return @import("domains/performance.zig").processMessage(command),
                     else => {},
                 },
+                13 => switch (@as(u104, @bitCast(domain[0..13].*))) {
+                    asUint(u104, "Accessibility") => return @import("domains/accessibility.zig").processMessage(command),
+                    else => {},
+                },
+
                 else => {},
             }
 
