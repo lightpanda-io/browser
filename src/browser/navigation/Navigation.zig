@@ -35,6 +35,7 @@ const Navigation = @This();
 const NavigationKind = @import("root.zig").NavigationKind;
 const NavigationHistoryEntry = @import("root.zig").NavigationHistoryEntry;
 const NavigationTransition = @import("root.zig").NavigationTransition;
+const NavigationState = @import("root.zig").NavigationState;
 const NavigationCurrentEntryChangeEvent = @import("root.zig").NavigationCurrentEntryChangeEvent;
 
 const NavigationEventTarget = @import("NavigationEventTarget.zig");
@@ -110,10 +111,10 @@ pub fn _forward(self: *Navigation, page: *Page) !NavigationReturn {
 pub fn updateEntries(self: *Navigation, url: []const u8, kind: NavigationKind, page: *Page, dispatch: bool) !void {
     switch (kind) {
         .replace => {
-            _ = try self.replaceEntry(url, null, page, dispatch);
+            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = null }, page, dispatch);
         },
         .push => |state| {
-            _ = try self.pushEntry(url, state, page, dispatch);
+            _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, dispatch);
         },
         .traverse => |index| {
             self.index = index;
@@ -132,7 +133,13 @@ pub fn processNavigation(self: *Navigation, page: *Page) !void {
 
 /// Pushes an entry into the Navigation stack WITHOUT actually navigating to it.
 /// For that, use `navigate`.
-pub fn pushEntry(self: *Navigation, _url: []const u8, state: ?[]const u8, page: *Page, dispatch: bool) !*NavigationHistoryEntry {
+pub fn pushEntry(
+    self: *Navigation,
+    _url: []const u8,
+    state: NavigationState,
+    page: *Page,
+    dispatch: bool,
+) !*NavigationHistoryEntry {
     const arena = page.session.arena;
 
     const url = try arena.dupe(u8, _url);
@@ -160,18 +167,24 @@ pub fn pushEntry(self: *Navigation, _url: []const u8, state: ?[]const u8, page: 
     // we don't always have a current entry...
     const previous = if (self.entries.items.len > 0) self.currentEntry() else null;
     try self.entries.append(arena, entry);
+    self.index = index;
+
     if (previous) |prev| {
         if (dispatch) {
             NavigationCurrentEntryChangeEvent.dispatch(self, prev, .push);
         }
     }
 
-    self.index = index;
-
     return entry;
 }
 
-pub fn replaceEntry(self: *Navigation, _url: []const u8, state: ?[]const u8, page: *Page, dispatch: bool) !*NavigationHistoryEntry {
+pub fn replaceEntry(
+    self: *Navigation,
+    _url: []const u8,
+    state: NavigationState,
+    page: *Page,
+    dispatch: bool,
+) !*NavigationHistoryEntry {
     const arena = page.session.arena;
     const url = try arena.dupe(u8, _url);
 
@@ -184,7 +197,7 @@ pub fn replaceEntry(self: *Navigation, _url: []const u8, state: ?[]const u8, pag
     const entry = try arena.create(NavigationHistoryEntry);
     entry.* = NavigationHistoryEntry{
         .id = id_str,
-        .key = id_str,
+        .key = previous.key,
         .url = url,
         .state = state,
     };
@@ -242,7 +255,20 @@ pub fn navigate(
                 // todo: Fire navigate event
                 try finished.resolve({});
 
-                _ = try self.pushEntry(url, state, page, true);
+                _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
+            } else {
+                try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
+            }
+        },
+        .replace => |state| {
+            if (is_same_document) {
+                page.url = new_url;
+
+                try committed.resolve({});
+                // todo: Fire navigate event
+                try finished.resolve({});
+
+                _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
                 try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
             }
@@ -263,7 +289,6 @@ pub fn navigate(
         .reload => {
             try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
         },
-        else => unreachable,
     }
 
     return .{
@@ -275,7 +300,13 @@ pub fn navigate(
 pub fn _navigate(self: *Navigation, _url: []const u8, _opts: ?NavigateOptions, page: *Page) !NavigationReturn {
     const opts = _opts orelse NavigateOptions{};
     const json = if (opts.state) |state| state.toJson(page.session.arena) catch return error.DataClone else null;
-    return try self.navigate(_url, .{ .push = json }, page);
+
+    const kind: NavigationKind = switch (opts.history) {
+        .replace => .{ .replace = json },
+        .push, .auto => .{ .push = json },
+    };
+
+    return try self.navigate(_url, kind, page);
 }
 
 pub const ReloadOptions = struct {
@@ -290,7 +321,7 @@ pub fn _reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !Navigatio
     const entry = self.currentEntry();
     if (opts.state) |state| {
         const previous = entry;
-        entry.state = state.toJson(arena) catch return error.DataClone;
+        entry.state = .{ .source = .navigation, .value = state.toJson(arena) catch return error.DataClone };
         NavigationCurrentEntryChangeEvent.dispatch(self, previous, .reload);
     }
 
@@ -323,6 +354,6 @@ pub fn _updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions
     const arena = page.session.arena;
 
     const previous = self.currentEntry();
-    self.currentEntry().state = options.state.toJson(arena) catch return error.DataClone;
+    self.currentEntry().state = .{ .source = .navigation, .value = options.state.toJson(arena) catch return error.DataClone };
     NavigationCurrentEntryChangeEvent.dispatch(self, previous, null);
 }
