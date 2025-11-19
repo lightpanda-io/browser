@@ -20,6 +20,7 @@ const std = @import("std");
 const Page = @import("../../browser/page.zig").Page;
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../notification.zig").Notification;
+const log = @import("../../log.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -133,10 +134,10 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         frameId: []const u8,
         worldName: []const u8,
-        grantUniveralAccess: bool,
+        grantUniveralAccess: bool = false,
     })) orelse return error.InvalidParams;
     if (!params.grantUniveralAccess) {
-        std.debug.print("grantUniveralAccess == false is not yet implemented", .{});
+        log.warn(.cdp, "not implemented", .{ .feature = "grantUniveralAccess == false is not yet implemented" });
         // When grantUniveralAccess == false and the client attempts to resolve
         // or otherwise access a DOM or other JS Object from another context that should fail.
     }
