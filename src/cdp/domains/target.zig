@@ -71,8 +71,8 @@ fn getTargets(cmd: anytype) !void {
         .targetInfos = [_]TargetInfo{.{
             .targetId = target_id,
             .type = "page",
-            .title = "",
-            .url = "",
+            .title = bc.getTitle() orelse "about:blank",
+            .url = bc.getURL() orelse "about:blank",
             .attached = true,
             .canAccessOpener = false,
         }},
