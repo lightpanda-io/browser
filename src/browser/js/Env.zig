@@ -111,16 +111,14 @@ pub fn init(allocator: Allocator, platform: *const Platform, _: Opts) !*Env {
         const Struct = s.defaultValue().?;
         if (@hasDecl(Struct, "prototype")) {
             const TI = @typeInfo(Struct.prototype);
-            const proto_name = @typeName(types.Receiver(TI.pointer.child));
-            if (@hasField(types.Lookup, proto_name) == false) {
-                @compileError(std.fmt.comptimePrint("Prototype '{s}' for '{s}' is undefined", .{ proto_name, @typeName(Struct) }));
+            const ProtoType = types.Receiver(TI.pointer.child);
+            if (!types.has(ProtoType)) {
+                @compileError(std.fmt.comptimePrint("Prototype '{s}' for '{s}' is undefined", .{ @typeName(ProtoType), @typeName(Struct) }));
             }
-            // Hey, look! This is our first real usage of the types.LOOKUP.
+            // Hey, look! This is our first real usage of the `types.Index`.
             // Just like we said above, given a type, we can get its
             // template index.
-
-            const proto_index = @field(types.LOOKUP, proto_name);
-            templates[i].inherit(templates[proto_index]);
+            templates[i].inherit(templates[types.getId(ProtoType)]);
         }
 
         // while we're here, let's populate our meta lookup

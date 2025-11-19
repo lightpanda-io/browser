@@ -104,10 +104,8 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         // though it's also a Window, we need to set the prototype for this
         // specific instance of the the Window.
         if (@hasDecl(Global, "prototype")) {
-            const proto_type = types.Receiver(@typeInfo(Global.prototype).pointer.child);
-            const proto_name = @typeName(proto_type);
-            const proto_index = @field(types.LOOKUP, proto_name);
-            js_global.inherit(templates[proto_index]);
+            const ProtoType = types.Receiver(@typeInfo(Global.prototype).pointer.child);
+            js_global.inherit(templates[types.getId(ProtoType)]);
         }
 
         const context_local = v8.Context.init(isolate, global_template, null);
@@ -123,14 +121,12 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
             const Struct = s.defaultValue().?;
 
             if (@hasDecl(Struct, "prototype")) {
-                const proto_type = types.Receiver(@typeInfo(Struct.prototype).pointer.child);
-                const proto_name = @typeName(proto_type);
-                if (@hasField(types.Lookup, proto_name) == false) {
-                    @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ proto_name);
+                const ProtoType = types.Receiver(@typeInfo(Struct.prototype).pointer.child);
+                if (!types.has(ProtoType)) {
+                    @compileError("Type '" ++ @typeName(Struct) ++ "' defines an unknown prototype: " ++ @typeName(ProtoType));
                 }
 
-                const proto_index = @field(types.LOOKUP, proto_name);
-                const proto_obj = templates[proto_index].getFunction(v8_context).toObject();
+                const proto_obj = templates[types.getId(ProtoType)].getFunction(v8_context).toObject();
 
                 const self_obj = templates[i].getFunction(v8_context).toObject();
                 _ = self_obj.setPrototype(v8_context, proto_obj);
