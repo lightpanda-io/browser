@@ -167,7 +167,7 @@ fn createTarget(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .attached = false,
             .targetId = target_id,
-            .title = params.url,
+            .title = "about:blank",
             .browserContextId = bc.id,
             .url = "about:blank",
         },
@@ -271,8 +271,8 @@ fn getTargetInfo(cmd: anytype) !void {
             .targetInfo = TargetInfo{
                 .targetId = target_id,
                 .type = "page",
-                .title = "",
-                .url = "",
+                .title = bc.getTitle() orelse "about:blank",
+                .url = bc.getURL() orelse "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
             },
@@ -283,8 +283,8 @@ fn getTargetInfo(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .targetId = "TID-STARTUP-B",
             .type = "browser",
-            .title = "",
-            .url = "",
+            .title = "about:blank",
+            .url = "about:blank",
             .attached = true,
             .canAccessOpener = false,
         },
@@ -630,8 +630,8 @@ test "cdp.target: getTargetInfo" {
         try ctx.expectSentResult(.{
             .targetInfo = .{
                 .type = "browser",
-                .title = "",
-                .url = "",
+                .title = "about:blank",
+                .url = "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
             },
@@ -664,7 +664,7 @@ test "cdp.target: getTargetInfo" {
                 .targetId = "TID-A",
                 .type = "page",
                 .title = "",
-                .url = "",
+                .url = "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
             },

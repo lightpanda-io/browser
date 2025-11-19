@@ -1222,6 +1222,10 @@ pub const Page = struct {
         const current_origin = try self.origin(self.call_arena);
         return std.mem.startsWith(u8, url, current_origin);
     }
+
+    pub fn getTitle(self: *const Page) ![]const u8 {
+        return try parser.documentHTMLGetTitle(self.window.document);
+    }
 };
 
 pub const NavigateReason = enum {
