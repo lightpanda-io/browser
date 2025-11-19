@@ -468,6 +468,14 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return if (raw_url.len == 0) null else raw_url;
         }
 
+        pub fn getTitle(self: *const Self) ?[]const u8 {
+            const page = self.session.currentPage() orelse return null;
+            return page.getTitle() catch |err| {
+                log.err(.cdp, "page title", .{ .err = err });
+                return null;
+            };
+        }
+
         pub fn networkEnable(self: *Self) !void {
             try self.cdp.browser.notification.register(.http_request_fail, self, onHttpRequestFail);
             try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
