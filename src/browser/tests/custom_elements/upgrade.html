@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<body>
+<my-early id="early"></my-early>
+<script src="../testing.js"></script>
+<script id="upgrade">
+{
+    let constructorCalled = 0;
+    let connectedCalled = 0;
+
+    class MyEarly extends HTMLElement {
+        constructor() {
+            super();
+            constructorCalled++;
+            this.upgraded = true;
+        }
+
+        connectedCallback() {
+            connectedCalled++;
+        }
+    }
+
+    const early = document.getElementById('early');
+    testing.expectEqual(undefined, early.upgraded);
+    testing.expectEqual(0, constructorCalled);
+    testing.expectEqual(0, connectedCalled);
+
+    customElements.define('my-early', MyEarly);
+    testing.expectEqual(true, early.upgraded);
+    testing.expectEqual(1, constructorCalled);
+    testing.expectEqual(1, connectedCalled);
+}
+
+{
+    let order = [];
+
+    class UpgradeParent extends HTMLElement {
+        constructor() {
+            super();
+            order.push('parent-constructor');
+        }
+
+        connectedCallback() {
+            order.push('parent-connected');
+        }
+    }
+
+    class UpgradeChild extends HTMLElement {
+        constructor() {
+            super();
+            order.push('child-constructor');
+        }
+
+        connectedCallback() {
+            order.push('child-connected');
+        }
+    }
+
+    const container = document.createElement('div');
+    container.innerHTML = '<upgrade-parent><upgrade-child></upgrade-child></upgrade-parent>';
+    document.body.appendChild(container);
+
+    testing.expectEqual(0, order.length);
+
+    customElements.define('upgrade-parent', UpgradeParent);
+    testing.expectEqual(2, order.length);
+    testing.expectEqual('parent-constructor', order[0]);
+    testing.expectEqual('parent-connected', order[1]);
+
+    customElements.define('upgrade-child', UpgradeChild);
+    testing.expectEqual(4, order.length);
+    testing.expectEqual('child-constructor', order[2]);
+    testing.expectEqual('child-connected', order[3]);
+}
+
+{
+    let connectedCalled = 0;
+
+    class DetachedUpgrade extends HTMLElement {
+        connectedCallback() {
+            connectedCalled++;
+        }
+    }
+
+    const container = document.createElement('div');
+    container.innerHTML = '<detached-upgrade></detached-upgrade>';
+
+    testing.expectEqual(0, connectedCalled);
+
+    customElements.define('detached-upgrade', DetachedUpgrade);
+    testing.expectEqual(0, connectedCalled);
+
+    document.body.appendChild(container);
+    testing.expectEqual(1, connectedCalled);
+}
+</script>

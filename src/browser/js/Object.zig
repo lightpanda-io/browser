@@ -118,6 +118,11 @@ pub fn getFunction(self: Object, name: []const u8) !?js.Function {
     return try context.createFunction(js_value);
 }
 
+pub fn callMethod(self: Object, comptime T: type, method_name: []const u8, args: anytype) !T {
+    const func = try self.getFunction(method_name) orelse return error.MethodNotFound;
+    return func.callWithThis(T, self, args);
+}
+
 pub fn isNull(self: Object) bool {
     return self.js_obj.toValue().isNull();
 }

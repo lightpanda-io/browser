@@ -16,23 +16,134 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const String = @import("../../../../string.zig").String;
 
 const js = @import("../../../js/js.zig");
+const log = @import("../../../../log.zig");
+const Page = @import("../../../Page.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const CustomElementDefinition = @import("../../CustomElementDefinition.zig");
 
 const Custom = @This();
 _proto: *HtmlElement,
 _tag_name: String,
+_definition: ?*CustomElementDefinition,
 
 pub fn asElement(self: *Custom) *Element {
     return self._proto._proto;
 }
 pub fn asNode(self: *Custom) *Node {
     return self.asElement().asNode();
+}
+
+pub fn invokeConnectedCallback(self: *Custom, page: *Page) void {
+    self.invokeCallback("connectedCallback", .{}, page);
+}
+
+pub fn invokeDisconnectedCallback(self: *Custom, page: *Page) void {
+    self.invokeCallback("disconnectedCallback", .{}, page);
+}
+
+pub fn invokeAttributeChangedCallback(self: *Custom, name: []const u8, old_value: ?[]const u8, new_value: ?[]const u8, page: *Page) void {
+    const definition = self._definition orelse return;
+    if (!definition.isAttributeObserved(name)) return;
+    self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value }, page);
+}
+
+// Static helpers that work on any Element (autonomous or customized built-in)
+pub fn invokeConnectedCallbackOnElement(element: *Element, page: *Page) void {
+    // Autonomous custom element
+    if (element.is(Custom)) |custom| {
+        custom.invokeConnectedCallback(page);
+        return;
+    }
+
+    // Customized built-in element
+    invokeCallbackOnElement(element, "connectedCallback", .{}, page);
+}
+
+pub fn invokeDisconnectedCallbackOnElement(element: *Element, page: *Page) void {
+    // Autonomous custom element
+    if (element.is(Custom)) |custom| {
+        custom.invokeDisconnectedCallback(page);
+        return;
+    }
+
+    // Customized built-in element
+    invokeCallbackOnElement(element, "disconnectedCallback", .{}, page);
+}
+
+pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: []const u8, old_value: ?[]const u8, new_value: ?[]const u8, page: *Page) void {
+    // Autonomous custom element
+    if (element.is(Custom)) |custom| {
+        custom.invokeAttributeChangedCallback(name, old_value, new_value, page);
+        return;
+    }
+
+    // Customized built-in element - check if attribute is observed
+    const definition = page.getCustomizedBuiltInDefinition(element) orelse return;
+    if (!definition.isAttributeObserved(name)) return;
+    invokeCallbackOnElement(element, "attributeChangedCallback", .{ name, old_value, new_value }, page);
+}
+
+fn invokeCallbackOnElement(element: *Element, comptime callback_name: [:0]const u8, args: anytype, page: *Page) void {
+    // Check if this element has a customized built-in definition
+    _ = page.getCustomizedBuiltInDefinition(element) orelse return;
+
+    const context = page.js;
+
+    // Get the JS element object
+    const js_val = context.zigValueToJs(element, .{}) catch return;
+    const js_element = context.createObject(js_val);
+
+    // Call the callback method if it exists
+    js_element.callMethod(void, callback_name, args) catch return;
+}
+
+// Check if element has "is" attribute and attach customized built-in definition
+pub fn checkAndAttachBuiltIn(element: *Element, page: *Page) !void {
+    const is_value = element.getAttributeSafe("is") orelse return;
+
+    const custom_elements = page.window.getCustomElements();
+    const definition = custom_elements._definitions.get(is_value) orelse return;
+
+    const extends_tag = definition.extends orelse return;
+    if (extends_tag != element.getTag()) {
+        return;
+    }
+
+    // Attach the definition
+    try page.setCustomizedBuiltInDefinition(element, definition);
+
+    // Invoke constructor
+    const prev_upgrading = page._upgrading_element;
+    const node = element.asNode();
+    page._upgrading_element = node;
+    defer page._upgrading_element = prev_upgrading;
+
+    var result: js.Function.Result = undefined;
+    _ = definition.constructor.newInstance(&result) catch |err| {
+        log.warn(.js, "custom builtin ctor", .{ .name = is_value, .err = err });
+        return;
+    };
+}
+
+
+fn invokeCallback(self: *Custom, comptime callback_name: [:0]const u8, args: anytype, page: *Page) void {
+    if (self._definition == null) {
+        return;
+    }
+
+    const context = page.js;
+
+    const js_val = context.zigValueToJs(self, .{}) catch return;
+    const js_element = context.createObject(js_val);
+
+    js_element.callMethod(void, callback_name, args) catch return;
 }
 
 pub const JsApi = struct {

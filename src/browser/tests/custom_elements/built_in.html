@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script id="built_in">
+{
+    class FancyButton extends HTMLElement {}
+    customElements.define('fancy-button', FancyButton, { extends: 'button' });
+
+    const definition = customElements.get('fancy-button');
+    testing.expectEqual(FancyButton, definition);
+}
+
+{
+    let threw = false;
+    try {
+        class BadExtends extends HTMLElement {}
+        customElements.define('bad-extends', BadExtends, { extends: 'not-a-real-element' });
+    } catch (e) {
+        threw = true;
+    }
+    testing.expectEqual(true, threw);
+}
+
+{
+    let threw = false;
+    try {
+        class ExtendCustom extends HTMLElement {}
+        customElements.define('extend-custom', ExtendCustom, { extends: 'fancy-button' });
+    } catch (e) {
+        threw = true;
+    }
+    testing.expectEqual(true, threw);
+}
+
+{
+    class FancyParagraph extends HTMLElement {}
+    customElements.define('fancy-paragraph', FancyParagraph, { extends: 'p' });
+
+    const definition = customElements.get('fancy-paragraph');
+    testing.expectEqual(FancyParagraph, definition);
+}
+
+{
+    let constructorCalled = 0;
+
+    class ConstructedButton extends HTMLElement {
+        constructor() {
+            super();
+            constructorCalled++;
+            this.clicked = false;
+        }
+    }
+
+    customElements.define('constructed-button', ConstructedButton, { extends: 'button' });
+
+    const btn = document.createElement('button', { is: 'constructed-button' });
+    testing.expectEqual(1, constructorCalled);
+    testing.expectEqual('BUTTON', btn.tagName);
+    testing.expectEqual(false, btn.clicked);
+}
+
+{
+    class WrongTag extends HTMLElement {}
+    customElements.define('wrong-tag', WrongTag, { extends: 'button' });
+
+    const div = document.createElement('div', { is: 'wrong-tag' });
+    testing.expectEqual('DIV', div.tagName);
+}
+
+{
+    let connectedCount = 0;
+    let disconnectedCount = 0;
+    let attributeChanges = [];
+
+    class LifecycleButton extends HTMLElement {
+        static get observedAttributes() {
+            return ['data-test'];
+        }
+
+        connectedCallback() {
+            connectedCount++;
+        }
+
+        disconnectedCallback() {
+            disconnectedCount++;
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            attributeChanges.push({ name, oldValue, newValue });
+        }
+    }
+
+    customElements.define('lifecycle-button', LifecycleButton, { extends: 'button' });
+
+    const btn = document.createElement('button', { is: 'lifecycle-button' });
+    testing.expectEqual(0, connectedCount);
+
+    document.body.appendChild(btn);
+    testing.expectEqual(1, connectedCount);
+
+    btn.setAttribute('data-test', 'value1');
+    testing.expectEqual(1, attributeChanges.length);
+    testing.expectEqual('data-test', attributeChanges[0].name);
+    testing.expectEqual(null, attributeChanges[0].oldValue);
+    testing.expectEqual('value1', attributeChanges[0].newValue);
+
+    btn.remove();
+    testing.expectEqual(1, disconnectedCount);
+}
+</script>
+
+<script>
+{
+    let constructorCalled = 0;
+    let connectedCalled = 0;
+
+    class ParsedButton extends HTMLElement {
+        constructor() {
+            super();
+            constructorCalled++;
+        }
+
+        connectedCallback() {
+            connectedCalled++;
+        }
+    }
+
+    customElements.define('parsed-button', ParsedButton, { extends: 'button' });
+}
+</script>
+<button is="parsed-button" id="parsed"></button>
+<script>
+{
+    const btn = document.getElementById('parsed');
+    testing.expectEqual('BUTTON', btn.tagName);
+}
+</script>

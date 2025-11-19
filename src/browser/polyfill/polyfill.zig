@@ -26,9 +26,7 @@ const Allocator = std.mem.Allocator;
 pub const Loader = struct {
     state: enum { empty, loading } = .empty,
 
-    done: struct {
-        webcomponents: bool = false,
-    } = .{},
+    done: struct {} = .{},
 
     fn load(self: *Loader, comptime name: []const u8, source: []const u8, js_context: *js.Context) void {
         var try_catch: js.TryCatch = undefined;
@@ -55,17 +53,6 @@ pub const Loader = struct {
             return false;
         }
 
-        if (!self.done.webcomponents and isWebcomponents(name)) {
-            const source = @import("webcomponents.zig").source;
-            self.load("webcomponents", source, js_context);
-            // We return false here: We want v8 to continue the calling chain
-            // to finally find the polyfill we just inserted. If we want to
-            // return false and stops the call chain, we have to use
-            // `info.GetReturnValue.Set()` function, or `undefined` will be
-            // returned immediately.
-            return false;
-        }
-
         if (comptime builtin.mode == .Debug) {
             log.debug(.unknown_prop, "unkown global property", .{
                 .info = "but the property can exist in pure JS",
@@ -76,25 +63,4 @@ pub const Loader = struct {
 
         return false;
     }
-
-    fn isWebcomponents(name: []const u8) bool {
-        if (std.mem.eql(u8, name, "customElements")) return true;
-        return false;
-    }
 };
-
-pub fn preload(allocator: Allocator, js_context: *js.Context) !void {
-    var try_catch: js.TryCatch = undefined;
-    try_catch.init(js_context);
-    defer try_catch.deinit();
-
-    const name = "webcomponents-pre";
-    const source = @import("webcomponents.zig").pre;
-    _ = js_context.exec(source, name) catch |err| {
-        if (try try_catch.err(allocator)) |msg| {
-            defer allocator.free(msg);
-            log.fatal(.app, "polyfill error", .{ .name = name, .err = msg });
-        }
-        return err;
-    };
-}

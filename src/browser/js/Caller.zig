@@ -106,13 +106,22 @@ pub fn _constructor(self: *Caller, func: anytype, info: v8.FunctionCallbackInfo)
         @compileError(@typeName(F) ++ " has a constructor without a return type");
     };
 
-    const this = info.getThis();
+    const new_this = info.getThis();
+    var this = new_this;
     if (@typeInfo(ReturnType) == .error_union) {
         const non_error_res = res catch |err| return err;
-        _ = try self.context.mapZigInstanceToJs(this, non_error_res);
+        this = (try self.context.mapZigInstanceToJs(this, non_error_res)).castToObject();
     } else {
-        _ = try self.context.mapZigInstanceToJs(this, res);
+        this = (try self.context.mapZigInstanceToJs(this, res)).castToObject();
     }
+
+    // If we got back a different object (existing wrapper), copy the prototype
+    // from new object. (this happens when we're upgrading an CustomElement)
+    if (this.handle != new_this.handle) {
+        const new_prototype = new_this.getPrototype();
+        _ = this.setPrototype(self.context.v8_context, new_prototype.castTo(v8.Object));
+    }
+
     info.getReturnValue().set(this);
 }
 

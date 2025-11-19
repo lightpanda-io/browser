@@ -399,6 +399,13 @@ pub fn createValue(self: *const Context, value: v8.Value) js.Value {
     };
 }
 
+pub fn createObject(self: *Context, js_value: v8.Value) js.Object {
+    return .{
+        .js_obj = js_value.castTo(v8.Object),
+        .context = self,
+    };
+}
+
 pub fn createFunction(self: *Context, js_value: v8.Value) !js.Function {
     // caller should have made sure this was a function
     std.debug.assert(js_value.isFunction());
@@ -1929,7 +1936,6 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     self.isolate.enqueueMicrotaskFunc(cb.func.castToFunction());
 }
-
 
 // == Misc ==
 // An interface for types that want to have their jsDeinit function to be

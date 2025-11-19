@@ -77,9 +77,21 @@ pub fn getURL(_: *const Document, page: *const Page) [:0]const u8 {
     return page.url;
 }
 
-pub fn createElement(_: *const Document, name: []const u8, page: *Page) !*Element {
+const CreateElementOptions = struct {
+    is: ?[]const u8 = null,
+};
+
+pub fn createElement(_: *const Document, name: []const u8, options_: ?CreateElementOptions, page: *Page) !*Element {
     const node = try page.createElement(null, name, null);
-    return node.as(Element);
+    const element = node.as(Element);
+
+    const options = options_ orelse return element;
+    if (options.is) |is_value| {
+        try element.setAttribute("is", is_value, page);
+        try Element.Html.Custom.checkAndAttachBuiltIn(element, page);
+    }
+
+    return element;
 }
 
 pub fn createElementNS(_: *const Document, namespace: ?[]const u8, name: []const u8, page: *Page) !*Element {

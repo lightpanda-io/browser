@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script id="connected">
+{
+    let connectedCount = 0;
+
+    class MyElement extends HTMLElement {
+        connectedCallback() {
+            connectedCount++;
+        }
+    }
+
+    customElements.define('my-element', MyElement);
+
+    const el = document.createElement('my-element');
+    testing.expectEqual(0, connectedCount);
+
+    document.body.appendChild(el);
+    testing.expectEqual(1, connectedCount);
+}
+
+{
+    let order = [];
+
+    class ParentElement extends HTMLElement {
+        connectedCallback() {
+            order.push('parent');
+        }
+    }
+
+    class ChildElement extends HTMLElement {
+        connectedCallback() {
+            order.push('child');
+        }
+    }
+
+    customElements.define('parent-element', ParentElement);
+    customElements.define('child-element', ChildElement);
+
+    const parent = document.createElement('parent-element');
+    const child = document.createElement('child-element');
+    parent.appendChild(child);
+
+    testing.expectEqual(0, order.length);
+
+    document.body.appendChild(parent);
+    testing.expectEqual(2, order.length);
+    testing.expectEqual('parent', order[0]);
+    testing.expectEqual('child', order[1]);
+}
+
+{
+    let connectedCount = 0;
+
+    class MoveElement extends HTMLElement {
+        connectedCallback() {
+            connectedCount++;
+        }
+    }
+
+    customElements.define('move-element', MoveElement);
+
+    const el = document.createElement('move-element');
+    document.body.appendChild(el);
+    testing.expectEqual(1, connectedCount);
+
+    const div = document.createElement('div');
+    document.body.appendChild(div);
+    div.appendChild(el);
+    testing.expectEqual(1, connectedCount);
+}
+
+{
+    let connectedCount = 0;
+
+    class DetachedElement extends HTMLElement {
+        connectedCallback() {
+            connectedCount++;
+        }
+    }
+
+    customElements.define('detached-element', DetachedElement);
+
+    const container = document.createElement('div');
+    const el = document.createElement('detached-element');
+    container.appendChild(el);
+    testing.expectEqual(0, connectedCount);
+
+    document.body.appendChild(container);
+    testing.expectEqual(1, connectedCount);
+}
+</script>

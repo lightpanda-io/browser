@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script id="attribute_changed">
+{
+    let callbackCalls = [];
+
+    class MyElement extends HTMLElement {
+        static get observedAttributes() {
+            return ['data-foo', 'data-bar'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            callbackCalls.push({ name, oldValue, newValue });
+        }
+    }
+
+    customElements.define('my-element', MyElement);
+
+    const el = document.createElement('my-element');
+    testing.expectEqual(0, callbackCalls.length);
+
+    el.setAttribute('data-foo', 'value1');
+    testing.expectEqual(1, callbackCalls.length);
+    testing.expectEqual('data-foo', callbackCalls[0].name);
+    testing.expectEqual(null, callbackCalls[0].oldValue);
+    testing.expectEqual('value1', callbackCalls[0].newValue);
+
+    el.setAttribute('data-foo', 'value2');
+    testing.expectEqual(2, callbackCalls.length);
+    testing.expectEqual('data-foo', callbackCalls[1].name);
+    testing.expectEqual('value1', callbackCalls[1].oldValue);
+    testing.expectEqual('value2', callbackCalls[1].newValue);
+
+    el.setAttribute('data-bar', 'bar-value');
+    testing.expectEqual(3, callbackCalls.length);
+    testing.expectEqual('data-bar', callbackCalls[2].name);
+    testing.expectEqual(null, callbackCalls[2].oldValue);
+    testing.expectEqual('bar-value', callbackCalls[2].newValue);
+}
+
+{
+    let callbackCalls = [];
+
+    class ObservedElement extends HTMLElement {
+        static get observedAttributes() {
+            return ['watched'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            callbackCalls.push({ name, oldValue, newValue });
+        }
+    }
+
+    customElements.define('observed-element', ObservedElement);
+
+    const el = document.createElement('observed-element');
+    el.setAttribute('unwatched', 'value');
+    testing.expectEqual(0, callbackCalls.length);
+
+    el.setAttribute('watched', 'value');
+    testing.expectEqual(1, callbackCalls.length);
+}
+
+{
+    let callbackCalls = [];
+
+    class RemoveAttrElement extends HTMLElement {
+        static get observedAttributes() {
+            return ['test'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            callbackCalls.push({ name, oldValue, newValue });
+        }
+    }
+
+    customElements.define('remove-attr-element', RemoveAttrElement);
+
+    const el = document.createElement('remove-attr-element');
+    el.setAttribute('test', 'value');
+    testing.expectEqual(1, callbackCalls.length);
+
+    el.removeAttribute('test');
+    testing.expectEqual(2, callbackCalls.length);
+    testing.expectEqual('test', callbackCalls[1].name);
+    testing.expectEqual('value', callbackCalls[1].oldValue);
+    testing.expectEqual(null, callbackCalls[1].newValue);
+}
+
+{
+    let callbackCalls = [];
+
+    class NoObservedElement extends HTMLElement {
+        attributeChangedCallback(name, oldValue, newValue) {
+            callbackCalls.push({ name, oldValue, newValue });
+        }
+    }
+
+    customElements.define('no-observed-element', NoObservedElement);
+
+    const el = document.createElement('no-observed-element');
+    el.setAttribute('test', 'value');
+    testing.expectEqual(0, callbackCalls.length);
+}
+
+{
+    let callbackCalls = [];
+
+    class UpgradeAttrElement extends HTMLElement {
+        static get observedAttributes() {
+            return ['existing'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            callbackCalls.push({ name, oldValue, newValue });
+        }
+    }
+
+    const el = document.createElement('upgrade-attr-element');
+    el.setAttribute('existing', 'before-upgrade');
+    testing.expectEqual(0, callbackCalls.length);
+
+    customElements.define('upgrade-attr-element', UpgradeAttrElement);
+    testing.expectEqual(0, callbackCalls.length);
+
+    el.setAttribute('existing', 'after-upgrade');
+    testing.expectEqual(1, callbackCalls.length);
+    testing.expectEqual('existing', callbackCalls[0].name);
+    testing.expectEqual('before-upgrade', callbackCalls[0].oldValue);
+    testing.expectEqual('after-upgrade', callbackCalls[0].newValue);
+}
+
+{
+    let callbackCalls = [];
+
+    class SetAttrMethodElement extends HTMLElement {
+        static get observedAttributes() {
+            return ['test'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            callbackCalls.push({ name, oldValue, newValue });
+        }
+    }
+
+    customElements.define('set-attr-method-element', SetAttrMethodElement);
+
+    const el = document.createElement('set-attr-method-element');
+    el.setAttribute('test', 'initial');
+    testing.expectEqual(1, callbackCalls.length);
+
+    el.setAttribute('test', 'initial');
+    testing.expectEqual(2, callbackCalls.length);
+    testing.expectEqual('initial', callbackCalls[1].oldValue);
+    testing.expectEqual('initial', callbackCalls[1].newValue);
+}
+</script>

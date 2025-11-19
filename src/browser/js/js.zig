@@ -162,6 +162,23 @@ pub const Value = struct {
         const value = try v8.Json.parse(ctx.v8_context, json_string);
         return Value{ .context = ctx, .value = value };
     }
+
+    pub fn isArray(self: Value) bool {
+        return self.value.isArray();
+    }
+
+    pub fn arrayLength(self: Value) u32 {
+        std.debug.assert(self.value.isArray());
+        return self.value.castTo(v8.Array).length();
+    }
+
+    pub fn arrayGet(self: Value, index: u32) !Value {
+        std.debug.assert(self.value.isArray());
+        const array_obj = self.value.castTo(v8.Array).castTo(v8.Object);
+        const idx_key = v8.Integer.initU32(self.context.isolate, index);
+        const elem_val = try array_obj.getValue(self.context.v8_context, idx_key.toValue());
+        return self.context.createValue(elem_val);
+    }
 };
 
 pub const ValueIterator = struct {
