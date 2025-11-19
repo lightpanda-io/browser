@@ -53,7 +53,7 @@
   testing.eventually(() => testing.expectEqual(1, wst1));
 
   let wst2 = 1;
-  window.setTimeout((a, b) => {wst2 = a + b}, 1, 2, 3);
+  window.setTimeout((a, b) => {wst2 = a+ b}, 1, 2, 3);
   testing.eventually(() => testing.expectEqual(5, wst2));
 </script>
 
@@ -69,7 +69,7 @@
   testing.expectEqual(true, called);
 </script>
 
-<!-- <script id=btoa_atob>
+<script id=btoa_atob>
   const b64 = btoa('https://ziglang.org/documentation/master/std/#std.base64.Base64Decoder')
   testing.expectEqual('aHR0cHM6Ly96aWdsYW5nLm9yZy9kb2N1bWVudGF0aW9uL21hc3Rlci9zdGQvI3N0ZC5iYXNlNjQuQmFzZTY0RGVjb2Rlcg==', b64);
 
@@ -79,9 +79,9 @@
   testing.expectError('Error: InvalidCharacterError', () => {
     atob('b');
   });
-</script> -->
+</script>
 
-<!-- <script id=scroll>
+<script id=scroll>
   let scroll = false;
   let scrollend = false
 
@@ -120,8 +120,8 @@
   testing.expectEqual(0, scrollY);
   testing.expectEqual(0, pageYOffset);
 </script>
- -->
-<!-- <script id=queueMicroTask>
+
+<script id=queueMicroTask>
   var qm = false;
   window.queueMicrotask(() => {qm = true });
   testing.eventually(() => testing.expectEqual(true, qm));
@@ -134,9 +134,9 @@
     dcl = e.target == document;
   });
   testing.eventually(() => testing.expectEqual(true, dcl));
-</script> -->
+</script>
 
-<!-- <script id=window.onload>
+<script id=window.onload>
   let isWindowTarget = false;
 
   const callback = (e) => isWindowTarget = e.target === window;
@@ -150,9 +150,9 @@
   testing.expectEqual(callback, window.onload);
 
   testing.eventually(() => testing.expectEqual(true, isWindowTarget));
-</script> -->
+</script>
 
-<!-- <script id=reportError>
+<script id=reportError>
   let errorEventFired = false;
   let capturedError = null;
 
@@ -166,4 +166,4 @@
 
   testing.expectEqual(true, errorEventFired);
   testing.expectEqual(testError, capturedError);
-</script> -->
+</script>

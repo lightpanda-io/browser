@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<body>
+<script src="../testing.js"></script>
+<script id="disconnected">
+{
+    let disconnectedCount = 0;
+
+    class MyElement extends HTMLElement {
+        disconnectedCallback() {
+            disconnectedCount++;
+        }
+    }
+
+    customElements.define('my-element', MyElement);
+
+    const el = document.createElement('my-element');
+    document.body.appendChild(el);
+    testing.expectEqual(0, disconnectedCount);
+
+    el.remove();
+    testing.expectEqual(1, disconnectedCount);
+}
+
+{
+    let order = [];
+
+    class ParentElement extends HTMLElement {
+        disconnectedCallback() {
+            order.push('parent');
+        }
+    }
+
+    class ChildElement extends HTMLElement {
+        disconnectedCallback() {
+            order.push('child');
+        }
+    }
+
+    customElements.define('parent-element', ParentElement);
+    customElements.define('child-element', ChildElement);
+
+    const parent = document.createElement('parent-element');
+    const child = document.createElement('child-element');
+    parent.appendChild(child);
+    document.body.appendChild(parent);
+
+    testing.expectEqual(0, order.length);
+
+    parent.remove();
+    testing.expectEqual(2, order.length);
+    testing.expectEqual('parent', order[0]);
+    testing.expectEqual('child', order[1]);
+}
+
+{
+    let disconnectedCount = 0;
+
+    class RemoveChildElement extends HTMLElement {
+        disconnectedCallback() {
+            disconnectedCount++;
+        }
+    }
+
+    customElements.define('remove-child-element', RemoveChildElement);
+
+    const el = document.createElement('remove-child-element');
+    document.body.appendChild(el);
+    testing.expectEqual(0, disconnectedCount);
+
+    document.body.removeChild(el);
+    testing.expectEqual(1, disconnectedCount);
+}
+
+{
+    let disconnectedCount = 0;
+
+    class MoveElement extends HTMLElement {
+        disconnectedCallback() {
+            disconnectedCount++;
+        }
+    }
+
+    customElements.define('move-element', MoveElement);
+
+    const el = document.createElement('move-element');
+    document.body.appendChild(el);
+    testing.expectEqual(0, disconnectedCount);
+
+    const div = document.createElement('div');
+    document.body.appendChild(div);
+    div.appendChild(el);
+    testing.expectEqual(0, disconnectedCount);
+}
+
+{
+    let disconnectedCount = 0;
+
+    class ReplaceChildElement extends HTMLElement {
+        disconnectedCallback() {
+            disconnectedCount++;
+        }
+    }
+
+    customElements.define('replace-child-element', ReplaceChildElement);
+
+    const el = document.createElement('replace-child-element');
+    const replacement = document.createElement('div');
+    document.body.appendChild(el);
+    testing.expectEqual(0, disconnectedCount);
+
+    document.body.replaceChild(replacement, el);
+    testing.expectEqual(1, disconnectedCount);
+}
+
+{
+    let connectedCount = 0;
+    let disconnectedCount = 0;
+
+    class LifecycleElement extends HTMLElement {
+        connectedCallback() {
+            connectedCount++;
+        }
+
+        disconnectedCallback() {
+            disconnectedCount++;
+        }
+    }
+
+    customElements.define('lifecycle-element', LifecycleElement);
+
+    const el = document.createElement('lifecycle-element');
+    testing.expectEqual(0, connectedCount);
+    testing.expectEqual(0, disconnectedCount);
+
+    document.body.appendChild(el);
+    testing.expectEqual(1, connectedCount);
+    testing.expectEqual(0, disconnectedCount);
+
+    el.remove();
+    testing.expectEqual(1, connectedCount);
+    testing.expectEqual(1, disconnectedCount);
+
+    document.body.appendChild(el);
+    testing.expectEqual(2, connectedCount);
+    testing.expectEqual(1, disconnectedCount);
+
+    el.remove();
+    testing.expectEqual(2, connectedCount);
+    testing.expectEqual(2, disconnectedCount);
+}
+</script>

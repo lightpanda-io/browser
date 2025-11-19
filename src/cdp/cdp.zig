@@ -644,7 +644,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         // debugger events
 
-
         pub fn onRunMessageLoopOnPause(_: *anyopaque, _: u32) void {
             // onRunMessageLoopOnPause is called when a breakpoint is hit.
             // Until quit pause, we must continue to run a nested message loop
@@ -743,12 +742,9 @@ const IsolatedWorld = struct {
         );
     }
 
-    pub fn createContextAndLoadPolyfills(self: *IsolatedWorld, arena: Allocator, page: *Page) !void {
+    pub fn createContextAndLoadPolyfills(self: *IsolatedWorld, page: *Page) !void {
         // We need to recreate the isolated world context
         try self.createContext(page);
-
-        const loader = @import("../browser/polyfill/polyfill.zig");
-        try loader.preload(arena, &self.executor.context.?);
     }
 };
 

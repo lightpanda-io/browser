@@ -54,6 +54,7 @@ const Performance = @import("webapi/Performance.zig");
 const HtmlScript = @import("webapi/Element.zig").Html.Script;
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
+const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const storage = @import("webapi/storage/storage.zig");
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -100,6 +101,16 @@ _mutation_delivery_scheduled: bool = false,
 // List of active IntersectionObservers
 _intersection_observers: std.ArrayList(*IntersectionObserver) = .{},
 _intersection_delivery_scheduled: bool = false,
+
+// Lookup for customized built-in elements. Maps element pointer to definition.
+_customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
+
+// This is set when an element is being upgraded (constructor is called).
+// The constructor can access this to get the element being upgraded.
+_upgrading_element: ?*Node = null,
+
+// List of custom elements that were created before their definition was registered
+_undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
 
 _polyfill_loader: polyfill.Loader = .{},
 
@@ -207,8 +218,9 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._mutation_delivery_scheduled = false;
     self._intersection_observers = .{};
     self._intersection_delivery_scheduled = false;
+    self._customized_builtin_definitions = .{};
+    self._undefined_custom_elements = .{};
 
-    try polyfill.preload(self.arena, self.js);
     try self.registerBackgroundTasks();
 }
 
@@ -1121,9 +1133,39 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
         return self.createSvgElementT(Element.Svg.Generic, name, attribute_iterator, .{ ._proto = undefined, ._tag = tag });
     }
 
-    // If we had a custom element registry, now is when we would look it up
-    // and, if found, return an Element.Html.Custom
     const tag_name = try String.init(self.arena, name, .{});
+
+    // Check if this is a custom element (must have hyphen for HTML namespace)
+    const has_hyphen = std.mem.indexOfScalar(u8, name, '-') != null;
+    if (has_hyphen and namespace == .html) {
+        const definition = self.window._custom_elements._definitions.get(name);
+        const node = try self.createHtmlElementT(Element.Html.Custom, namespace, attribute_iterator, .{
+            ._proto = undefined,
+            ._tag_name = tag_name,
+            ._definition = definition,
+        });
+
+        const def = definition orelse {
+            const element = node.as(Element);
+            const custom = element.is(Element.Html.Custom).?;
+            try self._undefined_custom_elements.append(self.arena, custom);
+            return node;
+        };
+
+        // Save and restore upgrading element to allow nested createElement calls
+        const prev_upgrading = self._upgrading_element;
+        self._upgrading_element = node;
+        defer self._upgrading_element = prev_upgrading;
+
+        var result: JS.Function.Result = undefined;
+        _ = def.constructor.newInstance(&result) catch |err| {
+            log.warn(.js, "custom element constructor", .{ .name = name, .err = err });
+            return node;
+        };
+
+        return node;
+    }
+
     return self.createHtmlElementT(Element.Html.Unknown, namespace, attribute_iterator, .{ ._proto = undefined, ._tag_name = tag_name });
 }
 
@@ -1132,6 +1174,9 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
     const element = html_element_ptr.asElement();
     element._namespace = namespace;
     try self.populateElementAttributes(element, attribute_iterator);
+
+    // Check for customized built-in element via "is" attribute
+    try Element.Html.Custom.checkAndAttachBuiltIn(element, self);
 
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
@@ -1269,13 +1314,15 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
 
     // The child was connected and now it no longer is. We need to "disconnect"
     // it and all of its descendants. For now "disconnect" just means updating
-    // document._elements_by_id
+    // document._elements_by_id and invoking disconnectedCallback for custom elements
     var elements_by_id = &self.document._elements_by_id;
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe("id")) |id| {
             _ = elements_by_id.remove(id);
         }
+
+        Element.Html.Custom.invokeDisconnectedCallbackOnElement(el, self);
     }
 }
 
@@ -1415,6 +1462,8 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
                 gop.value_ptr.* = el;
             }
         }
+
+        Element.Html.Custom.invokeConnectedCallbackOnElement(el, self);
     }
 }
 
@@ -1422,6 +1471,8 @@ pub fn attributeChange(self: *Page, element: *Element, name: []const u8, value: 
     _ = Element.Build.call(element, "attributeChange", .{ element, name, value, self }) catch |err| {
         log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err });
     };
+
+    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, value, self);
 
     for (self._mutation_observers.items) |observer| {
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
@@ -1435,6 +1486,8 @@ pub fn attributeRemove(self: *Page, element: *Element, name: []const u8, old_val
         log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err });
     };
 
+    Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, null, self);
+
     for (self._mutation_observers.items) |observer| {
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
             log.err(.page, "attributeRemove.notifyObserver", .{ .err = err });
@@ -1444,6 +1497,14 @@ pub fn attributeRemove(self: *Page, element: *Element, name: []const u8, old_val
 
 pub fn hasMutationObservers(self: *const Page) bool {
     return self._mutation_observers.items.len > 0;
+}
+
+pub fn getCustomizedBuiltInDefinition(self: *Page, element: *Element) ?*CustomElementDefinition {
+    return self._customized_builtin_definitions.get(element);
+}
+
+pub fn setCustomizedBuiltInDefinition(self: *Page, element: *Element, definition: *CustomElementDefinition) !void {
+    try self._customized_builtin_definitions.put(self.arena, element, definition);
 }
 
 pub fn characterDataChange(

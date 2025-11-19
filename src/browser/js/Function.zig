@@ -159,3 +159,10 @@ pub fn src(self: *const Function) ![]const u8 {
     const value = self.func.castToFunction().toValue();
     return self.context.valueToString(value, .{});
 }
+
+pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
+    const func_obj = self.func.castToFunction().toObject();
+    const key = v8.String.initUtf8(self.context.isolate, name);
+    const value = func_obj.getValue(self.context.v8_context, key) catch return null;
+    return self.context.createValue(value);
+}

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id="registry">
+{
+    testing.expectEqual(true, window.customElements !== undefined);
+    testing.expectEqual('function', typeof window.customElements.define);
+    testing.expectEqual('function', typeof window.customElements.get);
+}
+
+{
+    class MyElement extends HTMLElement {}
+    customElements.define('my-element', MyElement);
+    const retrieved = customElements.get('my-element');
+    testing.expectEqual(true, retrieved === MyElement);
+}
+
+{
+    const retrieved = customElements.get('not-defined');
+    testing.expectEqual(undefined, retrieved);
+}
+
+{
+    class AnotherElement extends HTMLElement {}
+    customElements.define('another-element', AnotherElement);
+
+    let threw = false;
+    try {
+        customElements.define('another-element', AnotherElement);
+    } catch (e) {
+        threw = true;
+    }
+    testing.expectEqual(true, threw);
+}
+
+{
+    let threw = false;
+    try {
+        customElements.define('nohyphen', class extends HTMLElement {});
+    } catch (e) {
+        threw = true;
+    }
+    testing.expectEqual(true, threw);
+}
+
+{
+    let threw = false;
+    try {
+        customElements.define('UPPERCASE-ELEMENT', class extends HTMLElement {});
+    } catch (e) {
+        threw = true;
+    }
+    testing.expectEqual(true, threw);
+}
+
+{
+    let threw = false;
+    try {
+        customElements.define('annotation-xml', class extends HTMLElement {});
+    } catch (e) {
+        threw = true;
+    }
+    testing.expectEqual(true, threw);
+}
+
+{
+    class TestElement extends HTMLElement {}
+    customElements.define('test-element', TestElement);
+
+    const el = document.createElement('test-element');
+    testing.expectEqual('TEST-ELEMENT', el.tagName);
+    testing.expectEqual(true, el instanceof HTMLElement);
+}
+
+{
+    const el = document.createElement('undefined-element');
+    testing.expectEqual('UNDEFINED-ELEMENT', el.tagName);
+}
+
+{
+    const el = document.createElement('no-hyphen-invalid');
+    testing.expectEqual('NO-HYPHEN-INVALID', el.tagName);
+}
+</script>

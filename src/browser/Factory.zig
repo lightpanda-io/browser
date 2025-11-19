@@ -61,6 +61,8 @@ _size_128_8: MemoryPoolAligned([128]u8, .@"8"),
 _size_144_8: MemoryPoolAligned([144]u8, .@"8"),
 _size_152_8: MemoryPoolAligned([152]u8, .@"8"),
 _size_160_8: MemoryPoolAligned([160]u8, .@"8"),
+_size_184_8: MemoryPoolAligned([184]u8, .@"8"),
+_size_192_8: MemoryPoolAligned([192]u8, .@"8"),
 _size_648_8: MemoryPoolAligned([648]u8, .@"8"),
 
 pub fn init(page: *Page) Factory {
@@ -82,6 +84,8 @@ pub fn init(page: *Page) Factory {
         ._size_144_8 = MemoryPoolAligned([144]u8, .@"8").init(page.arena),
         ._size_152_8 = MemoryPoolAligned([152]u8, .@"8").init(page.arena),
         ._size_160_8 = MemoryPoolAligned([160]u8, .@"8").init(page.arena),
+        ._size_184_8 = MemoryPoolAligned([184]u8, .@"8").init(page.arena),
+        ._size_192_8 = MemoryPoolAligned([192]u8, .@"8").init(page.arena),
         ._size_648_8 = MemoryPoolAligned([648]u8, .@"8").init(page.arena),
     };
 }
@@ -235,6 +239,8 @@ pub fn createT(self: *Factory, comptime T: type) !*T {
     if (comptime SO == 128) return @ptrCast(try self._size_128_8.create());
     if (comptime SO == 152) return @ptrCast(try self._size_152_8.create());
     if (comptime SO == 160) return @ptrCast(try self._size_160_8.create());
+    if (comptime SO == 184) return @ptrCast(try self._size_184_8.create());
+    if (comptime SO == 192) return @ptrCast(try self._size_192_8.create());
     if (comptime SO == 648) return @ptrCast(try self._size_648_8.create());
     @compileError(std.fmt.comptimePrint("No pool configured for @sizeOf({d}), @alignOf({d}): ({s})", .{ SO, @alignOf(T), @typeName(T) }));
 }

@@ -33,6 +33,7 @@ const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
+const CustomElementRegistry = @import("CustomElementRegistry.zig");
 
 const Window = @This();
 
@@ -47,6 +48,7 @@ _on_load: ?js.Function = null,
 _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
+_custom_elements: CustomElementRegistry = .{},
 
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
@@ -90,6 +92,10 @@ pub fn getLocation(self: *const Window) *Location {
 
 pub fn getHistory(self: *Window) *History {
     return &self._history;
+}
+
+pub fn getCustomElements(self: *Window) *CustomElementRegistry {
+    return &self._custom_elements;
 }
 
 pub fn getOnLoad(self: *const Window) ?js.Function {
@@ -228,8 +234,13 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
     const timer_id = self._timer_id +% 1;
     self._timer_id = timer_id;
 
-    for (opts.params) |*js_obj| {
-        js_obj.* = try js_obj.persist();
+    const params = opts.params;
+    var persisted_params: []js.Object = &.{};
+    if (params.len > 0) {
+        persisted_params = try page.arena.alloc(js.Object, params.len);
+        for (params, persisted_params) |a, *ca| {
+            ca.* = try a.persist();
+        }
     }
 
     const gop = try self._timers.getOrPut(page.arena, timer_id);
@@ -244,7 +255,7 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
         .page = page,
         .name = opts.name,
         .timer_id = timer_id,
-        .params = opts.params,
+        .params = persisted_params,
         .animation_frame = opts.animation_frame,
         .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
     });
@@ -334,6 +345,7 @@ pub const JsApi = struct {
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
     pub const location = bridge.accessor(Window.getLocation, null, .{ .cache = "location" });
     pub const history = bridge.accessor(Window.getHistory, null, .{ .cache = "history" });
+    pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
@@ -350,15 +362,21 @@ pub const JsApi = struct {
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
-    pub const length = bridge.accessor(struct{
-        fn wrap(_: *const Window) u32 { return 0; }
+    pub const length = bridge.accessor(struct {
+        fn wrap(_: *const Window) u32 {
+            return 0;
+        }
     }.wrap, null, .{ .cache = "length" });
 
-    pub const innerWidth = bridge.accessor(struct{
-        fn wrap(_: *const Window) u32 { return 1920; }
+    pub const innerWidth = bridge.accessor(struct {
+        fn wrap(_: *const Window) u32 {
+            return 1920;
+        }
     }.wrap, null, .{ .cache = "innerWidth" });
-    pub const innerHeight = bridge.accessor(struct{
-        fn wrap(_: *const Window) u32 { return 1080; }
+    pub const innerHeight = bridge.accessor(struct {
+        fn wrap(_: *const Window) u32 {
+            return 1080;
+        }
     }.wrap, null, .{ .cache = "innerHeight" });
 };
 

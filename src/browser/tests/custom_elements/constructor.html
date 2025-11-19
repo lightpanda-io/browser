@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id="constructor">
+{
+    let constructorCalled = false;
+    let constructorThis = null;
+
+    class MyElement extends HTMLElement {
+        constructor() {
+            super();
+            constructorCalled = true;
+            constructorThis = this;
+            this.customProperty = 'initialized';
+        }
+    }
+
+    customElements.define('my-element', MyElement);
+
+    const el = document.createElement('my-element');
+    testing.expectEqual(true, constructorCalled);
+    testing.expectEqual(el, constructorThis);
+    testing.expectEqual('initialized', el.customProperty);
+}
+
+{
+    class CounterElement extends HTMLElement {
+        constructor() {
+            super();
+            this.count = 0;
+        }
+
+        increment() {
+            this.count++;
+        }
+    }
+
+    customElements.define('counter-element', CounterElement);
+
+    const counter = document.createElement('counter-element');
+    testing.expectEqual(0, counter.count);
+    counter.increment();
+    testing.expectEqual(1, counter.count);
+    counter.increment();
+    testing.expectEqual(2, counter.count);
+}
+
+{
+    class NoConstructorElement extends HTMLElement {}
+
+    customElements.define('no-constructor-element', NoConstructorElement);
+
+    const el = document.createElement('no-constructor-element');
+    testing.expectEqual('NO-CONSTRUCTOR-ELEMENT', el.tagName);
+}
+</script>

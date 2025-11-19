@@ -121,7 +121,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    try world.createContextAndLoadPolyfills(bc.arena, page);
+    try world.createContextAndLoadPolyfills(page);
     const js_context = &world.executor.context.?;
 
     // Create the auxdata json for the contextCreated event
@@ -281,7 +281,7 @@ pub fn pageRemove(bc: anytype) !void {
 
 pub fn pageCreated(bc: anytype, page: *Page) !void {
     for (bc.isolated_worlds.items) |*isolated_world| {
-        try isolated_world.createContextAndLoadPolyfills(bc.arena, page);
+        try isolated_world.createContextAndLoadPolyfills(page);
     }
 }
 

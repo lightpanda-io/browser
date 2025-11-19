@@ -19,6 +19,7 @@
 const js = @import("../../js/js.zig");
 const reflect = @import("../../reflect.zig");
 
+const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 
@@ -56,6 +57,12 @@ const HtmlElement = @This();
 
 _type: Type,
 _proto: *Element,
+
+// Special constructor for custom elements
+pub fn construct(page: *Page) !*Element {
+    const node = page._upgrading_element orelse return error.IllegalConstructor;
+    return node.is(Element) orelse return error.IllegalConstructor;
+}
 
 pub const Type = union(enum) {
     anchor: Anchor,
@@ -145,6 +152,8 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const constructor = bridge.constructor(HtmlElement.construct, .{});
 };
 
 pub const Build = struct {
