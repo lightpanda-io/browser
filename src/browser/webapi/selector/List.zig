@@ -106,7 +106,7 @@ fn optimizeSelector(root: *Node, selector: *const Selector.Selector, page: *Page
     const segment_index = anchor.segment_index;
 
     // Look up the element by ID (O(1) hash map lookup)
-    const id_element = page.document._elements_by_id.get(id) orelse return null;
+    const id_element = page.getElementByIdFromNode(root, id) orelse return null;
     const id_node = id_element.asNode();
 
     if (!root.contains(id_node)) {

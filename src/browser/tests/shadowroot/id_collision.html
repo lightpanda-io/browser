@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+<div id="collision-test">Document</div>
+</body>
+
+<script id="id_collision_document_first">
+{
+    // Document tree element exists with id="collision-test"
+    // Create shadow tree with same ID
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="collision-test">Shadow</div>';
+
+    document.body.appendChild(host);
+
+    // document.getElementById should find the document-tree element
+    const fromDoc = document.getElementById('collision-test');
+    testing.expectEqual('Document', fromDoc.textContent);
+
+    // shadow.getElementById should find the shadow-tree element
+    const fromShadow = shadow.getElementById('collision-test');
+    testing.expectEqual('Shadow', fromShadow.textContent);
+
+    host.remove();
+}
+</script>
+
+<script id="id_collision_shadow_first">
+{
+    // Create shadow tree with ID first
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="unique-id">Shadow</div>';
+
+    document.body.appendChild(host);
+
+    // Now add document element with same ID
+    const docEl = document.createElement('div');
+    docEl.id = 'unique-id';
+    docEl.textContent = 'Document';
+    document.body.appendChild(docEl);
+
+    // document.getElementById should find the document-tree element
+    const fromDoc = document.getElementById('unique-id');
+    testing.expectEqual('Document', fromDoc.textContent);
+
+    // shadow.getElementById should find the shadow-tree element
+    const fromShadow = shadow.getElementById('unique-id');
+    testing.expectEqual('Shadow', fromShadow.textContent);
+
+    host.remove();
+    docEl.remove();
+}
+</script>

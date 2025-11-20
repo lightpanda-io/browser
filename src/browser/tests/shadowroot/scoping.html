@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="ownerDocument_in_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="child">Content</div>';
+
+    document.body.appendChild(host);
+
+    const child = shadow.getElementById('child');
+
+    // Elements in shadow tree should still reference the document
+    testing.expectEqual(document, child.ownerDocument);
+
+    host.remove();
+}
+</script>
+
+<script id="host_children_vs_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Shadow content</p>';
+
+    // Try to add regular children to host (light DOM)
+    const lightChild = document.createElement('div');
+    lightChild.textContent = 'Light DOM';
+    host.appendChild(lightChild);
+
+    document.body.appendChild(host);
+
+    // Host should have light DOM children
+    testing.expectEqual(1, host.children.length);
+    testing.expectEqual('Light DOM', host.children[0].textContent);
+
+    // Shadow should have shadow DOM children
+    testing.expectEqual(1, shadow.children.length);
+    testing.expectEqual('Shadow content', shadow.children[0].textContent);
+
+    // querySelector on host should NOT find shadow children
+    testing.expectEqual(null, host.querySelector('p'));
+
+    // querySelector on shadow should NOT find light children
+    testing.expectEqual(null, shadow.querySelector('div'));
+
+    host.remove();
+}
+</script>
+
+<script id="cloneNode_shadow">
+{
+    const host = document.createElement('div');
+    host.id = 'original-host';
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Shadow content</p>';
+
+    document.body.appendChild(host);
+
+    // Clone the host element
+    const clone = host.cloneNode(true);
+
+    // Per spec, cloneNode should NOT clone the shadow root
+    testing.expectEqual(null, clone.shadowRoot);
+    testing.expectEqual(0, clone.children.length);
+
+    host.remove();
+}
+</script>
+
+<script id="compareDocumentPosition_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="a">A</div><div id="b">B</div>';
+
+    document.body.appendChild(host);
+
+    const a = shadow.getElementById('a');
+    const b = shadow.getElementById('b');
+
+    // Elements within same shadow tree should have document position relationship
+    const pos = a.compareDocumentPosition(b);
+
+    // DOCUMENT_POSITION_FOLLOWING = 4
+    testing.expectEqual(4, pos);
+
+    host.remove();
+}
+</script>

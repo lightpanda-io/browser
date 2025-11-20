@@ -33,6 +33,7 @@ pub const HTMLDocument = @import("HTMLDocument.zig");
 pub const Children = @import("children.zig").Children;
 pub const DocumentFragment = @import("DocumentFragment.zig");
 pub const DocumentType = @import("DocumentType.zig");
+pub const ShadowRoot = @import("ShadowRoot.zig");
 
 const Allocator = std.mem.Allocator;
 const LinkedList = std.DoublyLinkedList;
@@ -105,6 +106,9 @@ pub fn is(self: *Node, comptime T: type) ?*T {
         .document_fragment => |doc| {
             if (T == DocumentFragment) {
                 return doc;
+            }
+            if (T == ShadowRoot) {
+                return doc.is(ShadowRoot);
             }
         },
     }
@@ -191,7 +195,7 @@ pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
         .cdata => |c| c._data = try page.arena.dupe(u8, data),
         .document => {},
         .document_type => {},
-        .document_fragment => {},
+        .document_fragment => |frag| return frag.replaceChildren(&.{.{ .text = data }}, page),
         .attribute => |attr| return attr.setValue(data, page),
     }
 }
@@ -222,6 +226,17 @@ pub fn nodeType(self: *const Node) u8 {
         .document_type => 10,
         .document_fragment => 11,
     };
+}
+
+pub fn isInShadowTree(self: *Node) bool {
+    var node = self._parent;
+    while (node) |n| {
+        if (n.is(ShadowRoot) != null) {
+            return true;
+        }
+        node = n._parent;
+    }
+    return false;
 }
 
 pub fn isConnected(self: *const Node) bool {

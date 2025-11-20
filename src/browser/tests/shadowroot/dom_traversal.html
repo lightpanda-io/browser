@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="parentNode_shadow_boundary">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="child">Content</div>';
+
+    document.body.appendChild(host);
+
+    const child = shadow.getElementById('child');
+
+    // In actual browsers, parentNode DOES expose the shadow root
+    testing.expectEqual(shadow, child.parentNode);
+
+    host.remove();
+}
+</script>
+
+<script id="parentElement_shadow_boundary">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="child">Content</div>';
+
+    document.body.appendChild(host);
+
+    const child = shadow.getElementById('child');
+
+    // parentElement should also not expose shadow root
+    testing.expectEqual(null, child.parentElement);
+
+    host.remove();
+}
+</script>
+
+<script id="getRootNode">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="child">Content</div>';
+
+    document.body.appendChild(host);
+
+    const child = shadow.getElementById('child');
+
+    // getRootNode should return the shadow root
+    const root = child.getRootNode();
+    testing.expectEqual(shadow, root);
+
+    // Host's getRootNode should return document
+    const hostRoot = host.getRootNode();
+    testing.expectEqual(document, hostRoot);
+
+    host.remove();
+}
+</script>
+
+<script id="contains_crosses_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="child">Content</div>';
+
+    document.body.appendChild(host);
+
+    const child = shadow.getElementById('child');
+
+    // Shadow root contains its children
+    testing.expectEqual(true, shadow.contains(child));
+
+    // In actual browsers, contains() does NOT cross shadow boundaries
+    testing.expectEqual(false, host.contains(child));
+    testing.expectEqual(false, document.body.contains(child));
+    testing.expectEqual(false, document.contains(child));
+
+    host.remove();
+}
+</script>
+
+<script id="closest_shadow_boundary">
+{
+    const host = document.createElement('div');
+    host.className = 'host-class';
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div class="inner"><p id="para">Text</p></div>';
+
+    document.body.appendChild(host);
+
+    const para = shadow.getElementById('para');
+
+    // closest should find elements within shadow tree
+    const inner = para.closest('.inner');
+    testing.expectEqual('DIV', inner.tagName);
+
+    // closest should NOT cross shadow boundary to find host
+    const foundHost = para.closest('.host-class');
+    testing.expectEqual(null, foundHost);
+
+    host.remove();
+}
+</script>
+
+<script id="nextSibling_in_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="first">First</div><div id="second">Second</div>';
+
+    document.body.appendChild(host);
+
+    const first = shadow.getElementById('first');
+    const second = shadow.getElementById('second');
+
+    // Sibling traversal should work within shadow tree
+    testing.expectEqual(second, first.nextSibling);
+    testing.expectEqual(first, second.previousSibling);
+
+    host.remove();
+}
+</script>
+
+<script id="childNodes_of_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div>A</div><div>B</div>';
+
+    document.body.appendChild(host);
+
+    // Shadow root should expose its children
+    const children = shadow.childNodes;
+    testing.expectEqual(2, children.length);
+
+    // Host should have no child nodes (shadow tree is separate)
+    testing.expectEqual(0, host.childNodes.length);
+
+    host.remove();
+}
+</script>

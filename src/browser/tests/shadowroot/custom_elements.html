@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="shadow_in_constructor">
+{
+    class ShadowElement extends HTMLElement {
+        constructor() {
+            super();
+            this.shadow = this.attachShadow({ mode: 'open' });
+            this.shadow.innerHTML = '<p>Shadow content</p>';
+        }
+    }
+
+    customElements.define('shadow-element', ShadowElement);
+
+    const el = document.createElement('shadow-element');
+    testing.expectEqual('open', el.shadowRoot.mode);
+    testing.expectEqual('<p>Shadow content</p>', el.shadowRoot.innerHTML);
+}
+</script>
+
+<script id="shadow_in_connectedCallback">
+{
+    let connectedCount = 0;
+
+    class ConnectedShadowElement extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+        }
+
+        connectedCallback() {
+            connectedCount++;
+            this.shadowRoot.innerHTML = `<div>Connected ${connectedCount}</div>`;
+        }
+    }
+
+    customElements.define('connected-shadow-element', ConnectedShadowElement);
+
+    const el = document.createElement('connected-shadow-element');
+    testing.expectEqual('', el.shadowRoot.innerHTML);
+
+    document.body.appendChild(el);
+    testing.expectEqual('<div>Connected 1</div>', el.shadowRoot.innerHTML);
+
+    el.remove();
+    document.body.appendChild(el);
+    testing.expectEqual('<div>Connected 2</div>', el.shadowRoot.innerHTML);
+}
+</script>
+
+<script id="closed_shadow">
+{
+    class ClosedShadowElement extends HTMLElement {
+        constructor() {
+            super();
+            this._shadow = this.attachShadow({ mode: 'closed' });
+            this._shadow.innerHTML = '<span>Private</span>';
+        }
+
+        getContent() {
+            return this._shadow.innerHTML;
+        }
+    }
+
+    customElements.define('closed-shadow-element', ClosedShadowElement);
+
+    const el = document.createElement('closed-shadow-element');
+    testing.expectEqual(null, el.shadowRoot);
+    testing.expectEqual('<span>Private</span>', el.getContent());
+}
+</script>
+
+<script id="multiple_custom_elements_with_shadows">
+{
+    class ComponentA extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = '<div class="a">Component A</div>';
+        }
+    }
+
+    class ComponentB extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = '<div class="b">Component B</div>';
+        }
+    }
+
+    customElements.define('component-a', ComponentA);
+    customElements.define('component-b', ComponentB);
+
+    const a = document.createElement('component-a');
+    const b = document.createElement('component-b');
+
+    testing.expectEqual('Component A', a.shadowRoot.querySelector('.a').textContent);
+    testing.expectEqual('Component B', b.shadowRoot.querySelector('.b').textContent);
+    testing.expectEqual(null, a.shadowRoot.querySelector('.b'));
+    testing.expectEqual(null, b.shadowRoot.querySelector('.a'));
+}
+</script>
+
+<script id="nested_custom_elements">
+{
+    class InnerElement extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = '<p>Nested</p>';
+        }
+    }
+
+    class OuterElement extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+        }
+
+        addInner() {
+            const inner = document.createElement('inner-element');
+            this.shadowRoot.appendChild(inner);
+            return inner;
+        }
+    }
+
+    customElements.define('inner-element', InnerElement);
+    customElements.define('outer-element', OuterElement);
+
+    const outer = document.createElement('outer-element');
+    const inner = outer.addInner();
+
+    testing.expectEqual('INNER-ELEMENT', inner.tagName);
+    testing.expectEqual('<p>Nested</p>', inner.shadowRoot.innerHTML);
+}
+</script>

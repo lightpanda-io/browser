@@ -132,7 +132,6 @@ pub fn checkAndAttachBuiltIn(element: *Element, page: *Page) !void {
     };
 }
 
-
 fn invokeCallback(self: *Custom, comptime callback_name: [:0]const u8, args: anytype, page: *Page) void {
     if (self._definition == null) {
         return;

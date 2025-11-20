@@ -483,6 +483,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/KeyValueList.zig"),
     @import("../webapi/DocumentFragment.zig"),
     @import("../webapi/DocumentType.zig"),
+    @import("../webapi/ShadowRoot.zig"),
     @import("../webapi/DOMException.zig"),
     @import("../webapi/DOMImplementation.zig"),
     @import("../webapi/DOMTreeWalker.zig"),

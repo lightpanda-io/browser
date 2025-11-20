@@ -153,14 +153,14 @@ pub const List = struct {
     }
 
     fn _put(self: *List, result: NormalizeAndEntry, value: []const u8, element: *Element, page: *Page) !*Entry {
-        const is_id = isIdForConnected(result.normalized, element);
+        const is_id = shouldAddToIdMap(result.normalized, element);
 
         var entry: *Entry = undefined;
         var old_value: ?[]const u8 = null;
         if (result.entry) |e| {
             old_value = try page.call_arena.dupe(u8, e._value.str());
             if (is_id) {
-                _ = page.document._elements_by_id.remove(e._value.str());
+                page.removeElementId(element, e._value.str());
             }
             e._value = try String.init(page.arena, value, .{});
             entry = e;
@@ -174,7 +174,11 @@ pub const List = struct {
         }
 
         if (is_id) {
-            try page.document._elements_by_id.put(page.arena, entry._value.str(), element);
+            const parent = element.asNode()._parent orelse {
+                std.debug.assert(false);
+                return entry;
+            };
+            try page.addElementId(parent, element, entry._value.str());
         }
         page.attributeChange(element, result.normalized, entry._value.str(), old_value);
         return entry;
@@ -227,11 +231,11 @@ pub const List = struct {
         const result = try self.getEntryAndNormalizedName(name, page);
         const entry = result.entry orelse return;
 
-        const is_id = isIdForConnected(result.normalized, element);
+        const is_id = shouldAddToIdMap(result.normalized, element);
         const old_value = entry._value.str();
 
         if (is_id) {
-            _ = page.document._elements_by_id.remove(entry._value.str());
+            page.removeElementId(element, entry._value.str());
         }
 
         page.attributeRemove(element, result.normalized, old_value);
@@ -312,8 +316,18 @@ pub const List = struct {
     };
 };
 
-fn isIdForConnected(normalized_id: []const u8, element: *const Element) bool {
-    return std.mem.eql(u8, normalized_id, "id") and element.asConstNode().isConnected();
+fn shouldAddToIdMap(normalized_name: []const u8, element: *Element) bool {
+    if (!std.mem.eql(u8, normalized_name, "id")) {
+        return false;
+    }
+
+    const node = element.asNode();
+    // Shadow tree elements are always added to their shadow root's map
+    if (node.isInShadowTree()) {
+        return true;
+    }
+    // Document tree elements only when connected
+    return node.isConnected();
 }
 
 pub fn normalizeNameForLookup(name: []const u8, page: *Page) ![]const u8 {

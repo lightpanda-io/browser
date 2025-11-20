@@ -22,15 +22,39 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
+const ShadowRoot = @import("ShadowRoot.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 
 const DocumentFragment = @This();
 
+_type: Type,
 _proto: *Node,
+
+pub const Type = union(enum) {
+    generic,
+    shadow_root: *ShadowRoot,
+};
+
+pub fn is(self: *DocumentFragment, comptime T: type) ?*T {
+    switch (self._type) {
+        .shadow_root => |shadow_root| {
+            if (T == ShadowRoot) {
+                return shadow_root;
+            }
+        },
+        .generic => {},
+    }
+    return null;
+}
+
+pub fn as(self: *DocumentFragment, comptime T: type) *T {
+    return self.is(T).?;
+}
 
 pub fn init(page: *Page) !*DocumentFragment {
     return page._factory.node(DocumentFragment{
+        ._type = .generic,
         ._proto = undefined,
     });
 }
@@ -136,6 +160,27 @@ pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, 
     }
 }
 
+pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer) !void {
+    const dump = @import("../dump.zig");
+    return dump.children(self.asNode(), .{}, writer);
+}
+
+pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, page: *Page) !void {
+    const parent = self.asNode();
+
+    page.domChanged();
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        page.removeNode(parent, child, .{ .will_be_reconnected = false });
+    }
+
+    if (html.len == 0) {
+        return;
+    }
+
+    try page.parseHtmlAsChildren(parent, html);
+}
+
 pub fn cloneFragment(self: *DocumentFragment, deep: bool, page: *Page) !*Node {
     const fragment = try DocumentFragment.init(page);
     const fragment_node = fragment.asNode();
@@ -175,6 +220,13 @@ pub const JsApi = struct {
     pub const append = bridge.function(DocumentFragment.append, .{});
     pub const prepend = bridge.function(DocumentFragment.prepend, .{});
     pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{});
+    pub const innerHTML = bridge.accessor(_innerHTML, DocumentFragment.setInnerHTML, .{});
+
+    fn _innerHTML(self: *DocumentFragment, page: *Page) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+        try self.getInnerHTML(&buf.writer);
+        return buf.written();
+    }
 };
 
 const testing = @import("../../testing.zig");

@@ -121,6 +121,16 @@ pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
     return child_ptr;
 }
 
+pub fn documentFragment(self: *Factory, child: anytype) !*@TypeOf(child) {
+    const child_ptr = try self.createT(@TypeOf(child));
+    child_ptr.* = child;
+    child_ptr._proto = try self.node(Node.DocumentFragment{
+        ._proto = undefined,
+        ._type = unionInit(Node.DocumentFragment.Type, child_ptr),
+    });
+    return child_ptr;
+}
+
 pub fn element(self: *Factory, child: anytype) !*@TypeOf(child) {
     const child_ptr = try self.createT(@TypeOf(child));
     child_ptr.* = child;

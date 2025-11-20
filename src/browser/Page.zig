@@ -50,6 +50,8 @@ const Element = @import("webapi/Element.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
+const DocumentFragment = @import("webapi/DocumentFragment.zig");
+const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const HtmlScript = @import("webapi/Element.zig").Html.Script;
 const MutationObserver = @import("webapi/MutationObserver.zig");
@@ -91,6 +93,7 @@ _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attri
 _element_styles: Element.StyleLookup = .{},
 _element_datasets: Element.DatasetLookup = .{},
 _element_class_lists: Element.ClassListLookup = .{},
+_element_shadow_roots: Element.ShadowRootLookup = .{},
 
 _script_manager: ScriptManager,
 
@@ -211,6 +214,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_styles = .{};
     self._element_datasets = .{};
     self._element_class_lists = .{};
+    self._element_shadow_roots = .{};
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
 
@@ -712,6 +716,39 @@ pub fn scriptAddedCallback(self: *Page, script: *HtmlScript) !void {
 
 pub fn domChanged(self: *Page) void {
     self.version += 1;
+}
+
+pub fn getElementIdMap(page: *Page, node: *Node) *std.StringHashMapUnmanaged(*Element) {
+    if (node.is(ShadowRoot)) |shadow_root| {
+        return &shadow_root._elements_by_id;
+    }
+
+    var parent = node._parent;
+    while (parent) |n| {
+        if (n.is(ShadowRoot)) |shadow_root| {
+            return &shadow_root._elements_by_id;
+        }
+        parent = n._parent;
+    }
+    return &page.document._elements_by_id;
+}
+
+pub fn addElementId(self: *Page, parent: *Node, element: *Element, id: []const u8) !void {
+    var id_map = self.getElementIdMap(parent);
+    const gop = try id_map.getOrPut(self.arena, id);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = element;
+    }
+}
+
+pub fn removeElementId(self: *Page, element: *Element, id: []const u8) void {
+    var id_map = self.getElementIdMap(element.asNode());
+    _ = id_map.remove(id);
+}
+
+pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Element {
+    const id_map = self.getElementIdMap(node);
+    return id_map.get(id);
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
@@ -1314,12 +1351,11 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
 
     // The child was connected and now it no longer is. We need to "disconnect"
     // it and all of its descendants. For now "disconnect" just means updating
-    // document._elements_by_id and invoking disconnectedCallback for custom elements
-    var elements_by_id = &self.document._elements_by_id;
+    // the ID map and invoking disconnectedCallback for custom elements
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe("id")) |id| {
-            _ = elements_by_id.remove(id);
+            self.removeElementId(el, id);
         }
 
         Element.Html.Custom.invokeDisconnectedCallbackOnElement(el, self);
@@ -1427,15 +1463,10 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         }
     }
 
-    var document_by_id = &self.document._elements_by_id;
-
     if (comptime from_parser) {
         if (child.is(Element)) |el| {
             if (el.getAttributeSafe("id")) |id| {
-                const gop = try document_by_id.getOrPut(self.arena, id);
-                if (!gop.found_existing) {
-                    gop.value_ptr.* = el;
-                }
+                try self.addElementId(parent, el, id);
             }
         }
         return;
@@ -1446,24 +1477,27 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         return;
     }
 
-    if (parent.isConnected() == false) {
-        // The parent isn't connected, we don't have to connect the child
+    const parent_in_shadow = parent.is(ShadowRoot) != null or parent.isInShadowTree();
+    const parent_is_connected = parent.isConnected();
+
+    if (!parent_in_shadow and !parent_is_connected) {
         return;
     }
 
-    // If we're here, it means that a disconnected child became connected. We
-    // need to connect it (and all of its descendants)
-
+    // If we're here, it means either:
+    // 1. A disconnected child became connected (parent.isConnected() == true)
+    // 2. Child is being added to a shadow tree (parent_in_shadow == true)
+    // In both cases, we need to update ID maps and invoke callbacks
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe("id")) |id| {
-            const gop = try document_by_id.getOrPut(self.arena, id);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = el;
-            }
+            try self.addElementId(el.asNode()._parent.?, el, id);
         }
 
-        Element.Html.Custom.invokeConnectedCallbackOnElement(el, self);
+        // Only invoke connected callback if actually connected to document
+        if (parent_is_connected) {
+            Element.Html.Custom.invokeConnectedCallbackOnElement(el, self);
+        }
     }
 }
 

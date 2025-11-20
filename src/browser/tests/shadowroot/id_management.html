@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="set_id_after_append">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const div = document.createElement('div');
+    div.textContent = 'Content';
+    shadow.appendChild(div);
+
+    document.body.appendChild(host);
+
+    // Set ID after element is in connected shadow tree
+    div.id = 'dynamic-id';
+
+    const found = shadow.getElementById('dynamic-id');
+    testing.expectEqual('Content', found.textContent);
+
+    const fromDoc = document.getElementById('dynamic-id');
+    testing.expectEqual(null, fromDoc);
+
+    host.remove();
+}
+</script>
+
+<script id="change_id">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="old-id">Text</div>';
+
+    document.body.appendChild(host);
+
+    const el = shadow.getElementById('old-id');
+    testing.expectEqual('Text', el.textContent);
+
+    // Change the ID
+    el.id = 'new-id';
+
+    testing.expectEqual(null, shadow.getElementById('old-id'));
+
+    const found = shadow.getElementById('new-id');
+    testing.expectEqual('Text', found.textContent);
+
+    host.remove();
+}
+</script>
+
+<script id="remove_id">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="removable">Text</div>';
+
+    document.body.appendChild(host);
+
+    testing.expectEqual('Text', shadow.getElementById('removable').textContent);
+
+    const el = shadow.getElementById('removable');
+    el.removeAttribute('id');
+
+    testing.expectEqual(null, shadow.getElementById('removable'));
+
+    host.remove();
+}
+</script>
+
+<script id="multiple_shadow_roots_same_id">
+{
+    // Create three shadow roots with same ID
+    const host1 = document.createElement('div');
+    const shadow1 = host1.attachShadow({ mode: 'open' });
+    shadow1.innerHTML = '<div id="shared">Shadow 1</div>';
+
+    const host2 = document.createElement('div');
+    const shadow2 = host2.attachShadow({ mode: 'open' });
+    shadow2.innerHTML = '<div id="shared">Shadow 2</div>';
+
+    const host3 = document.createElement('div');
+    const shadow3 = host3.attachShadow({ mode: 'open' });
+    shadow3.innerHTML = '<div id="shared">Shadow 3</div>';
+
+    document.body.appendChild(host1);
+    document.body.appendChild(host2);
+    document.body.appendChild(host3);
+
+    // Each shadow root should find its own element
+    testing.expectEqual('Shadow 1', shadow1.getElementById('shared').textContent);
+    testing.expectEqual('Shadow 2', shadow2.getElementById('shared').textContent);
+    testing.expectEqual('Shadow 3', shadow3.getElementById('shared').textContent);
+
+    // querySelector should also be isolated
+    testing.expectEqual('Shadow 1', shadow1.querySelector('#shared').textContent);
+    testing.expectEqual('Shadow 2', shadow2.querySelector('#shared').textContent);
+    testing.expectEqual('Shadow 3', shadow3.querySelector('#shared').textContent);
+
+    // Document should not find any of them
+    testing.expectEqual(null, document.getElementById('shared'));
+
+    host1.remove();
+    host2.remove();
+    host3.remove();
+}
+</script>
+
+<script id="multiple_shadows_with_document_collision">
+{
+    // Create document element with ID
+    const docEl = document.createElement('div');
+    docEl.id = 'collision';
+    docEl.textContent = 'Document';
+    document.body.appendChild(docEl);
+
+    // Create two shadow roots with same ID
+    const host1 = document.createElement('div');
+    const shadow1 = host1.attachShadow({ mode: 'open' });
+    shadow1.innerHTML = '<div id="collision">Shadow 1</div>';
+
+    const host2 = document.createElement('div');
+    const shadow2 = host2.attachShadow({ mode: 'open' });
+    shadow2.innerHTML = '<div id="collision">Shadow 2</div>';
+
+    document.body.appendChild(host1);
+    document.body.appendChild(host2);
+
+    // Document should find document element
+    testing.expectEqual('Document', document.getElementById('collision').textContent);
+    testing.expectEqual('Document', document.querySelector('#collision').textContent);
+
+    // Each shadow should find its own
+    testing.expectEqual('Shadow 1', shadow1.getElementById('collision').textContent);
+    testing.expectEqual('Shadow 1', shadow1.querySelector('#collision').textContent);
+
+    testing.expectEqual('Shadow 2', shadow2.getElementById('collision').textContent);
+    testing.expectEqual('Shadow 2', shadow2.querySelector('#collision').textContent);
+
+    docEl.remove();
+    host1.remove();
+    host2.remove();
+}
+</script>
+
+<script id="set_id_before_connected">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const div = document.createElement('div');
+    div.id = 'early-id';
+    div.textContent = 'Content';
+    shadow.appendChild(div);
+
+    // Should work even before host is connected
+    testing.expectEqual('Content', shadow.getElementById('early-id').textContent);
+
+    document.body.appendChild(host);
+
+    // Should still work after connected
+    testing.expectEqual('Content', shadow.getElementById('early-id').textContent);
+    testing.expectEqual(null, document.getElementById('early-id'));
+
+    host.remove();
+}
+</script>

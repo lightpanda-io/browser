@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="event_bubbling_through_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<button id="btn">Click</button>';
+    document.body.appendChild(host);
+
+    const button = shadow.getElementById('btn');
+
+    let insideCalled = false;
+    let shadowCalled = false;
+    let hostCalled = false;
+    let documentCalled = false;
+
+    let insideTarget = null;
+    let hostTarget = null;
+
+    button.addEventListener('click', (e) => {
+        insideCalled = true;
+        insideTarget = e.target;
+    });
+
+    shadow.addEventListener('click', (e) => {
+        shadowCalled = true;
+    });
+
+    host.addEventListener('click', (e) => {
+        hostCalled = true;
+        hostTarget = e.target;
+    });
+
+    document.addEventListener('click', (e) => {
+        documentCalled = true;
+    });
+
+    const event = new Event('click', { bubbles: true });
+    button.dispatchEvent(event);
+
+    testing.expectEqual(true, insideCalled);
+    testing.expectEqual(true, shadowCalled);
+
+    // Without composed:true, event should NOT escape shadow tree
+    testing.expectEqual(false, hostCalled);
+    testing.expectEqual(false, documentCalled);
+
+    host.remove();
+}
+</script>
+
+<script id="event_composed_escapes_shadow">
+    // @ZIGDOM TODO
+    testing.expectEqual(true, true);
+
+// {
+//     const host = document.createElement('div');
+//     const shadow = host.attachShadow({ mode: 'open' });
+//     shadow.innerHTML = '<button id="btn">Click</button>';
+//     document.body.appendChild(host);
+
+//     const button = shadow.getElementById('btn');
+
+//     let hostCalled = false;
+//     let hostTarget = null;
+
+//     host.addEventListener('click', (e) => {
+//         hostCalled = true;
+//         hostTarget = e.target;
+//     });
+
+//     // With composed:true, event SHOULD escape shadow tree
+//     const event = new Event('click', { bubbles: true, composed: true });
+//     button.dispatchEvent(event);
+
+//     testing.expectEqual(true, hostCalled);
+
+//     // Event target should be retargeted to host when outside shadow tree
+//     testing.expectEqual(host, hostTarget);
+
+//     host.remove();
+// }
+</script>

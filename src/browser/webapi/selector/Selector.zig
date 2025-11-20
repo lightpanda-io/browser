@@ -36,7 +36,7 @@ pub fn querySelector(root: *Node, input: []const u8, page: *Page) !?*Node.Elemen
         if (selector.segments.len == 0 and selector.first.parts.len == 1) {
             const first = selector.first.parts[0];
             if (first == .id) {
-                const el = page.document._elements_by_id.get(first.id) orelse continue;
+                const el = page.getElementByIdFromNode(root, first.id) orelse continue;
                 // Check if the element is within the root subtree
                 if (root.contains(el.asNode())) {
                     return el;

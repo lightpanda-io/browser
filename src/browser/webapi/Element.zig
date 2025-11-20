@@ -33,6 +33,7 @@ const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 pub const DOMStringMap = @import("element/DOMStringMap.zig");
 const DOMRect = @import("DOMRect.zig");
 const css = @import("css.zig");
+const ShadowRoot = @import("ShadowRoot.zig");
 
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
@@ -42,6 +43,7 @@ const Element = @This();
 pub const DatasetLookup = std.AutoHashMapUnmanaged(*Element, *DOMStringMap);
 pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
+pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 
 pub const Namespace = enum(u8) {
     html,
@@ -311,6 +313,22 @@ fn getOrCreateAttributeList(self: *Element, page: *Page) !*Attribute.List {
     };
 }
 
+pub fn getShadowRoot(self: *Element, page: *Page) ?*ShadowRoot {
+    const shadow_root = page._element_shadow_roots.get(self) orelse return null;
+    if (shadow_root._mode == .closed) return null;
+    return shadow_root;
+}
+
+pub fn attachShadow(self: *Element, mode_str: []const u8, page: *Page) !*ShadowRoot {
+    if (page._element_shadow_roots.get(self)) |_| {
+        return error.AlreadyHasShadowRoot;
+    }
+    const mode = try ShadowRoot.Mode.fromString(mode_str);
+    const shadow_root = try ShadowRoot.init(self, mode, page);
+    try page._element_shadow_roots.put(page.arena, self, shadow_root);
+    return shadow_root;
+}
+
 pub fn setAttributeNode(self: *Element, attr: *Attribute, page: *Page) !?*Attribute {
     if (attr._element) |el| {
         if (el == self) {
@@ -520,6 +538,28 @@ pub fn querySelector(self: *Element, selector: []const u8, page: *Page) !?*Eleme
 
 pub fn querySelectorAll(self: *Element, input: []const u8, page: *Page) !*Selector.List {
     return Selector.querySelectorAll(self.asNode(), input, page);
+}
+
+pub fn closest(self: *Element, selector: []const u8, page: *Page) !?*Element {
+    if (selector.len == 0) {
+        return error.SyntaxError;
+    }
+
+    var current: ?*Element = self;
+    while (current) |el| {
+        if (try el.matches(selector, page)) {
+            return el;
+        }
+
+        const parent = el._proto._parent orelse break;
+
+        if (parent.is(ShadowRoot) != null) {
+            break;
+        }
+
+        current = parent.is(Element);
+    }
+    return null;
 }
 
 pub fn parentElement(self: *Element) ?*Element {
@@ -867,6 +907,15 @@ pub const JsApi = struct {
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true });
+    pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
+    pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
+
+    const ShadowRootInit = struct {
+        mode: []const u8,
+    };
+    fn _attachShadow(self: *Element, init: ShadowRootInit, page: *Page) !*ShadowRoot {
+        return self.attachShadow(init.mode, page);
+    }
     pub const replaceChildren = bridge.function(Element.replaceChildren, .{});
     pub const remove = bridge.function(Element.remove, .{});
     pub const append = bridge.function(Element.append, .{});
@@ -879,6 +928,7 @@ pub const JsApi = struct {
     pub const matches = bridge.function(Element.matches, .{ .dom_exception = true });
     pub const querySelector = bridge.function(Element.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{ .dom_exception = true });
+    pub const closest = bridge.function(Element.closest, .{ .dom_exception = true });
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});
     pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});

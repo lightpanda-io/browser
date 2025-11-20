@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<div id="outer" class="container">
+  <div id="middle" class="wrapper">
+    <div id="inner" class="box">
+      <p id="paragraph" class="text">Content</p>
+    </div>
+  </div>
+</div>
+
+<script id=matchesSelf>
+{
+  const para = document.getElementById('paragraph');
+
+  testing.expectEqual(para, para.closest('p'));
+  testing.expectEqual(para, para.closest('.text'));
+  testing.expectEqual(para, para.closest('#paragraph'));
+  testing.expectEqual(para, para.closest('p.text'));
+  testing.expectEqual(para, para.closest('p#paragraph.text'));
+}
+</script>
+
+<script id=findsAncestors>
+{
+  const para = document.getElementById('paragraph');
+
+  const inner = document.getElementById('inner');
+  testing.expectEqual(inner, para.closest('.box'));
+  testing.expectEqual(inner, para.closest('#inner'));
+  testing.expectEqual(inner, para.closest('div.box'));
+
+  const middle = document.getElementById('middle');
+  testing.expectEqual(middle, para.closest('.wrapper'));
+  testing.expectEqual(middle, para.closest('#middle'));
+
+  const outer = document.getElementById('outer');
+  testing.expectEqual(outer, para.closest('.container'));
+  testing.expectEqual(outer, para.closest('#outer'));
+}
+</script>
+
+<script id=returnsNull>
+{
+  const para = document.getElementById('paragraph');
+
+  testing.expectEqual(null, para.closest('.nonexistent'));
+  testing.expectEqual(null, para.closest('#missing'));
+  testing.expectEqual(null, para.closest('table'));
+  testing.expectEqual(null, para.closest('span'));
+}
+</script>
+
+<script id=complexSelectors>
+{
+  const para = document.getElementById('paragraph');
+
+  testing.expectEqual(document.getElementById('inner'), para.closest('div.box'));
+  testing.expectEqual(document.getElementById('middle'), para.closest('div.wrapper'));
+  testing.expectEqual(document.getElementById('outer'), para.closest('div.container'));
+
+  const inner = document.getElementById('inner');
+  inner.classList.add('active');
+  testing.expectEqual(inner, para.closest('.box.active'));
+}
+</script>
+
+<script id=attributeSelectors>
+{
+  const para = document.getElementById('paragraph');
+  const inner = document.getElementById('inner');
+  inner.setAttribute('data-test', 'value');
+
+  testing.expectEqual(inner, para.closest('[data-test]'));
+  testing.expectEqual(inner, para.closest('[data-test="value"]'));
+  testing.expectEqual(null, para.closest('[data-other]'));
+}
+</script>
+
+<script id=errorHandling>
+{
+  const para = document.getElementById('paragraph');
+
+  let caught = false;
+  try {
+    para.closest('');
+  } catch (e) {
+    caught = true;
+    testing.expectEqual('SyntaxError', e.name);
+  }
+  testing.expectEqual(true, caught);
+}
+</script>

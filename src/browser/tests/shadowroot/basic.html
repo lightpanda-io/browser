@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="host1"></div>
+<div id="host2"></div>
+<div id="host3"></div>
+
+<!-- <script id="attachShadow_open">
+{
+    const host = $('#host1');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    testing.expectEqual('open', shadow.mode);
+    testing.expectEqual(host, shadow.host);
+    testing.expectEqual(shadow, host.shadowRoot);
+}
+</script>
+
+<script id="attachShadow_closed">
+{
+    const host = $('#host2');
+    const shadow = host.attachShadow({ mode: 'closed' });
+
+    testing.expectEqual('closed', shadow.mode);
+    testing.expectEqual(host, shadow.host);
+    testing.expectEqual(null, host.shadowRoot);
+}
+</script>
+
+<script id="innerHTML">
+{
+    const host = $('#host3');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    shadow.innerHTML = '<p>Hello</p><span>World</span>';
+    testing.expectEqual('<p>Hello</p><span>World</span>', shadow.innerHTML);
+
+    const p = shadow.querySelector('p');
+    testing.expectEqual('Hello', p.textContent);
+
+    const span = shadow.querySelector('span');
+    testing.expectEqual('World', span.textContent);
+}
+</script>
+
+<script id="querySelector">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div class="test"><p id="para">Text</p></div>';
+
+    const para = shadow.querySelector('#para');
+    testing.expectEqual('Text', para.textContent);
+
+    const div = shadow.querySelector('.test');
+    testing.expectEqual('DIV', div.tagName);
+
+    testing.expectEqual(null, shadow.querySelector('.nonexistent'));
+}
+</script>
+
+<script id="querySelectorAll">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>One</p><p>Two</p><p>Three</p>';
+
+    const paras = shadow.querySelectorAll('p');
+    testing.expectEqual(3, paras.length);
+    testing.expectEqual('One', paras[0].textContent);
+    testing.expectEqual('Two', paras[1].textContent);
+    testing.expectEqual('Three', paras[2].textContent);
+}
+</script>
+
+<script id="children">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div>A</div><span>B</span><p>C</p>';
+
+    const children = shadow.children;
+    testing.expectEqual(3, children.length);
+    testing.expectEqual('DIV', children[0].tagName);
+    testing.expectEqual('SPAN', children[1].tagName);
+    testing.expectEqual('P', children[2].tagName);
+}
+</script>
+
+<script id="firstLastChild">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div>First</div><span>Last</span>';
+
+    testing.expectEqual('DIV', shadow.firstElementChild.tagName);
+    testing.expectEqual('First', shadow.firstElementChild.textContent);
+
+    testing.expectEqual('SPAN', shadow.lastElementChild.tagName);
+    testing.expectEqual('Last', shadow.lastElementChild.textContent);
+}
+</script>
+
+<script id="appendChild">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const p = document.createElement('p');
+    p.textContent = 'Test';
+    shadow.appendChild(p);
+
+    testing.expectEqual(1, shadow.childElementCount);
+    testing.expectEqual(p, shadow.firstElementChild);
+    testing.expectEqual('Test', shadow.firstElementChild.textContent);
+}
+</script>
+
+<script id="append_prepend">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    shadow.append('text1');
+    testing.expectEqual('text1', shadow.innerHTML);
+
+    shadow.prepend('text0');
+    testing.expectEqual('text0text1', shadow.innerHTML);
+}
+</script>
+
+<script id="replaceChildren">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div>Old</div>';
+
+    testing.expectEqual(1, shadow.childElementCount);
+
+    shadow.replaceChildren('New content');
+    testing.expectEqual('New content', shadow.innerHTML);
+}
+</script> -->
+
+<script id="getElementById">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<div id="test">Content</div>';
+
+    const el = shadow.getElementById('test');
+    testing.expectEqual('Content', el.textContent);
+
+    testing.expectEqual(null, shadow.getElementById('nonexistent'));
+}
+</script>
