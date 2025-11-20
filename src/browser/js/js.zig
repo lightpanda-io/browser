@@ -478,7 +478,7 @@ pub const TaggedAnyOpaque = struct {
 };
 
 pub const PrototypeChainEntry = struct {
-    index: u16,
+    index: bridge.JsApiLookup.BackingInt,
     offset: u16, // offset to the _proto field
 };
 

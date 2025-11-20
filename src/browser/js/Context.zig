@@ -457,8 +457,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
         .pointer => |ptr| switch (ptr.size) {
             .one => {
                 if (@typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "JsApi")) {
-                    const type_name = @typeName(ptr.child.JsApi);
-                    if (@hasField(bridge.JsApiLookup, type_name)) {
+                    if (bridge.JsApiLookup.has(ptr.child.JsApi)) {
                         const js_obj = try self.mapZigInstanceToJs(null, value);
                         return js_obj.toValue();
                     }
@@ -499,8 +498,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
         },
         .@"struct" => |s| {
             if (@hasDecl(T, "JsApi")) {
-                const type_name = @typeName(T.JsApi);
-                if (@hasField(bridge.JsApiLookup, type_name)) {
+                if (bridge.JsApiLookup.has(T.JsApi)) {
                     const js_obj = try self.mapZigInstanceToJs(null, value);
                     return js_obj.toValue();
                 }
@@ -707,7 +705,7 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
                     return error.InvalidArgument;
                 }
                 if (@hasDecl(ptr.child, "JsApi")) {
-                    std.debug.assert(@hasField(bridge.JsApiLookup, @typeName(ptr.child.JsApi)));
+                    std.debug.assert(bridge.JsApiLookup.has(ptr.child.JsApi));
                     const js_obj = js_value.castTo(v8.Object);
                     return typeTaggedAnyOpaque(*ptr.child, js_obj);
                 }
@@ -1537,14 +1535,13 @@ pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
         return error.InvalidArgument;
     }
 
-    const type_name = @typeName(JsApi);
-    if (@hasField(bridge.JsApiLookup, type_name) == false) {
+    if (!bridge.JsApiLookup.has(JsApi)) {
         @compileError("unknown Zig type: " ++ @typeName(R));
     }
 
     const op = js_obj.getInternalField(0).castTo(v8.External).get();
     const tao: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
-    const expected_type_index = @field(bridge.JS_API_LOOKUP, type_name);
+    const expected_type_index = bridge.JsApiLookup.getId(JsApi);
 
     const prototype_chain = tao.prototype_chain[0..tao.prototype_len];
     if (prototype_chain[0].index == expected_type_index) {
@@ -1643,7 +1640,7 @@ fn probeJsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !Prob
                 if (!js_value.isObject()) {
                     return .{ .invalid = {} };
                 }
-                if (@hasField(bridge.JsApiLookup, @typeName(ptr.child.JsApi))) {
+                if (bridge.JsApiLookup.has(ptr.child.JsApi)) {
                     const js_obj = js_value.castTo(v8.Object);
                     // There's a bit of overhead in doing this, so instead
                     // of having a version of typeTaggedAnyOpaque which
