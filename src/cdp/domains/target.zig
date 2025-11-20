@@ -24,6 +24,7 @@ const LOADER_ID = "LOADERID42AA389647D702B4D805F49A";
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
+        getTargets,
         attachToTarget,
         closeTarget,
         createBrowserContext,
@@ -38,6 +39,7 @@ pub fn processMessage(cmd: anytype) !void {
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
+        .getTargets => return getTargets(cmd),
         .attachToTarget => return attachToTarget(cmd),
         .closeTarget => return closeTarget(cmd),
         .createBrowserContext => return createBrowserContext(cmd),
@@ -50,6 +52,31 @@ pub fn processMessage(cmd: anytype) !void {
         .setAutoAttach => return setAutoAttach(cmd),
         .setDiscoverTargets => return setDiscoverTargets(cmd),
     }
+}
+
+fn getTargets(cmd: anytype) !void {
+    // Some clients like Stagehand expects to have an existing context.
+    const bc = cmd.browser_context orelse cmd.createBrowserContext() catch |err| switch (err) {
+        error.AlreadyExists => unreachable,
+        else => return err,
+    };
+
+    const target_id = bc.target_id orelse {
+        return cmd.sendResult(.{
+            .targetInfos = [_]TargetInfo{},
+        }, .{ .include_session_id = false });
+    };
+
+    return cmd.sendResult(.{
+        .targetInfos = [_]TargetInfo{.{
+            .targetId = target_id,
+            .type = "page",
+            .title = bc.getTitle() orelse "about:blank",
+            .url = bc.getURL() orelse "about:blank",
+            .attached = true,
+            .canAccessOpener = false,
+        }},
+    }, .{ .include_session_id = false });
 }
 
 fn getBrowserContexts(cmd: anytype) !void {
