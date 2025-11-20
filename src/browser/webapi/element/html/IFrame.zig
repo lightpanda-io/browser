@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
+const Window = @import("../../Window.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -31,6 +33,10 @@ pub fn asNode(self: *IFrame) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getContentWindow(_: *const IFrame, page: *Page) *Window {
+    return page.window;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IFrame);
 
@@ -39,4 +45,6 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
 };

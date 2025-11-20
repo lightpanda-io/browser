@@ -1134,6 +1134,12 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined },
             ),
+            asUint("iframe") => return self.createHtmlElementT(
+                Element.Html.IFrame,
+                namespace,
+                attribute_iterator,
+                .{ ._proto = undefined },
+            ),
             else => {},
         },
         8 => switch (@as(u64, @bitCast(name[0..8].*))) {
