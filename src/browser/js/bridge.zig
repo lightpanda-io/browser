@@ -64,20 +64,17 @@ pub fn Builder(comptime T: type) type {
         pub fn prototypeChain() [prototypeChainLength(T)]js.PrototypeChainEntry {
             var entries: [prototypeChainLength(T)]js.PrototypeChainEntry = undefined;
 
-            entries[0] = .{
-                .offset = 0,
-                .index = @field(JS_API_LOOKUP, @typeName(T.JsApi)),
-            };
+            entries[0] = .{ .offset = 0, .index = JsApiLookup.getId(T.JsApi) };
 
             if (entries.len == 1) {
                 return entries;
             }
 
             var Prototype = T;
-            for (entries[1..]) |*entry| {
+            inline for (entries[1..]) |*entry| {
                 const Next = PrototypeType(Prototype).?;
                 entry.* = .{
-                    .index = @field(JS_API_LOOKUP, @typeName(Next.JsApi)),
+                    .index = JsApiLookup.getId(Next.JsApi),
                     .offset = @offsetOf(Prototype, "_proto"),
                 };
                 Prototype = Next;
@@ -394,55 +391,72 @@ pub fn Struct(comptime T: type) type {
     };
 }
 
-// Imagine we have a type Cat which has a getter:
-//
-//    fn getOwner(self: *Cat) *Owner {
-//        return self.owner;
-//    }
-//
-// When we execute caller.getter, we'll end up doing something like:
-//   const res = @call(.auto, Cat.getOwner, .{cat_instance});
-//
-// How do we turn `res`, which is an *Owner, into something we can return
-// to v8? We need the ObjectTemplate associated with Owner. How do we
-// get that? Well, we store all the ObjectTemplates in an array that's
-// tied to env. So we do something like:
-//
-//    env.templates[index_of_owner].initInstance(...);
-//
-// But how do we get that `index_of_owner`? `Lookup` is a struct
-// that looks like:
-//
-// const Lookup = struct {
-//     comptime cat: usize = 0,
-//     comptime owner: usize = 1,
-//     ...
-// }
-//
-// So to get the template index of `owner`, we can do:
-//
-//  const index_id = @field(type_lookup, @typeName(@TypeOf(res));
-//
-pub const JsApiLookup = blk: {
-    var fields: [JsApis.len]std.builtin.Type.StructField = undefined;
-    for (JsApis, 0..) |JsApi, i| {
-        fields[i] = .{
-            .name = @typeName(JsApi),
-            .type = u16,
-            .is_comptime = true,
-            .alignment = @alignOf(u16),
-            .default_value_ptr = @ptrCast(&i),
-        };
-    }
-    break :blk @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .decls = &.{},
-        .is_tuple = false,
-        .fields = &fields,
-    } });
-};
+pub const JsApiLookup = struct {
+    /// Integer type we use for `JsApiLookup` enum. Can be u8 at min.
+    pub const BackingInt = std.math.IntFittingRange(0, @max(std.math.maxInt(u8), JsApis.len));
 
-pub const JS_API_LOOKUP = JsApiLookup{};
+    /// Imagine we have a type `Cat` which has a getter:
+    ///
+    ///    fn get_owner(self: *Cat) *Owner {
+    ///        return self.owner;
+    ///    }
+    ///
+    /// When we execute `caller.getter`, we'll end up doing something like:
+    ///
+    ///    const res = @call(.auto, Cat.get_owner, .{cat_instance});
+    ///
+    /// How do we turn `res`, which is an *Owner, into something we can return
+    /// to v8? We need the ObjectTemplate associated with Owner. How do we
+    /// get that? Well, we store all the ObjectTemplates in an array that's
+    /// tied to env. So we do something like:
+    ///
+    ///    env.templates[index_of_owner].initInstance(...);
+    ///
+    /// But how do we get that `index_of_owner`? `Index` is an enum
+    /// that looks like:
+    ///
+    ///    pub const Enum = enum(BackingInt) {
+    ///        cat = 0,
+    ///        owner = 1,
+    ///        ...
+    ///    }
+    ///
+    /// (`BackingInt` is calculated at comptime regarding to interfaces we have)
+    /// So to get the template index of `owner`, simply do:
+    ///
+    ///    const index_id = types.getId(@TypeOf(res));
+    ///
+    pub const Enum = blk: {
+        var fields: [JsApis.len]std.builtin.Type.EnumField = undefined;
+        for (JsApis, 0..) |JsApi, i| {
+            fields[i] = .{ .name = @typeName(JsApi), .value = i };
+        }
+
+        break :blk @Type(.{
+            .@"enum" = .{
+                .fields = &fields,
+                .tag_type = BackingInt,
+                .is_exhaustive = true,
+                .decls = &.{},
+            },
+        });
+    };
+
+    /// Returns a boolean indicating if a type exist in the lookup.
+    pub inline fn has(t: type) bool {
+        return @hasField(Enum, @typeName(t));
+    }
+
+    /// Returns the `Enum` for the given type.
+    pub inline fn getIndex(t: type) Enum {
+        return @field(Enum, @typeName(t));
+    }
+
+    /// Returns the ID for the given type.
+    pub inline fn getId(t: type) BackingInt {
+        return @intFromEnum(getIndex(t));
+    }
+};
 
 pub const SubType = enum {
     @"error",

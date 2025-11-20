@@ -128,7 +128,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         // specific instance of the the Window.
         {
             const proto_type = @typeInfo(@TypeOf(page.window._proto)).pointer.child;
-            const proto_index = @field(bridge.JS_API_LOOKUP, @typeName(proto_type.JsApi));
+            const proto_index = bridge.JsApiLookup.getId(proto_type.JsApi);
             js_global.inherit(templates[proto_index]);
         }
 

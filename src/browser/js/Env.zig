@@ -335,7 +335,7 @@ fn generateConstructor(comptime JsApi: type, isolate: v8.Isolate) v8.FunctionTem
 //     }
 // }
 
-pub fn protoIndexLookup(comptime JsApi: type) ?u16 {
+pub fn protoIndexLookup(comptime JsApi: type) ?bridge.JsApiLookup.BackingInt {
     @setEvalBranchQuota(2000);
     comptime {
         const T = JsApi.bridge.type;
@@ -344,6 +344,6 @@ pub fn protoIndexLookup(comptime JsApi: type) ?u16 {
         }
         const Ptr = std.meta.fieldInfo(T, ._proto).type;
         const F = @typeInfo(Ptr).pointer.child;
-        return @field(bridge.JS_API_LOOKUP, @typeName(F.JsApi));
+        return bridge.JsApiLookup.getId(F.JsApi);
     }
 }
