@@ -398,29 +398,25 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
         return error.UnknownPseudoClass;
     }
 
-    // Simple pseudo-classes without arguments
-    if (std.mem.eql(u8, name, "first-child")) {
-        return .first_child;
-    }
-
-    if (std.mem.eql(u8, name, "last-child")) {
-        return .last_child;
-    }
-
-    if (std.mem.eql(u8, name, "only-child")) {
-        return .only_child;
-    }
-
-    if (std.mem.eql(u8, name, "first-of-type")) {
-        return .first_of_type;
-    }
-
-    if (std.mem.eql(u8, name, "last-of-type")) {
-        return .last_of_type;
-    }
-
-    if (std.mem.eql(u8, name, "only-of-type")) {
-        return .only_of_type;
+    switch (name.len) {
+        5 => {
+            if (fastEql(name, "modal")) return .modal;
+        },
+        10 => {
+            if (fastEql(name, "only-child")) return .only_child;
+            if (fastEql(name, "last-child")) return .last_child;
+        },
+        11 => {
+            if (fastEql(name, "first-child")) return .first_child;
+        },
+        12 => {
+            if (fastEql(name, "only-of-type")) return .only_of_type;
+            if (fastEql(name, "last-of-type")) return .last_of_type;
+        },
+        13 => {
+            if (fastEql(name, "first-of-type")) return .first_of_type;
+        },
+        else => {},
     }
 
     return error.UnknownPseudoClass;
@@ -799,6 +795,13 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+fn fastEql(a: []const u8, comptime b: []const u8) bool {
+    for (a, b) |a_byte, b_byte| {
+        if (a_byte != b_byte) return false;
+    }
+    return true;
 }
 
 const testing = @import("../../../testing.zig");

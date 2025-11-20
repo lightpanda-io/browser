@@ -131,6 +131,7 @@ pub const AttributeMatcher = union(enum) {
 };
 
 pub const PseudoClass = union(enum) {
+    modal,
     first_child,
     last_child,
     only_child,

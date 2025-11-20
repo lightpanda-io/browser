@@ -499,6 +499,7 @@ fn attributeContainsWord(value: []const u8, word: []const u8) bool {
 
 fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass) bool {
     switch (pseudo) {
+        .modal => return false,
         .first_child => return isFirstChild(el),
         .last_child => return isLastChild(el),
         .only_child => return isFirstChild(el) and isLastChild(el),
