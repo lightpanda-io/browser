@@ -762,6 +762,9 @@ pub const Page = struct {
         var self: *Page = @ptrCast(@alignCast(ctx));
         self.clearTransferArena();
 
+        // We need to handle different navigation types differently.
+        try self.session.navigation.processNavigation(self);
+
         switch (self.mode) {
             .pre => {
                 // Received a response without a body like: https://httpbin.io/status/200
@@ -840,9 +843,6 @@ pub const Page = struct {
                 unreachable;
             },
         }
-
-        // We need to handle different navigation types differently.
-        try self.session.navigation.processNavigation(self);
     }
 
     fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
