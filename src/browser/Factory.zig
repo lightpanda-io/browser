@@ -172,7 +172,7 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
     }
 
     // will never allocate, can't fail
-    const tag_name_str = String.init(self.page.arena, tag_name, .{}) catch unreachable;
+    const tag_name_str = String.init(self._page.arena, tag_name, .{}) catch unreachable;
 
     if (comptime fieldIsPointer(Element.Svg.Type, @TypeOf(child))) {
         const child_ptr = try self.createT(@TypeOf(child));
