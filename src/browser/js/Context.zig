@@ -705,7 +705,7 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
                     return error.InvalidArgument;
                 }
                 if (@hasDecl(ptr.child, "JsApi")) {
-                    //std.debug.assert(bridge.JsApiLookup.has(ptr.child.JsApi));
+                    std.debug.assert(bridge.JsApiLookup.has(ptr.child.JsApi));
                     const js_obj = js_value.castTo(v8.Object);
                     return typeTaggedAnyOpaque(*ptr.child, js_obj);
                 }
