@@ -34,7 +34,7 @@ slice: []const u8,
 /// MIME attached to blob. Can be an empty string.
 mime: []const u8,
 
-const Type = union(enum) {
+pub const Type = union(enum) {
     generic,
     file: *@import("File.zig"),
 };
@@ -76,7 +76,11 @@ pub fn init(
         break :blk "";
     };
 
-    return page._factory.create(Blob{ .slice = slice, .mime = mime });
+    return page._factory.create(Blob{
+        ._type = .generic,
+        .slice = slice,
+        .mime = mime,
+    });
 }
 
 const largest_vector = @max(std.simd.suggestVectorLength(u8) orelse 1, 8);

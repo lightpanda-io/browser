@@ -28,8 +28,8 @@ const File = @This();
 _proto: *Blob,
 
 // TODO: Implement File API.
-pub fn init() File {
-    return .{ ._proto = undefined };
+pub fn init(page: *Page) !*File {
+    return page._factory.blob(File{ ._proto = undefined });
 }
 
 pub const JsApi = struct {
