@@ -262,12 +262,12 @@ pub fn getSlice(
 }
 
 /// Returns the size of the Blob in bytes.
-pub fn size(self: *const Blob) usize {
+pub fn getSize(self: *const Blob) usize {
     return self.slice.len;
 }
 
 /// Returns the type of Blob; likely a MIME type, yet anything can be given.
-pub fn @"type"(self: *const Blob) []const u8 {
+pub fn getType(self: *const Blob) []const u8 {
     return self.mime;
 }
 
@@ -284,8 +284,8 @@ pub const JsApi = struct {
     pub const text = bridge.function(Blob.text, .{});
     pub const bytes = bridge.function(Blob.bytes, .{});
     pub const slice = bridge.function(Blob.getSlice, .{});
-    pub const size = bridge.accessor(Blob.size, null, .{});
-    pub const @"type" = bridge.accessor(Blob.type, null, .{});
+    pub const size = bridge.accessor(Blob.getSize, null, .{});
+    pub const @"type" = bridge.accessor(Blob.getType, null, .{});
 };
 
 const testing = @import("../../../testing.zig");
