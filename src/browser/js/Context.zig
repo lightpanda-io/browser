@@ -1295,7 +1295,8 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // as a static import dependency), we need to evaluate it now.
     if (gop.value_ptr.module_promise == null) {
         const mod = gop.value_ptr.module.?.castToModule();
-        if (mod.getStatus() == .kEvaluated) {
+        const status = mod.getStatus();
+        if (status == .kEvaluated or status == .kEvaluating) {
             // Module was already evaluated (shouldn't normally happen, but handle it).
             // Create a pre-resolved promise with the module namespace.
             const persisted_module_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
@@ -1306,7 +1307,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
             const evaluated = mod.evaluate(self.v8_context) catch {
-                std.debug.assert(mod.getStatus() == .kErrored);
+                std.debug.assert(status == .kErrored);
                 const error_msg = v8.String.initUtf8(isolate, "Module evaluation failed");
                 _ = resolver.reject(self.v8_context, error_msg.toValue());
                 return promise;
