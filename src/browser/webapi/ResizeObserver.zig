@@ -44,7 +44,7 @@ pub fn unobserve(self: *const ResizeObserver, element: *Element) void {
     return;
 }
 
-pub fn disconnect(self: *ResizeObserver) void {
+pub fn disconnect(self: *const ResizeObserver) void {
     _ = self;
 }
 

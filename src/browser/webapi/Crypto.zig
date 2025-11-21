@@ -21,9 +21,9 @@ const js = @import("../js/js.zig");
 
 const Crypto = @This();
 
-// We take a js.Vale, because we want to return the same instance, not a new
+// We take a js.Value, because we want to return the same instance, not a new
 // TypedArray
-pub fn getRandomValues(js_obj: js.Object) !js.Object {
+pub fn getRandomValues(_: *const Crypto, js_obj: js.Object) !js.Object {
     var into = try js_obj.toZig(RandomValues);
     const buf = into.asBuffer();
     if (buf.len > 65_536) {
@@ -33,7 +33,7 @@ pub fn getRandomValues(js_obj: js.Object) !js.Object {
     return js_obj;
 }
 
-pub fn randomUUID() ![36]u8 {
+pub fn randomUUID(_: *const Crypto) ![36]u8 {
     var hex: [36]u8 = undefined;
     @import("../../id.zig").uuidv4(&hex);
     return hex;
@@ -70,10 +70,11 @@ pub const JsApi = struct {
         pub const name = "Crypto";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const empty_with_no_proto = true;
     };
 
-    pub const getRandomValues = bridge.function(Crypto.getRandomValues, .{ .static = true });
-    pub const randomUUID = bridge.function(Crypto.randomUUID, .{ .static = true });
+    pub const getRandomValues = bridge.function(Crypto.getRandomValues, .{ });
+    pub const randomUUID = bridge.function(Crypto.randomUUID, .{ });
 };
 
 const testing = @import("../../testing.zig");

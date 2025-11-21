@@ -24,6 +24,7 @@ const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
+const Crypto = @import("Crypto.zig");
 const Navigator = @import("Navigator.zig");
 const Performance = @import("Performance.zig");
 const Document = @import("Document.zig");
@@ -71,6 +72,10 @@ pub fn getConsole(_: *const Window) Console {
 }
 
 pub fn getNavigator(_: *const Window) Navigator {
+    return .{};
+}
+
+pub fn getCrypto(_: *const Window) Crypto {
     return .{};
 }
 
@@ -345,6 +350,7 @@ pub const JsApi = struct {
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
     pub const location = bridge.accessor(Window.getLocation, null, .{ .cache = "location" });
     pub const history = bridge.accessor(Window.getHistory, null, .{ .cache = "history" });
+    pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
