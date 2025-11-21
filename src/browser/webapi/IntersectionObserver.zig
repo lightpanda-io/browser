@@ -53,18 +53,32 @@ var zero_rect: DOMRect = .{
 pub const ObserverInit = struct {
     root: ?*Element = null,
     rootMargin: ?[]const u8 = null,
-    threshold: []const f64 = &.{0.0},
+    threshold: Threshold = .{.scalar = 0.0},
+
+    const Threshold = union(enum) {
+        scalar: f64,
+        array: []const f64,
+    };
 };
 
 pub fn init(callback: js.Function, options: ?ObserverInit, page: *Page) !*IntersectionObserver {
     const opts = options orelse ObserverInit{};
     const root_margin = if (opts.rootMargin) |rm| try page.arena.dupe(u8, rm) else "0px";
 
+    const threshold = switch (opts.threshold) {
+        .scalar => |s| blk: {
+            const arr = try page.arena.alloc(f64, 1);
+            arr[0] = s;
+            break :blk arr;
+        },
+        .array => |arr| try page.arena.dupe(f64, arr),
+    };
+
     return page._factory.create(IntersectionObserver{
         ._callback = callback,
         ._root = opts.root,
         ._root_margin = root_margin,
-        ._threshold = try page.arena.dupe(f64, opts.threshold),
+        ._threshold = threshold
     });
 }
 

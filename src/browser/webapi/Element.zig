@@ -354,6 +354,22 @@ pub fn removeAttribute(self: *Element, name: []const u8, page: *Page) !void {
     return attributes.delete(name, self, page);
 }
 
+pub fn toggleAttribute(self: *Element, name: []const u8, force: ?bool, page: *Page) !bool {
+    const has = try self.hasAttribute(name, page);
+
+    const should_add = force orelse !has;
+
+    if (should_add and !has) {
+        try self.setAttribute(name, "", page);
+        return true;
+    } else if (!should_add and has) {
+        try self.removeAttribute(name, page);
+        return false;
+    }
+
+    return should_add;
+}
+
 pub fn removeAttributeNode(self: *Element, attr: *Attribute, page: *Page) !*Attribute {
     if (attr._element == null or attr._element.? != self) {
         return error.NotFound;
@@ -909,6 +925,7 @@ pub const JsApi = struct {
     pub const setAttribute = bridge.function(Element.setAttribute, .{});
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{});
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
+    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{});
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
