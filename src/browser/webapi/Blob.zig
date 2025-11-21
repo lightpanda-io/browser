@@ -26,12 +26,18 @@ const Page = @import("../../Page.zig");
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
 const Blob = @This();
 
+_type: Type,
 /// Immutable slice of blob.
 /// Note that another blob may hold a pointer/slice to this,
 /// so its better to leave the deallocation of it to arena allocator.
 slice: []const u8,
 /// MIME attached to blob. Can be an empty string.
 mime: []const u8,
+
+const Type = union(enum) {
+    generic,
+    file: *@import("File.zig"),
+};
 
 const InitOptions = struct {
     /// MIME type.
