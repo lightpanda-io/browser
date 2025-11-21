@@ -39,7 +39,7 @@ pub const Input = Request.Input;
 
 // @ZIGDOM just enough to get campire demo working
 pub fn init(input: Input, page: *Page) !js.Promise {
-    const request = try Request.init(input, page);
+    const request = try Request.init(input, null, page);
 
     const fetch = try page.arena.create(Fetch);
     fetch.* = .{

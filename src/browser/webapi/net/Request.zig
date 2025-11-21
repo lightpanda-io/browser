@@ -22,26 +22,90 @@ const js = @import("../../js/js.zig");
 
 const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
+const Headers = @import("Headers.zig");
 const Allocator = std.mem.Allocator;
 
 const Request = @This();
 
 _url: [:0]const u8,
+_method: std.http.Method,
+_headers: ?*Headers,
 _arena: Allocator,
 
 pub const Input = union(enum) {
+    request: *Request,
     url: [:0]const u8,
-    // request: *Request, TODO
 };
 
-pub fn init(input: Input, page: *Page) !*Request {
+pub const Options = struct {
+    method: ?[]const u8 = null,
+    headers: ?*Headers = null,
+};
+
+pub fn init(input: Input, opts_: ?Options, page: *Page) !*Request {
     const arena = page.arena;
-    const url = try URL.resolve(arena, page.url, input.url, .{ .always_dupe = true });
+    const url = switch (input) {
+        .url => |u| try URL.resolve(arena, page.url, u, .{ .always_dupe = true }),
+        .request => |r| try arena.dupeZ(u8, r._url),
+    };
+
+    const opts = opts_ orelse Options{};
+    const method = if (opts.method) |m|
+        try parseMethod(m, page)
+    else switch (input) {
+        .url => .GET,
+        .request => |r| r._method,
+    };
+
+    const headers = if (opts.headers) |h|
+        h
+    else switch (input) {
+        .url => null,
+        .request => |r| r._headers,
+    };
 
     return page._factory.create(Request{
         ._url = url,
         ._arena = arena,
+        ._method = method,
+        ._headers = headers,
     });
+}
+
+fn parseMethod(method: []const u8, page: *Page) !std.http.Method {
+    if (method.len > "options".len) {
+        return error.InvalidMethod;
+    }
+
+    const lower = std.ascii.lowerString(&page.buf, method);
+
+    if (std.mem.eql(u8, lower, "get")) return .GET;
+    if (std.mem.eql(u8, lower, "post")) return .POST;
+    if (std.mem.eql(u8, lower, "delete")) return .DELETE;
+    if (std.mem.eql(u8, lower, "put")) return .PUT;
+    if (std.mem.eql(u8, lower, "patch")) return .PATCH;
+    if (std.mem.eql(u8, lower, "head")) return .HEAD;
+    if (std.mem.eql(u8, lower, "options")) return .OPTIONS;
+
+    return error.InvalidMethod;
+}
+
+pub fn getUrl(self: *const Request) []const u8 {
+    return self._url;
+}
+
+pub fn getMethod(self: *const Request) []const u8 {
+    return @tagName(self._method);
+}
+
+pub fn getHeaders(self: *Request, page: *Page) !*Headers {
+    if (self._headers) |headers| {
+        return headers;
+    }
+
+    const headers = try Headers.init(page);
+    self._headers = headers;
+    return headers;
 }
 
 pub const JsApi = struct {
@@ -54,4 +118,12 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(Request.init, .{});
+    pub const url = bridge.accessor(Request.getUrl, null, .{});
+    pub const method = bridge.accessor(Request.getMethod, null, .{});
+    pub const headers = bridge.accessor(Request.getHeaders, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: Request" {
+    try testing.htmlRunner("net/request.html", .{});
+}

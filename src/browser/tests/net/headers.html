@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=basic>
+{
+  const headers = new Headers();
+  testing.expectEqual(null, headers.get('Content-Type'));
+  testing.expectEqual(false, headers.has('Content-Type'));
+
+  headers.set('Content-Type', 'application/json');
+  testing.expectEqual('application/json', headers.get('Content-Type'));
+  testing.expectEqual(true, headers.has('Content-Type'));
+
+  headers.set('Content-Type', 'text/html');
+  testing.expectEqual('text/html', headers.get('Content-Type'));
+
+  headers.delete('Content-Type');
+  testing.expectEqual(null, headers.get('Content-Type'));
+  testing.expectEqual(false, headers.has('Content-Type'));
+}
+
+{
+  const headers = new Headers();
+  headers.append('Accept', 'application/json');
+  headers.append('Accept', 'text/html');
+
+  const all = headers.getAll('Accept');
+  testing.expectEqual(2, all.length);
+  testing.expectEqual('application/json', all[0]);
+  testing.expectEqual('text/html', all[1]);
+}
+</script>

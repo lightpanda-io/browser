@@ -550,6 +550,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/Location.zig"),
     @import("../webapi/Navigator.zig"),
     @import("../webapi/net/FormData.zig"),
+    @import("../webapi/net/Headers.zig"),
     @import("../webapi/net/Request.zig"),
     @import("../webapi/net/Response.zig"),
     @import("../webapi/net/URLSearchParams.zig"),

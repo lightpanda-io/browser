@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=basic>
+{
+  const req = new Request('https://example.com/api');
+  testing.expectEqual('https://example.com/api', req.url);
+  testing.expectEqual('GET', req.method);
+}
+
+{
+  const req = new Request('https://example.com/api', { method: 'POST' });
+  testing.expectEqual('https://example.com/api', req.url);
+  testing.expectEqual('POST', req.method);
+}
+
+{
+  const req = new Request('https://example.com/api', { method: 'post' });
+  testing.expectEqual('POST', req.method);
+}
+
+{
+  const req = new Request('/path');
+  testing.expectEqual(true, req.url.includes('/path'));
+}
+</script>
+
+<script id=headers>
+{
+  const req = new Request('https://example.com/api');
+  const headers = req.headers;
+  testing.expectEqual('object', typeof headers);
+
+  headers.set('Content-Type', 'application/json');
+  testing.expectEqual('application/json', headers.get('Content-Type'));
+
+  const headers2 = req.headers;
+  testing.expectEqual(true, headers === headers2);
+  testing.expectEqual('application/json', headers2.get('Content-Type'));
+}
+
+{
+  const headers = new Headers();
+  headers.set('X-Custom', 'value');
+
+  const req = new Request('https://example.com/api', { headers });
+  testing.expectEqual('value', req.headers.get('X-Custom'));
+}
+</script>
+
+<script id=request_input>
+{
+  const req1 = new Request('https://example.com/api', { method: 'POST' });
+  const req2 = new Request(req1);
+
+  testing.expectEqual('https://example.com/api', req2.url);
+  testing.expectEqual('POST', req2.method);
+}
+
+{
+  const req1 = new Request('https://example.com/api', { method: 'POST' });
+  const req2 = new Request(req1, { method: 'GET' });
+
+  testing.expectEqual('https://example.com/api', req2.url);
+  testing.expectEqual('GET', req2.method);
+}
+
+{
+  const headers = new Headers();
+  headers.set('X-Original', 'value1');
+  const req1 = new Request('https://example.com/api', { headers });
+
+  const newHeaders = new Headers();
+  newHeaders.set('X-New', 'value2');
+  const req2 = new Request(req1, { headers: newHeaders });
+
+  testing.expectEqual(null, req2.headers.get('X-Original'));
+  testing.expectEqual('value2', req2.headers.get('X-New'));
+}
+</script>
+
+<script id=stringifier>
+{
+  const url = new URL('https://example.com/api');
+  const req = new Request(url);
+  testing.expectEqual('https://example.com/api', req.url);
+}
+
+{
+  const anchor = document.createElement('a');
+  anchor.href = 'https://example.com/test';
+  const req = new Request(anchor);
+  testing.expectEqual('https://example.com/test', req.url);
+}
+
+{
+  const obj = {
+    toString() {
+      return 'https://example.com/custom';
+    }
+  };
+  const req = new Request(obj);
+  testing.expectEqual('https://example.com/custom', req.url);
+}
+</script>
