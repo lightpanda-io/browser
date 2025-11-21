@@ -19,8 +19,8 @@
 const std = @import("std");
 const Writer = std.Io.Writer;
 
-const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
+const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 /// https://w3c.github.io/FileAPI/#blob-section
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
@@ -294,7 +294,7 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Blob.getType, null, .{});
 };
 
-const testing = @import("../../../testing.zig");
+const testing = @import("../../testing.zig");
 test "WebApi: Blob" {
     try testing.htmlRunner("blob.html", .{});
 }

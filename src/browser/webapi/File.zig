@@ -18,7 +18,8 @@
 
 const std = @import("std");
 
-const Blob = @import("file/Blob.zig");
+const Page = @import("../Page.zig");
+const Blob = @import("Blob.zig");
 const js = @import("../js/js.zig");
 
 const File = @This();
