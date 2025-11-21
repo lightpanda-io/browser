@@ -42,6 +42,7 @@ pub const Custom = @import("html/Custom.zig");
 pub const Script = @import("html/Script.zig");
 pub const Anchor = @import("html/Anchor.zig");
 pub const Button = @import("html/Button.zig");
+pub const Dialog = @import("html/Dialog.zig");
 pub const Form = @import("html/Form.zig");
 pub const Heading = @import("html/Heading.zig");
 pub const Unknown = @import("html/Unknown.zig");
@@ -70,6 +71,7 @@ pub const Type = union(enum) {
     br: BR,
     button: Button,
     custom: *Custom,
+    dialog: Dialog,
     div: Div,
     form: Form,
     generic: *Generic,
@@ -117,6 +119,7 @@ pub fn className(self: *const HtmlElement) []const u8 {
         .form => "[object HTMLFormElement]",
         .p => "[object HtmlParagraphElement]",
         .custom => "[object CUSTOM-TODO]",
+        .dialog => "[object HTMLDialogElement]",
         .img => "[object HTMLImageElement]",
         .iframe => "[object HTMLIFrameElement]",
         .br => "[object HTMLBRElement]",

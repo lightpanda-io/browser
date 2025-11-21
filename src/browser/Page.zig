@@ -1110,6 +1110,12 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined },
             ),
+            asUint("dialog") => return self.createHtmlElementT(
+                Element.Html.Dialog,
+                namespace,
+                attribute_iterator,
+                .{ ._proto = undefined },
+            ),
             asUint("strong") => return self.createHtmlElementT(
                 Element.Html.Generic,
                 namespace,

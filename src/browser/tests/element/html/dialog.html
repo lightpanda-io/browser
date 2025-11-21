@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- Dialog elements -->
+<dialog id="dialog1">Dialog content</dialog>
+<dialog id="dialog2" open>Open dialog</dialog>
+
+<script id="open_initial">
+  testing.expectEqual(false, $('#dialog1').open)
+  testing.expectEqual(true, $('#dialog2').open)
+</script>
+
+<script id="open_set">
+  {
+    $('#dialog1').open = true
+    testing.expectEqual(true, $('#dialog1').open)
+
+    $('#dialog2').open = false
+    testing.expectEqual(false, $('#dialog2').open)
+  }
+</script>
+
+<script id="open_reflects_to_attribute">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual(null, dialog.getAttribute('open'))
+    testing.expectFalse(dialog.outerHTML.includes('open'))
+
+    dialog.open = true
+    testing.expectEqual('', dialog.getAttribute('open'))
+    testing.expectTrue(dialog.outerHTML.includes('open'))
+
+    dialog.open = false
+    testing.expectEqual(null, dialog.getAttribute('open'))
+    testing.expectFalse(dialog.outerHTML.includes('open'))
+  }
+</script>
+
+<script id="returnValue_initial">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual('', dialog.returnValue)
+  }
+</script>
+
+<script id="returnValue_set">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual('', dialog.returnValue)
+
+    dialog.returnValue = 'success'
+    testing.expectEqual('success', dialog.returnValue)
+    testing.expectEqual('success', dialog.getAttribute('returnvalue'))
+
+    dialog.returnValue = 'cancel'
+    testing.expectEqual('cancel', dialog.returnValue)
+    testing.expectEqual('cancel', dialog.getAttribute('returnvalue'))
+  }
+</script>
+
+<script id="returnValue_reflects_to_attribute">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual(null, dialog.getAttribute('returnvalue'))
+
+    dialog.returnValue = 'confirmed'
+    testing.expectEqual('confirmed', dialog.getAttribute('returnvalue'))
+    testing.expectTrue(dialog.outerHTML.includes('returnvalue="confirmed"'))
+  }
+</script>
+
+<script id="element_type">
+  {
+    const dialog = document.createElement('dialog')
+    testing.expectEqual('DIALOG', dialog.tagName)
+    testing.expectTrue(dialog instanceof HTMLDialogElement)
+  }
+</script>
