@@ -21,6 +21,7 @@ const log = @import("../../log.zig");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Element = @import("Element.zig");
+const Node = @import("Node.zig");
 const CustomElementDefinition = @import("CustomElementDefinition.zig");
 
 const CustomElementRegistry = @This();
@@ -88,23 +89,10 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
             continue;
         }
 
-        custom._definition = definition;
-
-        const node = custom.asNode();
-        const prev_upgrading = page._upgrading_element;
-        page._upgrading_element = node;
-        defer page._upgrading_element = prev_upgrading;
-
-        var result: js.Function.Result = undefined;
-        _ = definition.constructor.newInstance(&result) catch |err| {
-            log.warn(.js, "custom element upgrade", .{ .name = name, .err = err });
+        upgradeCustomElement(custom, definition, page) catch {
             _ = page._undefined_custom_elements.swapRemove(idx);
             continue;
         };
-
-        if (node.isConnected()) {
-            custom.invokeConnectedCallback(page);
-        }
 
         _ = page._undefined_custom_elements.swapRemove(idx);
     }
@@ -113,6 +101,55 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
 pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function {
     const definition = self._definitions.get(name) orelse return null;
     return definition.constructor;
+}
+
+pub fn upgrade(self: *CustomElementRegistry, root: *Node, page: *Page) !void {
+    try upgradeNode(self, root, page);
+}
+
+fn upgradeNode(self: *CustomElementRegistry, node: *Node, page: *Page) !void {
+    if (node.is(Element)) |element| {
+        try upgradeElement(self, element, page);
+    }
+
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        try upgradeNode(self, child, page);
+    }
+}
+
+fn upgradeElement(self: *CustomElementRegistry, element: *Element, page: *Page) !void {
+    const Custom = @import("element/html/Custom.zig");
+
+    const custom = element.is(Custom) orelse {
+        return Custom.checkAndAttachBuiltIn(element, page);
+    };
+
+    if (custom._definition != null) return;
+
+    const name = custom._tag_name.str();
+    const definition = self._definitions.get(name) orelse return;
+
+    try upgradeCustomElement(custom, definition, page);
+}
+
+fn upgradeCustomElement(custom: *@import("element/html/Custom.zig"), definition: *CustomElementDefinition, page: *Page) !void {
+    custom._definition = definition;
+
+    const node = custom.asNode();
+    const prev_upgrading = page._upgrading_element;
+    page._upgrading_element = node;
+    defer page._upgrading_element = prev_upgrading;
+
+    var result: js.Function.Result = undefined;
+    _ = definition.constructor.newInstance(&result) catch |err| {
+        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err });
+        return error.CustomElementUpgradeFailed;
+    };
+
+    if (node.isConnected()) {
+        custom.invokeConnectedCallback(page);
+    }
 }
 
 fn validateName(name: []const u8) !void {
@@ -166,6 +203,7 @@ pub const JsApi = struct {
 
     pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
+    pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{});
 };
 
 const testing = @import("../../testing.zig");

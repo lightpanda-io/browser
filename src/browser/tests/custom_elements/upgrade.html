@@ -92,4 +92,63 @@
     document.body.appendChild(container);
     testing.expectEqual(1, connectedCalled);
 }
+
+{
+    let constructorCalled = 0;
+    let connectedCalled = 0;
+
+    class ManualUpgrade extends HTMLElement {
+        constructor() {
+            super();
+            constructorCalled++;
+            this.manuallyUpgraded = true;
+        }
+
+        connectedCallback() {
+            connectedCalled++;
+        }
+    }
+
+    customElements.define('manual-upgrade', ManualUpgrade);
+
+    const container = document.createElement('div');
+    container.innerHTML = '<manual-upgrade id="m1"><manual-upgrade id="m2"></manual-upgrade></manual-upgrade>';
+
+    testing.expectEqual(2, constructorCalled);
+    testing.expectEqual(0, connectedCalled);
+
+    customElements.upgrade(container);
+
+    testing.expectEqual(2, constructorCalled);
+    testing.expectEqual(0, connectedCalled);
+
+    const m1 = container.querySelector('#m1');
+    const m2 = container.querySelector('#m2');
+    testing.expectEqual(true, m1.manuallyUpgraded);
+    testing.expectEqual(true, m2.manuallyUpgraded);
+
+    document.body.appendChild(container);
+    testing.expectEqual(2, connectedCalled);
+}
+
+{
+    let alreadyUpgradedCalled = 0;
+
+    class AlreadyUpgraded extends HTMLElement {
+        constructor() {
+            super();
+            alreadyUpgradedCalled++;
+        }
+    }
+
+    const elem = document.createElement('div');
+    elem.innerHTML = '<already-upgraded></already-upgraded>';
+    document.body.appendChild(elem);
+
+    customElements.define('already-upgraded', AlreadyUpgraded);
+    testing.expectEqual(1, alreadyUpgradedCalled);
+
+    customElements.upgrade(elem);
+    testing.expectEqual(1, alreadyUpgradedCalled);
+}
 </script>

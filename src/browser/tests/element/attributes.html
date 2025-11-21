@@ -107,30 +107,24 @@
 {
   const el1 = $('#attr1');
 
-  // Toggle non-existent attribute (should add it and return true)
   testing.expectEqual(false, el1.hasAttribute('toggle-test'));
   testing.expectEqual(true, el1.toggleAttribute('toggle-test'));
   testing.expectEqual(true, el1.hasAttribute('toggle-test'));
   testing.expectEqual('', el1.getAttribute('toggle-test'));
 
-  // Toggle existing attribute (should remove it and return false)
   testing.expectEqual(false, el1.toggleAttribute('toggle-test'));
   testing.expectEqual(false, el1.hasAttribute('toggle-test'));
 
-  // Toggle with force=true when attribute doesn't exist (should add and return true)
   testing.expectEqual(false, el1.hasAttribute('toggle-test'));
   testing.expectEqual(true, el1.toggleAttribute('toggle-test', true));
   testing.expectEqual(true, el1.hasAttribute('toggle-test'));
 
-  // Toggle with force=true when attribute exists (should keep and return true)
   testing.expectEqual(true, el1.toggleAttribute('toggle-test', true));
   testing.expectEqual(true, el1.hasAttribute('toggle-test'));
 
-  // Toggle with force=false when attribute exists (should remove and return false)
   testing.expectEqual(false, el1.toggleAttribute('toggle-test', false));
   testing.expectEqual(false, el1.hasAttribute('toggle-test'));
 
-  // Toggle with force=false when attribute doesn't exist (should keep removed and return false)
   testing.expectEqual(false, el1.toggleAttribute('toggle-test', false));
   testing.expectEqual(false, el1.hasAttribute('toggle-test'));
 }
