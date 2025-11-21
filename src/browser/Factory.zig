@@ -31,6 +31,7 @@ const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
+const Blob = @import("webapi/Blob.zig");
 
 const MemoryPoolAligned = std.heap.MemoryPoolAligned;
 
@@ -221,6 +222,20 @@ pub fn xhrEventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     const field_name = comptime unionFieldName(XMLHttpRequestEventTarget.Type, @TypeOf(child));
     var child_ptr = &@field(et._type, field_name);
     child_ptr._proto = et;
+    return child_ptr;
+}
+
+pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
+    const child_ptr = try self.createT(@TypeOf(child));
+    child_ptr.* = child;
+
+    const b = try self.createT(Blob);
+    child_ptr._proto = b;
+    b.* = .{
+        ._type = unionInit(Blob.Type, child_ptr),
+        .slice = "",
+        .mime = "",
+    };
     return child_ptr;
 }
 
