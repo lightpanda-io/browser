@@ -230,7 +230,7 @@ pub fn getSlice(
     maybe_end: ?i32,
     maybe_content_type: ?[]const u8,
     page: *Page,
-) !Blob {
+) !*Blob {
     const mime: []const u8 = blk: {
         if (maybe_content_type) |content_type| {
             if (content_type.len == 0) {
@@ -265,10 +265,18 @@ pub fn getSlice(
             break :blk slice.len;
         };
 
-        return .{ .slice = slice[start..end], .mime = mime };
+        return page._factory.create(Blob{
+            ._type = .generic,
+            .slice = slice[start..end],
+            .mime = mime,
+        });
     }
 
-    return .{ .slice = slice, .mime = mime };
+    return page._factory.create(Blob{
+        ._type = .generic,
+        .slice = slice,
+        .mime = mime,
+    });
 }
 
 /// Returns the size of the Blob in bytes.
