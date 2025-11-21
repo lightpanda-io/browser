@@ -82,7 +82,7 @@ pub fn matches(el: *Node.Element, input: []const u8, page: *Page) !bool {
     const selectors = try Parser.parseList(arena, input, page);
 
     for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, null)) {
+        if (List.matches(el.asNode(), selector, page)) {
             return true;
         }
     }
@@ -131,8 +131,41 @@ pub const AttributeMatcher = union(enum) {
 };
 
 pub const PseudoClass = union(enum) {
+    // State pseudo-classes
     modal,
     checked,
+    disabled,
+    enabled,
+    indeterminate,
+
+    // Form validation
+    valid,
+    invalid,
+    required,
+    optional,
+    in_range,
+    out_of_range,
+    placeholder_shown,
+    read_only,
+    read_write,
+    default,
+
+    // User interaction
+    hover,
+    active,
+    focus,
+    focus_within,
+    focus_visible,
+
+    // Link states
+    link,
+    visited,
+    any_link,
+    target,
+
+    // Tree structural
+    root,
+    empty,
     first_child,
     last_child,
     only_child,
@@ -143,7 +176,16 @@ pub const PseudoClass = union(enum) {
     nth_last_child: NthPattern,
     nth_of_type: NthPattern,
     nth_last_of_type: NthPattern,
+
+    // Custom elements
+    defined,
+
+    // Functional
+    lang: []const u8,
     not: []const Selector, // :not() - CSS Level 4: supports full selectors and comma-separated lists
+    is: []const Selector, // :is() - matches any of the selectors
+    where: []const Selector, // :where() - like :is() but with zero specificity
+    has: []const Selector, // :has() - element containing descendants matching selector
 };
 
 pub const NthPattern = struct {

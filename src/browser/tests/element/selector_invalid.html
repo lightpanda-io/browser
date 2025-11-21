@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container">
+    <p>Test</p>
+</div>
+
+<script id="empty_functional">
+{
+    const container = $('#container');
+
+    // Empty functional pseudo-classes should error
+    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':has()'));
+    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':not()'));
+    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':is()'));
+    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':where()'));
+    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':lang()'));
+}
+</script>
+
+<script id="invalid_patterns">
+{
+    const container = $('#container');
+
+    // Invalid nth patterns
+    testing.expectError("Error: InvalidNthPattern", () => container.querySelector(':nth-child(foo)'));
+    testing.expectError("Error: InvalidNthPattern", () => container.querySelector(':nth-child(-)'));
+    testing.expectError("Error: InvalidNthPattern", () => container.querySelector(':nth-child(+)'));
+}
+</script>
+
+<script id="unknown_pseudo">
+{
+    const container = $('#container');
+
+    // Unknown pseudo-classes
+    testing.expectError("Error: UnknownPseudoClass", () => container.querySelector(':unknown'));
+    testing.expectError("Error: UnknownPseudoClass", () => container.querySelector(':not-a-real-pseudo'));
+    testing.expectError("Error: UnknownPseudoClass", () => container.querySelector(':fake(test)'));
+}
+</script>
+
+<script id="empty_selector">
+{
+    const container = $('#container');
+
+    // Empty selectors
+    testing.expectError("Syntax Error", () => container.querySelector(''));
+    testing.expectError("Syntax Error", () => document.querySelectorAll(''));
+}
+</script>
+
+<script id="invalid_combinators">
+{
+    const container = $('#container');
+
+    // Combinators with nothing after
+    testing.expectError("Error: InvalidSelector", () => container.querySelector('p >'));
+    testing.expectError("Error: InvalidSelector", () => container.querySelector('p +'));
+    testing.expectError("Error: InvalidSelector", () => container.querySelector('p ~'));
+}
+</script>

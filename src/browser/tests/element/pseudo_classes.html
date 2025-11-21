@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container">
+    <p id="first">First</p>
+    <input type="checkbox" id="checkbox">
+    <span id="empty"></span>
+    <span id="nonempty">Content</span>
+</div>
+
+<script id="parsing">
+{
+    const container = $('#container');
+
+    // Test that all pseudo-classes parse without throwing errors
+    const pseudoClasses = [
+        ':modal', ':checked', ':disabled', ':enabled', ':indeterminate',
+        ':valid', ':invalid', ':required', ':optional', ':in-range', ':out-of-range',
+        ':placeholder-shown', ':read-only', ':read-write', ':default',
+        ':hover', ':active', ':focus', ':focus-within', ':focus-visible',
+        ':link', ':visited', ':any-link', ':target',
+        ':root', ':empty', ':first-child', ':last-child', ':only-child',
+        ':first-of-type', ':last-of-type', ':only-of-type',
+        ':nth-child(2)', ':nth-last-child(2)', ':nth-of-type(2)', ':nth-last-of-type(2)',
+        ':defined', ':not(div)', ':is(div, span)', ':where(p, a)', ':has(span)', ':lang(en)'
+    ];
+
+    // Each querySelector should not throw an error
+    let allPassed = true;
+    for (const pseudo of pseudoClasses) {
+        try {
+            container.querySelector(pseudo);
+        } catch (e) {
+            allPassed = false;
+            break;
+        }
+    }
+    testing.expectTrue(allPassed);
+}
+</script>
+
+<script id="empty">
+{
+    const empty = document.querySelector(':empty');
+    testing.expectTrue(empty !== null);
+}
+</script>
+
+<script id="root">
+{
+    const html = document.querySelector(':root');
+    testing.expectTrue(html !== null);
+}
+</script>
+
+<script id="has">
+{
+    const result = document.querySelector(':has(span)');
+    testing.expectTrue(result !== null);
+}
+</script>
+
+<script id="not">
+{
+    const noDiv = document.querySelectorAll(':not(div)');
+    testing.expectTrue(noDiv.length > 0);
+}
+</script>
+
+<script id="is">
+{
+    const isResult = document.querySelectorAll(':is(p, span, input)');
+    testing.expectTrue(isResult.length >= 4);
+}
+</script>
+
+<script id="where">
+{
+    const whereResult = document.querySelectorAll(':where(p, span)');
+    testing.expectTrue(whereResult.length >= 3);
+}
+</script>

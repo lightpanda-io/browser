@@ -395,21 +395,144 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
             return .{ .not = selectors.items };
         }
 
+        if (std.mem.eql(u8, name, "is")) {
+            var selectors: std.ArrayList(Selector.Selector) = .empty;
 
+            _ = self.skipSpaces();
+            while (true) {
+                if (self.peek() == ')') break;
+                if (self.peek() == 0) return error.InvalidPseudoClass;
+
+                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                try selectors.append(arena, selector);
+
+                _ = self.skipSpaces();
+                if (self.peek() == ',') {
+                    self.input = self.input[1..];
+                    _ = self.skipSpaces();
+                    continue;
+                }
+                break;
+            }
+
+            if (self.peek() != ')') return error.InvalidPseudoClass;
+            self.input = self.input[1..];
+
+            if (selectors.items.len == 0) return error.InvalidPseudoClass;
+            return .{ .is = selectors.items };
+        }
+
+        if (std.mem.eql(u8, name, "where")) {
+            var selectors: std.ArrayList(Selector.Selector) = .empty;
+
+            _ = self.skipSpaces();
+            while (true) {
+                if (self.peek() == ')') break;
+                if (self.peek() == 0) return error.InvalidPseudoClass;
+
+                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                try selectors.append(arena, selector);
+
+                _ = self.skipSpaces();
+                if (self.peek() == ',') {
+                    self.input = self.input[1..];
+                    _ = self.skipSpaces();
+                    continue;
+                }
+                break;
+            }
+
+            if (self.peek() != ')') return error.InvalidPseudoClass;
+            self.input = self.input[1..];
+
+            if (selectors.items.len == 0) return error.InvalidPseudoClass;
+            return .{ .where = selectors.items };
+        }
+
+        if (std.mem.eql(u8, name, "has")) {
+            var selectors: std.ArrayList(Selector.Selector) = .empty;
+
+            _ = self.skipSpaces();
+            while (true) {
+                if (self.peek() == ')') break;
+                if (self.peek() == 0) return error.InvalidPseudoClass;
+
+                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                try selectors.append(arena, selector);
+
+                _ = self.skipSpaces();
+                if (self.peek() == ',') {
+                    self.input = self.input[1..];
+                    _ = self.skipSpaces();
+                    continue;
+                }
+                break;
+            }
+
+            if (self.peek() != ')') return error.InvalidPseudoClass;
+            self.input = self.input[1..];
+
+            if (selectors.items.len == 0) return error.InvalidPseudoClass;
+            return .{ .has = selectors.items };
+        }
+
+        if (std.mem.eql(u8, name, "lang")) {
+            _ = self.skipSpaces();
+            const lang_start = self.input;
+            var lang_i: usize = 0;
+            while (lang_i < lang_start.len and lang_start[lang_i] != ')') : (lang_i += 1) {}
+            if (lang_i == 0 or self.peek() == 0) return error.InvalidPseudoClass;
+
+            const lang = try arena.dupe(u8, std.mem.trim(u8, lang_start[0..lang_i], &std.ascii.whitespace));
+            self.input = lang_start[lang_i..];
+
+            if (self.peek() != ')') return error.InvalidPseudoClass;
+            self.input = self.input[1..];
+
+            return .{ .lang = lang };
+        }
 
         return error.UnknownPseudoClass;
     }
 
     switch (name.len) {
+        4 => {
+            if (fastEql(name, "root")) return .root;
+            if (fastEql(name, "link")) return .link;
+        },
         5 => {
             if (fastEql(name, "modal")) return .modal;
+            if (fastEql(name, "hover")) return .hover;
+            if (fastEql(name, "focus")) return .focus;
+            if (fastEql(name, "empty")) return .empty;
+            if (fastEql(name, "valid")) return .valid;
+        },
+        6 => {
+            if (fastEql(name, "active")) return .active;
+            if (fastEql(name, "target")) return .target;
         },
         7 => {
             if (fastEql(name, "checked")) return .checked;
+            if (fastEql(name, "visited")) return .visited;
+            if (fastEql(name, "enabled")) return .enabled;
+            if (fastEql(name, "invalid")) return .invalid;
+            if (fastEql(name, "default")) return .default;
+            if (fastEql(name, "defined")) return .defined;
+        },
+        8 => {
+            if (fastEql(name, "disabled")) return .disabled;
+            if (fastEql(name, "required")) return .required;
+            if (fastEql(name, "optional")) return .optional;
+            if (fastEql(name, "any-link")) return .any_link;
+            if (fastEql(name, "in-range")) return .in_range;
+        },
+        9 => {
+            if (fastEql(name, "read-only")) return .read_only;
         },
         10 => {
             if (fastEql(name, "only-child")) return .only_child;
             if (fastEql(name, "last-child")) return .last_child;
+            if (fastEql(name, "read-write")) return .read_write;
         },
         11 => {
             if (fastEql(name, "first-child")) return .first_child;
@@ -417,9 +540,16 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
         12 => {
             if (fastEql(name, "only-of-type")) return .only_of_type;
             if (fastEql(name, "last-of-type")) return .last_of_type;
+            if (fastEql(name, "focus-within")) return .focus_within;
+            if (fastEql(name, "out-of-range")) return .out_of_range;
         },
         13 => {
             if (fastEql(name, "first-of-type")) return .first_of_type;
+            if (fastEql(name, "focus-visible")) return .focus_visible;
+            if (fastEql(name, "indeterminate")) return .indeterminate;
+        },
+        17 => {
+            if (fastEql(name, "placeholder-shown")) return .placeholder_shown;
         },
         else => {},
     }
