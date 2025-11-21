@@ -287,3 +287,8 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Blob.size, null, .{});
     pub const @"type" = bridge.accessor(Blob.type, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: Blob" {
+    try testing.htmlRunner("blob.html", .{});
+}

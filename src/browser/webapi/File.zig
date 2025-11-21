@@ -42,3 +42,8 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(File.init, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: File" {
+    try testing.htmlRunner("file.html", .{});
+}
