@@ -243,6 +243,7 @@ pub const JsApi = struct {
     pub const hash = bridge.accessor(Anchor.getHash, Anchor.setHash, .{});
     pub const @"type" = bridge.accessor(Anchor.getType, Anchor.setType, .{});
     pub const text = bridge.accessor(Anchor.getText, Anchor.setText, .{});
+    pub const toString = bridge.function(Anchor.getHref, .{});
 };
 
 const testing = @import("../../../../testing.zig");

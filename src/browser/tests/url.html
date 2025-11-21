@@ -314,3 +314,51 @@
     testing.expectEqual('https://example.com/path', url.href);
   }
 </script>
+
+<script id=stringifier>
+{
+  const url1 = new URL('https://example.com/api');
+  const url2 = new URL(url1);
+  testing.expectEqual('https://example.com/api', url2.href);
+}
+
+{
+  const obj = {
+    toString() {
+      return 'https://example.com/custom';
+    }
+  };
+  const url = new URL(obj);
+  testing.expectEqual('https://example.com/custom', url.href);
+}
+
+{
+  const baseUrl = new URL('https://example.com/');
+  const url = new URL('/path', baseUrl);
+  testing.expectEqual('https://example.com/path', url.href);
+}
+
+{
+  const obj = {
+    toString() {
+      return 'https://example.com/';
+    }
+  };
+  const url = new URL('/relative', obj);
+  testing.expectEqual('https://example.com/relative', url.href);
+}
+
+{
+  const anchor = document.createElement('a');
+  anchor.href = 'https://example.com/test';
+  const url = new URL(anchor);
+  testing.expectEqual('https://example.com/test', url.href);
+}
+
+{
+  const anchor = document.createElement('a');
+  anchor.href = 'https://example.com/base/';
+  const url = new URL('relative', anchor);
+  testing.expectEqual('https://example.com/base/relative', url.href);
+}
+</script>
