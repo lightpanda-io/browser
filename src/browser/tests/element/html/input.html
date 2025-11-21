@@ -15,7 +15,7 @@
 
 <input id="disabled1" type="text" disabled>
 <input id="disabled2" type="checkbox">
-<!--
+
 <script id="type">
   testing.expectEqual('text', $('#text1').type)
   testing.expectEqual('text', $('#text2').type)
@@ -120,6 +120,28 @@
   testing.expectEqual('initial', $('#text1').defaultValue)
 </script>
 
+<script id="defaultValue_set">
+{
+  const input = document.createElement('input')
+  testing.expectEqual('', input.defaultValue)
+  testing.expectEqual(null, input.getAttribute('value'))
+
+  input.defaultValue = 'new default'
+  testing.expectEqual('new default', input.defaultValue)
+  testing.expectEqual('new default', input.getAttribute('value'))
+  testing.expectEqual('new default', input.value)
+
+  input.value = 'changed by user'
+  testing.expectEqual('changed by user', input.value)
+  testing.expectEqual('new default', input.defaultValue)
+
+  input.defaultValue = 'another default'
+  testing.expectEqual('another default', input.defaultValue)
+  testing.expectEqual('another default', input.getAttribute('value'))
+  testing.expectEqual('changed by user', input.value)
+}
+</script>
+
 <script id="defaultChecked">
   testing.expectEqual(true, $('#check1').defaultChecked)
   testing.expectEqual(false, $('#check2').defaultChecked)
@@ -128,6 +150,29 @@
 
   $('#check1').checked = false
   testing.expectEqual(true, $('#check1').defaultChecked)
+</script>
+
+<script id="defaultChecked_set">
+{
+  const input = document.createElement('input')
+  input.type = 'checkbox'
+  testing.expectEqual(false, input.defaultChecked)
+  testing.expectEqual(null, input.getAttribute('checked'))
+
+  input.defaultChecked = true
+  testing.expectEqual(true, input.defaultChecked)
+  testing.expectEqual('', input.getAttribute('checked'))
+  testing.expectEqual(true, input.checked)
+
+  input.checked = false
+  testing.expectEqual(false, input.checked)
+  testing.expectEqual(true, input.defaultChecked)
+
+  input.defaultChecked = false
+  testing.expectEqual(false, input.defaultChecked)
+  testing.expectEqual(null, input.getAttribute('checked'))
+  testing.expectEqual(false, input.checked)
+}
 </script>
 
 <script id="disabled_initial">
@@ -243,37 +288,6 @@
     testing.expectEqual('', input.getAttribute('checked'))
     testing.expectTrue(input.outerHTML.includes('checked'))
   }
-</script> -->
-
-<script id="defaultValue_set">
-{
-  const input = document.createElement('input')
-  testing.expectEqual('', input.defaultValue)
-  testing.expectEqual(null, input.getAttribute('value'))
-
-  input.defaultValue = 'new default'
-  testing.expectEqual('new default', input.defaultValue)
-  testing.expectEqual('new default', input.getAttribute('value'))
-  testing.expectEqual('new default', input.value)
-}
-</script>
-
-<!-- <script id="defaultChecked_set">
-{
-  const input = document.createElement('input')
-  input.type = 'checkbox'
-  testing.expectEqual(false, input.defaultChecked)
-  testing.expectEqual(null, input.getAttribute('checked'))
-
-  input.defaultChecked = true
-  testing.expectEqual(true, input.defaultChecked)
-  testing.expectEqual('', input.getAttribute('checked'))
-  testing.expectEqual(true, input.checked)
-
-  input.checked = false
-  testing.expectEqual(false, input.checked)
-  testing.expectEqual(true, input.defaultChecked)
-}
 </script>
 
 <input id="named1" type="text" name="username">
@@ -348,4 +362,37 @@
     testing.expectFalse(input.outerHTML.includes('required'))
   }
 </script>
- -->
+
+<script id="checked_pseudoclass">
+  // At this point, check1 is unchecked, check2 is checked (from checked_set test)
+  // radio2 is checked (from checked_set test)
+
+  // querySelector should find the first checked input
+  testing.expectEqual($('#check2'), document.querySelector('input:checked'))
+  testing.expectEqual(null, document.querySelector('#check1:checked'))
+  testing.expectEqual($('#check2'), document.querySelector('#check2:checked'))
+
+  {
+    const checkedInputs = document.querySelectorAll('input:checked')
+    testing.expectEqual(2, checkedInputs.length)
+    testing.expectEqual($('#check2'), checkedInputs[0])
+    testing.expectEqual($('#radio2'), checkedInputs[1])
+  }
+
+  // Text inputs should never match :checked
+  testing.expectEqual(null, document.querySelector('#text1:checked'))
+  testing.expectEqual(null, document.querySelector('#text2:checked'))
+
+  // Compound selectors
+  testing.expectEqual($('#check2'), document.querySelector('input[type="checkbox"]:checked'))
+  testing.expectEqual($('#radio2'), document.querySelector('input[type="radio"]:checked'))
+  testing.expectEqual($('#radio2'), document.querySelector('input[type="radio"][name="group1"]:checked'))
+
+  // Change state and verify selector updates dynamically
+  $('#check2').checked = false
+  $('#radio3').checked = true
+
+  testing.expectEqual(null, document.querySelector('input[type="checkbox"]:checked'))
+  testing.expectEqual($('#radio3'), document.querySelector('input[type="radio"]:checked'))
+  testing.expectEqual($('#radio3'), document.querySelector('input[type="radio"][name="group1"]:checked'))
+</script>

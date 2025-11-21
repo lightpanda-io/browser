@@ -395,12 +395,17 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
             return .{ .not = selectors.items };
         }
 
+
+
         return error.UnknownPseudoClass;
     }
 
     switch (name.len) {
         5 => {
             if (fastEql(name, "modal")) return .modal;
+        },
+        7 => {
+            if (fastEql(name, "checked")) return .checked;
         },
         10 => {
             if (fastEql(name, "only-child")) return .only_child;
