@@ -175,3 +175,43 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: nightly
+
+  build-aarch64-ios:
+    env:
+      OS: ios
+      ARCH: aarch64
+      TARGET_ENVIRONMENT: simulator
+
+    # macos-15 runs on arm CPU. see
+    # https://github.com/actions/runner-images?tab=readme-ov-file
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          submodules: recursive
+
+      - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
+          target-env: ${{env.TARGET_ENVIRONMENT}}
+
+      # zig uses macos instead of ios as target. But install created ios dir.
+      # here we link v8 build in macos path too.
+      - name: fix ios/macos pathes
+        run: |
+          # v8
+          cd  v8/out; ln -s ${{ env.OS }} macos; cd -
+          # libiconv
+          cd vendor/libiconv/out; ln -s ${{env.OS}}-${{env.ARCH}} macos-${{env.ARCH}}; cd -
+          # netsurf
+          cd vendor/netsurf/out; ln -s ${{env.OS}}-${{env.ARCH}} macos-${{env.ARCH}}; cd -
+          # mimalloc
+          cd vendor/mimalloc/out; ln -s ${{env.OS}}-${{env.ARCH}} macos-${{env.ARCH}}; cd -
+
+      - name: zig build
+        run: zig build --release=safe -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }}) static-lib
