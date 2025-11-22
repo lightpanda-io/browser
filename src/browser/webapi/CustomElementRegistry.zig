@@ -136,6 +136,10 @@ fn upgradeElement(self: *CustomElementRegistry, element: *Element, page: *Page) 
 fn upgradeCustomElement(custom: *@import("element/html/Custom.zig"), definition: *CustomElementDefinition, page: *Page) !void {
     custom._definition = definition;
 
+    // Reset callback flags since this is a fresh upgrade
+    custom._connected_callback_invoked = false;
+    custom._disconnected_callback_invoked = false;
+
     const node = custom.asNode();
     const prev_upgrading = page._upgrading_element;
     page._upgrading_element = node;

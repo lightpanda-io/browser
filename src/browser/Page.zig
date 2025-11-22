@@ -107,6 +107,8 @@ _intersection_delivery_scheduled: bool = false,
 
 // Lookup for customized built-in elements. Maps element pointer to definition.
 _customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
+_customized_builtin_connected_callback_invoked: std.AutoHashMapUnmanaged(*Element, void) = .{},
+_customized_builtin_disconnected_callback_invoked: std.AutoHashMapUnmanaged(*Element, void) = .{},
 
 // This is set when an element is being upgraded (constructor is called).
 // The constructor can access this to get the element being upgraded.
@@ -223,6 +225,8 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._intersection_observers = .{};
     self._intersection_delivery_scheduled = false;
     self._customized_builtin_definitions = .{};
+    self._customized_builtin_connected_callback_invoked = .{};
+    self._customized_builtin_disconnected_callback_invoked = .{};
     self._undefined_custom_elements = .{};
 
     try self.registerBackgroundTasks();
@@ -1380,13 +1384,14 @@ pub fn appendNode(self: *Page, parent: *Node, child: *Node, opts: InsertNodeOpts
 
 pub fn appendAllChildren(self: *Page, parent: *Node, target: *Node) !void {
     self.domChanged();
-    const is_connected = parent.isConnected();
     const dest_connected = target.isConnected();
 
     var it = parent.childrenIterator();
     while (it.next()) |child| {
+        // Check if child was connected BEFORE removing it from parent
+        const child_was_connected = child.isConnected();
         self.removeNode(parent, child, .{ .will_be_reconnected = dest_connected });
-        try self.appendNode(target, child, .{ .child_already_connected = is_connected });
+        try self.appendNode(target, child, .{ .child_already_connected = child_was_connected });
     }
 }
 
@@ -1500,14 +1505,19 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
     // 1. A disconnected child became connected (parent.isConnected() == true)
     // 2. Child is being added to a shadow tree (parent_in_shadow == true)
     // In both cases, we need to update ID maps and invoke callbacks
+
+    // Only invoke connectedCallback if the root child is transitioning from
+    // disconnected to connected. When that happens, all descendants should also
+    // get connectedCallback invoked (they're becoming connected as a group).
+    const should_invoke_connected = parent_is_connected and !opts.child_already_connected;
+
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe("id")) |id| {
             try self.addElementId(el.asNode()._parent.?, el, id);
         }
 
-        // Only invoke connected callback if actually connected to document
-        if (parent_is_connected) {
+        if (should_invoke_connected) {
             Element.Html.Custom.invokeConnectedCallbackOnElement(el, self);
         }
     }

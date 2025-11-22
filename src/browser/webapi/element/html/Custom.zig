@@ -32,6 +32,8 @@ const Custom = @This();
 _proto: *HtmlElement,
 _tag_name: String,
 _definition: ?*CustomElementDefinition,
+_connected_callback_invoked: bool = false,
+_disconnected_callback_invoked: bool = false,
 
 pub fn asElement(self: *Custom) *Element {
     return self._proto._proto;
@@ -41,10 +43,20 @@ pub fn asNode(self: *Custom) *Node {
 }
 
 pub fn invokeConnectedCallback(self: *Custom, page: *Page) void {
+    // Only invoke if we haven't already called it while connected
+    if (self._connected_callback_invoked) return;
+
+    self._connected_callback_invoked = true;
+    self._disconnected_callback_invoked = false;
     self.invokeCallback("connectedCallback", .{}, page);
 }
 
 pub fn invokeDisconnectedCallback(self: *Custom, page: *Page) void {
+    // Only invoke if we haven't already called it while disconnected
+    if (self._disconnected_callback_invoked) return;
+
+    self._disconnected_callback_invoked = true;
+    self._connected_callback_invoked = false;
     self.invokeCallback("disconnectedCallback", .{}, page);
 }
 
@@ -63,6 +75,16 @@ pub fn invokeConnectedCallbackOnElement(element: *Element, page: *Page) void {
     }
 
     // Customized built-in element
+    // Check if we've already invoked connectedCallback while connected
+    if (page._customized_builtin_connected_callback_invoked.contains(element)) return;
+
+    page._customized_builtin_connected_callback_invoked.put(
+        page.arena,
+        element,
+        {},
+    ) catch return;
+    _ = page._customized_builtin_disconnected_callback_invoked.remove(element);
+
     invokeCallbackOnElement(element, "connectedCallback", .{}, page);
 }
 
@@ -74,6 +96,16 @@ pub fn invokeDisconnectedCallbackOnElement(element: *Element, page: *Page) void 
     }
 
     // Customized built-in element
+    // Check if we've already invoked disconnectedCallback while disconnected
+    if (page._customized_builtin_disconnected_callback_invoked.contains(element)) return;
+
+    page._customized_builtin_disconnected_callback_invoked.put(
+        page.arena,
+        element,
+        {},
+    ) catch return;
+    _ = page._customized_builtin_connected_callback_invoked.remove(element);
+
     invokeCallbackOnElement(element, "disconnectedCallback", .{}, page);
 }
 
@@ -118,6 +150,10 @@ pub fn checkAndAttachBuiltIn(element: *Element, page: *Page) !void {
 
     // Attach the definition
     try page.setCustomizedBuiltInDefinition(element, definition);
+
+    // Reset callback flags since this is a fresh upgrade
+    _ = page._customized_builtin_connected_callback_invoked.remove(element);
+    _ = page._customized_builtin_disconnected_callback_invoked.remove(element);
 
     // Invoke constructor
     const prev_upgrading = page._upgrading_element;
