@@ -17,6 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
+
+const URL = @import("../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -31,6 +34,15 @@ pub fn asNode(self: *Link) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getHref(self: *Link, page: *Page) ![]const u8 {
+    const href = self.asElement().getAttributeSafe("href");
+    return URL.resolve(page.call_arena, page.url, href orelse "", .{});
+}
+
+pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("href", value, page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Link);
 
@@ -39,4 +51,6 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const href = bridge.accessor(Link.getHref, Link.setHref, .{});
 };
