@@ -47,7 +47,7 @@ pub fn getName(self: *const DOMException) []const u8 {
         .invalid_character_error => "InvalidCharacterError",
         .syntax_error => "SyntaxError",
         .not_found => "NotFoundError",
-        .not_supported => "NotSupported",
+        .not_supported => "NotSupportedError",
         .hierarchy_error => "HierarchyError",
     };
 }

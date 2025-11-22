@@ -51,7 +51,8 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
 
     const gop = try self._definitions.getOrPut(page.arena, name);
     if (gop.found_existing) {
-        return error.AlreadyDefined;
+        // Yes, this is the correct error to return when trying to redefine a name
+        return error.NotSupported;
     }
 
     const owned_name = try page.dupeString(name);

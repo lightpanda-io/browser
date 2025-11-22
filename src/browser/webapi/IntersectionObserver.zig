@@ -53,7 +53,7 @@ var zero_rect: DOMRect = .{
 pub const ObserverInit = struct {
     root: ?*Element = null,
     rootMargin: ?[]const u8 = null,
-    threshold: Threshold = .{.scalar = 0.0},
+    threshold: Threshold = .{ .scalar = 0.0 },
 
     const Threshold = union(enum) {
         scalar: f64,
@@ -74,12 +74,7 @@ pub fn init(callback: js.Function, options: ?ObserverInit, page: *Page) !*Inters
         .array => |arr| try page.arena.dupe(f64, arr),
     };
 
-    return page._factory.create(IntersectionObserver{
-        ._callback = callback,
-        ._root = opts.root,
-        ._root_margin = root_margin,
-        ._threshold = threshold
-    });
+    return page._factory.create(IntersectionObserver{ ._callback = callback, ._root = opts.root, ._root_margin = root_margin, ._threshold = threshold });
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void {

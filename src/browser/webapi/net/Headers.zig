@@ -14,7 +14,6 @@ pub fn init(page: *Page) !*Headers {
     });
 }
 
-
 pub fn append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
     try self._list.append(page.arena, name, value);
 }
