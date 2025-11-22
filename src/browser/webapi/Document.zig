@@ -175,6 +175,26 @@ pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node 
     return page.createTextNode(data);
 }
 
+pub fn createEvent(_: *const Document, event_type: []const u8, page: *Page) !*@import("Event.zig") {
+    const Event = @import("Event.zig");
+
+    if (std.ascii.eqlIgnoreCase(event_type, "event") or std.ascii.eqlIgnoreCase(event_type, "events") or std.ascii.eqlIgnoreCase(event_type, "htmlevents")) {
+        return Event.init("", null, page);
+    }
+
+    if (std.ascii.eqlIgnoreCase(event_type, "customevent") or std.ascii.eqlIgnoreCase(event_type, "customevents")) {
+        const CustomEvent = @import("event/CustomEvent.zig");
+        const custom_event = try CustomEvent.init("", null, page);
+        return custom_event.asEvent();
+    }
+
+    if (std.ascii.eqlIgnoreCase(event_type, "messageevent")) {
+        return error.NotSupported;
+    }
+
+    return error.NotSupported;
+}
+
 pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?u32, filter: ?DOMTreeWalker.FilterOpts, page: *Page) !*DOMTreeWalker {
     const show = what_to_show orelse NodeFilter.SHOW_ALL;
     return DOMTreeWalker.init(root, show, filter, page);
@@ -239,6 +259,7 @@ pub const JsApi = struct {
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
+    pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});
     pub const createNodeIterator = bridge.function(Document.createNodeIterator, .{});
     pub const getElementById = bridge.function(Document.getElementById, .{});

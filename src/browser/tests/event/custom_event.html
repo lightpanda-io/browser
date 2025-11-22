@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=customEventConstructor>
+{
+  const event = new CustomEvent('test');
+  testing.expectEqual('test', event.type);
+  testing.expectEqual(null, event.detail);
+  testing.expectEqual(false, event.bubbles);
+  testing.expectEqual(false, event.cancelable);
+}
+</script>
+
+<script id=customEventWithDetail>
+{
+  const detail = { foo: 'bar', num: 42 };
+  const event = new CustomEvent('custom', { detail });
+  testing.expectEqual('custom', event.type);
+  testing.expectEqual('bar', event.detail.foo);
+  testing.expectEqual(42, event.detail.num);
+}
+</script>
+
+<script id=customEventWithOptions>
+{
+  const event = new CustomEvent('opts', {
+    bubbles: true,
+    cancelable: true,
+    detail: 'test-detail'
+  });
+  testing.expectEqual(true, event.bubbles);
+  testing.expectEqual(true, event.cancelable);
+  testing.expectEqual('test-detail', event.detail);
+}
+</script>
+
+<script id=customEventDispatch>
+{
+  const target = document.createElement('div');
+  let receivedEvent = null;
+
+  target.addEventListener('myevent', (e) => {
+    receivedEvent = e;
+  });
+
+  const event = new CustomEvent('myevent', {
+    detail: { message: 'hello' }
+  });
+  target.dispatchEvent(event);
+
+  testing.expectEqual('hello', receivedEvent.detail.message);
+}
+</script>
+
+<script id=createEventCustomEvent>
+{
+  const event = document.createEvent('CustomEvent');
+  testing.expectEqual('', event.type);
+  testing.expectEqual(null, event.detail);
+}
+</script>
+
+<script id=createEventCaseInsensitive>
+{
+  const event1 = document.createEvent('customevent');
+  testing.expectEqual('', event1.type);
+
+  const event2 = document.createEvent('CUSTOMEVENT');
+  testing.expectEqual('', event2.type);
+
+  const event3 = document.createEvent('CustomEvents');
+  testing.expectEqual('', event3.type);
+}
+</script>
+
+<script id=createEventGeneric>
+{
+  const event1 = document.createEvent('Event');
+  testing.expectEqual('', event1.type);
+
+  const event2 = document.createEvent('Events');
+  testing.expectEqual('', event2.type);
+
+  const event3 = document.createEvent('HTMLEvents');
+  testing.expectEqual('', event3.type);
+}
+</script>
+
+<script id=customEventInheritance>
+{
+  const event = new CustomEvent('inherit-test');
+  testing.expectEqual(Event.NONE, event.eventPhase);
+  testing.expectEqual(false, event.defaultPrevented);
+}
+</script>

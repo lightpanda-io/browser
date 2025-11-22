@@ -48,6 +48,7 @@ pub const Type = union(enum) {
     generic,
     progress_event: *@import("event/ProgressEvent.zig"),
     error_event: *@import("event/ErrorEvent.zig"),
+    custom_event: *@import("event/CustomEvent.zig"),
 };
 
 const Options = struct {
