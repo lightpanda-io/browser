@@ -934,6 +934,7 @@ pub const Page = struct {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
                 try self.navigateFromWebAPI(href, .{}, .{ .push = null });
+                return;
             },
             .input => {
                 const element: *parser.Element = @ptrCast(node);
@@ -956,6 +957,12 @@ pub const Page = struct {
             },
             else => {},
         }
+
+        // Set the focus on the clicked element.
+        // Thanks to parser.nodeHTMLGetTagType, we know nod is an element.
+        // We assume we have a ElementHTML.
+        const Document = @import("dom/document.zig").Document;
+        try Document.setFocus(@ptrCast(self.window.document), @as(*parser.ElementHTML, @ptrCast(node)), self);
     }
 
     pub const KeyboardEvent = struct {
