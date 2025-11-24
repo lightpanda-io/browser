@@ -920,7 +920,7 @@ pub const Page = struct {
     fn windowClicked(node: *parser.EventNode, event: *parser.Event) void {
         const self: *Page = @fieldParentPtr("window_clicked_event_node", node);
         self._windowClicked(event) catch |err| {
-            log.err(.browser, "click handler error", .{ .err = err });
+            log.err(.input, "click handler error", .{ .err = err });
         };
     }
 
@@ -928,6 +928,7 @@ pub const Page = struct {
         const target = parser.eventTarget(event) orelse return;
         const node = parser.eventTargetToNode(target);
         const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
+        log.debug(.input, "window click event", .{ .tag = tag });
         switch (tag) {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
@@ -997,7 +998,7 @@ pub const Page = struct {
     fn keydownCallback(node: *parser.EventNode, event: *parser.Event) void {
         const self: *Page = @fieldParentPtr("keydown_event_node", node);
         self._keydownCallback(event) catch |err| {
-            log.err(.browser, "keydown handler error", .{ .err = err });
+            log.err(.input, "keydown handler error", .{ .err = err });
         };
     }
 
@@ -1005,6 +1006,8 @@ pub const Page = struct {
         const target = parser.eventTarget(event) orelse return;
         const node = parser.eventTargetToNode(target);
         const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
+
+        log.debug(.input, "key down event", .{ .tag = tag });
 
         const kbe: *parser.KeyboardEvent = @ptrCast(event);
         var new_key = try parser.keyboardEventGetKey(kbe);
