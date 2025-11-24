@@ -1021,11 +1021,11 @@ pub const Page = struct {
         if (std.mem.eql(u8, new_key, "Dead")) {
             return;
         }
-        log.debug(.input, "key down event", .{ .tag = tag, .key = new_key });
         switch (tag) {
             .input => {
                 const element: *parser.Element = @ptrCast(node);
                 const input_type = try parser.inputGetType(@ptrCast(element));
+                log.debug(.input, "key down on input", .{ .tag = tag, .key = new_key, .input_type = input_type });
                 if (std.mem.eql(u8, new_key, "Enter")) {
                     const form = (try self.formForElement(element)) orelse return;
                     return self.submitForm(@ptrCast(form), null);
@@ -1038,6 +1038,7 @@ pub const Page = struct {
                 }
             },
             .textarea => {
+                log.debug(.input, "key down on textarea", .{ .tag = tag, .key = new_key });
                 const value = try parser.textareaGetValue(@ptrCast(node));
                 if (std.mem.eql(u8, new_key, "Enter")) {
                     new_key = "\n";
@@ -1045,7 +1046,9 @@ pub const Page = struct {
                 const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
                 try parser.textareaSetValue(@ptrCast(node), new_value);
             },
-            else => {},
+            else => {
+                log.debug(.input, "key down event", .{ .tag = tag, .key = new_key });
+            },
         }
     }
 
