@@ -22,6 +22,7 @@ const js = @import("../js/js.zig");
 const logger = @import("../../log.zig");
 
 const Console = @This();
+_pad: bool = false,
 
 pub const init: Console = .{};
 

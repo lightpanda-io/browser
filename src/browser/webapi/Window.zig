@@ -34,12 +34,15 @@ const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
+const Element = @import("Element.zig");
+const CSSStyleDeclaration = @import("css/CSSStyleDeclaration.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 
 const Window = @This();
 
 _proto: *EventTarget,
 _document: *Document,
+_crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
 _performance: Performance,
@@ -67,16 +70,17 @@ pub fn getDocument(self: *Window) *Document {
     return self._document;
 }
 
-pub fn getConsole(_: *const Window) Console {
-    return .{};
+pub fn getConsole(self: *Window) *Console {
+    std.debug.print("getConsole\n", .{});
+    return &self._console;
 }
 
-pub fn getNavigator(_: *const Window) Navigator {
-    return .{};
+pub fn getNavigator(self: *Window) *Navigator {
+    return &self._navigator;
 }
 
-pub fn getCrypto(_: *const Window) Crypto {
-    return .{};
+pub fn getCrypto(self: *Window) *Crypto {
+    return &self._crypto;
 }
 
 pub fn getPerformance(self: *Window) *Performance {
@@ -210,6 +214,10 @@ pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQuery
     });
 }
 
+pub fn getComputedStyle(_: *const Window, _: *Element, page: *Page) !@import("css/CSSStyleDeclaration.zig") {
+    return CSSStyleDeclaration.init(null, page);
+}
+
 pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     const encoded_len = std.base64.standard.Encoder.calcSize(input.len);
     const encoded = try page.call_arena.alloc(u8, encoded_len);
@@ -222,6 +230,7 @@ pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     try std.base64.standard.Decoder.decode(decoded, input);
     return decoded;
 }
+
 
 const ScheduleOpts = struct {
     repeat: bool,
@@ -384,6 +393,7 @@ pub const JsApi = struct {
             return 1080;
         }
     }.wrap, null, .{ .cache = "innerHeight" });
+    pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
 };
 
 const testing = @import("../../testing.zig");

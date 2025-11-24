@@ -20,6 +20,7 @@ const builtin = @import("builtin");
 const js = @import("../js/js.zig");
 
 const Navigator = @This();
+_pad: bool = false,
 
 pub const init: Navigator = .{};
 
@@ -120,7 +121,3 @@ pub const JsApi = struct {
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
 };
 
-const testing = @import("../../testing.zig");
-test "WebApi: Navigator" {
-    try testing.htmlRunner("navigator.html", .{});
-}

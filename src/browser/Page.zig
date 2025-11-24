@@ -176,6 +176,8 @@ pub fn deinit(self: *Page) void {
         log.debug(.page, "page.deinit", .{ .url = self.url });
     }
     self.js.deinit();
+    self._script_manager.shutdown = true;
+    self._session.browser.http_client.abort();
     self._script_manager.deinit();
 }
 

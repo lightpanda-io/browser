@@ -20,6 +20,9 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Crypto = @This();
+_pad: bool = false,
+
+pub const init: Crypto = .{};
 
 // We take a js.Value, because we want to return the same instance, not a new
 // TypedArray

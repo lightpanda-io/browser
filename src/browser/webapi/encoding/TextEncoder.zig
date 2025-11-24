@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const TextEncoder = @This();
+_pad: bool = false,
 
 pub fn init() TextEncoder {
     return .{};
