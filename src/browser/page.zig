@@ -1016,24 +1016,22 @@ pub const Page = struct {
         const node = parser.eventTargetToNode(target);
         const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
 
-        log.debug(.input, "key down event", .{ .tag = tag });
-
         const kbe: *parser.KeyboardEvent = @ptrCast(event);
         var new_key = try parser.keyboardEventGetKey(kbe);
         if (std.mem.eql(u8, new_key, "Dead")) {
             return;
         }
-
+        log.debug(.input, "key down event", .{ .tag = tag, .key = new_key });
         switch (tag) {
             .input => {
                 const element: *parser.Element = @ptrCast(node);
                 const input_type = try parser.inputGetType(@ptrCast(element));
-                if (std.mem.eql(u8, input_type, "text")) {
-                    if (std.mem.eql(u8, new_key, "Enter")) {
-                        const form = (try self.formForElement(element)) orelse return;
-                        return self.submitForm(@ptrCast(form), null);
-                    }
+                if (std.mem.eql(u8, new_key, "Enter")) {
+                    const form = (try self.formForElement(element)) orelse return;
+                    return self.submitForm(@ptrCast(form), null);
+                }
 
+                if (std.mem.eql(u8, input_type, "text")) {
                     const value = try parser.inputGetValue(@ptrCast(element));
                     const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
                     try parser.inputSetValue(@ptrCast(element), new_value);
