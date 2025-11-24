@@ -1031,11 +1031,16 @@ pub const Page = struct {
                     return self.submitForm(@ptrCast(form), null);
                 }
 
-                if (std.mem.eql(u8, input_type, "text")) {
-                    const value = try parser.inputGetValue(@ptrCast(element));
-                    const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
-                    try parser.inputSetValue(@ptrCast(element), new_value);
+                if (std.mem.eql(u8, input_type, "radio")) {
+                    return;
                 }
+                if (std.mem.eql(u8, input_type, "checkbox")) {
+                    return;
+                }
+
+                const value = try parser.inputGetValue(@ptrCast(element));
+                const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
+                try parser.inputSetValue(@ptrCast(element), new_value);
             },
             .textarea => {
                 log.debug(.input, "key down on textarea", .{ .tag = tag, .key = new_key });
