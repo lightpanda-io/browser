@@ -928,11 +928,11 @@ pub const Page = struct {
         const target = parser.eventTarget(event) orelse return;
         const node = parser.eventTargetToNode(target);
         const tag = (try parser.nodeHTMLGetTagType(node)) orelse return;
-        log.debug(.input, "window click event", .{ .tag = tag });
         switch (tag) {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
+                log.debug(.input, "window click on link", .{ .tag = tag, .href = href });
                 try self.navigateFromWebAPI(href, .{}, .{ .push = null });
                 return;
             },
@@ -940,12 +940,14 @@ pub const Page = struct {
                 const element: *parser.Element = @ptrCast(node);
                 const input_type = try parser.inputGetType(@ptrCast(element));
                 if (std.ascii.eqlIgnoreCase(input_type, "submit")) {
+                    log.debug(.input, "window click on submit input", .{ .tag = tag });
                     return self.elementSubmitForm(element);
                 }
             },
             .button => {
                 const element: *parser.Element = @ptrCast(node);
                 const button_type = try parser.buttonGetType(@ptrCast(element));
+                log.debug(.input, "window click on button", .{ .tag = tag, .button_type = button_type });
                 if (std.ascii.eqlIgnoreCase(button_type, "submit")) {
                     return self.elementSubmitForm(element);
                 }
@@ -957,7 +959,7 @@ pub const Page = struct {
             },
             else => {},
         }
-
+        log.debug(.input, "window click on element", .{ .tag = tag });
         // Set the focus on the clicked element.
         // Thanks to parser.nodeHTMLGetTagType, we know nod is an element.
         // We assume we have a ElementHTML.
