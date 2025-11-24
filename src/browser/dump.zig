@@ -17,24 +17,45 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 
-pub const Opts = struct {
-    // @ZIGDOM (none of these do anything)
+pub const RootOpts = struct {
     with_base: bool = false,
-    strip_mode: StripMode = .{},
+    strip: Opts.Strip = .{},
+};
 
-    pub const StripMode = struct {
+pub const Opts = struct {
+    strip: Strip = .{},
+    pub const Strip = struct {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
     };
 };
 
+pub fn root(opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
+    const doc = page.document;
+    if (opts.with_base) {
+        if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
+            const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
+            const base = try doc.createElement("base", null, page);
+            try base.setAttributeSafe("base", page.url, page);
+            _ = try parent.insertBefore(base.asNode(), parent.firstChild(), page);
+        }
+    }
+
+    return deep(doc.asNode(), .{.strip = opts.strip}, writer);
+}
+
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer) error{WriteFailed}!void {
     switch (node._type) {
         .cdata => |cd| try writer.writeAll(cd.getData()),
         .element => |el| {
+            if (shouldStripElement(el, opts)) {
+                return;
+            }
+
             try el.format(writer);
             try children(node, opts, writer);
             if (!isVoidElement(el)) {
@@ -105,4 +126,48 @@ fn isVoidElement(el: *const Node.Element) bool {
         },
         .svg => false,
     };
+}
+
+fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
+    const tag_name = el.getTagNameDump();
+
+    if (opts.strip.js) {
+        if (std.mem.eql(u8, tag_name, "script")) return true;
+        if (std.mem.eql(u8, tag_name, "noscript")) return true;
+
+        if (std.mem.eql(u8, tag_name, "link")) {
+            if (el.getAttributeSafe("as")) |as| {
+                if (std.mem.eql(u8, as, "script")) return true;
+            }
+            if (el.getAttributeSafe("rel")) |rel| {
+                if (std.mem.eql(u8, rel, "modulepreload") or std.mem.eql(u8, rel, "preload")) {
+                    if (el.getAttributeSafe("as")) |as| {
+                        if (std.mem.eql(u8, as, "script")) return true;
+                    }
+                }
+            }
+        }
+    }
+
+    if (opts.strip.css or opts.strip.ui) {
+        if (std.mem.eql(u8, tag_name, "style")) return true;
+
+        if (std.mem.eql(u8, tag_name, "link")) {
+            if (el.getAttributeSafe("rel")) |rel| {
+                if (std.mem.eql(u8, rel, "stylesheet")) return true;
+            }
+        }
+    }
+
+    if (opts.strip.ui) {
+        if (std.mem.eql(u8, tag_name, "img")) return true;
+        if (std.mem.eql(u8, tag_name, "picture")) return true;
+        if (std.mem.eql(u8, tag_name, "video")) return true;
+        if (std.mem.eql(u8, tag_name, "audio")) return true;
+        if (std.mem.eql(u8, tag_name, "svg")) return true;
+        if (std.mem.eql(u8, tag_name, "canvas")) return true;
+        if (std.mem.eql(u8, tag_name, "iframe")) return true;
+    }
+
+    return false;
 }

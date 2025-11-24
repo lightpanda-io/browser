@@ -757,7 +757,7 @@ const Script = struct {
         // }
 
         const msg = try_catch.err(page.arena) catch |err| @errorName(err) orelse "unknown";
-        log.warn(.user_script, "eval script", .{
+        log.warn(.js, "eval script", .{
             .url = url,
             .err = msg,
             .cacheable = cacheable,

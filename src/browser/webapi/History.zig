@@ -52,7 +52,7 @@ pub fn pushState(self: *History, state: js.Object, _title: []const u8, url: ?[]c
     _ = url; // For minimal implementation, we don't actually navigate
     _ = page;
 
-    self._state = state;
+    self._state = try state.persist();
     self._length += 1;
 }
 
@@ -60,7 +60,7 @@ pub fn replaceState(self: *History, state: js.Object, _title: []const u8, url: ?
     _ = _title;
     _ = url;
     _ = page;
-    self._state = state;
+    self._state = try state.persist();
     // Note: replaceState doesn't change length
 }
 

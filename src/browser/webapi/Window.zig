@@ -49,6 +49,7 @@ _performance: Performance,
 _history: History,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function = null,
+_on_error: ?js.Function = null, // TODO: invoke on error?
 _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
@@ -71,7 +72,6 @@ pub fn getDocument(self: *Window) *Document {
 }
 
 pub fn getConsole(self: *Window) *Console {
-    std.debug.print("getConsole\n", .{});
     return &self._console;
 }
 
@@ -116,6 +116,18 @@ pub fn setOnLoad(self: *Window, cb_: ?js.Function) !void {
         self._on_load = cb;
     } else {
         self._on_load = null;
+    }
+}
+
+pub fn getOnError(self: *const Window) ?js.Function {
+    return self._on_error;
+}
+
+pub fn setOnError(self: *Window, cb_: ?js.Function) !void {
+    if (cb_) |cb| {
+        self._on_error = cb;
+    } else {
+        self._on_error = null;
     }
 }
 
@@ -214,7 +226,7 @@ pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQuery
     });
 }
 
-pub fn getComputedStyle(_: *const Window, _: *Element, page: *Page) !@import("css/CSSStyleDeclaration.zig") {
+pub fn getComputedStyle(_: *const Window, _: *Element, page: *Page) !*CSSStyleDeclaration {
     return CSSStyleDeclaration.init(null, page);
 }
 
@@ -362,6 +374,7 @@ pub const JsApi = struct {
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
+    pub const onerror = bridge.accessor(Window.getOnError, Window.getOnError, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});

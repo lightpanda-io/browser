@@ -125,8 +125,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = 5000,
                 .dump = .{
+                    .strip = opts.strip,
                     .with_base = opts.withbase,
-                    .strip_mode = opts.strip_mode,
                 },
             };
 
@@ -245,7 +245,7 @@ const Command = struct {
         dump: bool = false,
         common: Common,
         withbase: bool = false,
-        strip_mode: lp.dump.Opts.StripMode = .{},
+        strip: lp.dump.Opts.Strip = .{},
     };
 
     const Common = struct {
@@ -511,7 +511,7 @@ fn parseFetchArgs(
     var withbase: bool = false;
     var url: ?[:0]const u8 = null;
     var common: Command.Common = .{};
-    var strip_mode: lp.dump.Opts.StripMode = .{};
+    var strip: lp.dump.Opts.Strip = .{};
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
@@ -524,7 +524,7 @@ fn parseFetchArgs(
                 .feature = "--noscript argument",
                 .hint = "use '--strip_mode js' instead",
             });
-            strip_mode.js = true;
+            strip.js = true;
             continue;
         }
 
@@ -543,15 +543,15 @@ fn parseFetchArgs(
             while (it.next()) |part| {
                 const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
                 if (std.mem.eql(u8, trimmed, "js")) {
-                    strip_mode.js = true;
+                    strip.js = true;
                 } else if (std.mem.eql(u8, trimmed, "ui")) {
-                    strip_mode.ui = true;
+                    strip.ui = true;
                 } else if (std.mem.eql(u8, trimmed, "css")) {
-                    strip_mode.css = true;
+                    strip.css = true;
                 } else if (std.mem.eql(u8, trimmed, "full")) {
-                    strip_mode.js = true;
-                    strip_mode.ui = true;
-                    strip_mode.css = true;
+                    strip.js = true;
+                    strip.ui = true;
+                    strip.css = true;
                 } else {
                     log.fatal(.app, "invalid option choice", .{ .arg = "--strip_mode", .value = trimmed });
                 }
@@ -583,9 +583,9 @@ fn parseFetchArgs(
     return .{
         .url = url.?,
         .dump = dump,
+        .strip = strip,
         .common = common,
         .withbase = withbase,
-        .strip_mode = strip_mode,
     };
 }
 

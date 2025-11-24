@@ -129,7 +129,7 @@ pub const Jar = struct {
 
     pub fn populateFromResponse(self: *Jar, uri: *const Uri, set_cookie: []const u8) !void {
         const c = Cookie.parse(self.allocator, uri, set_cookie) catch |err| {
-            log.warn(.web_api, "cookie parse failed", .{ .raw = set_cookie, .err = err });
+            log.warn(.page, "cookie parse failed", .{ .raw = set_cookie, .err = err });
             return;
         };
 
@@ -312,7 +312,7 @@ pub const Cookie = struct {
                     // Algolia, for example, will call document.setCookie with
                     // an expired value which is literally 'Invalid Date'
                     // (it's trying to do something like: `new Date() + undefined`).
-                    log.debug(.web_api, "cookie expires date", .{ .date = expires_ });
+                    log.debug(.page, "cookie expires date", .{ .date = expires_ });
                 }
             }
         }

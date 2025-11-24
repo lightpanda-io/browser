@@ -125,7 +125,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 
 pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     if (comptime IS_DEBUG) {
-        log.debug(.xhr, "XMLHttpRequest.send", .{ .url = self._url });
+        log.debug(.http, "XMLHttpRequest.send", .{ .url = self._url });
     }
 
     if (body_) |b| {

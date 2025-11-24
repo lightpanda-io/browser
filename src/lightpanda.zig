@@ -32,7 +32,7 @@ const Allocator = std.mem.Allocator;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
-    dump: dump.Opts,
+    dump: dump.RootOpts,
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
@@ -64,7 +64,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     _ = session.fetchWait(opts.wait_ms);
 
     const writer = opts.writer orelse return;
-    try dump.deep(page.document.asNode(), opts.dump, writer);
+    try dump.root(opts.dump, writer, page);
     try writer.flush();
 }
 

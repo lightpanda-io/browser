@@ -80,3 +80,11 @@
     testing.expectTrue(whereResult.length >= 3);
 }
 </script>
+
+<div id=escaped class=":popover-open"></div>
+<script id="escaped">
+{
+    const escaped = document.querySelector('.\\:popover-open');
+    testing.expectEqual('escaped', escaped.id);
+}
+</script>

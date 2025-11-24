@@ -144,6 +144,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
 
     const result = self.func.castToFunction().call(context.v8_context, js_this, js_args);
     if (result == null) {
+        std.debug.print("CB ERR: {s}\n", .{self.src() catch "???"});
         return error.JSExecCallback;
     }
 

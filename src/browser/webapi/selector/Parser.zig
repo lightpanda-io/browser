@@ -226,8 +226,8 @@ pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Select
 
 fn parsePart(self: *Parser, arena: Allocator, page: *Page) !Part {
     return switch (self.peek()) {
-        '#' => .{ .id = try self.id() },
-        '.' => .{ .class = try self.class() },
+        '#' => .{ .id = try self.id(arena) },
+        '.' => .{ .class = try self.class(arena) },
         '*' => blk: {
             self.input = self.input[1..];
             break :blk .universal;
@@ -655,7 +655,7 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
     return .{ .a = a, .b = b };
 }
 
-pub fn id(self: *Parser) ![]const u8 {
+pub fn id(self: *Parser, arena: Allocator) ![]const u8 {
     // Must be called when we're at a '#'
     std.debug.assert(self.peek() == '#');
 
@@ -667,26 +667,46 @@ pub fn id(self: *Parser) ![]const u8 {
         return error.InvalidIDSelector;
     }
 
-    // First character: must be letter, underscore, or non-ASCII (>= 0x80)
-    // Can also be hyphen if not followed by digit or another hyphen
-    const first = input[0];
-    if (first == '-') {
-        if (input.len < 2) {
-            @branchHint(.cold);
-            return error.InvalidIDSelector;
-        }
-        const second = input[1];
-        if (second == '-' or std.ascii.isDigit(second)) {
-            @branchHint(.cold);
-            return error.InvalidIDSelector;
-        }
-    } else if (!std.ascii.isAlphabetic(first) and first != '_' and first < 0x80) {
-        @branchHint(.cold);
-        return error.InvalidIDSelector;
-    }
+    // First pass: find the end of the id and check if there are escape sequences
+    var i: usize = 0;
+    var has_escape = false;
+    var first_char_validated = false;
 
-    var i: usize = 1;
-    for (input[1..]) |b| {
+    while (i < input.len) {
+        const b = input[i];
+
+        if (b == '\\') {
+            // Escape sequence
+            if (i + 1 >= input.len) {
+                @branchHint(.cold);
+                return error.InvalidIDSelector;
+            }
+            has_escape = true;
+            i += 2; // Skip backslash and escaped char
+            first_char_validated = true;
+            continue;
+        }
+
+        // Validate first character if not yet validated
+        if (!first_char_validated) {
+            if (b == '-') {
+                if (i + 1 >= input.len) {
+                    @branchHint(.cold);
+                    return error.InvalidIDSelector;
+                }
+                const second = input[i + 1];
+                if (second == '-' or std.ascii.isDigit(second)) {
+                    @branchHint(.cold);
+                    return error.InvalidIDSelector;
+                }
+            } else if (!std.ascii.isAlphabetic(b) and b != '_' and b < 0x80) {
+                @branchHint(.cold);
+                return error.InvalidIDSelector;
+            }
+            first_char_validated = true;
+        }
+
+        // Check if this is a valid id character
         switch (b) {
             'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
             0x80...0xFF => {}, // non-ASCII characters
@@ -701,11 +721,39 @@ pub fn id(self: *Parser) ![]const u8 {
         i += 1;
     }
 
+    if (i == 0) {
+        @branchHint(.cold);
+        return error.InvalidIDSelector;
+    }
+
+    const raw = input[0..i];
     self.input = input[i..];
-    return input[0..i];
+
+    // If no escape sequences, return the slice as-is
+    if (!has_escape) {
+        return raw;
+    }
+
+    // Build unescaped string
+    var result = try std.ArrayList(u8).initCapacity(arena, raw.len);
+    var j: usize = 0;
+    while (j < raw.len) {
+        if (raw[j] == '\\') {
+            j += 1; // Skip backslash
+            if (j < raw.len) {
+                try result.append(arena, raw[j]); // Add escaped char
+                j += 1;
+            }
+        } else {
+            try result.append(arena, raw[j]);
+            j += 1;
+        }
+    }
+
+    return result.items;
 }
 
-fn class(self: *Parser) ![]const u8 {
+fn class(self: *Parser, arena: Allocator) ![]const u8 {
     // Must be called when we're at a '.'
     std.debug.assert(self.peek() == '.');
 
@@ -717,26 +765,46 @@ fn class(self: *Parser) ![]const u8 {
         return error.InvalidClassSelector;
     }
 
-    // First character: must be letter, underscore, or non-ASCII (>= 0x80)
-    // Can also be hyphen if not followed by digit or another hyphen
-    const first = input[0];
-    if (first == '-') {
-        if (input.len < 2) {
-            @branchHint(.cold);
-            return error.InvalidClassSelector;
-        }
-        const second = input[1];
-        if (second == '-' or std.ascii.isDigit(second)) {
-            @branchHint(.cold);
-            return error.InvalidClassSelector;
-        }
-    } else if (!std.ascii.isAlphabetic(first) and first != '_' and first < 0x80) {
-        @branchHint(.cold);
-        return error.InvalidClassSelector;
-    }
+    // First pass: find the end of the class name and check if there are escape sequences
+    var i: usize = 0;
+    var has_escape = false;
+    var first_char_validated = false;
 
-    var i: usize = 1;
-    for (input[1..]) |b| {
+    while (i < input.len) {
+        const b = input[i];
+
+        if (b == '\\') {
+            // Escape sequence
+            if (i + 1 >= input.len) {
+                @branchHint(.cold);
+                return error.InvalidClassSelector;
+            }
+            has_escape = true;
+            i += 2; // Skip backslash and escaped char
+            first_char_validated = true;
+            continue;
+        }
+
+        // Validate first character if not yet validated
+        if (!first_char_validated) {
+            if (b == '-') {
+                if (i + 1 >= input.len) {
+                    @branchHint(.cold);
+                    return error.InvalidClassSelector;
+                }
+                const second = input[i + 1];
+                if (second == '-' or std.ascii.isDigit(second)) {
+                    @branchHint(.cold);
+                    return error.InvalidClassSelector;
+                }
+            } else if (!std.ascii.isAlphabetic(b) and b != '_' and b < 0x80) {
+                @branchHint(.cold);
+                return error.InvalidClassSelector;
+            }
+            first_char_validated = true;
+        }
+
+        // Check if this is a valid class name character
         switch (b) {
             'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
             0x80...0xFF => {}, // non-ASCII characters
@@ -751,8 +819,36 @@ fn class(self: *Parser) ![]const u8 {
         i += 1;
     }
 
+    if (i == 0) {
+        @branchHint(.cold);
+        return error.InvalidClassSelector;
+    }
+
+    const raw = input[0..i];
     self.input = input[i..];
-    return input[0..i];
+
+    // If no escape sequences, return the slice as-is
+    if (!has_escape) {
+        return raw;
+    }
+
+    // Build unescaped string
+    var result = try std.ArrayList(u8).initCapacity(arena, raw.len);
+    var j: usize = 0;
+    while (j < raw.len) {
+        if (raw[j] == '\\') {
+            j += 1; // Skip backslash
+            if (j < raw.len) {
+                try result.append(arena, raw[j]); // Add escaped char
+                j += 1;
+            }
+        } else {
+            try result.append(arena, raw[j]);
+            j += 1;
+        }
+    }
+
+    return result.items;
 }
 
 fn tag(self: *Parser) ![]const u8 {
@@ -941,227 +1037,231 @@ fn fastEql(a: []const u8, comptime b: []const u8) bool {
 
 const testing = @import("../../../testing.zig");
 test "Selector: Parser.ID" {
+    const arena = testing.allocator;
+
     {
         var parser = Parser{ .input = "#" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "# " };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#1" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#9abc" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#-1" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#-5abc" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#--" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#--test" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#-" };
-        try testing.expectError(error.InvalidIDSelector, parser.id());
+        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
     }
 
     {
         var parser = Parser{ .input = "#over" };
-        try testing.expectEqual("over", try parser.id());
+        try testing.expectEqual("over", try parser.id(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#myID123" };
-        try testing.expectEqual("myID123", try parser.id());
+        try testing.expectEqual("myID123", try parser.id(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#_test" };
-        try testing.expectEqual("_test", try parser.id());
+        try testing.expectEqual("_test", try parser.id(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#test_123" };
-        try testing.expectEqual("test_123", try parser.id());
+        try testing.expectEqual("test_123", try parser.id(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#-test" };
-        try testing.expectEqual("-test", try parser.id());
+        try testing.expectEqual("-test", try parser.id(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#my-id" };
-        try testing.expectEqual("my-id", try parser.id());
+        try testing.expectEqual("my-id", try parser.id(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#test other" };
-        try testing.expectEqual("test", try parser.id());
+        try testing.expectEqual("test", try parser.id(arena));
         try testing.expectEqual(" other", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#id.class" };
-        try testing.expectEqual("id", try parser.id());
+        try testing.expectEqual("id", try parser.id(arena));
         try testing.expectEqual(".class", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#id:hover" };
-        try testing.expectEqual("id", try parser.id());
+        try testing.expectEqual("id", try parser.id(arena));
         try testing.expectEqual(":hover", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#id>child" };
-        try testing.expectEqual("id", try parser.id());
+        try testing.expectEqual("id", try parser.id(arena));
         try testing.expectEqual(">child", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#id[attr]" };
-        try testing.expectEqual("id", try parser.id());
+        try testing.expectEqual("id", try parser.id(arena));
         try testing.expectEqual("[attr]", parser.input);
     }
 }
 
 test "Selector: Parser.class" {
+    const arena = testing.allocator;
+
     {
         var parser = Parser{ .input = "." };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ". " };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".1" };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".9abc" };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".-1" };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".-5abc" };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".--" };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".--test" };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".-" };
-        try testing.expectError(error.InvalidClassSelector, parser.class());
+        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
     }
 
     {
         var parser = Parser{ .input = ".active" };
-        try testing.expectEqual("active", try parser.class());
+        try testing.expectEqual("active", try parser.class(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".myClass123" };
-        try testing.expectEqual("myClass123", try parser.class());
+        try testing.expectEqual("myClass123", try parser.class(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "._test" };
-        try testing.expectEqual("_test", try parser.class());
+        try testing.expectEqual("_test", try parser.class(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".test_123" };
-        try testing.expectEqual("test_123", try parser.class());
+        try testing.expectEqual("test_123", try parser.class(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".-test" };
-        try testing.expectEqual("-test", try parser.class());
+        try testing.expectEqual("-test", try parser.class(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".my-class" };
-        try testing.expectEqual("my-class", try parser.class());
+        try testing.expectEqual("my-class", try parser.class(arena));
         try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".test other" };
-        try testing.expectEqual("test", try parser.class());
+        try testing.expectEqual("test", try parser.class(arena));
         try testing.expectEqual(" other", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".class1.class2" };
-        try testing.expectEqual("class1", try parser.class());
+        try testing.expectEqual("class1", try parser.class(arena));
         try testing.expectEqual(".class2", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".class:hover" };
-        try testing.expectEqual("class", try parser.class());
+        try testing.expectEqual("class", try parser.class(arena));
         try testing.expectEqual(":hover", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".class>child" };
-        try testing.expectEqual("class", try parser.class());
+        try testing.expectEqual("class", try parser.class(arena));
         try testing.expectEqual(">child", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".class[attr]" };
-        try testing.expectEqual("class", try parser.class());
+        try testing.expectEqual("class", try parser.class(arena));
         try testing.expectEqual("[attr]", parser.input);
     }
 }
@@ -1354,3 +1454,4 @@ test "Selector: Parser.parseNthPattern" {
         try testing.expectEqual("  )", parser.input);
     }
 }
+

@@ -266,7 +266,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         try self.reset(false);
     }
 
-    log.info(.http, "navigate", .{
+    log.info(.page, "navigate", .{
         .url = request_url,
         .method = opts.method,
         .reason = opts.reason,
@@ -329,7 +329,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .done_callback = pageDoneCallback,
         .error_callback = pageErrorCallback,
     }) catch |err| {
-        log.err(.http, "navigate request", .{ .url = self.url, .err = err });
+        log.err(.page, "navigate request", .{ .url = self.url, .err = err });
         return err;
     };
 }
@@ -412,7 +412,7 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
 
-    log.debug(.http, "navigate header", .{
+    log.debug(.page, "navigate header", .{
         .url = self.url,
         .status = header.status,
         .content_type = header.contentType(),
@@ -433,7 +433,7 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         } orelse .unknown;
 
         if (comptime IS_DEBUG) {
-            log.debug(.http, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len });
+            log.debug(.page, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len });
         }
 
         switch (mime.content_type) {
@@ -475,7 +475,7 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
 
 fn pageDoneCallback(ctx: *anyopaque) !void {
     if (comptime IS_DEBUG) {
-        log.debug(.http, "navigate done", .{});
+        log.debug(.page, "navigate done", .{});
     }
 
     var self: *Page = @ptrCast(@alignCast(ctx));
@@ -522,7 +522,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
 }
 
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
-    log.err(.http, "navigate failed", .{ .err = err });
+    log.err(.page, "navigate failed", .{ .err = err });
 
     var self: *Page = @ptrCast(@alignCast(ctx));
     self.clearTransferArena();
@@ -624,7 +624,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
 
                 if (try_catch.hasCaught()) {
                     const msg = (try try_catch.err(self.arena)) orelse "unknown";
-                    log.warn(.user_script, "page wait", .{ .err = msg, .src = "scheduler" });
+                    log.warn(.js, "page wait", .{ .err = msg, .src = "scheduler" });
                     return error.JsError;
                 }
 

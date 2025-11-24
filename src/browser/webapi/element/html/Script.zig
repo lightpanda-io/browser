@@ -35,6 +35,11 @@ _executed: bool = false,
 pub fn asElement(self: *Script) *Element {
     return self._proto._proto;
 }
+
+pub fn asConstElement(self: *const Script) *const Element {
+    return self._proto._proto;
+}
+
 pub fn asNode(self: *Script) *Node {
     return self.asElement().asNode();
 }
@@ -76,6 +81,10 @@ pub fn setOnError(self: *Script, cb_: ?js.Function) !void {
     }
 }
 
+pub fn getNoModule(self: *const Script) bool {
+    return self.asConstElement().getAttributeSafe("nomodule") != null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Script);
 
@@ -88,6 +97,7 @@ pub const JsApi = struct {
     pub const src = bridge.accessor(Script.getSrc, Script.setSrc, .{});
     pub const onload = bridge.accessor(Script.getOnLoad, Script.setOnLoad, .{});
     pub const onerorr = bridge.accessor(Script.getOnError, Script.setOnError, .{});
+    pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
 };
 
 pub const Build = struct {

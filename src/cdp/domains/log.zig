@@ -88,8 +88,8 @@ pub fn LogInterceptor(comptime BC: type) type {
             self.bc.cdp.sendEvent("Log.entryAdded", .{
                 .entry = .{
                     .source = switch (scope) {
-                        .js, .user_script, .console, .web_api, .script_event => "javascript",
-                        .http, .fetch, .xhr => "network",
+                        .js, .console  => "javascript",
+                        .http => "network",
                         .telemetry, .unknown_prop, .interceptor => unreachable, // filtered out in writer above
                         else => "other",
                     },
