@@ -33,7 +33,7 @@
   testing.expectEqual('http://www.w3.org/1999/xhtml', regularDiv.namespaceURI);
 
   const custom = document.createElementNS('test', 'te:ST');
-  testing.expectEqual('TE:ST', custom.tagName); // Should be te:ST
+  testing.expectEqual('te:ST', custom.tagName);
   testing.expectEqual('te', custom.prefix);
   testing.expectEqual('ST', custom.localName);
   testing.expectEqual('http://www.w3.org/1999/xhtml', custom.namespaceURI); // Should be test
