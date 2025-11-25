@@ -93,3 +93,13 @@
   }
 </script>
 
+<script id=screen>
+  testing.expectEqual(1920, screen.width);
+  testing.expectEqual(1080, screen.height);
+  testing.expectEqual(1920, screen.availWidth);
+  testing.expectEqual(1040, screen.availHeight);
+  testing.expectEqual(24, screen.colorDepth);
+  testing.expectEqual(24, screen.pixelDepth);
+  testing.expectEqual(screen, window.screen);
+</script>
+

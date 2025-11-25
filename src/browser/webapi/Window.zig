@@ -26,6 +26,7 @@ const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Crypto = @import("Crypto.zig");
 const Navigator = @import("Navigator.zig");
+const Screen = @import("Screen.zig");
 const Performance = @import("Performance.zig");
 const Document = @import("Document.zig");
 const Location = @import("Location.zig");
@@ -45,6 +46,7 @@ _document: *Document,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
+_screen: Screen = .init,
 _performance: Performance,
 _history: History,
 _storage_bucket: *storage.Bucket,
@@ -77,6 +79,10 @@ pub fn getConsole(self: *Window) *Console {
 
 pub fn getNavigator(self: *Window) *Navigator {
     return &self._navigator;
+}
+
+pub fn getScreen(self: *Window) *Screen {
+    return &self._screen;
 }
 
 pub fn getCrypto(self: *Window) *Crypto {
@@ -366,6 +372,7 @@ pub const JsApi = struct {
     pub const parent = bridge.accessor(Window.getWindow, null, .{ .cache = "parent" });
     pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = "console" });
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{ .cache = "navigator" });
+    pub const screen = bridge.accessor(Window.getScreen, null, .{ .cache = "screen" });
     pub const performance = bridge.accessor(Window.getPerformance, null, .{ .cache = "performance" });
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{ .cache = "localStorage" });
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });

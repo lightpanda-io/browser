@@ -573,4 +573,5 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/ResizeObserver.zig"),
     @import("../webapi/Blob.zig"),
     @import("../webapi/File.zig"),
+    @import("../webapi/Screen.zig"),
 });
