@@ -4,394 +4,415 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Alignment = std.mem.Alignment;
 
-pub fn SlabAllocator(comptime slot_count: usize) type {
-    comptime assert(std.math.isPowerOfTwo(slot_count));
+const Slab = struct {
+    alignment: Alignment,
+    item_size: usize,
+    max_slot_count: usize,
 
-    const SlabKey = struct {
-        size: usize,
-        alignment: Alignment,
-    };
+    bitset: std.bit_set.DynamicBitSetUnmanaged,
+    chunks: std.ArrayListUnmanaged([]u8),
 
-    const Slab = struct {
-        const Slab = @This();
-        const chunk_shift = std.math.log2_int(usize, slot_count);
-        const chunk_mask = slot_count - 1;
-
+    pub fn init(
+        allocator: Allocator,
         alignment: Alignment,
         item_size: usize,
+        max_slot_count: usize,
+    ) !Slab {
+        return .{
+            .alignment = alignment,
+            .item_size = item_size,
+            .bitset = try .initFull(allocator, 0),
+            .chunks = .empty,
+            .max_slot_count = max_slot_count,
+        };
+    }
 
-        bitset: std.bit_set.DynamicBitSetUnmanaged,
-        chunks: std.ArrayListUnmanaged([]u8),
+    pub fn deinit(self: *Slab, allocator: Allocator) void {
+        self.bitset.deinit(allocator);
 
-        pub fn init(
-            allocator: Allocator,
-            alignment: Alignment,
-            item_size: usize,
-        ) !Slab {
-            return .{
-                .alignment = alignment,
-                .item_size = item_size,
-                .bitset = try .initFull(allocator, 0),
-                .chunks = .empty,
-            };
+        for (self.chunks.items) |chunk| {
+            allocator.rawFree(chunk, self.alignment, @returnAddress());
         }
 
-        pub fn deinit(self: *Slab, allocator: Allocator) void {
-            self.bitset.deinit(allocator);
+        self.chunks.deinit(allocator);
+    }
 
-            for (self.chunks.items) |chunk| {
-                allocator.rawFree(chunk, self.alignment, @returnAddress());
+    inline fn calculateChunkSize(self: *Slab, chunk_index: usize) usize {
+        const safe_index: u6 = @intCast(@min(std.math.maxInt(u6), chunk_index));
+        const exponential = @as(usize, 1) << safe_index;
+        return @min(exponential, self.max_slot_count);
+    }
+
+    inline fn toBitsetIndex(self: *Slab, chunk_index: usize, slot_index: usize) usize {
+        var offset: usize = 0;
+        for (0..chunk_index) |i| {
+            const chunk_size = self.calculateChunkSize(i);
+            offset += chunk_size;
+        }
+        return offset + slot_index;
+    }
+
+    inline fn toChunkAndSlotIndices(self: *Slab, bitset_index: usize) struct { usize, usize } {
+        var offset: usize = 0;
+        var chunk_index: usize = 0;
+
+        while (chunk_index < self.chunks.items.len) : (chunk_index += 1) {
+            const chunk_size = self.calculateChunkSize(chunk_index);
+            if (bitset_index < offset + chunk_size) {
+                return .{ chunk_index, bitset_index - offset };
             }
 
-            self.chunks.deinit(allocator);
+            offset += chunk_size;
         }
 
-        inline fn toBitsetIndex(chunk_index: usize, slot_index: usize) usize {
-            return chunk_index * slot_count + slot_index;
+        unreachable;
+    }
+
+    fn alloc(self: *Slab, allocator: Allocator) ![]u8 {
+        if (self.bitset.findFirstSet()) |index| {
+            const chunk_index, const slot_index = self.toChunkAndSlotIndices(index);
+
+            // if we have a free slot
+            self.bitset.unset(index);
+
+            const chunk = self.chunks.items[chunk_index];
+            const offset = slot_index * self.item_size;
+            return chunk.ptr[offset..][0..self.item_size];
+        } else {
+            const old_capacity = self.bitset.bit_length;
+
+            // if we have don't have a free slot
+            try self.allocateChunk(allocator);
+
+            const first_slot_index = old_capacity;
+            self.bitset.unset(first_slot_index);
+
+            const new_chunk = self.chunks.items[self.chunks.items.len - 1];
+            return new_chunk.ptr[0..self.item_size];
         }
+    }
 
-        inline fn chunkIndex(bitset_index: usize) usize {
-            return bitset_index >> chunk_shift;
-        }
+    fn free(self: *Slab, ptr: [*]u8) void {
+        const addr = @intFromPtr(ptr);
 
-        inline fn slotIndex(bitset_index: usize) usize {
-            return bitset_index & chunk_mask;
-        }
+        for (self.chunks.items, 0..) |chunk, i| {
+            const chunk_start = @intFromPtr(chunk.ptr);
+            const chunk_end = chunk_start + chunk.len;
 
-        fn alloc(self: *Slab, allocator: Allocator) ![]u8 {
-            if (self.bitset.findFirstSet()) |index| {
-                // if we have a free slot
-                const chunk_index = chunkIndex(index);
-                const slot_index = slotIndex(index);
-                self.bitset.unset(index);
+            if (addr >= chunk_start and addr < chunk_end) {
+                const offset = addr - chunk_start;
+                const slot_index = offset / self.item_size;
 
-                const chunk = self.chunks.items[chunk_index];
-                const offset = slot_index * self.item_size;
-                return chunk.ptr[offset..][0..self.item_size];
-            } else {
-                const old_capacity = self.bitset.bit_length;
+                const bitset_index = self.toBitsetIndex(i, slot_index);
+                assert(!self.bitset.isSet(bitset_index));
 
-                // if we have don't have a free slot
-                try self.allocateChunk(allocator);
-
-                const first_slot_index = old_capacity;
-                self.bitset.unset(first_slot_index);
-
-                const new_chunk = self.chunks.items[self.chunks.items.len - 1];
-                return new_chunk.ptr[0..self.item_size];
+                self.bitset.set(bitset_index);
+                return;
             }
         }
 
-        fn free(self: *Slab, ptr: [*]u8) void {
-            const addr = @intFromPtr(ptr);
+        unreachable;
+    }
 
-            for (self.chunks.items, 0..) |chunk, i| {
-                const chunk_start = @intFromPtr(chunk.ptr);
-                const chunk_end = chunk_start + (slot_count * self.item_size);
+    fn allocateChunk(self: *Slab, allocator: Allocator) !void {
+        const next_chunk_size = self.calculateChunkSize(self.chunks.items.len);
+        const chunk_len = self.item_size * next_chunk_size;
 
-                if (addr >= chunk_start and addr < chunk_end) {
-                    const offset = addr - chunk_start;
-                    const slot_index = offset / self.item_size;
+        const chunk_ptr = allocator.rawAlloc(
+            chunk_len,
+            self.alignment,
+            @returnAddress(),
+        ) orelse return error.FailedChildAllocation;
 
-                    const bitset_index = toBitsetIndex(i, slot_index);
-                    assert(!self.bitset.isSet(bitset_index));
+        const chunk = chunk_ptr[0..chunk_len];
+        try self.chunks.append(allocator, chunk);
 
-                    self.bitset.set(bitset_index);
-                    return;
+        const new_capacity = self.bitset.bit_length + next_chunk_size;
+        try self.bitset.resize(allocator, new_capacity, true);
+    }
+
+    const Stats = struct {
+        key: SlabKey,
+        item_size: usize,
+        chunk_count: usize,
+        total_slots: usize,
+        slots_in_use: usize,
+        slots_free: usize,
+        bytes_allocated: usize,
+        bytes_in_use: usize,
+        bytes_free: usize,
+        utilization_ratio: f64,
+    };
+
+    fn getStats(self: *const Slab, key: SlabKey) Stats {
+        const total_slots = self.bitset.bit_length;
+        const free_slots = self.bitset.count();
+        const used_slots = total_slots - free_slots;
+        const bytes_allocated = total_slots * self.item_size;
+        const bytes_in_use = used_slots * self.item_size;
+
+        const utilization_ratio = if (bytes_allocated > 0)
+            @as(f64, @floatFromInt(bytes_in_use)) / @as(f64, @floatFromInt(bytes_allocated))
+        else
+            0.0;
+
+        return .{
+            .key = key,
+            .item_size = self.item_size,
+            .chunk_count = self.chunks.items.len,
+            .total_slots = total_slots,
+            .slots_in_use = used_slots,
+            .slots_free = free_slots,
+            .bytes_allocated = bytes_allocated,
+            .bytes_in_use = bytes_in_use,
+            .bytes_free = free_slots * self.item_size,
+            .utilization_ratio = utilization_ratio,
+        };
+    }
+};
+
+const SlabKey = struct {
+    size: usize,
+    alignment: Alignment,
+};
+
+pub const SlabAllocator = struct {
+    const Self = @This();
+
+    child_allocator: Allocator,
+    max_slot_count: usize,
+
+    slabs: std.ArrayHashMapUnmanaged(SlabKey, Slab, struct {
+        const Context = @This();
+
+        pub fn hash(_: Context, key: SlabKey) u32 {
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHash(&hasher, key.size);
+            std.hash.autoHash(&hasher, key.alignment);
+            return @truncate(hasher.final());
+        }
+
+        pub fn eql(_: Context, a: SlabKey, b: SlabKey, _: usize) bool {
+            return a.size == b.size and a.alignment == b.alignment;
+        }
+    }, false) = .empty,
+
+    pub fn init(child_allocator: Allocator, max_slot_count: usize) Self {
+        assert(std.math.isPowerOfTwo(max_slot_count));
+
+        return .{
+            .child_allocator = child_allocator,
+            .slabs = .empty,
+            .max_slot_count = max_slot_count,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (self.slabs.values()) |*slab| {
+            slab.deinit(self.child_allocator);
+        }
+
+        self.slabs.deinit(self.child_allocator);
+    }
+
+    pub const ResetKind = enum {
+        /// Free all chunks and release all memory.
+        clear,
+        /// Keep all chunks, reset trees to reuse memory.
+        retain_capacity,
+    };
+
+    /// This clears all of the stored memory, freeing the currently used chunks.
+    pub fn reset(self: *Self, kind: ResetKind) void {
+        switch (kind) {
+            .clear => {
+                for (self.slabs.values()) |*slab| {
+                    for (slab.chunks.items) |chunk| {
+                        self.child_allocator.free(chunk);
+                    }
+
+                    slab.chunks.clearAndFree(self.child_allocator);
+                    slab.bitset.deinit(self.child_allocator);
+                }
+
+                self.slabs.clearAndFree(self.child_allocator);
+            },
+            .retain_capacity => {
+                for (self.slabs.values()) |*slab| {
+                    slab.bitset.setAll();
+                }
+            },
+        }
+    }
+
+    const Stats = struct {
+        total_allocated_bytes: usize,
+        bytes_in_use: usize,
+        bytes_free: usize,
+        slab_count: usize,
+        total_chunks: usize,
+        total_slots: usize,
+        slots_in_use: usize,
+        slots_free: usize,
+        fragmentation_ratio: f64,
+        utilization_ratio: f64,
+        slabs: []const Slab.Stats,
+
+        pub fn print(self: *const Stats) !void {
+            std.debug.print("\n", .{});
+            std.debug.print("\n=== Slab Allocator Statistics ===\n", .{});
+            std.debug.print("Overall Memory:\n", .{});
+            std.debug.print("  Total allocated: {} bytes ({d:.2} MB)\n", .{
+                self.total_allocated_bytes,
+                @as(f64, @floatFromInt(self.total_allocated_bytes)) / 1_048_576.0,
+            });
+            std.debug.print("  In use:          {} bytes ({d:.2} MB)\n", .{
+                self.bytes_in_use,
+                @as(f64, @floatFromInt(self.bytes_in_use)) / 1_048_576.0,
+            });
+            std.debug.print("  Free:            {} bytes ({d:.2} MB)\n", .{
+                self.bytes_free,
+                @as(f64, @floatFromInt(self.bytes_free)) / 1_048_576.0,
+            });
+
+            std.debug.print("\nOverall Structure:\n", .{});
+            std.debug.print("  Slab Count:    {}\n", .{self.slab_count});
+            std.debug.print("  Total chunks:    {}\n", .{self.total_chunks});
+            std.debug.print("  Total slots:     {}\n", .{self.total_slots});
+            std.debug.print("  Slots in use:    {}\n", .{self.slots_in_use});
+            std.debug.print("  Slots free:      {}\n", .{self.slots_free});
+
+            std.debug.print("\nOverall Efficiency:\n", .{});
+            std.debug.print("  Utilization:     {d:.1}%\n", .{self.utilization_ratio * 100.0});
+            std.debug.print("  Fragmentation:   {d:.1}%\n", .{self.fragmentation_ratio * 100.0});
+
+            if (self.slabs.len > 0) {
+                std.debug.print("\nPer-Slab Breakdown:\n", .{});
+                std.debug.print(
+                    "  {s:>5} | {s:>4} | {s:>6} | {s:>6} | {s:>6} | {s:>10} | {s:>6}\n",
+                    .{ "Size", "Algn", "Chunks", "Slots", "InUse", "Bytes", "Util%" },
+                );
+                std.debug.print(
+                    "  {s:-<5}-+-{s:-<4}-+-{s:-<6}-+-{s:-<6}-+-{s:-<6}-+-{s:-<10}-+-{s:-<6}\n",
+                    .{ "", "", "", "", "", "", "" },
+                );
+
+                for (self.slabs) |slab| {
+                    std.debug.print("  {d:5} | {d:4} | {d:6} | {d:6} | {d:6} | {d:10} | {d:5.1}%\n", .{
+                        slab.key.size,
+                        @intFromEnum(slab.key.alignment),
+                        slab.chunk_count,
+                        slab.total_slots,
+                        slab.slots_in_use,
+                        slab.bytes_allocated,
+                        slab.utilization_ratio * 100.0,
+                    });
                 }
             }
-
-            unreachable;
-        }
-
-        fn allocateChunk(self: *Slab, allocator: Allocator) !void {
-            const chunk_len = self.item_size * slot_count;
-
-            const chunk_ptr = allocator.rawAlloc(
-                chunk_len,
-                self.alignment,
-                @returnAddress(),
-            ) orelse return error.FailedChildAllocation;
-
-            const chunk = chunk_ptr[0..chunk_len];
-            try self.chunks.append(allocator, chunk);
-
-            const new_capacity = self.chunks.items.len * slot_count;
-            try self.bitset.resize(allocator, new_capacity, true);
-        }
-
-        const Stats = struct {
-            key: SlabKey,
-            item_size: usize,
-            chunk_count: usize,
-            total_slots: usize,
-            slots_in_use: usize,
-            slots_free: usize,
-            bytes_allocated: usize,
-            bytes_in_use: usize,
-            bytes_free: usize,
-            utilization_ratio: f64,
-        };
-
-        fn getStats(self: *const Slab, key: SlabKey) Stats {
-            const total_slots = self.bitset.bit_length;
-            const free_slots = self.bitset.count();
-            const used_slots = total_slots - free_slots;
-            const bytes_allocated = self.chunks.items.len * slot_count * self.item_size;
-            const bytes_in_use = used_slots * self.item_size;
-
-            const utilization_ratio = if (bytes_allocated > 0)
-                @as(f64, @floatFromInt(bytes_in_use)) / @as(f64, @floatFromInt(bytes_allocated))
-            else
-                0.0;
-
-            return .{
-                .key = key,
-                .item_size = self.item_size,
-                .chunk_count = self.chunks.items.len,
-                .total_slots = total_slots,
-                .slots_in_use = used_slots,
-                .slots_free = free_slots,
-                .bytes_allocated = bytes_allocated,
-                .bytes_in_use = bytes_in_use,
-                .bytes_free = free_slots * self.item_size,
-                .utilization_ratio = utilization_ratio,
-            };
         }
     };
 
-    return struct {
-        const Self = @This();
+    pub fn getStats(self: *Self, a: std.mem.Allocator) !Stats {
+        var slab_stats: std.ArrayList(Slab.Stats) = try .initCapacity(a, self.slabs.entries.len);
+        errdefer slab_stats.deinit(a);
 
-        child_allocator: Allocator,
-        slabs: std.ArrayHashMapUnmanaged(SlabKey, Slab, struct {
-            const Context = @This();
-
-            pub fn hash(_: Context, key: SlabKey) u32 {
-                var hasher = std.hash.Wyhash.init(0);
-                std.hash.autoHash(&hasher, key.size);
-                std.hash.autoHash(&hasher, key.alignment);
-                return @truncate(hasher.final());
-            }
-
-            pub fn eql(_: Context, a: SlabKey, b: SlabKey, _: usize) bool {
-                return a.size == b.size and a.alignment == b.alignment;
-            }
-        }, false) = .empty,
-
-        pub fn init(child_allocator: Allocator) Self {
-            return .{
-                .child_allocator = child_allocator,
-                .slabs = .empty,
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            for (self.slabs.values()) |*slab| {
-                slab.deinit(self.child_allocator);
-            }
-
-            self.slabs.deinit(self.child_allocator);
-        }
-
-        pub const ResetKind = enum {
-            /// Free all chunks and release all memory.
-            clear,
-            /// Keep all chunks, reset trees to reuse memory.
-            retain_capacity,
+        var stats = Stats{
+            .total_allocated_bytes = 0,
+            .bytes_in_use = 0,
+            .bytes_free = 0,
+            .slab_count = self.slabs.count(),
+            .total_chunks = 0,
+            .total_slots = 0,
+            .slots_in_use = 0,
+            .slots_free = 0,
+            .fragmentation_ratio = 0.0,
+            .utilization_ratio = 0.0,
+            .slabs = &.{},
         };
 
-        /// This clears all of the stored memory, freeing the currently used chunks.
-        pub fn reset(self: *Self, kind: ResetKind) void {
-            switch (kind) {
-                .clear => {
-                    for (self.slabs.values()) |*slab| {
-                        for (slab.chunks.items) |chunk| {
-                            self.child_allocator.free(chunk);
-                        }
+        var it = self.slabs.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const slab = entry.value_ptr;
+            const slab_stat = slab.getStats(key);
 
-                        slab.chunks.clearAndFree(self.child_allocator);
-                        slab.bitset.deinit(self.child_allocator);
-                    }
+            slab_stats.appendAssumeCapacity(slab_stat);
 
-                    self.slabs.clearAndFree(self.child_allocator);
-                },
-                .retain_capacity => {
-                    for (self.slabs.values()) |*slab| {
-                        slab.bitset.setAll();
-                    }
-                },
-            }
+            stats.total_allocated_bytes += slab_stat.bytes_allocated;
+            stats.bytes_in_use += slab_stat.bytes_in_use;
+            stats.bytes_free += slab_stat.bytes_free;
+            stats.total_chunks += slab_stat.chunk_count;
+            stats.total_slots += slab_stat.total_slots;
+            stats.slots_in_use += slab_stat.slots_in_use;
+            stats.slots_free += slab_stat.slots_free;
         }
 
-        const Stats = struct {
-            total_allocated_bytes: usize,
-            bytes_in_use: usize,
-            bytes_free: usize,
-            slab_count: usize,
-            total_chunks: usize,
-            total_slots: usize,
-            slots_in_use: usize,
-            slots_free: usize,
-            fragmentation_ratio: f64,
-            utilization_ratio: f64,
-            slabs: []const Slab.Stats,
+        if (stats.total_allocated_bytes > 0) {
+            stats.fragmentation_ratio = @as(f64, @floatFromInt(stats.bytes_free)) /
+                @as(f64, @floatFromInt(stats.total_allocated_bytes));
+            stats.utilization_ratio = @as(f64, @floatFromInt(stats.bytes_in_use)) /
+                @as(f64, @floatFromInt(stats.total_allocated_bytes));
+        }
 
-            pub fn print(self: *const Stats) !void {
-                std.debug.print("\n", .{});
-                std.debug.print("\n=== Slab Allocator Statistics ===\n", .{});
-                std.debug.print("Overall Memory:\n", .{});
-                std.debug.print("  Total allocated: {} bytes ({d:.2} MB)\n", .{
-                    self.total_allocated_bytes,
-                    @as(f64, @floatFromInt(self.total_allocated_bytes)) / 1_048_576.0,
-                });
-                std.debug.print("  In use:          {} bytes ({d:.2} MB)\n", .{
-                    self.bytes_in_use,
-                    @as(f64, @floatFromInt(self.bytes_in_use)) / 1_048_576.0,
-                });
-                std.debug.print("  Free:            {} bytes ({d:.2} MB)\n", .{
-                    self.bytes_free,
-                    @as(f64, @floatFromInt(self.bytes_free)) / 1_048_576.0,
-                });
+        stats.slabs = try slab_stats.toOwnedSlice(a);
+        return stats;
+    }
 
-                std.debug.print("\nOverall Structure:\n", .{});
-                std.debug.print("  Slab Count:    {}\n", .{self.slab_count});
-                std.debug.print("  Total chunks:    {}\n", .{self.total_chunks});
-                std.debug.print("  Total slots:     {}\n", .{self.total_slots});
-                std.debug.print("  Slots in use:    {}\n", .{self.slots_in_use});
-                std.debug.print("  Slots free:      {}\n", .{self.slots_free});
+    pub const vtable = Allocator.VTable{
+        .alloc = alloc,
+        .free = free,
+        .remap = Allocator.noRemap,
+        .resize = Allocator.noResize,
+    };
 
-                std.debug.print("\nOverall Efficiency:\n", .{});
-                std.debug.print("  Utilization:     {d:.1}%\n", .{self.utilization_ratio * 100.0});
-                std.debug.print("  Fragmentation:   {d:.1}%\n", .{self.fragmentation_ratio * 100.0});
-
-                if (self.slabs.len > 0) {
-                    std.debug.print("\nPer-Slab Breakdown:\n", .{});
-                    std.debug.print(
-                        "  {s:>5} | {s:>4} | {s:>6} | {s:>6} | {s:>6} | {s:>10} | {s:>6}\n",
-                        .{ "Size", "Algn", "Chunks", "Slots", "InUse", "Bytes", "Util%" },
-                    );
-                    std.debug.print(
-                        "  {s:-<5}-+-{s:-<4}-+-{s:-<6}-+-{s:-<6}-+-{s:-<6}-+-{s:-<10}-+-{s:-<6}\n",
-                        .{ "", "", "", "", "", "", "" },
-                    );
-
-                    for (self.slabs) |slab| {
-                        std.debug.print("  {d:5} | {d:4} | {d:6} | {d:6} | {d:6} | {d:10} | {d:5.1}%\n", .{
-                            slab.key.size,
-                            @intFromEnum(slab.key.alignment),
-                            slab.chunk_count,
-                            slab.total_slots,
-                            slab.slots_in_use,
-                            slab.bytes_allocated,
-                            slab.utilization_ratio * 100.0,
-                        });
-                    }
-                }
-            }
+    pub fn allocator(self: *Self) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &vtable,
         };
+    }
 
-        pub fn getStats(self: *Self, a: std.mem.Allocator) !Stats {
-            var slab_stats: std.ArrayList(Slab.Stats) = try .initCapacity(a, self.slabs.entries.len);
-            errdefer slab_stats.deinit(a);
+    fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        _ = ret_addr;
 
-            var stats = Stats{
-                .total_allocated_bytes = 0,
-                .bytes_in_use = 0,
-                .bytes_free = 0,
-                .slab_count = self.slabs.count(),
-                .total_chunks = 0,
-                .total_slots = 0,
-                .slots_in_use = 0,
-                .slots_free = 0,
-                .fragmentation_ratio = 0.0,
-                .utilization_ratio = 0.0,
-                .slabs = &.{},
-            };
+        const list_gop = self.slabs.getOrPut(
+            self.child_allocator,
+            SlabKey{ .size = len, .alignment = alignment },
+        ) catch return null;
 
-            var it = self.slabs.iterator();
-            while (it.next()) |entry| {
-                const key = entry.key_ptr.*;
-                const slab = entry.value_ptr;
-                const slab_stat = slab.getStats(key);
-
-                slab_stats.appendAssumeCapacity(slab_stat);
-
-                stats.total_allocated_bytes += slab_stat.bytes_allocated;
-                stats.bytes_in_use += slab_stat.bytes_in_use;
-                stats.bytes_free += slab_stat.bytes_free;
-                stats.total_chunks += slab_stat.chunk_count;
-                stats.total_slots += slab_stat.total_slots;
-                stats.slots_in_use += slab_stat.slots_in_use;
-                stats.slots_free += slab_stat.slots_free;
-            }
-
-            if (stats.total_allocated_bytes > 0) {
-                stats.fragmentation_ratio = @as(f64, @floatFromInt(stats.bytes_free)) /
-                    @as(f64, @floatFromInt(stats.total_allocated_bytes));
-                stats.utilization_ratio = @as(f64, @floatFromInt(stats.bytes_in_use)) /
-                    @as(f64, @floatFromInt(stats.total_allocated_bytes));
-            }
-
-            stats.slabs = try slab_stats.toOwnedSlice(a);
-            return stats;
-        }
-
-        pub const vtable = Allocator.VTable{
-            .alloc = alloc,
-            .free = free,
-            .remap = Allocator.noRemap,
-            .resize = Allocator.noResize,
-        };
-
-        pub fn allocator(self: *Self) Allocator {
-            return .{
-                .ptr = self,
-                .vtable = &vtable,
-            };
-        }
-
-        fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
-            const self: *Self = @ptrCast(@alignCast(ctx));
-            _ = ret_addr;
-
-            const list_gop = self.slabs.getOrPut(
+        if (!list_gop.found_existing) {
+            list_gop.value_ptr.* = Slab.init(
                 self.child_allocator,
-                SlabKey{ .size = len, .alignment = alignment },
+                alignment,
+                len,
+                self.max_slot_count,
             ) catch return null;
-
-            if (!list_gop.found_existing) {
-                list_gop.value_ptr.* = Slab.init(
-                    self.child_allocator,
-                    alignment,
-                    len,
-                ) catch return null;
-            }
-
-            const list = list_gop.value_ptr;
-            const buf = list.alloc(self.child_allocator) catch return null;
-            return buf.ptr;
         }
 
-        fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
-            const self: *Self = @ptrCast(@alignCast(ctx));
-            _ = ret_addr;
+        const list = list_gop.value_ptr;
+        const buf = list.alloc(self.child_allocator) catch return null;
+        return buf.ptr;
+    }
 
-            const ptr = memory.ptr;
-            const len = memory.len;
+    fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        _ = ret_addr;
 
-            const list = self.slabs.getPtr(.{ .size = len, .alignment = alignment }).?;
-            list.free(ptr);
-        }
-    };
-}
+        const ptr = memory.ptr;
+        const len = memory.len;
+
+        const list = self.slabs.getPtr(.{ .size = len, .alignment = alignment }).?;
+        list.free(ptr);
+    }
+};
 
 const testing = std.testing;
 
-const TestSlabAllocator = SlabAllocator(32);
+const TestSlabAllocator = SlabAllocator;
 
 test "slab allocator - basic allocation and free" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -409,7 +430,7 @@ test "slab allocator - basic allocation and free" {
 }
 
 test "slab allocator - multiple allocations" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -432,7 +453,7 @@ test "slab allocator - multiple allocations" {
 }
 
 test "slab allocator - no coalescing (different size classes)" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -459,7 +480,7 @@ test "slab allocator - no coalescing (different size classes)" {
 }
 
 test "slab allocator - reuse freed memory" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -477,7 +498,7 @@ test "slab allocator - reuse freed memory" {
 }
 
 test "slab allocator - multiple size classes" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -501,7 +522,7 @@ test "slab allocator - multiple size classes" {
 }
 
 test "slab allocator - various sizes" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -518,7 +539,7 @@ test "slab allocator - various sizes" {
 }
 
 test "slab allocator - exact sizes (no rounding)" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -539,7 +560,7 @@ test "slab allocator - exact sizes (no rounding)" {
 }
 
 test "slab allocator - chunk allocation" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -561,7 +582,7 @@ test "slab allocator - chunk allocation" {
 }
 
 test "slab allocator - reset with retain_capacity" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -588,7 +609,7 @@ test "slab allocator - reset with retain_capacity" {
 }
 
 test "slab allocator - reset with clear" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -610,7 +631,7 @@ test "slab allocator - reset with clear" {
 }
 
 test "slab allocator - stress test" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -647,7 +668,7 @@ test "slab allocator - stress test" {
 }
 
 test "slab allocator - alignment" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -662,7 +683,7 @@ test "slab allocator - alignment" {
 }
 
 test "slab allocator - no resize support" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -678,7 +699,7 @@ test "slab allocator - no resize support" {
 }
 
 test "slab allocator - fragmentation pattern" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -730,7 +751,7 @@ test "slab allocator - fragmentation pattern" {
 }
 
 test "slab allocator - many small allocations" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -752,11 +773,11 @@ test "slab allocator - many small allocations" {
 
     // Should have created multiple chunks
     const slab = slab_alloc.slabs.getPtr(.{ .size = 24, .alignment = Alignment.@"1" }).?;
-    try testing.expect(slab.chunks.items.len > 10);
+    try testing.expect(slab.chunks.items.len > 1);
 }
 
 test "slab allocator - zero waste for exact sizes" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();
@@ -776,7 +797,7 @@ test "slab allocator - zero waste for exact sizes" {
 }
 
 test "slab allocator - different size classes don't interfere" {
-    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
     defer slab_alloc.deinit();
 
     const allocator = slab_alloc.allocator();

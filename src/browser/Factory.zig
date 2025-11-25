@@ -24,7 +24,7 @@ const IS_DEBUG = builtin.mode == .Debug;
 const log = @import("../log.zig");
 const String = @import("../string.zig").String;
 
-const SlabAllocator = @import("../slab.zig").SlabAllocator(16);
+const SlabAllocator = @import("../slab.zig").SlabAllocator;
 
 const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
@@ -53,7 +53,7 @@ _slab: SlabAllocator,
 pub fn init(page: *Page) Factory {
     return .{
         ._page = page,
-        ._slab = SlabAllocator.init(page.arena),
+        ._slab = SlabAllocator.init(page.arena, 128),
     };
 }
 
