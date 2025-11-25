@@ -49,6 +49,10 @@ pub fn takeRecords(_: *const PerformanceObserver) []const Entry {
     return &.{};
 }
 
+pub fn getSupportedEntryTypes(_: *const PerformanceObserver) [][]const u8 {
+    return &.{};
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(PerformanceObserver);
 
@@ -64,4 +68,5 @@ pub const JsApi = struct {
     pub const observe = bridge.function(PerformanceObserver.observe, .{});
     pub const disconnect = bridge.function(PerformanceObserver.disconnect, .{});
     pub const takeRecords = bridge.function(PerformanceObserver.takeRecords, .{});
+    pub const supportedEntryTypes = bridge.accessor(PerformanceObserver.getSupportedEntryTypes, null, .{.static = true});
 };

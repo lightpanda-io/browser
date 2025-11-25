@@ -57,8 +57,12 @@ pub fn Builder(comptime T: type) type {
             return Callable.init(T, func, opts);
         }
 
-        pub fn property(value: anytype) Property.GetType(@TypeOf(value)) {
-            return Property.GetType(@TypeOf(value)).init(value);
+        pub fn property(value: anytype) Property {
+            switch (@typeInfo(@TypeOf(value))) {
+                .comptime_int, .int => return .{.int = value},
+                else => {},
+            }
+            @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet");
         }
 
         pub fn prototypeChain() [prototypeChainLength(T)]js.PrototypeChainEntry {
@@ -146,17 +150,22 @@ pub const Function = struct {
 };
 
 pub const Accessor = struct {
+    static: bool = false,
     getter: ?*const fn (?*const v8.C_FunctionCallbackInfo) callconv(.c) void = null,
     setter: ?*const fn (?*const v8.C_FunctionCallbackInfo) callconv(.c) void = null,
 
     const Opts = struct {
+        static: bool = false,
         cache: ?[]const u8 = null, // @ZIGDOM
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
     };
 
     fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Opts) Accessor {
-        var accessor = Accessor{};
+        var accessor = Accessor{
+            .static = opts.static,
+        };
+
         if (@typeInfo(@TypeOf(getter)) != .null) {
             accessor.getter = struct {
                 fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
@@ -321,20 +330,8 @@ pub const Callable = struct {
     }
 };
 
-pub const Property = struct {
-    fn GetType(comptime T: type) type {
-        switch (@typeInfo(T)) {
-            .comptime_int, .int => return Int,
-            else => @compileError("Property for " ++ @typeName(T) ++ " hasn't been defined yet"),
-        }
-    }
-
-    pub const Int = struct {
-        int: i64,
-        pub fn init(value: i64) Int {
-            return .{ .int = value };
-        }
-    };
+pub const Property = union(enum) {
+    int: i64,
 };
 
 // Given a Type, returns the length of the prototype chain, including self

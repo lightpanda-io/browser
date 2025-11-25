@@ -196,9 +196,15 @@ fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
     const context = Context.fromIsolate(isolate);
 
     const value =
-        if (msg.getValue()) |v8_value| context.valueToString(v8_value, .{}) catch |err| @errorName(err) else "no value";
+        if (msg.getValue()) |v8_value|
+            context.valueToString(v8_value, .{}) catch |err| @errorName(err)
+        else "no value"
+    ;
 
-    log.debug(.js, "unhandled rejection", .{ .value = value });
+    log.debug(.js, "unhandled rejection", .{
+        .value = value,
+        .stack = context.stackTrace() catch |err| @errorName(err) orelse "???"
+    });
 }
 
 // Give it a Zig struct, get back a v8.FunctionTemplate.
@@ -232,8 +238,13 @@ pub fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.Funct
                 const js_name = v8.String.initUtf8(isolate, name).toName();
                 const getter_callback = v8.FunctionTemplate.initCallback(isolate, value.getter);
                 if (value.setter == null) {
-                    template_proto.setAccessorGetter(js_name, getter_callback);
+                    if (value.static) {
+                        template.setAccessorGetter(js_name, getter_callback);
+                    } else {
+                        template_proto.setAccessorGetter(js_name, getter_callback);
+                    }
                 } else {
+                    std.debug.assert(value.static == false);
                     const setter_callback = v8.FunctionTemplate.initCallback(isolate, value.setter);
                     template_proto.setAccessorGetterAndSetter(js_name, getter_callback, setter_callback);
                 }
@@ -265,8 +276,11 @@ pub fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.Funct
                 const js_name = v8.Symbol.getIterator(isolate).toName();
                 template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
             },
-            bridge.Property.Int => {
-                const js_value = js.simpleZigValueToJs(isolate, value.int, true, false);
+            bridge.Property => {
+                const js_value = switch (value) {
+                    .int => |v| js.simpleZigValueToJs(isolate, v, true, false),
+                };
+
                 const js_name = v8.String.initUtf8(isolate, name).toName();
                 // apply it both to the type itself
                 template.set(js_name, js_value, v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
