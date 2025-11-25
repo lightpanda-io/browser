@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="document_styleSheets">
+{
+    const sheets = document.styleSheets;
+    testing.expectTrue(sheets !== null);
+    testing.expectEqual(0, sheets.length);
+
+    // Should return same instance
+    const sheets2 = document.styleSheets;
+    testing.expectTrue(sheets === sheets2);
+}
+</script>
+
+<script id="CSSStyleSheet_basic">
+{
+    const sheets = document.styleSheets;
+    testing.expectEqual('StyleSheetList', sheets.constructor.name);
+
+    // Test indexed access on empty list
+    testing.expectEqual(undefined, sheets[0]);
+    testing.expectEqual(undefined, sheets[99]);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_basic">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set single property
+    style.cssText = 'color: red';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_multiple">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set multiple properties
+    style.cssText = 'color: red; background: blue; margin: 10px';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+    testing.expectEqual('10px', style.getPropertyValue('margin'));
+    testing.expectEqual(3, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_important">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set property with !important
+    style.cssText = 'color: red !important';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_important_multiple">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Mix of important and non-important
+    style.cssText = 'color: red !important; background: blue; margin: 10px !important';
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+    testing.expectEqual('', style.getPropertyPriority('background'));
+    testing.expectEqual('important', style.getPropertyPriority('margin'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_whitespace">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Test whitespace handling
+    style.cssText = '  color  :  red  ;  background  :  blue  ';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_trailing_semicolon">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Trailing semicolon should be handled
+    style.cssText = 'color: red;';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_no_semicolon">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Single property without semicolon
+    style.cssText = 'color: red';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_empty_declarations">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Multiple semicolons should be ignored
+    style.cssText = 'color: red;;; background: blue';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+    testing.expectEqual(2, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_replace">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Set initial properties
+    style.cssText = 'color: red; background: blue';
+    testing.expectEqual(2, style.length);
+
+    // Replace with new properties
+    style.cssText = 'margin: 10px';
+    testing.expectEqual('', style.getPropertyValue('color'));
+    testing.expectEqual('', style.getPropertyValue('background'));
+    testing.expectEqual('10px', style.getPropertyValue('margin'));
+    testing.expectEqual(1, style.length);
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_clear">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    style.cssText = 'color: red; background: blue';
+    testing.expectEqual(2, style.length);
+
+    // Clear all properties
+    style.cssText = '';
+    testing.expectEqual(0, style.length);
+    testing.expectEqual('', style.getPropertyValue('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_colon_in_value">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // URL value with colon
+    style.cssText = 'background: url(http://example.com/image.png)';
+    testing.expectEqual('url(http://example.com/image.png)', style.getPropertyValue('background'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_important_whitespace">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Various whitespace around !important
+    style.cssText = 'color: red!important';
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+
+    style.cssText = 'color: red  !  important';
+    testing.expectEqual('important', style.getPropertyPriority('color'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_case_insensitive_property">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Property names should be normalized to lowercase
+    style.cssText = 'COLOR: red; BACKGROUND: blue';
+    testing.expectEqual('red', style.getPropertyValue('color'));
+    testing.expectEqual('blue', style.getPropertyValue('background'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_setCssText_exclamation_not_important">
+{
+    const div = document.createElement('div');
+    const style = div.style;
+
+    // Exclamation mark without "important" should be kept in value
+    style.cssText = 'content: "hello!"';
+    testing.expectEqual('"hello!"', style.getPropertyValue('content'));
+    testing.expectEqual('', style.getPropertyPriority('content'));
+}
+</script>

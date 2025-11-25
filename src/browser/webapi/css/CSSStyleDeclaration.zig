@@ -29,28 +29,6 @@ const CSSStyleDeclaration = @This();
 _element: ?*Element = null,
 _properties: std.DoublyLinkedList = .{},
 
-pub const Property = struct {
-    _name: String,
-    _value: String,
-    _important: bool = false,
-    _node: std.DoublyLinkedList.Node,
-
-    fn fromNodeLink(n: *std.DoublyLinkedList.Node) *Property {
-        return @alignCast(@fieldParentPtr("_node", n));
-    }
-
-    pub fn format(self: *const Property, writer: *std.Io.Writer) !void {
-        try self._name.format(writer);
-        try writer.writeAll(": ");
-        try self._value.format(writer);
-
-        if (self._important) {
-            try writer.writeAll(" !important");
-        }
-        try writer.writeByte(';');
-    }
-};
-
 pub fn init(element: ?*Element, page: *Page) !*CSSStyleDeclaration {
     return page._factory.create(CSSStyleDeclaration{
         ._element = element,
@@ -213,6 +191,28 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
     }
     return std.ascii.lowerString(buf, name);
 }
+
+pub const Property = struct {
+    _name: String,
+    _value: String,
+    _important: bool = false,
+    _node: std.DoublyLinkedList.Node,
+
+    fn fromNodeLink(n: *std.DoublyLinkedList.Node) *Property {
+        return @alignCast(@fieldParentPtr("_node", n));
+    }
+
+    pub fn format(self: *const Property, writer: *std.Io.Writer) !void {
+        try self._name.format(writer);
+        try writer.writeAll(": ");
+        try self._value.format(writer);
+
+        if (self._important) {
+            try writer.writeAll(" !important");
+        }
+        try writer.writeByte(';');
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSStyleDeclaration);

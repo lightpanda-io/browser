@@ -31,6 +31,7 @@ const NodeFilter = @import("NodeFilter.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
+const StyleSheetList = @import("css/StyleSheetList.zig");
 
 pub const HTMLDocument = @import("HTMLDocument.zig");
 
@@ -43,6 +44,7 @@ _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 _active_element: ?*Element = null,
+_style_sheets: ?*StyleSheetList = null,
 
 pub const Type = union(enum) {
     generic,
@@ -225,6 +227,15 @@ pub fn getActiveElement(self: *Document) ?*Element {
     return self.getDocumentElement();
 }
 
+pub fn getStyleSheets(self: *Document, page: *Page) !*StyleSheetList {
+    if (self._style_sheets) |sheets| {
+        return sheets;
+    }
+    const sheets = try StyleSheetList.init(page);
+    self._style_sheets = sheets;
+    return sheets;
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -253,7 +264,7 @@ pub const JsApi = struct {
     pub const readyState = bridge.accessor(Document.getReadyState, null, .{});
     pub const implementation = bridge.accessor(Document.getImplementation, null, .{});
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
-
+    pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const createElement = bridge.function(Document.createElement, .{});
     pub const createElementNS = bridge.function(Document.createElementNS, .{});
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});

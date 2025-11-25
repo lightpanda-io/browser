@@ -1454,4 +1454,3 @@ test "Selector: Parser.parseNthPattern" {
         try testing.expectEqual("  )", parser.input);
     }
 }
-

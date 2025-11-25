@@ -243,7 +243,6 @@ pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     return decoded;
 }
 
-
 const ScheduleOpts = struct {
     repeat: bool,
     params: []js.Object,

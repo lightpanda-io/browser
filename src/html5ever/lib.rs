@@ -184,6 +184,7 @@ pub extern "C" fn html5ever_get_memory_usage() -> Memory {
 // Streaming parser API
 // The Parser type from html5ever implements TendrilSink and supports streaming
 pub struct StreamingParser {
+    #[allow(dead_code)]
     arena: Box<typed_arena::Arena<sink::ElementData>>,
     parser: Box<dyn std::any::Any>,
 }

@@ -45,7 +45,7 @@ pub fn root(opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
         }
     }
 
-    return deep(doc.asNode(), .{.strip = opts.strip}, writer);
+    return deep(doc.asNode(), .{ .strip = opts.strip }, writer);
 }
 
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer) error{WriteFailed}!void {

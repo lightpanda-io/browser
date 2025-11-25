@@ -72,7 +72,9 @@ fn isKnownCSSProperty(dash_case: []const u8) bool {
 }
 
 fn camelCaseToDashCase(name: []const u8, buf: []u8) []const u8 {
-    if (name.len == 0) return name;
+    if (name.len == 0) {
+        return name;
+    }
 
     // Special case: cssFloat -> float
     const lower_name = std.ascii.lowerString(buf, name);

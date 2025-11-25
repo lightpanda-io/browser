@@ -120,4 +120,3 @@ pub const JsApi = struct {
     // Methods
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
 };
-
