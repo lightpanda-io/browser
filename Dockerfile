@@ -40,6 +40,8 @@ WORKDIR /browser
 RUN git submodule init && \
     git submodule update --recursive
 
+RUN make install-html5ever
+
 # download and install v8
 RUN case $TARGETPLATFORM in \
     "linux/arm64") ARCH="aarch64" ;; \

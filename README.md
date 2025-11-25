@@ -215,6 +215,16 @@ To init or update the submodules in the `vendor/` directory:
 make install-submodule
 ```
 
+**html5ever**
+
+[html5ver](https://github.com/servo/html5ever) is high-performance browser-grade HTML5 parser.
+
+```
+make install-html5ever
+```
+
+For dev env, use `make install-html5ever-dev`.
+
 **v8**
 
 First, get the tools necessary for building V8, as well as the V8 source code:
