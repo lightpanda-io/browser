@@ -1162,6 +1162,10 @@ pub fn resolvePromise(self: *Context, value: anytype) !js.Promise {
     return resolver.getPromise();
 }
 
+pub fn runMicrotasks(self: *Context) void {
+    self.isolate.performMicrotasksCheckpoint();
+}
+
 // creates a PersistentPromiseResolver, taking in a lifetime parameter.
 // If the lifetime is page, the page will clean up the PersistentPromiseResolver.
 // If the lifetime is self, you will be expected to deinitalize the PersistentPromiseResolver.
@@ -1444,6 +1448,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, fetch_result_: anyerror!ScriptMa
 }
 
 fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, module_entry: ModuleEntry) void {
+    defer self.runMicrotasks();
     const ctx = self.v8_context;
     const isolate = self.isolate;
     const external = v8.External.init(self.isolate, @ptrCast(state));
@@ -1479,6 +1484,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
                 return;
             }
 
+            defer caller.context.runMicrotasks();
             const namespace = s.module.?.getModuleNamespace();
             _ = s.resolver.castToPromiseResolver().resolve(caller.context.v8_context, namespace);
         }
@@ -1494,6 +1500,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
             if (s.context_id != caller.context.id) {
                 return;
             }
+            defer caller.context.runMicrotasks();
             _ = s.resolver.castToPromiseResolver().reject(caller.context.v8_context, info.getData());
         }
     }.callback, external);

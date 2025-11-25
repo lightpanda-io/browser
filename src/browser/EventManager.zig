@@ -107,12 +107,19 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }
+
     event._target = target;
+    var was_handled = false;
+
+    defer if (was_handled) {
+        self.page.js.runMicrotasks();
+    };
+
     switch (target._type) {
-        .node => |node| try self.dispatchNode(node, event),
+        .node => |node| try self.dispatchNode(node, event, &was_handled),
         .xhr, .window, .abort_signal, .media_query_list => {
             const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
-            try self.dispatchAll(list, target, event);
+            try self.dispatchAll(list, target, event, &was_handled);
         },
     }
 }
@@ -135,19 +142,26 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
         event._target = target;
     }
 
+    var was_dispatched = false;
+    defer if (was_dispatched) {
+        self.page.js.runMicrotasks();
+    };
+
     if (function_) |func| {
         event._current_target = target;
-        func.call(void, .{event}) catch |err| {
+        if (func.call(void, .{event})) {
+            was_dispatched = true;
+        } else |err| {
             // a non-JS error
             log.warn(.event, opts.context, .{ .err = err });
-        };
+        }
     }
 
     const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
-    try self.dispatchAll(list, target, event);
+    try self.dispatchAll(list, target, event, &was_dispatched);
 }
 
-fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
+fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool) !void {
     var path_len: usize = 0;
     var path_buffer: [128]*EventTarget = undefined;
 
@@ -175,7 +189,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         i -= 1;
         const current_target = path[i];
         if (self.lookup.getPtr(@intFromPtr(current_target))) |list| {
-            try self.dispatchPhase(list, current_target, event, true);
+            try self.dispatchPhase(list, current_target, event, was_handled, true);
             if (event._stop_propagation) {
                 event._event_phase = .none;
                 return;
@@ -187,7 +201,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     event._event_phase = .at_target;
     const target_et = target.asEventTarget();
     if (self.lookup.getPtr(@intFromPtr(target_et))) |list| {
-        try self.dispatchPhase(list, target_et, event, null);
+        try self.dispatchPhase(list, target_et, event, was_handled, null);
         if (event._stop_propagation) {
             event._event_phase = .none;
             return;
@@ -200,7 +214,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
         event._event_phase = .bubbling_phase;
         for (path[1..]) |current_target| {
             if (self.lookup.getPtr(@intFromPtr(current_target))) |list| {
-                try self.dispatchPhase(list, current_target, event, false);
+                try self.dispatchPhase(list, current_target, event, was_handled, false);
                 if (event._stop_propagation) {
                     break;
                 }
@@ -211,7 +225,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event) !void {
     event._event_phase = .none;
 }
 
-fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, comptime capture_only: ?bool) !void {
+fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime capture_only: ?bool) !void {
     const page = self.page;
     const typ = event._type_string;
 
@@ -240,6 +254,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             }
         }
 
+        was_handled.* = true;
         event._current_target = current_target;
 
         switch (listener.function) {
@@ -261,8 +276,8 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
 }
 
 //  Non-Node dispatching (XHR, Window without propagation)
-fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event) !void {
-    return self.dispatchPhase(list, current_target, event, null);
+fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool) !void {
+    return self.dispatchPhase(list, current_target, event, was_handled, null);
 }
 
 fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *Listener) void {

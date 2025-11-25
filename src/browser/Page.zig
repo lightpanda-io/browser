@@ -243,20 +243,12 @@ fn registerBackgroundTasks(self: *Page) !void {
     const Browser = @import("Browser.zig");
 
     try self.scheduler.add(self._session.browser, struct {
-        fn runMicrotasks(ctx: *anyopaque) !?u32 {
-            const b: *Browser = @ptrCast(@alignCast(ctx));
-            b.runMicrotasks();
-            return 5;
-        }
-    }.runMicrotasks, 5, .{ .name = "page.microtasks" });
-
-    try self.scheduler.add(self._session.browser, struct {
         fn runMessageLoop(ctx: *anyopaque) !?u32 {
             const b: *Browser = @ptrCast(@alignCast(ctx));
             b.runMessageLoop();
-            return 100;
+            return 250;
         }
-    }.runMessageLoop, 5, .{ .name = "page.messageLoop" });
+    }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
 }
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -705,10 +697,10 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
 }
 
 pub fn tick(self: *Page) void {
-    self._session.browser.runMicrotasks();
     _ = self.scheduler.run() catch |err| {
         log.err(.page, "tick", .{ .err = err });
     };
+    self.js.runMicrotasks();
 }
 
 pub fn scriptAddedCallback(self: *Page, script: *HtmlScript) !void {

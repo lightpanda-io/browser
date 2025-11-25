@@ -321,14 +321,15 @@ const ScheduleCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
+        const page = self.page;
         if (self.removed) {
-            _ = self.page.window._timers.remove(self.timer_id);
+            _ = page.window._timers.remove(self.timer_id);
             self.deinit();
             return null;
         }
 
         if (self.animation_frame) {
-            self.cb.call(void, .{self.page.window._performance.now()}) catch |err| {
+            self.cb.call(void, .{page.window._performance.now()}) catch |err| {
                 // a non-JS error
                 log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
             };
@@ -342,9 +343,10 @@ const ScheduleCallback = struct {
         if (self.repeat_ms) |ms| {
             return ms;
         }
+        defer self.deinit();
 
-        _ = self.page.window._timers.remove(self.timer_id);
-        self.deinit();
+        _ = page.window._timers.remove(self.timer_id);
+        page.js.runMicrotasks();
         return null;
     }
 };

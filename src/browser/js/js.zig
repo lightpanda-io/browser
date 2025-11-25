@@ -107,6 +107,7 @@ pub const PersistentPromiseResolver = struct {
     pub fn resolve(self: PersistentPromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value, .{});
+        defer context.runMicrotasks();
 
         // resolver.resolve will return null if the promise isn't pending
         const ok = self.resolver.castToPromiseResolver().resolve(context.v8_context, js_value) orelse return;
@@ -118,6 +119,7 @@ pub const PersistentPromiseResolver = struct {
     pub fn reject(self: PersistentPromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value, .{});
+        defer context.runMicrotasks();
 
         // resolver.reject will return null if the promise isn't pending
         const ok = self.resolver.castToPromiseResolver().reject(context.v8_context, js_value) orelse return;
