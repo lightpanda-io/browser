@@ -538,6 +538,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/element/html/Paragraph.zig"),
     @import("../webapi/element/html/Script.zig"),
     @import("../webapi/element/html/Select.zig"),
+    @import("../webapi/element/html/Slot.zig"),
     @import("../webapi/element/html/Style.zig"),
     @import("../webapi/element/html/Template.zig"),
     @import("../webapi/element/html/TextArea.zig"),
@@ -574,4 +575,5 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/Blob.zig"),
     @import("../webapi/File.zig"),
     @import("../webapi/Screen.zig"),
+    @import("../webapi/PerformanceObserver.zig"),
 });

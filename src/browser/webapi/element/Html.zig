@@ -51,6 +51,7 @@ pub const Template = @import("html/Template.zig");
 pub const TextArea = @import("html/TextArea.zig");
 pub const Paragraph = @import("html/Paragraph.zig");
 pub const Select = @import("html/Select.zig");
+pub const Slot = @import("html/Slot.zig");
 pub const Option = @import("html/Option.zig");
 pub const IFrame = @import("html/IFrame.zig");
 
@@ -90,6 +91,7 @@ pub const Type = union(enum) {
     p: Paragraph,
     script: *Script,
     select: Select,
+    slot: Slot,
     style: Style,
     template: *Template,
     text_area: *TextArea,
@@ -131,6 +133,7 @@ pub fn className(self: *const HtmlElement) []const u8 {
         .generic => "[object HTMLElement]",
         .script => "[object HtmlScriptElement]",
         .select => "[object HTMLSelectElement]",
+        .slot => "[object HTMLSlotElement]",
         .template => "[object HTMLTemplateElement]",
         .option => "[object HTMLOptionElement]",
         .text_area => "[object HtmlTextAreaElement]",

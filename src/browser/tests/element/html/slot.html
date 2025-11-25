@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="Slot#basic_creation">
+{
+    const slot = document.createElement('slot');
+    testing.expectEqual('SLOT', slot.tagName);
+}
+</script>
+
+<script id="Slot#name_attribute">
+{
+    const slot = document.createElement('slot');
+
+    // Set name via setAttribute
+    slot.setAttribute('name', 'header');
+    testing.expectEqual('header', slot.getAttribute('name'));
+
+    // Change name
+    slot.setAttribute('name', 'footer');
+    testing.expectEqual('footer', slot.getAttribute('name'));
+}
+</script>
+
+<script id="Slot#assignedNodes_empty">
+{
+    // Slot not in shadow tree
+    const slot = document.createElement('slot');
+    const nodes = slot.assignedNodes();
+    testing.expectEqual(0, nodes.length);
+}
+</script>
+
+<script id="Slot#assignedElements_empty">
+{
+    // Slot not in shadow tree
+    const slot = document.createElement('slot');
+    const elements = slot.assignedElements();
+    testing.expectEqual(0, elements.length);
+}
+</script>
+
+<script id="Slot#default_slot_basic">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    // Create default slot (no name)
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    // Add content to host
+    const span1 = document.createElement('span');
+    span1.textContent = 'Content 1';
+    host.appendChild(span1);
+
+    const span2 = document.createElement('span');
+    span2.textContent = 'Content 2';
+    host.appendChild(span2);
+
+    // Both spans should be assigned to default slot
+    const nodes = slot.assignedNodes();
+    testing.expectEqual(2, nodes.length);
+    testing.expectTrue(nodes[0] === span1);
+    testing.expectTrue(nodes[1] === span2);
+}
+</script>
+
+<script id="Slot#named_slot">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    // Create named slot
+    const headerSlot = document.createElement('slot');
+    headerSlot.name = 'header';
+    shadow.appendChild(headerSlot);
+
+    // Add content with slot attribute
+    const h1 = document.createElement('h1');
+    h1.textContent = 'Title';
+    h1.setAttribute('slot', 'header');
+    host.appendChild(h1);
+
+    const p = document.createElement('p');
+    p.textContent = 'Body';
+    host.appendChild(p);
+
+    // Only h1 should be assigned to header slot
+    const nodes = headerSlot.assignedNodes();
+    testing.expectEqual(1, nodes.length);
+    testing.expectTrue(nodes[0] === h1);
+}
+</script>
+
+<script id="Slot#multiple_slots">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    // Create multiple named slots
+    const headerSlot = document.createElement('slot');
+    headerSlot.name = 'header';
+    shadow.appendChild(headerSlot);
+
+    const footerSlot = document.createElement('slot');
+    footerSlot.name = 'footer';
+    shadow.appendChild(footerSlot);
+
+    const defaultSlot = document.createElement('slot');
+    shadow.appendChild(defaultSlot);
+
+    // Add content
+    const h1 = document.createElement('h1');
+    h1.setAttribute('slot', 'header');
+    host.appendChild(h1);
+
+    const p = document.createElement('p');
+    host.appendChild(p);
+
+    const footer = document.createElement('footer');
+    footer.setAttribute('slot', 'footer');
+    host.appendChild(footer);
+
+    // Check each slot
+    const headerNodes = headerSlot.assignedNodes();
+    testing.expectEqual(1, headerNodes.length);
+    testing.expectTrue(headerNodes[0] === h1);
+
+    const footerNodes = footerSlot.assignedNodes();
+    testing.expectEqual(1, footerNodes.length);
+    testing.expectTrue(footerNodes[0] === footer);
+
+    const defaultNodes = defaultSlot.assignedNodes();
+    testing.expectEqual(1, defaultNodes.length);
+    testing.expectTrue(defaultNodes[0] === p);
+}
+</script>
+
+<script id="Slot#assignedElements_filters_text_nodes">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    // Add mixed content
+    const span = document.createElement('span');
+    host.appendChild(span);
+
+    const text = document.createTextNode('Some text');
+    host.appendChild(text);
+
+    const div = document.createElement('div');
+    host.appendChild(div);
+
+    // assignedNodes should include all
+    const nodes = slot.assignedNodes();
+    testing.expectEqual(3, nodes.length);
+
+    // assignedElements should only include elements
+    const elements = slot.assignedElements();
+    testing.expectEqual(2, elements.length);
+    testing.expectTrue(elements[0] === span);
+    testing.expectTrue(elements[1] === div);
+}
+</script>
+
+<script id="Slot#text_nodes_default_slot_only">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const namedSlot = document.createElement('slot');
+    namedSlot.name = 'named';
+    shadow.appendChild(namedSlot);
+
+    const defaultSlot = document.createElement('slot');
+    shadow.appendChild(defaultSlot);
+
+    // Add text node
+    const text = document.createTextNode('Text content');
+    host.appendChild(text);
+
+    // Text should go to default slot only
+    const namedNodes = namedSlot.assignedNodes();
+    testing.expectEqual(0, namedNodes.length);
+
+    const defaultNodes = defaultSlot.assignedNodes();
+    testing.expectEqual(1, defaultNodes.length);
+    testing.expectTrue(defaultNodes[0] === text);
+}
+</script>
+
+<script id="Slot#flatten_false">
+{
+    const outerHost = document.createElement('div');
+    const outerShadow = outerHost.attachShadow({ mode: 'open' });
+
+    const innerHost = document.createElement('div');
+    const innerShadow = innerHost.attachShadow({ mode: 'open' });
+
+    // Inner slot
+    const innerSlot = document.createElement('slot');
+    innerShadow.appendChild(innerSlot);
+
+    // Outer slot contains inner host
+    const outerSlot = document.createElement('slot');
+    outerShadow.appendChild(outerSlot);
+    outerHost.appendChild(innerHost);
+
+    // Add content to inner host
+    const span = document.createElement('span');
+    innerHost.appendChild(span);
+
+    // Without flatten, outer slot should see inner host (not span)
+    const nodes = outerSlot.assignedNodes();
+    testing.expectEqual(1, nodes.length);
+    testing.expectTrue(nodes[0] === innerHost);
+}
+</script>
+
+<script id="Slot#flatten_true">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    // Add an element with a nested slot in it
+    const container = document.createElement('div');
+    container.innerHTML = '<slot name="nested"></slot>';
+    host.appendChild(container);
+
+    // Add a regular span
+    const span = document.createElement('span');
+    host.appendChild(span);
+
+    // Without flatten: should see container and span (2 elements)
+    const nodesNoFlat = slot.assignedNodes({ flatten: false });
+    testing.expectEqual(2, nodesNoFlat.length);
+
+    // With flatten: should still see container and span
+    // (flatten only matters if the assigned node is itself a slot in a shadow tree)
+    const nodesFlat = slot.assignedNodes({ flatten: true });
+    testing.expectEqual(2, nodesFlat.length);
+}
+</script>
+
+<script id="Slot#assignedElements_with_flatten">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    shadow.appendChild(slot);
+
+    // Add mixed content
+    const div = document.createElement('div');
+    host.appendChild(div);
+
+    const text = document.createTextNode('text');
+    host.appendChild(text);
+
+    const span = document.createElement('span');
+    host.appendChild(span);
+
+    // assignedElements with flatten should only return elements
+    const elements = slot.assignedElements({ flatten: true });
+    testing.expectEqual(2, elements.length);
+    testing.expectTrue(elements[0] === div);
+    testing.expectTrue(elements[1] === span);
+}
+</script>
+
+<script id="Slot#empty_slot_name_matches_no_slot_attribute">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const defaultSlot = document.createElement('slot');
+    shadow.appendChild(defaultSlot);
+
+    // Element without slot attribute
+    const div = document.createElement('div');
+    host.appendChild(div);
+
+    // Element with empty slot attribute
+    const span = document.createElement('span');
+    span.setAttribute('slot', '');
+    host.appendChild(span);
+
+    // Both should go to default slot
+    const nodes = defaultSlot.assignedNodes();
+    testing.expectEqual(2, nodes.length);
+    testing.expectTrue(nodes[0] === div);
+    testing.expectTrue(nodes[1] === span);
+}
+</script>
+
+<script id="Slot#slot_attribute_case_sensitive">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    slot.name = 'MySlot';
+    shadow.appendChild(slot);
+
+    // Matching case
+    const div1 = document.createElement('div');
+    div1.setAttribute('slot', 'MySlot');
+    host.appendChild(div1);
+
+    // Different case
+    const div2 = document.createElement('div');
+    div2.setAttribute('slot', 'myslot');
+    host.appendChild(div2);
+
+    // Only exact match should be assigned
+    const nodes = slot.assignedNodes();
+    testing.expectEqual(1, nodes.length);
+    testing.expectTrue(nodes[0] === div1);
+}
+</script>
+
+<script id="Slot#slot_in_slot_shadow_tree">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    // Create a container in shadow tree
+    const container = document.createElement('div');
+    shadow.appendChild(container);
+
+    // Slot inside container
+    const slot = document.createElement('slot');
+    container.appendChild(slot);
+
+    // Add content to host
+    const span = document.createElement('span');
+    host.appendChild(span);
+
+    // Slot should still work even when not direct child of shadow root
+    const nodes = slot.assignedNodes();
+    testing.expectEqual(1, nodes.length);
+    testing.expectTrue(nodes[0] === span);
+}
+</script>
+
+<script id="Slot#flatten_with_slot_and_siblings">
+{
+    // Test that flatten continues processing siblings after a nested slot
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const outerSlot = document.createElement('slot');
+    shadow.appendChild(outerSlot);
+
+    // Add a nested slot as first child
+    const innerSlot = document.createElement('slot');
+    innerSlot.setAttribute('name', 'inner');
+    host.appendChild(innerSlot);
+
+    // Add a regular element after the slot
+    const div = document.createElement('div');
+    div.textContent = 'After slot';
+    host.appendChild(div);
+
+    // Add another element
+    const span = document.createElement('span');
+    span.textContent = 'Another element';
+    host.appendChild(span);
+
+    // With flatten=true, should get all elements including those after the nested slot
+    const flattened = outerSlot.assignedElements({ flatten: true });
+    testing.expectEqual(3, flattened.length);
+    testing.expectTrue(flattened[0] === innerSlot);
+    testing.expectTrue(flattened[1] === div);
+    testing.expectTrue(flattened[2] === span);
+}
+</script>

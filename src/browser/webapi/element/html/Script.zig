@@ -57,6 +57,14 @@ pub fn setSrc(self: *Script, src: []const u8, page: *Page) !void {
     }
 }
 
+pub fn getType(self: *const Script) []const u8 {
+    return self.asConstElement().getAttributeSafe("type") orelse "";
+}
+
+pub fn setType(self: *Script, value: []const u8, page: *Page) !void {
+    return self.asElement().setAttributeSafe("type", value, page);
+}
+
 pub fn getOnLoad(self: *const Script) ?js.Function {
     return self._on_load;
 }
@@ -95,6 +103,7 @@ pub const JsApi = struct {
     };
 
     pub const src = bridge.accessor(Script.getSrc, Script.setSrc, .{});
+    pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{});
     pub const onload = bridge.accessor(Script.getOnLoad, Script.setOnLoad, .{});
     pub const onerorr = bridge.accessor(Script.getOnError, Script.setOnError, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});

@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<!-- Test complex component composition patterns like React/Next.js -->
+
+<script id="card_component_with_slots">
+{
+    // Define a card component with header, body, footer slots (like React children props)
+    customElements.define('app-card', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <div class="card">
+                    <div class="card-header">
+                        <slot name="header">Default Header</slot>
+                    </div>
+                    <div class="card-body">
+                        <slot></slot>
+                    </div>
+                    <div class="card-footer">
+                        <slot name="footer"></slot>
+                    </div>
+                </div>
+            `;
+        }
+    });
+
+    // Create card with mixed content
+    const card = document.createElement('app-card');
+
+    const header = document.createElement('h2');
+    header.setAttribute('slot', 'header');
+    header.textContent = 'My Card';
+    card.appendChild(header);
+
+    const body = document.createElement('p');
+    body.textContent = 'Card content';
+    card.appendChild(body);
+
+    const footer = document.createElement('span');
+    footer.setAttribute('slot', 'footer');
+    footer.textContent = 'Footer text';
+    card.appendChild(footer);
+
+    document.body.appendChild(card);
+
+    // Verify slot assignments
+    const headerSlot = card.shadowRoot.querySelector('slot[name="header"]');
+    const defaultSlot = card.shadowRoot.querySelectorAll('slot:not([name])')[0];
+    const footerSlot = card.shadowRoot.querySelector('slot[name="footer"]');
+
+    testing.expectEqual(1, headerSlot.assignedElements().length);
+    testing.expectEqual(1, defaultSlot.assignedElements().length);
+    testing.expectEqual(1, footerSlot.assignedElements().length);
+
+    testing.expectTrue(headerSlot.assignedElements()[0] === header);
+    testing.expectTrue(defaultSlot.assignedElements()[0] === body);
+    testing.expectTrue(footerSlot.assignedElements()[0] === footer);
+}
+</script>
+
+<script id="nested_components_with_slots">
+{
+    // Like React HOCs or wrapper components
+    customElements.define('app-wrapper', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <div class="wrapper">
+                    <slot></slot>
+                </div>
+            `;
+        }
+    });
+
+    customElements.define('app-inner', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <div class="inner">
+                    <slot></slot>
+                </div>
+            `;
+        }
+    });
+
+    // Nest components
+    const wrapper = document.createElement('app-wrapper');
+    const inner = document.createElement('app-inner');
+    const content = document.createElement('span');
+    content.textContent = 'Deeply nested';
+
+    inner.appendChild(content);
+    wrapper.appendChild(inner);
+    document.body.appendChild(wrapper);
+
+    // Verify outer wrapper slot
+    const wrapperSlot = wrapper.shadowRoot.querySelector('slot');
+    const wrapperAssigned = wrapperSlot.assignedElements();
+    testing.expectEqual(1, wrapperAssigned.length);
+    testing.expectTrue(wrapperAssigned[0] === inner);
+
+    // Verify inner component slot
+    const innerSlot = inner.shadowRoot.querySelector('slot');
+    const innerAssigned = innerSlot.assignedElements();
+    testing.expectEqual(1, innerAssigned.length);
+    testing.expectTrue(innerAssigned[0] === content);
+
+    // With flatten, outer slot should see through to content
+    const flatAssigned = wrapperSlot.assignedElements({ flatten: true });
+    testing.expectEqual(1, flatAssigned.length);
+}
+</script>
+
+<script id="tab_component_pattern">
+{
+    // Tabs pattern - common in UI libraries
+    customElements.define('app-tabs', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <div class="tabs">
+                    <div class="tab-buttons">
+                        <slot name="tabs"></slot>
+                    </div>
+                    <div class="tab-content">
+                        <slot name="panels"></slot>
+                    </div>
+                </div>
+            `;
+        }
+    });
+
+    const tabs = document.createElement('app-tabs');
+
+    // Add tab buttons
+    for (let i = 1; i <= 3; i++) {
+        const button = document.createElement('button');
+        button.setAttribute('slot', 'tabs');
+        button.textContent = `Tab ${i}`;
+        tabs.appendChild(button);
+    }
+
+    // Add panels
+    for (let i = 1; i <= 3; i++) {
+        const panel = document.createElement('div');
+        panel.setAttribute('slot', 'panels');
+        panel.textContent = `Panel ${i}`;
+        tabs.appendChild(panel);
+    }
+
+    document.body.appendChild(tabs);
+
+    const tabSlot = tabs.shadowRoot.querySelector('slot[name="tabs"]');
+    const panelSlot = tabs.shadowRoot.querySelector('slot[name="panels"]');
+
+    testing.expectEqual(3, tabSlot.assignedElements().length);
+    testing.expectEqual(3, panelSlot.assignedElements().length);
+}
+</script>
+
+<script id="layout_component_all_slots">
+{
+    // App layout pattern from Next.js/React
+    customElements.define('app-layout', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <div class="layout">
+                    <header><slot name="header"></slot></header>
+                    <aside><slot name="sidebar"></slot></aside>
+                    <main><slot></slot></main>
+                    <footer><slot name="footer"></slot></footer>
+                </div>
+            `;
+        }
+    });
+
+    const layout = document.createElement('app-layout');
+
+    const header = document.createElement('div');
+    header.setAttribute('slot', 'header');
+    header.textContent = 'Header';
+    layout.appendChild(header);
+
+    const sidebar = document.createElement('nav');
+    sidebar.setAttribute('slot', 'sidebar');
+    sidebar.textContent = 'Nav';
+    layout.appendChild(sidebar);
+
+    const main = document.createElement('article');
+    main.textContent = 'Main content';
+    layout.appendChild(main);
+
+    const footer = document.createElement('div');
+    footer.setAttribute('slot', 'footer');
+    footer.textContent = 'Footer';
+    layout.appendChild(footer);
+
+    document.body.appendChild(layout);
+
+    // All slots should be filled
+    const slots = layout.shadowRoot.querySelectorAll('slot');
+    testing.expectEqual(4, slots.length);
+
+    for (const slot of slots) {
+        testing.expectTrue(slot.assignedNodes().length > 0);
+    }
+}
+</script>
+
+<script id="dynamic_slot_reassignment">
+{
+    // Simulating conditional rendering like React
+    customElements.define('app-container', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <slot name="primary"></slot>
+                <slot name="secondary"></slot>
+            `;
+        }
+    });
+
+    const container = document.createElement('app-container');
+    const elem = document.createElement('div');
+    elem.textContent = 'Content';
+    elem.setAttribute('slot', 'primary');
+    container.appendChild(elem);
+    document.body.appendChild(container);
+
+    const primarySlot = container.shadowRoot.querySelector('slot[name="primary"]');
+    const secondarySlot = container.shadowRoot.querySelector('slot[name="secondary"]');
+
+    // Initially in primary
+    testing.expectEqual(1, primarySlot.assignedElements().length);
+    testing.expectEqual(0, secondarySlot.assignedElements().length);
+
+    // Move to secondary (like React re-rendering with different props)
+    elem.setAttribute('slot', 'secondary');
+
+    // Should now be in secondary
+    testing.expectEqual(0, primarySlot.assignedElements().length);
+    testing.expectEqual(1, secondarySlot.assignedElements().length);
+}
+</script>
+
+<script id="list_rendering_pattern">
+{
+    // List rendering like map() in React
+    customElements.define('app-list', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <ul><slot></slot></ul>
+            `;
+        }
+    });
+
+    customElements.define('app-list-item', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <li><slot></slot></li>
+            `;
+        }
+    });
+
+    const list = document.createElement('app-list');
+
+    const items = ['Item 1', 'Item 2', 'Item 3'];
+    items.forEach(text => {
+        const item = document.createElement('app-list-item');
+        const span = document.createElement('span');
+        span.textContent = text;
+        item.appendChild(span);
+        list.appendChild(item);
+    });
+
+    document.body.appendChild(list);
+
+    // List should have 3 items assigned
+    const listSlot = list.shadowRoot.querySelector('slot');
+    testing.expectEqual(3, listSlot.assignedElements().length);
+
+    // Each item should have content
+    const itemElements = listSlot.assignedElements();
+    itemElements.forEach(item => {
+        const itemSlot = item.shadowRoot.querySelector('slot');
+        testing.expectEqual(1, itemSlot.assignedElements().length);
+    });
+}
+</script>
+
+<script id="fallback_content_pattern">
+{
+    // Default/fallback content like React default props
+    customElements.define('app-message', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <div class="message">
+                    <slot>No message provided</slot>
+                </div>
+            `;
+        }
+    });
+
+    // Without content - should use fallback
+    const empty = document.createElement('app-message');
+    document.body.appendChild(empty);
+    const emptySlot = empty.shadowRoot.querySelector('slot');
+    testing.expectEqual(0, emptySlot.assignedNodes().length);
+
+    // With content - should override fallback
+    const filled = document.createElement('app-message');
+    const text = document.createTextNode('Custom message');
+    filled.appendChild(text);
+    document.body.appendChild(filled);
+    const filledSlot = filled.shadowRoot.querySelector('slot');
+    testing.expectEqual(1, filledSlot.assignedNodes().length);
+}
+</script>
+
+<script id="form_custom_input">
+{
+    // Custom form input component
+    customElements.define('app-input', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <label>
+                    <slot name="label">Label</slot>
+                    <input type="text">
+                </label>
+            `;
+        }
+    });
+
+    const input = document.createElement('app-input');
+    const label = document.createElement('span');
+    label.setAttribute('slot', 'label');
+    label.textContent = 'Username:';
+    input.appendChild(label);
+
+    document.body.appendChild(input);
+
+    const labelSlot = input.shadowRoot.querySelector('slot[name="label"]');
+    testing.expectEqual(1, labelSlot.assignedElements().length);
+    testing.expectEqual('Username:', labelSlot.assignedElements()[0].textContent);
+}
+</script>
+
+<script id="deeply_nested_slot_chain">
+{
+    // Three levels of nesting with slots
+    customElements.define('app-outer', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `<div class="outer"><slot></slot></div>`;
+        }
+    });
+
+    customElements.define('app-middle', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `<div class="middle"><slot></slot></div>`;
+        }
+    });
+
+    customElements.define('app-leaf', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `<div class="leaf"><slot></slot></div>`;
+        }
+    });
+
+    const outer = document.createElement('app-outer');
+    const middle = document.createElement('app-middle');
+    const leaf = document.createElement('app-leaf');
+    const content = document.createElement('span');
+    content.textContent = 'Deep content';
+
+    leaf.appendChild(content);
+    middle.appendChild(leaf);
+    outer.appendChild(middle);
+    document.body.appendChild(outer);
+
+    // Each level should see one element
+    const outerSlot = outer.shadowRoot.querySelector('slot');
+    testing.expectEqual(1, outerSlot.assignedElements().length);
+    testing.expectTrue(outerSlot.assignedElements()[0] === middle);
+
+    const middleSlot = middle.shadowRoot.querySelector('slot');
+    testing.expectEqual(1, middleSlot.assignedElements().length);
+    testing.expectTrue(middleSlot.assignedElements()[0] === leaf);
+
+    const leafSlot = leaf.shadowRoot.querySelector('slot');
+    testing.expectEqual(1, leafSlot.assignedElements().length);
+    testing.expectTrue(leafSlot.assignedElements()[0] === content);
+
+    // Flatten should not traverse through non-slot elements
+    const outerFlat = outerSlot.assignedElements({ flatten: true });
+    testing.expectEqual(1, outerFlat.length);
+}
+</script>
+
+<script id="mixed_slotted_and_unslotted">
+{
+    // Some children slotted, some not (edge case)
+    customElements.define('app-mixed', class extends HTMLElement {
+        constructor() {
+            super();
+            this.attachShadow({ mode: 'open' });
+            this.shadowRoot.innerHTML = `
+                <slot name="named"></slot>
+                <slot></slot>
+            `;
+        }
+    });
+
+    const mixed = document.createElement('app-mixed');
+
+    const named = document.createElement('div');
+    named.setAttribute('slot', 'named');
+    mixed.appendChild(named);
+
+    const unnamed1 = document.createElement('span');
+    mixed.appendChild(unnamed1);
+
+    const unnamed2 = document.createElement('p');
+    mixed.appendChild(unnamed2);
+
+    document.body.appendChild(mixed);
+
+    const namedSlot = mixed.shadowRoot.querySelector('slot[name="named"]');
+    const defaultSlot = mixed.shadowRoot.querySelectorAll('slot:not([name])')[0];
+
+    testing.expectEqual(1, namedSlot.assignedElements().length);
+    testing.expectEqual(2, defaultSlot.assignedElements().length);
+}
+</script>

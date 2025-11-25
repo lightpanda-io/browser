@@ -249,11 +249,14 @@ pub fn addFromElement(self: *ScriptManager, script_element: *Element.Html.Script
             .error_callback = Script.errorCallback,
         });
 
-        log.debug(.http, "script queue", .{
-            .ctx = ctx,
-            .url = remote_url.?,
-            .stack = page.js.stackTrace() catch "???",
-        });
+        if (comptime IS_DEBUG) {
+            log.debug(.http, "script queue", .{
+                .ctx = ctx,
+                .url = remote_url.?,
+                .element = element,
+                .stack = page.js.stackTrace() catch "???",
+            });
+        }
     }
 
     if (script.mode != .normal) {
@@ -326,12 +329,14 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
     var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
-    log.debug(.http, "script queue", .{
-        .url = url,
-        .ctx = "module",
-        .referrer = referrer,
-        .stack = self.page.js.stackTrace() catch "???",
-    });
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "script queue", .{
+            .url = url,
+            .ctx = "module",
+            .referrer = referrer,
+            .stack = self.page.js.stackTrace() catch "???",
+        });
+    }
 
     try self.client.request(.{
         .url = url,
@@ -403,12 +408,14 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
-    log.debug(.http, "script queue", .{
-        .url = url,
-        .ctx = "dynamic module",
-        .referrer = referrer,
-        .stack = self.page.js.stackTrace() catch "???",
-    });
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "script queue", .{
+            .url = url,
+            .ctx = "dynamic module",
+            .referrer = referrer,
+            .stack = self.page.js.stackTrace() catch "???",
+        });
+    }
 
     // It's possible, but unlikely, for client.request to immediately finish
     // a request, thus calling our callback. We generally don't want a call
@@ -617,11 +624,13 @@ const Script = struct {
             return;
         }
 
-        log.debug(.http, "script header", .{
-            .req = transfer,
-            .status = header.status,
-            .content_type = header.contentType(),
-        });
+        if (comptime IS_DEBUG) {
+            log.debug(.http, "script header", .{
+                .req = transfer,
+                .status = header.status,
+                .content_type = header.contentType(),
+            });
+        }
 
         // If this isn't true, then we'll likely leak memory. If you don't
         // set `CURLOPT_SUPPRESS_CONNECT_HEADERS` and CONNECT to a proxy, this
@@ -649,7 +658,9 @@ const Script = struct {
     fn doneCallback(ctx: *anyopaque) !void {
         const self: *Script = @ptrCast(@alignCast(ctx));
         self.complete = true;
-        log.debug(.http, "script fetch complete", .{ .req = self.url });
+        if (comptime IS_DEBUG) {
+            log.debug(.http, "script fetch complete", .{ .req = self.url });
+        }
 
         const manager = self.manager;
         if (self.mode == .async or self.mode == .import_async) {

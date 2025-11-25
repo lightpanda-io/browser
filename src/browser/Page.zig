@@ -1024,6 +1024,12 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
             else => {},
         },
         4 => switch (@as(u32, @bitCast(name[0..4].*))) {
+            asUint("span") => return self.createHtmlElementT(
+                Element.Html.Generic,
+                namespace,
+                attribute_iterator,
+                .{ ._proto = undefined, ._tag_name = String.init(undefined, "span", .{}) catch unreachable, ._tag = .span },
+            ),
             asUint("meta") => return self.createHtmlElementT(
                 Element.Html.Meta,
                 namespace,
@@ -1032,6 +1038,12 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
             ),
             asUint("link") => return self.createHtmlElementT(
                 Element.Html.Link,
+                namespace,
+                attribute_iterator,
+                .{ ._proto = undefined },
+            ),
+            asUint("slot") => return self.createHtmlElementT(
+                Element.Html.Slot,
                 namespace,
                 attribute_iterator,
                 .{ ._proto = undefined },
@@ -1065,12 +1077,6 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 namespace,
                 attribute_iterator,
                 .{ ._proto = undefined, ._tag_name = String.init(undefined, "main", .{}) catch unreachable, ._tag = .main },
-            ),
-            asUint("span") => return self.createHtmlElementT(
-                Element.Html.Generic,
-                namespace,
-                attribute_iterator,
-                .{ ._proto = undefined, ._tag_name = String.init(undefined, "span", .{}) catch unreachable, ._tag = .span },
             ),
             else => {},
         },
@@ -1786,4 +1792,8 @@ pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.Req
 const testing = @import("../testing.zig");
 test "WebApi: Page" {
     try testing.htmlRunner("page", .{});
+}
+
+test "WebApi: Integration" {
+    try testing.htmlRunner("integration", .{});
 }
