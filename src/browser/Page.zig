@@ -174,7 +174,12 @@ pub fn init(arena: Allocator, call_arena: Allocator, session: *Session) !*Page {
 pub fn deinit(self: *Page) void {
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.deinit", .{ .url = self.url });
+
+        // Uncomment if you want slab statistics to print.
+        // const stats = self._factory._slab.getStats(self.arena) catch unreachable;
+        // stats.print() catch unreachable;
     }
+
     self.js.deinit();
     self._script_manager.shutdown = true;
     self._session.browser.http_client.abort();
