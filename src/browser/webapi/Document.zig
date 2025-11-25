@@ -236,6 +236,26 @@ pub fn getStyleSheets(self: *Document, page: *Page) !*StyleSheetList {
     return sheets;
 }
 
+pub fn adoptNode(_: *const Document, node: *Node, page: *Page) !*Node {
+    if (node._type == .document) {
+        return error.NotSupported;
+    }
+
+    if (node._parent) |parent| {
+        page.removeNode(parent, node, .{ .will_be_reconnected = false });
+    }
+
+    return node;
+}
+
+pub fn importNode(_: *const Document, node: *Node, deep_: ?bool, page: *Page) !*Node {
+    if (node._type == .document) {
+        return error.NotSupported;
+    }
+
+    return node.cloneNode(deep_, page);
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -278,6 +298,9 @@ pub const JsApi = struct {
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
+    pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true });
+    pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true });
+
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {
             return page.window;

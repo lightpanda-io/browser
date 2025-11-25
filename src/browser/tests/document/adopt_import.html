@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id="test-container">
+  <p id="test-p" class="test-class" data-foo="bar">
+    <span>Child 1</span>
+    <span>Child 2</span>
+  </p>
+</div>
+
+<script id="importNodeShallow">
+{
+  const original = $('#test-p');
+  const imported = document.importNode(original, false);
+
+  testing.expectEqual(1, imported.nodeType);
+  testing.expectEqual('P', imported.tagName);
+  testing.expectEqual('test-class', imported.className);
+  testing.expectEqual('bar', imported.getAttribute('data-foo'));
+  testing.expectEqual(null, imported.parentNode);
+  testing.expectEqual(false, imported.hasChildNodes());
+  testing.expectEqual(false, original.isSameNode(imported));
+  testing.expectEqual(document, imported.ownerDocument);
+}
+</script>
+
+<script id="importNodeDeep">
+{
+  const original = $('#test-p');
+  const imported = document.importNode(original, true);
+
+  testing.expectEqual(1, imported.nodeType);
+  testing.expectEqual('P', imported.tagName);
+  testing.expectEqual('test-class', imported.className);
+  testing.expectEqual('bar', imported.getAttribute('data-foo'));
+  testing.expectEqual(null, imported.parentNode);
+  testing.expectEqual(true, imported.hasChildNodes());
+
+  testing.expectEqual(false, original.isSameNode(imported));
+  testing.expectEqual(false, original.firstChild.isSameNode(imported.firstChild));
+
+  const spans = imported.querySelectorAll('span');
+  testing.expectEqual(2, spans.length);
+  testing.expectEqual('Child 1', spans[0].textContent);
+  testing.expectEqual('Child 2', spans[1].textContent);
+  testing.expectEqual(document, imported.ownerDocument);
+}
+</script>
+
+<script id="importNodeDefault">
+{
+  const el = document.createElement('div');
+  el.appendChild(document.createElement('span'));
+
+  const imported = document.importNode(el);
+  testing.expectEqual(false, imported.hasChildNodes());
+}
+</script>
+
+<script id="importNodeDetached">
+{
+  const detached = document.createElement('div');
+  detached.textContent = 'detached';
+
+  const imported = document.importNode(detached, true);
+  testing.expectEqual('DIV', imported.tagName);
+  testing.expectEqual('detached', imported.textContent);
+  testing.expectEqual(null, imported.parentNode);
+  testing.expectEqual(false, detached.isSameNode(imported));
+  testing.expectEqual(document, imported.ownerDocument);
+}
+</script>
+
+<script id="importNodeTextNode">
+{
+  const text = document.createTextNode('Hello World');
+  const imported = document.importNode(text, false);
+
+  testing.expectEqual(3, imported.nodeType);
+  testing.expectEqual('Hello World', imported.nodeValue);
+  testing.expectEqual(null, imported.parentNode);
+  testing.expectEqual(false, text.isSameNode(imported));
+  testing.expectEqual(document, imported.ownerDocument);
+}
+</script>
+
+<script id="importNodeComment">
+{
+  const comment = document.createComment('test comment');
+  const imported = document.importNode(comment, false);
+
+  testing.expectEqual(8, imported.nodeType);
+  testing.expectEqual('test comment', imported.nodeValue);
+  testing.expectEqual(null, imported.parentNode);
+  testing.expectEqual(false, comment.isSameNode(imported));
+}
+</script>
+
+<script id="importNodeDoesNotModifyOriginal">
+{
+  const original = $('#test-p');
+  const originalParent = original.parentNode;
+  const imported = document.importNode(original, true);
+
+  testing.expectEqual(originalParent, original.parentNode);
+  testing.expectEqual(true, original.isConnected);
+  testing.expectEqual(null, imported.parentNode);
+  testing.expectEqual(false, imported.isConnected);
+}
+</script>
+
+<script id="adoptNodeDetached">
+{
+  const detached = document.createElement('div');
+  detached.textContent = 'detached';
+
+  const adopted = document.adoptNode(detached);
+  testing.expectEqual(detached, adopted);
+  testing.expectEqual('DIV', adopted.tagName);
+  testing.expectEqual('detached', adopted.textContent);
+  testing.expectEqual(null, adopted.parentNode);
+  testing.expectEqual(document, adopted.ownerDocument);
+}
+</script>
+
+<script id="adoptNodeRemovesFromParent">
+{
+  const container = $('#test-container');
+  const p = $('#test-p');
+
+  testing.expectEqual(container, p.parentNode);
+  testing.expectEqual(true, p.isConnected);
+
+  const adopted = document.adoptNode(p);
+
+  testing.expectEqual(p, adopted);
+  testing.expectEqual(null, adopted.parentNode);
+  testing.expectEqual(false, adopted.isConnected);
+  testing.expectEqual(false, container.contains(p));
+  testing.expectEqual(document, adopted.ownerDocument);
+}
+</script>
+
+<script id="adoptNodeTextNode">
+{
+  const text = document.createTextNode('Hello');
+  const adopted = document.adoptNode(text);
+
+  testing.expectEqual(text, adopted);
+  testing.expectEqual(3, adopted.nodeType);
+  testing.expectEqual('Hello', adopted.nodeValue);
+  testing.expectEqual(null, adopted.parentNode);
+}
+</script>
+
+<script id="adoptNodePreservesChildren">
+{
+  const div = document.createElement('div');
+  const span = document.createElement('span');
+  span.textContent = 'child';
+  div.appendChild(span);
+
+  const adopted = document.adoptNode(div);
+
+  testing.expectEqual(div, adopted);
+  testing.expectEqual(true, adopted.hasChildNodes());
+  testing.expectEqual(span, adopted.firstChild);
+  testing.expectEqual('child', adopted.firstChild.textContent);
+}
+</script>
+
+<script id="importThenAppend">
+{
+  const original = document.createElement('div');
+  original.textContent = 'test';
+
+  const imported = document.importNode(original, true);
+  document.body.appendChild(imported);
+
+  testing.expectEqual(document.body, imported.parentNode);
+  testing.expectEqual(true, imported.isConnected);
+  testing.expectEqual('test', imported.textContent);
+
+  imported.remove();
+}
+</script>
+
+<script id="adoptThenAppend">
+{
+  const detached = document.createElement('div');
+  detached.textContent = 'adopted';
+
+  const adopted = document.adoptNode(detached);
+  document.body.appendChild(adopted);
+
+  testing.expectEqual(document.body, adopted.parentNode);
+  testing.expectEqual(true, adopted.isConnected);
+  testing.expectEqual('adopted', adopted.textContent);
+
+  adopted.remove();
+}
+</script>
+
+<script id="importNodeWithAttributes">
+{
+  const input = document.createElement('input');
+  input.setAttribute('type', 'text');
+  input.setAttribute('name', 'username');
+  input.setAttribute('value', 'test');
+  input.setAttribute('data-custom', 'custom-value');
+
+  const imported = document.importNode(input, false);
+  testing.expectEqual('text', imported.getAttribute('type'));
+  testing.expectEqual('username', imported.getAttribute('name'));
+  testing.expectEqual('test', imported.getAttribute('value'));
+  testing.expectEqual('custom-value', imported.getAttribute('data-custom'));
+}
+</script>
