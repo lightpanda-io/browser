@@ -70,3 +70,7 @@ runs:
     - name: build html5ever
       shell: bash
       run: make install-html5ever
+
+    - name: build html5ever dev
+      shell: bash
+      run: make install-html5ever-dev
