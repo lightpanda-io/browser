@@ -39,6 +39,9 @@ pub fn build(b: *Build) !void {
         },
     }
 
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
     var opts = b.addOptions();
     opts.addOption(
         []const u8,
@@ -46,8 +49,30 @@ pub fn build(b: *Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // Build step to install html5ever dependency.
+    const html5ever_argv = blk: {
+        const argv: []const []const u8 = &.{
+            "cargo",
+            "build",
+            // Seems cargo can figure out required paths out of Cargo.toml.
+            "--manifest-path",
+            "vendor/html5ever/Cargo.toml",
+            // TODO: We can prefer `--artifact-dir` once it become stable.
+            "--target-dir",
+            b.getInstallPath(.prefix, "html5ever"),
+            // This must be the last argument.
+            "--release",
+        };
+
+        break :blk switch (optimize) {
+            // Consider these as dev builds.
+            .Debug, .ReleaseSafe => argv[0 .. argv.len - 1],
+            .ReleaseFast, .ReleaseSmall => argv,
+        };
+    };
+    const html5ever_exec_cargo = b.addSystemCommand(html5ever_argv);
+    const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
+    html5ever_step.dependOn(&html5ever_exec_cargo.step);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer");
     const enable_csan = b.option(std.zig.SanitizeC, "csan", "Enable C Sanitizers");
@@ -65,15 +90,15 @@ pub fn build(b: *Build) !void {
 
         try addDependencies(b, mod, opts);
 
-        if (optimize == .ReleaseFast or optimize == .ReleaseSmall) {
-            mod.addLibraryPath(b.path("build/html5ever/release"));
-        } else {
-            mod.addLibraryPath(b.path("build/html5ever/debug"));
-        }
-        mod.linkSystemLibrary("litefetch_html5ever", .{});
-
         break :blk mod;
     };
+
+    const html5ever_obj = switch (optimize) {
+        .Debug, .ReleaseSafe => b.getInstallPath(.prefix, "html5ever/debug/liblitefetch_html5ever.a"),
+        .ReleaseFast, .ReleaseSmall => b.getInstallPath(.prefix, "html5ever/release/liblitefetch_html5ever.a"),
+    };
+
+    lightpanda_module.addObjectFile(.{ .cwd_relative = html5ever_obj });
 
     {
         // browser
