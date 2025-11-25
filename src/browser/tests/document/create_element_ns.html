@@ -28,5 +28,13 @@
 
   const regularDiv = document.createElement('div');
   testing.expectEqual('DIV', regularDiv.tagName);
+  testing.expectEqual('div', regularDiv.localName);
+  testing.expectEqual(null, regularDiv.prefix);
   testing.expectEqual('http://www.w3.org/1999/xhtml', regularDiv.namespaceURI);
+
+  const custom = document.createElementNS('test', 'te:ST');
+  testing.expectEqual('TE:ST', custom.tagName); // Should be te:ST
+  testing.expectEqual('te', custom.prefix);
+  testing.expectEqual('ST', custom.localName);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', custom.namespaceURI); // Should be test
 </script>

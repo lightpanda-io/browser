@@ -913,6 +913,26 @@ pub const JsApi = struct {
         return buf.written();
     }
 
+    pub const prefix = bridge.accessor(_prefix, null, .{});
+    fn _prefix(self: *Element) ?[]const u8 {
+        const name = self.getTagNameLower();
+        if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+            return name[0..pos];
+        }
+
+        return null;
+    }
+
+    pub const localName = bridge.accessor(_localName, null, .{});
+    fn _localName(self: *Element) []const u8 {
+        const name = self.getTagNameLower();
+        if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+            return name[pos + 1 ..];
+        }
+
+        return name;
+    }
+
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
     pub const classList = bridge.accessor(Element.getClassList, null, .{});
