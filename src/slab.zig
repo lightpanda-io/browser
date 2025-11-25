@@ -239,10 +239,10 @@ const testing = std.testing;
 const TestSlabAllocator = SlabAllocator(32);
 
 test "slab allocator - basic allocation and free" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate some memory
     const ptr1 = try allocator.alloc(u8, 100);
@@ -257,10 +257,10 @@ test "slab allocator - basic allocation and free" {
 }
 
 test "slab allocator - multiple allocations" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     const ptr1 = try allocator.alloc(u8, 64);
     const ptr2 = try allocator.alloc(u8, 128);
@@ -280,10 +280,10 @@ test "slab allocator - multiple allocations" {
 }
 
 test "slab allocator - no coalescing (different size classes)" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate two blocks of same size
     const ptr1 = try allocator.alloc(u8, 128);
@@ -307,10 +307,10 @@ test "slab allocator - no coalescing (different size classes)" {
 }
 
 test "slab allocator - reuse freed memory" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     const ptr1 = try allocator.alloc(u8, 64);
     const addr1 = @intFromPtr(ptr1.ptr);
@@ -325,10 +325,10 @@ test "slab allocator - reuse freed memory" {
 }
 
 test "slab allocator - multiple size classes" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate various sizes - each creates a new slab
     var ptrs: [10][]u8 = undefined;
@@ -340,7 +340,7 @@ test "slab allocator - multiple size classes" {
     }
 
     // Should have created multiple slabs
-    try testing.expect(seg.slabs.count() >= 10);
+    try testing.expect(slab_alloc.slabs.count() >= 10);
 
     // Free all
     for (ptrs) |ptr| {
@@ -349,10 +349,10 @@ test "slab allocator - multiple size classes" {
 }
 
 test "slab allocator - various sizes" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Test different sizes (not limited to powers of 2!)
     const sizes = [_]usize{ 8, 16, 24, 32, 40, 64, 88, 128, 144, 256 };
@@ -366,10 +366,10 @@ test "slab allocator - various sizes" {
 }
 
 test "slab allocator - exact sizes (no rounding)" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Odd sizes stay exact (unlike buddy which rounds to power of 2)
     const ptr1 = try allocator.alloc(u8, 100);
@@ -387,10 +387,10 @@ test "slab allocator - exact sizes (no rounding)" {
 }
 
 test "slab allocator - chunk allocation" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate many items of same size to force multiple chunks
     var ptrs: [100][]u8 = undefined;
@@ -399,7 +399,7 @@ test "slab allocator - chunk allocation" {
     }
 
     // Should have allocated multiple chunks (32 items per chunk)
-    const slab = seg.slabs.getPtr(.{ .size = 64, .alignment = Alignment.@"1" }).?;
+    const slab = slab_alloc.slabs.getPtr(.{ .size = 64, .alignment = Alignment.@"1" }).?;
     try testing.expect(slab.chunks.items.len > 1);
 
     // Free all
@@ -409,10 +409,10 @@ test "slab allocator - chunk allocation" {
 }
 
 test "slab allocator - reset with retain_capacity" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate some memory
     const ptr1 = try allocator.alloc(u8, 128);
@@ -420,14 +420,14 @@ test "slab allocator - reset with retain_capacity" {
     _ = ptr1;
     _ = ptr2;
 
-    const slabs_before = seg.slabs.count();
-    const slab_128 = seg.slabs.getPtr(.{ .size = 128, .alignment = Alignment.@"1" }).?;
+    const slabs_before = slab_alloc.slabs.count();
+    const slab_128 = slab_alloc.slabs.getPtr(.{ .size = 128, .alignment = Alignment.@"1" }).?;
     const chunks_before = slab_128.chunks.items.len;
 
     // Reset but keep chunks
-    seg.reset(.retain_capacity);
+    slab_alloc.reset(.retain_capacity);
 
-    try testing.expectEqual(slabs_before, seg.slabs.count());
+    try testing.expectEqual(slabs_before, slab_alloc.slabs.count());
     try testing.expectEqual(chunks_before, slab_128.chunks.items.len);
 
     // Should be able to allocate again
@@ -436,21 +436,21 @@ test "slab allocator - reset with retain_capacity" {
 }
 
 test "slab allocator - reset with clear" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate some memory
     const ptr1 = try allocator.alloc(u8, 128);
     _ = ptr1;
 
-    try testing.expect(seg.slabs.count() > 0);
+    try testing.expect(slab_alloc.slabs.count() > 0);
 
     // Reset and free everything
-    seg.reset(.clear);
+    slab_alloc.reset(.clear);
 
-    try testing.expectEqual(@as(usize, 0), seg.slabs.count());
+    try testing.expectEqual(@as(usize, 0), slab_alloc.slabs.count());
 
     // Should still work after reset
     const ptr2 = try allocator.alloc(u8, 256);
@@ -458,10 +458,10 @@ test "slab allocator - reset with clear" {
 }
 
 test "slab allocator - stress test" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     var prng = std.Random.DefaultPrng.init(0);
     const random = prng.random();
@@ -495,10 +495,10 @@ test "slab allocator - stress test" {
 }
 
 test "slab allocator - alignment" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     const ptr1 = try allocator.create(u64);
     const ptr2 = try allocator.create(u32);
@@ -510,10 +510,10 @@ test "slab allocator - alignment" {
 }
 
 test "slab allocator - no resize support" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     const slice = try allocator.alloc(u8, 100);
     @memset(slice, 42);
@@ -526,10 +526,10 @@ test "slab allocator - no resize support" {
 }
 
 test "slab allocator - fragmentation pattern" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate 10 items
     var items: [10][]u8 = undefined;
@@ -578,10 +578,10 @@ test "slab allocator - fragmentation pattern" {
 }
 
 test "slab allocator - many small allocations" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate 1000 small items
     var ptrs: std.ArrayList([]u8) = .empty;
@@ -599,15 +599,15 @@ test "slab allocator - many small allocations" {
     }
 
     // Should have created multiple chunks
-    const slab = seg.slabs.getPtr(.{ .size = 24, .alignment = Alignment.@"1" }).?;
+    const slab = slab_alloc.slabs.getPtr(.{ .size = 24, .alignment = Alignment.@"1" }).?;
     try testing.expect(slab.chunks.items.len > 10);
 }
 
 test "slab allocator - zero waste for exact sizes" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // These sizes have zero internal fragmentation (unlike buddy)
     const sizes = [_]usize{ 24, 40, 56, 88, 144, 152, 184, 232, 648 };
@@ -624,10 +624,10 @@ test "slab allocator - zero waste for exact sizes" {
 }
 
 test "slab allocator - different size classes don't interfere" {
-    var seg = TestSlabAllocator.init(testing.allocator);
-    defer seg.deinit();
+    var slab_alloc = TestSlabAllocator.init(testing.allocator);
+    defer slab_alloc.deinit();
 
-    const allocator = seg.allocator();
+    const allocator = slab_alloc.allocator();
 
     // Allocate size 64
     const ptr_64 = try allocator.alloc(u8, 64);
