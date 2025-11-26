@@ -40,13 +40,6 @@ const Factory = @This();
 _page: *Page,
 _slab: SlabAllocator,
 
-pub const FactoryAllocationKind = union(enum) {
-    /// Allocated as part of a Factory PrototypeChain
-    chain: []u8,
-    /// Allocated standalone via factory.create()
-    standalone,
-};
-
 fn PrototypeChain(comptime types: []const type) type {
     return struct {
         const Self = @This();
@@ -103,7 +96,7 @@ fn PrototypeChain(comptime types: []const type) type {
 
         fn setRoot(self: *const Self, comptime T: type) void {
             const ptr = self.get(0);
-            ptr.* = .{ ._type = unionInit(T, self.get(1)), ._allocation = FactoryAllocationKind{ .chain = self.memory } };
+            ptr.* = .{ ._type = unionInit(T, self.get(1)), ._allocation = self.memory };
         }
 
         fn setMiddle(self: *const Self, comptime index: usize, comptime T: type) void {
@@ -164,7 +157,11 @@ pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
         &.{ EventTarget, @TypeOf(child) },
     ).allocate(allocator);
 
-    chain.setRoot(EventTarget.Type);
+    const event_ptr = chain.get(0);
+    event_ptr.* = .{
+        ._type = unionInit(EventTarget.Type, chain.get(1)),
+        ._allocation = chain.memory,
+    };
     chain.setLeaf(1, child);
 
     return chain.get(1);
@@ -183,7 +180,7 @@ pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
     event_ptr.* = .{
         ._type = unionInit(Event.Type, chain.get(1)),
         ._type_string = try String.init(self._page.arena, typ, .{}),
-        ._allocation = FactoryAllocationKind{ .chain = chain.memory },
+        ._allocation = chain.memory,
     };
     chain.setLeaf(1, child);
 
@@ -201,7 +198,7 @@ pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
     const blob_ptr = chain.get(0);
     blob_ptr.* = .{
         ._type = unionInit(Blob.Type, chain.get(1)),
-        ._allocation = FactoryAllocationKind{ .chain = chain.memory },
+        ._allocation = chain.memory,
         .slice = "",
         .mime = "",
     };
@@ -295,14 +292,11 @@ pub fn destroy(self: *Factory, value: anytype) void {
         }
     }
 
-    const allocation_kind = self.destroyChain(value, true) orelse return;
-    switch (allocation_kind) {
-        .chain => |buf| allocator.free(buf),
-        .standalone => {},
-    }
+    const chain_memory = self.destroyChain(value, true) orelse return;
+    allocator.free(chain_memory);
 }
 
-fn destroyChain(self: *Factory, value: anytype, comptime first: bool) ?FactoryAllocationKind {
+fn destroyChain(self: *Factory, value: anytype, comptime first: bool) ?[]u8 {
     const S = reflect.Struct(@TypeOf(value));
     const allocator = self._slab.allocator();
 

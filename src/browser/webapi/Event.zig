@@ -20,14 +20,13 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
-const FactoryAllocationKind = @import("../Factory.zig").FactoryAllocationKind;
 const EventTarget = @import("EventTarget.zig");
 const String = @import("../../string.zig").String;
 
 pub const Event = @This();
 
 _type: Type,
-_allocation: FactoryAllocationKind,
+_allocation: ?[]u8,
 
 _bubbles: bool = false,
 _cancelable: bool = false,
@@ -68,7 +67,7 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
 
     return page._factory.create(Event{
         ._type = .generic,
-        ._allocation = .standalone,
+        ._allocation = null,
         ._bubbles = opts.bubbles,
         ._time_stamp = time_stamp,
         ._cancelable = opts.cancelable,

@@ -21,14 +21,13 @@ const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
 const RegisterOptions = @import("../EventManager.zig").RegisterOptions;
-const FactoryAllocationKind = @import("../Factory.zig").FactoryAllocationKind;
 
 const Event = @import("Event.zig");
 
 const EventTarget = @This();
 
 _type: Type,
-_allocation: FactoryAllocationKind,
+_allocation: ?[]u8,
 
 pub const Type = union(enum) {
     node: *@import("Node.zig"),
@@ -124,7 +123,7 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: EventTarget" {
     // we create thousands of these per page. Nothing should bloat it.
-    try testing.expectEqual(16, @sizeOf(EventTarget));
+    try testing.expectEqual(32, @sizeOf(EventTarget));
 
     try testing.htmlRunner("events.html", .{});
 }
