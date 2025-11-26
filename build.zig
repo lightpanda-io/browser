@@ -46,8 +46,6 @@ pub fn build(b: *Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
-    const use_boringssl = b.option(bool, "use-boringssl", "Whether use BoringSSL (default:true)") orelse true;
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -61,7 +59,7 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
         .link_libcpp = true,
     });
-    try addDependencies(b, lightpanda_module, opts, use_boringssl);
+    try addDependencies(b, lightpanda_module, opts);
 
     {
         // browser
@@ -115,7 +113,7 @@ pub fn build(b: *Build) !void {
             .target = target,
             .optimize = optimize,
         });
-        try addDependencies(b, wpt_module, opts, use_boringssl);
+        try addDependencies(b, wpt_module, opts);
 
         // compile and install
         const wpt = b.addExecutable(.{
@@ -153,7 +151,7 @@ pub fn build(b: *Build) !void {
     }
 }
 
-fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, use_boringssl: bool) !void {
+fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
     try moduleNetSurf(b, mod);
     mod.addImport("build_config", opts.createModule());
 
@@ -376,39 +374,29 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, use
             mod.addCMacro("STDC_HEADERS", "1");
             mod.addCMacro("TIME_WITH_SYS_TIME", "1");
             mod.addCMacro("USE_NGHTTP2", "1");
-            if (use_boringssl) {
-                mod.addCMacro("USE_OPENSSL", "1");
-                mod.addCMacro("OPENSSL_IS_BORINGSSL", "1");
-            } else {
-                mod.addCMacro("USE_MBEDTLS", "1");
-            }
+            mod.addCMacro("USE_OPENSSL", "1");
+            mod.addCMacro("OPENSSL_IS_BORINGSSL", "1");
             mod.addCMacro("USE_THREADS_POSIX", "1");
             mod.addCMacro("USE_UNIX_SOCKETS", "1");
         }
 
         try buildZlib(b, mod);
         try buildBrotli(b, mod);
-        if (use_boringssl) {
-            const maybe_boringssl_dep = b.lazyDependency("boringssl-zig", .{
-                .target = target,
-                .optimize = mod.optimize.?,
-                .force_pic = true,
-            });
+        const boringssl_dep = b.dependency("boringssl-zig", .{
+            .target = target,
+            .optimize = mod.optimize.?,
+            .force_pic = true,
+        });
 
-            if (maybe_boringssl_dep) |boringssl_dep| {
-                const ssl = boringssl_dep.artifact("ssl");
-                ssl.bundle_ubsan_rt = false;
-                const crypto = boringssl_dep.artifact("crypto");
-                crypto.bundle_ubsan_rt = false;
+        const ssl = boringssl_dep.artifact("ssl");
+        ssl.bundle_ubsan_rt = false;
+        const crypto = boringssl_dep.artifact("crypto");
+        crypto.bundle_ubsan_rt = false;
 
-                mod.linkLibrary(ssl);
-                mod.linkLibrary(crypto);
-            }
-        } else {
-            try buildMbedtls(b, mod);
-        }
+        mod.linkLibrary(ssl);
+        mod.linkLibrary(crypto);
         try buildNghttp2(b, mod);
-        try buildCurl(b, mod, use_boringssl);
+        try buildCurl(b, mod);
         try buildAda(b, mod);
 
         switch (target.result.os.tag) {
@@ -699,7 +687,7 @@ fn buildNghttp2(b: *Build, m: *Build.Module) !void {
     } });
 }
 
-fn buildCurl(b: *Build, m: *Build.Module, use_boringssl: bool) !void {
+fn buildCurl(b: *Build, m: *Build.Module) !void {
     const curl = b.addLibrary(.{
         .name = "curl",
         .root_module = m,
@@ -867,20 +855,12 @@ fn buildCurl(b: *Build, m: *Build.Module, use_boringssl: bool) !void {
             root ++ "lib/vauth/spnego_sspi.c",
             root ++ "lib/vauth/vauth.c",
             root ++ "lib/vtls/cipher_suite.c",
-            root ++ "lib/vtls/vtls.c",
-            root ++ "lib/vtls/vtls_scache.c",
-            root ++ "lib/vtls/x509asn1.c",
-        },
-    });
-
-    curl.addCSourceFiles(.{
-        .files = if (use_boringssl) &.{
             root ++ "lib/vtls/openssl.c",
             root ++ "lib/vtls/hostcheck.c",
             root ++ "lib/vtls/keylog.c",
-        } else &.{
-            root ++ "lib/vtls/mbedtls.c",
-            root ++ "lib/vtls/mbedtls_threadlock.c",
+            root ++ "lib/vtls/vtls.c",
+            root ++ "lib/vtls/vtls_scache.c",
+            root ++ "lib/vtls/x509asn1.c",
         },
     });
 }

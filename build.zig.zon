@@ -14,9 +14,8 @@
             .hash = "N-V-__8AAPmhFAAw64ALjlzd5YMtzpSrmZ6KymsT84BKfB4s",
         },
         .@"boringssl-zig" = .{
-            .url = "git+https://github.com/Syndica/boringssl-zig.git#01b27c04e42cbb50173348bf2f225b2e223ef87a",
+            .url = "git+https://github.com/Syndica/boringssl-zig.git#c53df00d06b02b755ad88bbf4d1202ed9687b096",
             .hash = "boringssl-0.1.0-VtJeWehMAAA4RNnwRnzEvKcS9rjsR1QVRw1uJrwXxmVK",
-            .lazy = true,
         },
     },
 }
