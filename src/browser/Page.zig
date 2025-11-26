@@ -176,8 +176,10 @@ pub fn deinit(self: *Page) void {
         log.debug(.page, "page.deinit", .{ .url = self.url });
 
         // Uncomment if you want slab statistics to print.
-        const stats = self._factory._slab.getStats(self.arena) catch unreachable;
-        stats.print() catch unreachable;
+        // const stats = self._factory._slab.getStats(self.arena) catch unreachable;
+        // var buffer: [256]u8 = undefined;
+        // var stream = std.fs.File.stderr().writer(&buffer).interface;
+        // stats.print(&stream) catch unreachable;
     }
 
     self.js.deinit();

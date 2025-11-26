@@ -258,47 +258,47 @@ pub const SlabAllocator = struct {
         utilization_ratio: f64,
         slabs: []const Slab.Stats,
 
-        pub fn print(self: *const Stats) !void {
-            std.debug.print("\n", .{});
-            std.debug.print("\n=== Slab Allocator Statistics ===\n", .{});
-            std.debug.print("Overall Memory:\n", .{});
-            std.debug.print("  Total allocated: {} bytes ({d:.2} MB)\n", .{
+        pub fn print(self: *const Stats, stream: *std.io.Writer) !void {
+            try stream.print("\n", .{});
+            try stream.print("\n=== Slab Allocator Statistics ===\n", .{});
+            try stream.print("Overall Memory:\n", .{});
+            try stream.print("  Total allocated: {} bytes ({d:.2} MB)\n", .{
                 self.total_allocated_bytes,
                 @as(f64, @floatFromInt(self.total_allocated_bytes)) / 1_048_576.0,
             });
-            std.debug.print("  In use:          {} bytes ({d:.2} MB)\n", .{
+            try stream.print("  In use:          {} bytes ({d:.2} MB)\n", .{
                 self.bytes_in_use,
                 @as(f64, @floatFromInt(self.bytes_in_use)) / 1_048_576.0,
             });
-            std.debug.print("  Free:            {} bytes ({d:.2} MB)\n", .{
+            try stream.print("  Free:            {} bytes ({d:.2} MB)\n", .{
                 self.bytes_free,
                 @as(f64, @floatFromInt(self.bytes_free)) / 1_048_576.0,
             });
 
-            std.debug.print("\nOverall Structure:\n", .{});
-            std.debug.print("  Slab Count:    {}\n", .{self.slab_count});
-            std.debug.print("  Total chunks:    {}\n", .{self.total_chunks});
-            std.debug.print("  Total slots:     {}\n", .{self.total_slots});
-            std.debug.print("  Slots in use:    {}\n", .{self.slots_in_use});
-            std.debug.print("  Slots free:      {}\n", .{self.slots_free});
+            try stream.print("\nOverall Structure:\n", .{});
+            try stream.print("  Slab Count:    {}\n", .{self.slab_count});
+            try stream.print("  Total chunks:    {}\n", .{self.total_chunks});
+            try stream.print("  Total slots:     {}\n", .{self.total_slots});
+            try stream.print("  Slots in use:    {}\n", .{self.slots_in_use});
+            try stream.print("  Slots free:      {}\n", .{self.slots_free});
 
-            std.debug.print("\nOverall Efficiency:\n", .{});
-            std.debug.print("  Utilization:     {d:.1}%\n", .{self.utilization_ratio * 100.0});
-            std.debug.print("  Fragmentation:   {d:.1}%\n", .{self.fragmentation_ratio * 100.0});
+            try stream.print("\nOverall Efficiency:\n", .{});
+            try stream.print("  Utilization:     {d:.1}%\n", .{self.utilization_ratio * 100.0});
+            try stream.print("  Fragmentation:   {d:.1}%\n", .{self.fragmentation_ratio * 100.0});
 
             if (self.slabs.len > 0) {
-                std.debug.print("\nPer-Slab Breakdown:\n", .{});
-                std.debug.print(
+                try stream.print("\nPer-Slab Breakdown:\n", .{});
+                try stream.print(
                     "  {s:>5} | {s:>4} | {s:>6} | {s:>6} | {s:>6} | {s:>10} | {s:>6}\n",
                     .{ "Size", "Algn", "Chunks", "Slots", "InUse", "Bytes", "Util%" },
                 );
-                std.debug.print(
+                try stream.print(
                     "  {s:-<5}-+-{s:-<4}-+-{s:-<6}-+-{s:-<6}-+-{s:-<6}-+-{s:-<10}-+-{s:-<6}\n",
                     .{ "", "", "", "", "", "", "" },
                 );
 
                 for (self.slabs) |slab| {
-                    std.debug.print("  {d:5} | {d:4} | {d:6} | {d:6} | {d:6} | {d:10} | {d:5.1}%\n", .{
+                    try stream.print("  {d:5} | {d:4} | {d:6} | {d:6} | {d:6} | {d:10} | {d:5.1}%\n", .{
                         slab.key.size,
                         @intFromEnum(slab.key.alignment),
                         slab.chunk_count,
