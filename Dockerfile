@@ -50,11 +50,11 @@ RUN case $TARGETPLATFORM in \
     *) ARCH="x86_64" ;; \
     esac && \
     curl --fail -L -o libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${ZIG_V8}/libc_v8_${V8}_linux_${ARCH}.a && \
-    mkdir -p v8/out/linux/release/obj/zig/ && \
-    mv libc_v8.a v8/out/linux/release/obj/zig/libc_v8.a
+    mkdir -p v8/ && \
+    mv libc_v8.a v8/libc_v8.a
 
 # build release
-RUN make build
+RUN zig build -Doptimize=ReleaseSafe -Dprebuilt_v8_path=v8 -Dgit_commit=$$(git rev-parse --short HEAD)
 
 FROM debian:stable-slim
 

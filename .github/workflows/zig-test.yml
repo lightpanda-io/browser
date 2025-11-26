@@ -56,7 +56,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build debug
-        run: zig build
+        run: zig build -Dprebuilt_v8_path=v8
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
@@ -104,7 +104,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build test
-        run: zig build test -- --json > bench.json
+        run: zig build  -Dprebuilt_v8_path=v8 test -- --json > bench.json
 
       - name: write commit
         run: |
