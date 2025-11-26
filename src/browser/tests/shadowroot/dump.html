@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="innerHTML_excludes_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Shadow content</p>';
+
+    document.body.appendChild(host);
+
+    // Per spec, innerHTML does NOT include shadow DOM
+    const html = host.innerHTML;
+    testing.expectEqual('', html);
+
+    host.remove();
+}
+</script>
+
+<script id="innerHTML_only_light_dom">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Shadow content with <slot></slot></p>';
+
+    const lightChild = document.createElement('span');
+    lightChild.textContent = 'Light DOM';
+    host.appendChild(lightChild);
+
+    document.body.appendChild(host);
+
+    const html = host.innerHTML;
+    // innerHTML only returns light DOM, not shadow DOM
+    testing.expectEqual(false, html.indexOf('Shadow content') >= 0);
+    testing.expectEqual(true, html.indexOf('Light DOM') >= 0);
+    testing.expectEqual(true, html.indexOf('<span>Light DOM</span>') >= 0);
+
+    host.remove();
+}
+</script>
+
+<script id="outerHTML_excludes_shadow">
+{
+    const host = document.createElement('div');
+    host.id = 'test-host';
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Shadow content</p>';
+
+    document.body.appendChild(host);
+
+    // outerHTML also excludes shadow DOM per spec
+    const html = host.outerHTML;
+    testing.expectEqual(true, html.indexOf('<div id="test-host">') >= 0);
+    testing.expectEqual(false, html.indexOf('Shadow content') >= 0);
+    testing.expectEqual(true, html.indexOf('</div>') >= 0);
+
+    host.remove();
+}
+</script>
+
+<script id="innerHTML_closed_shadow">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'closed' });
+    shadow.innerHTML = '<p>Closed shadow content</p>';
+
+    document.body.appendChild(host);
+
+    // innerHTML never includes shadow DOM (open or closed)
+    const html = host.innerHTML;
+    testing.expectEqual('', html);
+
+    host.remove();
+}
+</script>
+
+<script id="innerHTML_nested_shadow">
+{
+    const outer = document.createElement('div');
+    const outerShadow = outer.attachShadow({ mode: 'open' });
+    outerShadow.innerHTML = '<div id="inner-host"></div>';
+
+    const innerHost = outerShadow.getElementById('inner-host');
+    const innerShadow = innerHost.attachShadow({ mode: 'open' });
+    innerShadow.innerHTML = '<p>Nested shadow content</p>';
+
+    document.body.appendChild(outer);
+
+    // innerHTML on outer doesn't include its shadow DOM
+    const html = outer.innerHTML;
+    testing.expectEqual('', html);
+
+    outer.remove();
+}
+</script>
+
+<script id="shadowRoot_innerHTML">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Para 1</p><p>Para 2</p>';
+
+    document.body.appendChild(host);
+
+    const shadowHtml = shadow.innerHTML;
+    testing.expectEqual(true, shadowHtml.indexOf('Para 1') >= 0);
+    testing.expectEqual(true, shadowHtml.indexOf('Para 2') >= 0);
+
+    host.remove();
+}
+</script>
+
+<script id="innerHTML_with_light_dom">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<slot></slot>';
+
+    const lightChild = document.createElement('span');
+    lightChild.textContent = 'Light only';
+    host.appendChild(lightChild);
+
+    document.body.appendChild(host);
+
+    // innerHTML returns light DOM children
+    const html = host.innerHTML;
+    testing.expectEqual(true, html.indexOf('Light only') >= 0);
+    testing.expectEqual(true, html.indexOf('<span>Light only</span>') >= 0);
+
+    host.remove();
+}
+</script>
+
+<script id="shadowRoot_innerHTML_direct">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p class="test" data-foo="bar">Shadow text</p>';
+
+    document.body.appendChild(host);
+
+    // Accessing shadow.innerHTML directly DOES return shadow content
+    const html = shadow.innerHTML;
+    testing.expectEqual(true, html.indexOf('class="test"') >= 0);
+    testing.expectEqual(true, html.indexOf('data-foo="bar"') >= 0);
+    testing.expectEqual(true, html.indexOf('Shadow text') >= 0);
+
+    host.remove();
+}
+</script>

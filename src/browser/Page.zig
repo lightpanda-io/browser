@@ -1216,6 +1216,22 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
             return node;
         };
 
+
+        // After constructor runs, invoke attributeChangedCallback for initial attributes
+        const element = node.as(Element);
+        if (element._attributes) |attributes| {
+            var it = attributes.iterator();
+            while (it.next()) |attr| {
+                Element.Html.Custom.invokeAttributeChangedCallbackOnElement(
+                    element,
+                    attr._name.str(),
+                    null, // old_value is null for initial attributes
+                    attr._value.str(),
+                    self,
+                );
+            }
+        }
+
         return node;
     }
 
@@ -1485,6 +1501,13 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
             if (el.getAttributeSafe("id")) |id| {
                 try self.addElementId(parent, el, id);
             }
+
+            // Invoke connectedCallback for custom elements during parsing
+            // For main document parsing, we know nodes are connected (fast path)
+            // For fragment parsing (innerHTML), we need to check connectivity
+            if (self._parse_mode == .document or child.isConnected()) {
+                try Element.Html.Custom.invokeConnectedCallbackOnElement(true, el, self);
+            }
         }
         return;
     }
@@ -1518,7 +1541,7 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         }
 
         if (should_invoke_connected) {
-            Element.Html.Custom.invokeConnectedCallbackOnElement(el, self);
+            try Element.Html.Custom.invokeConnectedCallbackOnElement(false, el, self);
         }
     }
 }

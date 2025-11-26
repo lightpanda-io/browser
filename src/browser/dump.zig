@@ -19,6 +19,7 @@
 const std = @import("std");
 const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
+const Slot = @import("webapi/element/html/Slot.zig");
 
 pub const RootOpts = struct {
     with_base: bool = false,
@@ -27,10 +28,23 @@ pub const RootOpts = struct {
 
 pub const Opts = struct {
     strip: Strip = .{},
+    shadow: Shadow = .rendered,
+
     pub const Strip = struct {
         js: bool = false,
         ui: bool = false,
         css: bool = false,
+    };
+
+    pub const Shadow = enum {
+        // Skip shadow DOM entirely (innerHTML/outerHTML)
+        skip,
+
+        // Dump everyhting (like "view source")
+        complete,
+
+        // Resolve slot elements (like what actually gets rendered)
+        rendered,
     };
 };
 
@@ -45,10 +59,10 @@ pub fn root(opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
         }
     }
 
-    return deep(doc.asNode(), .{ .strip = opts.strip }, writer);
+    return deep(doc.asNode(), .{ .strip = opts.strip }, writer, page);
 }
 
-pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer) error{WriteFailed}!void {
+pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
     switch (node._type) {
         .cdata => |cd| try writer.writeAll(cd.getData()),
         .element => |el| {
@@ -56,25 +70,39 @@ pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer) error{WriteFailed}!
                 return;
             }
 
+            // Handle <slot> elements in rendered mode
+            if (opts.shadow == .rendered) {
+                if (el.is(Slot)) |slot| {
+                    return dumpSlotContent(slot, opts, writer, page);
+                }
+            }
+
             try el.format(writer);
-            try children(node, opts, writer);
+
+            if (opts.shadow != .skip) {
+                if (page._element_shadow_roots.get(el)) |shadow| {
+                    try children(shadow.asNode(), opts, writer, page);
+                }
+            }
+
+            try children(node, opts, writer, page);
             if (!isVoidElement(el)) {
                 try writer.writeAll("</");
                 try writer.writeAll(el.getTagNameDump());
                 try writer.writeByte('>');
             }
         },
-        .document => try children(node, opts, writer),
+        .document => try children(node, opts, writer, page),
         .document_type => {},
-        .document_fragment => try children(node, opts, writer),
+        .document_fragment => try children(node, opts, writer, page),
         .attribute => unreachable,
     }
 }
 
-pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer) !void {
+pub fn children(parent: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
     var it = parent.childrenIterator();
     while (it.next()) |child| {
-        try deep(child, opts, writer);
+        try deep(child, opts, writer, page);
     }
 }
 
@@ -116,6 +144,18 @@ pub fn toJSON(node: *Node, writer: *std.json.Stringify) !void {
     }
     try writer.endArray();
     try writer.endObject();
+}
+
+fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
+    const assigned = slot.assignedNodes(null, page) catch return;
+
+    if (assigned.len > 0) {
+        for (assigned) |assigned_node| {
+            try deep(assigned_node, opts, writer, page);
+        }
+    } else {
+        try children(slot.asNode(), opts, writer, page);
+    }
 }
 
 fn isVoidElement(el: *const Node.Element) bool {

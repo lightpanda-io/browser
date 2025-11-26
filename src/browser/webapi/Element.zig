@@ -227,14 +227,14 @@ pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
     }
 }
 
-pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer) !void {
+pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, page: *Page) !void {
     const dump = @import("../dump.zig");
-    return dump.deep(self.asNode(), .{}, writer);
+    return dump.deep(self.asNode(), .{ .shadow = .skip }, writer, page);
 }
 
-pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer) !void {
+pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, page: *Page) !void {
     const dump = @import("../dump.zig");
-    return dump.children(self.asNode(), .{}, writer);
+    return dump.children(self.asNode(), .{ .shadow = .skip }, writer, page);
 }
 
 pub fn setInnerHTML(self: *Element, html: []const u8, page: *Page) !void {
@@ -906,14 +906,14 @@ pub const JsApi = struct {
     pub const outerHTML = bridge.accessor(_outerHTML, null, .{});
     fn _outerHTML(self: *Element, page: *Page) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self.getOuterHTML(&buf.writer);
+        try self.getOuterHTML(&buf.writer, page);
         return buf.written();
     }
 
     pub const innerHTML = bridge.accessor(_innerHTML, Element.setInnerHTML, .{});
     fn _innerHTML(self: *Element, page: *Page) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self.getInnerHTML(&buf.writer);
+        try self.getInnerHTML(&buf.writer, page);
         return buf.written();
     }
 

@@ -160,9 +160,9 @@ pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, 
     }
 }
 
-pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer) !void {
+pub fn getInnerHTML(self: *DocumentFragment, writer: *std.Io.Writer, page: *Page) !void {
     const dump = @import("../dump.zig");
-    return dump.children(self.asNode(), .{}, writer);
+    return dump.children(self.asNode(), .{ .shadow = .complete }, writer, page);
 }
 
 pub fn setInnerHTML(self: *DocumentFragment, html: []const u8, page: *Page) !void {
@@ -224,7 +224,7 @@ pub const JsApi = struct {
 
     fn _innerHTML(self: *DocumentFragment, page: *Page) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(page.call_arena);
-        try self.getInnerHTML(&buf.writer);
+        try self.getInnerHTML(&buf.writer, page);
         return buf.written();
     }
 };

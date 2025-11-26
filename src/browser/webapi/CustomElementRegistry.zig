@@ -84,7 +84,6 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     var idx: usize = 0;
     while (idx < page._undefined_custom_elements.items.len) {
         const custom = page._undefined_custom_elements.items[idx];
-
         if (!custom._tag_name.eqlSlice(name)) {
             idx += 1;
             continue;

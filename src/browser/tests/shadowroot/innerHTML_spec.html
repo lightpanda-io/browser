@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<script id="innerHTML_spec_compliance">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<p>Before <slot></slot> After</p>';
+
+    const slotted = document.createElement('span');
+    slotted.textContent = 'SLOTTED';
+    host.appendChild(slotted);
+
+    document.body.appendChild(host);
+
+    // host.innerHTML returns only light DOM (spec compliant)
+    const hostHTML = host.innerHTML;
+    testing.expectEqual(true, hostHTML.indexOf('SLOTTED') >= 0);
+    testing.expectEqual(false, hostHTML.indexOf('Before') >= 0);
+    testing.expectEqual(false, hostHTML.indexOf('<slot>') >= 0);
+
+    // shadow.innerHTML returns shadow DOM content
+    const shadowHTML = shadow.innerHTML;
+    testing.expectEqual(true, shadowHTML.indexOf('Before') >= 0);
+    testing.expectEqual(true, shadowHTML.indexOf('<slot>') >= 0);
+    testing.expectEqual(false, shadowHTML.indexOf('SLOTTED') >= 0);
+
+    host.remove();
+}
+</script>
+
+<script id="innerHTML_named_slots">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<slot name="header"></slot><slot name="footer"></slot>';
+
+    const header = document.createElement('h1');
+    header.setAttribute('slot', 'header');
+    header.textContent = 'Header Content';
+    host.appendChild(header);
+
+    const footer = document.createElement('p');
+    footer.setAttribute('slot', 'footer');
+    footer.textContent = 'Footer Content';
+    host.appendChild(footer);
+
+    document.body.appendChild(host);
+
+    // host.innerHTML returns light DOM with slot attributes
+    const hostHTML = host.innerHTML;
+    testing.expectEqual(true, hostHTML.indexOf('Header Content') >= 0);
+    testing.expectEqual(true, hostHTML.indexOf('Footer Content') >= 0);
+    testing.expectEqual(true, hostHTML.indexOf('slot="header"') >= 0);
+    testing.expectEqual(true, hostHTML.indexOf('slot="footer"') >= 0);
+
+    // shadow.innerHTML returns slot elements
+    const shadowHTML = shadow.innerHTML;
+    testing.expectEqual(true, shadowHTML.indexOf('<slot name="header"></slot>') >= 0);
+    testing.expectEqual(true, shadowHTML.indexOf('<slot name="footer"></slot>') >= 0);
+    testing.expectEqual(false, shadowHTML.indexOf('Header Content') >= 0);
+
+    host.remove();
+}
+</script>
+
+<script id="innerHTML_no_shadow">
+{
+    const host = document.createElement('div');
+    const child = document.createElement('span');
+    child.textContent = 'Regular content';
+    host.appendChild(child);
+
+    document.body.appendChild(host);
+
+    // Without shadow DOM, innerHTML works normally
+    const html = host.innerHTML;
+    testing.expectEqual(true, html.indexOf('Regular content') >= 0);
+    testing.expectEqual(true, html.indexOf('<span>') >= 0);
+
+    host.remove();
+}
+</script>

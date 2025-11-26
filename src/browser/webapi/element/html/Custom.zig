@@ -53,7 +53,9 @@ pub fn invokeConnectedCallback(self: *Custom, page: *Page) void {
 
 pub fn invokeDisconnectedCallback(self: *Custom, page: *Page) void {
     // Only invoke if we haven't already called it while disconnected
-    if (self._disconnected_callback_invoked) return;
+    if (self._disconnected_callback_invoked) {
+        return;
+    }
 
     self._disconnected_callback_invoked = true;
     self._connected_callback_invoked = false;
@@ -62,30 +64,49 @@ pub fn invokeDisconnectedCallback(self: *Custom, page: *Page) void {
 
 pub fn invokeAttributeChangedCallback(self: *Custom, name: []const u8, old_value: ?[]const u8, new_value: ?[]const u8, page: *Page) void {
     const definition = self._definition orelse return;
-    if (!definition.isAttributeObserved(name)) return;
+    if (!definition.isAttributeObserved(name)) {
+        return;
+    }
     self.invokeCallback("attributeChangedCallback", .{ name, old_value, new_value }, page);
 }
 
-// Static helpers that work on any Element (autonomous or customized built-in)
-pub fn invokeConnectedCallbackOnElement(element: *Element, page: *Page) void {
+pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, page: *Page) !void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
-        custom.invokeConnectedCallback(page);
+        if (comptime from_parser) {
+            // From parser, we know the element is brand new
+            custom._connected_callback_invoked = true;
+            custom.invokeCallback("connectedCallback", .{}, page);
+        } else {
+            custom.invokeConnectedCallback(page);
+        }
         return;
     }
 
-    // Customized built-in element
-    // Check if we've already invoked connectedCallback while connected
-    if (page._customized_builtin_connected_callback_invoked.contains(element)) return;
+    // Customized built-in element - check if it actually has a definition first
+    const definition = page.getCustomizedBuiltInDefinition(element) orelse return;
 
-    page._customized_builtin_connected_callback_invoked.put(
-        page.arena,
-        element,
-        {},
-    ) catch return;
+    if (comptime from_parser) {
+        // From parser, we know the element is brand new, skip the tracking check
+        try page._customized_builtin_connected_callback_invoked.put(
+            page.arena,
+            element,
+            {},
+        );
+    } else {
+        // Not from parser, check if we've already invoked while connected
+        const gop = try page._customized_builtin_connected_callback_invoked.getOrPut(
+            page.arena,
+            element,
+        );
+        if (gop.found_existing) {
+            return;
+        }
+        gop.value_ptr.* = {};
+    }
+
     _ = page._customized_builtin_disconnected_callback_invoked.remove(element);
-
-    invokeCallbackOnElement(element, "connectedCallback", .{}, page);
+    invokeCallbackOnElement(element, definition, "connectedCallback", .{}, page);
 }
 
 pub fn invokeDisconnectedCallbackOnElement(element: *Element, page: *Page) void {
@@ -95,18 +116,20 @@ pub fn invokeDisconnectedCallbackOnElement(element: *Element, page: *Page) void 
         return;
     }
 
-    // Customized built-in element
-    // Check if we've already invoked disconnectedCallback while disconnected
-    if (page._customized_builtin_disconnected_callback_invoked.contains(element)) return;
+    // Customized built-in element - check if it actually has a definition first
+    const definition = page.getCustomizedBuiltInDefinition(element) orelse return;
 
-    page._customized_builtin_disconnected_callback_invoked.put(
+    // Check if we've already invoked disconnectedCallback while disconnected
+    const gop = page._customized_builtin_disconnected_callback_invoked.getOrPut(
         page.arena,
         element,
-        {},
     ) catch return;
+    if (gop.found_existing) return;
+    gop.value_ptr.* = {};
+
     _ = page._customized_builtin_connected_callback_invoked.remove(element);
 
-    invokeCallbackOnElement(element, "disconnectedCallback", .{}, page);
+    invokeCallbackOnElement(element, definition, "disconnectedCallback", .{}, page);
 }
 
 pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: []const u8, old_value: ?[]const u8, new_value: ?[]const u8, page: *Page) void {
@@ -119,12 +142,11 @@ pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: []const 
     // Customized built-in element - check if attribute is observed
     const definition = page.getCustomizedBuiltInDefinition(element) orelse return;
     if (!definition.isAttributeObserved(name)) return;
-    invokeCallbackOnElement(element, "attributeChangedCallback", .{ name, old_value, new_value }, page);
+    invokeCallbackOnElement(element, definition, "attributeChangedCallback", .{ name, old_value, new_value }, page);
 }
 
-fn invokeCallbackOnElement(element: *Element, comptime callback_name: [:0]const u8, args: anytype, page: *Page) void {
-    // Check if this element has a customized built-in definition
-    _ = page.getCustomizedBuiltInDefinition(element) orelse return;
+fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefinition, comptime callback_name: [:0]const u8, args: anytype, page: *Page) void {
+    _ = definition;
 
     const context = page.js;
 
