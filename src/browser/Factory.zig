@@ -96,7 +96,7 @@ fn PrototypeChain(comptime types: []const type) type {
 
         fn setRoot(self: *const Self, comptime T: type) void {
             const ptr = self.get(0);
-            ptr.* = .{ ._type = unionInit(T, self.get(1)), ._allocation = self.memory };
+            ptr.* = .{ ._type = unionInit(T, self.get(1)) };
         }
 
         fn setMiddle(self: *const Self, comptime index: usize, comptime T: type) void {
@@ -160,7 +160,6 @@ pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     const event_ptr = chain.get(0);
     event_ptr.* = .{
         ._type = unionInit(EventTarget.Type, chain.get(1)),
-        ._allocation = chain.memory,
     };
     chain.setLeaf(1, child);
 
@@ -180,7 +179,6 @@ pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
     event_ptr.* = .{
         ._type = unionInit(Event.Type, chain.get(1)),
         ._type_string = try String.init(self._page.arena, typ, .{}),
-        ._allocation = chain.memory,
     };
     chain.setLeaf(1, child);
 
@@ -198,7 +196,6 @@ pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
     const blob_ptr = chain.get(0);
     blob_ptr.* = .{
         ._type = unionInit(Blob.Type, chain.get(1)),
-        ._allocation = chain.memory,
         .slice = "",
         .mime = "",
     };
@@ -275,9 +272,34 @@ pub fn xhrEventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     ).create(allocator, child);
 }
 
+fn hasChainRoot(comptime T: type) bool {
+    // Check if this is a root
+    if (@hasDecl(T, "_prototype_root")) {
+        return true;
+    }
+
+    // If no _proto field, we're at the top but not a recognized root
+    if (!@hasField(T, "_proto")) return false;
+
+    // Get the _proto field's type and recurse
+    const fields = @typeInfo(T).@"struct".fields;
+    inline for (fields) |field| {
+        if (std.mem.eql(u8, field.name, "_proto")) {
+            const ProtoType = reflect.Struct(field.type);
+            return hasChainRoot(ProtoType);
+        }
+    }
+
+    return false;
+}
+
+fn isChainType(comptime T: type) bool {
+    if (@hasField(T, "_proto")) return false;
+    return comptime hasChainRoot(T);
+}
+
 pub fn destroy(self: *Factory, value: anytype) void {
     const S = reflect.Struct(@TypeOf(value));
-    const allocator = self._slab.allocator();
 
     if (comptime IS_DEBUG) {
         // We should always destroy from the leaf down.
@@ -292,13 +314,47 @@ pub fn destroy(self: *Factory, value: anytype) void {
         }
     }
 
-    const chain_memory = self.destroyChain(value, true) orelse return;
-    allocator.free(chain_memory);
+    if (comptime isChainType(S)) {
+        self.destroyChain(value, true, 0, std.mem.Alignment.@"1");
+    } else {
+        self.destroyStandalone(value);
+    }
 }
 
-fn destroyChain(self: *Factory, value: anytype, comptime first: bool) ?[]u8 {
+pub fn destroyStandalone(self: *Factory, value: anytype) void {
+    const S = reflect.Struct(@TypeOf(value));
+    assert(!@hasDecl(S, "_prototype_root"));
+
+    const allocator = self._slab.allocator();
+
+    if (@hasDecl(S, "deinit")) {
+        // And it has a deinit, we'll call it
+        switch (@typeInfo(@TypeOf(S.deinit)).@"fn".params.len) {
+            1 => value.deinit(),
+            2 => value.deinit(self._page),
+            else => @compileLog(@typeName(S) ++ " has an invalid deinit function"),
+        }
+    }
+
+    allocator.destroy(value);
+}
+
+fn destroyChain(
+    self: *Factory,
+    value: anytype,
+    comptime first: bool,
+    old_size: usize,
+    old_align: std.mem.Alignment,
+) void {
     const S = reflect.Struct(@TypeOf(value));
     const allocator = self._slab.allocator();
+
+    // aligns the old size to the alignment of this element
+    const current_size = std.mem.alignForward(usize, old_size, @alignOf(S));
+    const alignment = std.mem.Alignment.fromByteUnits(@alignOf(S));
+
+    const new_align = std.mem.Alignment.max(old_align, alignment);
+    const new_size = current_size + @sizeOf(S);
 
     // This is initially called from a deinit. We don't want to call that
     // same deinit. So when this is the first time destroyChain is called
@@ -316,15 +372,22 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) ?[]u8 {
     }
 
     if (@hasField(S, "_proto")) {
-        return self.destroyChain(value._proto, false);
+        self.destroyChain(value._proto, false, new_size, new_align);
     } else if (@hasDecl(S, "JsApi")) {
         // Doesn't have a _proto, but has a JsApi.
         if (self._page.js.removeTaggedMapping(@intFromPtr(value))) |tagged| {
             allocator.destroy(tagged);
         }
-    } else if (@hasField(S, "_allocation")) {
-        return value._allocation;
-    } else return null;
+    } else {
+        // no proto so this is the head of the chain.
+        // we use this as the ptr to the start of the chain.
+        // and we have summed up the length.
+        assert(@hasDecl(S, "_prototype_root"));
+
+        const memory_ptr: [*]const u8 = @ptrCast(value);
+        const len = std.mem.alignForward(usize, new_size, new_align.toByteUnits());
+        allocator.free(memory_ptr[0..len]);
+    }
 }
 
 pub fn createT(self: *Factory, comptime T: type) !*T {

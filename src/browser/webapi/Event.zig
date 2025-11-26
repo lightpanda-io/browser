@@ -25,8 +25,8 @@ const String = @import("../../string.zig").String;
 
 pub const Event = @This();
 
+const _prototype_root = true;
 _type: Type,
-_allocation: ?[]u8,
 
 _bubbles: bool = false,
 _cancelable: bool = false,
@@ -67,7 +67,6 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
 
     return page._factory.create(Event{
         ._type = .generic,
-        ._allocation = null,
         ._bubbles = opts.bubbles,
         ._time_stamp = time_stamp,
         ._cancelable = opts.cancelable,
