@@ -376,23 +376,25 @@ pub const SlabAllocator = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
         _ = ret_addr;
 
+        const aligned_len = std.mem.alignForward(usize, len, alignment.toByteUnits());
+
         const list_gop = self.slabs.getOrPut(
             self.child_allocator,
-            SlabKey{ .size = len, .alignment = alignment },
+            SlabKey{ .size = aligned_len, .alignment = alignment },
         ) catch return null;
 
         if (!list_gop.found_existing) {
             list_gop.value_ptr.* = Slab.init(
                 self.child_allocator,
                 alignment,
-                len,
+                aligned_len,
                 self.max_slot_count,
             ) catch return null;
         }
 
         const list = list_gop.value_ptr;
         const buf = list.alloc(self.child_allocator) catch return null;
-        return buf.ptr;
+        return buf[0..len].ptr;
     }
 
     fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
@@ -401,8 +403,9 @@ pub const SlabAllocator = struct {
 
         const ptr = memory.ptr;
         const len = memory.len;
+        const aligned_len = std.mem.alignForward(usize, len, alignment.toByteUnits());
 
-        const list = self.slabs.getPtr(.{ .size = len, .alignment = alignment }).?;
+        const list = self.slabs.getPtr(.{ .size = aligned_len, .alignment = alignment }).?;
         list.free(ptr);
     }
 };
@@ -821,4 +824,40 @@ test "slab allocator - different size classes don't interfere" {
 
     allocator.free(ptr_128);
     allocator.free(ptr_64_again);
+}
+
+test "slab allocator - 16-byte alignment" {
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
+    defer slab_alloc.deinit();
+
+    const allocator = slab_alloc.allocator();
+
+    // Request 16-byte aligned memory
+    const ptr = try allocator.alignedAlloc(u8, .@"16", 152);
+    defer allocator.free(ptr);
+
+    // Verify alignment
+    const addr = @intFromPtr(ptr.ptr);
+    try testing.expect(addr % 16 == 0);
+
+    // Make sure we can use it
+    @memset(ptr, 0xFF);
+}
+
+test "slab allocator - various alignments" {
+    var slab_alloc = TestSlabAllocator.init(testing.allocator, 16);
+    defer slab_alloc.deinit();
+
+    const allocator = slab_alloc.allocator();
+
+    const alignments = [_]std.mem.Alignment{ .@"1", .@"2", .@"4", .@"8", .@"16" };
+
+    inline for (alignments) |alignment| {
+        const ptr = try allocator.alignedAlloc(u8, alignment, 100);
+        defer allocator.free(ptr);
+
+        const addr = @intFromPtr(ptr.ptr);
+        const align_value = alignment.toByteUnits();
+        try testing.expect(addr % align_value == 0);
+    }
 }
