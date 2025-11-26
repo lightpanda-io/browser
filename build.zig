@@ -46,7 +46,7 @@ pub fn build(b: *Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
-    const use_boringssl = b.option(bool, "use-boringssl", "Whether use BoringSSL (default:false)") orelse false;
+    const use_boringssl = b.option(bool, "use-boringssl", "Whether use BoringSSL (default:true)") orelse true;
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -69,7 +69,7 @@ pub fn build(b: *Build) !void {
 
         // compile and install
         const exe = b.addExecutable(.{
-            .name = if (use_boringssl) "lightpanda-boringssl" else "lightpanda-mbedtls",
+            .name = "lightpanda",
             .use_llvm = true,
             .root_module = lightpanda_module,
         });
