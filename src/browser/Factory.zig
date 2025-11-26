@@ -24,6 +24,8 @@ const IS_DEBUG = builtin.mode == .Debug;
 const log = @import("../log.zig");
 const String = @import("../string.zig").String;
 
+const SlabAllocator = @import("../slab.zig").SlabAllocator;
+
 const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
@@ -46,48 +48,12 @@ const MemoryPoolAligned = std.heap.MemoryPoolAligned;
 // (and alignment) based pools.
 const Factory = @This();
 _page: *Page,
-_size_8_8: MemoryPoolAligned([8]u8, .@"8"),
-_size_16_8: MemoryPoolAligned([16]u8, .@"8"),
-_size_24_8: MemoryPoolAligned([24]u8, .@"8"),
-_size_32_8: MemoryPoolAligned([32]u8, .@"8"),
-_size_32_16: MemoryPoolAligned([32]u8, .@"16"),
-_size_40_8: MemoryPoolAligned([40]u8, .@"8"),
-_size_48_16: MemoryPoolAligned([48]u8, .@"16"),
-_size_56_8: MemoryPoolAligned([56]u8, .@"8"),
-_size_64_16: MemoryPoolAligned([64]u8, .@"16"),
-_size_80_16: MemoryPoolAligned([80]u8, .@"16"),
-_size_88_8: MemoryPoolAligned([88]u8, .@"8"),
-_size_96_16: MemoryPoolAligned([96]u8, .@"16"),
-_size_128_8: MemoryPoolAligned([128]u8, .@"8"),
-_size_144_8: MemoryPoolAligned([144]u8, .@"8"),
-_size_152_8: MemoryPoolAligned([152]u8, .@"8"),
-_size_160_8: MemoryPoolAligned([160]u8, .@"8"),
-_size_184_8: MemoryPoolAligned([184]u8, .@"8"),
-_size_232_8: MemoryPoolAligned([232]u8, .@"8"),
-_size_648_8: MemoryPoolAligned([648]u8, .@"8"),
+_slab: SlabAllocator,
 
 pub fn init(page: *Page) Factory {
     return .{
         ._page = page,
-        ._size_8_8 = MemoryPoolAligned([8]u8, .@"8").init(page.arena),
-        ._size_16_8 = MemoryPoolAligned([16]u8, .@"8").init(page.arena),
-        ._size_24_8 = MemoryPoolAligned([24]u8, .@"8").init(page.arena),
-        ._size_32_8 = MemoryPoolAligned([32]u8, .@"8").init(page.arena),
-        ._size_32_16 = MemoryPoolAligned([32]u8, .@"16").init(page.arena),
-        ._size_40_8 = MemoryPoolAligned([40]u8, .@"8").init(page.arena),
-        ._size_48_16 = MemoryPoolAligned([48]u8, .@"16").init(page.arena),
-        ._size_56_8 = MemoryPoolAligned([56]u8, .@"8").init(page.arena),
-        ._size_64_16 = MemoryPoolAligned([64]u8, .@"16").init(page.arena),
-        ._size_80_16 = MemoryPoolAligned([80]u8, .@"16").init(page.arena),
-        ._size_88_8 = MemoryPoolAligned([88]u8, .@"8").init(page.arena),
-        ._size_96_16 = MemoryPoolAligned([96]u8, .@"16").init(page.arena),
-        ._size_128_8 = MemoryPoolAligned([128]u8, .@"8").init(page.arena),
-        ._size_144_8 = MemoryPoolAligned([144]u8, .@"8").init(page.arena),
-        ._size_152_8 = MemoryPoolAligned([152]u8, .@"8").init(page.arena),
-        ._size_160_8 = MemoryPoolAligned([160]u8, .@"8").init(page.arena),
-        ._size_184_8 = MemoryPoolAligned([184]u8, .@"8").init(page.arena),
-        ._size_232_8 = MemoryPoolAligned([232]u8, .@"8").init(page.arena),
-        ._size_648_8 = MemoryPoolAligned([648]u8, .@"8").init(page.arena),
+        ._slab = SlabAllocator.init(page.arena, 128),
     };
 }
 
@@ -246,28 +212,8 @@ pub fn create(self: *Factory, value: anytype) !*@TypeOf(value) {
 }
 
 pub fn createT(self: *Factory, comptime T: type) !*T {
-    const SO = @sizeOf(T);
-    if (comptime SO == 8) return @ptrCast(try self._size_8_8.create());
-    if (comptime SO == 16) return @ptrCast(try self._size_16_8.create());
-    if (comptime SO == 24) return @ptrCast(try self._size_24_8.create());
-    if (comptime SO == 32) {
-        if (comptime @alignOf(T) == 8) return @ptrCast(try self._size_32_8.create());
-        if (comptime @alignOf(T) == 16) return @ptrCast(try self._size_32_16.create());
-    }
-    if (comptime SO == 40) return @ptrCast(try self._size_40_8.create());
-    if (comptime SO == 48) return @ptrCast(try self._size_48_16.create());
-    if (comptime SO == 56) return @ptrCast(try self._size_56_8.create());
-    if (comptime SO == 64) return @ptrCast(try self._size_64_16.create());
-    if (comptime SO == 80) return @ptrCast(try self._size_80_16.create());
-    if (comptime SO == 88) return @ptrCast(try self._size_88_8.create());
-    if (comptime SO == 96) return @ptrCast(try self._size_96_16.create());
-    if (comptime SO == 128) return @ptrCast(try self._size_128_8.create());
-    if (comptime SO == 152) return @ptrCast(try self._size_152_8.create());
-    if (comptime SO == 160) return @ptrCast(try self._size_160_8.create());
-    if (comptime SO == 184) return @ptrCast(try self._size_184_8.create());
-    if (comptime SO == 232) return @ptrCast(try self._size_232_8.create());
-    if (comptime SO == 648) return @ptrCast(try self._size_648_8.create());
-    @compileError(std.fmt.comptimePrint("No pool configured for @sizeOf({d}), @alignOf({d}): ({s})", .{ SO, @alignOf(T), @typeName(T) }));
+    const allocator = self._slab.allocator();
+    return try allocator.create(T);
 }
 
 pub fn destroy(self: *Factory, value: anytype) void {
@@ -291,6 +237,8 @@ pub fn destroy(self: *Factory, value: anytype) void {
 fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
     const S = reflect.Struct(@TypeOf(value));
 
+    const allocator = self._slab.allocator();
+
     // This is initially called from a deinit. We don't want to call that
     // same deinit. So when this is the first time destroyChain is called
     // we don't call deinit (because we're in that deinit)
@@ -311,7 +259,7 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
     } else if (@hasDecl(S, "JsApi")) {
         // Doesn't have a _proto, but has a JsApi.
         if (self._page.js.removeTaggedMapping(@intFromPtr(value))) |tagged| {
-            self._size_24_8.destroy(@ptrCast(tagged));
+            allocator.destroy(tagged);
         }
     }
 
@@ -319,31 +267,7 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
     // (which makes sense when the @sizeOf(Leaf) == 8). These don't need to
     // be (cannot be) freed. But we'll still free the chain.
     if (comptime wasAllocated(S)) {
-        switch (@sizeOf(S)) {
-            8 => self._size_8_8.destroy(@ptrCast(@alignCast(value))),
-            16 => self._size_16_8.destroy(@ptrCast(value)),
-            24 => self._size_24_8.destroy(@ptrCast(value)),
-            32 => {
-                if (comptime @alignOf(S) == 8) {
-                    self._size_32_8.destroy(@ptrCast(value));
-                } else if (comptime @alignOf(S) == 16) {
-                    self._size_32_16.destroy(@ptrCast(value));
-                }
-            },
-            40 => self._size_40_8.destroy(@ptrCast(value)),
-            48 => self._size_48_16.destroy(@ptrCast(@alignCast(value))),
-            56 => self._size_56_8.destroy(@ptrCast(value)),
-            64 => self._size_64_16.destroy(@ptrCast(@alignCast(value))),
-            80 => self._size_80_16.destroy(@ptrCast(@alignCast(value))),
-            88 => self._size_88_8.destroy(@ptrCast(@alignCast(value))),
-            96 => self._size_96_16.destroy(@ptrCast(@alignCast(value))),
-            128 => self._size_128_8.destroy(@ptrCast(value)),
-            144 => self._size_144_8.destroy(@ptrCast(value)),
-            152 => self._size_152_8.destroy(@ptrCast(value)),
-            160 => self._size_160_8.destroy(@ptrCast(value)),
-            648 => self._size_648_8.destroy(@ptrCast(value)),
-            else => |SO| @compileError(std.fmt.comptimePrint("Don't know what I'm being asked to destroy @sizeOf({d}), @alignOf({d}): ({s})", .{ SO, @alignOf(S), @typeName(S) })),
-        }
+        allocator.destroy(value);
     }
 }
 
