@@ -26,6 +26,10 @@ inputs:
     description: 'cache dir to use'
     required: false
     default: '~/.cache'
+  mode:
+    description: 'debug or release'
+    required: false
+    default: 'debug'
 
 runs:
   using: "composite"
@@ -58,19 +62,26 @@ runs:
 
         wget -O ${{ inputs.cache-dir }}/v8/libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${{ inputs.zig-v8 }}/libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}.a
 
-    - name: install v8
+    - name: install v8 release
+      if: ${{ inputs.mode == 'release' }}
+      shell: bash
+      run: |
+        mkdir -p v8/out/${{ inputs.os }}/release/obj/zig/
+        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/${{ inputs.os }}/release/obj/zig/libc_v8.a
+
+    - name: install v8 debug
+      if: ${{ inputs.mode == 'debug' }}
       shell: bash
       run: |
         mkdir -p v8/out/${{ inputs.os }}/debug/obj/zig/
         ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/${{ inputs.os }}/debug/obj/zig/libc_v8.a
 
-        mkdir -p v8/out/${{ inputs.os }}/release/obj/zig/
-        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/${{ inputs.os }}/release/obj/zig/libc_v8.a
-
-    - name: build html5ever
+    - name: hmtl5ever release
+      if: ${{ inputs.mode == 'release' }}
       shell: bash
-      run: make install-html5ever
+      run: zig -Doptimize=ReleaseSafe build html5ever
 
-    - name: build html5ever dev
+    - name: hmtl5ever debug
+      if: ${{ inputs.mode == 'debug' }}
       shell: bash
-      run: make install-html5ever-dev
+      run: zig build html5ever

@@ -40,7 +40,7 @@ WORKDIR /browser
 RUN git submodule init && \
     git submodule update --recursive
 
-RUN make install-html5ever
+RUN zig build -Doptimize=ReleaseFast html5ever
 
 # download and install v8
 RUN case $TARGETPLATFORM in \

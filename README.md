@@ -220,10 +220,10 @@ make install-submodule
 [html5ver](https://github.com/servo/html5ever) is high-performance browser-grade HTML5 parser.
 
 ```
-make install-html5ever
+zig build html5ever
 ```
 
-For dev env, use `make install-html5ever-dev`.
+For a release build, use `zig build -Doptimize=ReleaseFast html5ever`.
 
 **v8**
 
