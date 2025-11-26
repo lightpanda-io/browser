@@ -127,20 +127,13 @@ build-v8:
 
 # Install and build required dependencies commands
 # ------------
-.PHONY: install-html5ever install-html5ever-dev
 .PHONY: install install-dev
 
 ## Install and build dependencies for release
-install: install-submodule install-html5ever
+install: install-submodule
 
 ## Install and build dependencies for dev
-install-dev: install-submodule install-html5ever-dev
-
-install-html5ever:
-	cd src/html5ever && cargo build --release --target-dir ../../build/html5ever/
-
-install-html5ever-dev:
-	cd src/html5ever && cargo build --target-dir ../../build/html5ever/
+install-dev: install-submodule
 
 data:
 	cd src/data && go run public_suffix_list_gen.go > public_suffix_list.zig
