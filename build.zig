@@ -56,7 +56,7 @@ pub fn build(b: *Build) !void {
             "build",
             // Seems cargo can figure out required paths out of Cargo.toml.
             "--manifest-path",
-            "vendor/html5ever/Cargo.toml",
+            "src/html5ever/Cargo.toml",
             // TODO: We can prefer `--artifact-dir` once it become stable.
             "--target-dir",
             b.getInstallPath(.prefix, "html5ever"),
