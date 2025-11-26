@@ -40,6 +40,13 @@ const Factory = @This();
 _page: *Page,
 _slab: SlabAllocator,
 
+pub const FactoryAllocationKind = union(enum) {
+    /// Allocated as part of a Factory PrototypeChain
+    chain: []u8,
+    /// Allocated standalone via factory.create()
+    standalone,
+};
+
 fn PrototypeChain(comptime types: []const type) type {
     return struct {
         const Self = @This();
@@ -96,7 +103,7 @@ fn PrototypeChain(comptime types: []const type) type {
 
         fn setRoot(self: *const Self, comptime T: type) void {
             const ptr = self.get(0);
-            ptr.* = .{ ._type = unionInit(T, self.get(1)) };
+            ptr.* = .{ ._type = unionInit(T, self.get(1)), ._allocation = FactoryAllocationKind{ .chain = self.memory } };
         }
 
         fn setMiddle(self: *const Self, comptime index: usize, comptime T: type) void {
@@ -163,6 +170,46 @@ pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     return chain.get(1);
 }
 
+// this is a root object
+pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+
+    // Special case: Event has a _type_string field, so we need manual setup
+    const chain = try PrototypeChain(
+        &.{ Event, @TypeOf(child) },
+    ).allocate(allocator);
+
+    const event_ptr = chain.get(0);
+    event_ptr.* = .{
+        ._type = unionInit(Event.Type, chain.get(1)),
+        ._type_string = try String.init(self._page.arena, typ, .{}),
+        ._allocation = FactoryAllocationKind{ .chain = chain.memory },
+    };
+    chain.setLeaf(1, child);
+
+    return chain.get(1);
+}
+
+pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+
+    // Special case: Blob has slice and mime fields, so we need manual setup
+    const chain = try PrototypeChain(
+        &.{ Blob, @TypeOf(child) },
+    ).allocate(allocator);
+
+    const blob_ptr = chain.get(0);
+    blob_ptr.* = .{
+        ._type = unionInit(Blob.Type, chain.get(1)),
+        ._allocation = FactoryAllocationKind{ .chain = chain.memory },
+        .slice = "",
+        .mime = "",
+    };
+    chain.setLeaf(1, child);
+
+    return chain.get(1);
+}
+
 pub fn node(self: *Factory, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     return try AutoPrototypeChain(
@@ -223,25 +270,6 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
     return chain.get(4);
 }
 
-// this is a root object
-pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
-    // Special case: Event has a _type_string field, so we need manual setup
-    const chain = try PrototypeChain(
-        &.{ Event, @TypeOf(child) },
-    ).allocate(allocator);
-
-    const event_ptr = chain.get(0);
-    event_ptr.* = .{
-        ._type = unionInit(Event.Type, chain.get(1)),
-        ._type_string = try String.init(self._page.arena, typ, .{}),
-    };
-    chain.setLeaf(1, child);
-
-    return chain.get(1);
-}
-
 pub fn xhrEventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
 
@@ -250,28 +278,9 @@ pub fn xhrEventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     ).create(allocator, child);
 }
 
-pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
-    // Special case: Blob has slice and mime fields, so we need manual setup
-    const chain = try PrototypeChain(
-        &.{ Blob, @TypeOf(child) },
-    ).allocate(allocator);
-
-    const blob_ptr = chain.get(0);
-    blob_ptr.* = .{
-        ._type = unionInit(Blob.Type, chain.get(1)),
-        .slice = "",
-        .mime = "",
-    };
-    chain.setLeaf(1, child);
-
-    return chain.get(1);
-}
-
 pub fn destroy(self: *Factory, value: anytype) void {
     const S = reflect.Struct(@TypeOf(value));
-    // const allocator = self._slab.allocator();
+    const allocator = self._slab.allocator();
 
     if (comptime IS_DEBUG) {
         // We should always destroy from the leaf down.
@@ -286,12 +295,14 @@ pub fn destroy(self: *Factory, value: anytype) void {
         }
     }
 
-    const root_ptr = self.destroyChain(value, true);
-    _ = root_ptr;
-    // allocator.destroy(root_ptr);
+    const allocation_kind = self.destroyChain(value, true) orelse return;
+    switch (allocation_kind) {
+        .chain => |buf| allocator.free(buf),
+        .standalone => {},
+    }
 }
 
-fn destroyChain(self: *Factory, value: anytype, comptime first: bool) *@TypeOf(value) {
+fn destroyChain(self: *Factory, value: anytype, comptime first: bool) ?FactoryAllocationKind {
     const S = reflect.Struct(@TypeOf(value));
     const allocator = self._slab.allocator();
 
@@ -317,9 +328,9 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) *@TypeOf(v
         if (self._page.js.removeTaggedMapping(@intFromPtr(value))) |tagged| {
             allocator.destroy(tagged);
         }
-    }
-
-    return @ptrCast(value);
+    } else if (@hasField(S, "_allocation")) {
+        return value._allocation;
+    } else return null;
 }
 
 pub fn createT(self: *Factory, comptime T: type) !*T {

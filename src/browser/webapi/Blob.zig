@@ -21,12 +21,15 @@ const Writer = std.Io.Writer;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const FactoryAllocationKind = @import("../Factory.zig").FactoryAllocationKind;
 
 /// https://w3c.github.io/FileAPI/#blob-section
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
 const Blob = @This();
 
 _type: Type,
+_allocation: FactoryAllocationKind,
+
 /// Immutable slice of blob.
 /// Note that another blob may hold a pointer/slice to this,
 /// so its better to leave the deallocation of it to arena allocator.
@@ -78,6 +81,7 @@ pub fn init(
 
     return page._factory.create(Blob{
         ._type = .generic,
+        ._allocation = .standalone,
         .slice = slice,
         .mime = mime,
     });
@@ -267,6 +271,7 @@ pub fn getSlice(
 
         return page._factory.create(Blob{
             ._type = .generic,
+            ._allocation = .standalone,
             .slice = slice[start..end],
             .mime = mime,
         });
@@ -274,6 +279,7 @@ pub fn getSlice(
 
     return page._factory.create(Blob{
         ._type = .generic,
+        ._allocation = .standalone,
         .slice = slice,
         .mime = mime,
     });

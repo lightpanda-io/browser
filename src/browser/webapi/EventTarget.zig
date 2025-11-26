@@ -21,12 +21,14 @@ const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
 const RegisterOptions = @import("../EventManager.zig").RegisterOptions;
+const FactoryAllocationKind = @import("../Factory.zig").FactoryAllocationKind;
 
 const Event = @import("Event.zig");
 
 const EventTarget = @This();
 
 _type: Type,
+_allocation: FactoryAllocationKind,
 
 pub const Type = union(enum) {
     node: *@import("Node.zig"),
