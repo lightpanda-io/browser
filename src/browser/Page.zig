@@ -1175,21 +1175,22 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
         else => {},
     }
 
-    if (namespace == .svg) {
-        const tag_name = try String.init(self.arena, name, .{});
-        if (std.ascii.eqlIgnoreCase(name, "svg")) {
-            return self.createSvgElementT(Element.Svg, name, attribute_iterator, .{
-                ._proto = undefined,
-                ._type = .svg,
-                ._tag_name = tag_name,
-            });
-        }
+    // TODO: uncomment
+    // if (namespace == .svg) {
+    //     const tag_name = try String.init(self.arena, name, .{});
+    //     if (std.ascii.eqlIgnoreCase(name, "svg")) {
+    //         return self.createSvgElementT(Element.Svg, name, attribute_iterator, .{
+    //             ._proto = undefined,
+    //             ._type = .svg,
+    //             ._tag_name = tag_name,
+    //         });
+    //     }
 
-        // Other SVG elements (rect, circle, text, g, etc.)
-        const lower = std.ascii.lowerString(&self.buf, name);
-        const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
-        return self.createSvgElementT(Element.Svg.Generic, name, attribute_iterator, .{ ._proto = undefined, ._tag = tag });
-    }
+    //     // Other SVG elements (rect, circle, text, g, etc.)
+    //     const lower = std.ascii.lowerString(&self.buf, name);
+    //     const tag = std.meta.stringToEnum(Element.Tag, lower) orelse .unknown;
+    //     return self.createSvgElementT(Element.Svg.Generic, name, attribute_iterator, .{ ._proto = undefined, ._tag = tag });
+    // }
 
     const tag_name = try String.init(self.arena, name, .{});
 
@@ -1220,7 +1221,6 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
             log.warn(.js, "custom element constructor", .{ .name = name, .err = err });
             return node;
         };
-
 
         // After constructor runs, invoke attributeChangedCallback for initial attributes
         const element = node.as(Element);

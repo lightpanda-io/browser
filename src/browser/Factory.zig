@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const assert = std.debug.assert;
 const builtin = @import("builtin");
 const reflect = @import("reflect.zig");
 const IS_DEBUG = builtin.mode == .Debug;
@@ -35,20 +36,112 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 const Blob = @import("webapi/Blob.zig");
 
-const MemoryPoolAligned = std.heap.MemoryPoolAligned;
-
-// 1. Generally, wrapping an ArenaAllocator within an ArenaAllocator doesn't make
-// much sense. But wrapping a MemoryPool within an Arena does. Specifically, by
-// doing so, we solve a major issue with Arena: freed memory can be re-used [for
-// more of the same size].
-// 2. Normally, you have a MemoryPool(T) where T is a `User` or something. Then
-// the MemoryPool can be used for creating users. But in reality, that memory
-// created by that pool could be re-used for anything with the same size (or less)
-// than a User (and a compatible alignment). So that's what we do - we have size
-// (and alignment) based pools.
 const Factory = @This();
 _page: *Page,
 _slab: SlabAllocator,
+
+fn PrototypeChain(comptime types: []const type) type {
+    return struct {
+        const Self = @This();
+        memory: []u8,
+
+        fn totalSize() usize {
+            var size: usize = 0;
+            for (types) |T| {
+                size = std.mem.alignForward(usize, size, @alignOf(T));
+                size += @sizeOf(T);
+            }
+            return size;
+        }
+
+        fn maxAlign() std.mem.Alignment {
+            var alignment: std.mem.Alignment = .@"1";
+
+            for (types) |T| {
+                alignment = std.mem.Alignment.max(alignment, std.mem.Alignment.of(T));
+            }
+
+            return alignment;
+        }
+
+        fn getType(comptime index: usize) type {
+            return types[index];
+        }
+
+        fn allocate(allocator: std.mem.Allocator) !Self {
+            const size = comptime Self.totalSize();
+            const alignment = comptime Self.maxAlign();
+
+            const memory = try allocator.alignedAlloc(u8, alignment, size);
+            return .{ .memory = memory };
+        }
+
+        fn get(self: *const Self, comptime index: usize) *getType(index) {
+            var offset: usize = 0;
+            inline for (types, 0..) |T, i| {
+                offset = std.mem.alignForward(usize, offset, @alignOf(T));
+
+                if (i == index) {
+                    return @as(*T, @ptrCast(@alignCast(self.memory.ptr + offset)));
+                }
+                offset += @sizeOf(T);
+            }
+            unreachable;
+        }
+
+        fn set(self: *const Self, comptime index: usize, value: getType(index)) void {
+            const ptr = self.get(index);
+            ptr.* = value;
+        }
+
+        fn setRoot(self: *const Self, comptime T: type) void {
+            const ptr = self.get(0);
+            ptr.* = .{ ._type = unionInit(T, self.get(1)) };
+        }
+
+        fn setMiddle(self: *const Self, comptime index: usize, comptime T: type) void {
+            assert(index >= 1);
+            assert(index < types.len);
+
+            const ptr = self.get(index);
+            ptr.* = .{ ._proto = self.get(index - 1), ._type = unionInit(T, self.get(index + 1)) };
+        }
+
+        fn setMiddleWithValue(self: *const Self, comptime index: usize, comptime T: type, value: anytype) void {
+            assert(index >= 1);
+
+            const ptr = self.get(index);
+            ptr.* = .{ ._proto = self.get(index - 1), ._type = unionInit(T, value) };
+        }
+
+        fn setLeaf(self: *const Self, comptime index: usize, value: anytype) void {
+            assert(index >= 1);
+
+            const ptr = self.get(index);
+            ptr.* = value;
+            ptr._proto = self.get(index - 1);
+        }
+    };
+}
+
+fn AutoPrototypeChain(comptime types: []const type) type {
+    return struct {
+        fn create(allocator: std.mem.Allocator, leaf_value: anytype) !*@TypeOf(leaf_value) {
+            const chain = try PrototypeChain(types).allocate(allocator);
+
+            const RootType = types[0];
+            chain.setRoot(RootType.Type);
+
+            inline for (1..types.len - 1) |i| {
+                const MiddleType = types[i];
+                chain.setMiddle(i, MiddleType.Type);
+            }
+
+            chain.setLeaf(types.len - 1, leaf_value);
+            return chain.get(types.len - 1);
+        }
+    };
+}
 
 pub fn init(page: *Page) Factory {
     return .{
@@ -59,165 +152,127 @@ pub fn init(page: *Page) Factory {
 
 // this is a root object
 pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const child_ptr = try self.createT(@TypeOf(child));
-    child_ptr.* = child;
+    const allocator = self._slab.allocator();
+    const chain = try PrototypeChain(
+        &.{ EventTarget, @TypeOf(child) },
+    ).allocate(allocator);
 
-    const et = try self.createT(EventTarget);
-    child_ptr._proto = et;
-    et.* = .{ ._type = unionInit(EventTarget.Type, child_ptr) };
-    return child_ptr;
+    chain.setRoot(EventTarget.Type);
+    chain.setLeaf(1, child);
+
+    return chain.get(1);
 }
 
 pub fn node(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const child_ptr = try self.createT(@TypeOf(child));
-    child_ptr.* = child;
-    child_ptr._proto = try self.eventTarget(Node{
-        ._proto = undefined,
-        ._type = unionInit(Node.Type, child_ptr),
-    });
-    return child_ptr;
+    const allocator = self._slab.allocator();
+    return try AutoPrototypeChain(
+        &.{ EventTarget, Node, @TypeOf(child) },
+    ).create(allocator, child);
 }
 
 pub fn document(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const child_ptr = try self.createT(@TypeOf(child));
-    child_ptr.* = child;
-    child_ptr._proto = try self.node(Document{
-        ._proto = undefined,
-        ._type = unionInit(Document.Type, child_ptr),
-    });
-    return child_ptr;
+    const allocator = self._slab.allocator();
+    return try AutoPrototypeChain(
+        &.{ EventTarget, Node, Document, @TypeOf(child) },
+    ).create(allocator, child);
 }
 
 pub fn documentFragment(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const child_ptr = try self.createT(@TypeOf(child));
-    child_ptr.* = child;
-    child_ptr._proto = try self.node(Node.DocumentFragment{
-        ._proto = undefined,
-        ._type = unionInit(Node.DocumentFragment.Type, child_ptr),
-    });
-    return child_ptr;
+    const allocator = self._slab.allocator();
+    return try AutoPrototypeChain(
+        &.{ EventTarget, Node, Node.DocumentFragment, @TypeOf(child) },
+    ).create(allocator, child);
 }
 
 pub fn element(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const child_ptr = try self.createT(@TypeOf(child));
-    child_ptr.* = child;
-    child_ptr._proto = try self.node(Element{
-        ._proto = undefined,
-        ._type = unionInit(Element.Type, child_ptr),
-    });
-    return child_ptr;
+    const allocator = self._slab.allocator();
+    return try AutoPrototypeChain(
+        &.{ EventTarget, Node, Element, @TypeOf(child) },
+    ).create(allocator, child);
 }
 
 pub fn htmlElement(self: *Factory, child: anytype) !*@TypeOf(child) {
-    if (comptime fieldIsPointer(Element.Html.Type, @TypeOf(child))) {
-        const child_ptr = try self.createT(@TypeOf(child));
-        child_ptr.* = child;
-        child_ptr._proto = try self.element(Element.Html{
-            ._proto = undefined,
-            ._type = unionInit(Element.Html.Type, child_ptr),
-        });
-        return child_ptr;
-    }
-
-    // Our union type fields are usually pointers. But, at the leaf, they
-    // can be struct (if all they contain is the `_proto` field, then we might
-    // as well store it directly in the struct).
-
-    const html = try self.element(Element.Html{
-        ._proto = undefined,
-        ._type = unionInit(Element.Html.Type, child),
-    });
-    const field_name = comptime unionFieldName(Element.Html.Type, @TypeOf(child));
-    var child_ptr = &@field(html._type, field_name);
-    child_ptr._proto = html;
-    return child_ptr;
+    const allocator = self._slab.allocator();
+    return try AutoPrototypeChain(
+        &.{ EventTarget, Node, Element, Element.Html, @TypeOf(child) },
+    ).create(allocator, child);
 }
 
 pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
-    if (@TypeOf(child) == Element.Svg) {
-        return self.element(child);
-    }
+    const allocator = self._slab.allocator();
 
     // will never allocate, can't fail
     const tag_name_str = String.init(self._page.arena, tag_name, .{}) catch unreachable;
 
-    if (comptime fieldIsPointer(Element.Svg.Type, @TypeOf(child))) {
-        const child_ptr = try self.createT(@TypeOf(child));
-        child_ptr.* = child;
-        child_ptr._proto = try self.element(Element.Svg{
-            ._proto = undefined,
-            ._tag_name = tag_name_str,
-            ._type = unionInit(Element.Svg.Type, child_ptr),
-        });
-        return child_ptr;
-    }
+    const chain = try PrototypeChain(
+        &.{ EventTarget, Node, Element, Element.Svg, @TypeOf(child) },
+    ).allocate(allocator);
 
-    // Our union type fields are usually pointers. But, at the leaf, they
-    // can be struct (if all they contain is the `_proto` field, then we might
-    // as well store it directly in the struct).
-    const svg = try self.element(Element.Svg{
-        ._proto = undefined,
+    chain.setRoot(EventTarget.Type);
+    chain.setMiddle(1, Node.Type);
+    chain.setMiddle(2, Element.Type);
+
+    // Manually set Element.Svg with the tag_name
+    chain.set(3, .{
+        ._proto = chain.get(2),
         ._tag_name = tag_name_str,
-        ._type = unionInit(Element.Svg.Type, child),
+        ._type = unionInit(Element.Svg.Type, chain.get(4)),
     });
-    const field_name = comptime unionFieldName(Element.Svg.Type, @TypeOf(child));
-    var child_ptr = &@field(svg._type, field_name);
-    child_ptr._proto = svg;
-    return child_ptr;
+
+    chain.setLeaf(4, child);
+    return chain.get(4);
 }
 
 // this is a root object
 pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
-    const child_ptr = try self.createT(@TypeOf(child));
-    child_ptr.* = child;
+    const allocator = self._slab.allocator();
 
-    const e = try self.createT(Event);
-    child_ptr._proto = e;
-    e.* = .{
-        ._type = unionInit(Event.Type, child_ptr),
+    // Special case: Event has a _type_string field, so we need manual setup
+    const chain = try PrototypeChain(
+        &.{ Event, @TypeOf(child) },
+    ).allocate(allocator);
+
+    const event_ptr = chain.get(0);
+    event_ptr.* = .{
+        ._type = unionInit(Event.Type, chain.get(1)),
         ._type_string = try String.init(self._page.arena, typ, .{}),
     };
-    return child_ptr;
+    chain.setLeaf(1, child);
+
+    return chain.get(1);
 }
 
 pub fn xhrEventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const et = try self.eventTarget(XMLHttpRequestEventTarget{
-        ._proto = undefined,
-        ._type = unionInit(XMLHttpRequestEventTarget.Type, child),
-    });
-    const field_name = comptime unionFieldName(XMLHttpRequestEventTarget.Type, @TypeOf(child));
-    var child_ptr = &@field(et._type, field_name);
-    child_ptr._proto = et;
-    return child_ptr;
+    const allocator = self._slab.allocator();
+
+    return try AutoPrototypeChain(
+        &.{ EventTarget, XMLHttpRequestEventTarget, @TypeOf(child) },
+    ).create(allocator, child);
 }
 
 pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const child_ptr = try self.createT(@TypeOf(child));
-    child_ptr.* = child;
+    const allocator = self._slab.allocator();
 
-    const b = try self.createT(Blob);
-    child_ptr._proto = b;
-    b.* = .{
-        ._type = unionInit(Blob.Type, child_ptr),
+    // Special case: Blob has slice and mime fields, so we need manual setup
+    const chain = try PrototypeChain(
+        &.{ Blob, @TypeOf(child) },
+    ).allocate(allocator);
+
+    const blob_ptr = chain.get(0);
+    blob_ptr.* = .{
+        ._type = unionInit(Blob.Type, chain.get(1)),
         .slice = "",
         .mime = "",
     };
-    return child_ptr;
-}
+    chain.setLeaf(1, child);
 
-pub fn create(self: *Factory, value: anytype) !*@TypeOf(value) {
-    const ptr = try self.createT(@TypeOf(value));
-    ptr.* = value;
-    return ptr;
-}
-
-pub fn createT(self: *Factory, comptime T: type) !*T {
-    const allocator = self._slab.allocator();
-    return try allocator.create(T);
+    return chain.get(1);
 }
 
 pub fn destroy(self: *Factory, value: anytype) void {
     const S = reflect.Struct(@TypeOf(value));
+    // const allocator = self._slab.allocator();
+
     if (comptime IS_DEBUG) {
         // We should always destroy from the leaf down.
         if (@hasField(S, "_type") and @typeInfo(@TypeOf(value._type)) == .@"union") {
@@ -231,12 +286,13 @@ pub fn destroy(self: *Factory, value: anytype) void {
         }
     }
 
-    self.destroyChain(value, true);
+    const root_ptr = self.destroyChain(value, true);
+    _ = root_ptr;
+    // allocator.destroy(root_ptr);
 }
 
-fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
+fn destroyChain(self: *Factory, value: anytype, comptime first: bool) *@TypeOf(value) {
     const S = reflect.Struct(@TypeOf(value));
-
     const allocator = self._slab.allocator();
 
     // This is initially called from a deinit. We don't want to call that
@@ -255,7 +311,7 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
     }
 
     if (@hasField(S, "_proto")) {
-        self.destroyChain(value._proto, false);
+        return self.destroyChain(value._proto, false);
     } else if (@hasDecl(S, "JsApi")) {
         // Doesn't have a _proto, but has a JsApi.
         if (self._page.js.removeTaggedMapping(@intFromPtr(value))) |tagged| {
@@ -263,36 +319,18 @@ fn destroyChain(self: *Factory, value: anytype, comptime first: bool) void {
         }
     }
 
-    // Leaf types are allowed by be placed directly within their _proto
-    // (which makes sense when the @sizeOf(Leaf) == 8). These don't need to
-    // be (cannot be) freed. But we'll still free the chain.
-    if (comptime wasAllocated(S)) {
-        allocator.destroy(value);
-    }
+    return @ptrCast(value);
 }
 
-fn wasAllocated(comptime S: type) bool {
-    // Whether it's heap allocate or not, we should have a pointer.
-    // (If it isn't heap allocated, it'll be a pointer from the proto's type
-    // e.g. &html._type.title)
-    if (!@hasField(S, "_proto")) {
-        // a root is always on the heap.
-        return true;
-    }
+pub fn createT(self: *Factory, comptime T: type) !*T {
+    const allocator = self._slab.allocator();
+    return try allocator.create(T);
+}
 
-    // the _proto type
-    const P = reflect.Struct(std.meta.fieldInfo(S, ._proto).type);
-
-    // the _proto._type type (the parent's _type union)
-    const U = std.meta.fieldInfo(P, ._type).type;
-    inline for (@typeInfo(U).@"union".fields) |field| {
-        if (field.type == S) {
-            // One of the types in the proto's _type union is this non-pointer
-            // structure, so it isn't heap allocted.
-            return false;
-        }
-    }
-    return true;
+pub fn create(self: *Factory, value: anytype) !*@TypeOf(value) {
+    const ptr = try self.createT(@TypeOf(value));
+    ptr.* = value;
+    return ptr;
 }
 
 fn unionInit(comptime T: type, value: anytype) T {
@@ -312,18 +350,6 @@ fn unionFieldName(comptime T: type, comptime V: type) []const u8 {
     inline for (@typeInfo(T).@"union".fields) |field| {
         if (reflect.Struct(field.type) == reflect.Struct(V)) {
             return field.name;
-        }
-    }
-    @compileError(@typeName(V) ++ " is not a valid type for " ++ @typeName(T) ++ ".type");
-}
-
-fn fieldIsPointer(comptime T: type, comptime V: type) bool {
-    inline for (@typeInfo(T).@"union".fields) |field| {
-        if (field.type == V) {
-            return false;
-        }
-        if (field.type == *V) {
-            return true;
         }
     }
     @compileError(@typeName(V) ++ " is not a valid type for " ++ @typeName(T) ++ ".type");
