@@ -5,13 +5,6 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
-pub fn registerTypes() []const type {
-    return &.{
-        Image,
-        // Factory,
-    };
-}
-
 const Image = @This();
 _proto: *HtmlElement,
 

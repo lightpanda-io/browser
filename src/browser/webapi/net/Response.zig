@@ -26,8 +26,9 @@ const Allocator = std.mem.Allocator;
 const Response = @This();
 
 _status: u16,
-_data: []const u8,
 _arena: Allocator,
+_headers: *Headers,
+_body: []const u8,
 
 const InitOpts = struct {
     status: u16 = 200,
@@ -39,22 +40,19 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
     const opts = opts_ orelse InitOpts{};
 
     return page._factory.create(Response{
-        ._status = opts.status,
-        ._data = if (body_) |b| try page.arena.dupe(u8, b) else "",
         ._arena = page.arena,
-    });
-}
-
-pub fn initFromFetch(arena: Allocator, data: []const u8, page: *Page) !*Response {
-    return page._factory.create(Response{
-        ._status = 200,
-        ._data = data,
-        ._arena = arena,
+        ._status = opts.status,
+        ._body = if (body_) |b| try page.arena.dupe(u8, b) else "",
+        ._headers = opts.headers orelse try Headers.init(page),
     });
 }
 
 pub fn getStatus(self: *const Response) u16 {
     return self._status;
+}
+
+pub fn getHeaders(self: *const Response) *Headers {
+    return self._headers;
 }
 
 pub fn isOK(self: *const Response) bool {
@@ -65,7 +63,7 @@ pub fn getJson(self: *Response, page: *Page) !js.Promise {
     const value = std.json.parseFromSliceLeaky(
         std.json.Value,
         page.call_arena,
-        self._data,
+        self._body,
         .{},
     ) catch |err| {
         return page.js.rejectPromise(.{@errorName(err)});
@@ -86,4 +84,5 @@ pub const JsApi = struct {
     pub const ok = bridge.accessor(Response.isOK, null, .{});
     pub const status = bridge.accessor(Response.getStatus, null, .{});
     pub const json = bridge.function(Response.getJson, .{});
+    pub const headers = bridge.accessor(Response.getHeaders, null, .{});
 };
