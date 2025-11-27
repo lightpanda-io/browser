@@ -17,6 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+
+const CSS = @This();
+_pad: bool = false,
+
+pub const init: CSS = .{};
 
 pub fn parseDimension(value: []const u8) ?f64 {
     if (value.len == 0) {
@@ -29,4 +36,135 @@ pub fn parseDimension(value: []const u8) ?f64 {
     }
 
     return std.fmt.parseFloat(f64, num_str) catch null;
+}
+
+/// Escapes a CSS identifier string
+/// https://drafts.csswg.org/cssom/#the-css.escape()-method
+pub fn escape(_: *const CSS, value: []const u8, page: *Page) ![]const u8 {
+    if (value.len == 0) {
+        return error.InvalidCharacterError;
+    }
+
+    const first = value[0];
+
+    // Count how many characters we need for the output
+    var out_len: usize = escapeLen(true, first);
+    for (value[1..]) |c| {
+        out_len += escapeLen(false, c);
+    }
+
+    if (out_len == value.len) {
+        return value;
+    }
+
+    const result = try page.call_arena.alloc(u8, out_len);
+    var pos: usize = 0;
+
+    if (needsEscape(true, first)) {
+        pos = writeEscape(true, result, first);
+    } else {
+        result[0] = first;
+        pos = 1;
+    }
+
+    for (value[1..]) |c| {
+        if (!needsEscape(false, c)) {
+            result[pos] = c;
+            pos += 1;
+        } else {
+            pos += writeEscape(false, result[pos..], c);
+        }
+    }
+
+    return result;
+}
+
+pub fn supports(_: *const CSS, property_or_condition: []const u8, value: ?[]const u8) bool {
+    _ = property_or_condition;
+    _ = value;
+    return true;
+}
+
+fn escapeLen(comptime is_first: bool, c: u8) usize {
+    if (needsEscape(is_first, c) == false) {
+        return 1;
+    }
+    if (c == 0) {
+        return "\u{FFFD}".len;
+    }
+    if (isHexEscape(c) or ((comptime is_first) and c >= '0' and c <= '9')) {
+        // Will be escaped as \XX (backslash + 1-6 hex digits + space)
+        return 2 + hexDigitsNeeded(c);
+    }
+    // Escaped as \C (backslash + character)
+    return 2;
+}
+
+fn needsEscape(comptime is_first: bool, c: u8) bool {
+    if (comptime is_first) {
+        if (c >= '0' and c <= '9') {
+            return true;
+        }
+        if (c == '-') {
+            return true;
+        }
+    }
+
+    // Characters that need escaping
+    return switch (c) {
+        0...0x1F, 0x7F => true,
+        '!', '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '.', '/', ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '`', '{', '|', '}', '~' => true,
+        ' ' => true,
+        else => false,
+    };
+}
+
+fn isHexEscape(c: u8) bool {
+    return (c >= 0x00 and c <= 0x1F) or c == 0x7F;
+}
+
+fn hexDigitsNeeded(c: u8) usize {
+    if (c < 0x10) {
+        return 1;
+    }
+    return 2;
+}
+
+fn writeEscape(comptime is_first: bool, buf: []u8, c: u8) usize {
+    buf[0] = '\\';
+    var data = buf[1..];
+
+    if (c == 0) {
+        // NULL character becomes replacement character
+        const replacement = "\u{FFFD}";
+        @memcpy(data[0..replacement.len], replacement);
+        return 1 + replacement.len;
+    }
+
+    if (isHexEscape(c) or ((comptime is_first) and c >= '0' and c <= '9')) {
+        const hex_str = std.fmt.bufPrint(data, "{x} ", .{c}) catch unreachable;
+        return 1 + hex_str.len;
+    }
+
+    data[0] = c;
+    return 2;
+}
+
+pub const JsApi = struct {
+    pub const bridge = js.Bridge(CSS);
+
+    pub const Meta = struct {
+        pub const name = "Css";
+        pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
+        pub const empty_with_no_proto = true;
+    };
+
+    pub const escape = bridge.function(CSS.escape, .{});
+    pub const supports = bridge.function(CSS.supports, .{});
+};
+
+const testing = @import("../../testing.zig");
+test "WebApi: CSS" {
+    try testing.htmlRunner("css.html", .{});
 }

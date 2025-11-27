@@ -25,6 +25,7 @@ const Page = @import("../Page.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Crypto = @import("Crypto.zig");
+const CSS = @import("CSS.zig");
 const Navigator = @import("Navigator.zig");
 const Screen = @import("Screen.zig");
 const Performance = @import("Performance.zig");
@@ -43,6 +44,7 @@ const Window = @This();
 
 _proto: *EventTarget,
 _document: *Document,
+_css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
@@ -87,6 +89,10 @@ pub fn getScreen(self: *Window) *Screen {
 
 pub fn getCrypto(self: *Window) *Crypto {
     return &self._crypto;
+}
+
+pub fn getCSS(self: *Window) *CSS {
+    return &self._css;
 }
 
 pub fn getPerformance(self: *Window) *Performance {
@@ -380,6 +386,7 @@ pub const JsApi = struct {
     pub const location = bridge.accessor(Window.getLocation, null, .{ .cache = "location" });
     pub const history = bridge.accessor(Window.getHistory, null, .{ .cache = "history" });
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });
+    pub const CSS = bridge.accessor(Window.getCSS, null, .{ .cache = "CSS" });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.getOnError, .{});

@@ -69,7 +69,7 @@ pub const Entry = struct {
     }
 
     pub fn getEntryType(self: *const Entry) []const u8 {
-       return switch (self._entry_type) {
+        return switch (self._entry_type) {
             .first_input => "first-input",
             .largest_contentful_paint => "largest-contentful-paint",
             .layout_shift => "layout-shift",

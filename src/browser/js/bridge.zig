@@ -59,7 +59,7 @@ pub fn Builder(comptime T: type) type {
 
         pub fn property(value: anytype) Property {
             switch (@typeInfo(@TypeOf(value))) {
-                .comptime_int, .int => return .{.int = value},
+                .comptime_int, .int => return .{ .int = value },
                 else => {},
             }
             @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet");
@@ -485,6 +485,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/collections.zig"),
     @import("../webapi/Console.zig"),
     @import("../webapi/Crypto.zig"),
+    @import("../webapi/CSS.zig"),
     @import("../webapi/css/CSSRule.zig"),
     @import("../webapi/css/CSSRuleList.zig"),
     @import("../webapi/css/CSSStyleDeclaration.zig"),

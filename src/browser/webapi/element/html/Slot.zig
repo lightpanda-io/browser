@@ -97,7 +97,7 @@ pub fn assign(self: *Slot, nodes: []const *Node) void {
     _ = nodes;
 
     // let's see if this is ever actually used
-    log.warn(.not_implemented, "Slot.assign", .{ });
+    log.warn(.not_implemented, "Slot.assign", .{});
 }
 
 fn findShadowRoot(self: *Slot) ?*ShadowRoot {

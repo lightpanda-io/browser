@@ -1221,7 +1221,6 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
             return node;
         };
 
-
         // After constructor runs, invoke attributeChangedCallback for initial attributes
         const element = node.as(Element);
         if (element._attributes) |attributes| {

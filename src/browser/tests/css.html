@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id="exists">
+  testing.expectEqual('object', typeof CSS);
+  testing.expectEqual('function', typeof CSS.escape);
+  testing.expectEqual('function', typeof CSS.supports);
+</script>
+
+<script id="escape_basic">
+  {
+    testing.expectEqual('hello', CSS.escape('hello'));
+    testing.expectEqual('world123', CSS.escape('world123'));
+    testing.expectEqual('foo-bar', CSS.escape('foo-bar'));
+    testing.expectEqual('_test', CSS.escape('_test'));
+  }
+</script>
+
+<script id="escape_first_character">
+  {
+    testing.expectEqual('\\30 abc', CSS.escape('0abc'));
+    testing.expectEqual('\\31 23', CSS.escape('123'));
+    testing.expectEqual('\\-test', CSS.escape('-test'));
+    testing.expectEqual('\\--test', CSS.escape('--test'));
+  }
+</script>
+
+<script id="escape_special_characters">
+  {
+    testing.expectEqual('hello\\ world', CSS.escape('hello world'));
+    testing.expectEqual('test\\!', CSS.escape('test!'));
+    testing.expectEqual('foo\\#bar', CSS.escape('foo#bar'));
+    testing.expectEqual('a\\(b\\)', CSS.escape('a(b)'));
+    testing.expectEqual('test\\@example', CSS.escape('test@example'));
+    testing.expectEqual('a\\[b\\]', CSS.escape('a[b]'));
+    testing.expectEqual('a\\{b\\}', CSS.escape('a{b}'));
+    testing.expectEqual('test\\:value', CSS.escape('test:value'));
+    testing.expectEqual('a\\.b', CSS.escape('a.b'));
+    testing.expectEqual('a\\,b', CSS.escape('a,b'));
+  }
+</script>
+
+<script id="escape_quotes">
+  {
+    testing.expectEqual('test\\"value', CSS.escape('test"value'));
+    testing.expectEqual('test\\\'value', CSS.escape("test'value"));
+  }
+</script>
+
+<script id="supports_basic">
+  {
+    testing.expectEqual(true, CSS.supports('display', 'block'));
+    testing.expectEqual(true, CSS.supports('position', 'relative'));
+    testing.expectEqual(true, CSS.supports('width', '100px'));
+    testing.expectEqual(true, CSS.supports('color', 'red'));
+  }
+</script>
+
+<script id="supports_common_properties">
+  {
+    testing.expectEqual(true, CSS.supports('margin', '10px'));
+    testing.expectEqual(true, CSS.supports('padding', '5px'));
+    testing.expectEqual(true, CSS.supports('border', '1px solid black'));
+    testing.expectEqual(true, CSS.supports('background-color', 'blue'));
+    testing.expectEqual(true, CSS.supports('font-size', '16px'));
+    testing.expectEqual(true, CSS.supports('opacity', '0.5'));
+    testing.expectEqual(true, CSS.supports('z-index', '10'));
+  }
+</script>

@@ -300,7 +300,7 @@ pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, base: [:0]const 
         return s;
     }
 
-    return URL.resolve(arena, base, specifier, .{.always_dupe = true});
+    return URL.resolve(arena, base, specifier, .{ .always_dupe = true });
 }
 
 pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {

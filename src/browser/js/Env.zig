@@ -198,13 +198,10 @@ fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
     const value =
         if (msg.getValue()) |v8_value|
             context.valueToString(v8_value, .{}) catch |err| @errorName(err)
-        else "no value"
-    ;
+        else
+            "no value";
 
-    log.debug(.js, "unhandled rejection", .{
-        .value = value,
-        .stack = context.stackTrace() catch |err| @errorName(err) orelse "???"
-    });
+    log.debug(.js, "unhandled rejection", .{ .value = value, .stack = context.stackTrace() catch |err| @errorName(err) orelse "???" });
 }
 
 // Give it a Zig struct, get back a v8.FunctionTemplate.

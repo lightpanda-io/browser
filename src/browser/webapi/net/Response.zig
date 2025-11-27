@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Page = @import("../../Page.zig");
+const Headers = @import("Headers.zig");
 const Allocator = std.mem.Allocator;
 
 const Response = @This();
@@ -27,6 +28,22 @@ const Response = @This();
 _status: u16,
 _data: []const u8,
 _arena: Allocator,
+
+const InitOpts = struct {
+    status: u16 = 200,
+    headers: ?*Headers = null,
+    statusText: ?[]const u8 = null,
+};
+
+pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
+    const opts = opts_ orelse InitOpts{};
+
+    return page._factory.create(Response{
+        ._status = opts.status,
+        ._data = if (body_) |b| try page.arena.dupe(u8, b) else "",
+        ._arena = page.arena,
+    });
+}
 
 pub fn initFromFetch(arena: Allocator, data: []const u8, page: *Page) !*Response {
     return page._factory.create(Response{
@@ -65,6 +82,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const constructor = bridge.constructor(Response.init, .{});
     pub const ok = bridge.accessor(Response.isOK, null, .{});
     pub const status = bridge.accessor(Response.getStatus, null, .{});
     pub const json = bridge.function(Response.getJson, .{});
