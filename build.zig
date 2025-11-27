@@ -144,6 +144,7 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, pre
         .target = target,
         .optimize = mod.optimize.?,
         .prebuilt_v8_path = prebuilt_v8_path,
+        .v8_cache_root = b.cache_root.path orelse "./",
     };
 
     mod.addIncludePath(b.path("vendor/lightpanda"));
