@@ -333,19 +333,6 @@ fn generateConstructor(comptime JsApi: type, isolate: v8.Isolate) v8.FunctionTem
     return template;
 }
 
-// fn generateUndetectable(comptime Struct: type, template: v8.ObjectTemplate) void {
-//     const has_js_call_as_function = @hasDecl(Struct, "jsCallAsFunction");
-
-//     if (has_js_call_as_function) {
-
-//     if (@hasDecl(Struct, "htmldda") and Struct.htmldda) {
-//         if (!has_js_call_as_function) {
-//             @compileError(@typeName(Struct) ++ ": htmldda required jsCallAsFunction to be defined. This is a hard-coded requirement in V8, because mark_as_undetectable only exists for HTMLAllCollection which is also callable.");
-//         }
-//         template.markAsUndetectable();
-//     }
-// }
-
 pub fn protoIndexLookup(comptime JsApi: type) ?bridge.JsApiLookup.BackingInt {
     @setEvalBranchQuota(2000);
     comptime {

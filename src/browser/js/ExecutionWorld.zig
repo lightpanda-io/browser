@@ -116,8 +116,9 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         // are now going to get associated with our global instance.
         inline for (JsApis, 0..) |JsApi, i| {
             if (@hasDecl(JsApi.Meta, "name")) {
-                const class_name = v8.String.initUtf8(isolate, JsApi.Meta.name);
-                global_template.set(class_name.toName(), templates[i], v8.PropertyAttribute.None);
+                const class_name = if (@hasDecl(JsApi.Meta, "constructor_alias")) JsApi.Meta.constructor_alias else JsApi.Meta.name;
+                const v8_class_name = v8.String.initUtf8(isolate, class_name);
+                global_template.set(v8_class_name.toName(), templates[i], v8.PropertyAttribute.None);
             }
         }
 

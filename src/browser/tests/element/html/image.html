@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="Image">
+{
+    let i1 = new Image()
+    testing.expectEqual(0, i1.width);
+    testing.expectEqual(null, i1.getAttribute('width'));
+    testing.expectEqual(0, i1.height);
+    testing.expectEqual(null, i1.getAttribute('height'));
+
+    let i2 = new Image(10)
+    testing.expectEqual(10, i2.width);
+    testing.expectEqual('10', i2.getAttribute('width'));
+    testing.expectEqual(0, i2.height);
+    testing.expectEqual(null, i2.getAttribute('height'));
+
+    let i3 = new Image(10, 20)
+    testing.expectEqual(10, i3.width);
+    testing.expectEqual('10', i3.getAttribute('width'));
+    testing.expectEqual(20, i3.height);
+    testing.expectEqual('20', i3.getAttribute('height'));
+}
+</script>
+
+<script id="src_alt">
+{
+    const img = document.createElement('img');
+
+    testing.expectEqual('', img.src);
+    testing.expectEqual('', img.alt);
+
+    img.src = 'test.png';
+    testing.expectEqual('test.png', img.src);
+    testing.expectEqual('test.png', img.getAttribute('src'));
+
+    img.alt = 'Test image';
+    testing.expectEqual('Test image', img.alt);
+    testing.expectEqual('Test image', img.getAttribute('alt'));
+}
+</script>
+
+<script id="width_height_setters">
+{
+    const img = document.createElement('img');
+
+    img.width = 100;
+    testing.expectEqual(100, img.width);
+    testing.expectEqual('100', img.getAttribute('width'));
+
+    img.height = 200;
+    testing.expectEqual(200, img.height);
+    testing.expectEqual('200', img.getAttribute('height'));
+
+    img.setAttribute('width', '50');
+    testing.expectEqual(50, img.width);
+
+    img.setAttribute('height', 'invalid');
+    testing.expectEqual(0, img.height);
+}
+</script>
+
+<script id="crossOrigin">
+{
+    const img = document.createElement('img');
+
+    testing.expectEqual(null, img.crossOrigin);
+
+    img.crossOrigin = 'anonymous';
+    testing.expectEqual('anonymous', img.crossOrigin);
+    testing.expectEqual('anonymous', img.getAttribute('crossorigin'));
+
+    img.crossOrigin = null;
+    testing.expectEqual(null, img.crossOrigin);
+    testing.expectEqual(null, img.getAttribute('crossorigin'));
+}
+</script>
+
+<script id="loading">
+{
+    const img = document.createElement('img');
+
+    testing.expectEqual('eager', img.loading);
+
+    img.loading = 'lazy';
+    testing.expectEqual('lazy', img.loading);
+    testing.expectEqual('lazy', img.getAttribute('loading'));
+}
+</script>
