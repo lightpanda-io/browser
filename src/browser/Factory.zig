@@ -241,17 +241,22 @@ pub fn htmlElement(self: *Factory, child: anytype) !*@TypeOf(child) {
 
 pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
+    const ChildT = @TypeOf(child);
 
-    // will never allocate, can't fail
-    const tag_name_str = String.init(self._page.arena, tag_name, .{}) catch unreachable;
+    if (ChildT == Element.Svg) {
+        return self.element(child);
+    }
 
     const chain = try PrototypeChain(
-        &.{ EventTarget, Node, Element, Element.Svg, @TypeOf(child) },
+        &.{ EventTarget, Node, Element, Element.Svg, ChildT },
     ).allocate(allocator);
 
     chain.setRoot(EventTarget.Type);
     chain.setMiddle(1, Node.Type);
     chain.setMiddle(2, Element.Type);
+
+    // will never allocate, can't fail
+    const tag_name_str = String.init(self._page.arena, tag_name, .{}) catch unreachable;
 
     // Manually set Element.Svg with the tag_name
     chain.set(3, .{
