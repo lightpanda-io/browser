@@ -162,18 +162,36 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool) !void {
+    const ShadowRoot = @import("webapi/ShadowRoot.zig");
+
     var path_len: usize = 0;
     var path_buffer: [128]*EventTarget = undefined;
 
     var node: ?*Node = target;
-    while (node) |n| : (node = n._parent) {
+    while (node) |n| {
         if (path_len >= path_buffer.len) break;
         path_buffer[path_len] = n.asEventTarget();
         path_len += 1;
+
+        // Check if this node is a shadow root
+        if (n.is(ShadowRoot)) |shadow| {
+            event._needs_retargeting = true;
+
+            // If event is not composed, stop at shadow boundary
+            if (!event._composed) {
+                break;
+            }
+
+            // Otherwise, jump to the shadow host and continue
+            node = shadow._host.asNode();
+            continue;
+        }
+
+        node = n._parent;
     }
 
     // Even though the window isn't part of the DOM, events always propagate
-    // through it in the capture phase
+    // through it in the capture phase (unless we stopped at a shadow boundary)
     if (path_len < path_buffer.len) {
         path_buffer[path_len] = self.page.window.asEventTarget();
         path_len += 1;
@@ -257,12 +275,23 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         was_handled.* = true;
         event._current_target = current_target;
 
+        // Compute adjusted target for shadow DOM retargeting (only if needed)
+        const original_target = event._target;
+        if (event._needs_retargeting) {
+            event._target = getAdjustedTarget(original_target, current_target);
+        }
+
         switch (listener.function) {
             .value => |value| try value.call(void, .{event}),
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
                 try self.page.js.eval(str, null);
             },
+        }
+
+        // Restore original target (only if we changed it)
+        if (event._needs_retargeting) {
+            event._target = original_target;
         }
 
         if (listener.once) {
@@ -325,3 +354,56 @@ const Function = union(enum) {
         };
     }
 };
+
+// Computes the adjusted target for shadow DOM event retargeting
+// Returns the lowest shadow-including ancestor of original_target that is
+// also an ancestor-or-self of current_target
+fn getAdjustedTarget(original_target: ?*EventTarget, current_target: *EventTarget) ?*EventTarget {
+    const ShadowRoot = @import("webapi/ShadowRoot.zig");
+
+    const orig_node = switch ((original_target orelse return null)._type) {
+        .node => |n| n,
+        else => return original_target,
+    };
+    const curr_node = switch (current_target._type) {
+        .node => |n| n,
+        else => return original_target,
+    };
+
+    // Walk up from original target, checking if we can reach current target
+    var node: ?*Node = orig_node;
+    while (node) |n| {
+        // Check if current_target is an ancestor of n (or n itself)
+        if (isAncestorOrSelf(curr_node, n)) {
+            return n.asEventTarget();
+        }
+
+        // Cross shadow boundary if needed
+        if (n.is(ShadowRoot)) |shadow| {
+            node = shadow._host.asNode();
+            continue;
+        }
+
+        node = n._parent;
+    }
+
+    return original_target;
+}
+
+// Check if ancestor is an ancestor of (or the same as) node
+// WITHOUT crossing shadow boundaries (just regular DOM tree)
+fn isAncestorOrSelf(ancestor: *Node, node: *Node) bool {
+    if (ancestor == node) {
+        return true;
+    }
+
+    var current: ?*Node = node._parent;
+    while (current) |n| {
+        if (n == ancestor) {
+            return true;
+        }
+        current = n._parent;
+    }
+
+    return false;
+}

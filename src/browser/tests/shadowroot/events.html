@@ -52,34 +52,135 @@
 </script>
 
 <script id="event_composed_escapes_shadow">
-    // @ZIGDOM TODO
-    testing.expectEqual(true, true);
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<button id="btn">Click</button>';
+    document.body.appendChild(host);
 
-// {
-//     const host = document.createElement('div');
-//     const shadow = host.attachShadow({ mode: 'open' });
-//     shadow.innerHTML = '<button id="btn">Click</button>';
-//     document.body.appendChild(host);
+    const button = shadow.getElementById('btn');
 
-//     const button = shadow.getElementById('btn');
+    let hostCalled = false;
+    let hostTarget = null;
 
-//     let hostCalled = false;
-//     let hostTarget = null;
+    host.addEventListener('click', (e) => {
+        hostCalled = true;
+        hostTarget = e.target;
+    });
 
-//     host.addEventListener('click', (e) => {
-//         hostCalled = true;
-//         hostTarget = e.target;
-//     });
+    // With composed:true, event SHOULD escape shadow tree
+    const event = new Event('click', { bubbles: true, composed: true });
+    button.dispatchEvent(event);
 
-//     // With composed:true, event SHOULD escape shadow tree
-//     const event = new Event('click', { bubbles: true, composed: true });
-//     button.dispatchEvent(event);
+    testing.expectEqual(true, hostCalled);
 
-//     testing.expectEqual(true, hostCalled);
+    // Event target should be retargeted to host when outside shadow tree
+    testing.expectEqual(host, hostTarget);
 
-//     // Event target should be retargeted to host when outside shadow tree
-//     testing.expectEqual(host, hostTarget);
+    host.remove();
+}
+</script>
 
-//     host.remove();
-// }
+<script id="composedPath_basic">
+{
+    const div1 = document.createElement('div');
+    const div2 = document.createElement('div');
+    const button = document.createElement('button');
+
+    div1.appendChild(div2);
+    div2.appendChild(button);
+    document.body.appendChild(div1);
+
+    let capturedPath = null;
+
+    button.addEventListener('click', (e) => {
+        capturedPath = e.composedPath();
+    });
+
+    const event = new Event('click', { bubbles: true });
+    button.dispatchEvent(event);
+
+    testing.expectEqual(7, capturedPath.length);
+    testing.expectEqual(button, capturedPath[0]);
+    testing.expectEqual(div2, capturedPath[1]);
+    testing.expectEqual(div1, capturedPath[2]);
+    testing.expectEqual(document.body, capturedPath[3]);
+    testing.expectEqual(document.documentElement, capturedPath[4]);
+    testing.expectEqual(document, capturedPath[5]);
+    testing.expectEqual(window, capturedPath[6]);
+
+    div1.remove();
+}
+</script>
+
+<script id="composedPath_after_dispatch">
+{
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+
+    const event = new Event('click', { bubbles: true });
+    button.dispatchEvent(event);
+
+    const path = event.composedPath();
+    testing.expectEqual(0, path.length);
+
+    button.remove();
+}
+</script>
+
+<script id="composedPath_with_shadow_not_composed">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    const button = document.createElement('button');
+
+    shadow.appendChild(button);
+    document.body.appendChild(host);
+
+    let capturedPath = null;
+
+    button.addEventListener('click', (e) => {
+        capturedPath = e.composedPath();
+    });
+
+    const event = new Event('click', { bubbles: true });
+    button.dispatchEvent(event);
+
+    testing.expectEqual(2, capturedPath.length);
+    testing.expectEqual(button, capturedPath[0]);
+    testing.expectEqual(shadow, capturedPath[1]);
+
+    host.remove();
+}
+</script>
+
+<script id="composedPath_with_shadow_composed">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    const button = document.createElement('button');
+
+    shadow.appendChild(button);
+    document.body.appendChild(host);
+
+    let capturedPath = null;
+
+    button.addEventListener('click', (e) => {
+        capturedPath = e.composedPath();
+    });
+
+    const event = new Event('click', { bubbles: true, composed: true });
+    button.dispatchEvent(event);
+
+    testing.expectEqual(7, capturedPath.length);
+    testing.expectEqual(button, capturedPath[0]);
+    testing.expectEqual(shadow, capturedPath[1]);
+    testing.expectEqual(host, capturedPath[2]);
+    testing.expectEqual(document.body, capturedPath[3]);
+    testing.expectEqual(document.documentElement, capturedPath[4]);
+    testing.expectEqual(document, capturedPath[5]);
+    testing.expectEqual(window, capturedPath[6]);
+
+    host.remove();
+}
 </script>
