@@ -254,8 +254,8 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
             }
         }
 
-        const m = try compileModule(self.isolate, src, url);
         const owned_url = try arena.dupeZ(u8, url);
+        const m = try compileModule(self.isolate, src, owned_url);
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
@@ -1342,6 +1342,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     var resolver = persistent_resolver.castToPromiseResolver();
 
     const state = try self.arena.create(DynamicModuleResolveState);
+
     state.* = .{
         .module = null,
         .context = self,
@@ -1379,27 +1380,39 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     }
 
     // So we have a module, but no async resolver. This can only
-    // happen if the module was first synchronously loaded (e.g., as a
-    // static import dependency). You'd think we can just return the module
+    // happen if the module was first synchronously loaded (Does that
+    // ever even happen?!) You'd think we cann just return the module
     // but no, we need to resolve the module namespace, and the
     // module could still be loading!
     // We need to do part of what the first case is going to do in
     // `dynamicModuleSourceCallback`, but we can skip some steps
-    // since the module is already compiled.
+    // since the module is alrady loaded,
     std.debug.assert(gop.value_ptr.module != null);
 
     // If the module hasn't been evaluated yet (it was only instantiated
     // as a static import dependency), we need to evaluate it now.
     if (gop.value_ptr.module_promise == null) {
         const mod = gop.value_ptr.module.?.castToModule();
-        const evaluated = mod.evaluate(self.v8_context) catch {
-            std.debug.assert(mod.getStatus() == .kErrored);
-            const error_msg = v8.String.initUtf8(isolate, "Module evaluation failed");
-            _ = resolver.reject(self.v8_context, error_msg.toValue());
-            return promise;
-        };
-        std.debug.assert(evaluated.isPromise());
-        gop.value_ptr.module_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+        const status = mod.getStatus();
+        if (status == .kEvaluated or status == .kEvaluating) {
+            // Module was already evaluated (shouldn't normally happen, but handle it).
+            // Create a pre-resolved promise with the module namespace.
+            const persisted_module_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
+            try self.persisted_promise_resolvers.append(self.arena, persisted_module_resolver);
+            var module_resolver = persisted_module_resolver.castToPromiseResolver();
+            _ = module_resolver.resolve(self.v8_context, mod.getModuleNamespace());
+            gop.value_ptr.module_promise = PersistentPromise.init(self.isolate, module_resolver.getPromise());
+        } else {
+            // the module was loaded, but not evaluated, we _have_ to evaluate it now
+            const evaluated = mod.evaluate(self.v8_context) catch {
+                std.debug.assert(status == .kErrored);
+                const error_msg = v8.String.initUtf8(isolate, "Module evaluation failed");
+                _ = resolver.reject(self.v8_context, error_msg.toValue());
+                return promise;
+            };
+            std.debug.assert(evaluated.isPromise());
+            gop.value_ptr.module_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+        }
     }
 
     // like before, we want to set this up so that if anything else
@@ -1407,30 +1420,30 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // since we're going to be doing all the work.
     gop.value_ptr.resolver_promise = persisted_promise;
 
-    // But we can skip directly to `resolveDynamicModule` which is
+    // But we can skip direclty to `resolveDynamicModule` which is
     // what the above callback will eventually do.
     self.resolveDynamicModule(state, gop.value_ptr.*);
     return promise;
 }
 
-fn dynamicModuleSourceCallback(ctx: *anyopaque, fetch_result_: anyerror!ScriptManager.ModuleSource) void {
+fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManager.ModuleSource) void {
     const state: *DynamicModuleResolveState = @ptrCast(@alignCast(ctx));
     var self = state.context;
 
-    var fetch_result = fetch_result_ catch |err| {
+    var ms = module_source_ catch |err| {
         const error_msg = v8.String.initUtf8(self.isolate, @errorName(err));
         _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
         return;
     };
 
     const module_entry = blk: {
-        defer fetch_result.deinit();
+        defer ms.deinit();
 
         var try_catch: js.TryCatch = undefined;
         try_catch.init(self);
         defer try_catch.deinit();
 
-        break :blk self.module(true, fetch_result.src(), state.specifier, true) catch {
+        break :blk self.module(true, ms.src(), state.specifier, true) catch {
             const ex = try_catch.exception(self.call_arena) catch |err| @errorName(err) orelse "unknown error";
             log.err(.js, "module compilation failed", .{
                 .specifier = state.specifier,

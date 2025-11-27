@@ -80,9 +80,6 @@ pub fn deinit(self: *Caller) void {
         _ = arena.reset(.{ .retain_with_limit = CALL_ARENA_RETAIN });
     }
 
-    // Set this _after_ we've executed the above code, so that if the
-    // above code executes any callbacks, they aren't being executed
-    // at scope 0, which would be wrong.
     context.call_depth = call_depth;
 }
 
