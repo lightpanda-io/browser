@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<body>
+<script src="testing.js"></script>
+<script id="basic">
+{
+    const channel = new MessageChannel();
+
+    testing.expectEqual(true, channel.port1 !== undefined);
+    testing.expectEqual(true, channel.port2 !== undefined);
+    testing.expectEqual(true, channel.port1 !== channel.port2);
+}
+
+{
+    const channel = new MessageChannel();
+    let received = null;
+
+    channel.port2.onmessage = function(e) {
+        received = e.data;
+    };
+
+    channel.port1.postMessage('hello');
+
+    setTimeout(() => {
+        testing.expectEqual('hello', received);
+    }, 10);
+}
+
+testing.async(async () => {
+    let messages = [];
+
+    let p = new Promise((resolve) => {
+        const channel = new MessageChannel();
+        channel.port2.addEventListener('message', (e) => {
+            messages.push(e.data);
+            if (e.data === 'third') {
+                resolve();
+            }
+        });
+        channel.port2.start();
+
+        channel.port1.postMessage('first');
+        channel.port1.postMessage('second');
+        channel.port1.postMessage('third');
+    });
+
+
+    await p;
+    testing.expectEqual(3, messages.length);
+    testing.expectEqual('first', messages[0]);
+    testing.expectEqual('second', messages[1]);
+    testing.expectEqual('third', messages[2]);
+});
+
+{
+    const channel = new MessageChannel();
+    let port1Count = 0;
+    let port2Count = 0;
+
+    channel.port1.onmessage = () => { port1Count++; };
+    channel.port2.onmessage = () => { port2Count++; };
+
+    channel.port1.postMessage('to port2');
+    channel.port2.postMessage('to port1');
+
+    setTimeout(() => {
+        testing.expectEqual(1, port1Count);
+        testing.expectEqual(1, port2Count);
+    }, 30);
+}
+
+{
+    const channel = new MessageChannel();
+    let received = null;
+
+    channel.port2.onmessage = (e) => {
+        received = e.data;
+    };
+
+    channel.port1.postMessage({ type: 'test', value: 42 });
+
+    setTimeout(() => {
+        testing.expectEqual('test', received.type);
+        testing.expectEqual(42, received.value);
+    }, 40);
+}
+</script>

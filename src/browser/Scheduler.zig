@@ -26,17 +26,22 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const Queue = std.PriorityQueue(Task, void, struct {
     fn compare(_: void, a: Task, b: Task) std.math.Order {
-        return std.math.order(a.run_at, b.run_at);
+        const time_order = std.math.order(a.run_at, b.run_at);
+        if (time_order != .eq) return time_order;
+        // Break ties with sequence number to maintain FIFO order
+        return std.math.order(a.sequence, b.sequence);
     }
 }.compare);
 
 const Scheduler = @This();
 
+_sequence: u64,
 low_priority: Queue,
 high_priority: Queue,
 
 pub fn init(allocator: std.mem.Allocator) Scheduler {
     return .{
+        ._sequence = 0,
         .low_priority = Queue.init(allocator, {}),
         .high_priority = Queue.init(allocator, {}),
     };
@@ -59,9 +64,12 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         log.debug(.scheduler, "scheduler.add", .{ .name = opts.name, .run_in_ms = run_in_ms, .low_priority = opts.low_priority });
     }
     var queue = if (opts.low_priority) &self.low_priority else &self.high_priority;
+    const seq = self._sequence + 1;
+    self._sequence = seq;
     return queue.add(.{
         .ctx = ctx,
         .callback = cb,
+        .sequence = seq,
         .name = opts.name,
         .run_at = timestamp(.monotonic) + run_in_ms,
     });
@@ -105,6 +113,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
 
 const Task = struct {
     run_at: u64,
+    sequence: u64,
     ctx: *anyopaque,
     name: []const u8,
     callback: Callback,

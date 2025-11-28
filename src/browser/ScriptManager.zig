@@ -751,6 +751,10 @@ const Script = struct {
             break :blk true;
         };
 
+        if (comptime IS_DEBUG) {
+            log.info(.browser, "executed script", .{.src = url});
+        }
+
         defer page.tick();
 
         if (success) {

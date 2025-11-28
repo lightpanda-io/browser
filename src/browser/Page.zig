@@ -702,6 +702,9 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
 }
 
 pub fn tick(self: *Page) void {
+    if (comptime IS_DEBUG) {
+        log.debug(.page, "tick", .{});
+    }
     _ = self.scheduler.run() catch |err| {
         log.err(.page, "tick", .{ .err = err });
     };
