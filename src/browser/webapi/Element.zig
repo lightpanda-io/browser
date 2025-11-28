@@ -769,7 +769,15 @@ fn upperTagName(tag_name: *String, buf: []u8) []const u8 {
         log.info(.dom, "tag.long.name", .{ .name = tag_name.str() });
         return tag_name.str();
     }
-    return std.ascii.upperString(buf, tag_name.str());
+    const tag = tag_name.str();
+    // If the tag_name has a prefix, we must uppercase only the suffix part.
+    // example: te:st should be returned as te:ST.
+    if (std.mem.indexOfPos(u8, tag, 0, ":")) |pos| {
+        @memcpy(buf[0 .. pos + 1], tag[0 .. pos + 1]);
+        _ = std.ascii.upperString(buf[pos..tag.len], tag[pos..tag.len]);
+        return buf[0..tag.len];
+    }
+    return std.ascii.upperString(buf, tag);
 }
 
 pub fn getTag(self: *const Element) Tag {
@@ -915,6 +923,26 @@ pub const JsApi = struct {
         var buf = std.Io.Writer.Allocating.init(page.call_arena);
         try self.getInnerHTML(&buf.writer, page);
         return buf.written();
+    }
+
+    pub const prefix = bridge.accessor(_prefix, null, .{});
+    fn _prefix(self: *Element) ?[]const u8 {
+        const name = self.getTagNameLower();
+        if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+            return name[0..pos];
+        }
+
+        return null;
+    }
+
+    pub const localName = bridge.accessor(_localName, null, .{});
+    fn _localName(self: *Element) []const u8 {
+        const name = self.getTagNameLower();
+        if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+            return name[pos + 1 ..];
+        }
+
+        return name;
     }
 
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
