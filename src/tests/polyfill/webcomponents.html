@@ -13,6 +13,8 @@
     }
   }
 
+  testing.expectEqual(73, LightpandaSnapshotPoC());
+
   window.customElements.define("lightpanda-test", LightPanda);
   const main = document.getElementById('main');
   main.appendChild(document.createElement('lightpanda-test'));
