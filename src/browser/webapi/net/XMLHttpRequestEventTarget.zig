@@ -35,7 +35,7 @@ _on_progress: ?js.Function = null,
 _on_timeout: ?js.Function = null,
 
 pub const Type = union(enum) {
-    request: @import("XMLHttpRequest.zig"),
+    request: *@import("XMLHttpRequest.zig"),
     // TODO: xml_http_request_upload
 };
 

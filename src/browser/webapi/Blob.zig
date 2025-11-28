@@ -26,7 +26,9 @@ const Page = @import("../Page.zig");
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
 const Blob = @This();
 
+const _prototype_root = true;
 _type: Type,
+
 /// Immutable slice of blob.
 /// Note that another blob may hold a pointer/slice to this,
 /// so its better to leave the deallocation of it to arena allocator.

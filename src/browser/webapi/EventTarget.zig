@@ -26,6 +26,7 @@ const Event = @import("Event.zig");
 
 const EventTarget = @This();
 
+const _prototype_root = true;
 _type: Type,
 
 pub const Type = union(enum) {
