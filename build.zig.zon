@@ -13,5 +13,9 @@
             .url = "https://github.com/ada-url/ada/releases/download/v3.3.0/singleheader.zip",
             .hash = "N-V-__8AAPmhFAAw64ALjlzd5YMtzpSrmZ6KymsT84BKfB4s",
         },
+        .@"boringssl-zig" = .{
+            .url = "git+https://github.com/Syndica/boringssl-zig.git#c53df00d06b02b755ad88bbf4d1202ed9687b096",
+            .hash = "boringssl-0.1.0-VtJeWehMAAA4RNnwRnzEvKcS9rjsR1QVRw1uJrwXxmVK",
+        },
     },
 }
