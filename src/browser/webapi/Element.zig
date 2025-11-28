@@ -272,9 +272,9 @@ pub fn setClassName(self: *Element, value: []const u8, page: *Page) !void {
     return self.setAttributeSafe("class", value, page);
 }
 
-pub fn attributeIterator(self: *Element) Attribute.Iterator {
+pub fn attributeIterator(self: *Element) Attribute.InnerIterator {
     const attributes = self._attributes orelse return .{};
-    return attributes.iterator(self);
+    return attributes.iterator();
 }
 
 pub fn getAttribute(self: *const Element, name: []const u8, page: *Page) !?[]const u8 {

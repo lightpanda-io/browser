@@ -215,14 +215,12 @@ pub fn addFromElement(self: *ScriptManager, script_element: *Element.Html.Script
         .url = remote_url orelse page.url,
         .mode = blk: {
             if (source == .@"inline") {
-                // inline modules are deferred, all other inline scripts have a
-                // normal execution flow
-                break :blk if (kind == .module) .@"defer" else .normal;
+                break :blk .normal;
             }
             if (element.getAttributeSafe("async") != null) {
                 break :blk .async;
             }
-            if (element.getAttributeSafe("defer") != null) {
+            if (kind == .module or element.getAttributeSafe("defer") != null) {
                 break :blk .@"defer";
             }
             break :blk .normal;

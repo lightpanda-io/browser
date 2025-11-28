@@ -122,13 +122,16 @@
     testing.expectEqual(0, callbackCalls.length);
 
     customElements.define('upgrade-attr-element', UpgradeAttrElement);
-    testing.expectEqual(0, callbackCalls.length);
-
-    el.setAttribute('existing', 'after-upgrade');
     testing.expectEqual(1, callbackCalls.length);
     testing.expectEqual('existing', callbackCalls[0].name);
-    testing.expectEqual('before-upgrade', callbackCalls[0].oldValue);
-    testing.expectEqual('after-upgrade', callbackCalls[0].newValue);
+    testing.expectEqual(null, callbackCalls[0].oldValue);
+    testing.expectEqual('before-upgrade', callbackCalls[0].newValue);
+
+    el.setAttribute('existing', 'after-upgrade');
+    testing.expectEqual(2, callbackCalls.length);
+    testing.expectEqual('existing', callbackCalls[1].name);
+    testing.expectEqual('before-upgrade', callbackCalls[1].oldValue);
+    testing.expectEqual('after-upgrade', callbackCalls[1].newValue);
 }
 
 {

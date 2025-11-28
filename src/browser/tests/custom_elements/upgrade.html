@@ -151,4 +151,34 @@
     customElements.upgrade(elem);
     testing.expectEqual(1, alreadyUpgradedCalled);
 }
+
+{
+    let attributeChangedCalls = [];
+
+    class UpgradeWithAttrs extends HTMLElement {
+        static get observedAttributes() {
+            return ['data-foo', 'data-bar'];
+        }
+
+        attributeChangedCallback(name, oldValue, newValue) {
+            attributeChangedCalls.push({ name, oldValue, newValue });
+        }
+    }
+
+    const container = document.createElement('div');
+    container.innerHTML = '<upgrade-with-attrs data-foo="hello" data-bar="world"></upgrade-with-attrs>';
+    document.body.appendChild(container);
+
+    testing.expectEqual(0, attributeChangedCalls.length);
+
+    customElements.define('upgrade-with-attrs', UpgradeWithAttrs);
+
+    testing.expectEqual(2, attributeChangedCalls.length);
+    testing.expectEqual('data-foo', attributeChangedCalls[0].name);
+    testing.expectEqual(null, attributeChangedCalls[0].oldValue);
+    testing.expectEqual('hello', attributeChangedCalls[0].newValue);
+    testing.expectEqual('data-bar', attributeChangedCalls[1].name);
+    testing.expectEqual(null, attributeChangedCalls[1].oldValue);
+    testing.expectEqual('world', attributeChangedCalls[1].newValue);
+}
 </script>

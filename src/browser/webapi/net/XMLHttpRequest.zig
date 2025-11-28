@@ -19,8 +19,6 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
 const log = @import("../../../log.zig");
 const Http = @import("../../../http/Http.zig");
 
@@ -32,6 +30,7 @@ const EventTarget = @import("../EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("XMLHttpRequestEventTarget.zig");
 
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const XMLHttpRequest = @This();
 _page: *Page,

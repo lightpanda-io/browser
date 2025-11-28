@@ -29,6 +29,7 @@ const Request = @import("Request.zig");
 const Response = @import("Response.zig");
 
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();
 
@@ -53,6 +54,10 @@ pub fn init(input: Input, page: *Page) !js.Promise {
 
     const http_client = page._session.browser.http_client;
     const headers = try http_client.newHeaders();
+
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "fetch", .{ .url = request._url });
+    }
 
     try http_client.request(.{
         .ctx = fetch,

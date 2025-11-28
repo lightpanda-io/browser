@@ -18,10 +18,13 @@
 
 const std = @import("std");
 const log = @import("../../log.zig");
+
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
-const Element = @import("Element.zig");
+
 const Node = @import("Node.zig");
+const Element = @import("Element.zig");
+const Custom = @import("element/html/Custom.zig");
 const CustomElementDefinition = @import("CustomElementDefinition.zig");
 
 const CustomElementRegistry = @This();
@@ -119,8 +122,6 @@ fn upgradeNode(self: *CustomElementRegistry, node: *Node, page: *Page) !void {
 }
 
 fn upgradeElement(self: *CustomElementRegistry, element: *Element, page: *Page) !void {
-    const Custom = @import("element/html/Custom.zig");
-
     const custom = element.is(Custom) orelse {
         return Custom.checkAndAttachBuiltIn(element, page);
     };
@@ -133,7 +134,7 @@ fn upgradeElement(self: *CustomElementRegistry, element: *Element, page: *Page) 
     try upgradeCustomElement(custom, definition, page);
 }
 
-fn upgradeCustomElement(custom: *@import("element/html/Custom.zig"), definition: *CustomElementDefinition, page: *Page) !void {
+fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinition, page: *Page) !void {
     custom._definition = definition;
 
     // Reset callback flags since this is a fresh upgrade
@@ -150,6 +151,15 @@ fn upgradeCustomElement(custom: *@import("element/html/Custom.zig"), definition:
         log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err });
         return error.CustomElementUpgradeFailed;
     };
+
+    // Invoke attributeChangedCallback for existing observed attributes
+    var attr_it = custom.asElement().attributeIterator();
+    while (attr_it.next()) |attr| {
+        const name = attr._name.str();
+        if (definition.isAttributeObserved(name)) {
+            custom.invokeAttributeChangedCallback(name, null, attr._value.str(), page);
+        }
+    }
 
     if (node.isConnected()) {
         custom.invokeConnectedCallback(page);

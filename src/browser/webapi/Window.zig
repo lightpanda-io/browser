@@ -54,6 +54,7 @@ _history: History,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function = null,
 _on_error: ?js.Function = null, // TODO: invoke on error?
+_on_unhandled_rejection: ?js.Function = null, // TODO: invoke on error
 _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
@@ -140,6 +141,18 @@ pub fn setOnError(self: *Window, cb_: ?js.Function) !void {
         self._on_error = cb;
     } else {
         self._on_error = null;
+    }
+}
+
+pub fn getOnUnhandledRejection(self: *const Window) ?js.Function {
+    return self._on_unhandled_rejection;
+}
+
+pub fn setOnUnhandledRejection(self: *Window, cb_: ?js.Function) !void {
+    if (cb_) |cb| {
+        self._on_unhandled_rejection = cb;
+    } else {
+        self._on_unhandled_rejection = null;
     }
 }
 
@@ -390,6 +403,7 @@ pub const JsApi = struct {
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.getOnError, .{});
+    pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});
