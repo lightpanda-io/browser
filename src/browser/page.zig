@@ -920,7 +920,7 @@ pub const Page = struct {
     fn windowClicked(node: *parser.EventNode, event: *parser.Event) void {
         const self: *Page = @fieldParentPtr("window_clicked_event_node", node);
         self._windowClicked(event) catch |err| {
-            log.err(.browser, "click handler error", .{ .err = err });
+            log.err(.input, "click handler error", .{ .err = err });
         };
     }
 
@@ -932,18 +932,22 @@ pub const Page = struct {
             .a => {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
+                log.debug(.input, "window click on link", .{ .tag = tag, .href = href });
                 try self.navigateFromWebAPI(href, .{}, .{ .push = null });
+                return;
             },
             .input => {
                 const element: *parser.Element = @ptrCast(node);
                 const input_type = try parser.inputGetType(@ptrCast(element));
                 if (std.ascii.eqlIgnoreCase(input_type, "submit")) {
+                    log.debug(.input, "window click on submit input", .{ .tag = tag });
                     return self.elementSubmitForm(element);
                 }
             },
             .button => {
                 const element: *parser.Element = @ptrCast(node);
                 const button_type = try parser.buttonGetType(@ptrCast(element));
+                log.debug(.input, "window click on button", .{ .tag = tag, .button_type = button_type });
                 if (std.ascii.eqlIgnoreCase(button_type, "submit")) {
                     return self.elementSubmitForm(element);
                 }
@@ -955,6 +959,12 @@ pub const Page = struct {
             },
             else => {},
         }
+        log.debug(.input, "window click on element", .{ .tag = tag });
+        // Set the focus on the clicked element.
+        // Thanks to parser.nodeHTMLGetTagType, we know nod is an element.
+        // We assume we have a ElementHTML.
+        const Document = @import("dom/document.zig").Document;
+        try Document.setFocus(@ptrCast(self.window.document), @as(*parser.ElementHTML, @ptrCast(node)), self);
     }
 
     pub const KeyboardEvent = struct {
@@ -997,7 +1007,7 @@ pub const Page = struct {
     fn keydownCallback(node: *parser.EventNode, event: *parser.Event) void {
         const self: *Page = @fieldParentPtr("keydown_event_node", node);
         self._keydownCallback(event) catch |err| {
-            log.err(.browser, "keydown handler error", .{ .err = err });
+            log.err(.input, "keydown handler error", .{ .err = err });
         };
     }
 
@@ -1011,23 +1021,29 @@ pub const Page = struct {
         if (std.mem.eql(u8, new_key, "Dead")) {
             return;
         }
-
         switch (tag) {
             .input => {
                 const element: *parser.Element = @ptrCast(node);
                 const input_type = try parser.inputGetType(@ptrCast(element));
-                if (std.mem.eql(u8, input_type, "text")) {
-                    if (std.mem.eql(u8, new_key, "Enter")) {
-                        const form = (try self.formForElement(element)) orelse return;
-                        return self.submitForm(@ptrCast(form), null);
-                    }
-
-                    const value = try parser.inputGetValue(@ptrCast(element));
-                    const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
-                    try parser.inputSetValue(@ptrCast(element), new_value);
+                log.debug(.input, "key down on input", .{ .tag = tag, .key = new_key, .input_type = input_type });
+                if (std.mem.eql(u8, new_key, "Enter")) {
+                    const form = (try self.formForElement(element)) orelse return;
+                    return self.submitForm(@ptrCast(form), null);
                 }
+
+                if (std.mem.eql(u8, input_type, "radio")) {
+                    return;
+                }
+                if (std.mem.eql(u8, input_type, "checkbox")) {
+                    return;
+                }
+
+                const value = try parser.inputGetValue(@ptrCast(element));
+                const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
+                try parser.inputSetValue(@ptrCast(element), new_value);
             },
             .textarea => {
+                log.debug(.input, "key down on textarea", .{ .tag = tag, .key = new_key });
                 const value = try parser.textareaGetValue(@ptrCast(node));
                 if (std.mem.eql(u8, new_key, "Enter")) {
                     new_key = "\n";
@@ -1035,7 +1051,9 @@ pub const Page = struct {
                 const new_value = try std.mem.concat(self.arena, u8, &.{ value, new_key });
                 try parser.textareaSetValue(@ptrCast(node), new_value);
             },
-            else => {},
+            else => {
+                log.debug(.input, "key down event", .{ .tag = tag, .key = new_key });
+            },
         }
     }
 

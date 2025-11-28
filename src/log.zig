@@ -40,6 +40,7 @@ pub const Scope = enum {
     fetch,
     polyfill,
     interceptor,
+    input,
 };
 
 const Opts = struct {
