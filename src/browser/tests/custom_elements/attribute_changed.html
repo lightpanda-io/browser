@@ -122,6 +122,10 @@
     testing.expectEqual(0, callbackCalls.length);
 
     customElements.define('upgrade-attr-element', UpgradeAttrElement);
+    testing.expectEqual(0, callbackCalls.length);
+
+    document.body.appendChild(el);
+
     testing.expectEqual(1, callbackCalls.length);
     testing.expectEqual('existing', callbackCalls[0].name);
     testing.expectEqual(null, callbackCalls[0].oldValue);

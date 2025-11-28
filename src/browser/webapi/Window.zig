@@ -34,6 +34,7 @@ const Location = @import("Location.zig");
 const Fetch = @import("net/Fetch.zig");
 const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
+const MessageEvent = @import("event/MessageEvent.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
 const Element = @import("Element.zig");
@@ -255,6 +256,28 @@ pub fn getComputedStyle(_: *const Window, _: *Element, page: *Page) !*CSSStyleDe
     return CSSStyleDeclaration.init(null, page);
 }
 
+pub fn postMessage(self: *Window, message: js.Object, target_origin: ?[]const u8, page: *Page) !void {
+    // For now, we ignore targetOrigin checking and just dispatch the message
+    // In a full implementation, we would validate the origin
+    _ = target_origin;
+
+    // postMessage queues a task (not a microtask), so use the scheduler
+    const origin = try self._location.getOrigin(page);
+    const callback = try page._factory.create(PostMessageCallback{
+        .window = self,
+        .message = try message.persist() ,
+        .origin = try page.arena.dupe(u8, origin),
+        .page = page,
+    });
+    errdefer page._factory.destroy(callback);
+
+
+    try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
+        .name = "postMessage",
+        .low_priority = false,
+    });
+}
+
 pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     const encoded_len = std.base64.standard.Encoder.calcSize(input.len);
     const encoded = try page.call_arena.alloc(u8, encoded_len);
@@ -266,6 +289,26 @@ pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     const decoded = try page.call_arena.alloc(u8, decoded_len);
     try std.base64.standard.Decoder.decode(decoded, input);
     return decoded;
+}
+
+pub fn getLength(_: *const Window) u32 {
+    return 0;
+}
+
+pub fn getInnerWidth(_: *const Window) u32 {
+    return 1920;
+}
+
+pub fn getInnerHeight(_: *const Window) u32 {
+    return 1080;
+}
+
+pub fn getScrollX(_: *const Window) u32 {
+    return 0;
+}
+
+pub fn getScrollY(_: *const Window) u32 {
+    return 0;
 }
 
 const ScheduleOpts = struct {
@@ -376,6 +419,35 @@ const ScheduleCallback = struct {
     }
 };
 
+const PostMessageCallback = struct {
+    window: *Window,
+    message: js.Object,
+    origin: []const u8,
+    page: *Page,
+
+    fn deinit(self: *PostMessageCallback) void {
+        self.page._factory.destroy(self);
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+        defer self.deinit();
+
+        const message_event = try MessageEvent.init("message", .{
+            .data = self.message,
+            .origin = self.origin,
+            .source = self.window,
+            .bubbles = false,
+            .cancelable = false,
+        }, self.page);
+
+        const event = message_event.asEvent();
+        try self.page._event_manager.dispatch(self.window.asEventTarget(), event);
+
+        return null;
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Window);
 
@@ -415,27 +487,19 @@ pub const JsApi = struct {
     pub const requestAnimationFrame = bridge.function(Window.requestAnimationFrame, .{});
     pub const cancelAnimationFrame = bridge.function(Window.cancelAnimationFrame, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
+    pub const postMessage = bridge.function(Window.postMessage, .{});
     pub const btoa = bridge.function(Window.btoa, .{});
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
-    pub const length = bridge.accessor(struct {
-        fn wrap(_: *const Window) u32 {
-            return 0;
-        }
-    }.wrap, null, .{ .cache = "length" });
-
-    pub const innerWidth = bridge.accessor(struct {
-        fn wrap(_: *const Window) u32 {
-            return 1920;
-        }
-    }.wrap, null, .{ .cache = "innerWidth" });
-    pub const innerHeight = bridge.accessor(struct {
-        fn wrap(_: *const Window) u32 {
-            return 1080;
-        }
-    }.wrap, null, .{ .cache = "innerHeight" });
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
+    pub const length = bridge.accessor(Window.getLength, null, .{ .cache = "length" });
+    pub const innerWidth = bridge.accessor(Window.getInnerWidth, null, .{ .cache = "innerWidth" });
+    pub const innerHeight = bridge.accessor(Window.getInnerHeight, null, .{ .cache = "innerHeight" });
+    pub const scrollX = bridge.accessor(Window.getScrollX, null, .{ .cache = "scrollX" });
+    pub const scrollY = bridge.accessor(Window.getScrollY, null, .{ .cache = "scrollY" });
+    pub const pageXOffset = bridge.accessor(Window.getScrollX, null, .{ .cache = "pageXOffset" });
+    pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{ .cache = "pageYOffset" });
 };
 
 const testing = @import("../../testing.zig");

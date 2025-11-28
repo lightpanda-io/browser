@@ -49,9 +49,10 @@ pub const EventPhase = enum(u8) {
 
 pub const Type = union(enum) {
     generic,
-    progress_event: *@import("event/ProgressEvent.zig"),
     error_event: *@import("event/ErrorEvent.zig"),
     custom_event: *@import("event/CustomEvent.zig"),
+    message_event: *@import("event/MessageEvent.zig"),
+    progress_event: *@import("event/ProgressEvent.zig"),
 };
 
 const Options = struct {

@@ -73,6 +73,16 @@ pub fn invokeAttributeChangedCallback(self: *Custom, name: []const u8, old_value
 pub fn invokeConnectedCallbackOnElement(comptime from_parser: bool, element: *Element, page: *Page) !void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
+        // If the element is undefined, check if a definition now exists and upgrade
+        if (custom._definition == null) {
+            const name = custom._tag_name.str();
+            if (page.window._custom_elements._definitions.get(name)) |definition| {
+                const CustomElementRegistry = @import("../../CustomElementRegistry.zig");
+                CustomElementRegistry.upgradeCustomElement(custom, definition, page) catch {};
+                return;
+            }
+        }
+
         if (comptime from_parser) {
             // From parser, we know the element is brand new
             custom._connected_callback_invoked = true;

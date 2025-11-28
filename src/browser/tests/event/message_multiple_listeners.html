@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=postMessageMultipleListeners>
+{
+  let count = 0;
+
+  const handler1 = () => { count++; };
+  const handler2 = () => { count++; };
+  window.addEventListener('message', handler1, { once: true });
+  window.addEventListener('message', handler2, { once: true });
+
+  window.postMessage('trigger', '*');
+
+  testing.eventually(() => {
+    testing.expectEqual(2, count);
+  });
+}
+</script>

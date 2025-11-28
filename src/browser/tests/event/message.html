@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=messageEventConstructor>
+{
+  const evt = new MessageEvent('message', {
+    data: { foo: 'bar', count: 42 },
+    origin: 'https://example.com',
+    source: window
+  });
+
+  testing.expectEqual('message', evt.type);
+  testing.expectEqual({ foo: 'bar', count: 42 }, evt.data);
+  testing.expectEqual('https://example.com', evt.origin);
+  testing.expectEqual(window, evt.source);
+  testing.expectEqual(false, evt.bubbles);
+  testing.expectEqual(false, evt.cancelable);
+}
+</script>
+
+<script id=messageEventWithString>
+{
+  const evt2 = new MessageEvent('message', {
+    data: 'Hello, World!',
+    origin: 'https://test.com'
+  });
+
+  testing.expectEqual('Hello, World!', evt2.data);
+  testing.expectEqual('https://test.com', evt2.origin);
+}
+</script>
+
+<script id=messageEventDefaults>
+{
+  const evt3 = new MessageEvent('message');
+
+  testing.expectEqual('', evt3.origin);
+  testing.expectEqual(false, evt3.bubbles);
+  testing.expectEqual(false, evt3.cancelable);
+}
+</script>
+
+<script id=messageEventInheritance>
+{
+  const evt4 = new MessageEvent('custom');
+
+  testing.expectEqual('custom', evt4.type);
+  testing.expectEqual(Event.NONE, evt4.eventPhase);
+  testing.expectEqual(false, evt4.defaultPrevented);
+}
+</script>
+
+<script id=postMessageBasic>
+{
+  let receivedEvent = null;
+
+  const handler = (e) => {
+    receivedEvent = e;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage('test data', '*');
+
+  testing.eventually(() => {
+    testing.expectEqual('test data', receivedEvent.data);
+    testing.expectEqual(window, receivedEvent.source);
+    testing.expectEqual('message', receivedEvent.type);
+  });
+}
+</script>
+
+<script id=postMessageWithObject>
+{
+  let receivedData = null;
+
+  const handler = (e) => {
+    receivedData = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  const testObj = { type: 'test', value: 123, nested: { key: 'value' } };
+  window.postMessage(testObj, '*');
+
+  testing.eventually(() => {
+    testing.expectEqual(testObj, receivedData);
+  });
+}
+</script>
+
+<script id=messageEventWithBubbles>
+{
+  const evt = new MessageEvent('message', {
+    data: 'test',
+    bubbles: true,
+    cancelable: true
+  });
+
+  testing.expectEqual(true, evt.bubbles);
+  testing.expectEqual(true, evt.cancelable);
+}
+</script>
+
+<script id=postMessageWithNumber>
+{
+  let received = null;
+
+  const handler = (e) => {
+    received = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage(42, '*');
+
+  testing.eventually(() => {
+    testing.expectEqual(42, received);
+  });
+}
+</script>
+
+<script id=postMessageWithArray>
+{
+  let received = null;
+
+  const handler = (e) => {
+    received = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  const arr = [1, 2, 3, 'test'];
+  window.postMessage(arr, '*');
+
+  testing.eventually(() => {
+    testing.expectEqual(arr, received);
+  });
+}
+</script>
+
+<script id=postMessageWithNull>
+{
+  let received = undefined;
+
+  const handler = (e) => {
+    received = e.data;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage(null, '*');
+
+  testing.eventually(() => {
+    testing.expectEqual(null, received);
+  });
+}
+</script>
+
+<script id=messageEventOriginFromLocation>
+{
+  let receivedOrigin = null;
+
+  const handler = (e) => {
+    receivedOrigin = e.origin;
+  };
+  window.addEventListener('message', handler, { once: true });
+
+  window.postMessage('test', '*');
+
+  testing.eventually(() => {
+    testing.expectEqual('http://127.0.0.1:9582', receivedOrigin);
+  });
+}
+</script>

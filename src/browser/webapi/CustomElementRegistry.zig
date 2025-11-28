@@ -92,6 +92,11 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
             continue;
         }
 
+        if (!custom.asElement().asNode().isConnected()) {
+            idx += 1;
+            continue;
+        }
+
         upgradeCustomElement(custom, definition, page) catch {
             _ = page._undefined_custom_elements.swapRemove(idx);
             continue;
@@ -134,7 +139,7 @@ fn upgradeElement(self: *CustomElementRegistry, element: *Element, page: *Page) 
     try upgradeCustomElement(custom, definition, page);
 }
 
-fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinition, page: *Page) !void {
+pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinition, page: *Page) !void {
     custom._definition = definition;
 
     // Reset callback flags since this is a fresh upgrade
