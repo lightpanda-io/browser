@@ -42,7 +42,7 @@ runs:
         sudo apt-get update
         sudo apt-get install -y wget xz-utils python3 ca-certificates git pkg-config libglib2.0-dev gperf libexpat1-dev cmake clang
 
-    - uses: mlugg/setup-zig@v2
+    - uses: mlugg/setup-zig@v2.0.5
       with:
         version: ${{ inputs.zig }}
 
