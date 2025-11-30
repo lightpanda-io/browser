@@ -135,7 +135,7 @@ pub fn isNullOrUndefined(self: Object) bool {
     return self.js_obj.toValue().isNullOrUndefined();
 }
 
-pub fn nameIterator(self: Object) js.ValueIterator {
+pub fn nameIterator(self: Object, allocator: Allocator) NameIterator {
     const context = self.context;
     const js_obj = self.js_obj;
 
@@ -145,6 +145,7 @@ pub fn nameIterator(self: Object) js.ValueIterator {
     return .{
         .count = count,
         .context = context,
+        .allocator = allocator,
         .js_obj = array.castTo(v8.Object),
     };
 }
@@ -153,10 +154,22 @@ pub fn toZig(self: Object, comptime T: type) !T {
     return self.context.jsValueToZig(T, self.js_obj.toValue());
 }
 
-pub fn TriState(comptime T: type) type {
-    return union(enum) {
-        null: void,
-        undefined: void,
-        value: T,
-    };
-}
+pub const NameIterator = struct {
+    count: u32,
+    idx: u32 = 0,
+    js_obj: v8.Object,
+    allocator: Allocator,
+    context: *const Context,
+
+    pub fn next(self: *NameIterator) !?[]const u8 {
+        const idx = self.idx;
+        if (idx == self.count) {
+            return null;
+        }
+        self.idx += 1;
+
+        const context = self.context;
+        const js_val = try self.js_obj.getAtIndex(context.v8_context, idx);
+        return try context.valueToString(js_val, .{ .allocator = self.allocator });
+    }
+};

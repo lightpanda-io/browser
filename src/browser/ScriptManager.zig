@@ -726,10 +726,10 @@ const Script = struct {
                     .kind = self.kind,
                     .cacheable = cacheable,
                 });
-                self.executeCallback(script_element._on_error, page);
+                self.executeCallback("error", script_element._on_error, page);
                 return;
             };
-            self.executeCallback(script_element._on_load, page);
+            self.executeCallback("load", script_element._on_load, page);
             return;
         }
 
@@ -752,13 +752,17 @@ const Script = struct {
         };
 
         if (comptime IS_DEBUG) {
-            log.info(.browser, "executed script", .{.src = url});
+            log.debug(.browser, "executed script", .{
+                .src = url,
+                .success = success,
+                .on_load = script_element._on_load != null
+            });
         }
 
         defer page.tick();
 
         if (success) {
-            self.executeCallback(script_element._on_load, page);
+            self.executeCallback("load", script_element._on_load, page);
             return;
         }
 
@@ -776,16 +780,31 @@ const Script = struct {
             .cacheable = cacheable,
         });
 
-        self.executeCallback(script_element._on_error, page);
+        self.executeCallback("error", script_element._on_error, page);
     }
 
-    fn executeCallback(self: *const Script, cb_: ?js.Function, page: *Page) void {
+    fn executeCallback(self: *const Script, comptime typ: []const u8, cb_: ?js.Function, page: *Page) void {
         const cb = cb_ orelse return;
 
-        // @ZIGDOM execute the callback
-        _ = cb;
-        _ = self;
-        _ = page;
+        const Event = @import("webapi/Event.zig");
+        const event = Event.init(typ, .{}, page) catch |err| {
+            log.warn(.js, "script internal callback", .{
+                .url = self.url,
+                .type = typ,
+                .err = err,
+            });
+            return;
+        };
+
+        var result: js.Function.Result = undefined;
+        cb.tryCall(void, .{event}, &result) catch {
+            log.warn(.js, "script callback", .{
+                .url = self.url,
+                .type = typ,
+                .err = result.exception,
+                .stack = result.stack,
+            });
+        };
     }
 };
 

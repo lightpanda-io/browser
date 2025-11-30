@@ -69,10 +69,9 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     // Read observedAttributes static property from constructor
     if (constructor.getPropertyValue("observedAttributes") catch null) |observed_attrs| {
         if (observed_attrs.isArray()) {
-            const len = observed_attrs.arrayLength();
-            var i: u32 = 0;
-            while (i < len) : (i += 1) {
-                const attr_val = observed_attrs.arrayGet(i) catch continue;
+            var js_arr = observed_attrs.toArray();
+            for (0..js_arr.len()) |i| {
+                const attr_val = js_arr.get(i) catch continue;
                 const attr_name = attr_val.toString(page.arena) catch continue;
                 const owned_attr = page.dupeString(attr_name) catch continue;
                 definition.observed_attributes.put(page.arena, owned_attr, {}) catch continue;

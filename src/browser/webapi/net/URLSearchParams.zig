@@ -33,17 +33,26 @@ _arena: Allocator,
 _params: KeyValueList,
 
 const InitOpts = union(enum) {
+    value: js.Value,
     query_string: []const u8,
-    // @ZIGMOD: Array
-    // @ZIGMOD: Object
 };
+
 pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
     const arena = page.arena;
     const params: KeyValueList = blk: {
         const opts = opts_ orelse break :blk .empty;
-        break :blk switch (opts) {
-            .query_string => |str| try paramsFromString(arena, str, &page.buf),
-        };
+        switch (opts) {
+            .query_string => |qs| break :blk try paramsFromString(arena, qs, &page.buf),
+            .value => |js_val| {
+                if (js_val.isObject()) {
+                    break :blk try paramsFromObject(arena,  js_val.toObject());
+                }
+                if (js_val.isString()) {
+                    break :blk try paramsFromString(arena, try js_val.toString(arena), &page.buf);
+                }
+                return error.InvalidArgument;
+            }
+        }
     };
 
     return page._factory.create(URLSearchParams{
@@ -172,6 +181,25 @@ fn paramsFromString(allocator: Allocator, input_: []const u8, buf: []u8) !KeyVal
         try params._entries.append(allocator, .{
             .name = name,
             .value = value,
+        });
+    }
+
+    return params;
+}
+
+fn paramsFromObject(arena: Allocator, js_obj: js.Object) !KeyValueList {
+    var it = js_obj.nameIterator(arena);
+
+    var params = KeyValueList.init();
+    try params.ensureTotalCapacity(arena, it.count);
+
+    while (try it.next()) |name| {
+        const js_value = try js_obj.get(name);
+        const value = try js_value.toString(arena);
+
+        try params._entries.append(arena, .{
+            .name = try String.init(arena, name, .{}),
+            .value = try String.init(arena, value, .{}),
         });
     }
 

@@ -29,6 +29,8 @@ pub const Inspector = @import("Inspector.zig");
 
 // TODO: Is "This" really necessary?
 pub const This = @import("This.zig");
+pub const Value = @import("Value.zig");
+pub const Array = @import("Array.zig");
 pub const Object = @import("Object.zig");
 pub const TryCatch = @import("TryCatch.zig");
 pub const Function = @import("Function.zig");
@@ -147,58 +149,6 @@ pub const Exception = struct {
     // the caller needs to deinit the string returned
     pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
         return self.context.valueToString(self.inner, .{ .allocator = allocator });
-    }
-};
-
-pub const Value = struct {
-    value: v8.Value,
-    context: *const Context,
-
-    // the caller needs to deinit the string returned
-    pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-        return self.context.valueToString(self.value, .{ .allocator = allocator });
-    }
-
-    pub fn fromJson(ctx: *Context, json: []const u8) !Value {
-        const json_string = v8.String.initUtf8(ctx.isolate, json);
-        const value = try v8.Json.parse(ctx.v8_context, json_string);
-        return Value{ .context = ctx, .value = value };
-    }
-
-    pub fn isArray(self: Value) bool {
-        return self.value.isArray();
-    }
-
-    pub fn arrayLength(self: Value) u32 {
-        std.debug.assert(self.value.isArray());
-        return self.value.castTo(v8.Array).length();
-    }
-
-    pub fn arrayGet(self: Value, index: u32) !Value {
-        std.debug.assert(self.value.isArray());
-        const array_obj = self.value.castTo(v8.Array).castTo(v8.Object);
-        const idx_key = v8.Integer.initU32(self.context.isolate, index);
-        const elem_val = try array_obj.getValue(self.context.v8_context, idx_key.toValue());
-        return self.context.createValue(elem_val);
-    }
-};
-
-pub const ValueIterator = struct {
-    count: u32,
-    idx: u32 = 0,
-    js_obj: v8.Object,
-    context: *const Context,
-
-    pub fn next(self: *ValueIterator) !?Value {
-        const idx = self.idx;
-        if (idx == self.count) {
-            return null;
-        }
-        self.idx += 1;
-
-        const context = self.context;
-        const js_val = try self.js_obj.getAtIndex(context.v8_context, idx);
-        return context.createValue(js_val);
     }
 };
 

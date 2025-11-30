@@ -392,9 +392,9 @@ pub fn createException(self: *const Context, e: v8.Value) js.Exception {
 
 // Wrap a v8.Value, largely so that we can provide a convenient
 // toString function
-pub fn createValue(self: *const Context, value: v8.Value) js.Value {
+pub fn createValue(self: *Context, value: v8.Value) js.Value {
     return .{
-        .value = value,
+        .js_val = value,
         .context = self,
     };
 }
@@ -665,8 +665,7 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
 pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
     switch (@typeInfo(T)) {
         .optional => |o| {
-            if (comptime o.child == js.Object) {
-                // If type type is a ?js.Object, then we want to pass
+                // If type type is a ?js.Value or a ?js.Object, then we want to pass
                 // a js.Object, not null. Consider a function,
                 //    _doSomething(arg: ?Env.JsObjet) void { ... }
                 //
@@ -681,6 +680,14 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
                 // pass in `null` and the the doSomething won't
                 // be able to tell if `null` was explicitly passed
                 // or whether no parameter was passed.
+            if (comptime o.child == js.Value) {
+                return js.Value{
+                    .context = self,
+                    .js_val = js_value,
+                };
+            }
+
+            if (comptime o.child == js.Object) {
                 return js.Object{
                     .context = self,
                     .js_obj = js_value.castTo(v8.Object),
@@ -829,6 +836,16 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
 
     if (T == js.String) {
         return .{ .string = try self.valueToString(js_value, .{ .allocator = self.arena }) };
+    }
+
+
+    if (comptime T == js.Value) {
+        // Caller wants an opaque js.Object. Probably a parameter
+        // that it needs to pass back into a callback
+        return js.Value{
+            .context = self,
+            .js_val = js_value,
+        };
     }
 
     const js_obj = js_value.castTo(v8.Object);
