@@ -26,10 +26,19 @@ const Allocator = std.mem.Allocator;
 
 const Response = @This();
 
+pub const Type = enum {
+    basic,
+    cors,
+    @"error",
+    @"opaque",
+    opaqueredirect,
+};
+
 _status: u16,
 _arena: Allocator,
 _headers: *Headers,
 _body: ?[]const u8,
+_type: Type,
 
 const InitOpts = struct {
     status: u16 = 200,
@@ -48,6 +57,7 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
         ._status = opts.status,
         ._body = body,
         ._headers = opts.headers orelse try Headers.init(page),
+        ._type = .basic, // @ZIGDOM: todo
     });
 }
 
@@ -57,6 +67,10 @@ pub fn getStatus(self: *const Response) u16 {
 
 pub fn getHeaders(self: *const Response) *Headers {
     return self._headers;
+}
+
+pub fn getType(self: *const Response) []const u8 {
+    return @tagName(self._type);
 }
 
 pub fn getBody(self: *const Response, page: *Page) !?*ReadableStream {
@@ -106,6 +120,7 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Response.init, .{});
     pub const ok = bridge.accessor(Response.isOK, null, .{});
     pub const status = bridge.accessor(Response.getStatus, null, .{});
+    pub const @"type" = bridge.accessor(Response.getType, null, .{});
     pub const text = bridge.function(Response.getText, .{});
     pub const json = bridge.function(Response.getJson, .{});
     pub const headers = bridge.accessor(Response.getHeaders, null, .{});

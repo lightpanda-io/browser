@@ -130,6 +130,10 @@ pub fn method(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionC
 
 pub fn _method(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) !void {
     const F = @TypeOf(func);
+    var handle_scope: v8.HandleScope = undefined;
+    handle_scope.init(self.isolate);
+    defer handle_scope.deinit();
+
     var args = try self.getArgs(F, 1, info);
     @field(args, "0") = try Context.typeTaggedAnyOpaque(*T, info.getThis());
     const res = @call(.auto, func, args);

@@ -182,7 +182,12 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-    self.js.deinit();
+    // removeContext() will execute the destructor of any type that
+    // registered a destructor (e.g. XMLHttpRequest).
+    // Should be called before we deinit the page, because these objects
+    // could be referencing it.
+    self._session.executor.removeContext();
+
     self._script_manager.shutdown = true;
     self._session.browser.http_client.abort();
     self._script_manager.deinit();
@@ -597,6 +602,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                     // haven't started navigating, I guess.
                     return .done;
                 }
+                self.js.runMicrotasks();
 
                 // Either we have active http connections, or we're in CDP
                 // mode with an extra socket. Either way, we're waiting

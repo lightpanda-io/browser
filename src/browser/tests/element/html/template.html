@@ -166,3 +166,43 @@
   testing.expectEqual('First', inner1.textContent);
 }
 </script>
+
+<script id=dynamic_content>
+{
+  let template = document.createElement('template');
+  template.innerHTML = '<p>1</p><span>2</span>';
+  testing.expectEqual(2, template.content.children.length);
+}
+</script>
+
+<script id=outerHTML_includes_content>
+{
+  const template = $('#basic');
+  const outer = template.outerHTML;
+
+  testing.expectTrue(outer.includes('<template'));
+  testing.expectTrue(outer.includes('</template>'));
+  testing.expectTrue(outer.includes('<div class="container">'));
+  testing.expectTrue(outer.includes('Hello Template'));
+}
+</script>
+
+<script id=outerHTML_with_attributes>
+{
+  let template = document.createElement('template');
+  template.id = 'test-template';
+  template.innerHTML = '<p>Content</p>';
+
+  const outer = template.outerHTML;
+  testing.expectEqual('<template id="test-template"><p>Content</p></template>', outer);
+}
+</script>
+
+<script id=textContent_empty>
+{
+  const template = $('#basic');
+  // textContent on template operates on the template element itself,
+  // NOT the DocumentFragment, so it should be empty
+  testing.expectEqual('', template.textContent);
+}
+</script>

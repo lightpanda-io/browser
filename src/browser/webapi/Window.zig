@@ -157,8 +157,8 @@ pub fn setOnUnhandledRejection(self: *Window, cb_: ?js.Function) !void {
     }
 }
 
-pub fn fetch(_: *const Window, input: Fetch.Input, page: *Page) !js.Promise {
-    return Fetch.init(input, page);
+pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.RequestInit, page: *Page) !js.Promise {
+    return Fetch.init(input, options, page);
 }
 
 pub fn setTimeout(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.Object, page: *Page) !u32 {

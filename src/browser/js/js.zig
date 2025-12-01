@@ -75,22 +75,20 @@ pub const PromiseResolver = struct {
         const context = self.context;
         const js_value = try context.zigValueToJs(value);
 
-        // resolver.resolve will return null if the promise isn't pending
-        const ok = self.resolver.resolve(context.v8_context, js_value) orelse return;
-        if (!ok) {
+        if (self.resolver.resolve(context.v8_context, js_value) == null) {
             return error.FailedToResolvePromise;
         }
+        self.runMicrotasks();
     }
 
     pub fn reject(self: PromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value);
 
-        // resolver.reject will return null if the promise isn't pending
-        const ok = self.resolver.reject(context.v8_context, js_value) orelse return;
-        if (!ok) {
+        if (self.resolver.reject(context.v8_context, js_value) == null) {
             return error.FailedToRejectPromise;
         }
+        self.runMicrotasks();
     }
 };
 
@@ -111,9 +109,7 @@ pub const PersistentPromiseResolver = struct {
         const js_value = try context.zigValueToJs(value, .{});
         defer context.runMicrotasks();
 
-        // resolver.resolve will return null if the promise isn't pending
-        const ok = self.resolver.castToPromiseResolver().resolve(context.v8_context, js_value) orelse return;
-        if (!ok) {
+        if (self.resolver.castToPromiseResolver().resolve(context.v8_context, js_value) == null) {
             return error.FailedToResolvePromise;
         }
     }
@@ -124,8 +120,7 @@ pub const PersistentPromiseResolver = struct {
         defer context.runMicrotasks();
 
         // resolver.reject will return null if the promise isn't pending
-        const ok = self.resolver.castToPromiseResolver().reject(context.v8_context, js_value) orelse return;
-        if (!ok) {
+        if (self.resolver.castToPromiseResolver().reject(context.v8_context, js_value) == null) {
             return error.FailedToRejectPromise;
         }
     }

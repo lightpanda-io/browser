@@ -40,10 +40,11 @@ _response: *Response,
 _resolver: js.PersistentPromiseResolver,
 
 pub const Input = Request.Input;
+pub const RequestInit = Request.Options;
 
 // @ZIGDOM just enough to get campfire demo working
-pub fn init(input: Input, page: *Page) !js.Promise {
-    const request = try Request.init(input, null, page);
+pub fn init(input: Input, options: ?RequestInit, page: *Page) !js.Promise {
+    const request = try Request.init(input, options, page);
 
     const fetch = try page.arena.create(Fetch);
     fetch.* = .{
@@ -60,7 +61,6 @@ pub fn init(input: Input, page: *Page) !js.Promise {
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
     }
-    std.debug.print("fetch: {s}\n", .{request._url});
 
     try http_client.request(.{
         .ctx = fetch,
@@ -100,7 +100,6 @@ fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     self._response._body = self._buf.items;
-    std.debug.print("fetch-resolve: {s}\n", .{self._url});
     return self._resolver.resolve(self._response);
 }
 

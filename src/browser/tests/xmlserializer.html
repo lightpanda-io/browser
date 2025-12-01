@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=basic>
+{
+  const serializer = new XMLSerializer();
+  testing.expectEqual('object', typeof serializer);
+  testing.expectEqual('function', typeof serializer.serializeToString);
+}
+</script>
+
+<script id=serializeSimpleElement>
+{
+  const serializer = new XMLSerializer();
+  const div = document.createElement('div');
+  div.textContent = 'Hello World';
+
+  const result = serializer.serializeToString(div);
+  testing.expectEqual('<div>Hello World</div>', result);
+}
+</script>
+
+<script id=serializeElementWithAttributes>
+{
+  const serializer = new XMLSerializer();
+  const div = document.createElement('div');
+  div.id = 'test';
+  div.className = 'foo bar';
+  div.textContent = 'Content';
+
+  const result = serializer.serializeToString(div);
+  testing.expectEqual('<div id="test" class="foo bar">Content</div>', result);
+}
+</script>
+
+<script id=serializeNestedElements>
+{
+  const serializer = new XMLSerializer();
+  const div = document.createElement('div');
+  const p = document.createElement('p');
+  const span = document.createElement('span');
+  span.textContent = 'Nested';
+  p.appendChild(span);
+  div.appendChild(p);
+
+  const result = serializer.serializeToString(div);
+  testing.expectEqual('<div><p><span>Nested</span></p></div>', result);
+}
+</script>
+
+<script id=serializeEmptyElement>
+{
+  const serializer = new XMLSerializer();
+  const div = document.createElement('div');
+
+  const result = serializer.serializeToString(div);
+  testing.expectEqual('<div></div>', result);
+}
+</script>
+
+<script id=serializeVoidElements>
+{
+  const serializer = new XMLSerializer();
+  const br = document.createElement('br');
+  const img = document.createElement('img');
+  img.src = 'test.png';
+
+  const brResult = serializer.serializeToString(br);
+  testing.expectEqual('<br>', brResult);
+
+  const imgResult = serializer.serializeToString(img);
+  testing.expectEqual('<img src="test.png">', imgResult);
+}
+</script>
+
+<script id=serializeMultipleSiblings>
+{
+  const serializer = new XMLSerializer();
+  const container = document.createElement('div');
+  const span1 = document.createElement('span');
+  span1.textContent = 'First';
+  const span2 = document.createElement('span');
+  span2.textContent = 'Second';
+  container.appendChild(span1);
+  container.appendChild(span2);
+
+  const result = serializer.serializeToString(container);
+  testing.expectEqual('<div><span>First</span><span>Second</span></div>', result);
+}
+</script>
+
+<script id=serializeDocumentFragment>
+{
+  const serializer = new XMLSerializer();
+  const fragment = document.createDocumentFragment();
+  const div = document.createElement('div');
+  div.textContent = 'In fragment';
+  const span = document.createElement('span');
+  span.textContent = 'Also in fragment';
+  fragment.appendChild(div);
+  fragment.appendChild(span);
+
+  const result = serializer.serializeToString(fragment);
+  testing.expectEqual('<div>In fragment</div><span>Also in fragment</span>', result);
+}
+</script>
+
+<script id=serializeFromDOM>
+{
+  const serializer = new XMLSerializer();
+  const testDiv = document.createElement('div');
+  testDiv.id = 'serialize-test';
+  testDiv.innerHTML = '<p class="test">Hello <strong>World</strong></p>';
+
+  const result = serializer.serializeToString(testDiv);
+  testing.expectEqual('<div id="serialize-test"><p class="test">Hello <strong>World</strong></p></div>', result);
+}
+</script>
+
+<script id=roundtripWithInnerHTML>
+{
+  const serializer = new XMLSerializer();
+  const original = '<div class="container"><p>Text</p><span id="x">More</span></div>';
+
+  const div = document.createElement('div');
+  div.innerHTML = original;
+
+  const serialized = serializer.serializeToString(div.firstChild);
+  testing.expectEqual(original, serialized);
+}
+</script>

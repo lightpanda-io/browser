@@ -1176,7 +1176,6 @@ pub fn resolvePromise(self: *Context, value: anytype) !js.Promise {
         return error.FailedToResolvePromise;
     }
     self.runMicrotasks();
-
     return resolver.getPromise();
 }
 
