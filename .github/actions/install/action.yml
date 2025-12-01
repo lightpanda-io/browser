@@ -79,7 +79,7 @@ runs:
     - name: hmtl5ever release
       if: ${{ inputs.mode == 'release' }}
       shell: bash
-      run: zig build -Doptimize=ReleaseSafe html5ever
+      run: zig build -Doptimize=ReleaseFast html5ever
 
     - name: hmtl5ever debug
       if: ${{ inputs.mode == 'debug' }}
