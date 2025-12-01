@@ -4,7 +4,7 @@ ARG MINISIG=0.12
 ARG ZIG=0.15.2
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG V8=14.0.365.4
-ARG ZIG_V8=v0.1.33
+ARG ZIG_V8=v0.1.35
 ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \
@@ -40,9 +40,7 @@ WORKDIR /browser
 RUN git submodule init && \
     git submodule update --recursive
 
-RUN make install-libiconv && \
-    make install-netsurf && \
-    make install-mimalloc
+RUN zig build -Doptimize=ReleaseFast html5ever
 
 # download and install v8
 RUN case $TARGETPLATFORM in \

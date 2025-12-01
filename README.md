@@ -140,13 +140,14 @@ You may still encounter errors or crashes. Please open an issue with specifics i
 
 Here are the key features we have implemented:
 
-- [x] HTTP loader (based on Libcurl)
-- [x] HTML parser and DOM tree (based on Netsurf libs)
-- [x] Javascript support (v8)
+- [x] HTTP loader ([Libcurl](https://curl.se/libcurl/))
+- [x] HTML parser ([html5ever](https://github.com/servo/html5ever))
+- [x] DOM tree
+- [x] Javascript support ([v8](https://v8.dev/))
 - [x] DOM APIs
 - [x] Ajax
   - [x] XHR API
-  - [x] Fetch API (polyfill)
+  - [x] Fetch API
 - [x] DOM dump
 - [x] CDP/websockets server
 - [x] Click
@@ -214,37 +215,15 @@ To init or update the submodules in the `vendor/` directory:
 make install-submodule
 ```
 
-**iconv**
+**html5ever**
 
-libiconv is an internationalization library used by Netsurf.
-
-```
-make install-libiconv
-```
-
-**Netsurf libs**
-
-Netsurf libs are used for HTML parsing and DOM tree generation.
+[html5ver](https://github.com/servo/html5ever) is high-performance browser-grade HTML5 parser.
 
 ```
-make install-netsurf
+zig build html5ever
 ```
 
-For dev env, use `make install-netsurf-dev`.
-
-**Mimalloc**
-
-Mimalloc is used as a C memory allocator.
-
-```
-make install-mimalloc
-```
-
-For dev env, use `make install-mimalloc-dev`.
-
-Note: when Mimalloc is built in dev mode, you can dump memory stats with the
-env var `MIMALLOC_SHOW_STATS=1`. See
-[https://microsoft.github.io/mimalloc/environment.html](https://microsoft.github.io/mimalloc/environment.html).
+For a release build, use `zig build -Doptimize=ReleaseFast html5ever`.
 
 **v8**
 

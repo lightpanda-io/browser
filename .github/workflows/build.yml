@@ -36,6 +36,7 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
+          mode: 'release'
 
       - name: zig build
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
@@ -74,6 +75,7 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
+          mode: 'release'
 
       - name: zig build
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dcpu=generic -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
@@ -114,6 +116,7 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
+          mode: 'release'
 
       - name: zig build
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
@@ -157,6 +160,7 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
+          mode: 'release'
 
       - name: zig build
         run: zig build --release=safe -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
