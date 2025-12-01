@@ -65,9 +65,9 @@ pub fn build(b: *Build) !void {
         };
 
         break :blk switch (optimize) {
-            // Consider these as dev builds.
-            .Debug, .ReleaseSafe => argv[0 .. argv.len - 1],
-            .ReleaseFast, .ReleaseSmall => argv,
+            // Prefer dev build on debug option.
+            .Debug => argv[0 .. argv.len - 1],
+            else => argv,
         };
     };
     const html5ever_exec_cargo = b.addSystemCommand(html5ever_argv);
@@ -94,8 +94,9 @@ pub fn build(b: *Build) !void {
     };
 
     const html5ever_obj = switch (optimize) {
-        .Debug, .ReleaseSafe => b.getInstallPath(.prefix, "html5ever/debug/liblitefetch_html5ever.a"),
-        .ReleaseFast, .ReleaseSmall => b.getInstallPath(.prefix, "html5ever/release/liblitefetch_html5ever.a"),
+        .Debug => b.getInstallPath(.prefix, "html5ever/debug/liblitefetch_html5ever.a"),
+        // Release builds.
+        else => b.getInstallPath(.prefix, "html5ever/release/liblitefetch_html5ever.a"),
     };
 
     lightpanda_module.addObjectFile(.{ .cwd_relative = html5ever_obj });
