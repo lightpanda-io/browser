@@ -360,6 +360,89 @@ pub fn attachShadow(self: *Element, mode_str: []const u8, page: *Page) !*ShadowR
     return shadow_root;
 }
 
+pub fn insertAdjacentHTML(
+    self: *Element,
+    position: []const u8,
+    /// TODO: Add support for XML parsing.
+    html_or_xml: []const u8,
+    page: *Page,
+) !void {
+    // Create a new HTMLDocument.
+    const doc = try page._factory.document(@import("HTMLDocument.zig"){
+        ._proto = undefined,
+    });
+    const doc_node = doc.asNode();
+
+    const Parser = @import("../parser/Parser.zig");
+    var parser = Parser.init(page.call_arena, doc_node, page);
+    parser.parseFragment(html_or_xml);
+    // Check if there's parsing error.
+    if (parser.err) |_| return error.Invalid;
+
+    // We always get it wrapped like so:
+    // <html><head></head><body>{ ... }</body></html>
+    // None of the following can be null.
+    const maybe_html_node = doc_node.firstChild();
+    std.debug.assert(maybe_html_node != null);
+    const html_node = maybe_html_node orelse return;
+
+    const maybe_body_node = html_node.lastChild();
+    std.debug.assert(maybe_body_node != null);
+    const body = maybe_body_node orelse return;
+
+    const self_node = self.asNode();
+    // * `target_node` is `*Node` (where we actually insert),
+    // * `prev_node` is `?*Node`.
+    const target_node, const prev_node = blk: {
+        // Prefer case-sensitive match.
+        // "beforeend" was the most common case in my tests; we might adjust the order
+        // depending on which ones websites prefer most.
+        if (std.mem.eql(u8, position, "beforeend")) {
+            break :blk .{ self_node, null };
+        }
+
+        if (std.mem.eql(u8, position, "afterbegin")) {
+            // Get the first child; null indicates there are no children.
+            break :blk .{ self_node, self_node.firstChild() };
+        }
+
+        if (std.mem.eql(u8, position, "beforebegin")) {
+            // The node must have a parent node in order to use this variant.
+            const parent_node = self_node.parentNode() orelse return error.NoModificationAllowed;
+            // Parent cannot be Document.
+            switch (parent_node._type) {
+                .document, .document_fragment => return error.NoModificationAllowed,
+                else => {},
+            }
+
+            break :blk .{ parent_node, self_node };
+        }
+
+        if (std.mem.eql(u8, position, "afterend")) {
+            // The node must have a parent node in order to use this variant.
+            const parent_node = self_node.parentNode() orelse return error.NoModificationAllowed;
+            // Parent cannot be Document.
+            switch (parent_node._type) {
+                .document, .document_fragment => return error.NoModificationAllowed,
+                else => {},
+            }
+
+            // Get the next sibling or null; null indicates our node is the only one.
+            break :blk .{ parent_node, self_node.nextSibling() };
+        }
+
+        // Returned if:
+        // * position is not one of the four listed values.
+        // * The input is XML that is not well-formed.
+        return error.Syntax;
+    };
+
+    var iter = body.childrenIterator();
+    while (iter.next()) |child_node| {
+        _ = try target_node.insertBefore(child_node, prev_node, page);
+    }
+}
+
 pub fn setAttributeNode(self: *Element, attr: *Attribute, page: *Page) !?*Attribute {
     if (attr._element) |el| {
         if (el == self) {
@@ -992,6 +1075,7 @@ pub const JsApi = struct {
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
     pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
+    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true });
 
     const ShadowRootInit = struct {
         mode: []const u8,
