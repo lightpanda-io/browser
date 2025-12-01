@@ -120,6 +120,9 @@ pub const JsApi = struct {
 pub const List = struct {
     _list: std.DoublyLinkedList = .{},
 
+    pub fn isEmpty(self: *const List) bool {
+        return self._list.first == null;
+    }
     pub fn get(self: *const List, name: []const u8, page: *Page) !?[]const u8 {
         const entry = (try self.getEntry(name, page)) orelse return null;
         return entry._value.str();

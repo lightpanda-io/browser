@@ -288,6 +288,11 @@ pub fn hasAttribute(self: *const Element, name: []const u8, page: *Page) !bool {
     return value != null;
 }
 
+pub fn hasAttributes(self: *const Element) bool {
+    const attributes = self._attributes orelse return false;
+    return attributes.isEmpty() == false;
+}
+
 pub fn getAttributeNode(self: *Element, name: []const u8, page: *Page) !?*Attribute {
     const attributes = self._attributes orelse return null;
     return attributes.getAttribute(name, self, page);
@@ -952,6 +957,7 @@ pub const JsApi = struct {
     pub const style = bridge.accessor(Element.getStyle, null, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
+    pub const hasAttributes = bridge.function(Element.hasAttributes, .{});
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
     pub const setAttribute = bridge.function(Element.setAttribute, .{});

@@ -129,3 +129,39 @@
   testing.expectEqual(false, el1.hasAttribute('toggle-test'));
 }
 </script>
+
+<script id=hasAttributes>
+{
+  const el1 = $('#attr1');
+
+  // Element with attributes should return true
+  testing.expectEqual(true, el1.hasAttributes());
+
+  // Create element with no attributes
+  const div = document.createElement('div');
+  testing.expectEqual(false, div.hasAttributes());
+
+  // Add an attribute
+  div.setAttribute('test', 'value');
+  testing.expectEqual(true, div.hasAttributes());
+
+  // Remove the attribute
+  div.removeAttribute('test');
+  testing.expectEqual(false, div.hasAttributes());
+
+  // Add multiple attributes
+  div.setAttribute('a', '1');
+  div.setAttribute('b', '2');
+  div.setAttribute('c', '3');
+  testing.expectEqual(true, div.hasAttributes());
+
+  // Remove all but one
+  div.removeAttribute('a');
+  div.removeAttribute('b');
+  testing.expectEqual(true, div.hasAttributes());
+
+  // Remove the last one
+  div.removeAttribute('c');
+  testing.expectEqual(false, div.hasAttributes());
+}
+</script>
