@@ -134,7 +134,7 @@ const PostMessageCallback = struct {
             .origin = "",
             .source = null,
         }, self.page) catch |err| {
-            log.err(.dom, "MessagePort.postMessage", .{.err = err});
+            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
             return null;
         };
 
@@ -144,7 +144,7 @@ const PostMessageCallback = struct {
             self.port._on_message,
             .{ .context = "MessagePort message" },
         ) catch |err| {
-            log.err(.dom, "MessagePort.postMessage", .{.err = err});
+            log.err(.dom, "MessagePort.postMessage", .{ .err = err });
         };
 
         return null;

@@ -284,28 +284,36 @@ pub const NamedIndexed = struct {
 
 pub const Iterator = struct {
     func: *const fn (?*const v8.C_FunctionCallbackInfo) callconv(.c) void,
+    async: bool,
 
-    const Opts = struct {};
+    const Opts = struct {
+        async: bool = false,
+    };
 
     fn init(comptime T: type, comptime struct_or_func: anytype, comptime opts: Opts) Iterator {
-        _ = opts;
         if (@typeInfo(@TypeOf(struct_or_func)) == .type) {
-            return .{ .func = struct {
-                fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
-                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                    info.getReturnValue().set(info.getThis());
-                }
-            }.wrap };
+            return .{
+                .async = opts.async,
+                .func = struct {
+                    fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                        const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                        info.getReturnValue().set(info.getThis());
+                    }
+                }.wrap,
+            };
         }
 
-        return .{ .func = struct {
-            fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
-                const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-                var caller = Caller.init(info);
-                defer caller.deinit();
-                caller.method(T, struct_or_func, info, .{});
-            }
-        }.wrap };
+        return .{
+            .async = opts.async,
+            .func = struct {
+                fn wrap(raw_info: ?*const v8.C_FunctionCallbackInfo) callconv(.c) void {
+                    const info = v8.FunctionCallbackInfo.initFromV8(raw_info);
+                    var caller = Caller.init(info);
+                    defer caller.deinit();
+                    caller.method(T, struct_or_func, info, .{});
+                }
+            }.wrap,
+        };
     }
 };
 
@@ -564,6 +572,9 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/net/URLSearchParams.zig"),
     @import("../webapi/net/XMLHttpRequest.zig"),
     @import("../webapi/net/XMLHttpRequestEventTarget.zig"),
+    @import("../webapi/streams/ReadableStream.zig"),
+    @import("../webapi/streams/ReadableStreamDefaultReader.zig"),
+    @import("../webapi/streams/ReadableStreamDefaultController.zig"),
     @import("../webapi/Node.zig"),
     @import("../webapi/storage/storage.zig"),
     @import("../webapi/URL.zig"),

@@ -37,7 +37,6 @@ pub fn init(page: *Page) !*MessageChannel {
     });
 }
 
-
 pub fn getPort1(self: *const MessageChannel) *MessagePort {
     return self._port1;
 }

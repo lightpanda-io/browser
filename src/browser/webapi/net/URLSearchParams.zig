@@ -45,13 +45,13 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
             .query_string => |qs| break :blk try paramsFromString(arena, qs, &page.buf),
             .value => |js_val| {
                 if (js_val.isObject()) {
-                    break :blk try paramsFromObject(arena,  js_val.toObject());
+                    break :blk try paramsFromObject(arena, js_val.toObject());
                 }
                 if (js_val.isString()) {
                     break :blk try paramsFromString(arena, try js_val.toString(arena), &page.buf);
                 }
                 return error.InvalidArgument;
-            }
+            },
         }
     };
 

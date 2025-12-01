@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=readable_stream_basic>
+  {
+    // Test basic stream creation
+    const stream = new ReadableStream();
+    testing.expectEqual('object', typeof stream);
+    testing.expectEqual('function', typeof stream.getReader);
+  }
+</script>
+
+<script id=readable_stream_reader>
+  {
+    // Test getting a reader
+    const stream = new ReadableStream();
+    const reader = stream.getReader();
+    testing.expectEqual('object', typeof reader);
+    testing.expectEqual('function', typeof reader.read);
+    testing.expectEqual('function', typeof reader.releaseLock);
+    testing.expectEqual('function', typeof reader.cancel);
+  }
+</script>
+
+<script id=readable_stream_read_empty>
+  (async function() {
+    const stream = new ReadableStream();
+    const reader = stream.getReader();
+
+    // Reading from empty stream should return done:true
+    const result = await reader.read();
+    testing.expectEqual('object', typeof result);
+    testing.expectEqual(true, result.done);
+  })();
+</script>
+
+<script id=response_body>
+  (async function() {
+    const response = new Response('hello world');
+    testing.expectEqual('object', typeof response.body);
+
+    const reader = response.body.getReader();
+    const result = await reader.read();
+
+    testing.expectEqual(false, result.done);
+    testing.expectEqual(true, result.value instanceof Uint8Array);
+
+    // Convert Uint8Array to string
+    const decoder = new TextDecoder();
+    const text = decoder.decode(result.value);
+    testing.expectEqual('hello world', text);
+
+    // Next read should be done
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=response_text>
+  (async function() {
+    const response = new Response('hello from text()');
+    const text = await response.text();
+    testing.expectEqual('hello from text()', text);
+  })();
+</script>
+
+<script id=response_json>
+  (async function() {
+    const response = new Response('{"foo":"bar","num":42}');
+    const json = await response.json();
+    testing.expectEqual('object', typeof json);
+    testing.expectEqual('bar', json.foo);
+    testing.expectEqual(42, json.num);
+  })();
+</script>
+
+<script id=response_null_body>
+  {
+    // Response with no body should have null body
+    const response = new Response();
+    testing.expectEqual(null, response.body);
+  }
+</script>
+
+<script id=response_empty_string_body>
+  (async function() {
+    // Response with empty string should have a stream that's immediately closed
+    const response = new Response('');
+    testing.expectEqual('object', typeof response.body);
+
+    const reader = response.body.getReader();
+    const result = await reader.read();
+
+    // Stream should be closed immediately (done: true, no value)
+    testing.expectEqual(true, result.done);
+  })();
+</script>
+
+<script id=response_status>
+  (async function() {
+    const response = new Response('test', { status: 404 });
+    testing.expectEqual(404, response.status);
+    testing.expectEqual(false, response.ok);
+
+    const text = await response.text();
+    testing.expectEqual('test', text);
+  })();
+</script>
+
+<script id=async_iterator_exists>
+  (async function() {
+    const stream = new ReadableStream();
+    testing.expectEqual('function', typeof stream[Symbol.asyncIterator]);
+  })();
+</script>
+
+<script id=async_iterator_basic>
+  (async function() {
+    const stream = new ReadableStream();
+    const iterator = stream[Symbol.asyncIterator]();
+    testing.expectEqual('object', typeof iterator);
+    testing.expectEqual('function', typeof iterator.next);
+  })();
+</script>
+
+<script id=async_iterator_for_await>
+  (async function() {
+    const response = new Response('test data');
+    const stream = response.body;
+
+    const chunks = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+
+    testing.expectEqual(1, chunks.length);
+    testing.expectEqual(true, chunks[0] instanceof Uint8Array);
+
+    const decoder = new TextDecoder();
+    const text = decoder.decode(chunks[0]);
+    testing.expectEqual('test data', text);
+  })();
+</script>
+
+<script id=async_iterator_locks_stream>
+  (async function() {
+    const response = new Response('test');
+    const stream = response.body;
+
+    // Get async iterator (locks stream)
+    const iterator = stream[Symbol.asyncIterator]();
+
+    // Try to get reader - should fail
+    let errorThrown = false;
+    try {
+      stream.getReader();
+    } catch (e) {
+      errorThrown = true;
+    }
+    testing.expectEqual(true, errorThrown);
+  })();
+</script>
+
+<script id=async_iterator_manual_next>
+  (async function() {
+    const response = new Response('hello');
+    const stream = response.body;
+    const iterator = stream[Symbol.asyncIterator]();
+
+    const result = await iterator.next();
+    testing.expectEqual('object', typeof result);
+    testing.expectEqual(false, result.done);
+    testing.expectEqual(true, result.value instanceof Uint8Array);
+
+    // Second call should be done
+    const result2 = await iterator.next();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=async_iterator_early_break>
+  (async function() {
+    const response = new Response('test data');
+    const stream = response.body;
+
+    for await (const chunk of stream) {
+      break; // Early exit
+    }
+
+    // Should not throw errors
+    testing.expectEqual('object', typeof stream);
+  })();
+</script>

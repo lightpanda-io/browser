@@ -665,21 +665,21 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
 pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
     switch (@typeInfo(T)) {
         .optional => |o| {
-                // If type type is a ?js.Value or a ?js.Object, then we want to pass
-                // a js.Object, not null. Consider a function,
-                //    _doSomething(arg: ?Env.JsObjet) void { ... }
-                //
-                // And then these two calls:
-                //   doSomething();
-                //   doSomething(null);
-                //
-                // In the first case, we'll pass `null`. But in the
-                // second, we'll pass a js.Object which represents
-                // null.
-                // If we don't have this code, both cases will
-                // pass in `null` and the the doSomething won't
-                // be able to tell if `null` was explicitly passed
-                // or whether no parameter was passed.
+            // If type type is a ?js.Value or a ?js.Object, then we want to pass
+            // a js.Object, not null. Consider a function,
+            //    _doSomething(arg: ?Env.JsObjet) void { ... }
+            //
+            // And then these two calls:
+            //   doSomething();
+            //   doSomething(null);
+            //
+            // In the first case, we'll pass `null`. But in the
+            // second, we'll pass a js.Object which represents
+            // null.
+            // If we don't have this code, both cases will
+            // pass in `null` and the the doSomething won't
+            // be able to tell if `null` was explicitly passed
+            // or whether no parameter was passed.
             if (comptime o.child == js.Value) {
                 return js.Value{
                     .context = self,
@@ -837,7 +837,6 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
     if (T == js.String) {
         return .{ .string = try self.valueToString(js_value, .{ .allocator = self.arena }) };
     }
-
 
     if (comptime T == js.Value) {
         // Caller wants an opaque js.Object. Probably a parameter
@@ -1157,15 +1156,14 @@ pub fn stackTrace(self: *const Context) !?[]const u8 {
 }
 
 // == Promise Helpers ==
-pub fn rejectPromise(self: *Context, value: anytype) js.Promise {
+pub fn rejectPromise(self: *Context, value: anytype) !js.Promise {
     const ctx = self.v8_context;
     var resolver = v8.PromiseResolver.init(ctx);
-    if (self.zigValueToJs(value, .{})) |js_value| {
-        _ = resolver.reject(ctx, js_value);
-    } else |err| {
-        const str = self.isolate.initStringUtf8(@errorName(err));
-        _ = resolver.reject(ctx, str.toValue());
+    const js_value = try self.zigValueToJs(value, .{});
+    if (resolver.reject(ctx, js_value) == null) {
+        return error.FailedToResolvePromise;
     }
+    self.runMicrotasks();
     return resolver.getPromise();
 }
 
@@ -1174,7 +1172,10 @@ pub fn resolvePromise(self: *Context, value: anytype) !js.Promise {
     const js_value = try self.zigValueToJs(value, .{});
 
     var resolver = v8.PromiseResolver.init(ctx);
-    _ = resolver.resolve(ctx, js_value);
+    if (resolver.resolve(ctx, js_value) == null) {
+        return error.FailedToResolvePromise;
+    }
+    self.runMicrotasks();
 
     return resolver.getPromise();
 }
@@ -1257,12 +1258,12 @@ pub fn dynamicModuleCallback(
 
     const resource = self.jsStringToZigZ(.{ .handle = resource_name.? }, .{}) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
-        return @constCast(self.rejectPromise("Out of memory").handle);
+        return @constCast((self.rejectPromise("Out of memory") catch return null).handle);
     };
 
     const specifier = self.jsStringToZigZ(.{ .handle = v8_specifier.? }, .{}) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback2" });
-        return @constCast(self.rejectPromise("Out of memory").handle);
+        return @constCast((self.rejectPromise("Out of memory") catch return null).handle);
     };
 
     const normalized_specifier = self.script_manager.?.resolveSpecifier(
@@ -1271,14 +1272,14 @@ pub fn dynamicModuleCallback(
         specifier,
     ) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback3" });
-        return @constCast(self.rejectPromise("Out of memory").handle);
+        return @constCast((self.rejectPromise("Out of memory") catch return null).handle);
     };
 
     const promise = self._dynamicModuleCallback(normalized_specifier, resource) catch |err| blk: {
         log.err(.js, "dynamic module callback", .{
             .err = err,
         });
-        break :blk self.rejectPromise("Failed to load module");
+        break :blk self.rejectPromise("Failed to load module") catch return null;
     };
     return @constCast(promise.handle);
 }

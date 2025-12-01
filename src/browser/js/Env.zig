@@ -270,7 +270,10 @@ pub fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.Funct
             bridge.Iterator => {
                 // Same as a function, but with a specific name
                 const function_template = v8.FunctionTemplate.initCallback(isolate, value.func);
-                const js_name = v8.Symbol.getIterator(isolate).toName();
+                const js_name = if (value.async)
+                    v8.Symbol.getAsyncIterator(isolate).toName()
+                else
+                    v8.Symbol.getIterator(isolate).toName();
                 template_proto.set(js_name, function_template, v8.PropertyAttribute.None);
             },
             bridge.Property => {

@@ -752,11 +752,7 @@ const Script = struct {
         };
 
         if (comptime IS_DEBUG) {
-            log.debug(.browser, "executed script", .{
-                .src = url,
-                .success = success,
-                .on_load = script_element._on_load != null
-            });
+            log.debug(.browser, "executed script", .{ .src = url, .success = success, .on_load = script_element._on_load != null });
         }
 
         defer page.tick();

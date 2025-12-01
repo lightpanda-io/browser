@@ -265,12 +265,11 @@ pub fn postMessage(self: *Window, message: js.Object, target_origin: ?[]const u8
     const origin = try self._location.getOrigin(page);
     const callback = try page._factory.create(PostMessageCallback{
         .window = self,
-        .message = try message.persist() ,
+        .message = try message.persist(),
         .origin = try page.arena.dupe(u8, origin),
         .page = page,
     });
     errdefer page._factory.destroy(callback);
-
 
     try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",

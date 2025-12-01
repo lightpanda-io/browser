@@ -21,6 +21,7 @@ const js = @import("../../js/js.zig");
 
 const Page = @import("../../Page.zig");
 const Headers = @import("Headers.zig");
+const ReadableStream = @import("../streams/ReadableStream.zig");
 const Allocator = std.mem.Allocator;
 
 const Response = @This();
@@ -28,7 +29,7 @@ const Response = @This();
 _status: u16,
 _arena: Allocator,
 _headers: *Headers,
-_body: []const u8,
+_body: ?[]const u8,
 
 const InitOpts = struct {
     status: u16 = 200,
@@ -39,10 +40,13 @@ const InitOpts = struct {
 pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
     const opts = opts_ orelse InitOpts{};
 
+    // Store empty string as empty string, not null
+    const body = if (body_) |b| try page.arena.dupe(u8, b) else null;
+
     return page._factory.create(Response{
         ._arena = page.arena,
         ._status = opts.status,
-        ._body = if (body_) |b| try page.arena.dupe(u8, b) else "",
+        ._body = body,
         ._headers = opts.headers orelse try Headers.init(page),
     });
 }
@@ -55,15 +59,34 @@ pub fn getHeaders(self: *const Response) *Headers {
     return self._headers;
 }
 
+pub fn getBody(self: *const Response, page: *Page) !?*ReadableStream {
+    const body = self._body orelse return null;
+
+    // Empty string should create a closed stream with no data
+    if (body.len == 0) {
+        const stream = try ReadableStream.init(page);
+        try stream._controller.close();
+        return stream;
+    }
+
+    return ReadableStream.initWithData(body, page);
+}
+
 pub fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
 
+pub fn getText(self: *const Response, page: *Page) !js.Promise {
+    const body = self._body orelse "";
+    return page.js.resolvePromise(body);
+}
+
 pub fn getJson(self: *Response, page: *Page) !js.Promise {
+    const body = self._body orelse "";
     const value = std.json.parseFromSliceLeaky(
         std.json.Value,
         page.call_arena,
-        self._body,
+        body,
         .{},
     ) catch |err| {
         return page.js.rejectPromise(.{@errorName(err)});
@@ -83,6 +106,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Response.init, .{});
     pub const ok = bridge.accessor(Response.isOK, null, .{});
     pub const status = bridge.accessor(Response.getStatus, null, .{});
+    pub const text = bridge.function(Response.getText, .{});
     pub const json = bridge.function(Response.getJson, .{});
     pub const headers = bridge.accessor(Response.getHeaders, null, .{});
+    pub const body = bridge.accessor(Response.getBody, null, .{});
 };
