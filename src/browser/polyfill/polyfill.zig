@@ -54,6 +54,28 @@ pub const Loader = struct {
         }
 
         if (comptime builtin.mode == .Debug) {
+            const ignored = std.StaticStringMap(void).initComptime(.{
+                .{ "process", {} },
+                .{ "ShadyDOM", {} },
+                .{ "ShadyCSS", {} },
+
+                .{ "litNonce", {} },
+                .{ "litHtmlVersions", {} },
+                .{ "litHtmlPolyfillSupport", {} },
+                .{ "litElementHydrateSupport", {} },
+
+                .{ "recaptcha", {} },
+                .{ "grecaptcha", {} },
+                .{ "___grecaptcha_cfg", {} },
+                .{ "__recaptcha_api", {} },
+                .{ "__google_recaptcha_client", {} },
+
+                .{ "CLOSURE_FLAGS", {} },
+            });
+            if (ignored.has(name)) {
+                return false;
+            }
+
             log.debug(.unknown_prop, "unkown global property", .{
                 .info = "but the property can exist in pure JS",
                 .stack = js_context.stackTrace() catch "???",
