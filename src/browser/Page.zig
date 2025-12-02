@@ -1094,6 +1094,12 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined, ._tag_name = String.init(undefined, "main", .{}) catch unreachable, ._tag = .main },
             ),
+            asUint("data") => return self.createHtmlElementT(
+                Element.Html.Data,
+                namespace,
+                attribute_iterator,
+                .{ ._proto = undefined },
+            ),
             else => {},
         },
         5 => switch (@as(u40, @bitCast(name[0..5].*))) {
