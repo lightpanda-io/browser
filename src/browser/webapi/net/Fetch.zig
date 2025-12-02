@@ -77,6 +77,13 @@ pub fn init(input: Input, options: ?RequestInit, page: *Page) !js.Promise {
     return fetch._resolver.promise();
 }
 
+pub fn deinit(self: *Fetch) void {
+    if (self.transfer) |transfer| {
+        transfer.abort();
+        self.transfer = null;
+    }
+}
+
 fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
 

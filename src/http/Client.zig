@@ -153,7 +153,7 @@ pub fn abort(self: *Client) void {
             log.err(.http, "get private info", .{ .err = err, .source = "abort" });
             continue;
         };
-        transfer.abort();
+        transfer.kill();
     }
     std.debug.assert(self.active == 0);
 
@@ -806,6 +806,15 @@ pub const Transfer = struct {
 
     pub fn abort(self: *Transfer) void {
         self.client.requestFailed(self, error.Abort);
+        if (self._handle != null) {
+            self.client.endTransfer(self);
+        }
+        self.deinit();
+    }
+
+    // internal, when the page is shutting down. Doesn't have the same ceremony
+    // as abort (doesn't send a notification, doesn't invoke an error callback)
+    fn kill(self: *Transfer) void {
         if (self._handle != null) {
             self.client.endTransfer(self);
         }

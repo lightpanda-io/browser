@@ -74,6 +74,13 @@ pub fn init(page: *Page) !*XMLHttpRequest {
     });
 }
 
+pub fn deinit(self: *XMLHttpRequest) void {
+    if (self.transfer) |transfer| {
+        transfer.abort();
+        self.transfer = null;
+    }
+}
+
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
