@@ -30,6 +30,7 @@ const CustomElementDefinition = @import("CustomElementDefinition.zig");
 const CustomElementRegistry = @This();
 
 _definitions: std.StringHashMapUnmanaged(*CustomElementDefinition) = .{},
+_when_defined: std.StringHashMapUnmanaged(js.PersistentPromiseResolver) = .{},
 
 const DefineOptions = struct {
     extends: ?[]const u8 = null,
@@ -103,6 +104,10 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
 
         _ = page._undefined_custom_elements.swapRemove(idx);
     }
+
+    if (self._when_defined.fetchRemove(name)) |entry| {
+        try entry.value.resolve(constructor);
+    }
 }
 
 pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function {
@@ -112,6 +117,25 @@ pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function {
 
 pub fn upgrade(self: *CustomElementRegistry, root: *Node, page: *Page) !void {
     try upgradeNode(self, root, page);
+}
+
+pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) !js.Promise {
+    if (self._definitions.get(name)) |definition| {
+        return page.js.resolvePromise(definition.constructor);
+    }
+
+    const gop = try self._when_defined.getOrPut(page.arena, name);
+    if (gop.found_existing) {
+        return gop.value_ptr.promise();
+    }
+    errdefer _ = self._when_defined.remove(name);
+    const owned_name = try page.dupeString(name);
+
+    const resolver = try page.js.createPromiseResolver(.page);
+    gop.key_ptr.* = owned_name;
+    gop.value_ptr.* = resolver;
+
+    return resolver.promise();
 }
 
 fn upgradeNode(self: *CustomElementRegistry, node: *Node, page: *Page) !void {
@@ -222,6 +246,7 @@ pub const JsApi = struct {
     pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
     pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{});
+    pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{});
 };
 
 const testing = @import("../../testing.zig");

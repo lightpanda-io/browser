@@ -81,3 +81,41 @@
     testing.expectEqual('NO-HYPHEN-INVALID', el.tagName);
 }
 </script>
+
+<script id="whenDefined_already_defined">
+{
+    class AlreadyDefined extends HTMLElement {}
+    customElements.define('already-defined', AlreadyDefined);
+
+    const promise = customElements.whenDefined('already-defined');
+    testing.expectEqual('object', typeof promise);
+    testing.expectEqual(true, promise instanceof Promise);
+}
+</script>
+
+<script id="whenDefined_not_yet_defined">
+{
+    const promise = customElements.whenDefined('future-element');
+    testing.expectEqual('object', typeof promise);
+    testing.expectEqual(true, promise instanceof Promise);
+
+    // Now define it
+    class FutureElement extends HTMLElement {}
+    customElements.define('future-element', FutureElement);
+}
+</script>
+
+<script id="whenDefined_same_promise">
+{
+    const promise1 = customElements.whenDefined('pending-element');
+    const promise2 = customElements.whenDefined('pending-element');
+
+    // Should return the same promise for the same name
+    testing.expectEqual(true, promise1 === promise2);
+
+    // Define it so cleanup happens
+    class PendingElement extends HTMLElement {}
+    customElements.define('pending-element', PendingElement);
+}
+</script>
+

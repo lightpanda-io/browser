@@ -61,8 +61,11 @@ pub const Loader = struct {
 
                 .{ "litNonce", {} },
                 .{ "litHtmlVersions", {} },
+                .{ "litElementVersions", {} },
                 .{ "litHtmlPolyfillSupport", {} },
                 .{ "litElementHydrateSupport", {} },
+                .{ "litElementPolyfillSupport", {} },
+                .{ "reactiveElementVersions", {} },
 
                 .{ "recaptcha", {} },
                 .{ "grecaptcha", {} },
