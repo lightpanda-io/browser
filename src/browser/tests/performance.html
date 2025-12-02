@@ -43,3 +43,91 @@
     }
   }
 </script>
+
+<script id=mark>
+  {
+    let mark1 = performance.mark("start");
+    testing.expectEqual(true, mark1 instanceof PerformanceMark);
+    testing.expectEqual('start', mark1.name);
+    testing.expectEqual('mark', mark1.entryType);
+    testing.expectEqual(0, mark1.duration);
+    testing.expectEqual(null, mark1.detail);
+
+    let mark2 = performance.mark("start", {startTime: 32939393.9});
+    testing.expectEqual(32939393.9, mark2.startTime);
+  }
+</script>
+
+<script id=getEntries>
+  {
+    // Clear any existing marks first
+    performance.clearMarks();
+
+    const entries1 = performance.getEntries();
+    const initialCount = entries1.length;
+
+    performance.mark("test1");
+    performance.mark("test2");
+    performance.mark("test3");
+
+    const entries2 = performance.getEntries();
+    testing.expectEqual(initialCount + 3, entries2.length);
+  }
+</script>
+
+<script id=getEntriesByType>
+  {
+    performance.clearMarks();
+
+    performance.mark("mark1");
+    performance.mark("mark2");
+
+    const marks = performance.getEntriesByType("mark");
+    testing.expectEqual(2, marks.length);
+    testing.expectEqual('mark1', marks[0].name);
+    testing.expectEqual('mark2', marks[1].name);
+  }
+</script>
+
+<script id=getEntriesByName>
+  {
+    performance.clearMarks();
+
+    performance.mark("myMark");
+    performance.mark("otherMark");
+    performance.mark("myMark");
+
+    const entries = performance.getEntriesByName("myMark");
+    testing.expectEqual(2, entries.length);
+    testing.expectEqual('myMark', entries[0].name);
+    testing.expectEqual('myMark', entries[1].name);
+
+    const byType = performance.getEntriesByName("myMark", "mark");
+    testing.expectEqual(2, byType.length);
+  }
+</script>
+
+<script id=clearMarks>
+  {
+    performance.clearMarks();
+
+    performance.mark("mark1");
+    performance.mark("mark2");
+    performance.mark("mark3");
+
+    let marks = performance.getEntriesByType("mark");
+    testing.expectEqual(3, marks.length);
+
+    // Clear specific mark
+    performance.clearMarks("mark2");
+    marks = performance.getEntriesByType("mark");
+    testing.expectEqual(2, marks.length);
+    testing.expectEqual('mark1', marks[0].name);
+    testing.expectEqual('mark3', marks[1].name);
+
+    // Clear all marks
+    performance.clearMarks();
+    marks = performance.getEntriesByType("mark");
+    testing.expectEqual(0, marks.length);
+  }
+</script>
