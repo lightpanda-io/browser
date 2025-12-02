@@ -32,7 +32,7 @@ pub const Attribute = @import("element/Attribute.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 pub const DOMStringMap = @import("element/DOMStringMap.zig");
 const DOMRect = @import("DOMRect.zig");
-const CSS = @import("css.zig");
+const CSS = @import("CSS.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 
 pub const Svg = @import("element/Svg.zig");
