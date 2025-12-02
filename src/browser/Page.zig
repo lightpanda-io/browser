@@ -629,8 +629,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
 
                 if (try_catch.hasCaught()) {
                     const msg = (try try_catch.err(self.arena)) orelse "unknown";
-                    log.warn(.js, "page wait", .{ .err = msg, .src = "scheduler" });
-                    return error.JsError;
+                    log.info(.js, "page wait", .{ .err = msg, .src = "scheduler" });
                 }
 
                 const http_active = http_client.active;
@@ -1648,9 +1647,9 @@ pub fn childListChange(
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
 pub fn parseHtmlAsChildren(self: *Page, node: *Node, html: []const u8) !void {
-    std.debug.assert(self._parse_mode == .document);
+    const previous_parse_mode = self._parse_mode;
     self._parse_mode = .fragment;
-    defer self._parse_mode = .document;
+    defer self._parse_mode = previous_parse_mode;
 
     var parser = Parser.init(self.call_arena, node, self);
     parser.parseFragment(html);
