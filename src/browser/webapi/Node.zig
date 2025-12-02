@@ -419,6 +419,61 @@ pub fn childrenIterator(self: *Node) NodeIterator {
     };
 }
 
+pub fn getLength(self: *Node) u32 {
+    switch (self._type) {
+        .cdata => |cdata| {
+            return @intCast(cdata.getData().len);
+        },
+        .element, .document, .document_fragment => {
+            var count: u32 = 0;
+            var it = self.childrenIterator();
+            while (it.next()) |_| {
+                count += 1;
+            }
+            return count;
+        },
+        .document_type, .attribute => return 0,
+    }
+}
+
+pub fn getChildIndex(self: *Node, target: *const Node) ?u32 {
+    var i: u32 = 0;
+    var it = self.childrenIterator();
+    while (it.next()) |child| {
+        if (child == target) {
+            return i;
+        }
+        i += 1;
+    }
+    return null;
+}
+
+pub fn getChildAt(self: *Node, index: u32) ?*Node {
+    var i: u32 = 0;
+    var it = self.childrenIterator();
+    while (it.next()) |child| {
+        if (i == index) {
+            return child;
+        }
+        i += 1;
+    }
+    return null;
+}
+
+pub fn getData(self: *const Node) []const u8 {
+    return switch (self._type) {
+        .cdata => |c| c.getData(),
+        else => "",
+    };
+}
+
+pub fn setData(self: *Node, data: []const u8) void {
+    switch (self._type) {
+        .cdata => |c| c._data = data,
+        else => {},
+    }
+}
+
 pub fn className(self: *const Node) []const u8 {
     switch (self._type) {
         inline else => |c| return c.className(),

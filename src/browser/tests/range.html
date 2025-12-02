@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+<body>
+<div id="test-content">
+  <p id="p1">First paragraph</p>
+  <p id="p2">Second paragraph</p>
+  <span id="s1">Span content</span>
+</div>
+
+<script id=basic>
+{
+  const range = document.createRange();
+  testing.expectEqual('object', typeof range);
+  testing.expectEqual(true, range instanceof Range);
+}
+</script>
+
+<script id=initial_state>
+{
+  const range = document.createRange();
+
+  // New range should be collapsed at document position
+  testing.expectEqual(document, range.startContainer);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(document, range.endContainer);
+  testing.expectEqual(0, range.endOffset);
+  testing.expectEqual(true, range.collapsed);
+}
+</script>
+
+<script id=setStart_setEnd>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+  const p2 = $('#p2');
+
+  range.setStart(p1, 0);
+  testing.expectEqual(p1, range.startContainer);
+  testing.expectEqual(0, range.startOffset);
+  // After setStart, if new start is after original end, range collapses
+  // Since original end was at (document, 0) and p1 is inside document,
+  // the range auto-collapses to the new start
+  testing.expectEqual(p1, range.endContainer);
+  testing.expectEqual(0, range.endOffset);
+  testing.expectEqual(true, range.collapsed);
+
+  range.setEnd(p2, 0);
+  testing.expectEqual(p2, range.endContainer);
+  testing.expectEqual(0, range.endOffset);
+  testing.expectEqual(false, range.collapsed);
+}
+</script>
+
+<script id=collapse>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+  const p2 = $('#p2');
+
+  range.setStart(p1, 0);
+  range.setEnd(p2, 1);
+  testing.expectEqual(false, range.collapsed);
+
+  // Collapse to start
+  range.collapse(true);
+  testing.expectEqual(p1, range.startContainer);
+  testing.expectEqual(p1, range.endContainer);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(0, range.endOffset);
+  testing.expectEqual(true, range.collapsed);
+
+  // Reset and collapse to end
+  range.setStart(p1, 0);
+  range.setEnd(p2, 1);
+  range.collapse(false);
+  testing.expectEqual(p2, range.startContainer);
+  testing.expectEqual(p2, range.endContainer);
+  testing.expectEqual(1, range.startOffset);
+  testing.expectEqual(1, range.endOffset);
+  testing.expectEqual(true, range.collapsed);
+}
+</script>
+
+<script id=selectNode>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+  const parent = p1.parentNode;
+
+  range.selectNode(p1);
+
+  testing.expectEqual(parent, range.startContainer);
+  testing.expectEqual(parent, range.endContainer);
+  testing.expectEqual(false, range.collapsed);
+
+  // Start should be before p1, end should be after p1
+  const startOffset = range.startOffset;
+  const endOffset = range.endOffset;
+  testing.expectEqual(startOffset + 1, endOffset);
+  testing.expectEqual(p1, parent.childNodes[startOffset]);
+}
+</script>
+
+<script id=selectNodeContents>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+
+  range.selectNodeContents(p1);
+
+  testing.expectEqual(p1, range.startContainer);
+  testing.expectEqual(p1, range.endContainer);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(p1.childNodes.length, range.endOffset);
+  testing.expectEqual(false, range.collapsed);
+}
+</script>
+
+<script id=setStartBefore_setStartAfter>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+  const p2 = $('#p2');
+  const parent = p1.parentNode;
+
+  range.setStartBefore(p1);
+  testing.expectEqual(parent, range.startContainer);
+  const beforeOffset = range.startOffset;
+  testing.expectEqual(p1, parent.childNodes[beforeOffset]);
+
+  range.setStartAfter(p1);
+  testing.expectEqual(parent, range.startContainer);
+  const afterOffset = range.startOffset;
+  testing.expectEqual(afterOffset, beforeOffset + 1);
+}
+</script>
+
+<script id=setEndBefore_setEndAfter>
+{
+  const range = document.createRange();
+  const p2 = $('#p2');
+  const parent = p2.parentNode;
+
+  range.setEndBefore(p2);
+  testing.expectEqual(parent, range.endContainer);
+  const beforeOffset = range.endOffset;
+  testing.expectEqual(p2, parent.childNodes[beforeOffset]);
+
+  range.setEndAfter(p2);
+  testing.expectEqual(parent, range.endContainer);
+  const afterOffset = range.endOffset;
+  testing.expectEqual(afterOffset, beforeOffset + 1);
+}
+</script>
+
+<script id=cloneRange>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+  const p2 = $('#p2');
+
+  range.setStart(p1, 0);
+  range.setEnd(p2, 1);
+
+  const clone = range.cloneRange();
+
+  testing.expectTrue(clone !== range);
+  testing.expectEqual(range.startContainer, clone.startContainer);
+  testing.expectEqual(range.startOffset, clone.startOffset);
+  testing.expectEqual(range.endContainer, clone.endContainer);
+  testing.expectEqual(range.endOffset, clone.endOffset);
+  testing.expectEqual(range.collapsed, clone.collapsed);
+
+  // Modifying clone shouldn't affect original
+  clone.collapse(true);
+  testing.expectEqual(true, clone.collapsed);
+  testing.expectEqual(false, range.collapsed);
+}
+</script>
+
+<script id=toString_collapsed>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+
+  range.setStart(p1, 0);
+  range.setEnd(p1, 0);
+
+  testing.expectEqual('', range.toString());
+}
+</script>
+
+<script id=insertNode>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+  const newSpan = document.createElement('span');
+  newSpan.textContent = 'INSERTED';
+
+  // Select p1's contents
+  range.selectNodeContents(p1);
+
+  // Collapse to start
+  range.collapse(true);
+
+  // Insert node
+  range.insertNode(newSpan);
+
+  // Check that span is first child of p1
+  testing.expectEqual(newSpan, p1.firstChild);
+  testing.expectEqual('INSERTED', newSpan.textContent);
+}
+</script>
+
+<script id=insertNode_splitText>
+{
+  const div = document.createElement('div');
+  div.textContent = 'Hello World';
+
+  const range = document.createRange();
+  const textNode = div.firstChild;
+
+  // Set range to middle of text (after "Hello ")
+  range.setStart(textNode, 6);
+  range.collapse(true);
+
+  // Insert a span in the middle
+  const span = document.createElement('span');
+  span.textContent = 'MIDDLE';
+  range.insertNode(span);
+
+  // Should have 3 children: "Hello ", span, "World"
+  testing.expectEqual(3, div.childNodes.length);
+  testing.expectEqual('Hello ', div.childNodes[0].textContent);
+  testing.expectEqual(span, div.childNodes[1]);
+  testing.expectEqual('MIDDLE', div.childNodes[1].textContent);
+  testing.expectEqual('World', div.childNodes[2].textContent);
+
+  // Full text should be correct
+  testing.expectEqual('Hello MIDDLEWorld', div.textContent);
+}
+</script>
+
+<script id=deleteContents>
+{
+  const div = document.createElement('div');
+  div.innerHTML = '<p>Hello</p><span>World</span>';
+
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  testing.expectEqual(2, div.childNodes.length);
+
+  range.deleteContents();
+
+  testing.expectEqual(0, div.childNodes.length);
+  testing.expectEqual(true, range.collapsed);
+}
+</script>
+
+<script id=cloneContents>
+{
+  const div = document.createElement('div');
+  div.innerHTML = '<p>First</p><span>Second</span>';
+
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  const fragment = range.cloneContents();
+
+  // Original should be unchanged
+  testing.expectEqual(2, div.childNodes.length);
+
+  // Fragment should have copies
+  testing.expectEqual(2, fragment.childNodes.length);
+  testing.expectEqual('P', fragment.childNodes[0].tagName);
+  testing.expectEqual('First', fragment.childNodes[0].textContent);
+  testing.expectEqual('SPAN', fragment.childNodes[1].tagName);
+  testing.expectEqual('Second', fragment.childNodes[1].textContent);
+}
+</script>
+
+<script id=extractContents>
+{
+  const div = document.createElement('div');
+  div.innerHTML = '<p>First</p><span>Second</span>';
+
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  const fragment = range.extractContents();
+
+  // Original should be empty
+  testing.expectEqual(0, div.childNodes.length);
+
+  // Fragment should have extracted content
+  testing.expectEqual(2, fragment.childNodes.length);
+  testing.expectEqual('P', fragment.childNodes[0].tagName);
+  testing.expectEqual('SPAN', fragment.childNodes[1].tagName);
+}
+</script>
+
+<script id=surroundContents>
+{
+  const div = document.createElement('div');
+  div.innerHTML = '<p>Content</p>';
+
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  const wrapper = document.createElement('section');
+  wrapper.className = 'wrapper';
+
+  range.surroundContents(wrapper);
+
+  // Div should now contain only the wrapper
+  testing.expectEqual(1, div.childNodes.length);
+  testing.expectEqual(wrapper, div.firstChild);
+  testing.expectEqual('wrapper', wrapper.className);
+
+  // Wrapper should contain original content
+  testing.expectEqual(1, wrapper.childNodes.length);
+  testing.expectEqual('P', wrapper.firstChild.tagName);
+  testing.expectEqual('Content', wrapper.firstChild.textContent);
+}
+</script>
+
+<script id=createContextualFragment_basic>
+{
+  const div = document.createElement('div');
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  const fragment = range.createContextualFragment('<p>Hello</p><span>World</span>');
+
+  // Fragment should contain the parsed elements
+  testing.expectEqual(2, fragment.childNodes.length);
+  testing.expectEqual('P', fragment.childNodes[0].tagName);
+  testing.expectEqual('Hello', fragment.childNodes[0].textContent);
+  testing.expectEqual('SPAN', fragment.childNodes[1].tagName);
+  testing.expectEqual('World', fragment.childNodes[1].textContent);
+
+  // Original div should be unchanged
+  testing.expectEqual(0, div.childNodes.length);
+}
+</script>
+
+<script id=createContextualFragment_empty>
+{
+  const div = document.createElement('div');
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  const fragment = range.createContextualFragment('');
+
+  testing.expectEqual(0, fragment.childNodes.length);
+}
+</script>
+
+<script id=createContextualFragment_textContext>
+{
+  const div = document.createElement('div');
+  div.textContent = 'Some text';
+
+  const range = document.createRange();
+  const textNode = div.firstChild;
+  range.setStart(textNode, 5);
+  range.collapse(true);
+
+  // Even though range is in text node, should use parent (div) as context
+  const fragment = range.createContextualFragment('<b>Bold</b>');
+
+  testing.expectEqual(1, fragment.childNodes.length);
+  testing.expectEqual('B', fragment.childNodes[0].tagName);
+  testing.expectEqual('Bold', fragment.childNodes[0].textContent);
+}
+</script>

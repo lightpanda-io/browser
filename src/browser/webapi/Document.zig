@@ -177,6 +177,11 @@ pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node 
     return page.createTextNode(data);
 }
 
+const Range = @import("Range.zig");
+pub fn createRange(_: *const Document, page: *Page) !*Range {
+    return Range.init(page);
+}
+
 pub fn createEvent(_: *const Document, event_type: []const u8, page: *Page) !*@import("Event.zig") {
     const Event = @import("Event.zig");
 
@@ -290,6 +295,7 @@ pub const JsApi = struct {
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
+    pub const createRange = bridge.function(Document.createRange, .{});
     pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});
     pub const createNodeIterator = bridge.function(Document.createNodeIterator, .{});

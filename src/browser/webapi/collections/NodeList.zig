@@ -18,6 +18,7 @@
 
 const std = @import("std");
 
+const log = @import("../../..//log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
@@ -63,6 +64,23 @@ pub fn entries(self: *NodeList, page: *Page) !*EntryIterator {
     return .init(.{ .list = self }, page);
 }
 
+pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
+    var i: i32 = 0;
+    var it = try self.values(page);
+    while (true) : (i += 1) {
+        const next = try it.next(page);
+        if (next.done) {
+            return;
+        }
+
+        var result: js.Function.Result = undefined;
+        cb.tryCall(void, .{ next.value, i, self }, &result) catch {
+            log.debug(.js, "forEach callback", .{ .err = result.exception, .stack = result.stack });
+            return;
+        };
+    }
+}
+
 const GenericIterator = @import("iterator.zig").Entry;
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
@@ -96,5 +114,6 @@ pub const JsApi = struct {
     pub const keys = bridge.function(NodeList.keys, .{});
     pub const values = bridge.function(NodeList.values, .{});
     pub const entries = bridge.function(NodeList.entries, .{});
+    pub const forEach = bridge.function(NodeList.forEach, .{});
     pub const symbol_iterator = bridge.iterator(NodeList.values, .{});
 };

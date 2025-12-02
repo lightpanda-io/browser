@@ -73,7 +73,11 @@
   testing.expectEqual([0], Array.from(one.keys()));
   testing.expectEqual([p10], Array.from(one.values()));
   testing.expectEqual([[0, p10]], Array.from(one.entries()));
+
   testing.expectEqual([p10], Array.from(one));
+  let foreach = [];
+  one.forEach((p) => foreach.push(p));
+  testing.expectEqual([p10], foreach);
 </script>
 
 <script id=contains>
