@@ -3,7 +3,7 @@ const Page = @import("../Page.zig");
 const datetime = @import("../../datetime.zig");
 
 pub fn registerTypes() []const type {
-    return &.{ Performance, Entry, Mark };
+    return &.{ Performance, Entry, Mark, Measure };
 }
 
 const std = @import("std");
@@ -36,28 +36,32 @@ pub fn mark(self: *Performance, name: []const u8, _options: ?Mark.Options, page:
     return m;
 }
 
+pub fn measure(self: *Performance, name: []const u8, _options: ?Measure.Options, page: *Page) !*Measure {
+    const m = try Measure.init(name, _options, page);
+    try self._entries.append(page.arena, m._proto);
+    return m;
+}
+
 pub fn clearMarks(self: *Performance, mark_name: ?[]const u8) void {
-    if (mark_name) |name| {
-        // Remove specific mark by name
-        var i: usize = 0;
-        while (i < self._entries.items.len) {
-            const entry = self._entries.items[i];
-            if (entry._type == .mark and std.mem.eql(u8, entry._name, name)) {
-                _ = self._entries.orderedRemove(i);
-            } else {
-                i += 1;
-            }
+    var i: usize = 0;
+    while (i < self._entries.items.len) {
+        const entry = self._entries.items[i];
+        if (entry._type == .mark and (mark_name == null or std.mem.eql(u8, entry._name, mark_name.?))) {
+            _ = self._entries.orderedRemove(i);
+        } else {
+            i += 1;
         }
-    } else {
-        // Remove all marks
-        var i: usize = 0;
-        while (i < self._entries.items.len) {
-            const entry = self._entries.items[i];
-            if (entry._type == .mark) {
-                _ = self._entries.orderedRemove(i);
-            } else {
-                i += 1;
-            }
+    }
+}
+
+pub fn clearMeasures(self: *Performance, measure_name: ?[]const u8) void {
+    var i: usize = 0;
+    while (i < self._entries.items.len) {
+        const entry = self._entries.items[i];
+        if (entry._type == .measure and (measure_name == null or std.mem.eql(u8, entry._name, measure_name.?))) {
+            _ = self._entries.orderedRemove(i);
+        } else {
+            i += 1;
         }
     }
 }
@@ -99,6 +103,15 @@ pub fn getEntriesByName(self: *const Performance, name: []const u8, entry_type: 
     return result.items;
 }
 
+fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
+    for (self._entries.items) |entry| {
+        if (entry._type == .mark and std.mem.eql(u8, entry._name, mark_name)) {
+            return entry._start_time;
+        }
+    }
+    return error.SyntaxError; // Mark not found
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Performance);
 
@@ -110,7 +123,9 @@ pub const JsApi = struct {
 
     pub const now = bridge.function(Performance.now, .{});
     pub const mark = bridge.function(Performance.mark, .{});
+    pub const measure = bridge.function(Performance.measure, .{});
     pub const clearMarks = bridge.function(Performance.clearMarks, .{});
+    pub const clearMeasures = bridge.function(Performance.clearMeasures, .{});
     pub const getEntries = bridge.function(Performance.getEntries, .{});
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
@@ -131,7 +146,7 @@ pub const Entry = struct {
         layout_shift,
         long_animation_frame,
         longtask,
-        measure,
+        measure: *Measure,
         navigation,
         paint,
         resource,
@@ -223,6 +238,69 @@ pub const Mark = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const detail = bridge.accessor(Mark.getDetail, null, .{});
+    };
+};
+
+pub const Measure = struct {
+    _proto: *Entry,
+    _detail: ?js.Object,
+
+    const Options = struct {
+        detail: ?js.Object = null,
+        start: ?[]const u8 = null,
+        end: ?[]const u8 = null,
+        duration: ?f64 = null,
+    };
+
+    pub fn init(name: []const u8, _opts: ?Options, page: *Page) !*Measure {
+        const opts = _opts orelse Options{};
+        const perf = &page.window._performance;
+
+        const start_time = if (opts.start) |start_mark|
+            try perf.getMarkTime(start_mark)
+        else
+            0.0;
+
+        const end_time = if (opts.end) |end_mark|
+            try perf.getMarkTime(end_mark)
+        else
+            perf.now();
+
+        const duration = opts.duration orelse (end_time - start_time);
+
+        if (duration < 0.0) {
+            return error.TypeError;
+        }
+
+        const detail = if (opts.detail) |d| try d.persist() else null;
+        const m = try page._factory.create(Measure{
+            ._proto = undefined,
+            ._detail = detail,
+        });
+
+        const entry = try page._factory.create(Entry{
+            ._start_time = start_time,
+            ._duration = duration,
+            ._name = try page.dupeString(name),
+            ._type = .{ .measure = m },
+        });
+        m._proto = entry;
+        return m;
+    }
+
+    pub fn getDetail(self: *const Measure) ?js.Object {
+        return self._detail;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(Measure);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceMeasure";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+        pub const detail = bridge.accessor(Measure.getDetail, null, .{});
     };
 };
 

@@ -131,3 +131,152 @@
     testing.expectEqual(0, marks.length);
   }
 </script>
+
+<script id=measure_basic>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    let measure1 = performance.measure("basic-measure");
+    testing.expectEqual(true, measure1 instanceof PerformanceMeasure);
+    testing.expectEqual('basic-measure', measure1.name);
+    testing.expectEqual('measure', measure1.entryType);
+    testing.expectEqual(null, measure1.detail);
+  }
+</script>
+
+<script id=measure_between_marks>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    performance.mark("start");
+    performance.mark("end");
+
+    let measure = performance.measure("duration", {
+      start: "start",
+      end: "end"
+    });
+
+    testing.expectEqual('duration', measure.name);
+    testing.expectEqual('measure', measure.entryType);
+    testing.expectEqual(true, measure.duration >= 0);
+    testing.expectEqual(true, measure.startTime >= 0);
+  }
+</script>
+
+<script id=measure_no_arguments>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    let measure = performance.measure("from-start");
+    testing.expectEqual('from-start', measure.name);
+    testing.expectEqual(0, measure.startTime);
+    testing.expectEqual(true, measure.duration > 0);
+  }
+</script>
+
+<script id=measure_with_duration>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    let measure = performance.measure("fixed-duration", {
+      duration: 100.5
+    });
+
+    testing.expectEqual('fixed-duration', measure.name);
+    testing.expectEqual(100.5, measure.duration);
+    testing.expectEqual(0, measure.startTime);
+  }
+</script>
+
+<script id=measure_with_detail>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    let detail = { foo: "bar", count: 42 };
+    let measure = performance.measure("with-detail", {
+      detail: detail
+    });
+
+    testing.expectEqual('with-detail', measure.name);
+    testing.expectEqual(true, measure.detail !== null);
+    testing.expectEqual('bar', measure.detail.foo);
+    testing.expectEqual(42, measure.detail.count);
+  }
+</script>
+
+<script id=getEntriesByType_measure>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    performance.measure("measure1");
+    performance.measure("measure2");
+    performance.measure("measure3");
+
+    const measures = performance.getEntriesByType("measure");
+    testing.expectEqual(3, measures.length);
+    testing.expectEqual('measure1', measures[0].name);
+    testing.expectEqual('measure2', measures[1].name);
+    testing.expectEqual('measure3', measures[2].name);
+  }
+</script>
+
+<script id=clearMeasures>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    performance.measure("measure1");
+    performance.measure("measure2");
+    performance.measure("measure3");
+
+    let measures = performance.getEntriesByType("measure");
+    testing.expectEqual(3, measures.length);
+
+    // Clear specific measure
+    performance.clearMeasures("measure2");
+    measures = performance.getEntriesByType("measure");
+    testing.expectEqual(2, measures.length);
+    testing.expectEqual('measure1', measures[0].name);
+    testing.expectEqual('measure3', measures[1].name);
+
+    // Clear all measures
+    performance.clearMeasures();
+    measures = performance.getEntriesByType("measure");
+    testing.expectEqual(0, measures.length);
+  }
+</script>
+
+<script id=mixed_marks_and_measures>
+  {
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    performance.mark("mark1");
+    performance.measure("measure1");
+    performance.mark("mark2");
+    performance.measure("measure2");
+
+    const allEntries = performance.getEntries();
+    testing.expectEqual(true, allEntries.length >= 4);
+
+    const marks = performance.getEntriesByType("mark");
+    testing.expectEqual(2, marks.length);
+
+    const measures = performance.getEntriesByType("measure");
+    testing.expectEqual(2, measures.length);
+
+    // Clearing marks shouldn't affect measures
+    performance.clearMarks();
+    const remainingMeasures = performance.getEntriesByType("measure");
+    testing.expectEqual(2, remainingMeasures.length);
+
+    const remainingMarks = performance.getEntriesByType("mark");
+    testing.expectEqual(0, remainingMarks.length);
+  }
+</script>
