@@ -63,25 +63,58 @@ pub fn root(opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
 }
 
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
+    return _deep(node, opts, false, writer, page);
+}
+
+fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
     switch (node._type) {
-        .cdata => |cd| try writeEscapedText(cd.getData(), writer),
+        .cdata => |cd| {
+            if (node.is(Node.CData.Comment)) |_| {
+                try writer.writeAll("<!--");
+                try writer.writeAll(cd.getData());
+                try writer.writeAll("-->");
+            } else {
+                try writeEscapedText(cd.getData(), writer);
+            }
+        },
         .element => |el| {
             if (shouldStripElement(el, opts)) {
                 return;
             }
 
-            // Handle <slot> elements in rendered mode
-            if (opts.shadow == .rendered) {
-                if (el.is(Slot)) |slot| {
-                    return dumpSlotContent(slot, opts, writer, page);
+            // When opts.shadow == .rendered, we normally skip any element with
+            // a slot attribute. Only the "active" element will get rendered into
+            // the <slot name="X">. However, the `deep` function is itself used
+            // to render that "active" content, so when we're trying to render
+            // it, we don't want to skip it.
+            if ((comptime force_slot == false) and opts.shadow == .rendered) {
+                if (el.getAttributeSafe("slot")) |_| {
+                    // Skip - will be rendered by the Slot if it's the active container
+                    return;
                 }
             }
 
             try el.format(writer);
 
+            if (opts.shadow == .rendered) {
+                if (el.is(Slot)) |slot| {
+                    try dumpSlotContent(slot, opts, writer, page);
+                    return writer.writeAll("</slot>");
+                }
+            }
             if (opts.shadow != .skip) {
                 if (page._element_shadow_roots.get(el)) |shadow| {
                     try children(shadow.asNode(), opts, writer, page);
+                    // In rendered mode, light DOM is only shown through slots, not directly
+                    if (opts.shadow == .rendered) {
+                        // Skip rendering light DOM children
+                        if (!isVoidElement(el)) {
+                            try writer.writeAll("</");
+                            try writer.writeAll(el.getTagNameDump());
+                            try writer.writeByte('>');
+                        }
+                        return;
+                    }
                 }
             }
 
@@ -151,7 +184,7 @@ fn dumpSlotContent(slot: *Slot, opts: Opts, writer: *std.Io.Writer, page: *Page)
 
     if (assigned.len > 0) {
         for (assigned) |assigned_node| {
-            try deep(assigned_node, opts, writer, page);
+            try _deep(assigned_node, opts, true, writer, page);
         }
     } else {
         try children(slot.asNode(), opts, writer, page);
