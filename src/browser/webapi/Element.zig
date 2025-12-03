@@ -229,6 +229,26 @@ pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
     }
 }
 
+pub fn setInnerText(self: *Element, text: []const u8, page: *Page) !void {
+    const parent = self.asNode();
+
+    // Remove all existing children
+    page.domChanged();
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        page.removeNode(parent, child, .{ .will_be_reconnected = false });
+    }
+
+    // Fast path: skip if text is empty
+    if (text.len == 0) {
+        return;
+    }
+
+    // Create and append text node
+    const text_node = try page.createTextNode(text);
+    try page.appendNode(parent, text_node, .{ .child_already_connected = false });
+}
+
 pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, page: *Page) !void {
     const dump = @import("../dump.zig");
     return dump.deep(self.asNode(), .{ .shadow = .skip }, writer, page);
@@ -913,7 +933,7 @@ pub const JsApi = struct {
     }
     pub const namespaceURI = bridge.accessor(Element.getNamespaceURI, null, .{});
 
-    pub const innerText = bridge.accessor(_innerText, null, .{});
+    pub const innerText = bridge.accessor(_innerText, Element.setInnerText, .{});
     fn _innerText(self: *Element, page: *const Page) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(page.call_arena);
         try self.getInnerText(&buf.writer);

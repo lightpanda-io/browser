@@ -129,3 +129,36 @@
   d1.innerHTML = '<div><br><hr><img src="x.png"></div>';
   testing.expectEqual('<div><br><hr><img src="x.png"></div>', d1.innerHTML);
 </script>
+
+<script id=innerText>
+  // Get innerText from element
+  d1.innerHTML = 'hello <em>world</em>';
+  testing.expectEqual('hello world', d1.innerText);
+
+  // Set innerText - should replace children with text node
+  d1.innerText = 'only text';
+  testing.expectEqual('only text', d1.innerText);
+  testing.expectEqual('only text', d1.innerHTML);
+
+  // innerText does NOT parse HTML (unlike innerHTML)
+  d1.innerText = 'hello <div>world</div><b>!!</b>';
+  testing.expectEqual('hello <div>world</div><b>!!</b>', d1.innerText);
+  console.warn(d1.innerHTML);
+  testing.expectEqual('hello &lt;div&gt;world&lt;/div&gt;&lt;b&gt;!!&lt;/b&gt;', d1.innerHTML);
+
+  // Setting empty string clears children
+  d1.innerText = '';
+  testing.expectEqual('', d1.innerText);
+  testing.expectEqual('', d1.innerHTML);
+
+  // innerText with nested elements
+  d1.innerHTML = '<div>hello <span>beautiful</span> world</div>';
+  testing.expectEqual('hello beautiful world', d1.innerText);
+
+  // Setting innerText removes all previous children including elements
+  d1.innerHTML = '<div><p><a id=link2>hi</a></p></div>';
+  testing.expectEqual('hi', d1.innerText);
+  d1.innerText = 'new content';
+  testing.expectEqual('new content', d1.innerText);
+  testing.expectEqual(null, $('#link2'));
+</script>

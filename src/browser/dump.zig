@@ -64,7 +64,7 @@ pub fn root(opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
 
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
     switch (node._type) {
-        .cdata => |cd| try writer.writeAll(cd.getData()),
+        .cdata => |cd| try writeEscapedText(cd.getData(), writer),
         .element => |el| {
             if (shouldStripElement(el, opts)) {
                 return;
@@ -210,4 +210,36 @@ fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
     }
 
     return false;
+}
+
+fn writeEscapedText(text: []const u8, writer: *std.Io.Writer) !void {
+    // Fast path: if no special characters, write directly
+    const first_special = std.mem.indexOfAny(u8, text, "&<>") orelse {
+        return writer.writeAll(text);
+    };
+
+    try writer.writeAll(text[0..first_special]);
+    try writer.writeAll(switch (text[first_special]) {
+        '&' => "&amp;",
+        '<' => "&lt;",
+        '>' => "&gt;",
+        else => unreachable,
+    });
+
+    // Process remaining text
+    var remaining = text[first_special + 1 ..];
+    while (std.mem.indexOfAny(u8, remaining, "&<>")) |offset| {
+        try writer.writeAll(remaining[0..offset]);
+        try writer.writeAll(switch (remaining[offset]) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            else => unreachable,
+        });
+        remaining = remaining[offset + 1 ..];
+    }
+
+    if (remaining.len > 0) {
+        try writer.writeAll(remaining);
+    }
 }
