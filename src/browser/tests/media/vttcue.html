@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<script src="..//testing.js"></script>
+
+<script id=basic>
+  {
+    // Test that VTTCue constructor exists
+    testing.expectEqual("function", typeof VTTCue);
+    testing.expectEqual("function", typeof TextTrackCue);
+
+    // Create a basic VTTCue
+    const cue = new VTTCue(0, 5, "Hello World");
+    testing.expectEqual(0, cue.startTime);
+    testing.expectEqual(5, cue.endTime);
+    testing.expectEqual("Hello World", cue.text);
+  }
+
+  {
+    // Test property setters
+    const cue = new VTTCue(1.5, 10.25, "Test text");
+    cue.id = "test-cue";
+    testing.expectEqual("test-cue", cue.id);
+
+    cue.startTime = 2.0;
+    testing.expectEqual(2.0, cue.startTime);
+
+    cue.text = "Modified text";
+    testing.expectEqual("Modified text", cue.text);
+  }
+</script>
+
+<script id=defaults>
+  {
+    // Test default values
+    const cue = new VTTCue(0, 1, "test");
+    testing.expectEqual("", cue.vertical);
+    testing.expectEqual(true, cue.snapToLines);
+    testing.expectEqual("auto", cue.line);
+    testing.expectEqual("auto", cue.position);
+    testing.expectEqual(100, cue.size);
+    testing.expectEqual("center", cue.align);
+    testing.expectEqual(false, cue.pauseOnExit);
+  }
+</script>
+
+<script id=properties>
+  {
+    // Test setting various properties
+    const cue = new VTTCue(0, 5, "test");
+
+    cue.vertical = "rl";
+    testing.expectEqual("rl", cue.vertical);
+
+    cue.snapToLines = false;
+    testing.expectEqual(false, cue.snapToLines);
+
+    cue.line = 10;
+    testing.expectEqual(10, cue.line);
+
+    cue.position = 50;
+    testing.expectEqual(50, cue.position);
+
+    cue.size = 75;
+    testing.expectEqual(75, cue.size);
+
+    cue.align = "left";
+    testing.expectEqual("left", cue.align);
+
+    cue.pauseOnExit = true;
+    testing.expectEqual(true, cue.pauseOnExit);
+  }
+</script>

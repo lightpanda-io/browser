@@ -36,6 +36,7 @@ pub const Type = union(enum) {
     abort_signal: *@import("AbortSignal.zig"),
     media_query_list: *@import("css/MediaQueryList.zig"),
     message_port: *@import("MessagePort.zig"),
+    text_track_cue: *@import("media/TextTrackCue.zig"),
 };
 
 pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
@@ -104,6 +105,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .abort_signal => writer.writeAll("<abort_signal>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
+        .text_track_cue => writer.writeAll("<TextTrackCue>"),
     };
 }
 

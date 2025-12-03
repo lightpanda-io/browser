@@ -277,6 +277,15 @@ pub fn xhrEventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     ).create(allocator, child);
 }
 
+pub fn textTrackCue(self: *Factory, child: anytype) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+    const TextTrackCue = @import("webapi/media/TextTrackCue.zig");
+
+    return try AutoPrototypeChain(
+        &.{ EventTarget, TextTrackCue, @TypeOf(child) },
+    ).create(allocator, child);
+}
+
 fn hasChainRoot(comptime T: type) bool {
     // Check if this is a root
     if (@hasDecl(T, "_prototype_root")) {
