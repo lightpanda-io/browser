@@ -87,7 +87,7 @@ pub fn measure(
                 break :blk perf.now();
             };
 
-            const m = try Measure.init1(
+            const m = try Measure.init(
                 name,
                 options.detail,
                 start_timestamp,
@@ -110,7 +110,7 @@ pub fn measure(
                 break :blk perf.now();
             };
 
-            const m = try Measure.init1(
+            const m = try Measure.init(
                 name,
                 null,
                 start_timestamp,
@@ -123,7 +123,7 @@ pub fn measure(
         },
     };
 
-    const m = try Measure.init1(name, null, 0.0, perf.now(), null, page);
+    const m = try Measure.init(name, null, 0.0, perf.now(), null, page);
     try self._entries.append(page.arena, m._proto);
     return m;
 }
