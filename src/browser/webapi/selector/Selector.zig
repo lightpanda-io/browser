@@ -82,7 +82,7 @@ pub fn matches(el: *Node.Element, input: []const u8, page: *Page) !bool {
     const selectors = try Parser.parseList(arena, input, page);
 
     for (selectors) |selector| {
-        if (List.matches(el.asNode(), selector, page)) {
+        if (List.matches(el.asNode(), selector, el.asNode(), page)) {
             return true;
         }
     }
@@ -165,6 +165,7 @@ pub const PseudoClass = union(enum) {
 
     // Tree structural
     root,
+    scope,
     empty,
     first_child,
     last_child,

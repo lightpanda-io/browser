@@ -504,6 +504,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
             if (fastEql(name, "modal")) return .modal;
             if (fastEql(name, "hover")) return .hover;
             if (fastEql(name, "focus")) return .focus;
+            if (fastEql(name, "scope")) return .scope;
             if (fastEql(name, "empty")) return .empty;
             if (fastEql(name, "valid")) return .valid;
         },

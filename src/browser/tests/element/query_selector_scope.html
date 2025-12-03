@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container">
+  <div id="child1" class="item">
+    <span id="grandchild1">Grandchild 1</span>
+    <span id="grandchild2">Grandchild 2</span>
+  </div>
+  <div id="child2" class="item">
+    <span id="grandchild3">Grandchild 3</span>
+  </div>
+</div>
+
+<script id="scopeBasic">
+{
+  // :scope refers to the reference element but querySelector only returns descendants
+  const container = $('#container');
+
+  // :scope alone doesn't match anything because querySelector only returns descendants
+  const scopeMatch = container.querySelector(':scope');
+  testing.expectEqual(null, scopeMatch);
+
+  // :scope in querySelectorAll should also return empty
+  const scopeMatches = container.querySelectorAll(':scope');
+  testing.expectEqual(0, scopeMatches.length);
+}
+</script>
+
+<script id="scopeWithCombinators">
+{
+  const container = $('#container');
+
+  // :scope > child - direct children of scope
+  const directChildren = container.querySelectorAll(':scope > div');
+  testing.expectEqual(2, directChildren.length);
+  testing.expectEqual($('#child1'), directChildren[0]);
+  testing.expectEqual($('#child2'), directChildren[1]);
+
+  // :scope > .item - direct children with class
+  const itemChildren = container.querySelectorAll(':scope > .item');
+  testing.expectEqual(2, itemChildren.length);
+
+  // :scope span - descendant spans of scope
+  const spans = container.querySelectorAll(':scope span');
+  testing.expectEqual(3, spans.length);
+
+  // :scope > div > span - grandchildren via specific path
+  const grandchildren = container.querySelectorAll(':scope > div > span');
+  testing.expectEqual(3, grandchildren.length);
+}
+</script>
+
+<div id="nested-container">
+  <div class="outer">
+    <div class="inner" id="target">
+      <span class="text">Inner text</span>
+    </div>
+    <div class="inner">
+      <span class="text">Other text</span>
+    </div>
+  </div>
+</div>
+
+<script id="scopeNested">
+{
+  const target = $('#target');
+
+  // :scope refers to target but querySelector only returns descendants
+  const scopeMatch = target.querySelector(':scope');
+  testing.expectEqual(null, scopeMatch);
+
+  // :scope > span should find direct children of target
+  const directSpan = target.querySelector(':scope > span');
+  testing.expectEqual('Inner text', directSpan.textContent);
+
+  // When querySelector is called on target, :scope refers to target
+  const scopeChildren = target.querySelectorAll(':scope > .text');
+  testing.expectEqual(1, scopeChildren.length);
+}
+</script>
+
+<div id="compound-test">
+  <div class="box" id="box1">Box 1</div>
+  <div class="box" id="box2">Box 2</div>
+  <span class="box" id="box3">Box 3</span>
+</div>
+
+<script id="scopeCompound">
+{
+  const compound = $('#compound-test');
+
+  // Compound selector with :scope
+  const divBoxes = compound.querySelectorAll(':scope > div.box');
+  testing.expectEqual(2, divBoxes.length);
+  testing.expectEqual($('#box1'), divBoxes[0]);
+  testing.expectEqual($('#box2'), divBoxes[1]);
+
+  // :scope with multiple parts
+  const spanBox = compound.querySelector(':scope > span.box');
+  testing.expectEqual($('#box3'), spanBox);
+}
+</script>
+
+<div id="pseudo-container">
+  <div class="parent" id="p1">
+    <div class="child">Child 1</div>
+    <div class="child">Child 2</div>
+  </div>
+  <div class="parent" id="p2">
+    <div class="child">Child 3</div>
+  </div>
+</div>
+
+<script id="scopeWithOtherPseudos">
+{
+  const container = $('#pseudo-container');
+
+  // :scope with :not()
+  const notP1Children = container.querySelectorAll(':scope > .parent:not(#p1) > .child');
+  testing.expectEqual(1, notP1Children.length);
+  testing.expectEqual('Child 3', notP1Children[0].textContent);
+
+  // :scope with :first-child
+  const firstParent = container.querySelector(':scope > .parent:first-child');
+  testing.expectEqual($('#p1'), firstParent);
+}
+</script>
