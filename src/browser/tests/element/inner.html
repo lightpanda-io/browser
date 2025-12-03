@@ -143,7 +143,6 @@
   // innerText does NOT parse HTML (unlike innerHTML)
   d1.innerText = 'hello <div>world</div><b>!!</b>';
   testing.expectEqual('hello <div>world</div><b>!!</b>', d1.innerText);
-  console.warn(d1.innerHTML);
   testing.expectEqual('hello &lt;div&gt;world&lt;/div&gt;&lt;b&gt;!!&lt;/b&gt;', d1.innerHTML);
 
   // Setting empty string clears children

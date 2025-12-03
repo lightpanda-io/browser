@@ -17,15 +17,145 @@
   testing.expectEqual(null, headers.get('Content-Type'));
   testing.expectEqual(false, headers.has('Content-Type'));
 }
+</script>
 
+<script id=case-insensitive>
+// Headers should be case-insensitive per HTTP spec
+{
+  const headers = new Headers();
+
+  // Set with one case, get with another
+  headers.set('Content-Type', 'application/json');
+  testing.expectEqual('application/json', headers.get('content-type'));
+  testing.expectEqual('application/json', headers.get('CONTENT-TYPE'));
+  testing.expectEqual('application/json', headers.get('Content-Type'));
+
+  // has should be case-insensitive
+  testing.expectEqual(true, headers.has('content-type'));
+  testing.expectEqual(true, headers.has('CONTENT-TYPE'));
+  testing.expectEqual(true, headers.has('Content-Type'));
+
+  // delete should be case-insensitive
+  headers.delete('CONTENT-TYPE');
+  testing.expectEqual(false, headers.has('content-type'));
+  testing.expectEqual(false, headers.has('Content-Type'));
+}
+
+{
+  const headers = new Headers();
+
+  // Append with different cases - should all be treated as same header
+  headers.append('Accept', 'application/json');
+  headers.append('ACCEPT', 'text/html');
+  headers.append('accept', 'text/plain');
+
+  // Verify all values are present using iteration
+  const values = Array.from(headers.values());
+  testing.expectEqual(3, values.length);
+  testing.expectEqual('application/json', values[0]);
+  testing.expectEqual('text/html', values[1]);
+  testing.expectEqual('text/plain', values[2]);
+}
+
+{
+  const headers = new Headers();
+
+  // Set should replace regardless of case
+  headers.set('Authorization', 'Bearer token1');
+  headers.set('AUTHORIZATION', 'Bearer token2');
+
+  testing.expectEqual('Bearer token2', headers.get('authorization'));
+
+  // Should only have one entry after set replaces
+  const entries = Array.from(headers.entries());
+  testing.expectEqual(1, entries.length);
+  testing.expectEqual('authorization', entries[0][0]);
+  testing.expectEqual('Bearer token2', entries[0][1]);
+}
+</script>
+
+<script id=iterators>
+// Test keys(), values(), entries() iterators
+{
+  const headers = new Headers();
+  headers.set('Content-Type', 'application/json');
+  headers.set('Authorization', 'Bearer token123');
+  headers.set('X-Custom', 'test-value');
+
+  // Test keys()
+  const keys = Array.from(headers.keys());
+  testing.expectEqual(3, keys.length);
+  testing.expectEqual('content-type', keys[0]);
+  testing.expectEqual('authorization', keys[1]);
+  testing.expectEqual('x-custom', keys[2]);
+
+  // Test values()
+  const values = Array.from(headers.values());
+  testing.expectEqual(3, values.length);
+  testing.expectEqual('application/json', values[0]);
+  testing.expectEqual('Bearer token123', values[1]);
+  testing.expectEqual('test-value', values[2]);
+
+  // Test entries()
+  const entries = Array.from(headers.entries());
+  testing.expectEqual(3, entries.length);
+  testing.expectEqual('content-type', entries[0][0]);
+  testing.expectEqual('application/json', entries[0][1]);
+  testing.expectEqual('authorization', entries[1][0]);
+  testing.expectEqual('Bearer token123', entries[1][1]);
+  testing.expectEqual('x-custom', entries[2][0]);
+  testing.expectEqual('test-value', entries[2][1]);
+}
+
+// Test forEach()
+{
+  const headers = new Headers();
+  headers.set('Content-Type', 'application/json');
+  headers.set('Authorization', 'Bearer token123');
+
+  const collected = [];
+  headers.forEach(function(value, name, headersObj) {
+    collected.push([name, value]);
+    testing.expectEqual(headers, headersObj);
+  });
+
+  testing.expectEqual(2, collected.length);
+  testing.expectEqual('content-type', collected[0][0]);
+  testing.expectEqual('application/json', collected[0][1]);
+  testing.expectEqual('authorization', collected[1][0]);
+  testing.expectEqual('Bearer token123', collected[1][1]);
+}
+
+// Test forEach with thisArg
+{
+  const headers = new Headers();
+  headers.set('X-Test', 'value');
+
+  const context = { count: 0 };
+  headers.forEach(function() {
+    this.count++;
+  }, context);
+
+  testing.expectEqual(1, context.count);
+}
+
+// Test multiple values for same header using append
 {
   const headers = new Headers();
   headers.append('Accept', 'application/json');
   headers.append('Accept', 'text/html');
+  headers.append('Accept', 'text/plain');
 
-  const all = headers.getAll('Accept');
-  testing.expectEqual(2, all.length);
-  testing.expectEqual('application/json', all[0]);
-  testing.expectEqual('text/html', all[1]);
+  const values = [];
+  headers.forEach((value, name) => {
+    if (name === 'accept') {
+      values.push(value);
+    }
+  });
+
+  testing.expectEqual(3, values.length);
+  testing.expectEqual('application/json', values[0]);
+  testing.expectEqual('text/html', values[1]);
+  testing.expectEqual('text/plain', values[2]);
 }
 </script>
