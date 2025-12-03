@@ -773,6 +773,8 @@ const Script = struct {
         log.warn(.js, "eval script", .{
             .url = url,
             .err = msg,
+            .stack = try_catch.stack(page.call_arena) catch null,
+            .line = try_catch.sourceLineNumber() orelse 0,
             .cacheable = cacheable,
         });
 
