@@ -48,8 +48,81 @@ pub fn mark(self: *Performance, name: []const u8, _options: ?Mark.Options, page:
     return m;
 }
 
-pub fn measure(self: *Performance, name: []const u8, _options: ?Measure.Options, page: *Page) !*Measure {
-    const m = try Measure.init(name, _options, page);
+const MeasureOptionsOrStartMark = union(enum) {
+    measure_options: Measure.Options,
+    start_mark: []const u8,
+};
+
+pub fn measure(
+    self: *Performance,
+    name: []const u8,
+    maybe_options_or_start: ?MeasureOptionsOrStartMark,
+    maybe_end_mark: ?[]const u8,
+    page: *Page,
+) !*Measure {
+    if (maybe_options_or_start) |options_or_start| switch (options_or_start) {
+        .measure_options => |options| {
+            // Get start timestamp.
+            const start_timestamp = blk: {
+                if (options.start) |timestamp_or_mark| {
+                    break :blk switch (timestamp_or_mark) {
+                        .timestamp => |timestamp| timestamp,
+                        .mark => |mark_name| try self.getMarkTime(mark_name),
+                    };
+                }
+
+                break :blk 0.0;
+            };
+
+            // Get end timestamp.
+            const end_timestamp = blk: {
+                if (options.end) |timestamp_or_mark| {
+                    break :blk switch (timestamp_or_mark) {
+                        .timestamp => |timestamp| timestamp,
+                        .mark => |mark_name| try self.getMarkTime(mark_name),
+                    };
+                }
+
+                break :blk self.now();
+            };
+
+            const m = try Measure.init(
+                name,
+                options.detail,
+                start_timestamp,
+                end_timestamp,
+                options.duration,
+                page,
+            );
+            try self._entries.append(page.arena, m._proto);
+            return m;
+        },
+        .start_mark => |start_mark| {
+            // Get start timestamp.
+            const start_timestamp = try self.getMarkTime(start_mark);
+            // Get end timestamp.
+            const end_timestamp = blk: {
+                if (maybe_end_mark) |mark_name| {
+                    break :blk try self.getMarkTime(mark_name);
+                }
+
+                break :blk self.now();
+            };
+
+            const m = try Measure.init(
+                name,
+                null,
+                start_timestamp,
+                end_timestamp,
+                null,
+                page,
+            );
+            try self._entries.append(page.arena, m._proto);
+            return m;
+        },
+    };
+
+    const m = try Measure.init(name, null, 0.0, self.now(), null, page);
     try self._entries.append(page.arena, m._proto);
     return m;
 }
@@ -121,6 +194,13 @@ fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
             return entry._start_time;
         }
     }
+
+    // Recognized mark names by browsers. `navigationStart` is an equivalent
+    // to 0. Others are dependant to request arrival, end of request etc.
+    if (std.mem.eql(u8, "navigationStart", mark_name)) {
+        return 0;
+    }
+
     return error.SyntaxError; // Mark not found
 }
 
@@ -259,39 +339,37 @@ pub const Measure = struct {
 
     const Options = struct {
         detail: ?js.Object = null,
-        start: ?[]const u8 = null,
-        end: ?[]const u8 = null,
+        start: ?TimestampOrMark,
+        end: ?TimestampOrMark,
         duration: ?f64 = null,
+
+        const TimestampOrMark = union(enum) {
+            timestamp: f64,
+            mark: []const u8,
+        };
     };
 
-    pub fn init(name: []const u8, _opts: ?Options, page: *Page) !*Measure {
-        const opts = _opts orelse Options{};
-        const perf = &page.window._performance;
-
-        const start_time = if (opts.start) |start_mark|
-            try perf.getMarkTime(start_mark)
-        else
-            0.0;
-
-        const end_time = if (opts.end) |end_mark|
-            try perf.getMarkTime(end_mark)
-        else
-            perf.now();
-
-        const duration = opts.duration orelse (end_time - start_time);
-
+    pub fn init(
+        name: []const u8,
+        maybe_detail: ?js.Object,
+        start_timestamp: f64,
+        end_timestamp: f64,
+        maybe_duration: ?f64,
+        page: *Page,
+    ) !*Measure {
+        const duration = maybe_duration orelse (end_timestamp - start_timestamp);
         if (duration < 0.0) {
             return error.TypeError;
         }
 
-        const detail = if (opts.detail) |d| try d.persist() else null;
+        const detail = if (maybe_detail) |d| try d.persist() else null;
         const m = try page._factory.create(Measure{
             ._proto = undefined,
             ._detail = detail,
         });
 
         const entry = try page._factory.create(Entry{
-            ._start_time = start_time,
+            ._start_time = start_timestamp,
             ._duration = duration,
             ._name = try page.dupeString(name),
             ._type = .{ .measure = m },
