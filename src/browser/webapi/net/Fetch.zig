@@ -69,7 +69,8 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     try http_client.request(.{
         .ctx = fetch,
         .url = request._url,
-        .method = .GET,
+        .method = request._method,
+        .body = request._body,
         .headers = headers,
         .resource_type = .fetch,
         .cookie_jar = &page._session.cookie_jar,

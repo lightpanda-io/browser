@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
+const Http = @import("../../../http/Http.zig");
 
 const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
@@ -28,8 +29,9 @@ const Allocator = std.mem.Allocator;
 const Request = @This();
 
 _url: [:0]const u8,
-_method: std.http.Method,
+_method: Http.Method,
 _headers: ?*Headers,
+_body: ?[]const u8,
 _arena: Allocator,
 
 pub const Input = union(enum) {
@@ -40,6 +42,7 @@ pub const Input = union(enum) {
 pub const InitOpts = struct {
     method: ?[]const u8 = null,
     headers: ?Headers.InitOpts = null,
+    body: ?[]const u8 = null,
 };
 
 pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
@@ -65,30 +68,39 @@ pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
         .request => |r| r._headers,
     };
 
+    const body = if (opts.body) |b|
+        try arena.dupe(u8, b)
+    else switch (input) {
+        .url => null,
+        .request => |r| r._body,
+    };
+
     return page._factory.create(Request{
         ._url = url,
         ._arena = arena,
         ._method = method,
         ._headers = headers,
+        ._body = body,
     });
 }
 
-fn parseMethod(method: []const u8, page: *Page) !std.http.Method {
+fn parseMethod(method: []const u8, page: *Page) !Http.Method {
     if (method.len > "options".len) {
         return error.InvalidMethod;
     }
 
     const lower = std.ascii.lowerString(&page.buf, method);
 
-    if (std.mem.eql(u8, lower, "get")) return .GET;
-    if (std.mem.eql(u8, lower, "post")) return .POST;
-    if (std.mem.eql(u8, lower, "delete")) return .DELETE;
-    if (std.mem.eql(u8, lower, "put")) return .PUT;
-    if (std.mem.eql(u8, lower, "patch")) return .PATCH;
-    if (std.mem.eql(u8, lower, "head")) return .HEAD;
-    if (std.mem.eql(u8, lower, "options")) return .OPTIONS;
-
-    return error.InvalidMethod;
+    const method_lookup = std.StaticStringMap(Http.Method).initComptime(.{
+        .{ "get", .GET },
+        .{ "post", .POST },
+        .{ "delete", .DELETE },
+        .{ "put", .PUT },
+        .{ "patch", .PATCH },
+        .{ "head", .HEAD },
+        .{ "options", .OPTIONS },
+    });
+    return method_lookup.get(lower) orelse return error.InvalidMethod;
 }
 
 pub fn getUrl(self: *const Request) []const u8 {
