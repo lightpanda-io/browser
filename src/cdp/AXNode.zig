@@ -147,6 +147,47 @@ pub const Writer = struct {
         value: AXValue,
     };
 
+    fn writeAXProperties(self: *const Writer, axnode: AXNode, w: anytype) !void {
+        const node = axnode._node;
+        switch (parser.nodeType(node)) {
+            .document => {
+                const uri = try parser.documentGetDocumentURI(@ptrCast(node));
+                try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = uri } }, w);
+                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .type = .booleanOrUndefined, .value = "true" } }, w);
+                return;
+            },
+            .element => {},
+            else => {
+                log.debug(.cdp, "invalid tag", .{ .node_type = parser.nodeType(node) });
+                return error.InvalidTag;
+            },
+        }
+
+        const elt: *parser.Element = @ptrCast(node);
+
+        const tag = try parser.elementTag(elt);
+        return switch (tag) {
+            .h1 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = "1" } }, w),
+            .h2 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = "2" } }, w),
+            .h3 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = "3" } }, w),
+            .h4 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = "4" } }, w),
+            .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = "5" } }, w),
+            .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = "6" } }, w),
+            .img => {
+                if (try parser.elementGetAttribute(elt, "href")) |uri| {
+                    try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = uri } }, w);
+                }
+            },
+            .a => {
+                if (try parser.elementGetAttribute(elt, "href")) |uri| {
+                    try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = uri } }, w);
+                }
+                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .type = .booleanOrUndefined, .value = "true" } }, w);
+            },
+            else => {},
+        };
+    }
+
     fn writeAXProperty(self: *const Writer, value: AXProperty, w: anytype) !void {
         try w.beginObject();
         try w.objectField("name");
@@ -222,6 +263,12 @@ pub const Writer = struct {
         }
         try w.endArray();
 
+        // Properties
+        try w.objectField("properties");
+        try w.beginArray();
+        try self.writeAXProperties(axn, w);
+        try w.endArray();
+
         try w.endObject();
 
         return false;
@@ -282,10 +329,11 @@ pub const AXRole = enum(u8) {
     term,
     textbox,
     time,
+    WebArea,
 
     fn fromNode(node: *parser.Node) !AXRole {
         switch (parser.nodeType(node)) {
-            .document => return .document,
+            .document => return .WebArea, // Chrome specific.
             .element => {},
             else => {
                 log.debug(.cdp, "invalid tag", .{ .node_type = parser.nodeType(node) });
