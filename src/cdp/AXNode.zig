@@ -572,30 +572,7 @@ fn writeName(axnode: AXNode, w: anytype) !?AXSource {
         => {},
         else => {
             if (parser.nodeTextContent(node)) |content| {
-                if (!std.unicode.utf8ValidateSlice(content)) {
-                    return error.InvalidUTF8String;
-                }
-
-                // replace white spaces with single space.
-                try w.beginWriteRaw();
-                try w.writer.writeByte('\"');
-                var prev_white = false;
-                for (content) |c| {
-                    if (std.ascii.isWhitespace(c)) {
-                        if (prev_white) {
-                            continue;
-                        }
-                        prev_white = true;
-                        try w.writer.writeByte(' ');
-                    } else {
-                        prev_white = false;
-                        try w.writer.writeByte(c);
-                    }
-                }
-                prev_white = false;
-                try w.writer.writeByte('\"');
-                w.endWriteRaw();
-
+                try writeString(content, w);
                 return .contents;
             }
         },
@@ -772,3 +749,32 @@ pub const Walker = struct {
         return parser.nodeNextSibling(n);
     }
 };
+
+// write a JSON string.
+// replaces all whitspaces with a single space.
+fn writeString(s: []const u8, w: anytype) !void {
+    if (!std.unicode.utf8ValidateSlice(s)) {
+        return error.InvalidUTF8String;
+    }
+
+    // replace white spaces with single space.
+    try w.beginWriteRaw();
+    try w.writer.writeByte('\"');
+    var cursor: usize = 0;
+    for (s, 0..) |c, i| {
+        if (std.ascii.isWhitespace(c)) {
+            // write string until space
+            if (cursor < i) {
+                try w.writer.writeAll(s[cursor..i]);
+                try w.writer.writeByte(' ');
+            }
+            cursor = i + 1;
+        }
+    }
+    // write the reminder string
+    if (cursor < s.len) {
+        try w.writer.writeAll(s[cursor..]);
+    }
+    try w.writer.writeByte('\"');
+    w.endWriteRaw();
+}
