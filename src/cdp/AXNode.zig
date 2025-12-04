@@ -572,7 +572,30 @@ fn writeName(axnode: AXNode, w: anytype) !?AXSource {
         => {},
         else => {
             if (parser.nodeTextContent(node)) |content| {
-                try w.write(content);
+                if (!std.unicode.utf8ValidateSlice(content)) {
+                    return error.InvalidUTF8String;
+                }
+
+                // replace white spaces with single space.
+                try w.beginWriteRaw();
+                try w.writer.writeByte('\"');
+                var prev_white = false;
+                for (content) |c| {
+                    if (std.ascii.isWhitespace(c)) {
+                        if (prev_white) {
+                            continue;
+                        }
+                        prev_white = true;
+                        try w.writer.writeByte(' ');
+                    } else {
+                        prev_white = false;
+                        try w.writer.writeByte(c);
+                    }
+                }
+                prev_white = false;
+                try w.writer.writeByte('\"');
+                w.endWriteRaw();
+
                 return .contents;
             }
         },
