@@ -195,6 +195,13 @@ fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
             return entry._start_time;
         }
     }
+
+    // Recognized mark names by browsers. `navigationStart` is an equivalent
+    // to 0. Others are dependant to request arrival, end of request etc.
+    if (std.mem.eql(u8, "navigationStart", mark_name)) {
+        return 0;
+    }
+
     return error.SyntaxError; // Mark not found
 }
 
