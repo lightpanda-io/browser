@@ -143,7 +143,6 @@ pub fn parentElement(self: *const Node) ?*Element {
 }
 
 pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
-    // Special case: DocumentFragment - append all its children instead
     if (child.is(DocumentFragment)) |_| {
         try page.appendAllChildren(child, self);
         return child;
@@ -336,6 +335,11 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
 
     if (ref_node._parent == null or ref_node._parent.? != self) {
         return error.NotFound;
+    }
+
+    if (new_node.is(DocumentFragment)) |_| {
+        try page.insertAllChildrenBefore(new_node, self, ref_node);
+        return new_node;
     }
 
     const child_already_connected = new_node.isConnected();

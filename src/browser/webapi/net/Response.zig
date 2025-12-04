@@ -56,7 +56,7 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
         ._arena = page.arena,
         ._status = opts.status,
         ._body = body,
-        ._headers = opts.headers orelse try Headers.init(page),
+        ._headers = opts.headers orelse try Headers.init(null, page),
         ._type = .basic, // @ZIGDOM: todo
     });
 }

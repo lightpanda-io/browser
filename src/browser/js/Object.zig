@@ -135,7 +135,7 @@ pub fn isNullOrUndefined(self: Object) bool {
     return self.js_obj.toValue().isNullOrUndefined();
 }
 
-pub fn nameIterator(self: Object, allocator: Allocator) NameIterator {
+pub fn nameIterator(self: Object) NameIterator {
     const context = self.context;
     const js_obj = self.js_obj;
 
@@ -145,7 +145,6 @@ pub fn nameIterator(self: Object, allocator: Allocator) NameIterator {
     return .{
         .count = count,
         .context = context,
-        .allocator = allocator,
         .js_obj = array.castTo(v8.Object),
     };
 }
@@ -158,7 +157,6 @@ pub const NameIterator = struct {
     count: u32,
     idx: u32 = 0,
     js_obj: v8.Object,
-    allocator: Allocator,
     context: *const Context,
 
     pub fn next(self: *NameIterator) !?[]const u8 {
@@ -170,6 +168,6 @@ pub const NameIterator = struct {
 
         const context = self.context;
         const js_val = try self.js_obj.getAtIndex(context.v8_context, idx);
-        return try context.valueToString(js_val, .{ .allocator = self.allocator });
+        return try context.valueToString(js_val, .{});
     }
 };

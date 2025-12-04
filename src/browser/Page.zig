@@ -1431,6 +1431,24 @@ pub fn appendAllChildren(self: *Page, parent: *Node, target: *Node) !void {
     }
 }
 
+pub fn insertAllChildrenBefore(self: *Page, fragment: *Node, target: *Node, ref_node: *Node) !void {
+    self.domChanged();
+    const dest_connected = target.isConnected();
+
+    var it = fragment.childrenIterator();
+    while (it.next()) |child| {
+        // Check if child was connected BEFORE removing it from fragment
+        const child_was_connected = child.isConnected();
+        self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
+        try self.insertNodeRelative(
+            target,
+            child,
+            .{ .before = ref_node },
+            .{ .child_already_connected = child_was_connected },
+        );
+    }
+}
+
 fn _appendNode(self: *Page, comptime from_parser: bool, parent: *Node, child: *Node, opts: InsertNodeOpts) !void {
     self._insertNodeRelative(from_parser, parent, child, .append, opts);
 }

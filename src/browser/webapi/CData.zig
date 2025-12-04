@@ -79,6 +79,119 @@ pub fn format(self: *const CData, writer: *std.io.Writer) !void {
     };
 }
 
+pub fn getLength(self: *const CData) usize {
+    return self._data.len;
+}
+
+pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
+    const new_data = try std.mem.concat(page.arena, u8, &.{ self._data, data });
+    try self.setData(new_data, page);
+}
+
+pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void {
+    if (offset > self._data.len) return error.IndexSizeError;
+    const end = @min(offset + count, self._data.len);
+
+    // Just slice - original data stays in arena
+    const old_value = self._data;
+    if (offset == 0) {
+        self._data = self._data[end..];
+    } else if (end >= self._data.len) {
+        self._data = self._data[0..offset];
+    } else {
+        self._data = try std.mem.concat(page.arena, u8, &.{
+            self._data[0..offset],
+            self._data[end..],
+        });
+    }
+    page.characterDataChange(self.asNode(), old_value);
+}
+
+pub fn insertData(self: *CData, offset: usize, data: []const u8, page: *Page) !void {
+    if (offset > self._data.len) return error.IndexSizeError;
+    const new_data = try std.mem.concat(page.arena, u8, &.{
+        self._data[0..offset],
+        data,
+        self._data[offset..],
+    });
+    try self.setData(new_data, page);
+}
+
+pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, page: *Page) !void {
+    if (offset > self._data.len) return error.IndexSizeError;
+    const end = @min(offset + count, self._data.len);
+    const new_data = try std.mem.concat(page.arena, u8, &.{
+        self._data[0..offset],
+        data,
+        self._data[end..],
+    });
+    try self.setData(new_data, page);
+}
+
+pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {
+    if (offset > self._data.len) return error.IndexSizeError;
+    const end = @min(offset + count, self._data.len);
+    return self._data[offset..end];
+}
+
+pub fn remove(self: *CData, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node.parentNode() orelse return;
+    _ = try parent.removeChild(node, page);
+}
+
+pub fn before(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node.parentNode() orelse return;
+
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+        _ = try parent.insertBefore(child, node, page);
+    }
+}
+
+pub fn after(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node.parentNode() orelse return;
+    const next = node.nextSibling();
+
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+        _ = try parent.insertBefore(child, next, page);
+    }
+}
+
+pub fn replaceWith(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node.parentNode() orelse return;
+    const next = node.nextSibling();
+
+    _ = try parent.removeChild(node, page);
+
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+        _ = try parent.insertBefore(child, next, page);
+    }
+}
+
+pub fn nextElementSibling(self: *CData) ?*Node.Element {
+    var maybe_sibling = self.asNode().nextSibling();
+    while (maybe_sibling) |sibling| {
+        if (sibling.is(Node.Element)) |el| return el;
+        maybe_sibling = sibling.nextSibling();
+    }
+    return null;
+}
+
+pub fn previousElementSibling(self: *CData) ?*Node.Element {
+    var maybe_sibling = self.asNode().previousSibling();
+    while (maybe_sibling) |sibling| {
+        if (sibling.is(Node.Element)) |el| return el;
+        maybe_sibling = sibling.previousSibling();
+    }
+    return null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CData);
 
@@ -89,4 +202,24 @@ pub const JsApi = struct {
     };
 
     pub const data = bridge.accessor(CData.getData, CData.setData, .{});
+    pub const length = bridge.accessor(CData.getLength, null, .{});
+
+    pub const appendData = bridge.function(CData.appendData, .{});
+    pub const deleteData = bridge.function(CData.deleteData, .{ .dom_exception = true });
+    pub const insertData = bridge.function(CData.insertData, .{ .dom_exception = true });
+    pub const replaceData = bridge.function(CData.replaceData, .{ .dom_exception = true });
+    pub const substringData = bridge.function(CData.substringData, .{ .dom_exception = true });
+
+    pub const remove = bridge.function(CData.remove, .{});
+    pub const before = bridge.function(CData.before, .{});
+    pub const after = bridge.function(CData.after, .{});
+    pub const replaceWith = bridge.function(CData.replaceWith, .{});
+
+    pub const nextElementSibling = bridge.accessor(CData.nextElementSibling, null, .{});
+    pub const previousElementSibling = bridge.accessor(CData.previousElementSibling, null, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: CData" {
+    try testing.htmlRunner("cdata", .{});
+}

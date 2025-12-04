@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container"></div>
+
+<script id="appendChildBasic">
+{
+  // DocumentFragment children should be moved, fragment itself should not appear
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
+  const span1 = document.createElement('span');
+  span1.textContent = 'A';
+  const span2 = document.createElement('span');
+  span2.textContent = 'B';
+
+  fragment.appendChild(span1);
+  fragment.appendChild(span2);
+
+  // Fragment should have 2 children before insertion
+  testing.expectEqual(2, fragment.childNodes.length);
+
+  container.appendChild(fragment);
+
+  // After insertion:
+  // 1. Container should have 2 children (the spans), not 1 (the fragment)
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual('SPAN', container.childNodes[0].tagName);
+  testing.expectEqual('SPAN', container.childNodes[1].tagName);
+  testing.expectEqual('A', container.childNodes[0].textContent);
+  testing.expectEqual('B', container.childNodes[1].textContent);
+
+  // 2. Fragment should be empty after insertion
+  testing.expectEqual(0, fragment.childNodes.length);
+
+  // 3. No DocumentFragment should appear in the tree
+  testing.expectEqual('SPAN', container.firstChild.tagName);
+  testing.expectEqual('SPAN', container.firstChild.nodeName);
+}
+</script>
+
+<script id="insertBeforeBasic">
+{
+  // insertBefore with DocumentFragment
+  const container = $('#container');
+  container.innerHTML = '<div id="ref">REF</div>';
+
+  const fragment = document.createDocumentFragment();
+  const span1 = document.createElement('span');
+  span1.textContent = 'A';
+  const span2 = document.createElement('span');
+  span2.textContent = 'B';
+
+  fragment.appendChild(span1);
+  fragment.appendChild(span2);
+
+  const ref = $('#ref');
+  container.insertBefore(fragment, ref);
+
+  // Container should have: span1, span2, ref (3 children)
+  testing.expectEqual(3, container.childNodes.length);
+  testing.expectEqual('SPAN', container.childNodes[0].tagName);
+  testing.expectEqual('A', container.childNodes[0].textContent);
+  testing.expectEqual('SPAN', container.childNodes[1].tagName);
+  testing.expectEqual('B', container.childNodes[1].textContent);
+  testing.expectEqual('DIV', container.childNodes[2].tagName);
+  testing.expectEqual('REF', container.childNodes[2].textContent);
+
+  // Fragment should be empty
+  testing.expectEqual(0, fragment.childNodes.length);
+}
+</script>
+
+<script id="insertBeforeNull">
+{
+  // insertBefore with null ref node should behave like appendChild
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
+  const span = document.createElement('span');
+  span.textContent = 'TEST';
+  fragment.appendChild(span);
+
+  container.insertBefore(fragment, null);
+
+  testing.expectEqual(1, container.childNodes.length);
+  testing.expectEqual('SPAN', container.childNodes[0].tagName);
+  testing.expectEqual(0, fragment.childNodes.length);
+}
+</script>
+
+<script id="replaceChildWithFragment">
+{
+  // replaceChild with DocumentFragment
+  const container = $('#container');
+  container.innerHTML = '<div id="old">OLD</div>';
+
+  const fragment = document.createDocumentFragment();
+  const span1 = document.createElement('span');
+  span1.textContent = 'A';
+  const span2 = document.createElement('span');
+  span2.textContent = 'B';
+  fragment.appendChild(span1);
+  fragment.appendChild(span2);
+
+  const old = $('#old');
+  container.replaceChild(fragment, old);
+
+  // Container should have 2 children (the fragment's children)
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual('SPAN', container.childNodes[0].tagName);
+  testing.expectEqual('A', container.childNodes[0].textContent);
+  testing.expectEqual('SPAN', container.childNodes[1].tagName);
+  testing.expectEqual('B', container.childNodes[1].textContent);
+
+  // Old node should not be in container
+  testing.expectEqual(null, old.parentNode);
+}
+</script>
+
+<script id="emptyFragment">
+{
+  // Empty DocumentFragment should not add any nodes
+  const container = $('#container');
+  container.innerHTML = '<span>TEST</span>';
+
+  const fragment = document.createDocumentFragment();
+  container.appendChild(fragment);
+
+  // Should still have just 1 child
+  testing.expectEqual(1, container.childNodes.length);
+  testing.expectEqual('SPAN', container.childNodes[0].tagName);
+}
+</script>
+
+<script id="fragmentReuse">
+{
+  // DocumentFragment can be reused after its children are moved
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
+  const span1 = document.createElement('span');
+  span1.textContent = 'A';
+  fragment.appendChild(span1);
+
+  container.appendChild(fragment);
+  testing.expectEqual(1, container.childNodes.length);
+  testing.expectEqual(0, fragment.childNodes.length);
+
+  // Reuse the same fragment
+  const span2 = document.createElement('span');
+  span2.textContent = 'B';
+  fragment.appendChild(span2);
+
+  container.appendChild(fragment);
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual('A', container.childNodes[0].textContent);
+  testing.expectEqual('B', container.childNodes[1].textContent);
+}
+</script>
+
+<script id="nestedFragments">
+{
+  // DocumentFragment containing another DocumentFragment
+  // (though this is unusual, the inner fragment should also be unwrapped)
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const outer = document.createDocumentFragment();
+  const inner = document.createDocumentFragment();
+
+  const span = document.createElement('span');
+  span.textContent = 'TEST';
+  inner.appendChild(span);
+
+  // Appending inner fragment to outer should move span to outer
+  outer.appendChild(inner);
+  testing.expectEqual(1, outer.childNodes.length);
+  testing.expectEqual('SPAN', outer.childNodes[0].tagName);
+  testing.expectEqual(0, inner.childNodes.length);
+
+  // Now append outer to container
+  container.appendChild(outer);
+  testing.expectEqual(1, container.childNodes.length);
+  testing.expectEqual('SPAN', container.childNodes[0].tagName);
+  testing.expectEqual(0, outer.childNodes.length);
+}
+</script>
+
+<script id="fragmentWithMixedContent">
+{
+  // DocumentFragment with text nodes, comments, and elements
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(document.createTextNode('Text1'));
+  fragment.appendChild(document.createComment('comment'));
+  const div = document.createElement('div');
+  div.textContent = 'Div';
+  fragment.appendChild(div);
+  fragment.appendChild(document.createTextNode('Text2'));
+
+  testing.expectEqual(4, fragment.childNodes.length);
+
+  container.appendChild(fragment);
+
+  // All 4 nodes should be in container
+  testing.expectEqual(4, container.childNodes.length);
+  testing.expectEqual(3, container.childNodes[0].nodeType); // TEXT_NODE
+  testing.expectEqual(8, container.childNodes[1].nodeType); // COMMENT_NODE
+  testing.expectEqual(1, container.childNodes[2].nodeType); // ELEMENT_NODE
+  testing.expectEqual(3, container.childNodes[3].nodeType); // TEXT_NODE
+
+  testing.expectEqual(0, fragment.childNodes.length);
+}
+</script>
+
+<script id="innerHTML">
+{
+  // After a DocumentFragment is inserted, innerHTML should not show it
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
+  const comment = document.createComment('test');
+  fragment.appendChild(comment);
+
+  container.appendChild(fragment);
+
+  // Should only see the comment, not a DocumentFragment wrapper
+  const html = container.innerHTML;
+  testing.expectEqual('<!--test-->', html);
+}
+</script>

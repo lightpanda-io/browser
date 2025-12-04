@@ -40,10 +40,10 @@ _response: *Response,
 _resolver: js.PersistentPromiseResolver,
 
 pub const Input = Request.Input;
-pub const RequestInit = Request.Options;
+pub const InitOpts = Request.InitOpts;
 
 // @ZIGDOM just enough to get campfire demo working
-pub fn init(input: Input, options: ?RequestInit, page: *Page) !js.Promise {
+pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
 
     const fetch = try page.arena.create(Fetch);
@@ -56,7 +56,11 @@ pub fn init(input: Input, options: ?RequestInit, page: *Page) !js.Promise {
     };
 
     const http_client = page._session.browser.http_client;
-    const headers = try http_client.newHeaders();
+    var headers = try http_client.newHeaders();
+    if (request._headers) |h| {
+        try h.populateHttpHeader(page.call_arena, &headers);
+    }
+    try page.requestCookie(.{}).headersForRequest(page.arena, request._url, &headers);
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });

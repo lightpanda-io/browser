@@ -41,9 +41,40 @@ pub const empty: KeyValueList = .{
     ._entries = .empty,
 };
 
+pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
+    var list = KeyValueList.init();
+    try list.ensureTotalCapacity(arena, original.len());
+    for (original._entries.items) |entry| {
+        try list.appendAssumeCapacity(arena, entry.name.str(), entry.value.str());
+    }
+    return list;
+}
+
+pub fn fromJsObject(arena: Allocator, js_obj: js.Object) !KeyValueList {
+    var it = js_obj.nameIterator();
+    var list = KeyValueList.init();
+    try list.ensureTotalCapacity(arena, it.count);
+
+    while (try it.next()) |name| {
+        const js_value = try js_obj.get(name);
+        const value = try js_value.toString(arena);
+
+        try list._entries.append(arena, .{
+            .name = try String.init(arena, name, .{}),
+            .value = try String.init(arena, value, .{}),
+        });
+    }
+
+    return list;
+}
+
 pub const Entry = struct {
     name: String,
     value: String,
+
+    pub fn format(self: Entry, writer: *std.Io.Writer) !void {
+        return writer.print("{f}: {f}", .{ self.name, self.value });
+    }
 };
 
 pub fn init() KeyValueList {

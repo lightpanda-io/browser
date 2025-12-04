@@ -5,15 +5,33 @@ const log = @import("../../../log.zig");
 const Page = @import("../../Page.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
+const Allocator = std.mem.Allocator;
+
 const Headers = @This();
 
 _list: KeyValueList,
 
-pub fn init(page: *Page) !*Headers {
+pub const InitOpts = union(enum) {
+    obj: *Headers,
+    js_obj: js.Object,
+};
+
+pub fn init(opts_: ?InitOpts, page: *Page) !*Headers {
+    const list = if (opts_) |opts| switch (opts) {
+        .obj => |obj| try KeyValueList.copy(page.arena, obj._list),
+        .js_obj => |js_obj| try KeyValueList.fromJsObject(page.arena, js_obj),
+    } else KeyValueList.init();
+
     return page._factory.create(Headers{
-        ._list = KeyValueList.init(),
+        ._list = list,
     });
 }
+
+// pub fn fromJsObject(js_obj: js.Object, page: *Page) !*Headers {
+//     return page._factory.create(Headers{
+//         ._list = try KeyValueList.fromJsObject(page.arena, js_obj),
+//     });
+// }
 
 pub fn append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
     const normalized_name = normalizeHeaderName(name, page);
@@ -60,6 +78,15 @@ pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object) !void {
         cb.tryCall(void, .{ entry.value.str(), entry.name.str(), self }, &result) catch {
             log.debug(.js, "forEach callback", .{ .err = result.exception, .stack = result.stack, .source = "headers" });
         };
+    }
+}
+
+// TODO: do we really need 2 different header structs??
+const Http = @import("../../../http/Http.zig");
+pub fn populateHttpHeader(self: *Headers, allocator: Allocator, http_headers: *Http.Headers) !void {
+    for (self._list._entries.items) |entry| {
+        const merged = try std.mem.concatWithSentinel(allocator, u8, &.{ entry.name.str(), ": ", entry.value.str() }, 0);
+        try http_headers.add(merged);
     }
 }
 

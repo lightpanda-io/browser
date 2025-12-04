@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container"></div>
+
+<script id="lengthProperty">
+{
+  // length property
+  const text = document.createTextNode('Hello');
+  testing.expectEqual(5, text.length);
+  testing.expectEqual(5, text.data.length);
+
+  const empty = document.createTextNode('');
+  testing.expectEqual(0, empty.length);
+
+  const comment = document.createComment('test comment');
+  testing.expectEqual(12, comment.length);
+}
+</script>
+
+<script id="appendDataBasic">
+{
+  // appendData basic
+  const text = document.createTextNode('Hello');
+  text.appendData(' World');
+  testing.expectEqual('Hello World', text.data);
+  testing.expectEqual(11, text.length);
+}
+</script>
+
+<script id="appendDataEmpty">
+{
+  // appendData to empty
+  const text = document.createTextNode('');
+  text.appendData('First');
+  testing.expectEqual('First', text.data);
+
+  // appendData empty string
+  text.appendData('');
+  testing.expectEqual('First', text.data);
+}
+</script>
+
+<script id="deleteDataBasic">
+{
+  // deleteData from middle
+  const text = document.createTextNode('Hello World');
+  text.deleteData(5, 6); // Remove ' World'
+  testing.expectEqual('Hello', text.data);
+  testing.expectEqual(5, text.length);
+}
+</script>
+
+<script id="deleteDataStart">
+{
+  // deleteData from start
+  const text = document.createTextNode('Hello World');
+  text.deleteData(0, 6); // Remove 'Hello '
+  testing.expectEqual('World', text.data);
+}
+</script>
+
+<script id="deleteDataEnd">
+{
+  // deleteData from end
+  const text = document.createTextNode('Hello World');
+  text.deleteData(5, 100); // Remove ' World' (count exceeds length)
+  testing.expectEqual('Hello', text.data);
+}
+</script>
+
+<script id="deleteDataAll">
+{
+  // deleteData everything
+  const text = document.createTextNode('Hello');
+  text.deleteData(0, 5);
+  testing.expectEqual('', text.data);
+  testing.expectEqual(0, text.length);
+}
+</script>
+
+<script id="deleteDataZeroCount">
+{
+  // deleteData with count=0
+  const text = document.createTextNode('Hello');
+  text.deleteData(2, 0);
+  testing.expectEqual('Hello', text.data);
+}
+</script>
+
+<script id="deleteDataInvalidOffset">
+{
+  // deleteData with invalid offset
+  const text = document.createTextNode('Hello');
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => text.deleteData(10, 5));
+  testing.expectEqual('Hello', text.data); // unchanged
+}
+</script>
+
+<script id="insertDataMiddle">
+{
+  // insertData in middle
+  const text = document.createTextNode('Hello');
+  text.insertData(5, ' World');
+  testing.expectEqual('Hello World', text.data);
+}
+</script>
+
+<script id="insertDataStart">
+{
+  // insertData at start
+  const text = document.createTextNode('World');
+  text.insertData(0, 'Hello ');
+  testing.expectEqual('Hello World', text.data);
+}
+</script>
+
+<script id="insertDataEnd">
+{
+  // insertData at end
+  const text = document.createTextNode('Hello');
+  text.insertData(5, ' World');
+  testing.expectEqual('Hello World', text.data);
+}
+</script>
+
+<script id="insertDataEmpty">
+{
+  // insertData into empty
+  const text = document.createTextNode('');
+  text.insertData(0, 'Hello');
+  testing.expectEqual('Hello', text.data);
+}
+</script>
+
+<script id="insertDataInvalidOffset">
+{
+  // insertData with invalid offset
+  const text = document.createTextNode('Hello');
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => text.insertData(10, 'X'));
+  testing.expectEqual('Hello', text.data);
+}
+</script>
+
+<script id="replaceDataBasic">
+{
+  // replaceData basic
+  const text = document.createTextNode('Hello World');
+  text.replaceData(6, 5, 'Universe');
+  testing.expectEqual('Hello Universe', text.data);
+}
+</script>
+
+<script id="replaceDataShorter">
+{
+  // replaceData with shorter string
+  const text = document.createTextNode('Hello World');
+  text.replaceData(6, 5, 'Hi');
+  testing.expectEqual('Hello Hi', text.data);
+}
+</script>
+
+<script id="replaceDataLonger">
+{
+  // replaceData with longer string
+  const text = document.createTextNode('Hello Hi');
+  text.replaceData(6, 2, 'World');
+  testing.expectEqual('Hello World', text.data);
+}
+</script>
+
+<script id="replaceDataExceedingCount">
+{
+  // replaceData with count exceeding length
+  const text = document.createTextNode('Hello World');
+  text.replaceData(6, 100, 'Everyone');
+  testing.expectEqual('Hello Everyone', text.data);
+}
+</script>
+
+<script id="replaceDataZeroCount">
+{
+  // replaceData with count=0 (acts like insert)
+  const text = document.createTextNode('Hello World');
+  text.replaceData(5, 0, '!!!');
+  testing.expectEqual('Hello!!! World', text.data);
+}
+</script>
+
+<script id="substringDataBasic">
+{
+  // substringData basic
+  const text = document.createTextNode('Hello World');
+  const sub = text.substringData(0, 5);
+  testing.expectEqual('Hello', sub);
+  testing.expectEqual('Hello World', text.data); // original unchanged
+}
+</script>
+
+<script id="substringDataMiddle">
+{
+  // substringData from middle
+  const text = document.createTextNode('Hello World');
+  const sub = text.substringData(6, 5);
+  testing.expectEqual('World', sub);
+}
+</script>
+
+<script id="substringDataExceedingCount">
+{
+  // substringData with count exceeding length
+  const text = document.createTextNode('Hello World');
+  const sub = text.substringData(6, 100);
+  testing.expectEqual('World', sub);
+}
+</script>
+
+<script id="substringDataZeroCount">
+{
+  // substringData with count=0
+  const text = document.createTextNode('Hello');
+  const sub = text.substringData(0, 0);
+  testing.expectEqual('', sub);
+}
+</script>
+
+<script id="substringDataInvalidOffset">
+{
+  // substringData with invalid offset
+  const text = document.createTextNode('Hello');
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => text.substringData(10, 5));
+}
+</script>
+
+<script id="commentCharacterData">
+{
+  // CharacterData methods work on comments too
+  const comment = document.createComment('Hello');
+
+  comment.appendData(' World');
+  testing.expectEqual('Hello World', comment.data);
+
+  comment.deleteData(5, 6);
+  testing.expectEqual('Hello', comment.data);
+
+  comment.insertData(0, 'Start: ');
+  testing.expectEqual('Start: Hello', comment.data);
+
+  comment.replaceData(0, 7, 'End: ');
+  testing.expectEqual('End: Hello', comment.data);
+
+  const sub = comment.substringData(5, 5);
+  testing.expectEqual('Hello', sub);
+}
+</script>
+
+<script id="dataChangeNotifications">
+{
+  // Verify data changes are reflected in DOM
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text = document.createTextNode('Original');
+  container.appendChild(text);
+
+  text.appendData(' Text');
+  testing.expectEqual('Original Text', container.textContent);
+
+  text.deleteData(0, 9);
+  testing.expectEqual('Text', container.textContent);
+
+  text.data = 'Changed';
+  testing.expectEqual('Changed', container.textContent);
+}
+</script>
+
+<script id="removeWithSiblings">
+{
+  // remove() when node has siblings
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text1 = document.createTextNode('A');
+  const text2 = document.createTextNode('B');
+  const text3 = document.createTextNode('C');
+  container.appendChild(text1);
+  container.appendChild(text2);
+  container.appendChild(text3);
+
+  testing.expectEqual(3, container.childNodes.length);
+  testing.expectEqual('ABC', container.textContent);
+
+  text2.remove();
+
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual('AC', container.textContent);
+  testing.expectEqual(null, text2.parentNode);
+  testing.expectEqual(text3, text1.nextSibling);
+}
+</script>
+
+<script id="removeOnlyChild">
+{
+  // remove() when node is only child
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text = document.createTextNode('Only');
+  container.appendChild(text);
+
+  testing.expectEqual(1, container.childNodes.length);
+
+  text.remove();
+
+  testing.expectEqual(0, container.childNodes.length);
+  testing.expectEqual(null, text.parentNode);
+}
+</script>
+
+<script id="removeNoParent">
+{
+  // remove() when node has no parent (should do nothing)
+  const text = document.createTextNode('Orphan');
+  text.remove(); // Should not throw
+  testing.expectEqual(null, text.parentNode);
+}
+</script>
+
+<script id="removeCommentWithElementSiblings">
+{
+  // remove() comment with element siblings
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const div1 = document.createElement('div');
+  div1.textContent = 'First';
+  const comment = document.createComment('middle');
+  const div2 = document.createElement('div');
+  div2.textContent = 'Last';
+
+  container.appendChild(div1);
+  container.appendChild(comment);
+  container.appendChild(div2);
+
+  testing.expectEqual(3, container.childNodes.length);
+
+  comment.remove();
+
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual('DIV', container.childNodes[0].tagName);
+  testing.expectEqual('DIV', container.childNodes[1].tagName);
+  testing.expectEqual(div2, div1.nextSibling);
+}
+</script>
+
+<script id="beforeWithSiblings">
+{
+  // before() when node has siblings
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text1 = document.createTextNode('A');
+  const text2 = document.createTextNode('C');
+  container.appendChild(text1);
+  container.appendChild(text2);
+
+  const textB = document.createTextNode('B');
+  text2.before(textB);
+
+  testing.expectEqual(3, container.childNodes.length);
+  testing.expectEqual('ABC', container.textContent);
+  testing.expectEqual(textB, text1.nextSibling);
+  testing.expectEqual(text2, textB.nextSibling);
+}
+</script>
+
+<script id="beforeMultipleNodes">
+{
+  // before() with multiple nodes
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text = document.createTextNode('Z');
+  container.appendChild(text);
+
+  const text1 = document.createTextNode('A');
+  const text2 = document.createTextNode('B');
+  const text3 = document.createTextNode('C');
+
+  text.before(text1, text2, text3);
+
+  testing.expectEqual(4, container.childNodes.length);
+  testing.expectEqual('ABCZ', container.textContent);
+}
+</script>
+
+<script id="beforeMixedTypes">
+{
+  // before() with mixed node types
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const target = document.createTextNode('Target');
+  container.appendChild(target);
+
+  const elem = document.createElement('span');
+  elem.textContent = 'E';
+  const text = document.createTextNode('T');
+  const comment = document.createComment('C');
+
+  target.before(elem, text, comment);
+
+  testing.expectEqual(4, container.childNodes.length);
+  testing.expectEqual(1, container.childNodes[0].nodeType); // ELEMENT_NODE
+  testing.expectEqual(3, container.childNodes[1].nodeType); // TEXT_NODE
+  testing.expectEqual(8, container.childNodes[2].nodeType); // COMMENT_NODE
+  testing.expectEqual(3, container.childNodes[3].nodeType); // TEXT_NODE (target)
+}
+</script>
+
+<script id="beforeNoParent">
+{
+  // before() when node has no parent (should do nothing)
+  const orphan = document.createTextNode('Orphan');
+  const text = document.createTextNode('Test');
+  orphan.before(text);
+
+  testing.expectEqual(null, orphan.parentNode);
+  testing.expectEqual(null, text.parentNode);
+}
+</script>
+
+<script id="beforeOnlyChild">
+{
+  // before() when target is only child
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const target = document.createTextNode('B');
+  container.appendChild(target);
+
+  const textA = document.createTextNode('A');
+  target.before(textA);
+
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual('AB', container.textContent);
+  testing.expectEqual(textA, container.firstChild);
+  testing.expectEqual(target, textA.nextSibling);
+}
+</script>
+
+<script id="afterWithSiblings">
+{
+  // after() when node has siblings
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text1 = document.createTextNode('A');
+  const text2 = document.createTextNode('C');
+  container.appendChild(text1);
+  container.appendChild(text2);
+
+  const textB = document.createTextNode('B');
+  text1.after(textB);
+
+  testing.expectEqual(3, container.childNodes.length);
+  testing.expectEqual('ABC', container.textContent);
+  testing.expectEqual(textB, text1.nextSibling);
+  testing.expectEqual(text2, textB.nextSibling);
+}
+</script>
+
+<script id="afterMultipleNodes">
+{
+  // after() with multiple nodes
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text = document.createTextNode('A');
+  container.appendChild(text);
+
+  const text1 = document.createTextNode('B');
+  const text2 = document.createTextNode('C');
+  const text3 = document.createTextNode('D');
+
+  text.after(text1, text2, text3);
+
+  testing.expectEqual(4, container.childNodes.length);
+  testing.expectEqual('ABCD', container.textContent);
+}
+</script>
+
+<script id="afterMixedTypes">
+{
+  // after() with mixed node types
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const target = document.createTextNode('Start');
+  container.appendChild(target);
+
+  const elem = document.createElement('div');
+  elem.textContent = 'E';
+  const comment = document.createComment('comment');
+  const text = document.createTextNode('T');
+
+  target.after(elem, comment, text);
+
+  testing.expectEqual(4, container.childNodes.length);
+  testing.expectEqual(3, container.childNodes[0].nodeType); // TEXT_NODE (target)
+  testing.expectEqual(1, container.childNodes[1].nodeType); // ELEMENT_NODE
+  testing.expectEqual(8, container.childNodes[2].nodeType); // COMMENT_NODE
+  testing.expectEqual(3, container.childNodes[3].nodeType); // TEXT_NODE
+}
+</script>
+
+<script id="afterNoParent">
+{
+  // after() when node has no parent (should do nothing)
+  const orphan = document.createTextNode('Orphan');
+  const text = document.createTextNode('Test');
+  orphan.after(text);
+
+  testing.expectEqual(null, orphan.parentNode);
+  testing.expectEqual(null, text.parentNode);
+}
+</script>
+
+<script id="afterAsLastChild">
+{
+  // after() when target is last child
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const target = document.createTextNode('A');
+  container.appendChild(target);
+
+  const textB = document.createTextNode('B');
+  target.after(textB);
+
+  testing.expectEqual(2, container.childNodes.length);
+  testing.expectEqual('AB', container.textContent);
+  testing.expectEqual(target, container.firstChild);
+  testing.expectEqual(textB, container.lastChild);
+  testing.expectEqual(null, textB.nextSibling);
+}
+</script>
+
+<script id="replaceWithSingleNode">
+{
+  // replaceWith() with single node
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const old = document.createTextNode('Old');
+  container.appendChild(old);
+
+  const replacement = document.createTextNode('New');
+  old.replaceWith(replacement);
+
+  testing.expectEqual(1, container.childNodes.length);
+  testing.expectEqual('New', container.textContent);
+  testing.expectEqual(null, old.parentNode);
+  testing.expectEqual(container, replacement.parentNode);
+}
+</script>
+
+<script id="replaceWithMultipleNodes">
+{
+  // replaceWith() with multiple nodes
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const old = document.createTextNode('X');
+  container.appendChild(old);
+
+  const text1 = document.createTextNode('A');
+  const text2 = document.createTextNode('B');
+  const text3 = document.createTextNode('C');
+
+  old.replaceWith(text1, text2, text3);
+
+  testing.expectEqual(3, container.childNodes.length);
+  testing.expectEqual('ABC', container.textContent);
+  testing.expectEqual(null, old.parentNode);
+}
+</script>
+
+<script id="replaceWithOnlyChild">
+{
+  // replaceWith() when target is only child
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const old = document.createTextNode('Only');
+  container.appendChild(old);
+
+  testing.expectEqual(1, container.childNodes.length);
+
+  const replacement = document.createTextNode('Replaced');
+  old.replaceWith(replacement);
+
+  testing.expectEqual(1, container.childNodes.length);
+  testing.expectEqual('Replaced', container.textContent);
+  testing.expectEqual(replacement, container.firstChild);
+}
+</script>
+
+<script id="replaceWithBetweenSiblings">
+{
+  // replaceWith() when node has siblings on both sides
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text1 = document.createTextNode('A');
+  const text2 = document.createTextNode('X');
+  const text3 = document.createTextNode('C');
+  container.appendChild(text1);
+  container.appendChild(text2);
+  container.appendChild(text3);
+
+  const replacement = document.createTextNode('B');
+  text2.replaceWith(replacement);
+
+  testing.expectEqual(3, container.childNodes.length);
+  testing.expectEqual('ABC', container.textContent);
+  testing.expectEqual(replacement, text1.nextSibling);
+  testing.expectEqual(text3, replacement.nextSibling);
+}
+</script>
+
+<script id="replaceWithMixedTypes">
+{
+  // replaceWith() with mixed node types
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const old = document.createComment('old');
+  container.appendChild(old);
+
+  const elem = document.createElement('span');
+  elem.textContent = 'E';
+  const text = document.createTextNode('T');
+  const comment = document.createComment('C');
+
+  old.replaceWith(elem, text, comment);
+
+  testing.expectEqual(3, container.childNodes.length);
+  testing.expectEqual(1, container.childNodes[0].nodeType); // ELEMENT_NODE
+  testing.expectEqual(3, container.childNodes[1].nodeType); // TEXT_NODE
+  testing.expectEqual(8, container.childNodes[2].nodeType); // COMMENT_NODE
+  testing.expectEqual(null, old.parentNode);
+}
+</script>
+
+<script id="nextElementSiblingText">
+{
+  // nextElementSibling on text node with element siblings
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text1 = document.createTextNode('A');
+  const comment = document.createComment('comment');
+  const div = document.createElement('div');
+  div.id = 'found';
+  const text2 = document.createTextNode('B');
+
+  container.appendChild(text1);
+  container.appendChild(comment);
+  container.appendChild(div);
+  container.appendChild(text2);
+
+  testing.expectEqual('found', text1.nextElementSibling.id);
+  testing.expectEqual('found', comment.nextElementSibling.id);
+  testing.expectEqual(null, text2.nextElementSibling);
+}
+</script>
+
+<script id="nextElementSiblingNoElement">
+{
+  // nextElementSibling when there's no element sibling
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text = document.createTextNode('A');
+  const comment = document.createComment('B');
+  container.appendChild(text);
+  container.appendChild(comment);
+
+  testing.expectEqual(null, text.nextElementSibling);
+  testing.expectEqual(null, comment.nextElementSibling);
+}
+</script>
+
+<script id="previousElementSiblingComment">
+{
+  // previousElementSibling on comment with element siblings
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const div = document.createElement('div');
+  div.id = 'found';
+  const text = document.createTextNode('text');
+  const comment = document.createComment('comment');
+
+  container.appendChild(div);
+  container.appendChild(text);
+  container.appendChild(comment);
+
+  testing.expectEqual('found', text.previousElementSibling.id);
+  testing.expectEqual('found', comment.previousElementSibling.id);
+  testing.expectEqual(null, div.previousElementSibling);
+}
+</script>
+
+<script id="previousElementSiblingNoElement">
+{
+  // previousElementSibling when there's no element sibling
+  const container = $('#container');
+  container.innerHTML = '';
+
+  const text = document.createTextNode('A');
+  const comment = document.createComment('B');
+  container.appendChild(text);
+  container.appendChild(comment);
+
+  testing.expectEqual(null, text.previousElementSibling);
+  testing.expectEqual(null, comment.previousElementSibling);
+}
+</script>

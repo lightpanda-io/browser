@@ -37,19 +37,19 @@ pub const Input = union(enum) {
     url: [:0]const u8,
 };
 
-pub const Options = struct {
+pub const InitOpts = struct {
     method: ?[]const u8 = null,
-    headers: ?*Headers = null,
+    headers: ?Headers.InitOpts = null,
 };
 
-pub fn init(input: Input, opts_: ?Options, page: *Page) !*Request {
+pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
     const arena = page.arena;
     const url = switch (input) {
         .url => |u| try URL.resolve(arena, page.url, u, .{ .always_dupe = true }),
         .request => |r| try arena.dupeZ(u8, r._url),
     };
 
-    const opts = opts_ orelse Options{};
+    const opts = opts_ orelse InitOpts{};
     const method = if (opts.method) |m|
         try parseMethod(m, page)
     else switch (input) {
@@ -57,8 +57,8 @@ pub fn init(input: Input, opts_: ?Options, page: *Page) !*Request {
         .request => |r| r._method,
     };
 
-    const headers = if (opts.headers) |h|
-        h
+    const headers = if (opts.headers) |header_init|
+        try Headers.init(header_init, page)
     else switch (input) {
         .url => null,
         .request => |r| r._headers,
@@ -103,7 +103,7 @@ pub fn getHeaders(self: *Request, page: *Page) !*Headers {
         return headers;
     }
 
-    const headers = try Headers.init(page);
+    const headers = try Headers.init(null, page);
     self._headers = headers;
     return headers;
 }

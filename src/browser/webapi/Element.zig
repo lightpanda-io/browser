@@ -26,17 +26,18 @@ const Page = @import("../Page.zig");
 const reflect = @import("../reflect.zig");
 
 const Node = @import("Node.zig");
+const CSS = @import("CSS.zig");
+const DOMRect = @import("DOMRect.zig");
+const ShadowRoot = @import("ShadowRoot.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
-pub const Attribute = @import("element/Attribute.zig");
+const Animation = @import("animation/Animation.zig");
+const DOMStringMap = @import("element/DOMStringMap.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
-pub const DOMStringMap = @import("element/DOMStringMap.zig");
-const DOMRect = @import("DOMRect.zig");
-const CSS = @import("CSS.zig");
-const ShadowRoot = @import("ShadowRoot.zig");
 
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
+pub const Attribute = @import("element/Attribute.zig");
 
 const Element = @This();
 
@@ -587,6 +588,14 @@ pub fn querySelectorAll(self: *Element, input: []const u8, page: *Page) !*Select
     return Selector.querySelectorAll(self.asNode(), input, page);
 }
 
+pub fn getAnimations(_: *const Element) []*Animation {
+    return &.{};
+}
+
+pub fn animate(_: *Element, _: js.Object, _: js.Object) !Animation {
+    return Animation.init();
+}
+
 pub fn closest(self: *Element, selector: []const u8, page: *Page) !?*Element {
     if (selector.len == 0) {
         return error.SyntaxError;
@@ -1012,6 +1021,8 @@ pub const JsApi = struct {
     pub const querySelector = bridge.function(Element.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Element.querySelectorAll, .{ .dom_exception = true });
     pub const closest = bridge.function(Element.closest, .{ .dom_exception = true });
+    pub const getAnimations = bridge.function(Element.getAnimations, .{});
+    pub const animate = bridge.function(Element.animate, .{});
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});
     pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});

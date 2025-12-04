@@ -45,6 +45,11 @@
   const req = new Request('https://example.com/api', { headers });
   testing.expectEqual('value', req.headers.get('X-Custom'));
 }
+
+{
+  const req = new Request('https://example.com/api', {headers: {over: '9000!'}});
+  testing.expectEqual('9000!', req.headers.get('over'));
+}
 </script>
 
 <script id=request_input>
@@ -102,3 +107,4 @@
   testing.expectEqual('https://example.com/custom', req.url);
 }
 </script>
+

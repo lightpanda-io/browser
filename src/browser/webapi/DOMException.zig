@@ -33,6 +33,7 @@ pub fn fromError(err: anyerror) ?DOMException {
         error.NotFound => .{ ._code = .not_found },
         error.NotSupported => .{ ._code = .not_supported },
         error.HierarchyError => .{ ._code = .hierarchy_error },
+        error.IndexSizeError => .{ ._code = .index_size_error },
         else => null,
     };
 }
@@ -45,6 +46,7 @@ pub fn getName(self: *const DOMException) []const u8 {
     return switch (self._code) {
         .none => "Error",
         .invalid_character_error => "InvalidCharacterError",
+        .index_size_error => "IndexSizeErorr",
         .syntax_error => "SyntaxError",
         .not_found => "NotFoundError",
         .not_supported => "NotSupportedError",
@@ -56,6 +58,7 @@ pub fn getMessage(self: *const DOMException) []const u8 {
     return switch (self._code) {
         .none => "",
         .invalid_character_error => "Invalid Character",
+        .index_size_error => "IndexSizeError: Index or size is negative or greater than the allowed amount",
         .syntax_error => "Syntax Error",
         .not_supported => "Not Supported",
         .not_found => "Not Found",
@@ -65,6 +68,7 @@ pub fn getMessage(self: *const DOMException) []const u8 {
 
 const Code = enum(u8) {
     none = 0,
+    index_size_error = 1,
     hierarchy_error = 3,
     invalid_character_error = 5,
     not_found = 8,

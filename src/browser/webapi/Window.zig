@@ -157,7 +157,7 @@ pub fn setOnUnhandledRejection(self: *Window, cb_: ?js.Function) !void {
     }
 }
 
-pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.RequestInit, page: *Page) !js.Promise {
+pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
     return Fetch.init(input, options, page);
 }
 
