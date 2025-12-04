@@ -38,7 +38,7 @@ const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
 pub const Server = struct {
     app: *App,
-    shutdown: bool,
+    shutdown: bool = false,
     allocator: Allocator,
     client: ?posix.socket_t,
     listener: ?posix.socket_t,
@@ -53,16 +53,36 @@ pub const Server = struct {
             .app = app,
             .client = null,
             .listener = null,
-            .shutdown = false,
             .allocator = allocator,
             .json_version_response = json_version_response,
         };
     }
 
+    /// Interrupts the server so that main can complete normally and call all defer handlers.
+    pub fn stop(self: *Server) void {
+        if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
+            return;
+        }
+
+        // Linux and BSD/macOS handle canceling a socket blocked on accept differently.
+        // For Linux, we use std.shutdown, which will cause accept to return error.SocketNotListening (EINVAL).
+        // For BSD, shutdown will return an error. Instead we call posix.close, which will result with error.ConnectionAborted (BADF).
+        if (self.listener) |listener| switch (builtin.target.os.tag) {
+            .linux => posix.shutdown(listener, .recv) catch |err| {
+                log.warn(.app, "listener shutdown", .{ .err = err });
+            },
+            .macos, .freebsd, .netbsd, .openbsd => {
+                self.listener = null;
+                posix.close(listener);
+            },
+            else => unreachable,
+        };
+    }
+
     pub fn deinit(self: *Server) void {
-        self.shutdown = true;
         if (self.listener) |listener| {
             posix.close(listener);
+            self.listener = null;
         }
         // *if* server.run is running, we should really wait for it to return
         // before existing from here.
@@ -83,14 +103,19 @@ pub const Server = struct {
         try posix.listen(listener, 1);
 
         log.info(.app, "server running", .{ .address = address });
-        while (true) {
+        while (!@atomicLoad(bool, &self.shutdown, .monotonic)) {
             const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
-                if (self.shutdown) {
-                    return;
+                switch (err) {
+                    error.SocketNotListening, error.ConnectionAborted => {
+                        log.info(.app, "server stopped", .{});
+                        break;
+                    },
+                    else => {
+                        log.err(.app, "CDP accept", .{ .err = err });
+                        std.Thread.sleep(std.time.ns_per_s);
+                        continue;
+                    },
                 }
-                log.err(.app, "CDP accept", .{ .err = err });
-                std.Thread.sleep(std.time.ns_per_s);
-                continue;
             };
 
             self.client = socket;

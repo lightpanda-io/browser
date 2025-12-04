@@ -23,67 +23,42 @@ const Allocator = std.mem.Allocator;
 const log = @import("log.zig");
 const App = @import("app.zig").App;
 const Server = @import("server.zig").Server;
+const SigHandler = @import("sighandler.zig").SigHandler;
 const Browser = @import("browser/browser.zig").Browser;
 const DumpStripMode = @import("browser/dump.zig").Opts.StripMode;
 
 const build_config = @import("build_config");
 
-var _app: ?*App = null;
-var _server: ?Server = null;
-
 pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    const alloc = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
+    var gpa_instance: std.heap.DebugAllocator(.{}) = .init;
+    const gpa = if (builtin.mode == .Debug) gpa_instance.allocator() else std.heap.c_allocator;
 
     defer if (builtin.mode == .Debug) {
-        if (gpa.detectLeaks()) std.posix.exit(1);
+        if (gpa_instance.detectLeaks()) std.posix.exit(1);
     };
 
-    run(alloc) catch |err| {
+    var arena_instance = std.heap.ArenaAllocator.init(gpa);
+    const arena = arena_instance.allocator();
+    defer arena_instance.deinit();
+
+    var sighandler = SigHandler{ .arena = arena };
+    try sighandler.install();
+
+    run(gpa, arena, &sighandler) catch |err| {
         // If explicit filters were set, they won't be valid anymore because
-        // the args_arena is gone. We need to set it to something that's not
-        // invalid. (We should just move the args_arena up to main)
+        // the arena is gone. We need to set it to something that's not
+        // invalid. (We should just move the arena up to main)
         log.opts.filter_scopes = &.{};
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
 }
 
-// Handle app shutdown gracefuly on signals.
-fn shutdown() void {
-    const sigaction: std.posix.Sigaction = .{
-        .handler = .{
-            .handler = struct {
-                pub fn handler(_: c_int) callconv(.c) void {
-                    // Shutdown service gracefuly.
-                    if (_server) |server| {
-                        server.deinit();
-                    }
-                    if (_app) |app| {
-                        app.deinit();
-                    }
-                    std.posix.exit(0);
-                }
-            }.handler,
-        },
-        .mask = std.posix.empty_sigset,
-        .flags = 0,
-    };
-    // Exit the program on SIGINT signal. When running the browser in a Docker
-    // container, sending a CTRL-C (SIGINT) signal is catched but doesn't exit
-    // the program. Here we force exiting on SIGINT.
-    std.posix.sigaction(std.posix.SIG.INT, &sigaction, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null);
-    std.posix.sigaction(std.posix.SIG.QUIT, &sigaction, null);
-}
-
-fn run(alloc: Allocator) !void {
-    var args_arena = std.heap.ArenaAllocator.init(alloc);
-    defer args_arena.deinit();
-    const args = try parseArgs(args_arena.allocator());
+fn run(gpa: Allocator, arena: Allocator, sighandler: *SigHandler) !void {
+    const args = try parseArgs(arena);
 
     switch (args.mode) {
         .help => {
@@ -110,13 +85,13 @@ fn run(alloc: Allocator) !void {
     const user_agent = blk: {
         const USER_AGENT = "User-Agent: Lightpanda/1.0";
         if (args.userAgentSuffix()) |suffix| {
-            break :blk try std.fmt.allocPrintSentinel(args_arena.allocator(), "{s} {s}", .{ USER_AGENT, suffix }, 0);
+            break :blk try std.fmt.allocPrintSentinel(arena, "{s} {s}", .{ USER_AGENT, suffix }, 0);
         }
         break :blk USER_AGENT;
     };
 
     // _app is global to handle graceful shutdown.
-    _app = try App.init(alloc, .{
+    var app = try App.init(gpa, .{
         .run_mode = args.mode,
         .http_proxy = args.httpProxy(),
         .proxy_bearer_token = args.proxyBearerToken(),
@@ -127,8 +102,6 @@ fn run(alloc: Allocator) !void {
         .http_max_concurrent = args.httpMaxConcurrent(),
         .user_agent = user_agent,
     });
-
-    const app = _app.?;
     defer app.deinit();
     app.telemetry.record(.{ .run = {} });
 
@@ -141,9 +114,10 @@ fn run(alloc: Allocator) !void {
             };
 
             // _server is global to handle graceful shutdown.
-            _server = try Server.init(app, address);
-            const server = &_server.?;
+            var server = try Server.init(app, address);
             defer server.deinit();
+
+            try sighandler.on(Server.stop, .{&server});
 
             // max timeout of 1 week.
             const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(i32, opts.timeout) * 1000;
