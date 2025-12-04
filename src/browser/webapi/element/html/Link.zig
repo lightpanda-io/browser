@@ -43,6 +43,14 @@ pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe("href", value, page);
 }
 
+pub fn getRel(self: *Link) []const u8 {
+    return self.asElement().getAttributeSafe("rel") orelse return "";
+}
+
+pub fn setRel(self: *Link, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("rel", value, page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Link);
 
@@ -52,5 +60,6 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{});
     pub const href = bridge.accessor(Link.getHref, Link.setHref, .{});
 };

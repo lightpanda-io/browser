@@ -57,9 +57,10 @@ pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
         .request => |r| r._method,
     };
 
-    const headers = if (opts.headers) |header_init|
-        try Headers.init(header_init, page)
-    else switch (input) {
+    const headers = if (opts.headers) |headers_init| switch (headers_init) {
+        .obj => |h| h,
+        else => try Headers.init(headers_init, page),
+    } else switch (input) {
         .url => null,
         .request => |r| r._headers,
     };

@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
+const Page = @import("../Page.zig");
 const logger = @import("../../log.zig");
 
 const Console = @This();
@@ -26,24 +27,29 @@ _pad: bool = false,
 
 pub const init: Console = .{};
 
-pub fn log(_: *const Console, values: []js.Object) void {
-    logger.info(.js, "console.log", .{ValueWriter{ .values = values }});
+pub fn log(_: *const Console, values: []js.Object, page: *Page) void {
+    logger.info(.js, "console.log", .{ValueWriter{ .page = page, .values = values }});
 }
 
-pub fn warn(_: *const Console, values: []js.Object) void {
-    logger.warn(.js, "console.warn", .{ValueWriter{ .values = values }});
+pub fn warn(_: *const Console, values: []js.Object, page: *Page) void {
+    logger.warn(.js, "console.warn", .{ValueWriter{ .page = page, .values = values }});
 }
 
-pub fn @"error"(_: *const Console, values: []js.Object) void {
-    logger.warn(.js, "console.error", .{ValueWriter{ .values = values }});
+pub fn @"error"(_: *const Console, values: []js.Object, page: *Page) void {
+    logger.warn(.js, "console.error", .{ValueWriter{ .page = page, .values = values, .include_stack = true }});
 }
 
 const ValueWriter = struct {
+    page: *Page,
     values: []js.Object,
+    include_stack: bool = false,
 
     pub fn format(self: ValueWriter, writer: *std.io.Writer) !void {
         for (self.values, 1..) |value, i| {
             try writer.print("\n  arg({d}): {f}", .{ i, value });
+        }
+        if (self.include_stack) {
+            try writer.print("\n stack: {s}", .{self.page.js.stackTrace() catch |err| @errorName(err) orelse "???"});
         }
     }
     pub fn jsonStringify(self: ValueWriter, writer: *std.json.Stringify) !void {
