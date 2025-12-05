@@ -49,7 +49,10 @@ pub const Writer = struct {
 
     fn toJSON(self: *const Writer, node: *const Node, w: anytype) !void {
         try w.beginArray();
-        try self.writeNode(node, w);
+        if (try self.writeNode(node, w)) {
+            try w.endArray();
+            return;
+        }
 
         const walker = Walker{};
         var next: ?*parser.Node = null;
@@ -63,13 +66,7 @@ pub const Writer = struct {
             }
 
             const n = try self.registry.register(next.?);
-            try self.writeNode(n, w);
-
-            const tag = try parser.elementTag(@ptrCast(next.?));
-            skip_children = switch (tag) {
-                .head => true,
-                else => false,
-            };
+            skip_children = try self.writeNode(n, w);
         }
 
         try w.endArray();
@@ -194,11 +191,14 @@ pub const Writer = struct {
     }
 
     // write a node. returns true if children must be skipped.
-    fn writeNode(self: *const Writer, node: *const Node, w: anytype) !void {
+    fn writeNode(self: *const Writer, node: *const Node, w: anytype) !bool {
         try w.beginObject();
 
         const axn = try AXNode.fromNode(node._node);
         try w.objectField("nodeId");
+        try w.write(node.id);
+
+        try w.objectField("backendDOMNodeId");
         try w.write(node.id);
 
         try w.objectField("role");
@@ -249,28 +249,34 @@ pub const Writer = struct {
         }
 
         // Children
+        const skip_children = try axn.ignoreChildren();
+
         try w.objectField("childIds");
-        var registry = self.registry;
-        const child_nodes = try parser.nodeGetChildNodes(n);
-        const child_count = parser.nodeListLength(child_nodes);
-
-        var i: usize = 0;
         try w.beginArray();
-        for (0..child_count) |_| {
-            defer i += 1;
-            const child = (parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
+        if (!skip_children) {
+            var registry = self.registry;
+            const child_nodes = try parser.nodeGetChildNodes(n);
+            const child_count = parser.nodeListLength(child_nodes);
 
-            // ignore non-elements
-            if (parser.nodeType(child) != .element) {
-                continue;
+            var i: usize = 0;
+            for (0..child_count) |_| {
+                defer i += 1;
+                const child = (parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
+
+                // ignore non-elements
+                if (parser.nodeType(child) != .element) {
+                    continue;
+                }
+
+                const child_node = try registry.register(child);
+                try w.write(child_node.id);
             }
-
-            const child_node = try registry.register(child);
-            try w.write(child_node.id);
         }
         try w.endArray();
 
         try w.endObject();
+
+        return skip_children;
     }
 };
 
@@ -328,11 +334,11 @@ pub const AXRole = enum(u8) {
     term,
     textbox,
     time,
-    WebRootArea,
+    RootWebArea,
 
     fn fromNode(node: *parser.Node) !AXRole {
         switch (parser.nodeType(node)) {
-            .document => return .WebRootArea, // Chrome specific.
+            .document => return .RootWebArea, // Chrome specific.
             .element => {},
             else => {
                 log.debug(.cdp, "invalid tag", .{ .node_type = parser.nodeType(node) });
@@ -658,6 +664,22 @@ fn isHidden(elt: *parser.Element) !bool {
     // TODO Check CSS visibility (if you have access to computed styles)
 
     return false;
+}
+
+fn ignoreChildren(self: AXNode) !bool {
+    const node = self._node;
+    if (parser.nodeType(node) == .document) {
+        return false;
+    }
+
+    std.debug.assert(parser.nodeType(node) == .element);
+
+    const elt: *parser.Element = @ptrCast(node);
+    const tag = try parser.elementTag(elt);
+    return switch (tag) {
+        .head => true,
+        else => false,
+    };
 }
 
 fn isIgnore(self: AXNode) !bool {
