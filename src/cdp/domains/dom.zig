@@ -22,6 +22,8 @@ const Node = @import("../Node.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
 
+const dump = @import("../../browser/dump.zig");
+
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: anytype) !void {
@@ -40,6 +42,8 @@ pub fn processMessage(cmd: anytype) !void {
         getBoxModel,
         requestChildNodes,
         getFrameOwner,
+        getOuterHTML,
+        requestNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -57,6 +61,8 @@ pub fn processMessage(cmd: anytype) !void {
         .getBoxModel => return getBoxModel(cmd),
         .requestChildNodes => return requestChildNodes(cmd),
         .getFrameOwner => return getFrameOwner(cmd),
+        .getOuterHTML => return getOuterHTML(cmd),
+        .requestNode => return requestNode(cmd),
     }
 }
 
@@ -480,6 +486,39 @@ fn getFrameOwner(cmd: anytype) !void {
 
     const node = try bc.node_registry.register(page.window._document.asNode());
     return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});
+}
+
+fn getOuterHTML(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        objectId: ?[]const u8 = null,
+        includeShadowDOM: bool = false,
+    })) orelse return error.InvalidParams;
+
+    if (params.includeShadowDOM) {
+        log.warn(.cdp, "not implemented", .{ .feature = "DOM.getOuterHTML: Not implemented includeShadowDOM parameter" });
+    }
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const node = try getNode(cmd.arena, bc, params.nodeId, params.backendNodeId, params.objectId);
+
+    var aw = std.Io.Writer.Allocating.init(cmd.arena);
+    try dump.deep(node.dom, .{}, &aw.writer, page);
+
+    return cmd.sendResult(.{ .outerHTML = aw.written() }, .{});
+}
+
+fn requestNode(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        objectId: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try getNode(cmd.arena, bc, null, null, params.objectId);
+
+    return cmd.sendResult(.{ .nodeId = node.id }, .{});
 }
 
 const testing = @import("../testing.zig");
