@@ -46,6 +46,8 @@ pub fn build(b: *Build) !void {
         b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
     );
 
+    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -59,7 +61,7 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
         .link_libcpp = true,
     });
-    try addDependencies(b, lightpanda_module, opts);
+    try addDependencies(b, lightpanda_module, opts, prebuilt_v8_path);
 
     {
         // browser
@@ -113,7 +115,7 @@ pub fn build(b: *Build) !void {
             .target = target,
             .optimize = optimize,
         });
-        try addDependencies(b, wpt_module, opts);
+        try addDependencies(b, wpt_module, opts, prebuilt_v8_path);
 
         // compile and install
         const wpt = b.addExecutable(.{
@@ -131,27 +133,9 @@ pub fn build(b: *Build) !void {
         const wpt_step = b.step("wpt", "WPT tests");
         wpt_step.dependOn(&wpt_cmd.step);
     }
-
-    {
-        // get v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const get_v8 = b.addRunArtifact(v8.artifact("get-v8"));
-        const get_step = b.step("get-v8", "Get v8");
-        get_step.dependOn(&get_v8.step);
-    }
-
-    {
-        // build v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const build_v8 = b.addRunArtifact(v8.artifact("build-v8"));
-        const build_step = b.step("build-v8", "Build v8");
-        build_step.dependOn(&build_v8.step);
-    }
 }
 
-fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
+fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, prebuilt_v8_path: ?[]const u8) !void {
     try moduleNetSurf(b, mod);
     mod.addImport("build_config", opts.createModule());
 
@@ -159,6 +143,8 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
     const dep_opts = .{
         .target = target,
         .optimize = mod.optimize.?,
+        .prebuilt_v8_path = prebuilt_v8_path,
+        .cache_root = b.pathFromRoot(".lp-cache"),
     };
 
     mod.addIncludePath(b.path("vendor/lightpanda"));
@@ -171,36 +157,6 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         const v8_mod = b.dependency("v8", dep_opts).module("v8");
         v8_mod.addOptions("default_exports", v8_opts);
         mod.addImport("v8", v8_mod);
-
-        const release_dir = if (mod.optimize.? == .Debug) "debug" else "release";
-        const os = switch (target.result.os.tag) {
-            .linux => "linux",
-            .macos => "macos",
-            else => return error.UnsupportedPlatform,
-        };
-        var lib_path = try std.fmt.allocPrint(
-            mod.owner.allocator,
-            "v8/out/{s}/{s}/obj/zig/libc_v8.a",
-            .{ os, release_dir },
-        );
-        std.fs.cwd().access(lib_path, .{}) catch {
-            // legacy path
-            lib_path = try std.fmt.allocPrint(
-                mod.owner.allocator,
-                "v8/out/{s}/obj/zig/libc_v8.a",
-                .{release_dir},
-            );
-        };
-        mod.addObjectFile(mod.owner.path(lib_path));
-
-        switch (target.result.os.tag) {
-            .macos => {
-                // v8 has a dependency, abseil-cpp, which, on Mac, uses CoreFoundation
-                mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
-                mod.linkFramework("CoreFoundation", .{});
-            },
-            else => {},
-        }
     }
 
     {

@@ -58,7 +58,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build release
-        run: zig build -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: upload artifact
         uses: actions/upload-artifact@v4

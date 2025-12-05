@@ -1,5 +1,6 @@
 zig-cache
 /.zig-cache/
+/.lp-cache/
 zig-out
 /vendor/netsurf/out
 /vendor/libiconv/
