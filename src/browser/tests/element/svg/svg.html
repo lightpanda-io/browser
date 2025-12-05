@@ -6,23 +6,61 @@
 <SVG id=svg3></SVG>
 
 <script id=svg>
-    let svg1 = $('#svg1');
-    testing.expectEqual('svg', svg1.tagName);
-    testing.expectEqual('http://www.w3.org/2000/svg', svg1.namespaceURI);
+{
+  let svg1 = $('#svg1');
+  testing.expectEqual('svg', svg1.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg1.namespaceURI);
 
-    let svg2 = $('#svg2');
-    testing.expectEqual('svg', svg2.tagName);
-    testing.expectEqual('http://www.w3.org/2000/svg', svg2.namespaceURI);
+  let svg2 = $('#svg2');
+  testing.expectEqual('svg', svg2.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg2.namespaceURI);
 
-    let svg3 = $('#svg3');
-    testing.expectEqual('svg', svg3.tagName);
-    testing.expectEqual('http://www.w3.org/2000/svg', svg3.namespaceURI);
+  let svg3 = $('#svg3');
+  testing.expectEqual('svg', svg3.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg3.namespaceURI);
 
-    const svg4 = document.createElementNS('http://www.w3.org/2000/svg', 'SvG');
-    testing.expectEqual('SvG', svg4.tagName);
-    testing.expectEqual('http://www.w3.org/2000/svg', svg4.namespaceURI);
+  const svg4 = document.createElementNS('http://www.w3.org/2000/svg', 'SvG');
+  testing.expectEqual('SvG', svg4.tagName);
+  testing.expectEqual('http://www.w3.org/2000/svg', svg4.namespaceURI);
 
-    const svg5 = document.createElement('SvG');
-    testing.expectEqual('SVG', svg5.tagName);
-    testing.expectEqual('http://www.w3.org/1999/xhtml', svg5.namespaceURI);
+  const svg5 = document.createElement('SvG');
+  testing.expectEqual('SVG', svg5.tagName);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', svg5.namespaceURI);
+}
+</script>
+
+<svg id=lower width="200" height="100" style="border:1px solid #ccc" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <rect></rect>
+  <text x="100" y="95" font-size="14" text-anchor="middle">OVER 9000!!</text>
+</svg>
+
+<SVG ID=UPPER WIDTH="200" HEIGHT="100" STYLE="BORDER:1PX SOLID #CCC" XMLNS="http://www.w3.org/2000/svg" VIEWBOX="0 0 200 100">
+  <RECT></RECT>
+  <TEXT X="100" Y="95" FONT-SIZE="14" TEXT-ANCHOR="MIDDLE">OVER 9000!!!</TEXT>
+</SVG>
+
+<script id=casing>
+  testing.expectEqual(false, 'AString' instanceof SVGElement);
+
+  const lower = $('#lower');
+  testing.expectEqual('http://www.w3.org/2000/svg', lower.getAttribute('xmlns'));
+  testing.expectEqual('http://www.w3.org/2000/svg', lower.getAttributeNode('xmlns').value);
+  testing.expectEqual('http://www.w3.org/2000/svg', lower.attributes.getNamedItem('xmlns').value);
+  testing.expectEqual('0 0 200 100', lower.getAttribute('viewBox'));
+  testing.expectEqual('viewBox', lower.getAttributeNode('viewBox').name);
+  testing.expectEqual(true, lower.outerHTML.includes('viewBox'));
+  testing.expectEqual('svg', lower.tagName);
+  testing.expectEqual('rect', lower.querySelector('rect').tagName);
+  testing.expectEqual('text', lower.querySelector('text').tagName);
+
+  const upper = $('#UPPER');
+  testing.expectEqual('http://www.w3.org/2000/svg', upper.getAttribute('xmlns'));
+  testing.expectEqual('http://www.w3.org/2000/svg', upper.getAttributeNode('xmlns').value);
+  testing.expectEqual('http://www.w3.org/2000/svg', upper.attributes.getNamedItem('xmlns').value);
+  testing.expectEqual('0 0 200 100', upper.getAttribute('viewBox'));
+  testing.expectEqual('viewBox', upper.getAttributeNode('viewBox').name);
+  testing.expectEqual(true, upper.outerHTML.includes('viewBox'));
+  testing.expectEqual('svg', upper.tagName);
+  testing.expectEqual('rect', upper.querySelector('rect').tagName);
+  testing.expectEqual('text', upper.querySelector('text').tagName);
 </script>

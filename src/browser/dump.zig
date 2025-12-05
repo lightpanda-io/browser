@@ -1,4 +1,4 @@
-    // Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -284,11 +284,11 @@ fn writeEscapedByte(input: []const u8, index: usize, writer: *std.Io.Writer) ![]
             // non breaking space
             if (input.len > index + 1 and input[index + 1] == 160) {
                 try writer.writeAll("&nbsp;");
-                return input [index + 2 ..];
+                return input[index + 2 ..];
             }
             try writer.writeByte(194);
         },
         else => unreachable,
     }
-    return input[index + 1..];
+    return input[index + 1 ..];
 }

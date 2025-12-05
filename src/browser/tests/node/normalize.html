@@ -28,3 +28,22 @@
   testing.expectEqual('a<p></p>b', container.innerHTML);
   testing.expectEqual(3, container.childNodes.length);
 </script>
+
+<span id=token class="token" style="color:#ce9178">&quot;puppeteer &quot;</span>
+                                        <h3 id=name>Leto
+                                        <!-- -->
+                                        <!-- -->
+                                        Atreides</h3>
+<script id=adjascent_test_nodes>
+  const token = $('#token');
+  testing.expectEqual('"puppeteer "', token.firstChild.nodeValue);
+
+  const name = $('#name');
+  testing.expectEqual([
+    "Leto\n                                        ",
+    " ",
+    "\n                                        ",
+    " ",
+    "\n                                        Atreides"
+  ], Array.from(name.childNodes).map((n) => n.nodeValue));
+</script>

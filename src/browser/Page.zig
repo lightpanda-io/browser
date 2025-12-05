@@ -355,7 +355,7 @@ pub fn documentIsLoaded(self: *Page) void {
 }
 
 pub fn _documentIsLoaded(self: *Page) !void {
-    const event = try Event.init("DOMContentLoaded", .{}, self);
+    const event = try Event.init("DOMContentLoaded", .{ .bubbles = true }, self);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -1292,7 +1292,9 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
         var existing = list orelse return;
 
         var attributes = try self.arena.create(Element.Attribute.List);
-        attributes.* = .{};
+        attributes.* = .{
+            .normalize = existing.normalize,
+        };
 
         var it = existing.iterator();
         while (it.next()) |attr| {
@@ -1306,12 +1308,10 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
     if (@TypeOf(list) == @TypeOf(null) or list.count() == 0) {
         return;
     }
-    var attributes = try self.arena.create(Element.Attribute.List);
-    attributes.* = .{};
+    var attributes = try element.createAttributeList(self);
     while (list.next()) |attr| {
         try attributes.putNew(attr.name.local.slice(), attr.value.slice(), self);
     }
-    element._attributes = attributes;
 }
 
 pub fn createTextNode(self: *Page, text: []const u8) !*Node {

@@ -343,7 +343,7 @@ pub fn getOrCreateAttributeList(self: *Element, page: *Page) !*Attribute.List {
 pub fn createAttributeList(self: *Element, page: *Page) !*Attribute.List {
     std.debug.assert(self._attributes == null);
     const a = try page.arena.create(Attribute.List);
-    a.* = .{.normalize = self._namespace == .html};
+    a.* = .{ .normalize = self._namespace == .html };
     self._attributes = a;
     return a;
 }

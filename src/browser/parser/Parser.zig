@@ -242,13 +242,7 @@ fn _addAttrsIfMissingCallback(self: *Parser, node: *Node, attributes: h5e.Attrib
     const element = node.as(Element);
     const page = self.page;
 
-    const attr_list = element._attributes orelse blk: {
-        const a = try page.arena.create(@import("../webapi/element/Attribute.zig").List);
-        a.* = .{};
-        element._attributes = a;
-        break :blk a;
-    };
-
+    const attr_list = try element.getOrCreateAttributeList(page);
     while (attributes.next()) |attr| {
         const name = attr.name.local.slice();
         const value = attr.value.slice();

@@ -118,6 +118,7 @@ pub const JsApi = struct {
 // in our Entry? Because that would require an extra 8 bytes for every single
 // attribute in the DOM, and, again, we expect that to almost always be null.
 pub const List = struct {
+    normalize: bool,
     _list: std.DoublyLinkedList = .{},
 
     pub fn isEmpty(self: *const List) bool {
@@ -273,7 +274,9 @@ pub const List = struct {
         entry: ?*Entry,
     };
     fn getEntryAndNormalizedName(self: *const List, name: []const u8, page: *Page) !NormalizeAndEntry {
-        const normalized = try normalizeNameForLookup(name, page);
+        const normalized =
+            if (self.normalize) try normalizeNameForLookup(name, page) else name;
+
         return .{
             .normalized = normalized,
             .entry = self.getEntryWithNormalizedName(normalized),
