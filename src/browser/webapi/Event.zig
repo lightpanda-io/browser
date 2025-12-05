@@ -55,6 +55,7 @@ pub const Type = union(enum) {
     custom_event: *@import("event/CustomEvent.zig"),
     message_event: *@import("event/MessageEvent.zig"),
     progress_event: *@import("event/ProgressEvent.zig"),
+    composition_event: *@import("event/CompositionEvent.zig"),
 };
 
 const Options = struct {
