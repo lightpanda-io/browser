@@ -43,6 +43,7 @@ pub fn processMessage(cmd: anytype) !void {
         requestChildNodes,
         getFrameOwner,
         getOuterHTML,
+        requestNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -61,6 +62,7 @@ pub fn processMessage(cmd: anytype) !void {
         .requestChildNodes => return requestChildNodes(cmd),
         .getFrameOwner => return getFrameOwner(cmd),
         .getOuterHTML => return getOuterHTML(cmd),
+        .requestNode => return requestNode(cmd),
     }
 }
 
@@ -516,6 +518,17 @@ fn getOuterHTML(cmd: anytype) !void {
     try dump.writeNode(node._node, .{}, &aw.writer);
 
     return cmd.sendResult(.{ .outerHTML = aw.written() }, .{});
+}
+
+fn requestNode(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        objectId: []const u8,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const node = try getNode(cmd.arena, bc, null, null, params.objectId);
+
+    return cmd.sendResult(.{ .nodeId = node.id }, .{});
 }
 
 const testing = @import("../testing.zig");

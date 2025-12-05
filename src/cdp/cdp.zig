@@ -292,6 +292,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
 pub fn BrowserContext(comptime CDP_T: type) type {
     const Node = @import("Node.zig");
+    const AXNode = @import("AXNode.zig");
 
     return struct {
         id: []const u8,
@@ -463,6 +464,14 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .root = root,
                 .depth = opts.depth,
                 .exclude_root = opts.exclude_root,
+                .registry = &self.node_registry,
+            };
+        }
+
+        pub fn axnodeWriter(self: *Self, root: *const Node, opts: AXNode.Writer.Opts) AXNode.Writer {
+            _ = opts;
+            return .{
+                .root = root,
                 .registry = &self.node_registry,
             };
         }
