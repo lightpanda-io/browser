@@ -146,6 +146,10 @@ pub fn getLength(self: *const CData) usize {
     return self._data.len;
 }
 
+pub fn isEqualNode(self: *const CData, other: *const CData) bool {
+    return std.mem.eql(u8, self.getData(), other.getData());
+}
+
 pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
     const new_data = try std.mem.concat(page.arena, u8, &.{ self._data, data });
     try self.setData(new_data, page);

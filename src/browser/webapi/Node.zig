@@ -286,6 +286,27 @@ pub fn getNodeType(self: *const Node) u8 {
     };
 }
 
+pub fn isEqualNode(self: *Node, other: *Node) bool {
+    // Make sure types match.
+    if (self.getNodeType() != other.getNodeType()) {
+        return false;
+    }
+
+    // TODO: Compare `localName` and prefix.
+    return switch (self._type) {
+        .element => self.as(Element).isEqualNode(other.as(Element)),
+        .attribute => self.as(Element.Attribute).isEqualNode(other.as(Element.Attribute)),
+        .cdata => self.as(CData).isEqualNode(other.as(CData)),
+        else => {
+            log.warn(.browser, "not implemented", .{
+                .type = self._type,
+                .feature = "Node.isEqualNode",
+            });
+            return false;
+        },
+    };
+}
+
 pub fn isInShadowTree(self: *Node) bool {
     var node = self._parent;
     while (node) |n| {
@@ -822,6 +843,7 @@ pub const JsApi = struct {
     pub const cloneNode = bridge.function(Node.cloneNode, .{ .dom_exception = true });
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
     pub const getRootNode = bridge.function(Node.getRootNode, .{});
+    pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
 
     pub const toString = bridge.function(_toString, .{});
     fn _toString(self: *const Node) []const u8 {

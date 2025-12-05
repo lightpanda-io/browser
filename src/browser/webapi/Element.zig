@@ -117,6 +117,49 @@ pub fn className(self: *const Element) []const u8 {
     };
 }
 
+pub fn attributesEql(self: *const Element, other: *Element) bool {
+    if (self._attributes) |attr_list| {
+        const other_list = other._attributes orelse return false;
+        return attr_list.eql(other_list);
+    }
+    // Make sure no attrs in both sides.
+    return other._attributes == null;
+}
+
+/// TODO: localName and prefix comparison.
+pub fn isEqualNode(self: *Element, other: *Element) bool {
+    const self_tag = self.getTagNameDump();
+    const other_tag = other.getTagNameDump();
+    // Compare namespaces and tags.
+    const dirty = self._namespace != other._namespace or !std.mem.eql(u8, self_tag, other_tag);
+    if (dirty) {
+        return false;
+    }
+
+    // Compare attributes.
+    if (!self.attributesEql(other)) {
+        return false;
+    }
+
+    // Compare children.
+    var self_iter = self.asNode().childrenIterator();
+    var other_iter = other.asNode().childrenIterator();
+    var self_count: usize = 0;
+    var other_count: usize = 0;
+    while (self_iter.next()) |self_node| : (self_count += 1) {
+        const other_node = other_iter.next() orelse return false;
+        other_count += 1;
+        if (self_node.isEqualNode(other_node)) {
+            continue;
+        }
+
+        return false;
+    }
+
+    // Make sure both have equal number of children.
+    return self_count == other_count;
+}
+
 pub fn getTagNameLower(self: *const Element) []const u8 {
     switch (self._type) {
         .html => |he| switch (he._type) {
