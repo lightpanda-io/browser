@@ -49,31 +49,13 @@ pub const Writer = struct {
 
     fn toJSON(self: *const Writer, node: *const Node, w: anytype) !void {
         try w.beginArray();
-        if (try self.writeNode(node, w)) {
-            // skip children
-            try w.endArray();
-            return;
-        }
-
-        // special case: if the node is the document, walk starts from body.
-        const start = blk: {
-            if (parser.nodeType(node._node) != .document) {
-                break :blk node._node;
-            }
-
-            const doc = parser.documentHTMLToDocument(@ptrCast(node._node));
-            std.debug.assert(doc.is_html);
-
-            // find <body> tag
-            const list = try parser.documentGetElementsByTagName(doc, "body");
-            break :blk parser.nodeListItem(list, 0) orelse node._node;
-        };
+        try self.writeNode(node, w);
 
         const walker = Walker{};
         var next: ?*parser.Node = null;
         var skip_children = false;
         while (true) {
-            next = try walker.get_next(start, next, .{ .skip_children = skip_children }) orelse break;
+            next = try walker.get_next(node._node, next, .{ .skip_children = skip_children }) orelse break;
 
             if (parser.nodeType(next.?) != .element) {
                 skip_children = true;
@@ -81,7 +63,13 @@ pub const Writer = struct {
             }
 
             const n = try self.registry.register(next.?);
-            skip_children = try self.writeNode(n, w);
+            try self.writeNode(n, w);
+
+            const tag = try parser.elementTag(@ptrCast(next.?));
+            skip_children = switch (tag) {
+                .head => true,
+                else => false,
+            };
         }
 
         try w.endArray();
@@ -206,18 +194,22 @@ pub const Writer = struct {
     }
 
     // write a node. returns true if children must be skipped.
-    fn writeNode(self: *const Writer, node: *const Node, w: anytype) !bool {
+    fn writeNode(self: *const Writer, node: *const Node, w: anytype) !void {
         try w.beginObject();
 
         const axn = try AXNode.fromNode(node._node);
         try w.objectField("nodeId");
         try w.write(node.id);
 
+        try w.objectField("role");
+        try self.writeAXValue(.{ .type = .role, .value = .{ .string = try axn.getRole() } }, w);
+
         const ignore = try axn.isIgnore();
         try w.objectField("ignored");
         try w.write(ignore);
 
         if (ignore) {
+            // Ignore reasons
             try w.objectField("ignored_reasons");
             try w.beginArray();
             try w.beginObject();
@@ -227,12 +219,8 @@ pub const Writer = struct {
             try self.writeAXValue(.{ .type = .boolean, .value = .{ .boolean = true } }, w);
             try w.endObject();
             try w.endArray();
-        }
-
-        try w.objectField("role");
-        try self.writeAXValue(.{ .type = .role, .value = .{ .string = try axn.getRole() } }, w);
-
-        if (!ignore) {
+        } else {
+            // Name
             try w.objectField("name");
             try w.beginObject();
             try w.objectField("type");
@@ -243,10 +231,17 @@ pub const Writer = struct {
                 try self.writeAXSource(s, w);
             }
             try w.endObject();
+
+            // Properties
+            try w.objectField("properties");
+            try w.beginArray();
+            try self.writeAXProperties(axn, w);
+            try w.endArray();
         }
 
         const n = axn._node;
 
+        // Parent
         if (parser.nodeParentNode(n)) |p| {
             const parent_node = try self.registry.register(p);
             try w.objectField("parentId");
@@ -265,21 +260,17 @@ pub const Writer = struct {
             defer i += 1;
             const child = (parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
 
-            // TODO ignore some of them?
+            // ignore non-elements
+            if (parser.nodeType(child) != .element) {
+                continue;
+            }
+
             const child_node = try registry.register(child);
             try w.write(child_node.id);
         }
         try w.endArray();
 
-        // Properties
-        try w.objectField("properties");
-        try w.beginArray();
-        try self.writeAXProperties(axn, w);
-        try w.endArray();
-
         try w.endObject();
-
-        return false;
     }
 };
 
@@ -527,8 +518,8 @@ pub const AXRole = enum(u8) {
             .dfn => .term,
 
             // Document Structure
-            .html => .document,
-            .body => .document,
+            .html => .none,
+            .body => .none,
 
             // Deprecated/Obsolete Elements
             .marquee => .marquee,
@@ -697,6 +688,8 @@ fn isIgnore(self: AXNode) !bool {
         .datalist,
         .col,
         .colgroup,
+        .html,
+        .body,
         => return true,
         .img => {
             // Check for empty decorative images
