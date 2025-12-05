@@ -189,3 +189,24 @@
   testing.expectEqual(8, Node.COMMENT_NODE);
   testing.expectEqual(11, Node.DOCUMENT_FRAGMENT_NODE);
 </script>
+
+<div id="rootNodeComposed"></div>
+<script id=getRootNodeComposed>
+  const testContainer = $('#rootNodeComposed');
+  const shadowHost = document.createElement('div');
+  testContainer.appendChild(shadowHost);
+  const shadowRoot = shadowHost.attachShadow({ mode: 'open' });
+  const shadowChild = document.createElement('span');
+  shadowRoot.appendChild(shadowChild);
+
+  testing.expectEqual('ShadowRoot', shadowChild.getRootNode().__proto__.constructor.name);
+  testing.expectEqual('ShadowRoot', shadowChild.getRootNode({ composed: false }).__proto__.constructor.name);
+  testing.expectEqual('HTMLDocument', shadowChild.getRootNode({ composed: true }).__proto__.constructor.name);
+  testing.expectEqual('HTMLDocument', shadowHost.getRootNode().__proto__.constructor.name);
+
+  const disconnected = document.createElement('div');
+  const disconnectedChild = document.createElement('span');
+  disconnected.appendChild(disconnectedChild);
+  testing.expectEqual('HTMLDivElement', disconnectedChild.getRootNode().__proto__.constructor.name);
+  testing.expectEqual('HTMLDivElement', disconnectedChild.getRootNode({ composed: true }).__proto__.constructor.name);
+</script>

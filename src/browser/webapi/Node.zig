@@ -259,14 +259,23 @@ const GetRootNodeOpts = struct {
 };
 pub fn getRootNode(self: *const Node, opts_: ?GetRootNodeOpts) *const Node {
     const opts = opts_ orelse GetRootNodeOpts{};
-    if (opts.composed) {
-        log.warn(.not_implemented, "Node.getRootNode", .{ .feature = "composed" });
-    }
 
     var root = self;
     while (root._parent) |parent| {
         root = parent;
     }
+
+    // If composed is true, traverse through shadow boundaries
+    if (opts.composed) {
+        while (true) {
+            const shadow_root = @constCast(root).is(ShadowRoot) orelse break;
+            root = shadow_root.getHost().asNode();
+            while (root._parent) |parent| {
+                root = parent;
+            }
+        }
+    }
+
     return root;
 }
 
