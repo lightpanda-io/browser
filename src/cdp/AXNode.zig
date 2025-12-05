@@ -49,7 +49,8 @@ pub const Writer = struct {
 
     fn toJSON(self: *const Writer, node: *const Node, w: anytype) !void {
         try w.beginArray();
-        if (try self.writeNode(node, w)) {
+        const root = try AXNode.fromNode(node._node);
+        if (try self.writeNode(node.id, root, w)) {
             try w.endArray();
             return;
         }
@@ -60,13 +61,26 @@ pub const Writer = struct {
         while (true) {
             next = try walker.get_next(node._node, next, .{ .skip_children = skip_children }) orelse break;
 
-            if (parser.nodeType(next.?) != .element) {
+            const node_type = parser.nodeType(next.?);
+            if (node_type != .element and node_type != .text) {
                 skip_children = true;
                 continue;
             }
 
+            // special case: if the node is a text, it depends the parent to
+            // keep the text.
+            if (node_type == .text) {
+                if (parser.nodeParentNode(next.?)) |p| {
+                    if (try ignoreText(p)) {
+                        skip_children = true;
+                        continue;
+                    }
+                }
+            }
+
             const n = try self.registry.register(next.?);
-            skip_children = try self.writeNode(n, w);
+            const axn = try AXNode.fromNode(next.?);
+            skip_children = try self.writeNode(n.id, axn, w);
         }
 
         try w.endArray();
@@ -149,7 +163,7 @@ pub const Writer = struct {
                 try self.writeAXProperty(.{ .name = .focusable, .value = .{ .type = .booleanOrUndefined, .value = .{ .boolean = true } } }, w);
                 return;
             },
-            .element => {},
+            .element, .text => {},
             else => {
                 log.debug(.cdp, "invalid tag", .{ .node_type = parser.nodeType(node) });
                 return error.InvalidTag;
@@ -191,15 +205,15 @@ pub const Writer = struct {
     }
 
     // write a node. returns true if children must be skipped.
-    fn writeNode(self: *const Writer, node: *const Node, w: anytype) !bool {
+    fn writeNode(self: *const Writer, id: u32, axn: AXNode, w: anytype) !bool {
+        // ignore empty texts
         try w.beginObject();
 
-        const axn = try AXNode.fromNode(node._node);
         try w.objectField("nodeId");
-        try w.write(node.id);
+        try w.write(id);
 
         try w.objectField("backendDOMNodeId");
-        try w.write(node.id);
+        try w.write(id);
 
         try w.objectField("role");
         try self.writeAXValue(.{ .type = .role, .value = .{ .string = try axn.getRole() } }, w);
@@ -250,6 +264,7 @@ pub const Writer = struct {
 
         // Children
         const skip_children = try axn.ignoreChildren();
+        const skip_text = try ignoreText(n);
 
         try w.objectField("childIds");
         try w.beginArray();
@@ -263,8 +278,8 @@ pub const Writer = struct {
                 defer i += 1;
                 const child = (parser.nodeListItem(child_nodes, @intCast(i))) orelse break;
 
-                // ignore non-elements
-                if (parser.nodeType(child) != .element) {
+                // ignore non-elements or text.
+                if (parser.nodeType(child) != .element and (parser.nodeType(child) != .text or skip_text)) {
                     continue;
                 }
 
@@ -303,7 +318,7 @@ pub const AXRole = enum(u8) {
     form,
     group,
     heading,
-    img,
+    image,
     insertion,
     link,
     list,
@@ -335,11 +350,14 @@ pub const AXRole = enum(u8) {
     textbox,
     time,
     RootWebArea,
+    LineBreak,
+    StaticText,
 
     fn fromNode(node: *parser.Node) !AXRole {
         switch (parser.nodeType(node)) {
             .document => return .RootWebArea, // Chrome specific.
             .element => {},
+            .text => return .StaticText,
             else => {
                 log.debug(.cdp, "invalid tag", .{ .node_type = parser.nodeType(node) });
                 return error.InvalidTag;
@@ -491,7 +509,7 @@ pub const AXRole = enum(u8) {
             .dialog => .dialog,
 
             // Media
-            .img => .img,
+            .img => .image,
             .figure => .figure,
 
             // Tables
@@ -530,6 +548,8 @@ pub const AXRole = enum(u8) {
             // Deprecated/Obsolete Elements
             .marquee => .marquee,
 
+            .br => .LineBreak,
+
             else => .none,
         };
     }
@@ -564,6 +584,12 @@ fn writeName(axnode: AXNode, w: anytype) !?AXSource {
         return .title;
     }
 
+    if (parser.nodeType(node) == .text) {
+        const content = parser.nodeTextContent(node) orelse "";
+        try writeString(content, w);
+        return .contents;
+    }
+
     std.debug.assert(parser.nodeType(node) == .element);
     const elt: *parser.Element = @ptrCast(node);
 
@@ -581,6 +607,10 @@ fn writeName(axnode: AXNode, w: anytype) !?AXSource {
 
     const tag = try parser.elementTag(elt);
     switch (tag) {
+        .br => {
+            try writeString("\n", w);
+            return .contents;
+        },
         .input => {
             const input_type = try parser.elementGetAttribute(elt, "type") orelse "text";
             switch (input_type.len) {
@@ -622,6 +652,7 @@ fn writeName(axnode: AXNode, w: anytype) !?AXSource {
         .object,
         .progress,
         .meter,
+        .p,
         => {},
         else => {
             if (parser.nodeTextContent(node)) |content| {
@@ -666,9 +697,32 @@ fn isHidden(elt: *parser.Element) !bool {
     return false;
 }
 
+fn ignoreText(node: *parser.Node) !bool {
+    if (parser.nodeType(node) == .document) {
+        return true;
+    }
+
+    if (parser.nodeType(node) == .text) {
+        return true;
+    }
+
+    std.debug.assert(parser.nodeType(node) == .element);
+
+    const elt: *parser.Element = @ptrCast(node);
+    const tag = try parser.elementTag(elt);
+    return switch (tag) {
+        .p => false,
+        else => true,
+    };
+}
+
 fn ignoreChildren(self: AXNode) !bool {
     const node = self._node;
     if (parser.nodeType(node) == .document) {
+        return false;
+    }
+
+    if (parser.nodeType(node) == .text) {
         return false;
     }
 
@@ -687,6 +741,10 @@ fn isIgnore(self: AXNode) !bool {
     const role_attr = self.role_attr;
 
     if (parser.nodeType(node) == .document) {
+        return false;
+    }
+
+    if (parser.nodeType(node) == .text) {
         return false;
     }
 
