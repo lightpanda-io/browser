@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<head id="the_head">
+  <title>Test Document Title</title>
+  <script src="../testing.js"></script>
+</head>
+
+<body>
+  <!-- This structure will get mutated by insertAdjacentText test -->
+  <div id="insert-adjacent-text-outer-wrapper">
+    <div id="insert-adjacent-text-inner-wrapper">
+      <span></span>
+      <p>content</p>
+    </div>
+  </div>
+</body>
+
+<script id=insertAdjacentText>
+  const wrapper = $("#insert-adjacent-text-inner-wrapper");
+
+  // Insert "beforeend".
+  {
+    wrapper.insertAdjacentText("beforeend", "atlas, rise!");
+    const { nodeType, data } = wrapper.lastChild;
+    testing.expectEqual(nodeType, Node.TEXT_NODE);
+    testing.expectEqual(data, "atlas, rise!");
+  }
+
+  // Insert "beforebegin".
+  {
+    wrapper.insertAdjacentText("beforebegin", "before everything else");
+    const { nodeType, data } = wrapper.previousSibling;
+    testing.expectEqual(nodeType, Node.TEXT_NODE);
+    testing.expectEqual(data, "before everything else");
+  }
+
+  // Insert "afterend".
+  {
+    wrapper.insertAdjacentText("afterend", "after end");
+    const { nodeType, data } = wrapper.nextSibling;
+    testing.expectEqual(nodeType, Node.TEXT_NODE);
+    testing.expectEqual(data, "after end");
+  }
+
+  // Insert "afterbegin".
+  wrapper.insertAdjacentText("afterbegin", "after begin");
+  const { nodeType, data } = wrapper.firstChild;
+  testing.expectEqual(nodeType, Node.TEXT_NODE);
+  testing.expectEqual(data, "after begin");
+</script>
