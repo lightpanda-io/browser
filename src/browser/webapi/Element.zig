@@ -336,13 +336,16 @@ pub fn setAttributeSafe(self: *Element, name: []const u8, value: []const u8, pag
     _ = try attributes.putSafe(name, value, self, page);
 }
 
-fn getOrCreateAttributeList(self: *Element, page: *Page) !*Attribute.List {
-    return self._attributes orelse {
-        const a = try page.arena.create(Attribute.List);
-        a.* = .{};
-        self._attributes = a;
-        return a;
-    };
+pub fn getOrCreateAttributeList(self: *Element, page: *Page) !*Attribute.List {
+    return self._attributes orelse return self.createAttributeList(page);
+}
+
+pub fn createAttributeList(self: *Element, page: *Page) !*Attribute.List {
+    std.debug.assert(self._attributes == null);
+    const a = try page.arena.create(Attribute.List);
+    a.* = .{.normalize = self._namespace == .html};
+    self._attributes = a;
+    return a;
 }
 
 pub fn getShadowRoot(self: *Element, page: *Page) ?*ShadowRoot {
@@ -370,12 +373,7 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, page: *Page) !?*Attrib
         _ = try el.removeAttributeNode(attr, page);
     }
 
-    const attributes = self._attributes orelse blk: {
-        const a = try page.arena.create(Attribute.List);
-        a.* = .{};
-        self._attributes = a;
-        break :blk a;
-    };
+    const attributes = try self.getOrCreateAttributeList(page);
     return attributes.putAttribute(attr, self, page);
 }
 

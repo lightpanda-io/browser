@@ -821,7 +821,7 @@ pub const Transfer = struct {
         self.deinit();
     }
 
-    // abortAuthChallenge is called when an auth chanllenge interception is
+    // abortAuthChallenge is called when an auth challenge interception is
     // abort. We don't call self.client.endTransfer here b/c it has been done
     // before interception process.
     pub fn abortAuthChallenge(self: *Transfer) void {

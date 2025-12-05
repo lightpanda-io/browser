@@ -164,7 +164,17 @@
     if (observed_ids[script_id] === 'fail') {
       return;
     }
+
     observed_ids[script_id] = status;
+
+    if (document.currentScript != null) {
+      if (document.currentScript.onerror === null) {
+        document.currentScript.onerror = function() {
+          observed_ids[document.currentScript.id] = 'fail';
+          failed = true;
+        }
+      }
+    }
   }
 
   function _currentScriptId() {
@@ -201,17 +211,15 @@
       return `array: \n${value.map(_displayValue).join('\n')}\n`;
     }
 
-    // Quickjs can deal with  cyclical objects, but browsers can't. We
-    // serialize with a custom replacer so that the tests can be run in browsers.
     const seen = [];
     return JSON.stringify(value, function(key, val) {
-    if (val != null && typeof val == "object") {
-        if (seen.indexOf(val) >= 0) {
-            return;
-        }
-        seen.push(val);
-    }
-    return val;
-});
+      if (val != null && typeof val == "object") {
+          if (seen.indexOf(val) >= 0) {
+              return;
+          }
+          seen.push(val);
+      }
+      return val;
+    });
   }
 })();

@@ -105,7 +105,7 @@ pub const JsApi = struct {
     pub const src = bridge.accessor(Script.getSrc, Script.setSrc, .{});
     pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{});
     pub const onload = bridge.accessor(Script.getOnLoad, Script.setOnLoad, .{});
-    pub const onerorr = bridge.accessor(Script.getOnError, Script.setOnError, .{});
+    pub const onerror = bridge.accessor(Script.getOnError, Script.setOnError, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
 };
 

@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+    // Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -74,7 +74,11 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 try writer.writeAll(cd.getData());
                 try writer.writeAll("-->");
             } else {
-                try writeEscapedText(cd.getData(), writer);
+                if (shouldEscapeText(node._parent)) {
+                    try writeEscapedText(cd.getData(), writer);
+                } else {
+                    try writer.writeAll(cd.getData());
+                }
             }
         },
         .element => |el| {
@@ -245,34 +249,46 @@ fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
     return false;
 }
 
+fn shouldEscapeText(node_: ?*Node) bool {
+    const node = node_ orelse return true;
+    if (node.is(Node.Element.Html.Script) != null) {
+        return false;
+    }
+    return true;
+}
 fn writeEscapedText(text: []const u8, writer: *std.Io.Writer) !void {
     // Fast path: if no special characters, write directly
-    const first_special = std.mem.indexOfAny(u8, text, "&<>") orelse {
+    const first_special = std.mem.indexOfAnyPos(u8, text, 0, &.{ '&', '<', '>', 194 }) orelse {
         return writer.writeAll(text);
     };
 
     try writer.writeAll(text[0..first_special]);
-    try writer.writeAll(switch (text[first_special]) {
-        '&' => "&amp;",
-        '<' => "&lt;",
-        '>' => "&gt;",
-        else => unreachable,
-    });
+    var remaining = try writeEscapedByte(text, first_special, writer);
 
-    // Process remaining text
-    var remaining = text[first_special + 1 ..];
-    while (std.mem.indexOfAny(u8, remaining, "&<>")) |offset| {
+    while (std.mem.indexOfAnyPos(u8, remaining, 0, &.{ '&', '<', '>', 194 })) |offset| {
         try writer.writeAll(remaining[0..offset]);
-        try writer.writeAll(switch (remaining[offset]) {
-            '&' => "&amp;",
-            '<' => "&lt;",
-            '>' => "&gt;",
-            else => unreachable,
-        });
-        remaining = remaining[offset + 1 ..];
+        remaining = try writeEscapedByte(remaining, offset, writer);
     }
 
     if (remaining.len > 0) {
         try writer.writeAll(remaining);
     }
+}
+
+fn writeEscapedByte(input: []const u8, index: usize, writer: *std.Io.Writer) ![]const u8 {
+    switch (input[index]) {
+        '&' => try writer.writeAll("&amp;"),
+        '<' => try writer.writeAll("&lt;"),
+        '>' => try writer.writeAll("&gt;"),
+        194 => {
+            // non breaking space
+            if (input.len > index + 1 and input[index + 1] == 160) {
+                try writer.writeAll("&nbsp;");
+                return input [index + 2 ..];
+            }
+            try writer.writeByte(194);
+        },
+        else => unreachable,
+    }
+    return input[index + 1..];
 }
