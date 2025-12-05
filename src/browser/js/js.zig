@@ -256,6 +256,9 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
         .bool => return v8.getValue(if (value) v8.initTrue(isolate) else v8.initFalse(isolate)),
         .int => |n| switch (n.signedness) {
             .signed => {
+                if (value > 0 and value <= 4_294_967_295) {
+                    return v8.Integer.initU32(isolate, @intCast(value)).toValue();
+                }
                 if (value >= -2_147_483_648 and value <= 2_147_483_647) {
                     return v8.Integer.initI32(isolate, @intCast(value)).toValue();
                 }
