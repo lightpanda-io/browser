@@ -5,8 +5,8 @@
     .fingerprint = 0xda130f3af836cea0,
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/01180f73bbf647a51e86778e34a2879eae47e7ec.tar.gz",
-            .hash = "v8-0.0.0-xddH6x8EBADxksPyjuglYL46iImoktNGf4S0qE05B_o2",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/e047d2a4d5af5783763f0f6a652fab8982a08603.tar.gz",
+            .hash = "v8-0.0.0-xddH65gMBACRBQMM7EwmVgfi94FJyyX-0jpe5KhXYhfv",
         },
         // .v8 = .{ .path = "../zig-v8-fork" },
         .@"ada-singleheader" = .{
