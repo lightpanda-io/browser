@@ -181,11 +181,13 @@ pub const Writer = struct {
             .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 5 } } }, w),
             .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 6 } } }, w),
             .img => {
+                // TODO make uri absolute
                 if (try parser.elementGetAttribute(elt, "href")) |uri| {
                     try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = .{ .string = uri } } }, w);
                 }
             },
             .a => {
+                // TODO make uri absolute
                 if (try parser.elementGetAttribute(elt, "href")) |uri| {
                     try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = .{ .string = uri } } }, w);
                 }
