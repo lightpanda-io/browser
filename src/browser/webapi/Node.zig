@@ -227,6 +227,81 @@ pub fn nodeType(self: *const Node) u8 {
     };
 }
 
+pub fn isEqualNode(self: *Node, other: *Node, page: *Page) bool {
+    // Make sure types match.
+    if (self.nodeType() != other.nodeType()) {
+        return false;
+    }
+
+    // TODO: Compare `localName` and prefix.
+    switch (self._type) {
+        .element => {
+            const e1 = self.as(Element);
+            const e2 = other.as(Element);
+
+            const e1_tag = e1.getTagNameSpec(&page.buf);
+            var buf: [Page.BUF_SIZE]u8 = undefined;
+            const e2_tag = e2.getTagNameSpec(&buf);
+
+            // Compare attributes.
+            var e1_iter = e1.attributeIterator();
+            var e2_iter = e2.attributeIterator();
+            var iter1_count: usize = 0;
+            var iter2_count: usize = 0;
+
+            while (e1_iter.next()) |attrib1| : (iter1_count += 1) {
+                const attrib2 = e2_iter.next() orelse return false;
+                iter2_count += 1;
+
+                if (attrib1._name.eql(attrib2._name) and attrib1._value.eql(attrib2._value)) {
+                    continue;
+                }
+
+                return false;
+            }
+
+            if (e1._namespace != e2._namespace or !std.mem.eql(u8, e1_tag, e2_tag) or iter1_count != iter2_count) {
+                return false;
+            }
+        },
+        .attribute => {
+            const a1 = self.as(Element.Attribute);
+            const a2 = other.as(Element.Attribute);
+            return std.mem.eql(u8, a1.getName(), a2.getName()) and std.mem.eql(u8, a1.getValue(), a2.getValue());
+        },
+        .cdata => {
+            const c1 = self.as(CData);
+            const c2 = other.as(CData);
+
+            return std.mem.eql(u8, c1.getData(), c2.getData());
+        },
+        else => @panic("NIY"),
+    }
+
+    // `Node.childNodes` allocate memory, this seems like a better option.
+    var self_iter = self.childrenIterator();
+    var other_iter = other.childrenIterator();
+    var self_child_count: usize = 0;
+    var other_child_count: usize = 0;
+
+    while (self_iter.next()) |self_node| : (self_child_count += 1) {
+        const other_node = other_iter.next() orelse {
+            // iter1 has node still but iter2 reached end.
+            return false;
+        };
+        // Increase 1 since not null.
+        other_child_count += 1;
+
+        // We may investigate iterative approach if recursive version
+        // causes stack issues for large nodes.
+        if (!isEqualNode(self_node, other_node, page)) {
+            return false;
+        }
+    }
+
+    return self_child_count == other_child_count;
+}
+
 pub fn isInShadowTree(self: *Node) bool {
     var node = self._parent;
     while (node) |n| {
@@ -751,6 +826,7 @@ pub const JsApi = struct {
     pub const cloneNode = bridge.function(Node.cloneNode, .{ .dom_exception = true });
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
     pub const getRootNode = bridge.function(Node.getRootNode, .{});
+    pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
 
     pub const toString = bridge.function(_toString, .{});
     fn _toString(self: *const Node) []const u8 {
