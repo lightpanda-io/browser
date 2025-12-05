@@ -106,7 +106,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
 
     if (self._when_defined.fetchRemove(name)) |entry| {
-        try entry.value.resolve(constructor);
+        entry.value.resolve("whenDefined", constructor);
     }
 }
 

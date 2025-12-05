@@ -1062,67 +1062,84 @@ pub fn jsStringToZigZ(self: *const Context, str: v8.String, opts: JsStringToZigO
     return buf;
 }
 
-pub fn valueToDetailString(self: *const Context, value: v8.Value) ![]u8 {
-    var str: ?v8.String = null;
-    const v8_context = self.v8_context;
-
-    if (value.isObject() and !value.isFunction()) blk: {
-        str = v8.Json.stringify(v8_context, value, null) catch break :blk;
-
-        if (str.?.lenUtf8(self.isolate) == 2) {
-            // {} isn't useful, null this so that we can get the toDetailString
-            // (which might also be useless, but maybe not)
-            str = null;
-        }
-    }
-
-    if (str == null) {
-        str = try value.toDetailString(v8_context);
-    }
-
-    const s = try self.jsStringToZig(str.?, .{});
-    if (comptime builtin.mode == .Debug) {
-        if (std.mem.eql(u8, s, "[object Object]")) {
-            if (self.debugValueToString(value.castTo(v8.Object))) |ds| {
-                return ds;
-            } else |err| {
-                log.err(.js, "debug serialize value", .{ .err = err });
-            }
-        }
-    }
-    return s;
+pub fn debugValue(self: *const Context, js_val: v8.Value, writer: *std.Io.Writer) !void {
+    var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    return _debugValue(self, js_val, &seen, 0, writer) catch error.WriteFailed;
 }
 
-fn debugValueToString(self: *const Context, js_obj: v8.Object) ![]u8 {
-    if (comptime builtin.mode != .Debug) {
-        @compileError("debugValue can only be called in debug mode");
+fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnmanaged(u32, void), depth: usize, writer: *std.Io.Writer) !void {
+    if (js_val.isNull()) {
+        // I think null can sometimes appear as an object, so check this and
+        // handle it first.
+        return writer.writeAll("null");
     }
-    const v8_context = self.v8_context;
 
+    if (!js_val.isObject()) {
+        // handle these explicitly, so we don't include the type (we only want to include
+        // it when there's some ambiguity, e.g. the string "true")
+        if (js_val.isUndefined()) {
+            return writer.writeAll("undefined");
+        }
+        if (js_val.isTrue()) {
+            return writer.writeAll("true");
+        }
+        if (js_val.isFalse()) {
+            return writer.writeAll("false");
+        }
+        // TODO: KARL wait for v8 build to work again, this works with
+        // the latest version of zig-v8-fork, I just can't build it right now
+        // APPLY THIS change to valueToString and valueToStringz
+        // if (js_val.isSymbol()) {
+        //     const js_sym = v8.Symbol{.handle = js_val.handle};
+        //     const js_sym_desc = js_sym.getDescription(self.isolate);
+        //     const js_sym_str = try self.valueToString(js_sym_desc, .{});
+        //     return writer.print("{s} (symbol)", .{js_sym_str});
+        // }
+        const js_type = try self.jsStringToZig(try js_val.typeOf(self.isolate), .{});
+        const js_val_str = try self.valueToString(js_val, .{});
+        if (js_val_str.len > 2000) {
+            try writer.writeAll(js_val_str[0..2000]);
+            try writer.writeAll(" ... (truncated)");
+        } else {
+            try writer.writeAll(js_val_str);
+        }
+        return writer.print(" ({s})", .{js_type});
+    }
+
+    const js_obj = js_val.castTo(v8.Object);
+    {
+        // explicit scope because gop will become invalid in recursive call
+        const gop = try seen.getOrPut(self.call_arena, js_obj.getIdentityHash());
+        if (gop.found_existing) {
+            return writer.writeAll("<circular>\n");
+        }
+        gop.value_ptr.* = {};
+    }
+
+    const v8_context = self.v8_context;
     const names_arr = js_obj.getOwnPropertyNames(v8_context);
     const names_obj = names_arr.castTo(v8.Object);
     const len = names_arr.length();
 
-    var arr: std.ArrayListUnmanaged(u8) = .empty;
-    var writer = arr.writer(self.call_arena);
-    try writer.writeAll("(JSON.stringify failed, dumping top-level fields)\n");
+    if (depth > 20) {
+        return writer.writeAll("...deeply nested object...");
+    }
+
+    try writer.print("({d}/{d})", .{ js_obj.getOwnPropertyNames(v8_context).length(), js_obj.getPropertyNames(v8_context).length() });
     for (0..len) |i| {
+        if (i == 0) {
+            try writer.writeByte('\n');
+        }
         const field_name = try names_obj.getAtIndex(v8_context, @intCast(i));
-        const field_value = try js_obj.getValue(v8_context, field_name);
         const name = try self.valueToString(field_name, .{});
-        const value = try self.valueToString(field_value, .{});
+        try writer.splatByteAll(' ', depth);
         try writer.writeAll(name);
         try writer.writeAll(": ");
-        if (std.mem.indexOfAny(u8, value, &std.ascii.whitespace) == null) {
-            try writer.writeAll(value);
-        } else {
-            try writer.writeByte('"');
-            try writer.writeAll(value);
-            try writer.writeByte('"');
+        try self._debugValue(try js_obj.getValue(v8_context, field_name), seen, depth + 1, writer);
+        if (i != len - 1) {
+            try writer.writeByte('\n');
         }
-        try writer.writeByte(' ');
     }
-    return arr.items;
 }
 
 pub fn stackTrace(self: *const Context) !?[]const u8 {

@@ -475,23 +475,15 @@ fn logFunctionCallError(self: *Caller, type_name: []const u8, func: []const u8, 
 }
 
 fn serializeFunctionArgs(self: *Caller, info: v8.FunctionCallbackInfo) ![]const u8 {
-    const separator = log.separator();
-    const js_parameter_count = info.length();
-
     const context = self.context;
-    var arr: std.ArrayListUnmanaged(u8) = .{};
-    for (0..js_parameter_count) |i| {
-        const js_value = info.getArg(@intCast(i));
-        const value_string = try context.valueToDetailString(js_value);
-        const value_type = try context.jsStringToZig(try js_value.typeOf(self.isolate), .{});
-        try std.fmt.format(arr.writer(context.call_arena), "{s}{d}: {s} ({s})", .{
-            separator,
-            i + 1,
-            value_string,
-            value_type,
-        });
+    var buf = std.Io.Writer.Allocating.init(context.call_arena);
+
+    const separator = log.separator();
+    for (0..info.length()) |i| {
+        try buf.writer.print("{s}{d} - ", .{ separator, i + 1 });
+        try context.debugValue(info.getArg(@intCast(i)), &buf.writer);
     }
-    return arr.items;
+    return buf.written();
 }
 
 // Takes a function, and returns a tuple for its argument. Used when we

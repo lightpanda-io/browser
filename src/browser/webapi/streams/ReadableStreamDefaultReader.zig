@@ -59,17 +59,14 @@ pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
 
     if (stream._state == .closed) {
         const result = ReadResult{
-            .value = null,
             .done = true,
+            .value = null,
         };
         return page.js.resolvePromise(result);
     }
 
-    const result = ReadResult{
-        .done = true,
-        .value = null,
-    };
-    return page.js.resolvePromise(result);
+    // No data, but not closed. We need to queue the read for any future data
+    return stream._controller.addPendingRead(page);
 }
 
 pub fn releaseLock(self: *ReadableStreamDefaultReader) void {

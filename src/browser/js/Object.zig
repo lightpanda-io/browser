@@ -20,6 +20,8 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 const PersistentObject = v8.Persistent(v8.Object);
@@ -74,12 +76,10 @@ pub fn toString(self: Object) ![]const u8 {
     return self.context.valueToString(js_value, .{});
 }
 
-pub fn toDetailString(self: Object) ![]const u8 {
-    const js_value = self.js_obj.toValue();
-    return self.context.valueToDetailString(js_value);
-}
-
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
+    if (comptime IS_DEBUG) {
+        return self.context.debugValue(self.js_obj.toValue(), writer);
+    }
     const str = self.toString() catch return error.WriteFailed;
     return writer.writeAll(str);
 }

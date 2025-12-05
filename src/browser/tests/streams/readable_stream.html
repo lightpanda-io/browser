@@ -21,18 +21,6 @@
   }
 </script>
 
-<script id=readable_stream_read_empty>
-  (async function() {
-    const stream = new ReadableStream();
-    const reader = stream.getReader();
-
-    // Reading from empty stream should return done:true
-    const result = await reader.read();
-    testing.expectEqual('object', typeof result);
-    testing.expectEqual(true, result.done);
-  })();
-</script>
-
 <script id=response_body>
   (async function() {
     const response = new Response('hello world');

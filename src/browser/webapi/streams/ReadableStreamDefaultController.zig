@@ -21,6 +21,7 @@ const js = @import("../../js/js.zig");
 
 const Page = @import("../../Page.zig");
 const ReadableStream = @import("ReadableStream.zig");
+const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 
 const ReadableStreamDefaultController = @This();
 
@@ -28,14 +29,22 @@ _page: *Page,
 _stream: *ReadableStream,
 _arena: std.mem.Allocator,
 _queue: std.ArrayList([]const u8),
+_pending_reads: std.ArrayList(js.PersistentPromiseResolver),
 
 pub fn init(stream: *ReadableStream, page: *Page) !*ReadableStreamDefaultController {
     return page._factory.create(ReadableStreamDefaultController{
         ._page = page,
+        ._queue = .empty,
         ._stream = stream,
         ._arena = page.arena,
-        ._queue = std.ArrayList([]const u8){},
+        ._pending_reads = .empty,
     });
+}
+
+pub fn addPendingRead(self: *ReadableStreamDefaultController, page: *Page) !js.Promise {
+    const resolver = try page.js.createPromiseResolver(.page);
+    try self._pending_reads.append(self._arena, resolver);
+    return resolver.promise();
 }
 
 pub fn enqueue(self: *ReadableStreamDefaultController, chunk: []const u8) !void {
@@ -43,9 +52,19 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: []const u8) !void 
         return error.StreamNotReadable;
     }
 
-    // Store a copy of the chunk in the page arena
-    const chunk_copy = try self._page.arena.dupe(u8, chunk);
-    try self._queue.append(self._arena, chunk_copy);
+    if (self._pending_reads.items.len == 0) {
+        const chunk_copy = try self._page.arena.dupe(u8, chunk);
+        return self._queue.append(self._arena, chunk_copy);
+    }
+
+    // I know, this is ouch! But we expect to have very few (if any)
+    // pending reads.
+    const resolver = self._pending_reads.orderedRemove(0);
+    const result = ReadableStreamDefaultReader.ReadResult{
+        .done = false,
+        .value = .{ .values = chunk },
+    };
+    resolver.resolve("stream enqueue", result);
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
@@ -54,6 +73,16 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
     }
 
     self._stream._state = .closed;
+
+    // Resolve all pending reads with done=true
+    const result = ReadableStreamDefaultReader.ReadResult{
+        .done = true,
+        .value = null,
+    };
+    for (self._pending_reads.items) |resolver| {
+        resolver.resolve("stream close", result);
+    }
+    self._pending_reads.clearRetainingCapacity();
 }
 
 pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
@@ -63,6 +92,12 @@ pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
 
     self._stream._state = .errored;
     self._stream._stored_error = try self._page.arena.dupe(u8, err);
+
+    // Reject all pending reads
+    for (self._pending_reads.items) |resolver| {
+        resolver.reject("stream errror", err);
+    }
+    self._pending_reads.clearRetainingCapacity();
 }
 
 pub fn dequeue(self: *ReadableStreamDefaultController) ?[]const u8 {

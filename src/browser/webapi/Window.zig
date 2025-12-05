@@ -222,6 +222,24 @@ pub fn cancelAnimationFrame(self: *Window, id: u32) void {
     sc.removed = true;
 }
 
+const RequestIdleCallbackOpts = struct {
+    timeout: ?u32 = null,
+};
+pub fn requestIdleCallback(self: *Window, cb: js.Function, opts_: ?RequestIdleCallbackOpts, page: *Page) !u32 {
+    const opts = opts_ orelse RequestIdleCallbackOpts{};
+    return self.scheduleCallback(cb, opts.timeout orelse 50, .{
+        .repeat = false,
+        .params = &.{},
+        .low_priority = true,
+        .name = "window.requestIdleCallback",
+    }, page);
+}
+
+pub fn cancelIdleCallback(self: *Window, id: u32) void {
+    var sc = self._timers.get(id) orelse return;
+    sc.removed = true;
+}
+
 pub fn reportError(self: *Window, err: js.Object, page: *Page) !void {
     const error_event = try ErrorEvent.init("error", .{
         .@"error" = err,
@@ -485,6 +503,8 @@ pub const JsApi = struct {
     pub const clearImmediate = bridge.function(Window.clearImmediate, .{});
     pub const requestAnimationFrame = bridge.function(Window.requestAnimationFrame, .{});
     pub const cancelAnimationFrame = bridge.function(Window.cancelAnimationFrame, .{});
+    pub const requestIdleCallback = bridge.function(Window.requestIdleCallback, .{});
+    pub const cancelIdleCallback = bridge.function(Window.cancelIdleCallback, .{});
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
     pub const postMessage = bridge.function(Window.postMessage, .{});
     pub const btoa = bridge.function(Window.btoa, .{});

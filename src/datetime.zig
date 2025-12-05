@@ -548,7 +548,7 @@ pub fn milliTimestamp(comptime mode: TimestampMode) u64 {
     return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000_000)));
 }
 
-fn timespec() posix.timespec {
+pub fn timespec() posix.timespec {
     if (comptime is_posix == false) {
         @compileError("`timespec` should not be called when `is_posix` is false");
     }

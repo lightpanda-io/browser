@@ -112,12 +112,10 @@ fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     self._response._body = self._buf.items;
-    return self._resolver.resolve(self._response);
+    return self._resolver.resolve("fetch done", self._response);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
-    self._resolver.reject(@errorName(err)) catch |inner| {
-        log.err(.bug, "failed to reject", .{ .source = "fetch", .err = inner, .reject = err });
-    };
+    self._resolver.reject("fetch error", @errorName(err));
 }

@@ -71,7 +71,12 @@ pub const PromiseResolver = struct {
         return self.resolver.getPromise();
     }
 
-    pub fn resolve(self: PromiseResolver, value: anytype) !void {
+    pub fn resolve(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
+        self._resolve(value) catch |err| {
+            log.err(.bug, "resolve", .{ .source = source, .err = err, .persistent = false });
+        };
+    }
+    fn _resolve(self: PromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value);
 
@@ -81,7 +86,12 @@ pub const PromiseResolver = struct {
         self.runMicrotasks();
     }
 
-    pub fn reject(self: PromiseResolver, value: anytype) !void {
+    pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
+        self._reject(value) catch |err| {
+            log.err(.bug, "reject", .{ .source = source, .err = err, .persistent = false });
+        };
+    }
+    fn _reject(self: PromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value);
 
@@ -104,7 +114,12 @@ pub const PersistentPromiseResolver = struct {
         return self.resolver.castToPromiseResolver().getPromise();
     }
 
-    pub fn resolve(self: PersistentPromiseResolver, value: anytype) !void {
+    pub fn resolve(self: PersistentPromiseResolver, comptime source: []const u8, value: anytype) void {
+        self._resolve(value) catch |err| {
+            log.err(.bug, "resolve", .{ .source = source, .err = err, .persistent = true });
+        };
+    }
+    fn _resolve(self: PersistentPromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value, .{});
         defer context.runMicrotasks();
@@ -114,7 +129,13 @@ pub const PersistentPromiseResolver = struct {
         }
     }
 
-    pub fn reject(self: PersistentPromiseResolver, value: anytype) !void {
+    pub fn reject(self: PersistentPromiseResolver, comptime source: []const u8, value: anytype) void {
+        self._reject(value) catch |err| {
+            log.err(.bug, "reject", .{ .source = source, .err = err, .persistent = true });
+        };
+    }
+
+    fn _reject(self: PersistentPromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value, .{});
         defer context.runMicrotasks();

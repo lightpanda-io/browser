@@ -13,21 +13,33 @@ const Performance = @This();
 _time_origin: u64,
 _entries: std.ArrayListUnmanaged(*Entry) = .{},
 
+/// Get high-resolution timestamp in microseconds, rounded to 5μs increments
+/// to match browser behavior (prevents fingerprinting)
+fn highResTimestamp() u64 {
+    const ts = datetime.timespec();
+    const micros = @as(u64, @intCast(ts.sec)) * 1_000_000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000)));
+    // Round to nearest 5 microseconds (like Firefox default)
+    const rounded = @divTrunc(micros + 2, 5) * 5;
+    return rounded;
+}
+
 pub fn init() Performance {
     return .{
-        ._time_origin = datetime.milliTimestamp(.monotonic),
+        ._time_origin = highResTimestamp(),
         ._entries = .{},
     };
 }
 
 pub fn now(self: *const Performance) f64 {
-    const current = datetime.milliTimestamp(.monotonic);
+    const current = highResTimestamp();
     const elapsed = current - self._time_origin;
-    return @floatFromInt(elapsed);
+    // Return as milliseconds with microsecond precision
+    return @as(f64, @floatFromInt(elapsed)) / 1000.0;
 }
 
 pub fn getTimeOrigin(self: *const Performance) f64 {
-    return @floatFromInt(self._time_origin);
+    // Return as milliseconds
+    return @as(f64, @floatFromInt(self._time_origin)) / 1000.0;
 }
 
 pub fn mark(self: *Performance, name: []const u8, _options: ?Mark.Options, page: *Page) !*Mark {
