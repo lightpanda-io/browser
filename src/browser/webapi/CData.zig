@@ -75,7 +75,7 @@ pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
 pub fn format(self: *const CData, writer: *std.io.Writer) !void {
     return switch (self._type) {
         .text => writer.print("<text>{s}</text>", .{self._data}),
-        .comment => writer.print("<comment>{s}</comment>", .{self._data}),
+        .comment => writer.print("<!-- {s} -->", .{self._data}),
     };
 }
 
