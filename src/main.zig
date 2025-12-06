@@ -101,7 +101,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     switch (args.mode) {
         .serve => |opts| {
             log.debug(.app, "startup", .{ .mode = "serve" });
-            const address = std.net.Address.parseIp4(opts.host, opts.port) catch |err| {
+            const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
                 return args.printUsageAndExit(false);
             };
