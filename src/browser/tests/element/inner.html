@@ -1,6 +1,12 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 <div id=d1>hello <em>world</em></div>
+<div id=d2>
+  <style>h1 { font-size: 1em; }</style>
+  <!-- this is a comment -->
+  This is a <br>
+  text
+</div>
 
 <script id=innerHTML>
   const d1 = $('#d1');
@@ -20,6 +26,9 @@
   d1.innerHTML = '<script src=inner.js>';
   testing.expectEqual('<script src="inner.js"><\/script>', d1.innerHTML);
   testing.expectEqual(false, inner_loaded);
+
+  const d2 = $('#d2');
+  testing.expectEqual("\n  <style>h1 { font-size: 1em; }</style>\n  <!-- this is a comment -->\n  This is a <br>\n  text\n", d2.innerHTML);
 </script>
 
 <script id=ids>
@@ -160,4 +169,8 @@
   d1.innerText = 'new content';
   testing.expectEqual('new content', d1.innerText);
   testing.expectEqual(null, $('#link2'));
+
+  // TODO innerText is not rendered correctly for now.
+  //testing.expectEqual("This is a\ntext", d2.innerText);
+  testing.expectEqual("  This is a \n  text", d2.innerText);
 </script>

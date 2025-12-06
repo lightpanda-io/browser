@@ -223,10 +223,44 @@ pub fn getNamespaceURI(self: *const Element) []const u8 {
     return self._namespace.toUri();
 }
 
+// innerText represents the **rendered** text content of a node and its
+// descendants.
 pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
-        try child.getTextContent(writer);
+        switch (child._type) {
+            .element => |e| switch (e._type) {
+                .html => |he| switch (he._type) {
+                    .br => try writer.writeByte('\n'),
+                    .script, .style, .template => continue,
+                    else => try e.getInnerText(writer), // TODO check if elt is hidden.
+                },
+                .svg => {},
+            },
+            .cdata => |c| switch (c._type) {
+                .comment => continue,
+                .text => {
+                    const data = c.getData();
+                    if (std.mem.trim(u8, data, &std.ascii.whitespace).len != 0) {
+                        // Trim all whitespaces except spaces.
+                        // TODO this is not the correct way to render text, this is
+                        // a temp approximation.
+                        const text = std.mem.trim(u8, data, &[_]u8{
+                            '\t',
+                            '\n',
+                            '\r',
+                            std.ascii.control_code.vt,
+                            std.ascii.control_code.ff,
+                        });
+                        try writer.writeAll(text);
+                    }
+                },
+            },
+            .document => {},
+            .document_type => {},
+            .document_fragment => {},
+            .attribute => |attr| try writer.writeAll(attr._value),
+        }
     }
 }
 
