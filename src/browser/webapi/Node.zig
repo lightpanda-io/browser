@@ -171,7 +171,20 @@ pub fn childNodes(self: *const Node, page: *Page) !*collections.ChildNodes {
 
 pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!void {
     switch (self._type) {
-        .element => |el| return el.getInnerText(writer),
+        .element => {
+            var it = self.childrenIterator();
+            while (it.next()) |child| {
+                // ignore comments and TODO processing instructions.
+                switch (child._type) {
+                    .cdata => |c| switch (c._type) {
+                        .comment => continue,
+                        .text => {},
+                    },
+                    else => {},
+                }
+                try child.getTextContent(writer);
+            }
+        },
         .cdata => |c| try writer.writeAll(c.getData()),
         .document => {},
         .document_type => {},
@@ -719,7 +732,7 @@ pub const JsApi = struct {
         switch (self._type) {
             .element => |el| {
                 var buf = std.Io.Writer.Allocating.init(page.call_arena);
-                try el.getInnerText(&buf.writer);
+                try el.asNode().getTextContent(&buf.writer);
                 return buf.written();
             },
             .cdata => |cdata| return cdata.getData(),
