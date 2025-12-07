@@ -175,12 +175,8 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
             var it = self.childrenIterator();
             while (it.next()) |child| {
                 // ignore comments and TODO processing instructions.
-                switch (child._type) {
-                    .cdata => |c| switch (c._type) {
-                        .comment => continue,
-                        .text => {},
-                    },
-                    else => {},
+                if (child.is(CData.Comment) != null) {
+                    continue;
                 }
                 try child.getTextContent(writer);
             }
