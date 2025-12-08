@@ -1,4 +1,4 @@
-FROM debian:stable
+FROM debian:stable-slim
 
 ARG MINISIG=0.12
 ARG ZIG=0.15.2
