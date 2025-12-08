@@ -17,11 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
 
+const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 const GenericIterator = @import("iterator.zig").Entry;
-const Page = @import("../../Page.zig");
 
 pub const DOMTokenList = @This();
 
@@ -31,6 +32,10 @@ pub const DOMTokenList = @This();
 
 _element: *Element,
 _attribute_name: []const u8,
+
+pub const KeyIterator = GenericIterator(Iterator, "0");
+pub const ValueIterator = GenericIterator(Iterator, "1");
+pub const EntryIterator = GenericIterator(Iterator, null);
 
 const Lookup = std.StringArrayHashMapUnmanaged(void);
 
@@ -158,21 +163,40 @@ pub fn setValue(self: *DOMTokenList, value: []const u8, page: *Page) !void {
     try self._element.setAttribute(self._attribute_name, value, page);
 }
 
-pub fn iterator(self: *const DOMTokenList, page: *Page) !*Iterator {
-    return Iterator.init(.{ .list = self }, page);
+pub fn keys(self: *DOMTokenList, page: *Page) !*KeyIterator {
+    return .init(.{ .list = self }, page);
 }
 
-pub const Iterator = GenericIterator(struct {
-    index: usize = 0,
-    list: *const DOMTokenList,
+pub fn values(self: *DOMTokenList, page: *Page) !*ValueIterator {
+    return .init(.{ .list = self }, page);
+}
 
-    // TODO: the underlying list.iten is very inefficient!
-    pub fn next(self: *@This(), page: *Page) !?[]const u8 {
-        const index = self.index;
-        self.index = index + 1;
-        return self.list.item(index, page);
+pub fn entries(self: *DOMTokenList, page: *Page) !*EntryIterator {
+    return .init(.{ .list = self }, page);
+}
+
+pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, page: *Page) !void {
+    const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
+
+    const allocator = page.call_arena;
+
+    var i: i32 = 0;
+    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+
+    var it = std.mem.tokenizeAny(u8, self.getValue(), WHITESPACE);
+    while (it.next()) |token| {
+        const gop = try seen.getOrPut(allocator, token);
+        if (gop.found_existing) {
+            continue;
+        }
+        var result: js.Function.Result = undefined;
+        cb.tryCall(void, .{ token, i, self }, &result) catch {
+            log.debug(.js, "forEach callback", .{ .err = result.exception, .stack = result.stack, .source = "DOMTokenList" });
+            return;
+        };
+        i += 1;
     }
-}, null);
+}
 
 fn getTokens(self: *const DOMTokenList, page: *Page) !Lookup {
     const value = self.getValue();
@@ -205,6 +229,20 @@ fn updateAttribute(self: *DOMTokenList, tokens: Lookup, page: *Page) !void {
     try self._element.setAttribute(self._attribute_name, joined, page);
 }
 
+const Iterator = struct {
+    index: u32 = 0,
+    list: *DOMTokenList,
+
+    const Entry = struct { u32, []const u8 };
+
+    pub fn next(self: *Iterator, page: *Page) !?Entry {
+        const index = self.index;
+        const node = try self.list.item(index, page) orelse return null;
+        self.index = index + 1;
+        return .{ index, node };
+    }
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DOMTokenList);
 
@@ -229,6 +267,11 @@ pub const JsApi = struct {
     pub const toggle = bridge.function(DOMTokenList.toggle, .{ .dom_exception = true });
     pub const replace = bridge.function(DOMTokenList.replace, .{ .dom_exception = true });
     pub const value = bridge.accessor(DOMTokenList.getValue, DOMTokenList.setValue, .{});
-    pub const symbol_iterator = bridge.iterator(DOMTokenList.iterator, .{});
+    pub const toString = bridge.function(DOMTokenList.getValue, .{});
+    pub const keys = bridge.function(DOMTokenList.keys, .{});
+    pub const values = bridge.function(DOMTokenList.values, .{});
+    pub const entries = bridge.function(DOMTokenList.entries, .{});
+    pub const symbol_iterator = bridge.iterator(DOMTokenList.values, .{});
+    pub const forEach = bridge.function(DOMTokenList.forEach, .{});
     pub const @"[]" = bridge.indexed(DOMTokenList.item, .{ .null_as_undefined = true });
 };

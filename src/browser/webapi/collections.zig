@@ -34,6 +34,8 @@ pub fn registerTypes() []const type {
         @import("collections/HTMLAllCollection.zig").Iterator,
         HTMLOptionsCollection,
         DOMTokenList,
-        DOMTokenList.Iterator,
+        DOMTokenList.KeyIterator,
+        DOMTokenList.ValueIterator,
+        DOMTokenList.EntryIterator,
     };
 }

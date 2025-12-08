@@ -21,11 +21,6 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
 pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
-    // const InnerStruct = switch (@typeInfo(Inner)) {
-    //     .@"struct" => Inner,
-    //     .pointer => |ptr| ptr.child,
-    //     else => @compileError("invalid iterator type"),
-    // };
     const InnerStruct = Inner;
     const R = reflect(InnerStruct, field);
 
@@ -68,7 +63,7 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
                 pub var class_id: bridge.ClassId = undefined;
             };
 
-            pub const next = bridge.function(Self.next, .{});
+            pub const next = bridge.function(Self.next, .{ .null_as_undefined = true });
             pub const symbol_iterator = bridge.iterator(Self, .{});
         };
     };

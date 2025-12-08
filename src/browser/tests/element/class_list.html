@@ -332,3 +332,272 @@
   testing.expectEqual('a c e b f', div.className);
 }
 </script>
+
+<script id=toString>
+{
+  const div = document.createElement('div');
+  div.className = 'foo bar baz';
+
+  testing.expectEqual('foo bar baz', div.classList.toString());
+
+  div.className = '';
+  testing.expectEqual('', div.classList.toString());
+
+  div.className = '  alpha   beta  ';
+  testing.expectEqual('  alpha   beta  ', div.classList.toString());
+}
+</script>
+
+<script id=keys_iterator>
+{
+  const div = document.createElement('div');
+  div.className = 'one two three';
+
+  const keys = [];
+  const iter = div.classList.keys();
+
+  let result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual(0, result.value);
+  keys.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual(1, result.value);
+  keys.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual(2, result.value);
+  keys.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(true, result.done);
+  testing.expectEqual(undefined, result.value);
+
+  testing.expectEqual([0, 1, 2], keys);
+}
+</script>
+
+<script id=keys_for_of>
+{
+  const div = document.createElement('div');
+  div.className = 'alpha beta gamma';
+
+  const keys = [];
+  for (const key of div.classList.keys()) {
+    keys.push(key);
+  }
+  testing.expectEqual([0, 1, 2], keys);
+}
+</script>
+
+<script id=values_iterator>
+{
+  const div = document.createElement('div');
+  div.className = 'red green blue';
+
+  const values = [];
+  const iter = div.classList.values();
+
+  let result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual('red', result.value);
+  values.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual('green', result.value);
+  values.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual('blue', result.value);
+  values.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(true, result.done);
+  testing.expectEqual(undefined, result.value);
+
+  testing.expectEqual(['red', 'green', 'blue'], values);
+}
+</script>
+
+<script id=values_for_of>
+{
+  const div = document.createElement('div');
+  div.className = 'x y z';
+
+  const values = [];
+  for (const value of div.classList.values()) {
+    values.push(value);
+  }
+  testing.expectEqual(['x', 'y', 'z'], values);
+}
+</script>
+
+<script id=entries_iterator>
+{
+  const div = document.createElement('div');
+  div.className = 'first second third';
+
+  const entries = [];
+  const iter = div.classList.entries();
+
+  let result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual([0, 'first'], result.value);
+  entries.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual([1, 'second'], result.value);
+  entries.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(false, result.done);
+  testing.expectEqual([2, 'third'], result.value);
+  entries.push(result.value);
+
+  result = iter.next();
+  testing.expectEqual(true, result.done);
+  testing.expectEqual(undefined, result.value);
+
+  testing.expectEqual([[0, 'first'], [1, 'second'], [2, 'third']], entries);
+}
+</script>
+
+<script id=entries_for_of>
+{
+  const div = document.createElement('div');
+  div.className = 'a b c';
+
+  const entries = [];
+  for (const entry of div.classList.entries()) {
+    entries.push(entry);
+  }
+  testing.expectEqual([[0, 'a'], [1, 'b'], [2, 'c']], entries);
+}
+</script>
+
+<script id=forEach_basic>
+{
+  const div = document.createElement('div');
+  div.className = 'red green blue';
+
+  const values = [];
+  const indices = [];
+  const lists = [];
+
+  div.classList.forEach((value, index, list) => {
+    values.push(value);
+    indices.push(index);
+    lists.push(list);
+  });
+
+  testing.expectEqual(['red', 'green', 'blue'], values);
+  testing.expectEqual([0, 1, 2], indices);
+  testing.expectEqual(3, lists.length);
+  testing.expectEqual(div.classList, lists[0]);
+  testing.expectEqual(div.classList, lists[1]);
+  testing.expectEqual(div.classList, lists[2]);
+}
+</script>
+
+<script id=forEach_with_this>
+{
+  const div = document.createElement('div');
+  div.className = 'one two';
+
+  const context = { count: 0 };
+
+  div.classList.forEach(function(value) {
+    this.count++;
+  }, context);
+
+  testing.expectEqual(2, context.count);
+}
+</script>
+
+<script id=forEach_empty_list>
+{
+  const div = document.createElement('div');
+  div.className = '';
+
+  let callCount = 0;
+  div.classList.forEach(() => {
+    callCount++;
+  });
+
+  testing.expectEqual(0, callCount);
+}
+</script>
+
+<script id=forEach_duplicates>
+{
+  const div = document.createElement('div');
+  div.className = 'foo foo bar';
+
+  const values = [];
+  div.classList.forEach((value) => {
+    values.push(value);
+  });
+
+  testing.expectEqual(['foo', 'bar'], values);
+}
+</script>
+
+<script id=iterators_empty_list>
+{
+  const div = document.createElement('div');
+  div.className = '';
+
+  const keys = [...div.classList.keys()];
+  testing.expectEqual([], keys);
+
+  const values = [...div.classList.values()];
+  testing.expectEqual([], values);
+
+  const entries = [...div.classList.entries()];
+  testing.expectEqual([], entries);
+}
+</script>
+
+<script id=iterators_with_duplicates>
+{
+  const div = document.createElement('div');
+  div.className = 'alpha alpha beta alpha';
+
+  const values = [...div.classList.values()];
+  testing.expectEqual(['alpha', 'beta'], values);
+
+  const entries = [...div.classList.entries()];
+  testing.expectEqual([[0, 'alpha'], [1, 'beta']], entries);
+}
+</script>
+
+<script id=iterator_live_behavior>
+{
+  const div = document.createElement('div');
+  div.className = 'one two three';
+
+  const iter = div.classList.values();
+
+  let result = iter.next();
+  testing.expectEqual('one', result.value);
+
+  div.classList.add('four');
+
+  result = iter.next();
+  testing.expectEqual('two', result.value);
+
+  result = iter.next();
+  testing.expectEqual('three', result.value);
+
+  result = iter.next();
+  testing.expectEqual('four', result.value);
+
+  result = iter.next();
+  testing.expectEqual(true, result.done);
+}
+</script>

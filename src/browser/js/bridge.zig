@@ -288,6 +288,7 @@ pub const Iterator = struct {
 
     const Opts = struct {
         async: bool = false,
+        null_as_undefined: bool = false,
     };
 
     fn init(comptime T: type, comptime struct_or_func: anytype, comptime opts: Opts) Iterator {

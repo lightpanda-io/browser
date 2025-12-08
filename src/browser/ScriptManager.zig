@@ -684,7 +684,7 @@ const Script = struct {
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *Script = @ptrCast(@alignCast(ctx));
         log.warn(.http, "script fetch error", .{
-            .err = err ,
+            .err = err,
             .req = self.url,
             .mode = self.mode,
             .kind = self.kind,
