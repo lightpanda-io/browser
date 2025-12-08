@@ -21,6 +21,7 @@ const js = @import("../../js/js.zig");
 
 const Page = @import("../../Page.zig");
 const ReadableStream = @import("ReadableStream.zig");
+const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
 
 const ReadableStreamDefaultReader = @This();
 
@@ -36,7 +37,21 @@ pub fn init(stream: *ReadableStream, page: *Page) !*ReadableStreamDefaultReader 
 
 pub const ReadResult = struct {
     done: bool,
-    value: ?js.TypedArray(u8),
+    value: Chunk,
+
+    // Done like this so that we can properly return undefined in some cases
+    const Chunk = union(enum) {
+        empty,
+        string: []const u8,
+        uint8array: js.TypedArray(u8),
+
+        pub fn fromChunk(chunk: ReadableStreamDefaultController.Chunk) Chunk {
+            return switch (chunk) {
+                .string => |s| .{ .string = s },
+                .uint8array => |arr| .{ .uint8array = arr },
+            };
+        }
+    };
 };
 
 pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
@@ -52,7 +67,7 @@ pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
     if (stream._controller.dequeue()) |chunk| {
         const result = ReadResult{
             .done = false,
-            .value = js.TypedArray(u8){ .values = chunk },
+            .value = .fromChunk(chunk),
         };
         return page.js.resolvePromise(result);
     }
@@ -60,7 +75,7 @@ pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
     if (stream._state == .closed) {
         const result = ReadResult{
             .done = true,
-            .value = null,
+            .value = .empty,
         };
         return page.js.resolvePromise(result);
     }
@@ -81,12 +96,9 @@ pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, page: *P
         return page.js.rejectPromise("Reader has been released");
     };
 
-    const reason = reason_ orelse "canceled";
-
-    try stream._controller.doError(reason);
     self.releaseLock();
 
-    return page.js.resolvePromise(.{});
+    return stream.cancel(reason_, page);
 }
 
 pub const JsApi = struct {

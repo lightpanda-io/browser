@@ -25,19 +25,34 @@ const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 
 const ReadableStreamDefaultController = @This();
 
+pub const Chunk = union(enum) {
+    // the order matters, sorry.
+    uint8array: js.TypedArray(u8),
+    string: []const u8,
+
+    pub fn dupe(self: Chunk, allocator: std.mem.Allocator) !Chunk {
+        return switch (self) {
+            .string => |str| .{ .string = try allocator.dupe(u8, str) },
+            .uint8array => |arr| .{ .uint8array = try arr.dupe(allocator) },
+        };
+    }
+};
+
 _page: *Page,
 _stream: *ReadableStream,
 _arena: std.mem.Allocator,
-_queue: std.ArrayList([]const u8),
+_queue: std.ArrayList(Chunk),
 _pending_reads: std.ArrayList(js.PersistentPromiseResolver),
+_high_water_mark: u32,
 
-pub fn init(stream: *ReadableStream, page: *Page) !*ReadableStreamDefaultController {
+pub fn init(stream: *ReadableStream, high_water_mark: u32, page: *Page) !*ReadableStreamDefaultController {
     return page._factory.create(ReadableStreamDefaultController{
         ._page = page,
         ._queue = .empty,
         ._stream = stream,
         ._arena = page.arena,
         ._pending_reads = .empty,
+        ._high_water_mark = high_water_mark,
     });
 }
 
@@ -47,13 +62,13 @@ pub fn addPendingRead(self: *ReadableStreamDefaultController, page: *Page) !js.P
     return resolver.promise();
 }
 
-pub fn enqueue(self: *ReadableStreamDefaultController, chunk: []const u8) !void {
+pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
     if (self._stream._state != .readable) {
         return error.StreamNotReadable;
     }
 
     if (self._pending_reads.items.len == 0) {
-        const chunk_copy = try self._page.arena.dupe(u8, chunk);
+        const chunk_copy = try chunk.dupe(self._page.arena);
         return self._queue.append(self._arena, chunk_copy);
     }
 
@@ -62,7 +77,7 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: []const u8) !void 
     const resolver = self._pending_reads.orderedRemove(0);
     const result = ReadableStreamDefaultReader.ReadResult{
         .done = false,
-        .value = .{ .values = chunk },
+        .value = .fromChunk(chunk),
     };
     resolver.resolve("stream enqueue", result);
 }
@@ -77,7 +92,7 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
     // Resolve all pending reads with done=true
     const result = ReadableStreamDefaultReader.ReadResult{
         .done = true,
-        .value = null,
+        .value = .empty,
     };
     for (self._pending_reads.items) |resolver| {
         resolver.resolve("stream close", result);
@@ -100,11 +115,16 @@ pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
     self._pending_reads.clearRetainingCapacity();
 }
 
-pub fn dequeue(self: *ReadableStreamDefaultController) ?[]const u8 {
+pub fn dequeue(self: *ReadableStreamDefaultController) ?Chunk {
     if (self._queue.items.len == 0) {
         return null;
     }
-    return self._queue.orderedRemove(0);
+    const chunk = self._queue.orderedRemove(0);
+
+    // After dequeueing, we may need to pull more data
+    self._stream.callPullIfNeeded() catch {};
+
+    return chunk;
 }
 
 pub fn getDesiredSize(self: *const ReadableStreamDefaultController) ?i32 {
@@ -112,9 +132,9 @@ pub fn getDesiredSize(self: *const ReadableStreamDefaultController) ?i32 {
         .errored => return null,
         .closed => return 0,
         .readable => {
-            // For now, just report based on queue size
-            // In a real implementation, this would use highWaterMark
-            return @as(i32, 1) - @as(i32, @intCast(self._queue.items.len));
+            const queue_size: i32 = @intCast(self._queue.items.len);
+            const hwm: i32 = @intCast(self._high_water_mark);
+            return hwm - queue_size;
         },
     }
 }

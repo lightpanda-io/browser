@@ -78,7 +78,7 @@ pub fn getBody(self: *const Response, page: *Page) !?*ReadableStream {
 
     // Empty string should create a closed stream with no data
     if (body.len == 0) {
-        const stream = try ReadableStream.init(page);
+        const stream = try ReadableStream.init(null, null, page);
         try stream._controller.close();
         return stream;
     }

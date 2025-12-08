@@ -178,3 +178,126 @@
     testing.expectEqual('object', typeof stream);
   })();
 </script>
+
+<script id=readable_stream_locked>
+  const stream1 = new ReadableStream({
+    start(controller) {
+      controller.enqueue("data");
+      controller.close();
+    }
+  });
+
+  testing.expectEqual(false, stream1.locked);
+  const reader1 = stream1.getReader();
+  testing.expectEqual(true, stream1.locked);
+  reader1.releaseLock();
+  testing.expectEqual(false, stream1.locked);
+</script>
+
+<script id=readable_stream_cancel>
+  (async function() {
+    var cancelCalled = false;
+    var cancelReason = null;
+
+    const stream2 = new ReadableStream({
+      start(controller) {
+        controller.enqueue("data1");
+        controller.enqueue("data2");
+      },
+      cancel(reason) {
+        cancelCalled = true;
+        cancelReason = reason;
+      }
+    });
+
+    const result = await stream2.cancel("user requested");
+    testing.expectEqual(undefined, result);
+    testing.expectEqual(true, cancelCalled);
+    testing.expectEqual("user requested", cancelReason);
+  })();
+</script>
+
+<script id=readable_stream_pull>
+  (async function() {
+    var pullCount = 0;
+
+    const stream3 = new ReadableStream({
+      start(controller) {
+        controller.enqueue("initial");
+      },
+      pull(controller) {
+        pullCount++;
+        if (pullCount <= 2) {
+          controller.enqueue("pulled" + pullCount);
+        }
+        if (pullCount === 2) {
+          controller.close();
+        }
+      }
+    }, { highWaterMark: 1 });
+
+    const reader3 = stream3.getReader();
+
+    const data1 = await reader3.read();
+    testing.expectEqual("initial", data1.value);
+    testing.expectEqual(false, data1.done);
+
+    const data2 = await reader3.read();
+    testing.expectEqual("pulled1", data2.value);
+    testing.expectEqual(false, data2.done);
+  })();
+</script>
+
+<script id=readable_stream_desired_size>
+  var desiredSizes = [];
+
+  const stream4 = new ReadableStream({
+    start(controller) {
+      desiredSizes.push(controller.desiredSize);
+      controller.enqueue("a");
+      desiredSizes.push(controller.desiredSize);
+      controller.enqueue("b");
+      desiredSizes.push(controller.desiredSize);
+    }
+  }, { highWaterMark: 2 });
+
+  testing.expectEqual(2, desiredSizes[0]);
+  testing.expectEqual(1, desiredSizes[1]);
+  testing.expectEqual(0, desiredSizes[2]);
+</script>
+
+<script id=readable_stream_start_with_pull>
+  (async function() {
+    var pullCount = 0;
+
+    const stream5 = new ReadableStream({
+      start(controller) {
+        controller.enqueue("start1");
+        controller.enqueue("start2");
+      },
+      pull(controller) {
+        pullCount++;
+        if (pullCount === 1) {
+          controller.enqueue("pull1");
+        } else if (pullCount === 2) {
+          controller.enqueue("pull2");
+          controller.close();
+        }
+      }
+    }, { highWaterMark: 2 });
+
+    const reader5 = stream5.getReader();
+
+    const data1 = await reader5.read();
+    testing.expectEqual("start1", data1.value);
+    testing.expectEqual(false, data1.done);
+
+    const data2 = await reader5.read();
+    testing.expectEqual("start2", data2.value);
+    testing.expectEqual(false, data2.done);
+
+    const data3 = await reader5.read();
+    testing.expectEqual("pull1", data3.value);
+    testing.expectEqual(false, data3.done);
+  })();
+</script>

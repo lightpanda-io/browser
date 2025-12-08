@@ -43,9 +43,27 @@ _state: State,
 _reader: ?*ReadableStreamDefaultReader,
 _controller: *ReadableStreamDefaultController,
 _stored_error: ?[]const u8,
+_pull_fn: ?js.Function = null,
+_pulling: bool = false,
+_pull_again: bool = false,
+_cancel: ?Cancel = null,
 
-pub fn init(page: *Page) !*ReadableStream {
-    const stream = try page._factory.create(ReadableStream{
+const UnderlyingSource = struct {
+    start: ?js.Function = null,
+    pull: ?js.Function = null,
+    cancel: ?js.Function = null,
+    type: ?[]const u8 = null,
+};
+
+const QueueingStrategy = struct {
+    size: ?js.Function = null,
+    highWaterMark: u32 = 1,
+};
+
+pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) !*ReadableStream {
+    const strategy: QueueingStrategy = strategy_ orelse .{};
+
+    const self = try page._factory.create(ReadableStream{
         ._page = page,
         ._state = .readable,
         ._reader = null,
@@ -53,22 +71,40 @@ pub fn init(page: *Page) !*ReadableStream {
         ._stored_error = null,
     });
 
-    stream._controller = try ReadableStreamDefaultController.init(stream, page);
-    return stream;
+    self._controller = try ReadableStreamDefaultController.init(self, strategy.highWaterMark, page);
+
+    if (src_) |src| {
+        if (src.start) |start| {
+            try start.call(void, .{self._controller});
+        }
+
+        if (src.cancel) |callback| {
+            self._cancel = .{
+                .callback = callback,
+            };
+        }
+
+        if (src.pull) |pull| {
+            self._pull_fn = pull;
+            try self.callPullIfNeeded();
+        }
+    }
+
+    return self;
 }
 
 pub fn initWithData(data: []const u8, page: *Page) !*ReadableStream {
-    const stream = try init(page);
+    const stream = try init(null, null, page);
 
     // For Phase 1: immediately enqueue all data and close
-    try stream._controller.enqueue(data);
+    try stream._controller.enqueue(.{ .uint8array = .{ .values = data } });
     try stream._controller.close();
 
     return stream;
 }
 
 pub fn getReader(self: *ReadableStream, page: *Page) !*ReadableStreamDefaultReader {
-    if (self._reader != null) {
+    if (self.getLocked()) {
         return error.ReaderLocked;
     }
 
@@ -85,6 +121,101 @@ pub fn getAsyncIterator(self: *ReadableStream, page: *Page) !*AsyncIterator {
     return AsyncIterator.init(self, page);
 }
 
+pub fn getLocked(self: *const ReadableStream) bool {
+    return self._reader != null;
+}
+
+pub fn callPullIfNeeded(self: *ReadableStream) !void {
+    if (!self.shouldCallPull()) {
+        return;
+    }
+
+    if (self._pulling) {
+        self._pull_again = true;
+        return;
+    }
+
+    self._pulling = true;
+
+    const pull_fn = self._pull_fn orelse return;
+
+    // Call the pull function
+    // Note: In a complete implementation, we'd handle the promise returned by pull
+    // and set _pulling = false when it resolves
+    try pull_fn.call(void, .{self._controller});
+
+    self._pulling = false;
+
+    // If pull was requested again while we were pulling, pull again
+    if (self._pull_again) {
+        self._pull_again = false;
+        try self.callPullIfNeeded();
+    }
+}
+
+fn shouldCallPull(self: *const ReadableStream) bool {
+    if (self._state != .readable) {
+        return false;
+    }
+
+    if (self._pull_fn == null) {
+        return false;
+    }
+
+    const desired_size = self._controller.getDesiredSize() orelse return false;
+    return desired_size > 0;
+}
+
+pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promise {
+    if (self._state != .readable) {
+        if (self._cancel) |c| {
+            if (c.resolver) |r| {
+                return r.promise();
+            }
+        }
+        return page.js.resolvePromise(.{});
+    }
+
+    if (self._cancel == null) {
+        self._cancel = Cancel{};
+    }
+
+    var c = &self._cancel.?;
+    if (c.resolver == null) {
+        c.resolver = try page.js.createPromiseResolver(.self);
+    }
+
+    // Execute the cancel callback if provided
+    if (c.callback) |cb| {
+        if (reason) |r| {
+            try cb.call(void, .{r});
+        } else {
+            try cb.call(void, .{});
+        }
+    }
+
+    self._state = .closed;
+    self._controller._queue.clearRetainingCapacity();
+
+    const result = ReadableStreamDefaultReader.ReadResult{
+        .done = true,
+        .value = .empty,
+    };
+    for (self._controller._pending_reads.items) |resolver| {
+        resolver.resolve("stream cancelled", result);
+    }
+    self._controller._pending_reads.clearRetainingCapacity();
+
+    c.resolver.?.resolve("ReadableStream.cancel", {});
+    return c.resolver.?.promise();
+}
+
+const Cancel = struct {
+    callback: ?js.Function = null,
+    reason: ?[]const u8 = null,
+    resolver: ?js.PersistentPromiseResolver = null,
+};
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ReadableStream);
 
@@ -95,7 +226,9 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(ReadableStream.init, .{});
+    pub const cancel = bridge.function(ReadableStream.cancel, .{});
     pub const getReader = bridge.function(ReadableStream.getReader, .{});
+    pub const locked = bridge.accessor(ReadableStream.getLocked, null, .{});
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };
 
