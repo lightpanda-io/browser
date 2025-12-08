@@ -95,6 +95,7 @@ pub const EventTarget = struct {
     // --------
     pub fn constructor(page: *Page) !*parser.EventTarget {
         const et = try page.arena.create(EventTarget);
+        et.* = .{};
         return @ptrCast(&et.base);
     }
 
