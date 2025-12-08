@@ -102,7 +102,8 @@ pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !voi
     // Write the reminder chunk.
     if (is_w) {
         // Last chunk is whitespaces.
-        if (opts.trim_right == false) {
+        // If the string contains only whitespaces, don't write it.
+        if (start > 0 and opts.trim_right == false) {
             try writer.writeByte(' ');
         }
     } else {
@@ -285,6 +286,8 @@ test "WebApi: CData.render" {
     };
 
     const test_cases = [_]TestCase{
+        .{ .value = "   ", .expected = "" },
+        .{ .value = "   ", .expected = "", .opts = .{ .trim_left = false, .trim_right = false } },
         .{ .value = "foo bar", .expected = "foo bar" },
         .{ .value = "foo  bar", .expected = "foo bar" },
         .{ .value = "  foo bar", .expected = "foo bar" },

@@ -239,7 +239,7 @@ pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
             },
             .cdata => |c| switch (c._type) {
                 .comment => continue,
-                .text => try c.render(writer, .{}),
+                .text => try c.render(writer, .{ .trim_right = false, .trim_left = false }),
             },
             .document => {},
             .document_type => {},
