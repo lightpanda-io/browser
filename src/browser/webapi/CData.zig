@@ -24,6 +24,7 @@ const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 pub const Text = @import("cdata/Text.zig");
 pub const Comment = @import("cdata/Comment.zig");
+pub const CDATASection = @import("cdata/CDATASection.zig");
 
 const CData = @This();
 
@@ -34,6 +35,9 @@ _data: []const u8 = "",
 pub const Type = union(enum) {
     text: Text,
     comment: Comment,
+    // This should be under Text, but that would require storing a _type union
+    // in text, which would add 8 bytes to every text node.
+    cdata_section: CDATASection,
 };
 
 pub fn asNode(self: *CData) *Node {
@@ -53,6 +57,7 @@ pub fn className(self: *const CData) []const u8 {
     return switch (self._type) {
         .text => "[object Text]",
         .comment => "[object Comment]",
+        .cdata_section => "[object CDATASection]",
     };
 }
 
@@ -128,6 +133,7 @@ pub fn format(self: *const CData, writer: *std.io.Writer) !void {
     return switch (self._type) {
         .text => writer.print("<text>{s}</text>", .{self._data}),
         .comment => writer.print("<!-- {s} -->", .{self._data}),
+        .cdata_section => writer.print("<![CDATA[{s}]]>", .{self._data}),
     };
 }
 
@@ -248,7 +254,7 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(CData);
 
     pub const Meta = struct {
-        pub const name = "CData";
+        pub const name = "CharacterData";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };

@@ -1348,6 +1348,34 @@ pub fn createComment(self: *Page, text: []const u8) !*Node {
     return cd.asNode();
 }
 
+pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
+    // Validate that the data doesn't contain "]]>"
+    if (std.mem.indexOf(u8, data, "]]>") != null) {
+        return error.InvalidCharacterError;
+    }
+
+    const owned_data = try self.dupeString(data);
+
+    // First allocate the Text node separately
+    const text_node = try self._factory.create(CData.Text{
+        ._proto = undefined,
+    });
+
+    // Then create the CData with cdata_section variant
+    const cd = try self._factory.node(CData{
+        ._proto = undefined,
+        ._type = .{ .cdata_section = .{
+            ._proto = text_node,
+        } },
+        ._data = owned_data,
+    });
+
+    // Set up the back pointer from Text to CData
+    text_node._proto = cd;
+
+    return cd.asNode();
+}
+
 pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;

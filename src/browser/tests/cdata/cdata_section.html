@@ -1,0 +1,217 @@
+cdataClassName<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container"></div>
+
+<script id="createInHTMLDocument">
+{
+  try {
+    document.createCDATASection('test');
+    testing.fail('Should have thrown NotSupportedError');
+  } catch (err) {
+    testing.expectEqual('NotSupportedError', err.name);
+  }
+}
+</script>
+
+<script id="createInXMLDocument">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('Hello World');
+
+  testing.expectEqual(4, cdata.nodeType);
+  testing.expectEqual('#cdata-section', cdata.nodeName);
+  testing.expectEqual('Hello World', cdata.data);
+  testing.expectEqual(11, cdata.length);
+}
+</script>
+
+<script id="cdataWithSpecialChars">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('<tag>&amp;"quotes"</tag>');
+
+  testing.expectEqual('<tag>&amp;"quotes"</tag>', cdata.data);
+}
+</script>
+
+<script id="cdataRejectsEndMarker">
+{
+  const doc = new Document();
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => doc.createCDATASection('foo ]]> bar'));
+}
+</script>
+
+<script id="cdataRejectsEndMarkerEdgeCase">
+{
+  const doc = new Document();
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => doc.createCDATASection(']]>'));
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => doc.createCDATASection('start]]>end'));
+}
+</script>
+
+<script id="cdataAllowsSimilarPatterns">
+{
+  const doc = new Document();
+
+  const cdata1 = doc.createCDATASection(']>');
+  testing.expectEqual(']>', cdata1.data);
+
+  const cdata2 = doc.createCDATASection(']]');
+  testing.expectEqual(']]', cdata2.data);
+
+  const cdata3 = doc.createCDATASection('] ]>');
+  testing.expectEqual('] ]>', cdata3.data);
+}
+</script>
+
+<script id="cdataCharacterDataMethods">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('Hello');
+
+  cdata.appendData(' World');
+  testing.expectEqual('Hello World', cdata.data);
+  testing.expectEqual(11, cdata.length);
+
+  cdata.deleteData(5, 6);
+  testing.expectEqual('Hello', cdata.data);
+
+  cdata.insertData(0, 'Hi ');
+  testing.expectEqual('Hi Hello', cdata.data);
+
+  cdata.replaceData(0, 3, 'Bye');
+  testing.expectEqual('ByeHello', cdata.data);
+
+  const sub = cdata.substringData(0, 3);
+  testing.expectEqual('Bye', sub);
+}
+</script>
+
+<script id="cdataInheritance">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('test');
+
+  testing.expectEqual(true, cdata instanceof CDATASection);
+  testing.expectEqual(true, cdata instanceof Text);
+  testing.expectEqual(true, cdata instanceof CharacterData);
+  testing.expectEqual(true, cdata instanceof Node);
+}
+</script>
+
+<script id="cdataWholeText">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('test data');
+
+  testing.expectEqual('test data', cdata.wholeText);
+}
+</script>
+
+<script id="cdataClone">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('original data');
+
+  const clone = cdata.cloneNode(false);
+
+  testing.expectEqual(4, clone.nodeType);
+  testing.expectEqual('#cdata-section', clone.nodeName);
+  testing.expectEqual('original data', clone.data);
+  testing.expectEqual(true, clone !== cdata);
+}
+</script>
+
+<script id="cdataRemove">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('test');
+
+  const root = doc.createElement('root');
+  doc.appendChild(root);
+  root.appendChild(cdata);
+
+  testing.expectEqual(1, root.childNodes.length);
+  testing.expectEqual(root, cdata.parentNode);
+
+  cdata.remove();
+  testing.expectEqual(0, root.childNodes.length);
+  testing.expectEqual(null, cdata.parentNode);
+}
+</script>
+
+<script id="cdataBeforeAfter">
+{
+  const doc = new Document();
+  const root = doc.createElement('root');
+  doc.appendChild(root);
+
+  const cdata = doc.createCDATASection('middle');
+  root.appendChild(cdata);
+
+  const text1 = doc.createTextNode('before');
+  const text2 = doc.createTextNode('after');
+
+  cdata.before(text1);
+  cdata.after(text2);
+
+  testing.expectEqual(3, root.childNodes.length);
+}
+</script>
+
+<script id="cdataReplaceWith">
+{
+  const doc = new Document();
+  const root = doc.createElement('root');
+  doc.appendChild(root);
+
+  const cdata = doc.createCDATASection('old');
+  root.appendChild(cdata);
+
+  const replacement = doc.createTextNode('new');
+  cdata.replaceWith(replacement);
+
+  testing.expectEqual(1, root.childNodes.length);
+  testing.expectEqual('new', root.childNodes[0].data);
+  testing.expectEqual(null, cdata.parentNode);
+}
+</script>
+
+<script id="cdataSiblingNavigation">
+{
+  const doc = new Document();
+  const root = doc.createElement('root');
+  doc.appendChild(root);
+
+  const elem1 = doc.createElement('first');
+  const cdata = doc.createCDATASection('middle');
+  const elem2 = doc.createElement('last');
+
+  root.appendChild(elem1);
+  root.appendChild(cdata);
+  root.appendChild(elem2);
+
+  testing.expectEqual('LAST', cdata.nextElementSibling.tagName);
+  testing.expectEqual('FIRST', cdata.previousElementSibling.tagName);
+}
+</script>
+
+<script id="cdataEmptyString">
+{
+  const doc = new Document();
+  const cdata = doc.createCDATASection('');
+
+  testing.expectEqual('', cdata.data);
+  testing.expectEqual(0, cdata.length);
+}
+</script>

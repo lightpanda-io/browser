@@ -226,6 +226,13 @@ pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node 
     return page.createTextNode(data);
 }
 
+pub fn createCDATASection(self: *const Document, data: []const u8, page: *Page) !*Node {
+    switch (self._type) {
+        .html => return error.NotSupported,
+        .generic => return page.createCDATASection(data),
+    }
+}
+
 const Range = @import("Range.zig");
 pub fn createRange(_: *const Document, page: *Page) !*Range {
     return Range.init(page);
@@ -353,6 +360,7 @@ pub const JsApi = struct {
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
+    pub const createCDATASection = bridge.function(Document.createCDATASection, .{ .dom_exception = true });
     pub const createRange = bridge.function(Document.createRange, .{});
     pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});

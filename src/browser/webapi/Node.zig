@@ -213,6 +213,7 @@ pub fn getNodeName(self: *const Node, page: *Page) []const u8 {
         .element => |el| el.getTagNameSpec(&page.buf),
         .cdata => |cd| switch (cd._type) {
             .text => "#text",
+            .cdata_section => "#cdata-section",
             .comment => "#comment",
         },
         .document => "#document",
@@ -228,6 +229,7 @@ pub fn nodeType(self: *const Node) u8 {
         .attribute => 2,
         .cdata => |cd| switch (cd._type) {
             .text => 3,
+            .cdata_section => 4,
             .comment => 8,
         },
         .document => 9,
@@ -507,13 +509,14 @@ pub fn normalize(self: *Node, page: *Page) !void {
     return self._normalize(page.call_arena, &buffer, page);
 }
 
-pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, StringTooLarge, NotSupported, NotImplemented }!*Node {
+pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, StringTooLarge, NotSupported, NotImplemented, InvalidCharacterError }!*Node {
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => |cd| {
             const data = cd.getData();
             return switch (cd._type) {
                 .text => page.createTextNode(data),
+                .cdata_section => page.createCDATASection(data),
                 .comment => page.createComment(data),
             };
         },
