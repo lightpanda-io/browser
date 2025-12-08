@@ -113,4 +113,13 @@
   // doesn't crash on null receiver
   content.addEventListener('he2', null);
   content.dispatchEvent(new Event('he2'));
+
+  // Test that EventTarget constructor properly initializes vtable
+  const et = new EventTarget();
+  testing.expectEqual('[object EventTarget]', et.toString());
+
+  let constructorTestCalled = false;
+  et.addEventListener('test', () => { constructorTestCalled = true; });
+  et.dispatchEvent(new Event('test'));
+  testing.expectEqual(true, constructorTestCalled);
 </script>
