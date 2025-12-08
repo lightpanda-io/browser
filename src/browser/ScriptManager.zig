@@ -205,13 +205,16 @@ pub fn addFromElement(self: *ScriptManager, script_element: *Element.Html.Script
     const script = try self.script_pool.create();
     errdefer self.script_pool.destroy(script);
 
+    const is_inline = source == .@"inline";
+
     script.* = .{
         .kind = kind,
         .node = .{},
         .manager = self,
         .source = source,
         .script_element = script_element,
-        .complete = source == .@"inline",
+        .complete = is_inline,
+        .status = if (is_inline) 200 else 0,
         .url = remote_url orelse page.url,
         .mode = blk: {
             if (source == .@"inline") {
@@ -270,6 +273,11 @@ pub fn addFromElement(self: *ScriptManager, script_element: *Element.Html.Script
         if (!script.complete) {
             _ = try client.tick(200);
             continue;
+        }
+        if (script.status == 0) {
+            // an error (that we already logged)
+            script.deinit(true);
+            return;
         }
 
         // could have already been evaluating if this is dynamically added
@@ -675,7 +683,21 @@ const Script = struct {
 
     fn errorCallback(ctx: *anyopaque, err: anyerror) void {
         const self: *Script = @ptrCast(@alignCast(ctx));
-        log.warn(.http, "script fetch error", .{ .req = self.url, .err = err });
+        log.warn(.http, "script fetch error", .{
+            .err = err ,
+            .req = self.url,
+            .mode = self.mode,
+            .kind = self.kind,
+            .status = self.status,
+        });
+
+        if (self.mode == .normal) {
+            // This is blocked in a loop at the end of addFromElement, setting
+            // it to complete with a status of 0 will signal the error.
+            self.status = 0;
+            self.complete = true;
+            return;
+        }
 
         const manager = self.manager;
         manager.scriptList(self).remove(&self.node);
