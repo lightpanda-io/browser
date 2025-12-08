@@ -140,6 +140,29 @@ pub fn getAll(self: *HTMLDocument, page: *Page) !*collections.HTMLAllCollection 
     return page._factory.create(collections.HTMLAllCollection.init(self.asNode(), page));
 }
 
+pub fn getCookie(_: *HTMLDocument, page: *Page) ![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    try page._session.cookie_jar.forRequest(page.url, buf.writer(page.call_arena), .{
+        .is_http = false,
+        .is_navigation = true,
+    });
+    return buf.items;
+}
+
+pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, page: *Page) ![]const u8 {
+    // we use the cookie jar's allocator to parse the cookie because it
+    // outlives the page's arena.
+    const Cookie = @import("storage/Cookie.zig");
+    const c = try Cookie.parse(page._session.cookie_jar.allocator, page.url, cookie_str);
+    errdefer c.deinit();
+    if (c.http_only) {
+        c.deinit();
+        return ""; // HttpOnly cookies cannot be set from JS
+    }
+    try page._session.cookie_jar.add(c, std.time.timestamp());
+    return cookie_str;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLDocument);
 
@@ -170,4 +193,5 @@ pub const JsApi = struct {
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
     pub const location = bridge.accessor(HTMLDocument.getLocation, null, .{ .cache = "location" });
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
+    pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
 };

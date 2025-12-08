@@ -169,3 +169,14 @@
   newAnchor.remove();
   testing.expectEqual(initialLength, anchors.length);
 </script>
+
+<script id=cookie>
+  testing.expectEqual('', document.cookie);
+  document.cookie = 'name=Oeschger;';
+  document.cookie = 'favorite_food=tripe;';
+
+  testing.expectEqual('name=Oeschger; favorite_food=tripe', document.cookie);
+  // "" should be returned, but the framework overrules it atm
+  document.cookie = 'IgnoreMy=Ghost; HttpOnly';
+  testing.expectEqual('name=Oeschger; favorite_food=tripe', document.cookie);
+</script>
