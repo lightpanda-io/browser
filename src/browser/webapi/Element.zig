@@ -228,21 +228,46 @@ pub fn getNamespaceURI(self: *const Element) []const u8 {
 // innerText represents the **rendered** text content of a node and its
 // descendants.
 pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
+    var state = innerTextState{};
+    return try self._getInnerText(writer, &state);
+}
+const innerTextState = struct {
+    pre_w: bool = false,
+    trim_left: bool = true,
+};
+fn _getInnerText(self: *Element, writer: *std.Io.Writer, state: *innerTextState) !void {
     var it = self.asNode().childrenIterator();
     while (it.next()) |child| {
         switch (child._type) {
             .element => |e| switch (e._type) {
                 .html => |he| switch (he._type) {
-                    .br => try writer.writeByte('\n'),
-                    .script, .style, .template => continue,
-                    else => try e.getInnerText(writer), // TODO check if elt is hidden.
+                    .br => {
+                        try writer.writeByte('\n');
+                        state.pre_w = false; // prevent a next pre space.
+                        state.trim_left = true;
+                    },
+                    .script, .style, .template => {
+                        state.pre_w = false; // prevent a next pre space.
+                        state.trim_left = true;
+                    },
+                    else => try e._getInnerText(writer, state), // TODO check if elt is hidden.
                 },
                 .svg => {},
             },
             .cdata => |c| switch (c._type) {
-                .comment => continue,
-                .text => try c.render(writer, .{ .trim_right = false, .trim_left = false }),
-                .cdata_section => try writer.writeAll(c._data),
+                .comment => {
+                    state.pre_w = false; // prevent a next pre space.
+                    state.trim_left = true;
+                },
+                .text => {
+                    if (state.pre_w) try writer.writeByte(' ');
+                    state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
+                    // if we had a pre space, trim left next one.
+                    state.trim_left = state.pre_w;
+                },
+                // CDATA sections should not be used within HTML. They are
+                // considered comments and are not displayed.
+                .cdata_section => {},
             },
             .document => {},
             .document_type => {},

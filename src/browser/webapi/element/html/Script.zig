@@ -15,6 +15,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+const std = @import("std");
 
 const log = @import("../../../../log.zig");
 const js = @import("../../../js/js.zig");
@@ -93,6 +94,10 @@ pub fn getNoModule(self: *const Script) bool {
     return self.asConstElement().getAttributeSafe("nomodule") != null;
 }
 
+pub fn setInnerText(self: *Script, text: []const u8, page: *Page) !void {
+    try self.asNode().setTextContent(text, page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Script);
 
@@ -107,6 +112,12 @@ pub const JsApi = struct {
     pub const onload = bridge.accessor(Script.getOnLoad, Script.setOnLoad, .{});
     pub const onerror = bridge.accessor(Script.getOnError, Script.setOnError, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
+    pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{});
+    fn _innerText(self: *Script, page: *const Page) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+        try self.asNode().getTextContent(&buf.writer);
+        return buf.written();
+    }
 };
 
 pub const Build = struct {
