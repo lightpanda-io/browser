@@ -881,31 +881,82 @@ pub const Walker = struct {
     }
 };
 
-// write a JSON string.
-// replaces all whitspaces with a single space.
+// Replace successives whitespaces with one withespace.
+// Trims left and right according to the options.
+// Returns true if the string ends with a trimmed whitespace.
 fn writeString(s: []const u8, w: anytype) !void {
-    if (!std.unicode.utf8ValidateSlice(s)) {
-        return error.InvalidUTF8String;
-    }
-
-    // replace white spaces with single space.
     try w.beginWriteRaw();
     try w.writer.writeByte('\"');
-    var cursor: usize = 0;
-    for (s, 0..) |c, i| {
-        if (std.ascii.isWhitespace(c)) {
-            // write string until space
-            if (cursor < i) {
-                try w.writer.writeAll(s[cursor..i]);
-                try w.writer.writeByte(' ');
-            }
-            cursor = i + 1;
-        }
-    }
-    // write the reminder string
-    if (cursor < s.len) {
-        try w.writer.writeAll(s[cursor..]);
-    }
+    try stripWhitespaces(s, w.writer);
     try w.writer.writeByte('\"');
     w.endWriteRaw();
+}
+
+fn stripWhitespaces(s: []const u8, writer: anytype) !void {
+    var start: usize = 0;
+    var prev_w: ?bool = null;
+    var is_w: bool = undefined;
+
+    for (s, 0..) |c, i| {
+        is_w = std.ascii.isWhitespace(c);
+
+        // Detect the first char type.
+        if (prev_w == null) {
+            prev_w = is_w;
+        }
+        // The current char is the same kind of char, the chunk continues.
+        if (prev_w.? == is_w) {
+            continue;
+        }
+
+        // Starting here, the chunk changed.
+        if (is_w) {
+            // We have a chunk of non-whitespaces, we write it as it.
+            try writer.writeAll(s[start..i]);
+        } else {
+            // We have a chunk of whitespaces, replace with one space,
+            // depending the position.
+            if (start > 0) {
+                try writer.writeByte(' ');
+            }
+        }
+        // Start the new chunk.
+        prev_w = is_w;
+        start = i;
+    }
+    // Write the reminder chunk.
+    if (!is_w) {
+        // last chunk is non whitespaces.
+        try writer.writeAll(s[start..]);
+    }
+}
+
+test "AXnode: stripWhitespaces" {
+    const allocator = std.testing.allocator;
+
+    const TestCase = struct {
+        value: []const u8,
+        expected: []const u8,
+    };
+
+    const test_cases = [_]TestCase{
+        .{ .value = "   ", .expected = "" },
+        .{ .value = "   ", .expected = "" },
+        .{ .value = "foo bar", .expected = "foo bar" },
+        .{ .value = "foo  bar", .expected = "foo bar" },
+        .{ .value = "  foo bar", .expected = "foo bar" },
+        .{ .value = "foo bar  ", .expected = "foo bar" },
+        .{ .value = "  foo bar  ", .expected = "foo bar" },
+        .{ .value = "foo\n\tbar", .expected = "foo bar" },
+        .{ .value = "\tfoo bar   baz   \t\n yeah\r\n", .expected = "foo bar baz yeah" },
+    };
+
+    var buffer = std.io.Writer.Allocating.init(allocator);
+    defer buffer.deinit();
+
+    for (test_cases) |test_case| {
+        buffer.clearRetainingCapacity();
+        try stripWhitespaces(test_case.value, &buffer.writer);
+        try std.testing.expectEqualStrings(test_case.expected, buffer.written());
+    }
 }
