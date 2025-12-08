@@ -28,7 +28,6 @@ const Option = @This();
 
 _proto: *HtmlElement,
 _value: ?[]const u8 = null,
-_text: ?[]const u8 = null,
 _selected: bool = false,
 _default_selected: bool = false,
 _disabled: bool = false,
@@ -43,9 +42,15 @@ pub fn asNode(self: *Option) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getValue(self: *const Option) []const u8 {
-    // If value attribute exists, use that; otherwise use text content
-    return self._value orelse self._text orelse "";
+pub fn getValue(self: *Option, page: *Page) []const u8 {
+    // If value attribute exists, use that; otherwise use text content (stripped)
+    if (self._value) |v| {
+        return v;
+    }
+
+    const node = self.asNode();
+    const text = node.getTextContentAlloc(page.call_arena) catch return "";
+    return std.mem.trim(u8, text, &std.ascii.whitespace);
 }
 
 pub fn setValue(self: *Option, value: []const u8, page: *Page) !void {
@@ -55,7 +60,9 @@ pub fn setValue(self: *Option, value: []const u8, page: *Page) !void {
 }
 
 pub fn getText(self: *const Option) []const u8 {
-    return self._text orelse "";
+    const node: *Node = @constCast(self.asConstElement().asConstNode());
+    const allocator = std.heap.page_allocator; // TODO: use proper allocator
+    return node.getTextContentAlloc(allocator) catch "";
 }
 
 pub fn getSelected(self: *const Option) bool {
@@ -112,8 +119,6 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    const CData = @import("../../CData.zig");
-
     pub fn created(node: *Node, _: *Page) !void {
         var self = node.as(Option);
         const element = self.asElement();
@@ -127,17 +132,6 @@ pub const Build = struct {
 
         // Check for disabled attribute
         self._disabled = element.getAttributeSafe("disabled") != null;
-    }
-
-    pub fn complete(node: *Node, _: *const Page) !void {
-        var self = node.as(Option);
-
-        // Get text content
-        if (node.firstChild()) |child| {
-            if (child.is(CData.Text)) |txt| {
-                self._text = txt.getWholeText();
-            }
-        }
     }
 
     pub fn attributeChange(element: *Element, name: []const u8, value: []const u8, _: *Page) !void {

@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const HTMLCollection = @import("HTMLCollection.zig");
 const NodeLive = @import("node_live.zig").NodeLive;
@@ -59,17 +60,28 @@ pub fn setSelectedIndex(self: *HTMLOptionsCollection, index: i32) !void {
 
 const Option = @import("../element/html/Option.zig");
 
+const AddBeforeOption = union(enum) {
+    option: *Option,
+    index: u32,
+};
+
 // Add a new option element
-pub fn add(self: *HTMLOptionsCollection, element: *Option, before: ?*Option, page: *Page) !void {
+pub fn add(self: *HTMLOptionsCollection, element: *Option, before_: ?AddBeforeOption, page: *Page) !void {
     const select_node = self._select.asNode();
     const element_node = element.asElement().asNode();
 
-    if (before) |before_option| {
-        const before_node = before_option.asElement().asNode();
-        _ = try select_node.insertBefore(element_node, before_node, page);
-    } else {
-        _ = try select_node.appendChild(element_node, page);
+    var before_node: ?*Node = null;
+    if (before_) |before| {
+        switch (before) {
+            .index => |idx| {
+                if (self.getAtIndex(idx, page)) |el| {
+                    before_node = el.asNode();
+                }
+            },
+            .option => |before_option| before_node = before_option.asNode(),
+        }
     }
+    _ = try select_node.insertBefore(element_node, before_node, page);
 }
 
 // Remove an option element by index

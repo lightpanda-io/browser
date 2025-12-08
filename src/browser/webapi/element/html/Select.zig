@@ -44,7 +44,7 @@ pub fn asConstNode(self: *const Select) *const Node {
     return self.asConstElement().asConstNode();
 }
 
-pub fn getValue(self: *Select) []const u8 {
+pub fn getValue(self: *Select, page: *Page) []const u8 {
     // Return value of first selected option, or first option if none selected
     var first_option: ?*Option = null;
     var iter = self.asNode().childrenIterator();
@@ -54,25 +54,24 @@ pub fn getValue(self: *Select) []const u8 {
             first_option = option;
         }
         if (option.getSelected()) {
-            return option.getValue();
+            return option.getValue(page);
         }
     }
     // No explicitly selected option, return first option's value
     if (first_option) |opt| {
-        return opt.getValue();
+        return opt.getValue(page);
     }
     return "";
 }
 
 pub fn setValue(self: *Select, value: []const u8, page: *Page) !void {
-    _ = page;
     // Find option with matching value and select it
     // Note: This updates the current state (_selected), not the default state (attribute)
     // Setting value always deselects all others, even for multiple selects
     var iter = self.asNode().childrenIterator();
     while (iter.next()) |child| {
         const option = child.is(Option) orelse continue;
-        option._selected = std.mem.eql(u8, option.getValue(), value);
+        option._selected = std.mem.eql(u8, option.getValue(page), value);
     }
 }
 
@@ -196,6 +195,17 @@ pub fn getOptions(self: *Select, page: *Page) !*collections.HTMLOptionsCollectio
     });
 }
 
+pub fn getLength(self: *Select) u32 {
+    var i: u32 = 0;
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Option) != null) {
+            i += 1;
+        }
+    }
+    return i;
+}
+
 pub fn getSelectedOptions(self: *Select, page: *Page) !collections.NodeLive(.selected_options) {
     return collections.NodeLive(.selected_options).init(null, self.asNode(), {}, page);
 }
@@ -243,6 +253,7 @@ pub const JsApi = struct {
     pub const selectedOptions = bridge.accessor(Select.getSelectedOptions, null, .{});
     pub const form = bridge.accessor(Select.getForm, null, .{});
     pub const size = bridge.accessor(Select.getSize, Select.setSize, .{});
+    pub const length = bridge.accessor(Select.getLength, null, .{});
 };
 
 pub const Build = struct {

@@ -158,6 +158,7 @@
   {
     const sel = $('#select1')
     const opts = sel.options
+    testing.expectEqual(3, sel.length)
     testing.expectEqual(3, opts.length)
     testing.expectEqual('HTMLOptionsCollection', opts.constructor.name)
 
@@ -165,6 +166,9 @@
     testing.expectEqual('val1', opts[0].value)
     testing.expectEqual('val2', opts[1].value)
     testing.expectEqual('val3', opts[2].value)
+    testing.expectEqual('val1', opts.item(0).value);
+    testing.expectEqual('val2', opts.item(1).value);
+    testing.expectEqual('val3', opts.item(2).value);
   }
 </script>
 
@@ -224,6 +228,12 @@
     testing.expectEqual(2, opts.length)
     testing.expectEqual('zero', opts[0].value)
     testing.expectEqual('b', opts[1].value)
+
+    opts.add(opt1, 0)
+    testing.expectEqual(3, opts.length)
+    testing.expectEqual('a', opts[0].value)
+    testing.expectEqual('zero', opts[1].value)
+    testing.expectEqual('b', opts[2].value)
   }
 </script>
 
@@ -362,5 +372,18 @@
     select.size = 7
     testing.expectEqual('7', select.getAttribute('size'))
     testing.expectTrue(select.outerHTML.includes('size="7"'))
+  }
+</script>
+
+<select id="no_value">
+  <option>d1
+  <option>d2
+</select>
+<script id="no_value_attribute">
+  {
+    const select = $('#no_value');
+    testing.expectEqual(2, select.length)
+    testing.expectEqual('d1', select.options[0].value)
+    testing.expectEqual('d2', select.options[1].value)
   }
 </script>
