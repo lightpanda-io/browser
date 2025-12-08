@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../js/js.zig");
 
 const URL = @import("URL.zig");
@@ -64,6 +65,25 @@ pub fn getHash(self: *const Location) []const u8 {
     return self._url.getHash();
 }
 
+pub fn setHash(_: *const Location, hash: []const u8, page: *Page) !void {
+    const normalized_hash = blk: {
+        if (hash.len == 0) {
+            const old_url = page.url;
+
+            break :blk if (std.mem.indexOfScalar(u8, old_url, '#')) |index|
+                old_url[0..index]
+            else
+                old_url;
+        } else if (hash[0] == '#')
+            break :blk hash
+        else
+            break :blk try std.fmt.allocPrint(page.arena, "#{s}", .{hash});
+    };
+
+    const duped_hash = try page.arena.dupeZ(u8, normalized_hash);
+    return page.navigate(duped_hash, .{ .reason = .script });
+}
+
 pub fn toString(self: *const Location, page: *const Page) ![:0]const u8 {
     return self._url.toString(page);
 }
@@ -80,7 +100,7 @@ pub const JsApi = struct {
     pub const toString = bridge.function(Location.toString, .{});
     pub const href = bridge.accessor(Location.toString, null, .{});
     pub const search = bridge.accessor(Location.getSearch, null, .{});
-    pub const hash = bridge.accessor(Location.getHash, null, .{});
+    pub const hash = bridge.accessor(Location.getHash, Location.setHash, .{});
     pub const pathname = bridge.accessor(Location.getPathname, null, .{});
     pub const hostname = bridge.accessor(Location.getHostname, null, .{});
     pub const host = bridge.accessor(Location.getHost, null, .{});

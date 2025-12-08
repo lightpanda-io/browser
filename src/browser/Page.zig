@@ -287,8 +287,13 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     if (!opts.force) {
         // If we are navigating within the same document, just change URL.
         if (URL.eqlDocument(self.url, resolved_url)) {
+            // update page url
             self.url = resolved_url;
-            // 3. change window.location
+
+            // update location
+            self.window._location = try Location.init(self.url, self);
+            self.document._location = self.window._location;
+
             try session.navigation.updateEntries("", .{ .push = null }, self, true);
             return;
         }
