@@ -416,6 +416,65 @@ pub fn attachShadow(self: *Element, mode_str: []const u8, page: *Page) !*ShadowR
     return shadow_root;
 }
 
+pub fn insertAdjacentHTML(
+    self: *Element,
+    position: []const u8,
+    /// TODO: Add support for XML parsing.
+    html_or_xml: []const u8,
+    page: *Page,
+) !void {
+    // Create a new HTMLDocument.
+    const doc = try page._factory.document(@import("HTMLDocument.zig"){
+        ._proto = undefined,
+    });
+    const doc_node = doc.asNode();
+
+    const Parser = @import("../parser/Parser.zig");
+    var parser = Parser.init(page.call_arena, doc_node, page);
+    parser.parse(html_or_xml);
+    // Check if there's parsing error.
+    if (parser.err) |_| return error.Invalid;
+
+    // We always get it wrapped like so:
+    // <html><head></head><body>{ ... }</body></html>
+    // None of the following can be null.
+    const maybe_html_node = doc_node.firstChild();
+    std.debug.assert(maybe_html_node != null);
+    const html_node = maybe_html_node orelse return;
+
+    const maybe_body_node = html_node.lastChild();
+    std.debug.assert(maybe_body_node != null);
+    const body = maybe_body_node orelse return;
+
+    const target_node, const prev_node = try self.asNode().findAdjacentNodes(position);
+
+    var iter = body.childrenIterator();
+    while (iter.next()) |child_node| {
+        _ = try target_node.insertBefore(child_node, prev_node, page);
+    }
+}
+
+pub fn insertAdjacentElement(
+    self: *Element,
+    position: []const u8,
+    element: *Element,
+    page: *Page,
+) !void {
+    const target_node, const prev_node = try self.asNode().findAdjacentNodes(position);
+    _ = try target_node.insertBefore(element.asNode(), prev_node, page);
+}
+
+pub fn insertAdjacentText(
+    self: *Element,
+    where: []const u8,
+    data: []const u8,
+    page: *Page,
+) !void {
+    const text_node = try page.createTextNode(data);
+    const target_node, const prev_node = try self.asNode().findAdjacentNodes(where);
+    _ = try target_node.insertBefore(text_node, prev_node, page);
+}
+
 pub fn setAttributeNode(self: *Element, attr: *Attribute, page: *Page) !?*Attribute {
     if (attr._element) |el| {
         if (el == self) {
@@ -1060,6 +1119,9 @@ pub const JsApi = struct {
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
     pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
+    pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true });
+    pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .dom_exception = true });
+    pub const insertAdjacentText = bridge.function(Element.insertAdjacentText, .{ .dom_exception = true });
 
     const ShadowRootInit = struct {
         mode: []const u8,
