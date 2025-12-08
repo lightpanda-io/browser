@@ -75,4 +75,4 @@ EXPOSE 9222/tcp
 # Using "tini" as PID1 ensures that signals work as expected, so e.g. "docker stop" will not hang.
 # (See https://github.com/krallin/tini#why-tini).
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/bin/lightpanda", "serve", "--host", "0.0.0.0", "--port", "9222"]
+CMD ["/bin/lightpanda", "serve", "--host", "0.0.0.0", "--port", "9222", "--log_level", "info"]
