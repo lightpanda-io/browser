@@ -272,11 +272,12 @@ pub fn getHost(raw: [:0]const u8) []const u8 {
 
 // Returns true if these two URLs point to the same document.
 pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
+    if (!std.mem.eql(u8, getProtocol(first), getProtocol(second))) return false;
     if (!std.mem.eql(u8, getHost(first), getHost(second))) return false;
     if (!std.mem.eql(u8, getPort(first), getPort(second))) return false;
     if (!std.mem.eql(u8, getPathname(first), getPathname(second))) return false;
     if (!std.mem.eql(u8, getSearch(first), getSearch(second))) return false;
-    if (!std.mem.eql(u8, getHash(first), getHash(second))) return false;
+    // hashes are allowed to be different.
 
     return true;
 }
@@ -447,5 +448,73 @@ test "URL: resolve" {
     for (cases) |case| {
         const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
         try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: eqlDocument" {
+    defer testing.reset();
+    {
+        const url = "https://lightpanda.io/about";
+        try testing.expectEqual(true, eqlDocument(url, url));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "http://lightpanda.io/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://example.com/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io:8080/about";
+        const url2 = "https://lightpanda.io:9090/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://lightpanda.io/contact";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?foo=bar";
+        const url2 = "https://lightpanda.io/about?baz=qux";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about#section1";
+        const url2 = "https://lightpanda.io/about#section2";
+        try testing.expectEqual(true, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://lightpanda.io/about/";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?foo=bar";
+        const url2 = "https://lightpanda.io/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://lightpanda.io/about?foo=bar";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?foo=bar";
+        const url2 = "https://lightpanda.io/about?foo=bar";
+        try testing.expectEqual(true, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?";
+        const url2 = "https://lightpanda.io/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://duckduckgo.com/";
+        const url2 = "https://duckduckgo.com/?q=lightpanda";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
     }
 }
