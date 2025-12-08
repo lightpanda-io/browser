@@ -24,6 +24,7 @@ const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
+const Navigation = @import("../webapi/navigation/Navigation.zig");
 const Crypto = @import("Crypto.zig");
 const CSS = @import("CSS.zig");
 const Navigator = @import("Navigator.zig");
@@ -115,6 +116,10 @@ pub fn getLocation(self: *const Window) *Location {
 
 pub fn getHistory(self: *Window) *History {
     return &self._history;
+}
+
+pub fn getNavigation(_: *Window, page: *Page) *Navigation {
+    return &page._session.navigation;
 }
 
 pub fn getCustomElements(self: *Window) *CustomElementRegistry {
@@ -487,6 +492,7 @@ pub const JsApi = struct {
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
     pub const location = bridge.accessor(Window.getLocation, null, .{ .cache = "location" });
     pub const history = bridge.accessor(Window.getHistory, null, .{ .cache = "history" });
+    pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });
     pub const CSS = bridge.accessor(Window.getCSS, null, .{ .cache = "CSS" });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
