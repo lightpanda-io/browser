@@ -19,9 +19,10 @@
 const std = @import("std");
 
 const log = @import("../../log.zig");
+const URL = @import("../../browser/URL.zig");
 const Cookie = @import("../../browser/webapi/storage/storage.zig").Cookie;
-const CookieJar = @import("../../browser/webapi/storage/storage.zig").Jar;
-pub const PreparedUri = @import("../../browser/webapi/storage/cookie.zig").PreparedUri;
+const CookieJar = Cookie.Jar;
+pub const PreparedUri = Cookie.PreparedUri;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -112,9 +113,9 @@ pub const CookiePartitionKey = struct {
 pub const CdpCookie = struct {
     name: []const u8,
     value: []const u8,
-    url: ?[]const u8 = null,
+    url: ?[:0]const u8 = null,
     domain: ?[]const u8 = null,
-    path: ?[]const u8 = null,
+    path: ?[:0]const u8 = null,
     secure: ?bool = null, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     httpOnly: bool = false, // default: https://www.rfc-editor.org/rfc/rfc6265#section-5.3
     sameSite: SameSite = .None, // default: https://datatracker.ietf.org/doc/html/draft-west-first-party-cookies
@@ -136,12 +137,10 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     const a = arena.allocator();
 
     // NOTE: The param.url can affect the default domain, (NOT path), secure, source port, and source scheme.
-    const uri = if (param.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
-    const uri_ptr = if (uri) |*u| u else null;
-    const domain = try Cookie.parseDomain(a, uri_ptr, param.domain);
+    const domain = try Cookie.parseDomain(a, param.url, param.domain);
     const path = if (param.path == null) "/" else try Cookie.parsePath(a, null, param.path);
 
-    const secure = if (param.secure) |s| s else if (uri) |uri_| std.mem.eql(u8, uri_.scheme, "https") else false;
+    const secure = if (param.secure) |s| s else if (param.url) |url| URL.isHTTPS(url) else false;
 
     const cookie = Cookie{
         .arena = arena,

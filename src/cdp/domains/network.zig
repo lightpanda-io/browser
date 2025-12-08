@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const CdpStorage = @import("storage.zig");
+const URL = @import("../../browser/URL.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
 const Notification = @import("../../Notification.zig");
 
@@ -107,7 +108,7 @@ fn cookieMatches(cookie: *const Cookie, name: []const u8, domain: ?[]const u8, p
 fn deleteCookies(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         name: []const u8,
-        url: ?[]const u8 = null,
+        url: ?[:0]const u8 = null,
         domain: ?[]const u8 = null,
         path: ?[]const u8 = null,
         partitionKey: ?CdpStorage.CookiePartitionKey = null,
@@ -117,15 +118,12 @@ fn deleteCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const cookies = &bc.session.cookie_jar.cookies;
 
-    const uri = if (params.url) |url| std.Uri.parse(url) catch return error.InvalidParams else null;
-    const uri_ptr = if (uri) |u| &u else null;
-
     var index = cookies.items.len;
     while (index > 0) {
         index -= 1;
         const cookie = &cookies.items[index];
-        const domain = try Cookie.parseDomain(cmd.arena, uri_ptr, params.domain);
-        const path = try Cookie.parsePath(cmd.arena, uri_ptr, params.path);
+        const domain = try Cookie.parseDomain(cmd.arena, params.url, params.domain);
+        const path = try Cookie.parsePath(cmd.arena, params.url, params.path);
 
         // We do not want to use Cookie.appliesTo here. As a Cookie with a shorter path would match.
         // Similar to deduplicating with areCookiesEqual, except domain and path are optional.
@@ -167,23 +165,23 @@ fn setCookies(cmd: anytype) !void {
     try cmd.sendResult(null, .{});
 }
 
-const GetCookiesParam = struct { urls: ?[]const []const u8 = null };
+const GetCookiesParam = struct {
+    urls: ?[]const [:0]const u8 = null,
+};
 fn getCookies(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(GetCookiesParam)) orelse GetCookiesParam{};
 
     // If not specified, use the URLs of the page and all of its subframes. TODO subframes
     const page_url = if (bc.session.page) |page| page.url else null;
-    const param_urls = params.urls orelse &[_][]const u8{page_url orelse return error.InvalidParams};
+    const param_urls = params.urls orelse &[_][:0]const u8{page_url orelse return error.InvalidParams};
 
     var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
     for (param_urls) |url| {
-        const uri = std.Uri.parse(url) catch return error.InvalidParams;
-
         urls.appendAssumeCapacity(.{
-            .host = try Cookie.parseDomain(cmd.arena, &uri, null),
-            .path = try Cookie.parsePath(cmd.arena, &uri, null),
-            .secure = std.mem.eql(u8, uri.scheme, "https"),
+            .host = try Cookie.parseDomain(cmd.arena, url, null),
+            .path = try Cookie.parsePath(cmd.arena, url, null),
+            .secure = URL.isHTTPS(url),
         });
     }
 
@@ -300,23 +298,19 @@ pub const TransferAsRequestWriter = struct {
             try jws.objectField("url");
             try jws.beginWriteRaw();
             try writer.writeByte('\"');
-            try transfer.uri.writeToStream(writer, .{
-                .scheme = true,
-                .authentication = true,
-                .authority = true,
-                .path = true,
-                .query = true,
-            });
+            // #ZIGDOM shouldn't include the hash?
+            try writer.writeAll(transfer.url);
             try writer.writeByte('\"');
             jws.endWriteRaw();
         }
 
         {
-            if (transfer.uri.fragment) |frag| {
+            const frag = URL.getHash(transfer.url);
+            if (frag.len > 0) {
                 try jws.objectField("urlFragment");
                 try jws.beginWriteRaw();
                 try writer.writeAll("\"#");
-                try writer.writeAll(frag.percent_encoded);
+                try writer.writeAll(frag);
                 try writer.writeByte('\"');
                 jws.endWriteRaw();
             }
@@ -370,13 +364,8 @@ const TransferAsResponseWriter = struct {
             try jws.objectField("url");
             try jws.beginWriteRaw();
             try writer.writeByte('\"');
-            try transfer.uri.writeToStream(writer, .{
-                .scheme = true,
-                .authentication = true,
-                .authority = true,
-                .path = true,
-                .query = true,
-            });
+            // #ZIGDOM shouldn't include the hash?
+            try writer.writeAll(transfer.url);
             try writer.writeByte('\"');
             jws.endWriteRaw();
         }

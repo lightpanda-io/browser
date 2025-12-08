@@ -51,7 +51,7 @@ arena: Allocator,
 transfer_arena: Allocator,
 
 executor: js.ExecutionWorld,
-cookie_jar: storage.Jar,
+cookie_jar: storage.Cookie.Jar,
 storage_shed: storage.Shed,
 
 page: ?*Page = null,
@@ -73,7 +73,7 @@ pub fn init(self: *Session, browser: *Browser) !void {
         .storage_shed = .{},
         .queued_navigation = null,
         .arena = browser.session_arena.allocator(),
-        .cookie_jar = storage.Jar.init(allocator),
+        .cookie_jar = storage.Cookie.Jar.init(allocator),
         .transfer_arena = browser.transfer_arena.allocator(),
     };
 }

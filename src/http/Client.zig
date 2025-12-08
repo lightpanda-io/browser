@@ -23,7 +23,7 @@ const builtin = @import("builtin");
 const Http = @import("Http.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
-const CookieJar = @import("../browser/webapi/storage/cookie.zig").Jar;
+const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 
 const c = Http.c;
 const posix = std.posix;
@@ -257,12 +257,6 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
 fn makeTransfer(self: *Client, req: Request) !*Transfer {
     errdefer req.headers.deinit();
 
-    // we need this for cookies
-    const uri = std.Uri.parse(req.url) catch |err| {
-        log.warn(.http, "invalid url", .{ .err = err, .url = req.url });
-        return err;
-    };
-
     const transfer = try self.transfer_pool.create();
     errdefer self.transfer_pool.destroy(transfer);
 
@@ -271,7 +265,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     transfer.* = .{
         .arena = ArenaAllocator.init(self.allocator),
         .id = id,
-        .uri = uri,
+        .url = req.url,
         .req = req,
         .ctx = req.ctx,
         .client = self,
@@ -593,26 +587,16 @@ pub const Handle = struct {
 
 pub const RequestCookie = struct {
     is_http: bool,
+    jar: *CookieJar,
     is_navigation: bool,
     origin: [:0]const u8,
-    jar: *@import("../browser/webapi/storage/cookie.zig").Jar,
 
     pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
-        const uri = std.Uri.parse(url) catch |err| {
-            log.warn(.http, "invalid url", .{ .err = err, .url = url });
-            return error.InvalidUrl;
-        };
-
-        const origin_uri = std.Uri.parse(self.origin) catch |err| {
-            log.warn(.http, "invalid url", .{ .err = err, .url = self.origin });
-            return error.InvalidUrl;
-        };
-
         var arr: std.ArrayListUnmanaged(u8) = .{};
-        try self.jar.forRequest(&uri, arr.writer(temp), .{
+        try self.jar.forRequest(url, arr.writer(temp), .{
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
-            .origin_uri = &origin_uri,
+            .origin_url = self.origin,
         });
 
         if (arr.items.len > 0) {
@@ -692,7 +676,7 @@ pub const Transfer = struct {
     arena: ArenaAllocator,
     id: usize = 0,
     req: Request,
-    uri: std.Uri, // used for setting/getting the cookie
+    url: [:0]const u8,
     ctx: *anyopaque, // copied from req.ctx to make it easier for callback handlers
     client: *Client,
     // total bytes received in the response, including the response status line,
@@ -778,7 +762,7 @@ pub const Transfer = struct {
 
     pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
         // for cookies
-        self.uri = try std.Uri.parse(url);
+        self.url = url;
 
         // for the request itself
         self.req.url = url;
@@ -846,7 +830,7 @@ pub const Transfer = struct {
         while (true) {
             const ct = getResponseHeader(easy, "set-cookie", i);
             if (ct == null) break;
-            try req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value);
+            try req.cookie_jar.populateFromResponse(transfer.url, ct.?.value);
             i += 1;
             if (i >= ct.?.amount) break;
         }
@@ -860,13 +844,12 @@ pub const Transfer = struct {
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &base_url));
 
         const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
-        const uri = try std.Uri.parse(url);
-        transfer.uri = uri;
+        transfer.url = url;
 
         var cookies: std.ArrayListUnmanaged(u8) = .{};
-        try req.cookie_jar.forRequest(&uri, cookies.writer(arena), .{
+        try req.cookie_jar.forRequest(url, cookies.writer(arena), .{
             .is_http = true,
-            .origin_uri = &transfer.uri,
+            .origin_url = url,
             // used to enforce samesite cookie rules
             .is_navigation = req.resource_type == .document,
         });
@@ -895,7 +878,7 @@ pub const Transfer = struct {
         while (true) {
             const ct = getResponseHeader(easy, "set-cookie", i);
             if (ct == null) break;
-            transfer.req.cookie_jar.populateFromResponse(&transfer.uri, ct.?.value) catch |err| {
+            transfer.req.cookie_jar.populateFromResponse(transfer.url, ct.?.value) catch |err| {
                 log.err(.http, "set cookie", .{ .err = err, .req = transfer });
                 return err;
             };

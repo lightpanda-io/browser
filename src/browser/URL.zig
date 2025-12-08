@@ -171,6 +171,10 @@ pub fn getProtocol(raw: [:0]const u8) []const u8 {
     return raw[0 .. pos + 1];
 }
 
+pub fn isHTTPS(raw: [:0]const u8) bool {
+    return std.mem.startsWith(u8, raw, "https:");
+}
+
 pub fn getHostname(raw: [:0]const u8) []const u8 {
     const host = getHost(raw);
     const pos = std.mem.lastIndexOfScalar(u8, host, ':') orelse return host;

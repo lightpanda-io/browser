@@ -26,8 +26,7 @@ pub fn registerTypes() []const type {
     return &.{Lookup};
 }
 
-pub const Jar = @import("cookie.zig").Jar;
-pub const Cookie = @import("cookie.zig").Cookie;
+pub const Cookie = @import("Cookie.zig");
 
 pub const Shed = struct {
     _origins: std.StringHashMapUnmanaged(*Bucket) = .empty,
