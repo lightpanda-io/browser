@@ -191,7 +191,11 @@ fn processQueuedNavigation(self: *Session) !bool {
         return err;
     };
 
-    page.navigate(qn.url, qn.opts) catch |err| {
+    page.navigate(
+        qn.url,
+        qn.opts,
+        self.navigation._current_navigation_kind orelse .{ .push = null },
+    ) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
         return err;
     };

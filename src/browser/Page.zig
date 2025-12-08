@@ -58,6 +58,7 @@ const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
+const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
@@ -270,7 +271,7 @@ fn registerBackgroundTasks(self: *Page) !void {
     }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
 }
 
-pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
+pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind: NavigationKind) !void {
     const session = self._session;
 
     const resolved_url = try URL.resolve(
@@ -292,7 +293,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
             self.window._location = try Location.init(self.url, self);
             self.document._location = self.window._location;
 
-            try session.navigation.updateEntries("", .{ .push = null }, self, true);
+            try session.navigation.updateEntries(resolved_url, kind, self, true);
             return;
         }
     }
@@ -352,6 +353,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .url = self.url,
         .timestamp = timestamp(.monotonic),
     });
+
+    session.navigation._current_navigation_kind = kind;
 
     http_client.request(.{
         .ctx = self,

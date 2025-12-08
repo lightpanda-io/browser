@@ -92,7 +92,6 @@ pub fn back(self: *Navigation, page: *Page) !NavigationReturn {
 
     const new_index = self._index - 1;
     const next_entry = self._entries.items[new_index];
-    self._index = new_index;
 
     return self.navigateInner(next_entry._url, .{ .traverse = new_index }, page);
 }
@@ -108,7 +107,6 @@ pub fn forward(self: *Navigation, page: *Page) !NavigationReturn {
 
     const new_index = self._index + 1;
     const next_entry = self._entries.items[new_index];
-    self._index = new_index;
 
     return self.navigateInner(next_entry._url, .{ .traverse = new_index }, page);
 }
@@ -132,7 +130,10 @@ pub fn updateEntries(self: *Navigation, url: [:0]const u8, kind: NavigationKind,
 // This is only really safe to run in the `pageDoneCallback` where we can guarantee that the URL and NavigationKind are correct.
 pub fn processNavigation(self: *Navigation, page: *Page) !void {
     const url = page.url;
+
     const kind: NavigationKind = self._current_navigation_kind orelse .{ .push = null };
+    defer self._current_navigation_kind = null;
+
     try self.updateEntries(url, kind, page, false);
 }
 
@@ -247,8 +248,10 @@ pub fn navigateInner(
     const committed = try page.js.createPromiseResolver(.page);
     const finished = try page.js.createPromiseResolver(.page);
 
-    const new_url = try URL.resolve(arena, url, page.url, .{});
+    const new_url = try URL.resolve(arena, page.url, url, .{});
     const is_same_document = URL.eqlDocument(new_url, page.url);
+
+    const previous = self.getCurrentEntry();
 
     switch (kind) {
         .push => |state| {
@@ -261,8 +264,7 @@ pub fn navigateInner(
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                // try page.navigate(url, .{ .reason = .navigation }, kind);
-                try page.navigate(url, .{ .reason = .navigation });
+                try page.navigate(url, .{ .reason = .navigation }, kind);
             }
         },
         .replace => |state| {
@@ -275,8 +277,7 @@ pub fn navigateInner(
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                // try page.navigate(url, .{ .reason = .navigation }, kind);
-                try page.navigate(url, .{ .reason = .navigation });
+                try page.navigate(url, .{ .reason = .navigation }, kind);
             }
         },
         .traverse => |index| {
@@ -289,15 +290,21 @@ pub fn navigateInner(
                 // todo: Fire navigate event
                 finished.resolve("navigation traverse", {});
             } else {
-                // try page.navigate(url, .{ .reason = .navigation }, kind);
-                try page.navigate(url, .{ .reason = .navigation });
+                try page.navigate(url, .{ .reason = .navigation }, kind);
             }
         },
         .reload => {
-            // try page.navigate(url, .{ .reason = .navigation }, kind);
-            try page.navigate(url, .{ .reason = .navigation });
+            try page.navigate(url, .{ .reason = .navigation }, kind);
         },
     }
+
+    // If we haven't navigated off, let us fire off an a currententrychange.
+    const event = try NavigationCurrentEntryChangeEvent.init(
+        "currententrychange",
+        .{ .from = previous, .navigationType = @tagName(kind) },
+        page,
+    );
+    try self._proto.dispatch(.{ .currententrychange = event }, page);
 
     return .{
         .committed = committed.promise(),

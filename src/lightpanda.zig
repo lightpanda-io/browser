@@ -60,7 +60,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     //     }
     // }
 
-    _ = try page.navigate(url, .{});
+    _ = try page.navigate(url, .{}, .{ .push = null });
     _ = session.fetchWait(opts.wait_ms);
 
     const writer = opts.writer orelse return;

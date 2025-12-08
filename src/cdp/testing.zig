@@ -127,10 +127,10 @@ const TestContext = struct {
             const full_url = try std.fmt.allocPrintSentinel(
                 self.arena.allocator(),
                 "http://127.0.0.1:9582/src/browser/tests/{s}",
-                .{ url },
+                .{url},
                 0,
             );
-            try page.navigate(full_url, .{});
+            try page.navigate(full_url, .{}, .{ .push = null });
             bc.session.fetchWait(2000);
         }
         return bc;

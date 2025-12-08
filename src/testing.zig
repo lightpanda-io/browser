@@ -403,7 +403,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     try_catch.init(js_context);
     defer try_catch.deinit();
 
-    try page.navigate(url, .{});
+    try page.navigate(url, .{}, .{ .push = null });
     test_session.fetchWait(2000);
 
     page._session.browser.runMicrotasks();
@@ -428,7 +428,7 @@ pub fn pageTest(comptime test_file: []const u8) !*Page {
         0,
     );
 
-    try page.navigate(url, .{});
+    try page.navigate(url, .{}, .{ .push = null });
     test_session.fetchWait(2000);
     return page;
 }

@@ -114,7 +114,7 @@ fn run(
     defer session.removePage();
 
     const url = try std.fmt.allocPrintSentinel(arena, "http://localhost:9582/{s}", .{test_file}, 0);
-    try page.navigate(url, .{});
+    try page.navigate(url, .{}, .{ .push = null });
 
     _ = page.wait(2000);
 

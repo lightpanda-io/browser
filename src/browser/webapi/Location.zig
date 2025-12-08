@@ -81,7 +81,7 @@ pub fn setHash(_: *const Location, hash: []const u8, page: *Page) !void {
     };
 
     const duped_hash = try page.arena.dupeZ(u8, normalized_hash);
-    return page.navigate(duped_hash, .{ .reason = .script });
+    return page.navigate(duped_hash, .{ .reason = .script }, .{ .replace = null });
 }
 
 pub fn toString(self: *const Location, page: *const Page) ![:0]const u8 {

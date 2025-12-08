@@ -183,7 +183,7 @@ fn navigate(cmd: anytype) !void {
     try page.navigate(params.url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
-    });
+    }, .{ .push = null });
 }
 
 pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.PageNavigate) !void {
