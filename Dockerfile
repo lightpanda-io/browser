@@ -1,4 +1,4 @@
-FROM debian:stable
+FROM debian:stable-slim
 
 ARG MINISIG=0.12
 ARG ZIG=0.15.2
@@ -61,10 +61,13 @@ FROM debian:stable-slim
 RUN apt-get update -yq && \
     apt-get install -yq tini
 
+FROM debian:stable-slim
+
 # copy ca certificates
 COPY --from=0 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 COPY --from=0 /browser/zig-out/bin/lightpanda /bin/lightpanda
+COPY --from=1 /usr/bin/tini /usr/bin/tini
 
 EXPOSE 9222/tcp
 
@@ -72,4 +75,4 @@ EXPOSE 9222/tcp
 # Using "tini" as PID1 ensures that signals work as expected, so e.g. "docker stop" will not hang.
 # (See https://github.com/krallin/tini#why-tini).
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/bin/lightpanda", "serve", "--host", "0.0.0.0", "--port", "9222"]
+CMD ["/bin/lightpanda", "serve", "--host", "0.0.0.0", "--port", "9222", "--log_level", "info"]
