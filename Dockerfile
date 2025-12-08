@@ -61,10 +61,13 @@ FROM debian:stable-slim
 RUN apt-get update -yq && \
     apt-get install -yq tini
 
+FROM debian:stable-slim
+
 # copy ca certificates
 COPY --from=0 /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 COPY --from=0 /browser/zig-out/bin/lightpanda /bin/lightpanda
+COPY --from=1 /usr/bin/tini /usr/bin/tini
 
 EXPOSE 9222/tcp
 
