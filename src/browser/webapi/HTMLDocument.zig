@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
+const String = @import("../../string.zig").String;
 
 const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
@@ -91,22 +92,40 @@ pub fn setTitle(self: *HTMLDocument, title: []const u8, page: *Page) !void {
             return title_element.asElement().replaceChildren(&.{.{ .text = title }}, page);
         }
     }
+
+    const title_node = try page.createElement(null, "title", null);
+    const title_element = title_node.as(Element);
+    try title_element.replaceChildren(&.{.{ .text = title }}, page);
+    _ = try head.asNode().appendChild(title_node, page);
 }
 
 pub fn getImages(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .img, page);
+    return collections.NodeLive(.tag).init(self.asNode(), .img, page);
 }
 
 pub fn getScripts(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .script, page);
+    return collections.NodeLive(.tag).init(self.asNode(), .script, page);
 }
 
-pub fn getLinks(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .anchor, page);
+pub fn getLinks(self: *HTMLDocument, page: *Page) !collections.NodeLive(.links) {
+    return collections.NodeLive(.links).init(self.asNode(), {}, page);
+}
+
+pub fn getAnchors(self: *HTMLDocument, page: *Page) !collections.NodeLive(.anchors) {
+    return collections.NodeLive(.anchors).init(self.asNode(), {}, page);
 }
 
 pub fn getForms(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
-    return collections.NodeLive(.tag).init(null, self.asNode(), .form, page);
+    return collections.NodeLive(.tag).init(self.asNode(), .form, page);
+}
+
+pub fn getEmbeds(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag) {
+    return collections.NodeLive(.tag).init(self.asNode(), .embed, page);
+}
+
+const applet_string = String.init(undefined, "applet", .{}) catch unreachable;
+pub fn getApplets(self: *HTMLDocument, page: *Page) !collections.NodeLive(.tag_name) {
+    return collections.NodeLive(.tag_name).init(self.asNode(), applet_string, page);
 }
 
 pub fn getCurrentScript(self: *const HTMLDocument) ?*Element.Html.Script {
@@ -143,7 +162,11 @@ pub const JsApi = struct {
     pub const images = bridge.accessor(HTMLDocument.getImages, null, .{});
     pub const scripts = bridge.accessor(HTMLDocument.getScripts, null, .{});
     pub const links = bridge.accessor(HTMLDocument.getLinks, null, .{});
+    pub const anchors = bridge.accessor(HTMLDocument.getAnchors, null, .{});
     pub const forms = bridge.accessor(HTMLDocument.getForms, null, .{});
+    pub const embeds = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
+    pub const applets = bridge.accessor(HTMLDocument.getApplets, null, .{});
+    pub const plugins = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
     pub const location = bridge.accessor(HTMLDocument.getLocation, null, .{ .cache = "location" });
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});

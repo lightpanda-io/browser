@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<input name="username" value="john">
+<input name="password" type="password">
+<input name="username" value="jane">
+<button name="submit">Submit</button>
+<a name="section1">Section 1</a>
+<a name="username">User Link</a>
+
+<script id=getElementsByName_basic>
+  {
+    const usernames = document.getElementsByName('username');
+    testing.expectEqual(3, usernames.length);
+    testing.expectEqual('INPUT', usernames[0].tagName);
+    testing.expectEqual('john', usernames[0].value);
+    testing.expectEqual('INPUT', usernames[1].tagName);
+    testing.expectEqual('jane', usernames[1].value);
+    testing.expectEqual('A', usernames[2].tagName);
+
+    const passwords = document.getElementsByName('password');
+    testing.expectEqual(1, passwords.length);
+    testing.expectEqual('password', passwords[0].type);
+
+    const submits = document.getElementsByName('submit');
+    testing.expectEqual(1, submits.length);
+    testing.expectEqual('BUTTON', submits[0].tagName);
+  }
+</script>
+
+<script id=getElementsByName_empty>
+  {
+    const nonexistent = document.getElementsByName('nonexistent');
+    testing.expectEqual(0, nonexistent.length);
+  }
+</script>
+
+<script id=getElementsByName_live_collection>
+  {
+    const usernames = document.getElementsByName('username');
+    const initialLength = usernames.length;
+
+    const newInput = document.createElement('input');
+    newInput.name = 'username';
+    newInput.value = 'bob';
+    document.body.appendChild(newInput);
+
+    testing.expectEqual(initialLength + 1, usernames.length);
+    testing.expectEqual(newInput, usernames[usernames.length - 1]);
+
+    newInput.removeAttribute('name');
+    testing.expectEqual(initialLength, usernames.length);
+
+    newInput.name = 'username';
+    testing.expectEqual(initialLength + 1, usernames.length);
+
+    newInput.remove();
+    testing.expectEqual(initialLength, usernames.length);
+  }
+</script>

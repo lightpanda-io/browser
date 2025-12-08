@@ -1120,6 +1120,12 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined },
             ),
+            asUint("embed") => return self.createHtmlElementT(
+                Element.Html.Embed,
+                namespace,
+                attribute_iterator,
+                .{ ._proto = undefined },
+            ),
             else => {},
         },
         6 => switch (@as(u48, @bitCast(name[0..6].*))) {

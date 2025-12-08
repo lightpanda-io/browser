@@ -35,18 +35,26 @@ const Mode = enum {
     tag,
     tag_name,
     class_name,
+    name,
+    all_elements,
     child_elements,
     child_tag,
     selected_options,
+    links,
+    anchors,
 };
 
 const Filters = union(Mode) {
     tag: Element.Tag,
     tag_name: String,
-    class_name: []const u8,
+    class_name: [][]const u8,
+    name: []const u8,
+    all_elements,
     child_elements,
     child_tag: Element.Tag,
     selected_options,
+    links,
+    anchors,
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(2000);
@@ -74,7 +82,7 @@ const Filters = union(Mode) {
 pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
-        .tag, .tag_name, .class_name => TreeWalker.FullExcludeSelf,
+        .tag, .tag_name, .class_name, .name, .all_elements, .links, .anchors => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .selected_options => TreeWalker.Children,
     };
     return struct {
@@ -83,16 +91,11 @@ pub fn NodeLive(comptime mode: Mode) type {
         _last_index: usize,
         _last_length: ?u32,
         _cached_version: usize,
-        // NodeLive doesn't use an arena directly, but the filter might have
-        // used it (to own the string). So we take ownership of the arena so that
-        // we can free it when we're freed.s
-        _arena: ?Allocator,
 
         const Self = @This();
 
-        pub fn init(arena: ?Allocator, root: *Node, filter: Filter, page: *Page) Self {
+        pub fn init(root: *Node, filter: Filter, page: *Page) Self {
             return .{
-                ._arena = arena,
                 ._last_index = 0,
                 ._last_length = null,
                 ._filter = filter,
@@ -212,10 +215,25 @@ pub fn NodeLive(comptime mode: Mode) type {
                     return std.mem.eql(u8, element_tag, self._filter.str());
                 },
                 .class_name => {
+                    if (self._filter.len == 0) {
+                        return false;
+                    }
+
                     const el = node.is(Element) orelse return false;
                     const class_attr = el.getAttributeSafe("class") orelse return false;
-                    return Selector.classAttributeContains(class_attr, self._filter);
+                    for (self._filter) |class_name| {
+                        if (!Selector.classAttributeContains(class_attr, class_name)) {
+                            return false;
+                        }
+                    }
+                    return true;
                 },
+                .name => {
+                    const el = node.is(Element) orelse return false;
+                    const name_attr = el.getAttributeSafe("name") orelse return false;
+                    return std.mem.eql(u8, name_attr, self._filter);
+                },
+                .all_elements => return node._type == .element,
                 .child_elements => return node._type == .element,
                 .child_tag => {
                     const el = node.is(Element) orelse return false;
@@ -226,6 +244,20 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const Option = Element.Html.Option;
                     const opt = el.is(Option) orelse return false;
                     return opt.getSelected();
+                },
+                .links => {
+                    // Links are <a> elements with href attribute (TODO: also <area> when implemented)
+                    const el = node.is(Element) orelse return false;
+                    const Anchor = Element.Html.Anchor;
+                    if (el.is(Anchor) == null) return false;
+                    return el.hasAttributeSafe("href");
+                },
+                .anchors => {
+                    // Anchors are <a> elements with name attribute
+                    const el = node.is(Element) orelse return false;
+                    const Anchor = Element.Html.Anchor;
+                    if (el.is(Anchor) == null) return false;
+                    return el.hasAttributeSafe("name");
                 },
             }
         }
@@ -249,9 +281,13 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .tag => HTMLCollection{ .data = .{ .tag = self } },
                 .tag_name => HTMLCollection{ .data = .{ .tag_name = self } },
                 .class_name => HTMLCollection{ .data = .{ .class_name = self } },
+                .name => HTMLCollection{ .data = .{ .name = self } },
+                .all_elements => HTMLCollection{ .data = .{ .all_elements = self } },
                 .child_elements => HTMLCollection{ .data = .{ .child_elements = self } },
                 .child_tag => HTMLCollection{ .data = .{ .child_tag = self } },
                 .selected_options => HTMLCollection{ .data = .{ .selected_options = self } },
+                .links => HTMLCollection{ .data = .{ .links = self } },
+                .anchors => HTMLCollection{ .data = .{ .anchors = self } },
             };
             return page._factory.create(collection);
         }

@@ -135,6 +135,11 @@ pub const List = struct {
         return entry._value.str();
     }
 
+    // meant for internal usage, where the name is known to be properly cased
+    pub fn hasSafe(self: *const List, name: []const u8) bool {
+        return self.getEntryWithNormalizedName(name) != null;
+    }
+
     pub fn getAttribute(self: *const List, name: []const u8, element: ?*Element, page: *Page) !?*Attribute {
         const entry = (try self.getEntry(name, page)) orelse return null;
         const gop = try page._attribute_lookup.getOrPut(page.arena, @intFromPtr(entry));
@@ -184,6 +189,7 @@ pub const List = struct {
             };
             try page.addElementId(parent, element, entry._value.str());
         }
+        page.domChanged();
         page.attributeChange(element, result.normalized, entry._value.str(), old_value);
         return entry;
     }
@@ -242,6 +248,7 @@ pub const List = struct {
             page.removeElementId(element, entry._value.str());
         }
 
+        page.domChanged();
         page.attributeRemove(element, result.normalized, old_value);
         _ = page._attribute_lookup.remove(@intFromPtr(entry));
         self._list.remove(&entry._node);

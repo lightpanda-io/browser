@@ -23,38 +23,39 @@ const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 
-pub const BR = @import("html/BR.zig");
-pub const HR = @import("html/HR.zig");
-pub const LI = @import("html/LI.zig");
-pub const OL = @import("html/OL.zig");
-pub const UL = @import("html/UL.zig");
-pub const Div = @import("html/Div.zig");
-pub const Html = @import("html/Html.zig");
-pub const Head = @import("html/Head.zig");
-pub const Meta = @import("html/Meta.zig");
-pub const Body = @import("html/Body.zig");
-pub const Link = @import("html/Link.zig");
-pub const Image = @import("html/Image.zig");
-pub const Input = @import("html/Input.zig");
-pub const Title = @import("html/Title.zig");
-pub const Style = @import("html/Style.zig");
-pub const Custom = @import("html/Custom.zig");
-pub const Script = @import("html/Script.zig");
 pub const Anchor = @import("html/Anchor.zig");
+pub const Body = @import("html/Body.zig");
+pub const BR = @import("html/BR.zig");
 pub const Button = @import("html/Button.zig");
+pub const Custom = @import("html/Custom.zig");
 pub const Data = @import("html/Data.zig");
 pub const Dialog = @import("html/Dialog.zig");
+pub const Div = @import("html/Div.zig");
+pub const Embed = @import("html/Embed.zig");
 pub const Form = @import("html/Form.zig");
-pub const Heading = @import("html/Heading.zig");
-pub const Unknown = @import("html/Unknown.zig");
 pub const Generic = @import("html/Generic.zig");
-pub const Template = @import("html/Template.zig");
-pub const TextArea = @import("html/TextArea.zig");
+pub const Head = @import("html/Head.zig");
+pub const Heading = @import("html/Heading.zig");
+pub const HR = @import("html/HR.zig");
+pub const Html = @import("html/Html.zig");
+pub const IFrame = @import("html/IFrame.zig");
+pub const Image = @import("html/Image.zig");
+pub const Input = @import("html/Input.zig");
+pub const LI = @import("html/LI.zig");
+pub const Link = @import("html/Link.zig");
+pub const Meta = @import("html/Meta.zig");
+pub const OL = @import("html/OL.zig");
+pub const Option = @import("html/Option.zig");
 pub const Paragraph = @import("html/Paragraph.zig");
+pub const Script = @import("html/Script.zig");
 pub const Select = @import("html/Select.zig");
 pub const Slot = @import("html/Slot.zig");
-pub const Option = @import("html/Option.zig");
-pub const IFrame = @import("html/IFrame.zig");
+pub const Style = @import("html/Style.zig");
+pub const Template = @import("html/Template.zig");
+pub const TextArea = @import("html/TextArea.zig");
+pub const Title = @import("html/Title.zig");
+pub const UL = @import("html/UL.zig");
+pub const Unknown = @import("html/Unknown.zig");
 
 const HtmlElement = @This();
 
@@ -76,6 +77,7 @@ pub const Type = union(enum) {
     data: *Data,
     dialog: *Dialog,
     div: *Div,
+    embed: *Embed,
     form: *Form,
     generic: *Generic,
     heading: *Heading,
@@ -120,6 +122,7 @@ pub fn className(self: *const HtmlElement) []const u8 {
     return switch (self._type) {
         .anchor => "[object HtmlAnchorElement]",
         .div => "[object HtmlDivElement]",
+        .embed => "[object HtmlEmbedElement]",
         .form => "[object HTMLFormElement]",
         .p => "[object HtmlParagraphElement]",
         .custom => "[object CUSTOM-TODO]",

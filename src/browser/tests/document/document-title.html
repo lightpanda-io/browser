@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<head id="the_head">
+  <script src="../testing.js"></script>
+</head>
+
+<body id=the_body>
+</body>
+
+<script id=title_initially_empty>
+  testing.expectEqual('', document.title);
+</script>
+
+<script id=title_set_without_existing>
+  document.title = 'New Title';
+  testing.expectEqual('New Title', document.title);
+
+  const titleElement = document.head.querySelector('title');
+  testing.expectEqual(true, titleElement !== null);
+  testing.expectEqual('New Title', titleElement.textContent);
+</script>
+
+<script id=title_update_existing>
+  document.title = 'Updated Title';
+  testing.expectEqual('Updated Title', document.title);
+
+  const titleElements = document.head.querySelectorAll('title');
+  testing.expectEqual(1, titleElements.length);
+  testing.expectEqual('Updated Title', titleElements[0].textContent);
+</script>
+
+<script id=title_set_empty>
+  document.title = '';
+  testing.expectEqual('', document.title);
+</script>

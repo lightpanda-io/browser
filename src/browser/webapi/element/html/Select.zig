@@ -185,7 +185,7 @@ pub fn setRequired(self: *Select, required: bool, page: *Page) !void {
 
 pub fn getOptions(self: *Select, page: *Page) !*collections.HTMLOptionsCollection {
     // For options, we use the child_tag mode to filter only <option> elements
-    const node_live = collections.NodeLive(.child_tag).init(null, self.asNode(), .option, page);
+    const node_live = collections.NodeLive(.child_tag).init(self.asNode(), .option, page);
     const html_collection = try node_live.runtimeGenericWrap(page);
 
     // Create and return HTMLOptionsCollection
@@ -207,7 +207,7 @@ pub fn getLength(self: *Select) u32 {
 }
 
 pub fn getSelectedOptions(self: *Select, page: *Page) !collections.NodeLive(.selected_options) {
-    return collections.NodeLive(.selected_options).init(null, self.asNode(), {}, page);
+    return collections.NodeLive(.selected_options).init(self.asNode(), {}, page);
 }
 
 pub fn getForm(self: *Select, page: *Page) ?*Form {

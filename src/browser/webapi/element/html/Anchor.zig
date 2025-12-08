@@ -31,6 +31,9 @@ _proto: *HtmlElement,
 pub fn asElement(self: *Anchor) *Element {
     return self._proto._proto;
 }
+pub fn asConstElement(self: *const Anchor) *const Element {
+    return self._proto._proto;
+}
 pub fn asNode(self: *Anchor) *Node {
     return self.asElement().asNode();
 }
@@ -193,6 +196,14 @@ pub fn setType(self: *Anchor, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe("type", value, page);
 }
 
+pub fn getName(self: *const Anchor) []const u8 {
+    return self.asConstElement().getAttributeSafe("name") orelse "";
+}
+
+pub fn setName(self: *Anchor, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("name", value, page);
+}
+
 pub fn getText(self: *Anchor, page: *Page) ![:0]const u8 {
     return self.asNode().getTextContentAlloc(page.call_arena);
 }
@@ -235,6 +246,7 @@ pub const JsApi = struct {
 
     pub const href = bridge.accessor(Anchor.getHref, Anchor.setHref, .{});
     pub const target = bridge.accessor(Anchor.getTarget, Anchor.setTarget, .{});
+    pub const name = bridge.accessor(Anchor.getName, Anchor.setName, .{});
     pub const origin = bridge.accessor(Anchor.getOrigin, null, .{});
     pub const host = bridge.accessor(Anchor.getHost, Anchor.setHost, .{});
     pub const hostname = bridge.accessor(Anchor.getHostname, Anchor.setHostname, .{});

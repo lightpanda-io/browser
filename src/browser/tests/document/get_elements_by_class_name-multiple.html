@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="div1" class="foo bar">Div 1</div>
+<div id="div2" class="bar foo">Div 2</div>
+<div id="div3" class="foo bar baz">Div 3</div>
+<div id="div4" class="foo">Div 4</div>
+<div id="div5" class="bar">Div 5</div>
+<div id="div6" class="baz foo bar">Div 6</div>
+
+<script id=getElementsByClassName_single>
+  {
+    const fooElements = document.getElementsByClassName('foo');
+    testing.expectEqual(5, fooElements.length);
+  }
+</script>
+
+<script id=getElementsByClassName_multiple>
+  {
+    // Should match elements that have BOTH foo AND bar
+    const fooBarElements = document.getElementsByClassName('foo bar');
+    testing.expectEqual(4, fooBarElements.length);
+
+    // Order shouldn't matter
+    const barFooElements = document.getElementsByClassName('bar foo');
+    testing.expectEqual(4, barFooElements.length);
+  }
+</script>
+
+<script id=getElementsByClassName_three>
+  {
+    // Should match elements that have ALL three classes
+    const threeClasses = document.getElementsByClassName('foo bar baz');
+    testing.expectEqual(2, threeClasses.length);
+  }
+</script>
+
+<script id=getElementsByClassName_whitespace>
+  {
+    // Multiple spaces, tabs, newlines should be treated as separators
+    const multiSpace = document.getElementsByClassName('foo  bar');
+    testing.expectEqual(4, multiSpace.length);
+
+    // Leading/trailing whitespace should be ignored
+    const withSpaces = document.getElementsByClassName('  foo bar  ');
+    testing.expectEqual(4, withSpaces.length);
+  }
+</script>

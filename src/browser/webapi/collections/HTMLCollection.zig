@@ -28,9 +28,13 @@ const Mode = enum {
     tag,
     tag_name,
     class_name,
+    name,
+    all_elements,
     child_elements,
     child_tag,
     selected_options,
+    links,
+    anchors,
 };
 
 const HTMLCollection = @This();
@@ -39,9 +43,13 @@ data: union(Mode) {
     tag: NodeLive(.tag),
     tag_name: NodeLive(.tag_name),
     class_name: NodeLive(.class_name),
+    name: NodeLive(.name),
+    all_elements: NodeLive(.all_elements),
     child_elements: NodeLive(.child_elements),
     child_tag: NodeLive(.child_tag),
     selected_options: NodeLive(.selected_options),
+    links: NodeLive(.links),
+    anchors: NodeLive(.anchors),
 },
 
 pub fn length(self: *HTMLCollection, page: *const Page) u32 {
@@ -69,9 +77,13 @@ pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
             .tag => |*impl| .{ .tag = impl._tw.clone() },
             .tag_name => |*impl| .{ .tag_name = impl._tw.clone() },
             .class_name => |*impl| .{ .class_name = impl._tw.clone() },
+            .name => |*impl| .{ .name = impl._tw.clone() },
+            .all_elements => |*impl| .{ .all_elements = impl._tw.clone() },
             .child_elements => |*impl| .{ .child_elements = impl._tw.clone() },
             .child_tag => |*impl| .{ .child_tag = impl._tw.clone() },
             .selected_options => |*impl| .{ .selected_options = impl._tw.clone() },
+            .links => |*impl| .{ .links = impl._tw.clone() },
+            .anchors => |*impl| .{ .anchors = impl._tw.clone() },
         },
     }, page);
 }
@@ -83,9 +95,13 @@ pub const Iterator = GenericIterator(struct {
         tag: TreeWalker.FullExcludeSelf,
         tag_name: TreeWalker.FullExcludeSelf,
         class_name: TreeWalker.FullExcludeSelf,
+        name: TreeWalker.FullExcludeSelf,
+        all_elements: TreeWalker.FullExcludeSelf,
         child_elements: TreeWalker.Children,
         child_tag: TreeWalker.Children,
         selected_options: TreeWalker.Children,
+        links: TreeWalker.FullExcludeSelf,
+        anchors: TreeWalker.FullExcludeSelf,
     },
 
     pub fn next(self: *@This(), _: *Page) ?*Element {
@@ -93,9 +109,13 @@ pub const Iterator = GenericIterator(struct {
             .tag => |*impl| impl.nextTw(&self.tw.tag),
             .tag_name => |*impl| impl.nextTw(&self.tw.tag_name),
             .class_name => |*impl| impl.nextTw(&self.tw.class_name),
+            .name => |*impl| impl.nextTw(&self.tw.name),
+            .all_elements => |*impl| impl.nextTw(&self.tw.all_elements),
             .child_elements => |*impl| impl.nextTw(&self.tw.child_elements),
             .child_tag => |*impl| impl.nextTw(&self.tw.child_tag),
             .selected_options => |*impl| impl.nextTw(&self.tw.selected_options),
+            .links => |*impl| impl.nextTw(&self.tw.links),
+            .anchors => |*impl| impl.nextTw(&self.tw.anchors),
         };
     }
 }, null);

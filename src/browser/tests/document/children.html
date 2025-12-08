@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<head>
+  <title>Test</title>
+</head>
+<body>
+  <div id="test">Content</div>
+</body>
+
+<script id=document_children_basic>
+  {
+    const children = document.children;
+    testing.expectEqual('HTMLCollection', children.constructor.name);
+    testing.expectEqual(1, children.length);
+    testing.expectEqual('HTML', children[0].tagName);
+    testing.expectEqual(document.documentElement, children[0]);
+  }
+</script>
+
+<script id=document_children_live>
+  {
+    const children = document.children;
+    const initialLength = children.length;
+
+    testing.expectEqual(1, initialLength);
+  }
+</script>

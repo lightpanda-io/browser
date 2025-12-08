@@ -25,7 +25,6 @@
   testing.expectEqual(true, newdoc.compatMode === document.compatMode);
   testing.expectEqual(true, newdoc.characterSet === document.characterSet);
   testing.expectEqual(true, newdoc.charset === document.charset);
-  testing.expectEqual(true, newdoc.contentType === document.contentType);
 
   testing.expectEqual('HTML', document.documentElement.tagName);
 
@@ -35,8 +34,8 @@
   testing.expectEqual('CSS1Compat', document.compatMode);
   testing.expectEqual('text/html', document.contentType);
 
-  testing.expectEqual('http://localhost:9582/src/tests/dom/document.html', document.documentURI);
-  testing.expectEqual('http://localhost:9582/src/tests/dom/document.html', document.URL);
+  testing.expectEqual('http://localhost:9589/dom/document.html', document.documentURI);
+  testing.expectEqual('http://localhost:9589/dom/document.html', document.URL);
 
   testing.expectEqual(document.body, document.activeElement);
 
@@ -61,7 +60,7 @@
   let byTagNameAll = document.getElementsByTagName('*');
   // If you add a script block (or change the HTML in any other way on this
   // page), this test will break. Adjust it accordingly.
-  testing.expectEqual(21, byTagNameAll.length);
+  testing.expectEqual(12, byTagNameAll.length);
   testing.expectEqual('html', byTagNameAll.item(0).localName);
   testing.expectEqual('SCRIPT', byTagNameAll.item(11).tagName);
 
@@ -170,21 +169,21 @@
 </script>
 
 <script id=createEvent>
-    const event = document.createEvent("Event");
+  const event = document.createEvent("Event");
 
-    testing.expectEqual(true, event instanceof Event);
-    testing.expectEqual("", event.type);
+  testing.expectEqual(true, event instanceof Event);
+  testing.expectEqual("", event.type);
 
-    const customEvent = document.createEvent("CustomEvent");
-    customEvent.initCustomEvent("hey", false, false);
+  const customEvent = document.createEvent("CustomEvent");
+  customEvent.initCustomEvent("hey", false, false);
 
-    testing.expectEqual(true, customEvent instanceof CustomEvent);
-    testing.expectEqual(true, customEvent instanceof Event);
+  testing.expectEqual(true, customEvent instanceof CustomEvent);
+  testing.expectEqual(true, customEvent instanceof Event);
 
-    testing.withError(
-        (err) => {
-            // TODO: Check the error type.
-        },
-        () => document.createEvent("InvalidType"),
-    );
+  testing.withError(
+      (err) => {
+          // TODO: Check the error type.
+      },
+      () => document.createEvent("InvalidType"),
+  );
 </script>

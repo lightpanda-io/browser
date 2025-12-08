@@ -12,7 +12,7 @@
   testing.expectEqual('Document', document.__proto__.__proto__.constructor.name);
   testing.expectEqual('body', document.body.localName);
 
-  testing.expectEqual('localhost:9582', document.domain);
+  testing.expectEqual('localhost', document.domain);
   testing.expectEqual('', document.referrer);
   testing.expectEqual('', document.title);
   testing.expectEqual('body', document.body.localName);

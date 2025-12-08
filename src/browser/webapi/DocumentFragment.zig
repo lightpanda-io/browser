@@ -94,7 +94,7 @@ pub fn querySelectorAll(self: *DocumentFragment, input: []const u8, page: *Page)
 }
 
 pub fn getChildren(self: *DocumentFragment, page: *Page) !collections.NodeLive(.child_elements) {
-    return collections.NodeLive(.child_elements).init(null, self.asNode(), {}, page);
+    return collections.NodeLive(.child_elements).init(self.asNode(), {}, page);
 }
 
 pub fn firstElementChild(self: *DocumentFragment) ?*Element {

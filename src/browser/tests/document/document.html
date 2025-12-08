@@ -40,3 +40,132 @@
   const emptyText = document.createTextNode('');
   testing.expectEqual('', emptyText.nodeValue);
 </script>
+
+<script id=document_metadata>
+  // Test document metadata properties on HTML document
+  testing.expectEqual('text/html', document.contentType);
+  testing.expectEqual('UTF-8', document.characterSet);
+  testing.expectEqual('UTF-8', document.charset);
+  testing.expectEqual('UTF-8', document.inputEncoding);
+  testing.expectEqual('CSS1Compat', document.compatMode);
+  testing.expectEqual(document.URL, document.documentURI);
+  testing.expectEqual('', document.referrer);
+  testing.expectEqual('127.0.0.1', document.domain);
+</script>
+
+<script id=programmatic_document_metadata>
+  // Test document metadata properties on programmatically created document
+  const doc = new Document();
+  testing.expectEqual('application/xml', doc.contentType);
+  testing.expectEqual('UTF-8', doc.characterSet);
+  testing.expectEqual('UTF-8', doc.charset);
+  testing.expectEqual('UTF-8', doc.inputEncoding);
+  testing.expectEqual('CSS1Compat', doc.compatMode);
+  testing.expectEqual('', doc.referrer);
+  // Programmatic document should have empty domain (no URL/origin)
+  testing.expectEqual('127.0.0.1', doc.domain);
+</script>
+
+<!-- Test anchors and links -->
+<a id="link1" href="/page1">Link 1</a>
+<a id="link2" href="/page2">Link 2</a>
+<a id="anchor1" name="section1">Anchor 1</a>
+<a id="anchor2" name="section2">Anchor 2</a>
+<a id="both" href="/page3" name="section3">Both href and name</a>
+<a id="no_attrs">No attributes</a>
+
+<script id=document_links>
+  {
+    // document.links should only include <a> elements with href attribute
+    const links = document.links;
+    testing.expectEqual('HTMLCollection', links.constructor.name);
+    testing.expectEqual(3, links.length);
+
+    // Should include link1, link2, and both
+    testing.expectEqual($('#link1'), links[0]);
+    testing.expectEqual($('#link2'), links[1]);
+    testing.expectEqual($('#both'), links[2]);
+
+    // Indexed access
+    testing.expectEqual($('#link1'), links.item(0));
+    testing.expectEqual($('#link2'), links.item(1));
+    testing.expectEqual($('#both'), links.item(2));
+    testing.expectEqual(null, links.item(3));
+  }
+</script>
+
+<script id=document_anchors>
+  {
+    // document.anchors should only include <a> elements with name attribute
+    const anchors = document.anchors;
+    testing.expectEqual('HTMLCollection', anchors.constructor.name);
+    testing.expectEqual(3, anchors.length);
+
+    // Should include anchor1, anchor2, and both
+    testing.expectEqual($('#anchor1'), anchors[0]);
+    testing.expectEqual($('#anchor2'), anchors[1]);
+    testing.expectEqual($('#both'), anchors[2]);
+
+    // Indexed access
+    testing.expectEqual($('#anchor1'), anchors.item(0));
+    testing.expectEqual($('#anchor2'), anchors.item(1));
+    testing.expectEqual($('#both'), anchors.item(2));
+    testing.expectEqual(null, anchors.item(3));
+  }
+</script>
+
+<script id=links_live_collection>
+  {
+    // Test that document.links is a live collection
+    const links = document.links;
+    const initialLength = links.length;
+
+    // Add a new link
+    const newLink = document.createElement('a');
+    newLink.href = '/new-page';
+    newLink.textContent = 'New Link';
+    document.body.appendChild(newLink);
+
+    testing.expectEqual(initialLength + 1, links.length);
+    testing.expectEqual(newLink, links[links.length - 1]);
+
+    // Remove href attribute - should no longer be in links
+    newLink.removeAttribute('href');
+    testing.expectEqual(initialLength, links.length);
+
+    // Add it back
+    newLink.href = '/another-page';
+    testing.expectEqual(initialLength + 1, links.length);
+
+    // Remove the element
+    newLink.remove();
+    testing.expectEqual(initialLength, links.length);
+  }
+</script>
+
+<script id=anchors_live_collection>
+  // Test that document.anchors is a live collection
+  const anchors = document.anchors;
+  const initialLength = anchors.length;
+
+  // Add a new anchor
+  const newAnchor = document.createElement('a');
+  newAnchor.name = 'new-section';
+  newAnchor.textContent = 'New Anchor';
+  document.body.appendChild(newAnchor);
+
+  testing.expectEqual(initialLength + 1, anchors.length);
+  testing.expectEqual(newAnchor, anchors[anchors.length - 1]);
+
+  // Remove name attribute - should no longer be in anchors
+  newAnchor.removeAttribute('name');
+  testing.expectEqual(initialLength, anchors.length);
+
+  // Add it back
+  newAnchor.name = 'another-section';
+  testing.expectEqual(initialLength + 1, anchors.length);
+
+  // Remove the element
+  newAnchor.remove();
+  testing.expectEqual(initialLength, anchors.length);
+</script>

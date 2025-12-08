@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<head>
+  <title>Test</title>
+</head>
+<body>
+  <div id="div1">
+    <span id="span1">Text</span>
+  </div>
+  <p id="p1">Paragraph</p>
+</body>
+
+<script id=getElementsByTagName_wildcard>
+  {
+    const allElements = document.getElementsByTagName('*');
+    testing.expectEqual('HTMLCollection', allElements.constructor.name);
+
+    // Should include: html, head, title, script (testing.js), body, div, span, p, script (this one)
+    // At least 9 elements
+    testing.expectEqual(true, allElements.length >= 9);
+
+    // Check some specific elements are included
+    let foundDiv = false;
+    let foundSpan = false;
+    let foundP = false;
+
+    for (let i = 0; i < allElements.length; i++) {
+      const el = allElements[i];
+      if (el.tagName === 'DIV') foundDiv = true;
+      if (el.tagName === 'SPAN') foundSpan = true;
+      if (el.tagName === 'P') foundP = true;
+    }
+
+    testing.expectEqual(true, foundDiv);
+    testing.expectEqual(true, foundSpan);
+    testing.expectEqual(true, foundP);
+  }
+</script>

@@ -21,6 +21,7 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const URL = @import("../URL.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
@@ -79,6 +80,29 @@ pub fn getURL(_: *const Document, page: *const Page) [:0]const u8 {
     return page.url;
 }
 
+pub fn getContentType(self: *const Document) []const u8 {
+    return switch (self._type) {
+        .html => "text/html",
+        .generic => "application/xml",
+    };
+}
+
+pub fn getCharacterSet(_: *const Document) []const u8 {
+    return "UTF-8";
+}
+
+pub fn getCompatMode(_: *const Document) []const u8 {
+    return "CSS1Compat";
+}
+
+pub fn getReferrer(_: *const Document) []const u8 {
+    return "";
+}
+
+pub fn getDomain(_: *const Document, page: *const Page) []const u8 {
+    return URL.getHostname(page.url);
+}
+
 const CreateElementOptions = struct {
     is: ?[]const u8 = null,
 };
@@ -109,6 +133,7 @@ pub fn getElementById(self: *const Document, id_: ?[]const u8) ?*Element {
 const GetElementsByTagNameResult = union(enum) {
     tag: collections.NodeLive(.tag),
     tag_name: collections.NodeLive(.tag_name),
+    all_elements: collections.NodeLive(.all_elements),
 };
 pub fn getElementsByTagName(self: *Document, tag_name: []const u8, page: *Page) !GetElementsByTagNameResult {
     if (tag_name.len > 256) {
@@ -116,23 +141,47 @@ pub fn getElementsByTagName(self: *Document, tag_name: []const u8, page: *Page) 
         return error.InvalidTagName;
     }
 
+    // Handle wildcard '*' - return all elements
+    if (std.mem.eql(u8, tag_name, "*")) {
+        return .{
+            .all_elements = collections.NodeLive(.all_elements).init(self.asNode(), {}, page),
+        };
+    }
+
     const lower = std.ascii.lowerString(&page.buf, tag_name);
     if (Node.Element.Tag.parseForMatch(lower)) |known| {
         // optimized for known tag names, comparis
         return .{
-            .tag = collections.NodeLive(.tag).init(null, self.asNode(), known, page),
+            .tag = collections.NodeLive(.tag).init(self.asNode(), known, page),
         };
     }
 
     const arena = page.arena;
     const filter = try String.init(arena, lower, .{});
-    return .{ .tag_name = collections.NodeLive(.tag_name).init(arena, self.asNode(), filter, page) };
+    return .{ .tag_name = collections.NodeLive(.tag_name).init(self.asNode(), filter, page) };
 }
 
 pub fn getElementsByClassName(self: *Document, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
     const arena = page.arena;
-    const filter = try arena.dupe(u8, class_name);
-    return collections.NodeLive(.class_name).init(arena, self.asNode(), filter, page);
+
+    // Parse space-separated class names
+    var class_names: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.tokenizeAny(u8, class_name, &std.ascii.whitespace);
+    while (it.next()) |name| {
+        try class_names.append(arena, try page.dupeString(name));
+    }
+
+    return collections.NodeLive(.class_name).init(self.asNode(), class_names.items, page);
+}
+
+pub fn getElementsByName(self: *Document, name: []const u8, page: *Page) !collections.NodeLive(.name) {
+    const arena = page.arena;
+    const filter = try arena.dupe(u8, name);
+    return collections.NodeLive(.name).init(self.asNode(), filter, page);
+}
+
+pub fn getChildren(self: *Document, page: *Page) !collections.NodeLive(.child_elements) {
+    return collections.NodeLive(.child_elements).init(self.asNode(), {}, page);
 }
 
 pub fn getDocumentElement(self: *Document) ?*Element {
@@ -285,11 +334,20 @@ pub const JsApi = struct {
     }
 
     pub const URL = bridge.accessor(Document.getURL, null, .{});
+    pub const documentURI = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
+    pub const children = bridge.accessor(Document.getChildren, null, .{});
     pub const readyState = bridge.accessor(Document.getReadyState, null, .{});
     pub const implementation = bridge.accessor(Document.getImplementation, null, .{});
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
+    pub const contentType = bridge.accessor(Document.getContentType, null, .{});
+    pub const characterSet = bridge.accessor(Document.getCharacterSet, null, .{});
+    pub const charset = bridge.accessor(Document.getCharacterSet, null, .{});
+    pub const inputEncoding = bridge.accessor(Document.getCharacterSet, null, .{});
+    pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
+    pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
+    pub const domain = bridge.accessor(Document.getDomain, null, .{});
     pub const createElement = bridge.function(Document.createElement, .{});
     pub const createElementNS = bridge.function(Document.createElementNS, .{});
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
@@ -304,6 +362,7 @@ pub const JsApi = struct {
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
+    pub const getElementsByName = bridge.function(Document.getElementsByName, .{});
     pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true });
     pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true });
 
