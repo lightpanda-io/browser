@@ -37,6 +37,7 @@ pub const Type = union(enum) {
     media_query_list: *@import("css/MediaQueryList.zig"),
     message_port: *@import("MessagePort.zig"),
     text_track_cue: *@import("media/TextTrackCue.zig"),
+    navigation: *@import("navigation/NavigationEventTarget.zig"),
 };
 
 pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {

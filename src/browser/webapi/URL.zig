@@ -33,6 +33,7 @@ _search_params: ?*URLSearchParams = null,
 
 // convenience
 pub const resolve = @import("../URL.zig").resolve;
+pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
 pub fn init(url: [:0]const u8, base_: ?[:0]const u8, page: *Page) !*URL {
     const url_is_absolute = @import("../URL.zig").isCompleteHTTPUrl(url);

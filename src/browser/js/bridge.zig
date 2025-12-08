@@ -567,6 +567,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/event/ErrorEvent.zig"),
     @import("../webapi/event/MessageEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
+    @import("../webapi/event/NavigationCurrentEntryChangeEvent.zig"),
     @import("../webapi/MessageChannel.zig"),
     @import("../webapi/MessagePort.zig"),
     @import("../webapi/media/MediaError.zig"),
@@ -599,4 +600,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/File.zig"),
     @import("../webapi/Screen.zig"),
     @import("../webapi/PerformanceObserver.zig"),
+    @import("../webapi/navigation/Navigation.zig"),
+    @import("../webapi/navigation/NavigationEventTarget.zig"),
+    @import("../webapi/navigation/NavigationHistoryEntry.zig"),
 });

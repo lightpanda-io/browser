@@ -268,6 +268,17 @@ pub fn getHost(raw: [:0]const u8) []const u8 {
     return authority[0..path_start];
 }
 
+// Returns true if these two URLs point to the same document.
+pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
+    if (!std.mem.eql(u8, getHost(first), getHost(second))) return false;
+    if (!std.mem.eql(u8, getPort(first), getPort(second))) return false;
+    if (!std.mem.eql(u8, getPathname(first), getPathname(second))) return false;
+    if (!std.mem.eql(u8, getSearch(first), getSearch(second))) return false;
+    if (!std.mem.eql(u8, getHash(first), getHash(second))) return false;
+
+    return true;
+}
+
 const KnownProtocol = enum {
     @"http:",
     @"https:",
@@ -285,6 +296,30 @@ test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(false, isCompleteHTTPUrl("../../about"));
     try testing.expectEqual(false, isCompleteHTTPUrl("about"));
 }
+
+// TODO: uncomment
+// test "URL: resolve regression (#1093)" {
+//     defer testing.reset();
+
+//     const Case = struct {
+//         base: []const u8,
+//         path: []const u8,
+//         expected: []const u8,
+//     };
+
+//     const cases = [_]Case{
+//         .{
+//             .base = "https://alas.aws.amazon.com/alas2.html",
+//             .path = "../static/bootstrap.min.css",
+//             .expected = "https://alas.aws.amazon.com/static/bootstrap.min.css",
+//         },
+//     };
+
+//     for (cases) |case| {
+//         const result = try resolve(testing.arena_allocator, case.path, case.base, .{});
+//         try testing.expectString(case.expected, result);
+//     }
+// }
 
 test "URL: resolve" {
     defer testing.reset();

@@ -206,7 +206,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
             .POST => "formSubmissionPost",
             else => unreachable,
         },
-        .address_bar => null,
+        .address_bar, .navigation => null,
     };
     if (reason_) |reason| {
         try cdp.sendEvent("Page.frameScheduledNavigation", .{

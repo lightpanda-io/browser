@@ -272,6 +272,27 @@ fn registerBackgroundTasks(self: *Page) !void {
 }
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
+    const session = self._session;
+
+    const resolved_url = try URL.resolve(
+        session.transfer_arena,
+        self.url,
+        request_url,
+        .{ .always_dupe = true },
+    );
+
+    // setting opts.force = true will force a page load.
+    // otherwise, we will need to ensure this is a true (not document) navigation.
+    if (!opts.force) {
+        // If we are navigating within the same document, just change URL.
+        if (URL.eqlDocument(self.url, resolved_url)) {
+            self.url = resolved_url;
+            // 3. change window.location
+            try session.navigation.updateEntries("", .{ .push = null }, self, true);
+            return;
+        }
+    }
+
     if (self._parse_state != .pre) {
         // it's possible for navigate to be called multiple times on the
         // same page (via CDP). We want to reset the page between each call.
@@ -492,6 +513,9 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
 
     var self: *Page = @ptrCast(@alignCast(ctx));
     self.clearTransferArena();
+
+    //We need to handle different navigation types differently.
+    try self._session.navigation.processNavigation(self);
 
     defer if (comptime IS_DEBUG) {
         log.debug(.page, "page.load.complete", .{ .url = self.url });
@@ -1868,6 +1892,7 @@ pub const NavigateReason = enum {
     form,
     script,
     history,
+    navigation,
 };
 
 pub const NavigateOpts = struct {
@@ -1876,6 +1901,7 @@ pub const NavigateOpts = struct {
     method: Http.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
+    force: bool = false,
 };
 
 const RequestCookieOpts = struct {

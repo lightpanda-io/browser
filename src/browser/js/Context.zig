@@ -515,7 +515,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             }
 
             if (T == js.Value) {
-                return value.value;
+                return value.js_val;
             }
 
             if (T == js.Promise) {
