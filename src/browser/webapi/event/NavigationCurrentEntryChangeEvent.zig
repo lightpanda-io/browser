@@ -42,8 +42,8 @@ pub fn getFrom(self: *NavigationCurrentEntryChangeEvent) *NavigationHistoryEntry
     return self._from;
 }
 
-pub fn getNavigationType(self: *const NavigationCurrentEntryChangeEvent) ?NavigationType {
-    return self._navigation_type;
+pub fn getNavigationType(self: *const NavigationCurrentEntryChangeEvent) ?[]const u8 {
+    return if (self._navigation_type) |nav_type| @tagName(nav_type) else null;
 }
 
 pub const JsApi = struct {
