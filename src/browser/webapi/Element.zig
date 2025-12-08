@@ -239,22 +239,7 @@ pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
             },
             .cdata => |c| switch (c._type) {
                 .comment => continue,
-                .text => {
-                    const data = c.getData();
-                    if (std.mem.trim(u8, data, &std.ascii.whitespace).len != 0) {
-                        // Trim all whitespaces except spaces.
-                        // TODO this is not the correct way to render text, this is
-                        // a temp approximation.
-                        const text = std.mem.trim(u8, data, &[_]u8{
-                            '\t',
-                            '\n',
-                            '\r',
-                            std.ascii.control_code.vt,
-                            std.ascii.control_code.ff,
-                        });
-                        try writer.writeAll(text);
-                    }
-                },
+                .text => try c.render(writer, .{}),
             },
             .document => {},
             .document_type => {},
