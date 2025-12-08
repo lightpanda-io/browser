@@ -68,9 +68,11 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
         return std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
     }
 
-    var normalized_base: []const u8 = base;
-    if (std.mem.lastIndexOfScalar(u8, normalized_base[authority_start..], '/')) |pos| {
-        normalized_base = normalized_base[0 .. pos + authority_start];
+    var normalized_base: []const u8 = base[0..path_start];
+    if (path_start < base.len) {
+        if (std.mem.lastIndexOfScalar(u8, base[path_start + 1 ..], '/')) |pos| {
+            normalized_base = base[0 .. path_start + 1 + pos];
+        }
     }
 
     // trailing space so that we always have space to append the null terminator
@@ -297,29 +299,28 @@ test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(false, isCompleteHTTPUrl("about"));
 }
 
-// TODO: uncomment
-// test "URL: resolve regression (#1093)" {
-//     defer testing.reset();
+test "URL: resolve regression (#1093)" {
+    defer testing.reset();
 
-//     const Case = struct {
-//         base: []const u8,
-//         path: []const u8,
-//         expected: []const u8,
-//     };
+    const Case = struct {
+        base: [:0]const u8,
+        path: [:0]const u8,
+        expected: [:0]const u8,
+    };
 
-//     const cases = [_]Case{
-//         .{
-//             .base = "https://alas.aws.amazon.com/alas2.html",
-//             .path = "../static/bootstrap.min.css",
-//             .expected = "https://alas.aws.amazon.com/static/bootstrap.min.css",
-//         },
-//     };
+    const cases = [_]Case{
+        .{
+            .base = "https://alas.aws.amazon.com/alas2.html",
+            .path = "../static/bootstrap.min.css",
+            .expected = "https://alas.aws.amazon.com/static/bootstrap.min.css",
+        },
+    };
 
-//     for (cases) |case| {
-//         const result = try resolve(testing.arena_allocator, case.path, case.base, .{});
-//         try testing.expectString(case.expected, result);
-//     }
-// }
+    for (cases) |case| {
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
 
 test "URL: resolve" {
     defer testing.reset();
