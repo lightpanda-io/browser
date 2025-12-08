@@ -422,6 +422,9 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
+    self._session.browser.runMicrotasks();
+    self._session.browser.runMessageLoop();
+
     // dispatch window.load event
     const event = try Event.init("load", .{}, self);
     // this event is weird, it's dispatched directly on the window, but
