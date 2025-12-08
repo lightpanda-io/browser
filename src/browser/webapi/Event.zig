@@ -57,6 +57,7 @@ pub const Type = union(enum) {
     progress_event: *@import("event/ProgressEvent.zig"),
     composition_event: *@import("event/CompositionEvent.zig"),
     navigation_current_entry_change_event: *@import("event/NavigationCurrentEntryChangeEvent.zig"),
+    page_transition_event: *@import("event/PageTransitionEvent.zig"),
 };
 
 const Options = struct {

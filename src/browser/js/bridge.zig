@@ -568,6 +568,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/event/MessageEvent.zig"),
     @import("../webapi/event/ProgressEvent.zig"),
     @import("../webapi/event/NavigationCurrentEntryChangeEvent.zig"),
+    @import("../webapi/event/PageTransitionEvent.zig"),
     @import("../webapi/MessageChannel.zig"),
     @import("../webapi/MessagePort.zig"),
     @import("../webapi/media/MediaError.zig"),

@@ -329,7 +329,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !Navigation
     const entry = self.getCurrentEntry();
     if (opts.state) |state| {
         const previous = entry;
-        entry.state = .{ .source = .navigation, .value = state.toJson(arena) catch return error.DataClone };
+        entry._state = .{ .source = .navigation, .value = state.toJson(arena) catch return error.DataClone };
 
         const event = try NavigationCurrentEntryChangeEvent.init(
             "currententrychange",

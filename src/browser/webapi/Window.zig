@@ -55,6 +55,7 @@ _performance: Performance,
 _history: History,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function = null,
+_on_pageshow: ?js.Function = null,
 _on_error: ?js.Function = null, // TODO: invoke on error?
 _on_unhandled_rejection: ?js.Function = null, // TODO: invoke on error
 _location: *Location,
@@ -135,6 +136,18 @@ pub fn setOnLoad(self: *Window, cb_: ?js.Function) !void {
         self._on_load = cb;
     } else {
         self._on_load = null;
+    }
+}
+
+pub fn getOnPageShow(self: *const Window) ?js.Function {
+    return self._on_pageshow;
+}
+
+pub fn setOnPageShow(self: *Window, cb_: ?js.Function) !void {
+    if (cb_) |cb| {
+        self._on_pageshow = cb;
+    } else {
+        self._on_pageshow = null;
     }
 }
 
@@ -497,6 +510,7 @@ pub const JsApi = struct {
     pub const CSS = bridge.accessor(Window.getCSS, null, .{ .cache = "CSS" });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
+    pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.getOnError, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
     pub const fetch = bridge.function(Window.fetch, .{});

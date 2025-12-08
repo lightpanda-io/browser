@@ -58,6 +58,7 @@ const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const storage = @import("webapi/storage/storage.zig");
+const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
@@ -435,6 +436,14 @@ fn _documentIsComplete(self: *Page) !void {
         event,
         self.window._on_load,
         .{ .inject_target = false, .context = "page load" },
+    );
+
+    const pageshow_event = try PageTransitionEvent.init("pageshow", .{}, self);
+    try self._event_manager.dispatchWithFunction(
+        self.window.asEventTarget(),
+        pageshow_event.asEvent(),
+        self.window._on_pageshow,
+        .{ .context = "page show" },
     );
 }
 
