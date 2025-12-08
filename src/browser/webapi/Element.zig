@@ -265,6 +265,9 @@ fn _getInnerText(self: *Element, writer: *std.Io.Writer, state: *innerTextState)
                     // if we had a pre space, trim left next one.
                     state.trim_left = state.pre_w;
                 },
+                // CDATA sections should not be used within HTML. They are
+                // considered comments and are not displayed.
+                .cdata_section => {},
             },
             .document => {},
             .document_type => {},
