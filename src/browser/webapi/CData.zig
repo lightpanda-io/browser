@@ -71,7 +71,8 @@ pub const RenderOpts = struct {
 };
 // Replace successives whitespaces with one withespace.
 // Trims left and right according to the options.
-pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !void {
+// Returns true if the string ends with a trimmed whitespace.
+pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !bool {
     var start: usize = 0;
     var prev_w: ?bool = null;
     var is_w: bool = undefined;
@@ -110,11 +111,15 @@ pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !voi
         // If the string contains only whitespaces, don't write it.
         if (start > 0 and opts.trim_right == false) {
             try writer.writeByte(' ');
+        } else {
+            return true;
         }
     } else {
         // last chunk is non whitespaces.
         try writer.writeAll(s[start..]);
     }
+
+    return false;
 }
 
 pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
@@ -288,19 +293,20 @@ test "WebApi: CData.render" {
     const TestCase = struct {
         value: []const u8,
         expected: []const u8,
+        result: bool = false,
         opts: RenderOpts = .{},
     };
 
     const test_cases = [_]TestCase{
-        .{ .value = "   ", .expected = "" },
-        .{ .value = "   ", .expected = "", .opts = .{ .trim_left = false, .trim_right = false } },
+        .{ .value = "   ", .expected = "", .result = true },
+        .{ .value = "   ", .expected = "", .opts = .{ .trim_left = false, .trim_right = false }, .result = true },
         .{ .value = "foo bar", .expected = "foo bar" },
         .{ .value = "foo  bar", .expected = "foo bar" },
         .{ .value = "  foo bar", .expected = "foo bar" },
-        .{ .value = "foo bar  ", .expected = "foo bar" },
-        .{ .value = "  foo  bar  ", .expected = "foo bar" },
+        .{ .value = "foo bar  ", .expected = "foo bar", .result = true },
+        .{ .value = "  foo  bar  ", .expected = "foo bar", .result = true },
         .{ .value = "foo\n\tbar", .expected = "foo bar" },
-        .{ .value = "\tfoo bar   baz   \t\n yeah\r\n", .expected = "foo bar baz yeah" },
+        .{ .value = "\tfoo bar   baz   \t\n yeah\r\n", .expected = "foo bar baz yeah", .result = true },
         .{ .value = "  foo bar", .expected = " foo bar", .opts = .{ .trim_left = false } },
         .{ .value = "foo bar  ", .expected = "foo bar ", .opts = .{ .trim_right = false } },
         .{ .value = "  foo bar  ", .expected = " foo bar ", .opts = .{ .trim_left = false, .trim_right = false } },
@@ -317,8 +323,9 @@ test "WebApi: CData.render" {
             ._data = test_case.value,
         };
 
-        try cdata.render(&buffer.writer, test_case.opts);
+        const result = try cdata.render(&buffer.writer, test_case.opts);
 
         try std.testing.expectEqualStrings(test_case.expected, buffer.written());
+        try std.testing.expect(result == test_case.result);
     }
 }

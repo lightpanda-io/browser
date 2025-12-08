@@ -7,6 +7,9 @@
   This is a <br>
   text
 </div>
+<p id=d3><span>Hello</span> <span>World</span></p>
+<p id=d4><span>Hello</span>
+  <span>World</span></p>
 
 <script id=innerHTML>
   const d1 = $('#d1');
@@ -170,7 +173,7 @@
   testing.expectEqual('new content', d1.innerText);
   testing.expectEqual(null, $('#link2'));
 
-  // TODO innerText is not rendered correctly for now.
-  //testing.expectEqual("This is a\ntext", d2.innerText);
-  testing.expectEqual(" This is a \n text ", d2.innerText);
+  testing.expectEqual("This is a\ntext", d2.innerText);
+  testing.expectEqual("Hello World", $('#d3').innerText);
+  testing.expectEqual("Hello World", $('#d4').innerText);
 </script>
