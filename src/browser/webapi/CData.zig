@@ -60,6 +60,58 @@ pub fn getData(self: *const CData) []const u8 {
     return self._data;
 }
 
+pub const RenderOpts = struct {
+    trim_left: bool = true,
+    trim_right: bool = true,
+};
+// Replace successives whitespaces with one withespace.
+// Trims left and right according to the options.
+pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !void {
+    var start: usize = 0;
+    var prev_w: ?bool = null;
+    var is_w: bool = undefined;
+    const s = self._data;
+
+    for (s, 0..) |c, i| {
+        is_w = std.ascii.isWhitespace(c);
+
+        // Detect the first char type.
+        if (prev_w == null) {
+            prev_w = is_w;
+        }
+        // The current char is the same kind of char, the chunk continues.
+        if (prev_w.? == is_w) {
+            continue;
+        }
+
+        // Starting here, the chunk changed.
+        if (is_w) {
+            // We have a chunk of non-whitespaces, we write it as it.
+            try writer.writeAll(s[start..i]);
+        } else {
+            // We have a chunk of whitespaces, replace with one space,
+            // depending the position.
+            if (start > 0 or !opts.trim_left) {
+                try writer.writeByte(' ');
+            }
+        }
+        // Start the new chunk.
+        prev_w = is_w;
+        start = i;
+    }
+    // Write the reminder chunk.
+    if (is_w) {
+        // Last chunk is whitespaces.
+        // If the string contains only whitespaces, don't write it.
+        if (start > 0 and opts.trim_right == false) {
+            try writer.writeByte(' ');
+        }
+    } else {
+        // last chunk is non whitespaces.
+        try writer.writeAll(s[start..]);
+    }
+}
+
 pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
     const old_value = self._data;
 
@@ -222,4 +274,45 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: CData" {
     try testing.htmlRunner("cdata", .{});
+}
+
+test "WebApi: CData.render" {
+    const allocator = std.testing.allocator;
+
+    const TestCase = struct {
+        value: []const u8,
+        expected: []const u8,
+        opts: RenderOpts = .{},
+    };
+
+    const test_cases = [_]TestCase{
+        .{ .value = "   ", .expected = "" },
+        .{ .value = "   ", .expected = "", .opts = .{ .trim_left = false, .trim_right = false } },
+        .{ .value = "foo bar", .expected = "foo bar" },
+        .{ .value = "foo  bar", .expected = "foo bar" },
+        .{ .value = "  foo bar", .expected = "foo bar" },
+        .{ .value = "foo bar  ", .expected = "foo bar" },
+        .{ .value = "  foo  bar  ", .expected = "foo bar" },
+        .{ .value = "foo\n\tbar", .expected = "foo bar" },
+        .{ .value = "\tfoo bar   baz   \t\n yeah\r\n", .expected = "foo bar baz yeah" },
+        .{ .value = "  foo bar", .expected = " foo bar", .opts = .{ .trim_left = false } },
+        .{ .value = "foo bar  ", .expected = "foo bar ", .opts = .{ .trim_right = false } },
+        .{ .value = "  foo bar  ", .expected = " foo bar ", .opts = .{ .trim_left = false, .trim_right = false } },
+    };
+
+    var buffer = std.io.Writer.Allocating.init(allocator);
+    defer buffer.deinit();
+    for (test_cases) |test_case| {
+        buffer.clearRetainingCapacity();
+
+        const cdata = CData{
+            ._type = .{ .text = undefined },
+            ._proto = undefined,
+            ._data = test_case.value,
+        };
+
+        try cdata.render(&buffer.writer, test_case.opts);
+
+        try std.testing.expectEqualStrings(test_case.expected, buffer.written());
+    }
 }

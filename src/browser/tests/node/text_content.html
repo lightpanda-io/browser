@@ -1,6 +1,12 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 <div id=id1>d1 <p>hello</p></div>
+<div id=id2>
+  <style>h1 { font-size: 1em; }</style>
+  <!-- this is a comment -->
+  This is a <br>
+  text
+</div>
 
 <script id=element>
   const div = $('#id1');
@@ -8,6 +14,9 @@
 
   div.textContent = 'world <p>!</p>';
   testing.expectEqual('world <p>!</p>', div.textContent);
+
+  const div2 = $('#id2');
+  testing.expectEqual("\n  h1 { font-size: 1em; }\n  \n  This is a \n  text\n", div2.textContent);
 </script>
 
 <script id=document>
@@ -28,8 +37,8 @@
   const attr = div.getAttributeNode('id');
   testing.expectEqual('id1', attr.value);
   testing.expectEqual('id1', attr.textContent);
-  attr.textContent = 'id2';
-  testing.expectEqual('id2', attr.value);
-  testing.expectEqual('id2', attr.textContent);
-  testing.expectEqual(div, $('#id2'));
+  attr.textContent = 'attr2';
+  testing.expectEqual('attr2', attr.value);
+  testing.expectEqual('attr2', attr.textContent);
+  testing.expectEqual(div, $('#attr2'));
 </script>
