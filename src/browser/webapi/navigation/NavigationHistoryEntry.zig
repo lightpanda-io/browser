@@ -60,7 +60,7 @@ pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {
 
 pub const StateReturn = union(enum) { value: ?js.Value, undefined: void };
 
-pub fn state(self: *const NavigationHistoryEntry, page: *Page) !StateReturn {
+pub fn getState(self: *const NavigationHistoryEntry, page: *Page) !StateReturn {
     if (self._state.source == .navigation) {
         if (self._state.value) |value| {
             return .{ .value = try js.Value.fromJson(page.js, value) };
@@ -84,5 +84,5 @@ pub const JsApi = struct {
     pub const key = bridge.accessor(NavigationHistoryEntry.key, null, .{});
     pub const sameDocument = bridge.accessor(NavigationHistoryEntry.sameDocument, null, .{});
     pub const url = bridge.accessor(NavigationHistoryEntry.url, null, .{});
-    pub const state = bridge.accessor(NavigationHistoryEntry.state, null, .{});
+    pub const getState = bridge.function(NavigationHistoryEntry.getState, .{});
 };
