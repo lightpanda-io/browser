@@ -34,7 +34,6 @@ const Mime = @import("Mime.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
 const Scheduler = @import("Scheduler.zig");
-const History = @import("webapi/History.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 
@@ -211,7 +210,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
         self.window = try self._factory.eventTarget(Window{
             ._document = self.document,
             ._storage_bucket = storage_bucket,
-            ._history = History.init(self),
             ._performance = Performance.init(),
             ._proto = undefined,
             ._location = &default_location,
@@ -1902,6 +1900,12 @@ const IdleNotification = union(enum) {
         return false;
     }
 };
+
+pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
+    const URLRaw = @import("URL.zig");
+    const current_origin = (try URLRaw.getOrigin(self.arena, self.url)) orelse return false;
+    return std.mem.startsWith(u8, url, current_origin);
+}
 
 pub const NavigateReason = enum {
     anchor,

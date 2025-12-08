@@ -52,10 +52,10 @@ _console: Console = .init,
 _navigator: Navigator = .init,
 _screen: Screen = .init,
 _performance: Performance,
-_history: History,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function = null,
 _on_pageshow: ?js.Function = null,
+_on_popstate: ?js.Function = null,
 _on_error: ?js.Function = null, // TODO: invoke on error?
 _on_unhandled_rejection: ?js.Function = null, // TODO: invoke on error
 _location: *Location,
@@ -115,8 +115,8 @@ pub fn getLocation(self: *const Window) *Location {
     return self._location;
 }
 
-pub fn getHistory(self: *Window) *History {
-    return &self._history;
+pub fn getHistory(_: *Window, page: *Page) *History {
+    return &page._session.history;
 }
 
 pub fn getNavigation(_: *Window, page: *Page) *Navigation {
@@ -148,6 +148,18 @@ pub fn setOnPageShow(self: *Window, cb_: ?js.Function) !void {
         self._on_pageshow = cb;
     } else {
         self._on_pageshow = null;
+    }
+}
+
+pub fn getOnPopState(self: *const Window) ?js.Function {
+    return self._on_popstate;
+}
+
+pub fn setOnPopState(self: *Window, cb_: ?js.Function) !void {
+    if (cb_) |cb| {
+        self._on_popstate = cb;
+    } else {
+        self._on_popstate = null;
     }
 }
 
@@ -504,13 +516,14 @@ pub const JsApi = struct {
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
     pub const location = bridge.accessor(Window.getLocation, null, .{ .cache = "location" });
-    pub const history = bridge.accessor(Window.getHistory, null, .{ .cache = "history" });
+    pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });
     pub const CSS = bridge.accessor(Window.getCSS, null, .{ .cache = "CSS" });
     pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
+    pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.getOnError, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
     pub const fetch = bridge.function(Window.fetch, .{});

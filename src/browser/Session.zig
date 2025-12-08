@@ -23,6 +23,7 @@ const log = @import("../log.zig");
 const js = @import("js/js.zig");
 const storage = @import("webapi/storage/storage.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
+const History = @import("webapi/History.zig");
 
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
@@ -55,6 +56,7 @@ executor: js.ExecutionWorld,
 cookie_jar: storage.Cookie.Jar,
 storage_shed: storage.Shed,
 
+history: History,
 navigation: Navigation,
 
 page: ?*Page = null,
@@ -80,6 +82,7 @@ pub fn init(self: *Session, browser: *Browser) !void {
         .arena = session_allocator,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
         .navigation = Navigation.init(session_allocator),
+        .history = .{},
         .transfer_arena = browser.transfer_arena.allocator(),
     };
 }
