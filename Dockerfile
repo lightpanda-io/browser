@@ -1,7 +1,6 @@
 FROM debian:stable-slim
 
 ARG MINISIG=0.12
-ARG ZIG=0.15.2
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG V8=14.0.365.4
 ARG ZIG_V8=v0.1.34
@@ -17,24 +16,24 @@ RUN apt-get update -yq && \
 
 # install minisig
 RUN curl --fail -L -O https://github.com/jedisct1/minisign/releases/download/${MINISIG}/minisign-${MINISIG}-linux.tar.gz && \
-    tar xvzf minisign-${MINISIG}-linux.tar.gz
-
-# install zig
-RUN case $TARGETPLATFORM in \
-    "linux/arm64") ARCH="aarch64" ;; \
-    *) ARCH="x86_64" ;; \
-    esac && \
-    curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-${ARCH}-linux-${ZIG}.tar.xz && \
-    curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-${ARCH}-linux-${ZIG}.tar.xz.minisig && \
-    minisign-linux/${ARCH}/minisign -Vm zig-${ARCH}-linux-${ZIG}.tar.xz -P ${ZIG_MINISIG} && \
-    tar xvf zig-${ARCH}-linux-${ZIG}.tar.xz && \
-    mv zig-${ARCH}-linux-${ZIG} /usr/local/lib && \
-    ln -s /usr/local/lib/zig-${ARCH}-linux-${ZIG}/zig /usr/local/bin/zig
+    tar xvzf minisign-${MINISIG}-linux.tar.gz -C /
 
 # clone lightpanda
 RUN git clone https://github.com/lightpanda-io/browser.git
-
 WORKDIR /browser
+
+# install zig
+RUN ZIG=$(grep '\.minimum_zig_version = "' "build.zig.zon" | cut -d'"' -f2) && \
+    case $TARGETPLATFORM in \
+      "linux/arm64") ARCH="aarch64" ;; \
+      *) ARCH="x86_64" ;; \
+    esac && \
+    curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-${ARCH}-linux-${ZIG}.tar.xz && \
+    curl --fail -L -O https://ziglang.org/download/${ZIG}/zig-${ARCH}-linux-${ZIG}.tar.xz.minisig && \
+    /minisign-linux/${ARCH}/minisign -Vm zig-${ARCH}-linux-${ZIG}.tar.xz -P ${ZIG_MINISIG} && \
+    tar xvf zig-${ARCH}-linux-${ZIG}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG} /usr/local/lib && \
+    ln -s /usr/local/lib/zig-${ARCH}-linux-${ZIG}/zig /usr/local/bin/zig
 
 # install deps
 RUN git submodule init && \

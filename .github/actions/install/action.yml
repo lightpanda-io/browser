@@ -2,10 +2,6 @@ name: "Browsercore install"
 description: "Install deps for the project browsercore"
 
 inputs:
-  zig:
-    description: 'Zig version to install'
-    required: false
-    default: '0.15.2'
   arch:
     description: 'CPU arch used to select the v8 lib'
     required: false
@@ -38,9 +34,8 @@ runs:
         sudo apt-get update
         sudo apt-get install -y wget xz-utils python3 ca-certificates git pkg-config libglib2.0-dev gperf libexpat1-dev cmake clang
 
+    # Zig version used from the `minimum_zig_version` field in build.zig.zon
     - uses: mlugg/setup-zig@v2
-      with:
-        version: ${{ inputs.zig }}
 
     - name: Cache v8
       id: cache-v8

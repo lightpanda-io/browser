@@ -47,18 +47,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-dev run run-release shell test bench download-zig wpt data
-.PHONY: end2end
-
-zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/build.zig" | cut -d'"' -f2)
-
-## Download the zig recommended version
-download-zig:
-	$(eval url = "https://ziglang.org/download/$(zig_version)/zig-$(OS)-$(ARCH)-$(zig_version).tar.xz")
-	$(eval dest = "/tmp/zig-$(OS)-$(ARCH)-$(zig_version).tar.xz")
-	@printf "\e[36mDownload zig version $(zig_version)...\e[0m\n"
-	@curl -o "$(dest)" -L "$(url)" || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
-	@printf "\e[33mDownloaded $(dest)\e[0m\n"
+.PHONY: build build-dev run run-release shell test bench wpt data end2end
 
 ## Build in release-safe mode
 build:
