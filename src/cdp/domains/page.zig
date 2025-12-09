@@ -19,6 +19,7 @@
 const std = @import("std");
 const Page = @import("../../browser/Page.zig");
 const Notification = @import("../../Notification.zig");
+const timestampF = @import("../../datetime.zig").timestamp;
 
 const Allocator = std.mem.Allocator;
 
@@ -47,7 +48,7 @@ pub fn processMessage(cmd: anytype) !void {
 const Frame = struct {
     id: []const u8,
     loaderId: []const u8,
-    url: []const u8,
+    url: [:0]const u8,
     domainAndRegistry: []const u8 = "",
     securityOrigin: []const u8,
     mimeType: []const u8 = "text/html",
@@ -82,11 +83,36 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    if (params.enabled) {
-        try bc.lifecycleEventsEnable();
-    } else {
+
+    if (params.enabled == false) {
         bc.lifecycleEventsDisable();
+        return cmd.sendResult(null, .{});
     }
+
+    // Enable lifecycle events.
+    try bc.lifecycleEventsEnable();
+
+    // When we enable lifecycle events, we must dispatch events for all
+    // attached targets.
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    if (page._load_state == .complete) {
+        const now = timestampF(.monotonic);
+        const http_client = page._session.browser.http_client;
+
+        try sendPageLifecycle(bc, "DOMContentLoaded", now);
+        try sendPageLifecycle(bc, "load", now);
+
+        const http_active = http_client.active;
+        const total_network_activity = http_active + http_client.intercepted;
+        if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
+            try sendPageLifecycle(bc, "networkAlmostIdle", now);
+        }
+        if (page._notified_network_idle.check(total_network_activity == 0)) {
+            try sendPageLifecycle(bc, "networkIdle", now);
+        }
+    }
+
     return cmd.sendResult(null, .{});
 }
 

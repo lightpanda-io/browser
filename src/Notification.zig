@@ -109,13 +109,13 @@ pub const PageRemove = struct {};
 
 pub const PageNavigate = struct {
     timestamp: u64,
-    url: []const u8,
+    url: [:0]const u8,
     opts: Page.NavigateOpts,
 };
 
 pub const PageNavigated = struct {
     timestamp: u64,
-    url: []const u8,
+    url: [:0]const u8,
 };
 
 pub const PageNetworkIdle = struct {

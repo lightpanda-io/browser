@@ -109,7 +109,7 @@ fn disposeBrowserContext(cmd: anytype) !void {
 
 fn createTarget(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-        // url: []const u8,
+        url: [:0]const u8 = "about:blank",
         // width: ?u64 = null,
         // height: ?u64 = null,
         browserContextId: ?[]const u8 = null,
@@ -168,7 +168,7 @@ fn createTarget(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .attached = false,
             .targetId = target_id,
-            .title = "about:blank",
+            .title = params.url,
             .browserContextId = bc.id,
             .url = "about:blank",
         },
@@ -178,6 +178,10 @@ fn createTarget(cmd: anytype) !void {
     if (cmd.cdp.target_auto_attach) {
         try doAttachtoTarget(cmd, target_id);
     }
+
+    try page.navigate(params.url, .{
+        .reason = .address_bar,
+    });
 
     try cmd.sendResult(.{
         .targetId = target_id,
@@ -518,7 +522,7 @@ test "cdp.target: createTarget" {
     {
         var ctx = testing.context();
         defer ctx.deinit();
-        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about/blank" } });
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
 
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
@@ -530,7 +534,7 @@ test "cdp.target: createTarget" {
         defer ctx.deinit();
         // active auto attach to get the Target.attachedToTarget event.
         try ctx.processMessage(.{ .id = 9, .method = "Target.setAutoAttach", .params = .{ .autoAttach = true, .waitForDebuggerOnStart = false } });
-        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about/blank" } });
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .url = "about:blank" } });
 
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
