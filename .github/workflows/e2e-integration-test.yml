@@ -1,0 +1,68 @@
+name: e2e-integration-test
+
+env:
+  LIGHTPANDA_DISABLE_TELEMETRY: true
+
+on:
+  schedule:
+    - cron: "4 4 * * *"
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  zig-build-release:
+    name: zig build release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Don't run the CI with draft PR.
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          submodules: recursive
+
+      - uses: ./.github/actions/install
+
+      - name: zig build release
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-build-release
+          path: |
+            zig-out/bin/lightpanda
+          retention-days: 1
+
+  demo-scripts:
+    name: demo-integration-scripts
+    needs: zig-build-release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: npm install
+
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - name: run end to end integration tests
+        run: |
+          ./lightpanda serve & echo $! > LPD.pid
+          go run integration/main.go
+          kill `cat LPD.pid`
