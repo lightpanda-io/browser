@@ -38,30 +38,15 @@ pub const NavigationKind = union(NavigationType) {
     replace: ?[]const u8,
     traverse: usize,
     reload,
+
+    pub fn toNavigationType(self: NavigationKind) NavigationType {
+        return std.meta.activeTag(self);
+    }
 };
 
 pub const NavigationState = struct {
     source: enum { history, navigation },
     value: ?[]const u8,
-};
-
-// https://developer.mozilla.org/en-US/docs/Web/API/NavigationActivation
-pub const NavigationActivation = struct {
-    entry: NavigationHistoryEntry,
-    from: ?NavigationHistoryEntry = null,
-    type: NavigationType,
-
-    pub fn get_entry(self: *const NavigationActivation) NavigationHistoryEntry {
-        return self.entry;
-    }
-
-    pub fn get_from(self: *const NavigationActivation) ?NavigationHistoryEntry {
-        return self.from;
-    }
-
-    pub fn get_navigationType(self: *const NavigationActivation) NavigationType {
-        return self.type;
-    }
 };
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationTransition

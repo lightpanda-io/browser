@@ -29,10 +29,11 @@ const EventTarget = @import("../EventTarget.zig");
 const Navigation = @This();
 
 const NavigationKind = @import("root.zig").NavigationKind;
-const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
+const NavigationActivation = @import("NavigationActivation.zig");
 const NavigationTransition = @import("root.zig").NavigationTransition;
 const NavigationState = @import("root.zig").NavigationState;
 
+const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
 const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEntryChangeEvent.zig");
 const NavigationEventTarget = @import("NavigationEventTarget.zig");
 
@@ -44,6 +45,7 @@ _index: usize = 0,
 // Need to be stable pointers, because Events can reference entries.
 _entries: std.ArrayList(*NavigationHistoryEntry) = .empty,
 _next_entry_id: usize = 0,
+_activation: ?NavigationActivation = null,
 
 pub fn init(arena: std.mem.Allocator) Navigation {
     return Navigation{ ._arena = arena };
@@ -63,6 +65,10 @@ pub fn onNewPage(self: *Navigation, page: *Page) !void {
     );
 }
 
+pub fn getActivation(self: *const Navigation) ?NavigationActivation {
+    return self._activation;
+}
+
 pub fn getCanGoBack(self: *const Navigation) bool {
     return self._index > 0;
 }
@@ -71,12 +77,18 @@ pub fn getCanGoForward(self: *const Navigation) bool {
     return self._entries.items.len > self._index + 1;
 }
 
+pub fn getCurrentEntryOrNull(self: *Navigation) ?*NavigationHistoryEntry {
+    if (self._entries.items.len > self._index) {
+        return self._entries.items[self._index];
+    } else return null;
+}
+
 pub fn getCurrentEntry(self: *Navigation) *NavigationHistoryEntry {
     // This should never fail. An entry should always be created before
     // we run the scripts on the page we are loading.
     std.debug.assert(self._entries.items.len > 0);
 
-    return self._entries.items[self._index];
+    return self.getCurrentEntryOrNull().?;
 }
 
 pub fn getTransition(_: *const Navigation) ?NavigationTransition {
@@ -117,8 +129,8 @@ pub fn forward(self: *Navigation, page: *Page) !NavigationReturn {
 
 pub fn updateEntries(self: *Navigation, url: [:0]const u8, kind: NavigationKind, page: *Page, dispatch: bool) !void {
     switch (kind) {
-        .replace => {
-            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = null }, page, dispatch);
+        .replace => |state| {
+            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, dispatch);
         },
         .push => |state| {
             _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, dispatch);
@@ -131,14 +143,23 @@ pub fn updateEntries(self: *Navigation, url: [:0]const u8, kind: NavigationKind,
 }
 
 // This is for after true navigation processing, where we need to ensure that our entries are up to date.
-// This is only really safe to run in the `pageDoneCallback` where we can guarantee that the URL and NavigationKind are correct.
-pub fn processNavigation(self: *Navigation, page: *Page) !void {
+//
+// This is only really safe to run in the `pageDoneCallback`
+// where we can guarantee that the URL and NavigationKind are correct.
+pub fn commitNavigation(self: *Navigation, page: *Page) !void {
     const url = page.url;
 
     const kind: NavigationKind = self._current_navigation_kind orelse .{ .push = null };
     defer self._current_navigation_kind = null;
 
+    const from_entry = self.getCurrentEntryOrNull();
     try self.updateEntries(url, kind, page, false);
+
+    self._activation = NavigationActivation{
+        ._from = from_entry,
+        ._entry = self.getCurrentEntry(),
+        ._type = kind.toNavigationType(),
+    };
 }
 
 /// Pushes an entry into the Navigation stack WITHOUT actually navigating to it.
@@ -401,6 +422,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const activation = bridge.accessor(Navigation.getActivation, null, .{});
     pub const canGoBack = bridge.accessor(Navigation.getCanGoBack, null, .{});
     pub const canGoForward = bridge.accessor(Navigation.getCanGoForward, null, .{});
     pub const currentEntry = bridge.accessor(Navigation.getCurrentEntry, null, .{});

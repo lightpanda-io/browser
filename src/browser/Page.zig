@@ -530,7 +530,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     self.clearTransferArena();
 
     //We need to handle different navigation types differently.
-    try self._session.navigation.processNavigation(self);
+    try self._session.navigation.commitNavigation(self);
 
     defer if (comptime IS_DEBUG) {
         log.debug(.page, "page.load.complete", .{ .url = self.url });
@@ -567,9 +567,6 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         },
         else => unreachable,
     }
-    // We need to handle different navigation types differently.
-    // @ZIGDOM
-    // try self._session.navigation.processNavigation(self);
 }
 
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
