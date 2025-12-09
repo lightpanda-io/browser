@@ -21,38 +21,21 @@ const builtin = @import("builtin");
 
 const Build = std.Build;
 
-/// Do not rename this constant. It is scanned by some scripts to determine
-/// which zig version to install.
-const recommended_zig_version = "0.15.2";
-
 pub fn build(b: *Build) !void {
-    switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
-        .eq => {},
-        .lt => {
-            @compileError("The minimum version of Zig required to compile is '" ++ recommended_zig_version ++ "', found '" ++ builtin.zig_version_string ++ "'.");
-        },
-        .gt => {
-            std.debug.print(
-                "WARNING: Recommended Zig version '{s}', but found '{s}', build may fail...\n\n",
-                .{ recommended_zig_version, builtin.zig_version_string },
-            );
-        },
-    }
-
-    var opts = b.addOptions();
-    opts.addOption(
-        []const u8,
-        "git_commit",
-        b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
-    );
-
-    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // We're still using llvm because the new x86 backend seems to crash
-    // with v8. This can be reproduced in zig-v8-fork.
+    const manifest = Manifest.init(b);
+
+    const git_commit = b.option([]const u8, "git_commit", "Current git commit");
+    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
+
+    var opts = b.addOptions();
+    opts.addOption([]const u8, "version", manifest.version);
+    opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
+
+    // We're still using llvm because the new x86 backend seems to crash with v8.
+    // This can be reproduced in zig-v8-fork.
 
     const lightpanda_module = b.addModule("lightpanda", .{
         .root_source_file = b.path("src/main.zig"),
@@ -851,3 +834,28 @@ pub fn buildAda(b: *Build, m: *Build.Module) !void {
     // Expose ada module to main module.
     m.addImport("ada", ada_mod);
 }
+
+const Manifest = struct {
+    version: []const u8,
+    minimum_zig_version: []const u8,
+
+    fn init(b: *std.Build) Manifest {
+        const input = @embedFile("build.zig.zon");
+
+        var diagnostics: std.zon.parse.Diagnostics = .{};
+        defer diagnostics.deinit(b.allocator);
+
+        return std.zon.parse.fromSlice(Manifest, b.allocator, input, &diagnostics, .{
+            .free_on_error = true,
+            .ignore_unknown_fields = true,
+        }) catch |err| {
+            switch (err) {
+                error.OutOfMemory => @panic("OOM"),
+                error.ParseZon => {
+                    std.debug.print("Parse diagnostics:\n{f}\n", .{diagnostics});
+                    std.process.exit(1);
+                },
+            }
+        };
+    }
+};
