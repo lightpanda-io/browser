@@ -272,14 +272,10 @@ pub fn getHost(raw: [:0]const u8) []const u8 {
 
 // Returns true if these two URLs point to the same document.
 pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
-    if (!std.mem.eql(u8, getProtocol(first), getProtocol(second))) return false;
-    if (!std.mem.eql(u8, getHost(first), getHost(second))) return false;
-    if (!std.mem.eql(u8, getPort(first), getPort(second))) return false;
-    if (!std.mem.eql(u8, getPathname(first), getPathname(second))) return false;
-    if (!std.mem.eql(u8, getSearch(first), getSearch(second))) return false;
-    // hashes are allowed to be different.
-
-    return true;
+    // First '#' signifies the start of the fragment.
+    const first_hash_index = std.mem.indexOfScalar(u8, first, '#') orelse first.len;
+    const second_hash_index = std.mem.indexOfScalar(u8, second, '#') orelse second.len;
+    return std.mem.eql(u8, first[0..first_hash_index], second[0..second_hash_index]);
 }
 
 const KnownProtocol = enum {
