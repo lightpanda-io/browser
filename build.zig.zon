@@ -9,5 +9,9 @@
             .hash = "v8-0.0.0-xddH6wTgAwALFCYoZbUIqtsRyP6mr69N7aKT_cySHKN2",
         },
         //.v8 = .{ .path = "../zig-v8-fork" }
+        .@"boringssl-zig" = .{
+            .url = "git+https://github.com/Syndica/boringssl-zig.git#c53df00d06b02b755ad88bbf4d1202ed9687b096",
+            .hash = "boringssl-0.1.0-VtJeWehMAAA4RNnwRnzEvKcS9rjsR1QVRw1uJrwXxmVK",
+        },
     },
 }
