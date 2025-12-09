@@ -72,6 +72,10 @@ pub fn getCanGoForward(self: *const Navigation) bool {
 }
 
 pub fn getCurrentEntry(self: *Navigation) *NavigationHistoryEntry {
+    // This should never fail. An entry should always be created before
+    // we run the scripts on the page we are loading.
+    std.debug.assert(self._entries.items.len > 0);
+
     return self._entries.items[self._index];
 }
 
