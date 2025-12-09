@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -42,7 +42,7 @@ _current_navigation_kind: ?NavigationKind = null,
 
 _index: usize = 0,
 // Need to be stable pointers, because Events can reference entries.
-_entries: std.ArrayListUnmanaged(*NavigationHistoryEntry) = .empty,
+_entries: std.ArrayList(*NavigationHistoryEntry) = .empty,
 _next_entry_id: usize = 0,
 
 pub fn init(arena: std.mem.Allocator) Navigation {

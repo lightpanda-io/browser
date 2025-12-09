@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -52,7 +52,7 @@ pub fn getState(self: *PopStateEvent, page: *Page) !?js.Value {
     return value;
 }
 
-pub fn getUAVisualTransition(_: *PopStateEvent) bool {
+pub fn hasUAVisualTransition(_: *PopStateEvent) bool {
     // Not currently supported  so we always return false;
     return false;
 }
@@ -68,5 +68,5 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(PopStateEvent.init, .{});
     pub const state = bridge.accessor(PopStateEvent.getState, null, .{});
-    pub const hasUAVisualTransition = bridge.accessor(PopStateEvent.getUAVisualTransition, null, .{});
+    pub const hasUAVisualTransition = bridge.accessor(PopStateEvent.hasUAVisualTransition, null, .{});
 };

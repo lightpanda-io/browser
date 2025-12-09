@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -46,8 +46,6 @@ pub fn asEvent(self: *PageTransitionEvent) *Event {
 pub fn getPersisted(self: *PageTransitionEvent) bool {
     return self._persisted;
 }
-
-const PageTransitionKind = enum { show, hide };
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(PageTransitionEvent);
