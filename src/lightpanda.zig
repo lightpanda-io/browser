@@ -64,7 +64,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     _ = session.fetchWait(opts.wait_ms);
 
     const writer = opts.writer orelse return;
-    try dump.root(opts.dump, writer, page);
+    try dump.root(page.window._document, opts.dump, writer, page);
     try writer.flush();
 }
 

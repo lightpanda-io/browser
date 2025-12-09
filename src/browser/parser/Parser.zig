@@ -219,17 +219,25 @@ fn _createCommentCallback(self: *Parser, str: []const u8) !*anyopaque {
 }
 
 fn appendDoctypeToDocument(ctx: *anyopaque, name: h5e.StringSlice, public_id: h5e.StringSlice, system_id: h5e.StringSlice) callconv(.c) void {
-    _ = public_id;
-    _ = system_id;
-
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    self._appendDoctypeToDocument(name.slice()) catch |err| {
+    self._appendDoctypeToDocument(name.slice(), public_id.slice(), system_id.slice()) catch |err| {
         self.err = .{ .err = err, .source = .append_doctype_to_document };
     };
 }
-fn _appendDoctypeToDocument(self: *Parser, name: []const u8) !void {
-    _ = self;
-    _ = name;
+fn _appendDoctypeToDocument(self: *Parser, name: []const u8, public_id: []const u8, system_id: []const u8) !void {
+    const page = self.page;
+
+    // Create the DocumentType node
+    const DocumentType = @import("../webapi/DocumentType.zig");
+    const doctype = try page._factory.node(DocumentType{
+        ._proto = undefined,
+        ._name = try page.dupeString(name),
+        ._public_id = try page.dupeString(public_id),
+        ._system_id = try page.dupeString(system_id),
+    });
+
+    // Append it to the document
+    try page.appendNew(self.container.node, .{ .node = doctype.asNode() });
 }
 
 fn addAttrsIfMissingCallback(ctx: *anyopaque, target_ref: *anyopaque, attributes: h5e.AttributeIterator) callconv(.c) void {

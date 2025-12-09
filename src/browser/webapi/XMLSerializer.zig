@@ -32,7 +32,11 @@ pub fn init() XMLSerializer {
 pub fn serializeToString(self: *const XMLSerializer, node: *Node, page: *Page) ![]const u8 {
     _ = self;
     var buf = std.Io.Writer.Allocating.init(page.call_arena);
-    try dump.deep(node, .{ .shadow = .skip }, &buf.writer, page);
+    if (node.is(Node.Document)) |doc| {
+        try dump.root(doc, .{ .shadow = .skip }, &buf.writer, page);
+    } else {
+        try dump.deep(node, .{ .shadow = .skip }, &buf.writer, page);
+    }
     return buf.written();
 }
 

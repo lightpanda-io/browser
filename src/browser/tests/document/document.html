@@ -8,6 +8,7 @@
 </body>
 
 <script id=document>
+  testing.expectEqual(10, document.childNodes[0].nodeType);
   testing.expectEqual(null, document.parentNode);
   testing.expectEqual(undefined, document.getCurrentScript);
   testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/document/document.html", document.URL);

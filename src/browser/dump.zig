@@ -24,6 +24,7 @@ const Slot = @import("webapi/element/html/Slot.zig");
 pub const RootOpts = struct {
     with_base: bool = false,
     strip: Opts.Strip = .{},
+    shadow: Opts.Shadow = .rendered,
 };
 
 pub const Opts = struct {
@@ -48,10 +49,10 @@ pub const Opts = struct {
     };
 };
 
-pub fn root(opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
-    const doc = page.document;
+pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
     if (opts.with_base) {
         if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
+            try writer.writeAll("<!DOCTYPE html>");
             const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
             const base = try doc.createElement("base", null, page);
             try base.setAttributeSafe("base", page.url, page);
@@ -59,7 +60,7 @@ pub fn root(opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
         }
     }
 
-    return deep(doc.asNode(), .{ .strip = opts.strip }, writer, page);
+    return deep(doc.asNode(), .{ .strip = opts.strip, .shadow = opts.shadow }, writer, page);
 }
 
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
@@ -130,7 +131,29 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             }
         },
         .document => try children(node, opts, writer, page),
-        .document_type => {},
+        .document_type => |dt| {
+            try writer.writeAll("<!DOCTYPE ");
+            try writer.writeAll(dt.getName());
+
+            const public_id = dt.getPublicId();
+            const system_id = dt.getSystemId();
+            if (public_id.len != 0 and system_id.len != 0) {
+                try writer.writeAll(" PUBLIC \"");
+                try writeEscapedText(public_id, writer);
+                try writer.writeAll("\" \"");
+                try writeEscapedText(system_id, writer);
+                try writer.writeByte('"');
+            } else if (public_id.len != 0) {
+                try writer.writeAll(" PUBLIC \"");
+                try writeEscapedText(public_id, writer);
+                try writer.writeByte('"');
+            } else if (system_id.len != 0) {
+                try writer.writeAll(" SYSTEM \"");
+                try writeEscapedText(system_id, writer);
+                try writer.writeByte('"');
+            }
+            try writer.writeAll(">\n");
+        },
         .document_fragment => try children(node, opts, writer, page),
         .attribute => unreachable,
     }

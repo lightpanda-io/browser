@@ -868,7 +868,6 @@ fn notifyNetworkAlmostIdle(self: *Page) void {
 
 // called from the parser
 pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
-    // TODO: should some of this be pushed into appendNode... ?
     const node = switch (child) {
         .node => |n| n,
         .text => |txt| blk: {
