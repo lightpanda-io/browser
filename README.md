@@ -158,8 +158,6 @@ Here are the key features we have implemented:
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
-You can also follow the progress of our Javascript support in our dedicated [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime#development) project.
-
 ## Build from sources
 
 ### Prerequisites
@@ -168,12 +166,13 @@ Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on
-[zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime/) (with v8),
+[zig-v8-fork](https://github.com/lightpanda-io/zig-v8-fork/),
 [Libcurl](https://curl.se/libcurl/),
+[Brotli](https://github.com/google/brotli),
 [Netsurf libs](https://www.netsurf-browser.org/) and
 [Mimalloc](https://microsoft.github.io/mimalloc).
 
-To be able to build the v8 engine for zig-js-runtime, you have to install some libs:
+To be able to build the v8 engine, you have to install some libs:
 
 For Debian/Ubuntu based Linux:
 
