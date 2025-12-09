@@ -821,64 +821,62 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
 // Extracted so that it can be used in both jsValueToZig and in
 // probeJsValueToZig. Avoids having to duplicate this logic when probing.
 fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
-    if (T == js.Function) {
-        if (!js_value.isFunction()) {
-            return null;
-        }
-        return try self.createFunction(js_value);
-    }
-
-    if (@hasDecl(T, "_TYPED_ARRAY_ID_KLUDGE")) {
-        const VT = @typeInfo(std.meta.fieldInfo(T, .values).type).pointer.child;
-        const arr = (try self.jsValueToTypedArray(VT, js_value)) orelse return null;
-        return .{ .values = arr };
-    }
-
-    if (T == js.String) {
-        return .{ .string = try self.valueToString(js_value, .{ .allocator = self.arena }) };
-    }
-
-    if (comptime T == js.Value) {
+    return switch (T) {
+        js.Function => {
+            if (!js_value.isFunction()) {
+                return null;
+            }
+            return try self.createFunction(js_value);
+        },
+        // zig fmt: off
+        js.TypedArray(u8), js.TypedArray(u16), js.TypedArray(u32), js.TypedArray(u64),
+        js.TypedArray(i8), js.TypedArray(i16), js.TypedArray(i32), js.TypedArray(i64),
+        js.TypedArray(f32), js.TypedArray(f64),
+        // zig fmt: on
+        => {
+            const ValueType = @typeInfo(std.meta.fieldInfo(T, .values).type).pointer.child;
+            const arr = (try self.jsValueToTypedArray(ValueType, js_value)) orelse return null;
+            return .{ .values = arr };
+        },
+        js.String => .{ .string = try self.valueToString(js_value, .{ .allocator = self.arena }) },
         // Caller wants an opaque js.Object. Probably a parameter
-        // that it needs to pass back into a callback
-        return js.Value{
-            .context = self,
+        // that it needs to pass back into a callback.
+        js.Value => js.Value{
             .js_val = js_value,
-        };
-    }
-
-    const js_obj = js_value.castTo(v8.Object);
-
-    if (comptime T == js.Object) {
-        // Caller wants an opaque js.Object. Probably a parameter
-        // that it needs to pass back into a callback
-        return js.Object{
-            .js_obj = js_obj,
             .context = self,
-        };
-    }
+        },
+        // Caller wants an opaque js.Object. Probably a parameter
+        // that it needs to pass back into a callback.
+        js.Object => js.Object{
+            .js_obj = js_value.castTo(v8.Object),
+            .context = self,
+        },
+        else => {
+            if (!js_value.isObject()) {
+                return null;
+            }
 
-    if (!js_value.isObject()) {
-        return null;
-    }
+            const js_obj = js_value.castTo(v8.Object);
+            const v8_context = self.v8_context;
+            const isolate = self.isolate;
 
-    const v8_context = self.v8_context;
-    const isolate = self.isolate;
+            var value: T = undefined;
+            inline for (@typeInfo(T).@"struct".fields) |field| {
+                const name = field.name;
+                const key = v8.String.initUtf8(isolate, name);
+                if (js_obj.has(v8_context, key.toValue())) {
+                    @field(value, name) = try self.jsValueToZig(field.type, try js_obj.getValue(v8_context, key));
+                } else if (@typeInfo(field.type) == .optional) {
+                    @field(value, name) = null;
+                } else {
+                    const dflt = field.defaultValue() orelse return null;
+                    @field(value, name) = dflt;
+                }
+            }
 
-    var value: T = undefined;
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        const name = field.name;
-        const key = v8.String.initUtf8(isolate, name);
-        if (js_obj.has(v8_context, key.toValue())) {
-            @field(value, name) = try self.jsValueToZig(field.type, try js_obj.getValue(v8_context, key));
-        } else if (@typeInfo(field.type) == .optional) {
-            @field(value, name) = null;
-        } else {
-            const dflt = field.defaultValue() orelse return null;
-            @field(value, name) = dflt;
-        }
-    }
-    return value;
+            return value;
+        },
+    };
 }
 
 fn jsValueToTypedArray(_: *Context, comptime T: type, js_value: v8.Value) !?[]T {

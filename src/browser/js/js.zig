@@ -53,8 +53,6 @@ pub fn Bridge(comptime T: type) type {
 // Env.JsObject. Want a TypedArray? Env.TypedArray.
 pub fn TypedArray(comptime T: type) type {
     return struct {
-        pub const _TYPED_ARRAY_ID_KLUDGE = true;
-
         values: []const T,
 
         pub fn dupe(self: TypedArray(T), allocator: Allocator) !TypedArray(T) {
@@ -62,6 +60,14 @@ pub fn TypedArray(comptime T: type) type {
         }
     };
 }
+
+pub const ArrayBuffer = struct {
+    values: []const u8,
+
+    pub fn dupe(self: ArrayBuffer, allocator: Allocator) !ArrayBuffer {
+        return .{ .values = try allocator.dupe(u8, self.values) };
+    }
+};
 
 pub const PromiseResolver = struct {
     context: *Context,
@@ -317,55 +323,73 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
             return v8.initNull(isolate).toValue();
         },
         .@"struct" => {
-            const T = @TypeOf(value);
-            if (@hasDecl(T, "_TYPED_ARRAY_ID_KLUDGE")) {
-                const values = value.values;
-                const value_type = @typeInfo(@TypeOf(values)).pointer.child;
-                const len = values.len;
-                const bits = switch (@typeInfo(value_type)) {
-                    .int => |n| n.bits,
-                    .float => |f| f.bits,
-                    else => @compileError("Invalid TypeArray type: " ++ @typeName(value_type)),
-                };
-
-                var array_buffer: v8.ArrayBuffer = undefined;
-                if (len == 0) {
-                    array_buffer = v8.ArrayBuffer.init(isolate, 0);
-                } else {
-                    const buffer_len = len * bits / 8;
-                    const backing_store = v8.BackingStore.init(isolate, buffer_len);
+            switch (@TypeOf(value)) {
+                ArrayBuffer => {
+                    const values = value.values;
+                    const len = values.len;
+                    var array_buffer: v8.ArrayBuffer = undefined;
+                    const backing_store = v8.BackingStore.init(isolate, len);
                     const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
-                    @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
+                    @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
                     array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
-                }
 
-                switch (@typeInfo(value_type)) {
-                    .int => |n| switch (n.signedness) {
-                        .unsigned => switch (n.bits) {
-                            8 => return v8.Uint8Array.init(array_buffer, 0, len).toValue(),
-                            16 => return v8.Uint16Array.init(array_buffer, 0, len).toValue(),
-                            32 => return v8.Uint32Array.init(array_buffer, 0, len).toValue(),
-                            64 => return v8.BigUint64Array.init(array_buffer, 0, len).toValue(),
+                    return .{ .handle = array_buffer.handle };
+                },
+                // zig fmt: off
+                TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
+                TypedArray(i8), TypedArray(i16), TypedArray(i32), TypedArray(i64),
+                TypedArray(f32), TypedArray(f64),
+                // zig fmt: on
+                => {
+                    const values = value.values;
+                    const value_type = @typeInfo(@TypeOf(values)).pointer.child;
+                    const len = values.len;
+                    const bits = switch (@typeInfo(value_type)) {
+                        .int => |n| n.bits,
+                        .float => |f| f.bits,
+                        else => @compileError("Invalid TypeArray type: " ++ @typeName(value_type)),
+                    };
+
+                    var array_buffer: v8.ArrayBuffer = undefined;
+                    if (len == 0) {
+                        array_buffer = v8.ArrayBuffer.init(isolate, 0);
+                    } else {
+                        const buffer_len = len * bits / 8;
+                        const backing_store = v8.BackingStore.init(isolate, buffer_len);
+                        const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
+                        @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
+                        array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
+                    }
+
+                    switch (@typeInfo(value_type)) {
+                        .int => |n| switch (n.signedness) {
+                            .unsigned => switch (n.bits) {
+                                8 => return v8.Uint8Array.init(array_buffer, 0, len).toValue(),
+                                16 => return v8.Uint16Array.init(array_buffer, 0, len).toValue(),
+                                32 => return v8.Uint32Array.init(array_buffer, 0, len).toValue(),
+                                64 => return v8.BigUint64Array.init(array_buffer, 0, len).toValue(),
+                                else => {},
+                            },
+                            .signed => switch (n.bits) {
+                                8 => return v8.Int8Array.init(array_buffer, 0, len).toValue(),
+                                16 => return v8.Int16Array.init(array_buffer, 0, len).toValue(),
+                                32 => return v8.Int32Array.init(array_buffer, 0, len).toValue(),
+                                64 => return v8.BigInt64Array.init(array_buffer, 0, len).toValue(),
+                                else => {},
+                            },
+                        },
+                        .float => |f| switch (f.bits) {
+                            32 => return v8.Float32Array.init(array_buffer, 0, len).toValue(),
+                            64 => return v8.Float64Array.init(array_buffer, 0, len).toValue(),
                             else => {},
                         },
-                        .signed => switch (n.bits) {
-                            8 => return v8.Int8Array.init(array_buffer, 0, len).toValue(),
-                            16 => return v8.Int16Array.init(array_buffer, 0, len).toValue(),
-                            32 => return v8.Int32Array.init(array_buffer, 0, len).toValue(),
-                            64 => return v8.BigInt64Array.init(array_buffer, 0, len).toValue(),
-                            else => {},
-                        },
-                    },
-                    .float => |f| switch (f.bits) {
-                        32 => return v8.Float32Array.init(array_buffer, 0, len).toValue(),
-                        64 => return v8.Float64Array.init(array_buffer, 0, len).toValue(),
                         else => {},
-                    },
-                    else => {},
-                }
-                // We normally don't fail in this function unless fail == true
-                // but this can never be valid.
-                @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
+                    }
+                    // We normally don't fail in this function unless fail == true
+                    // but this can never be valid.
+                    @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
+                },
+                else => {},
             }
         },
         .@"union" => return simpleZigValueToJs(isolate, std.meta.activeTag(value), fail, null_as_undefined),
