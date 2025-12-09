@@ -331,7 +331,8 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 
 // Enable TLS verification on all connections.
 pub fn enableTlsVerify(self: *const Client) !void {
-    try self.ensureNoActiveConnection();
+    // Remove inflight connections check on enable TLS b/c chromiumoxide calls
+    // the command during navigate and Curl seems to accept it...
 
     for (self.handles.handles) |*h| {
         const easy = h.conn.easy;
@@ -348,7 +349,8 @@ pub fn enableTlsVerify(self: *const Client) !void {
 
 // Disable TLS verification on all connections.
 pub fn disableTlsVerify(self: *const Client) !void {
-    try self.ensureNoActiveConnection();
+    // Remove inflight connections check on disable TLS b/c chromiumoxide calls
+    // the command during navigate and Curl seems to accept it...
 
     for (self.handles.handles) |*h| {
         const easy = h.conn.easy;
