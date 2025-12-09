@@ -2,10 +2,6 @@ name: "Browsercore install"
 description: "Install deps for the project browsercore"
 
 inputs:
-  zig:
-    description: 'Zig version to install'
-    required: false
-    default: '0.15.2'
   arch:
     description: 'CPU arch used to select the v8 lib'
     required: false
@@ -26,10 +22,6 @@ inputs:
     description: 'cache dir to use'
     required: false
     default: '~/.cache'
-  mode:
-    description: 'debug or release'
-    required: false
-    default: 'debug'
 
 runs:
   using: "composite"
@@ -42,9 +34,8 @@ runs:
         sudo apt-get update
         sudo apt-get install -y wget xz-utils python3 ca-certificates git pkg-config libglib2.0-dev gperf libexpat1-dev cmake clang
 
-    - uses: mlugg/setup-zig@v2.0.5
-      with:
-        version: ${{ inputs.zig }}
+    # Zig version used from the `minimum_zig_version` field in build.zig.zon
+    - uses: mlugg/setup-zig@v2
 
     - name: Cache v8
       id: cache-v8
@@ -62,26 +53,34 @@ runs:
 
         wget -O ${{ inputs.cache-dir }}/v8/libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${{ inputs.zig-v8 }}/libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}.a
 
-    - name: install v8 release
-      if: ${{ inputs.mode == 'release' }}
+    - name: install v8
       shell: bash
       run: |
-        mkdir -p v8/out/${{ inputs.os }}/release/obj/zig/
-        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/${{ inputs.os }}/release/obj/zig/libc_v8.a
+        mkdir -p v8
+        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/libc_v8.a
 
-    - name: install v8 debug
-      if: ${{ inputs.mode == 'debug' }}
-      shell: bash
-      run: |
-        mkdir -p v8/out/${{ inputs.os }}/debug/obj/zig/
-        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/out/${{ inputs.os }}/debug/obj/zig/libc_v8.a
+    - name: Cache libiconv
+      id: cache-libiconv
+      uses: actions/cache@v4
+      env:
+        cache-name: cache-libiconv
+      with:
+        path: ${{ inputs.cache-dir }}/libiconv
+        key: vendor/libiconv/libiconv-1.17
 
-    - name: hmtl5ever release
-      if: ${{ inputs.mode == 'release' }}
+    - name: download libiconv
+      if: ${{ steps.cache-libiconv.outputs.cache-hit != 'true' }}
       shell: bash
-      run: zig build -Doptimize=ReleaseFast html5ever
+      run: make download-libiconv
 
-    - name: hmtl5ever debug
-      if: ${{ inputs.mode == 'debug' }}
+    - name: build libiconv
       shell: bash
-      run: zig build html5ever
+      run: make build-libiconv
+
+    - name: build mimalloc
+      shell: bash
+      run: make install-mimalloc
+
+    - name: build netsurf
+      shell: bash
+      run: make install-netsurf

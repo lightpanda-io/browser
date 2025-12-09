@@ -21,33 +21,18 @@ const builtin = @import("builtin");
 
 const Build = std.Build;
 
-/// Do not rename this constant. It is scanned by some scripts to determine
-/// which zig version to install.
-const recommended_zig_version = "0.15.2";
-
 pub fn build(b: *Build) !void {
-    switch (comptime builtin.zig_version.order(std.SemanticVersion.parse(recommended_zig_version) catch unreachable)) {
-        .eq => {},
-        .lt => {
-            @compileError("The minimum version of Zig required to compile is '" ++ recommended_zig_version ++ "', found '" ++ builtin.zig_version_string ++ "'.");
-        },
-        .gt => {
-            std.debug.print(
-                "WARNING: Recommended Zig version '{s}', but found '{s}', build may fail...\n\n",
-                .{ recommended_zig_version, builtin.zig_version_string },
-            );
-        },
-    }
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const manifest = Manifest.init(b);
+
+    const git_commit = b.option([]const u8, "git_commit", "Current git commit");
+    const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
+
     var opts = b.addOptions();
-    opts.addOption(
-        []const u8,
-        "git_commit",
-        b.option([]const u8, "git_commit", "Current git commit") orelse "dev",
-    );
+    opts.addOption([]const u8, "version", manifest.version);
+    opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
 
     // Build step to install html5ever dependency.
     const html5ever_argv = blk: {
@@ -88,7 +73,7 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = enable_tsan,
         });
 
-        try addDependencies(b, mod, opts);
+        try addDependencies(b, mod, opts, prebuilt_v8_path);
 
         break :blk mod;
     };
@@ -191,33 +176,17 @@ pub fn build(b: *Build) !void {
         const run_step = b.step("wpt", "Run WPT tests");
         run_step.dependOn(&run_cmd.step);
     }
-
-    {
-        // get v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const get_v8 = b.addRunArtifact(v8.artifact("get-v8"));
-        const get_step = b.step("get-v8", "Get v8");
-        get_step.dependOn(&get_v8.step);
-    }
-
-    {
-        // build v8
-        // -------
-        const v8 = b.dependency("v8", .{ .target = target, .optimize = optimize });
-        const build_v8 = b.addRunArtifact(v8.artifact("build-v8"));
-        const build_step = b.step("build-v8", "Build v8");
-        build_step.dependOn(&build_v8.step);
-    }
 }
 
-fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !void {
+fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, prebuilt_v8_path: ?[]const u8) !void {
     mod.addImport("build_config", opts.createModule());
 
     const target = mod.resolved_target.?;
     const dep_opts = .{
         .target = target,
         .optimize = mod.optimize.?,
+        .prebuilt_v8_path = prebuilt_v8_path,
+        .cache_root = b.pathFromRoot(".lp-cache"),
     };
 
     mod.addIncludePath(b.path("vendor/lightpanda"));
@@ -230,36 +199,6 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options) !vo
         const v8_mod = b.dependency("v8", dep_opts).module("v8");
         v8_mod.addOptions("default_exports", v8_opts);
         mod.addImport("v8", v8_mod);
-
-        const release_dir = if (mod.optimize.? == .Debug) "debug" else "release";
-        const os = switch (target.result.os.tag) {
-            .linux => "linux",
-            .macos => "macos",
-            else => return error.UnsupportedPlatform,
-        };
-        var lib_path = try std.fmt.allocPrint(
-            mod.owner.allocator,
-            "v8/out/{s}/{s}/obj/zig/libc_v8.a",
-            .{ os, release_dir },
-        );
-        std.fs.cwd().access(lib_path, .{}) catch {
-            // legacy path
-            lib_path = try std.fmt.allocPrint(
-                mod.owner.allocator,
-                "v8/out/{s}/obj/zig/libc_v8.a",
-                .{release_dir},
-            );
-        };
-        mod.addObjectFile(mod.owner.path(lib_path));
-
-        switch (target.result.os.tag) {
-            .macos => {
-                // v8 has a dependency, abseil-cpp, which, on Mac, uses CoreFoundation
-                mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
-                mod.linkFramework("CoreFoundation", .{});
-            },
-            else => {},
-        }
     }
 
     {
@@ -747,3 +686,28 @@ fn buildCurl(b: *Build, m: *Build.Module) !void {
         },
     });
 }
+
+const Manifest = struct {
+    version: []const u8,
+    minimum_zig_version: []const u8,
+
+    fn init(b: *std.Build) Manifest {
+        const input = @embedFile("build.zig.zon");
+
+        var diagnostics: std.zon.parse.Diagnostics = .{};
+        defer diagnostics.deinit(b.allocator);
+
+        return std.zon.parse.fromSlice(Manifest, b.allocator, input, &diagnostics, .{
+            .free_on_error = true,
+            .ignore_unknown_fields = true,
+        }) catch |err| {
+            switch (err) {
+                error.OutOfMemory => @panic("OOM"),
+                error.ParseZon => {
+                    std.debug.print("Parse diagnostics:\n{f}\n", .{diagnostics});
+                    std.process.exit(1);
+                },
+            }
+        };
+    }
+};
