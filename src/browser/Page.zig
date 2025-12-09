@@ -63,7 +63,7 @@ const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 pub threadlocal var current: *Page = undefined;
-var default_url = URL{ ._raw = "about/blank" };
+var default_url = URL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
 
 pub const BUF_SIZE = 1024;
@@ -201,19 +201,25 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._factory = Factory.init(self);
 
     self.version = 0;
-    self.url = "about/blank";
+    self.url = "about:blank";
 
     self.document = (try self._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
 
-    const storage_bucket = try self._factory.create(storage.Bucket{});
-    self.window = try self._factory.eventTarget(Window{
-        ._document = self.document,
-        ._storage_bucket = storage_bucket,
-        ._history = History.init(self),
-        ._performance = Performance.init(),
-        ._proto = undefined,
-        ._location = &default_location,
-    });
+    if (comptime initializing == true) {
+        const storage_bucket = try self._factory.create(storage.Bucket{});
+        self.window = try self._factory.eventTarget(Window{
+            ._document = self.document,
+            ._storage_bucket = storage_bucket,
+            ._history = History.init(self),
+            ._performance = Performance.init(),
+            ._proto = undefined,
+            ._location = &default_location,
+        });
+    } else {
+        self.window._document = self.document;
+        self.window._location = &default_location;
+        // TODO reset _custom_elements?
+    }
 
     self._parse_state = .pre;
     self._load_state = .parsing;
@@ -224,8 +230,10 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._script_manager = ScriptManager.init(self);
     errdefer self._script_manager.deinit();
 
-    self.js = try self._session.executor.createContext(self, true, JS.GlobalMissingCallback.init(&self._polyfill_loader));
-    errdefer self.js.deinit();
+    if (comptime initializing == true) {
+        self.js = try self._session.executor.createContext(self, true, JS.GlobalMissingCallback.init(&self._polyfill_loader));
+        errdefer self.js.deinit();
+    }
 
     self._element_styles = .{};
     self._element_datasets = .{};
