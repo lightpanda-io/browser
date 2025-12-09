@@ -98,7 +98,6 @@ pub const JsApi = struct {
         pub const name = "Navigator";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        // ZIGDOM (currently no optimization for empty types)
         pub const empty_with_no_proto = true;
     };
 

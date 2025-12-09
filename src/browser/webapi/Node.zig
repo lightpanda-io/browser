@@ -256,9 +256,9 @@ pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
     }
 }
 
-pub fn getNodeName(self: *const Node, page: *Page) []const u8 {
+pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
     return switch (self._type) {
-        .element => |el| el.getTagNameSpec(&page.buf),
+        .element => |el| el.getTagNameSpec(buf),
         .cdata => |cd| switch (cd._type) {
             .text => "#text",
             .cdata_section => "#cdata-section",
@@ -271,7 +271,7 @@ pub fn getNodeName(self: *const Node, page: *Page) []const u8 {
     };
 }
 
-pub fn nodeType(self: *const Node) u8 {
+pub fn getNodeType(self: *const Node) u8 {
     return switch (self._type) {
         .element => 1,
         .attribute => 2,
@@ -488,6 +488,13 @@ pub fn childrenIterator(self: *Node) NodeIterator {
 
     return .{
         .node = children.first(),
+    };
+}
+
+pub fn getChildrenCount(self: *Node) usize {
+    return switch (self._type) {
+        .element, .document, .document_fragment => self.getLength(),
+        .document_type, .attribute, .cdata => return 0,
     };
 }
 
@@ -770,8 +777,12 @@ pub const JsApi = struct {
     pub const DOCUMENT_POSITION_CONTAINED_BY = bridge.property(0x10);
     pub const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = bridge.property(0x20);
 
-    pub const nodeName = bridge.accessor(Node.getNodeName, null, .{});
-    pub const nodeType = bridge.accessor(Node.nodeType, null, .{});
+    pub const nodeName = bridge.accessor(struct{
+        fn wrap(self: *const Node, page: *Page) []const u8 {
+            return self.getNodeName(&page.buf);
+        }
+    }.wrap, null, .{});
+    pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});
 
     pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{});
     fn _textContext(self: *Node, page: *const Page) !?[]const u8 {

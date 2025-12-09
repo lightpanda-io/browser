@@ -40,6 +40,7 @@ const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
+const Page = @import("browser/Page.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -413,6 +414,27 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
         std.debug.print("{s}: test failure\nError: {s}\n", .{ test_file, msg });
         return err;
     };
+}
+
+// Used by a few CDP tests - wouldn't be sad to see this go.
+pub fn pageTest(comptime test_file: []const u8) !*Page {
+    const page = try test_session.createPage();
+    errdefer test_session.removePage();
+
+    const url = try std.fmt.allocPrintSentinel(
+        arena_allocator,
+        "http://127.0.0.1:9582/{s}{s}",
+        .{ WEB_API_TEST_ROOT, test_file },
+        0,
+    );
+
+    try page.navigate(url, .{});
+    test_session.fetchWait(2000);
+
+    page._session.browser.runMicrotasks();
+    page._session.browser.runMessageLoop();
+
+    return page;
 }
 
 test {

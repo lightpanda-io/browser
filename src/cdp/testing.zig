@@ -32,8 +32,7 @@ pub const expect = std.testing.expect;
 pub const expectEqual = base.expectEqual;
 pub const expectError = base.expectError;
 pub const expectEqualSlices = base.expectEqualSlices;
-
-pub const Document = @import("../testing.zig").Document;
+pub const pageTest = base.pageTest;
 
 const Client = struct {
     allocator: Allocator,

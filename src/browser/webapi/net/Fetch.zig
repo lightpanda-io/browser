@@ -42,7 +42,6 @@ _resolver: js.PersistentPromiseResolver,
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
-// @ZIGDOM just enough to get campfire demo working
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
 

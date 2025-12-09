@@ -1276,7 +1276,7 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
         @call(.auto, @field(E.Build, "created"), .{ node, self }) catch |err| {
-            log.err(.page, "build.created", .{ .tag = node.getNodeName(self), .err = err });
+            log.err(.page, "build.created", .{ .tag = node.getNodeName(&self.buf), .err = err });
             return err;
         };
     }

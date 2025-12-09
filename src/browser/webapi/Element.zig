@@ -225,6 +225,15 @@ pub fn getNamespaceURI(self: *const Element) []const u8 {
     return self._namespace.toUri();
 }
 
+pub fn getLocalName(self: *Element) []const u8 {
+    const name = self.getTagNameLower();
+    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+        return name[pos + 1 ..];
+    }
+
+    return name;
+}
+
 // innerText represents the **rendered** text content of a node and its
 // descendants.
 pub fn getInnerText(self: *Element, writer: *std.Io.Writer) !void {
@@ -1091,16 +1100,7 @@ pub const JsApi = struct {
         return null;
     }
 
-    pub const localName = bridge.accessor(_localName, null, .{});
-    fn _localName(self: *Element) []const u8 {
-        const name = self.getTagNameLower();
-        if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
-            return name[pos + 1 ..];
-        }
-
-        return name;
-    }
-
+    pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
     pub const classList = bridge.accessor(Element.getClassList, null, .{});

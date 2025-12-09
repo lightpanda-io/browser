@@ -287,8 +287,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
 }
 
 pub fn BrowserContext(comptime CDP_T: type) type {
-    // @ZIGMOD
-    // const Node = @import("Node.zig");
+    const Node = @import("Node.zig");
 
     return struct {
         id: []const u8,
@@ -328,9 +327,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         security_origin: []const u8,
         page_life_cycle_events: bool,
         secure_context_type: []const u8,
-        // @ZIGDOM
-        // node_registry: Node.Registry,
-        // node_search_list: Node.Search.List,
+        node_registry: Node.Registry,
+        node_search_list: Node.Search.List,
 
         inspector: js.Inspector,
         isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
@@ -363,9 +361,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             const inspector = try cdp.browser.env.newInspector(arena, self);
 
-            // @ZIGDOM
-            // var registry = Node.Registry.init(allocator);
-            // errdefer registry.deinit();
+            var registry = Node.Registry.init(allocator);
+            errdefer registry.deinit();
 
             self.* = .{
                 .id = id,
@@ -378,9 +375,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .secure_context_type = "Secure", // TODO = enum
                 .loader_id = LOADER_ID,
                 .page_life_cycle_events = false, // TODO; Target based value
-                // @ZIGDOM
-                // .node_registry = registry,
-                // .node_search_list = undefined,
+                .node_registry = registry,
+                .node_search_list = undefined,
                 .isolated_worlds = .empty,
                 .inspector = inspector,
                 .notification_arena = cdp.notification_arena.allocator(),
@@ -388,8 +384,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .captured_responses = .empty,
                 .log_interceptor = LogInterceptor(Self).init(allocator, self),
             };
-            // ZIGDOM
-            // self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
+            self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
 
             try cdp.browser.notification.register(.page_remove, self, onPageRemove);
@@ -424,9 +419,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 world.deinit();
             }
             self.isolated_worlds.clearRetainingCapacity();
-            // @ZIGDOM
-            // self.node_registry.deinit();
-            // self.node_search_list.deinit();
+            self.node_registry.deinit();
+            self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);
 
             if (self.http_proxy_changed) {
@@ -440,10 +434,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn reset(self: *Self) void {
-            // @ZIGDOM
-            _ = self;
-            // self.node_registry.reset();
-            // self.node_search_list.reset();
+            self.node_registry.reset();
+            self.node_search_list.reset();
         }
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
@@ -462,15 +454,14 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return world;
         }
 
-        // @ZIGDOM
-        // pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
-        //     return .{
-        //         .root = root,
-        //         .depth = opts.depth,
-        //         .exclude_root = opts.exclude_root,
-        //         .registry = &self.node_registry,
-        //     };
-        // }
+        pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
+            return .{
+                .root = root,
+                .depth = opts.depth,
+                .exclude_root = opts.exclude_root,
+                .registry = &self.node_registry,
+            };
+        }
 
         pub fn getURL(self: *const Self) ?[:0]const u8 {
             const page = self.session.currentPage() orelse return null;
