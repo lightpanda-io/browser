@@ -27,7 +27,6 @@ const reflect = @import("../reflect.zig");
 
 const Node = @import("Node.zig");
 const CSS = @import("CSS.zig");
-const DOMRect = @import("DOMRect.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
@@ -35,6 +34,7 @@ const Animation = @import("animation/Animation.zig");
 const DOMStringMap = @import("element/DOMStringMap.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 
+pub const DOMRect = @import("DOMRect.zig");
 pub const Svg = @import("element/Svg.zig");
 pub const Html = @import("element/Html.zig");
 pub const Attribute = @import("element/Attribute.zig");

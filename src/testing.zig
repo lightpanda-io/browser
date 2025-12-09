@@ -430,10 +430,6 @@ pub fn pageTest(comptime test_file: []const u8) !*Page {
 
     try page.navigate(url, .{});
     test_session.fetchWait(2000);
-
-    page._session.browser.runMicrotasks();
-    page._session.browser.runMessageLoop();
-
     return page;
 }
 

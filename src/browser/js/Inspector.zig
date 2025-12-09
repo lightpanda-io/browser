@@ -109,7 +109,7 @@ pub fn getRemoteObject(
     group: []const u8,
     value: anytype,
 ) !RemoteObject {
-    const js_value = try context.zigValueToJs(value);
+    const js_value = try context.zigValueToJs(value, .{});
 
     // We do not want to expose this as a parameter for now
     const generate_preview = false;
@@ -127,8 +127,10 @@ pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []con
     const unwrapped = try self.session.unwrapObject(allocator, object_id);
     // The values context and groupId are not used here
     const toa = getTaggedAnyOpaque(unwrapped.value) orelse return null;
-    if (toa.subtype == null or toa.subtype != .node) return error.ObjectIdIsNotANode;
-    return toa.ptr;
+    if (toa.subtype == null or toa.subtype != .node) {
+        return error.ObjectIdIsNotANode;
+    }
+    return toa.value;
 }
 
 const NoopInspector = struct {

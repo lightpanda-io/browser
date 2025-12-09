@@ -93,7 +93,7 @@ const TestContext = struct {
         id: ?[]const u8 = null,
         target_id: ?[]const u8 = null,
         session_id: ?[]const u8 = null,
-        html: ?[]const u8 = null,
+        url: ?[:0]const u8 = null,
     };
     pub fn loadBrowserContext(self: *TestContext, opts: BrowserContextOpts) !*main.BrowserContext(TestCDP) {
         var c = self.cdp();
@@ -116,12 +116,23 @@ const TestContext = struct {
             bc.session_id = sid;
         }
 
-        // @ZIGDOM
-        // if (opts.html) |html| {
-        //     if (bc.session_id == null) bc.session_id = "SID-X";
-        //     const page = try bc.session.createPage();
-        //     page.window._document = (try Document.init(html)).doc;
-        // }
+        if (opts.url) |url| {
+            if (bc.session_id == null) {
+                bc.session_id = "SID-X";
+            }
+            if (bc.target_id == null) {
+                bc.target_id = "TID-X";
+            }
+            const page = try bc.session.createPage();
+            const full_url = try std.fmt.allocPrintSentinel(
+                self.arena.allocator(),
+                "http://127.0.0.1:9582/src/browser/tests/{s}",
+                .{ url },
+                0,
+            );
+            try page.navigate(full_url, .{});
+            bc.session.fetchWait(2000);
+        }
         return bc;
     }
 
