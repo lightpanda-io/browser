@@ -17,12 +17,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 
 const CData = @import("../CData.zig");
 
 const Comment = @This();
 
 _proto: *CData,
+
+pub fn init(content: ?[]const u8, page: *Page) !*Comment {
+    const node = try page.createComment(content orelse "");
+    return node.as(Comment);
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Comment);
@@ -32,4 +38,6 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const constructor = bridge.constructor(Comment.init, .{});
 };
