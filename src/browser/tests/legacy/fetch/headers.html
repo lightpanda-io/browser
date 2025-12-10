@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <script src="../testing.js"></script>
 
 <script id=headers>
@@ -48,9 +49,9 @@
   }
 
   testing.expectEqual(3, keys.length);
-  testing.expectEqual(true, keys.includes("Content-Type"));
-  testing.expectEqual(true, keys.includes("Authorization"));
-  testing.expectEqual(true, keys.includes("X-Custom"));
+  testing.expectEqual(true, keys.includes("content-type"));
+  testing.expectEqual(true, keys.includes("authorization"));
+  testing.expectEqual(true, keys.includes("x-custom"));
 </script>
 
 <script id=values>
@@ -84,15 +85,15 @@
   testing.expectEqual(3, entries.length);
 
   const entryMap = new Map(entries);
-  testing.expectEqual("application/json", entryMap.get("Content-Type"));
-  testing.expectEqual("Bearer token123", entryMap.get("Authorization"));
-  testing.expectEqual("test-value", entryMap.get("X-Custom"));
+  testing.expectEqual("application/json", entryMap.get("content-type"));
+  testing.expectEqual("Bearer token123", entryMap.get("authorization"));
+  testing.expectEqual("test-value", entryMap.get("x-custom"));
   
   const entryKeys = Array.from(entryMap.keys());
   testing.expectEqual(3, entryKeys.length);
-  testing.expectEqual(true, entryKeys.includes("Content-Type"));
-  testing.expectEqual(true, entryKeys.includes("Authorization"));
-  testing.expectEqual(true, entryKeys.includes("X-Custom"));
+  testing.expectEqual(true, entryKeys.includes("content-type"));
+  testing.expectEqual(true, entryKeys.includes("authorization"));
+  testing.expectEqual(true, entryKeys.includes("x-custom"));
   
   const entryValues = Array.from(entryMap.values());
   testing.expectEqual(3, entryValues.length);

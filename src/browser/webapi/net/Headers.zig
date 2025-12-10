@@ -1,6 +1,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const log = @import("../../../log.zig");
+const String = @import("../../../string.zig").String;
 
 const Page = @import("../../Page.zig");
 const KeyValueList = @import("../KeyValueList.zig");
@@ -13,25 +14,21 @@ _list: KeyValueList,
 
 pub const InitOpts = union(enum) {
     obj: *Headers,
+    strings: []const [2][]const u8,
     js_obj: js.Object,
 };
 
 pub fn init(opts_: ?InitOpts, page: *Page) !*Headers {
     const list = if (opts_) |opts| switch (opts) {
         .obj => |obj| try KeyValueList.copy(page.arena, obj._list),
-        .js_obj => |js_obj| try KeyValueList.fromJsObject(page.arena, js_obj),
+        .js_obj => |js_obj| try KeyValueList.fromJsObject(page.arena, js_obj, normalizeHeaderName, page),
+        .strings => |kvs| try KeyValueList.fromArray(page.arena, kvs, normalizeHeaderName, page),
     } else KeyValueList.init();
 
     return page._factory.create(Headers{
         ._list = list,
     });
 }
-
-// pub fn fromJsObject(js_obj: js.Object, page: *Page) !*Headers {
-//     return page._factory.create(Headers{
-//         ._list = try KeyValueList.fromJsObject(page.arena, js_obj),
-//     });
-// }
 
 pub fn append(self: *Headers, name: []const u8, value: []const u8, page: *Page) !void {
     const normalized_name = normalizeHeaderName(name, page);
@@ -43,9 +40,17 @@ pub fn delete(self: *Headers, name: []const u8, page: *Page) void {
     self._list.delete(normalized_name, null);
 }
 
-pub fn get(self: *const Headers, name: []const u8, page: *Page) ?[]const u8 {
+pub fn get(self: *const Headers, name: []const u8, page: *Page) !?[]const u8 {
     const normalized_name = normalizeHeaderName(name, page);
-    return self._list.get(normalized_name);
+    const all_values = try self._list.getAll(normalized_name, page);
+
+    if (all_values.len == 0) {
+        return null;
+    }
+    if (all_values.len == 1) {
+        return all_values[0];
+    }
+    return try std.mem.join(page.call_arena, ", ", all_values);
 }
 
 pub fn has(self: *const Headers, name: []const u8, page: *Page) bool {
@@ -96,6 +101,7 @@ fn normalizeHeaderName(name: []const u8, page: *Page) []const u8 {
     }
     return std.ascii.lowerString(&page.buf, name);
 }
+
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Headers);

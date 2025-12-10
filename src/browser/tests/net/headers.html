@@ -72,6 +72,137 @@
   testing.expectEqual('authorization', entries[0][0]);
   testing.expectEqual('Bearer token2', entries[0][1]);
 }
+
+{
+    const headers = new Headers({"Set-Cookie": "name=world"});
+    testing.expectEqual("name=world", headers.get("set-cookie"));
+}
+
+// Test object initialization with case normalization
+{
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "AUTHORIZATION": "Bearer token",
+    "x-CuStOm": "mixed-case"
+  });
+
+  // All headers should be normalized to lowercase
+  testing.expectEqual("application/json", headers.get("content-type"));
+  testing.expectEqual("Bearer token", headers.get("authorization"));
+  testing.expectEqual("mixed-case", headers.get("x-custom"));
+
+  // Verify via keys iterator that names are normalized
+  const keys = Array.from(headers.keys());
+  testing.expectEqual(3, keys.length);
+  testing.expectEqual(true, keys.includes("content-type"));
+  testing.expectEqual(true, keys.includes("authorization"));
+  testing.expectEqual(true, keys.includes("x-custom"));
+}
+</script>
+
+<script id=array-initialization>
+// Test array initialization
+{
+  const headers = new Headers([
+    ["Content-Type", "application/json"],
+    ["Authorization", "Bearer token123"]
+  ]);
+
+  testing.expectEqual("application/json", headers.get("Content-Type"));
+  testing.expectEqual("Bearer token123", headers.get("Authorization"));
+  testing.expectEqual(true, headers.has("Content-Type"));
+  testing.expectEqual(true, headers.has("Authorization"));
+}
+
+// Test array initialization with case normalization
+{
+  const headers = new Headers([
+    ["Content-Type", "text/html"],
+    ["AUTHORIZATION", "Bearer abc"],
+    ["x-CuStOm-HeAdEr", "value123"]
+  ]);
+
+  // All header names should be normalized to lowercase
+  testing.expectEqual("text/html", headers.get("content-type"));
+  testing.expectEqual("Bearer abc", headers.get("authorization"));
+  testing.expectEqual("value123", headers.get("x-custom-header"));
+
+  // Verify case-insensitive access works
+  testing.expectEqual("text/html", headers.get("CONTENT-TYPE"));
+  testing.expectEqual("Bearer abc", headers.get("Authorization"));
+  testing.expectEqual("value123", headers.get("X-CUSTOM-HEADER"));
+
+  // Verify keys are normalized
+  const keys = Array.from(headers.keys());
+  testing.expectEqual(3, keys.length);
+  testing.expectEqual("content-type", keys[0]);
+  testing.expectEqual("authorization", keys[1]);
+  testing.expectEqual("x-custom-header", keys[2]);
+}
+
+// Test array initialization with multiple values
+{
+  const headers = new Headers([
+    ["Accept", "application/json"],
+    ["Accept", "text/html"],
+    ["Content-Type", "text/plain"]
+  ]);
+
+  const entries = Array.from(headers.entries());
+  testing.expectEqual(3, entries.length);
+
+  // All Accept headers should be present
+  const acceptValues = entries.filter(e => e[0] === 'accept').map(e => e[1]);
+  testing.expectEqual(2, acceptValues.length);
+  testing.expectEqual("application/json", acceptValues[0]);
+  testing.expectEqual("text/html", acceptValues[1]);
+}
+</script>
+
+<script id=copy-constructor>
+// Test creating Headers from another Headers object
+{
+  const original = new Headers();
+  original.set("Content-Type", "application/json");
+  original.set("Authorization", "Bearer token123");
+  original.set("X-Custom", "test-value");
+
+  const copy = new Headers(original);
+
+  // Copy should have all the same headers
+  testing.expectEqual("application/json", copy.get("Content-Type"));
+  testing.expectEqual("Bearer token123", copy.get("Authorization"));
+  testing.expectEqual("test-value", copy.get("X-Custom"));
+
+  // Copy should be independent
+  copy.set("X-Modified", "new-value");
+  testing.expectEqual("new-value", copy.get("X-Modified"));
+  testing.expectEqual(null, original.get("X-Modified"));
+
+  // Modifying copy shouldn't affect original
+  copy.set("Content-Type", "text/html");
+  testing.expectEqual("text/html", copy.get("Content-Type"));
+  testing.expectEqual("application/json", original.get("Content-Type"));
+}
+
+// Test copy constructor with mixed-case headers
+{
+  const original = new Headers([
+    ["Content-TYPE", "application/json"],
+    ["AUTHORIZATION", "Bearer xyz"]
+  ]);
+
+  const copy = new Headers(original);
+
+  // Headers should be normalized in copy
+  testing.expectEqual("application/json", copy.get("content-type"));
+  testing.expectEqual("Bearer xyz", copy.get("authorization"));
+
+  const keys = Array.from(copy.keys());
+  testing.expectEqual(2, keys.length);
+  testing.expectEqual("content-type", keys[0]);
+  testing.expectEqual("authorization", keys[1]);
+}
 </script>
 
 <script id=iterators>
@@ -157,5 +288,49 @@
   testing.expectEqual('application/json', values[0]);
   testing.expectEqual('text/html', values[1]);
   testing.expectEqual('text/plain', values[2]);
+}
+</script>
+
+<script id=get-concatenation>
+// Test that get() returns concatenated values for headers with multiple values
+{
+  const headers = new Headers();
+  headers.append('Accept', 'application/json');
+  headers.append('Accept', 'text/html');
+  headers.append('Accept', 'text/plain');
+
+  // get() should return comma-separated concatenated values
+  const acceptValue = headers.get('Accept');
+  testing.expectEqual('application/json, text/html, text/plain', acceptValue);
+}
+
+// Test concatenation with case-insensitive header names
+{
+  const headers = new Headers();
+  headers.append('Content-Type', 'image/jpeg');
+  headers.append('CONTENT-TYPE', 'image/png');
+  headers.append('content-type', 'image/svg+xml');
+
+  const contentType = headers.get('Content-Type');
+  testing.expectEqual('image/jpeg, image/png, image/svg+xml', contentType);
+}
+
+// Test that set() replaces all values, not concatenates
+{
+  const headers = new Headers();
+  headers.append('Authorization', 'Bearer token1');
+  headers.append('Authorization', 'Bearer token2');
+
+  // Before set, should have both values
+  testing.expectEqual('Bearer token1, Bearer token2', headers.get('Authorization'));
+
+  // set() should replace all values
+  headers.set('Authorization', 'Bearer new-token');
+  testing.expectEqual('Bearer new-token', headers.get('Authorization'));
+
+  // Should only have one entry now
+  const entries = Array.from(headers.entries());
+  const authEntries = entries.filter(e => e[0] === 'authorization');
+  testing.expectEqual(1, authEntries.length);
 }
 </script>

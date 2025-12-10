@@ -33,6 +33,7 @@ pub fn registerTypes() []const type {
     };
 }
 
+const Normalizer = *const fn([]const u8, *Page) []const u8;
 pub const KeyValueList = @This();
 
 _entries: std.ArrayListUnmanaged(Entry) = .empty,
@@ -50,7 +51,7 @@ pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
     return list;
 }
 
-pub fn fromJsObject(arena: Allocator, js_obj: js.Object) !KeyValueList {
+pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, page: *Page) !KeyValueList {
     var it = js_obj.nameIterator();
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, it.count);
@@ -58,13 +59,29 @@ pub fn fromJsObject(arena: Allocator, js_obj: js.Object) !KeyValueList {
     while (try it.next()) |name| {
         const js_value = try js_obj.get(name);
         const value = try js_value.toString(arena);
+        const normalized = if (comptime normalizer) |n| n(name, page) else name;
 
-        try list._entries.append(arena, .{
-            .name = try String.init(arena, name, .{}),
+        list._entries.appendAssumeCapacity(.{
+            .name = try String.init(arena, normalized, .{}),
             .value = try String.init(arena, value, .{}),
         });
     }
 
+    return list;
+}
+
+pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normalizer: ?Normalizer, page: *Page) !KeyValueList {
+    var list = KeyValueList.init();
+    try list.ensureTotalCapacity(arena, kvs.len);
+
+    for (kvs) |pair| {
+        const normalized = if (comptime normalizer) |n| n(pair[0], page) else pair[0];
+
+        list._entries.appendAssumeCapacity(.{
+            .name = try String.init(arena, normalized, .{}),
+            .value = try String.init(arena, pair[1], .{}),
+        });
+    }
     return list;
 }
 
