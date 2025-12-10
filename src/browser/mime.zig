@@ -53,6 +53,18 @@ pub const Mime = struct {
         other: struct { type: []const u8, sub_type: []const u8 },
     };
 
+    pub fn contentTypeString(mime: *const Mime) [:0]const u8 {
+        return switch (mime.content_type) {
+            .text_xml => "text/xml",
+            .text_html => "text/html",
+            .text_javascript => "application/javascript",
+            .text_plain => "text/plain",
+            .text_css => "text/css",
+            .application_json => "application/json",
+            else => "",
+        };
+    }
+
     /// Returns the null-terminated charset value.
     pub fn charsetString(mime: *const Mime) [:0]const u8 {
         return @ptrCast(&mime.charset);

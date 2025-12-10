@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const CdpStorage = @import("storage.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
 const Notification = @import("../../notification.zig").Notification;
+const Mime = @import("../../browser/mime.zig").Mime;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -390,6 +391,20 @@ const TransferAsResponseWriter = struct {
 
             try jws.objectField("statusText");
             try jws.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
+        }
+
+        {
+            const mime: Mime = blk: {
+                if (transfer.response_header.?.contentType()) |ct| {
+                    break :blk try Mime.parse(ct);
+                }
+                break :blk .unknown;
+            };
+
+            try jws.objectField("mimeType");
+            try jws.write(mime.contentTypeString());
+            try jws.objectField("charset");
+            try jws.write(mime.charsetString()[0..]);
         }
 
         {
