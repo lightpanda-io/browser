@@ -650,7 +650,7 @@ test "cdp.dom: getBoxModel" {
         .params = .{ .nodeId = 6 },
     });
     try ctx.expectSentResult(.{ .model = BoxModel{
-        .content = Quad{ 0.0, 0.0, 5.0, 0.0, 5.0, 5.0, 0.0, 5.0 },
+        .content = Quad{ 0.0, 200.0, 5.0, 200.0, 5.0, 205.0, 0.0, 205.0 },
         .padding = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .border = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
         .margin = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },

@@ -765,8 +765,8 @@ fn getElementDimensions(self: *Element, page: *Page) !struct { width: f64, heigh
         const tag = self.getTag();
 
         // Root containers get large default size to contain descendant positions.
-        // With calculateDocumentPosition using 10x multipliers per level, deep trees
-        // can position elements at y=millions, so we need a large container height.
+        // With calculateDocumentPosition using linear depth scaling (100px per level),
+        // even very deep trees (100 levels) stay within 10,000px.
         // 100M pixels is plausible for very long documents.
         if (tag == .html or tag == .body) {
             if (width == 5.0) width = 1920.0;
@@ -843,51 +843,51 @@ pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
     return ptr[0..1];
 }
 
-// Calculates a pseudo-position in the document using an efficient heuristic.
+// Calculates a pseudo-position in the document using linear depth scaling.
 //
-// Instead of walking the entire DOM tree (which would be O(total_nodes)), this
-// function walks UP the tree counting previous siblings at each level. Each level
-// uses exponential weighting (10x per depth level) to preserve document order.
-//
-// This gives O(depth * avg_siblings) complexity while maintaining relative positioning
-// that's useful for scraping and understanding element flow in the document.
+// This approach uses a fixed pixel offset per depth level (100px) plus sibling
+// position within that level. This keeps positions reasonable even for very deep
+// DOM trees (e.g., Amazon product pages can be 36+ levels deep).
 //
 // Example:
-//   <body>              → position 0
-//     <div>             → position 0 (0 siblings at level 1)
-//       <span></span>   → position 0 (0 siblings at level 2)
-//       <span></span>   → position 1 (1 sibling at level 2)
+//   <body>              → position 0    (depth 0)
+//     <div>             → position 100  (depth 1, 0 siblings)
+//       <span></span>   → position 200  (depth 2, 0 siblings)
+//       <span></span>   → position 201  (depth 2, 1 sibling)
 //     </div>
-//     <div>             → position 10 (1 sibling at level 1, weighted by 10)
-//       <p></p>         → position 10 (0 siblings at level 2, parent has 10)
+//     <div>             → position 101  (depth 1, 1 sibling)
+//       <p></p>         → position 200  (depth 2, 0 siblings)
 //     </div>
 //   </body>
 //
 // Trade-offs:
-// - Much faster than full tree-walking for deep/large DOMs
-// - Positions reflect document order and parent-child relationships
-// - Keeps positions within reasonable bounds (10-level deep tree → ~10M pixels)
-// - Not pixel-accurate, but sufficient for layout heuristics
+// - O(depth) complexity, very fast
+// - Linear scaling: 36 levels ≈ 3,600px, 100 levels ≈ 10,000px
+// - Rough document order preserved (depth dominates, siblings differentiate)
+// - Fits comfortably in realistic document heights
 fn calculateDocumentPosition(node: *Node) f64 {
-    var position: f64 = 0.0;
-    var multiplier: f64 = 1.0;
+    var depth: f64 = 0.0;
+    var sibling_offset: f64 = 0.0;
     var current = node;
 
-    while (current.parentNode()) |parent| {
-        var count: f64 = 0.0;
+    // Count siblings at the immediate level
+    if (current.parentNode()) |parent| {
         var sibling = parent.firstChild();
         while (sibling) |s| {
             if (s == current) break;
-            count += 1.0;
+            sibling_offset += 1.0;
             sibling = s.nextSibling();
         }
+    }
 
-        position += count * multiplier;
-        multiplier *= 10.0;
+    // Count depth from root
+    while (current.parentNode()) |parent| {
+        depth += 1.0;
         current = parent;
     }
 
-    return position;
+    // Each depth level = 100px, siblings add within that level
+    return (depth * 100.0) + sibling_offset;
 }
 
 const GetElementsByTagNameResult = union(enum) {
