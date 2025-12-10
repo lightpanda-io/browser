@@ -100,6 +100,7 @@ _script_manager: ScriptManager,
 // List of active MutationObservers
 _mutation_observers: std.ArrayList(*MutationObserver) = .{},
 _mutation_delivery_scheduled: bool = false,
+_mutation_delivery_depth: u32 = 0,
 
 // List of active IntersectionObservers
 _intersection_observers: std.ArrayList(*IntersectionObserver) = .{},
@@ -244,6 +245,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
 
     self._mutation_observers = .{};
     self._mutation_delivery_scheduled = false;
+    self._mutation_delivery_depth = 0;
     self._intersection_observers = .{};
     self._intersection_delivery_scheduled = false;
     self._customized_builtin_definitions = .{};
@@ -848,6 +850,18 @@ pub fn deliverMutations(self: *Page) void {
         return;
     }
     self._mutation_delivery_scheduled = false;
+
+    self._mutation_delivery_depth += 1;
+    defer if (!self._mutation_delivery_scheduled) {
+        // reset the depth once nothing is left to be scheduled
+        self._mutation_delivery_depth = 0;
+    };
+
+    if (self._mutation_delivery_depth > 100) {
+        log.err(.page, "page.MutationLimit", .{});
+        self._mutation_delivery_depth = 0;
+        return;
+    }
 
     // Iterate backwards to handle observers that disconnect during their callback
     var i = self._mutation_observers.items.len;
