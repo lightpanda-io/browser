@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -30,16 +30,24 @@ _view: *Window,
 pub const EventOptions = struct {
     detail: u32 = 0,
     view: ?*Window = null,
+
+    // From Event.
+    bubbles: bool = false,
+    cancelable: bool = false,
 };
 
 pub fn init(typ: []const u8, _options: ?EventOptions, page: *Page) !*UIEvent {
     const options = _options orelse EventOptions{};
 
-    return page._factory.event(typ, UIEvent{
+    const event = try page._factory.event(typ, UIEvent{
         ._proto = undefined,
         ._detail = options.detail,
-        ._view = options.view,
+        ._view = options.view orelse page.window,
     });
+
+    event._proto._bubbles = options.bubbles;
+    event._proto._cancelable = options.cancelable;
+    return event;
 }
 
 pub fn asEvent(self: *UIEvent) *Event {
@@ -56,6 +64,8 @@ pub fn getView(self: *UIEvent) *Window {
     return self._view;
 }
 
+// deprecated `initUIEvent()` not implemented
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(UIEvent);
 
@@ -69,3 +79,8 @@ pub const JsApi = struct {
     pub const detail = bridge.accessor(UIEvent.getDetail, null, .{});
     pub const view = bridge.accessor(UIEvent.getView, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: UIEvent" {
+    try testing.htmlRunner("event/ui.html", .{});
+}
