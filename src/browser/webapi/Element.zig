@@ -755,9 +755,53 @@ pub fn checkVisibility(self: *Element, page: *Page) !bool {
     return true;
 }
 
+fn getElementDimensions(self: *Element, page: *Page) !struct { width: f64, height: f64 } {
+    const style = try self.getStyle(page);
+    const decl = style.asCSSStyleDeclaration();
+    var width = CSS.parseDimension(decl.getPropertyValue("width", page)) orelse 5.0;
+    var height = CSS.parseDimension(decl.getPropertyValue("height", page)) orelse 5.0;
+
+    if (width == 5.0 or height == 5.0) {
+        const tag = self.getTag();
+
+        // Root containers get large default size to contain descendant positions.
+        // With calculateDocumentPosition using 10x multipliers per level, deep trees
+        // can position elements at y=millions, so we need a large container height.
+        // 100M pixels is plausible for very long documents.
+        if (tag == .html or tag == .body) {
+            if (width == 5.0) width = 1920.0;
+            if (height == 5.0) height = 100_000_000.0;
+        } else if (tag == .img or tag == .iframe) {
+            if (self.getAttributeSafe("width")) |w| {
+                width = std.fmt.parseFloat(f64, w) catch width;
+            }
+            if (self.getAttributeSafe("height")) |h| {
+                height = std.fmt.parseFloat(f64, h) catch height;
+            }
+        }
+    }
+
+    return .{ .width = width, .height = height };
+}
+
+pub fn getClientWidth(self: *Element, page: *Page) !f64 {
+    if (!try self.checkVisibility(page)) {
+        return 0.0;
+    }
+    const dims = try self.getElementDimensions(page);
+    return dims.width;
+}
+
+pub fn getClientHeight(self: *Element, page: *Page) !f64 {
+    if (!try self.checkVisibility(page)) {
+        return 0.0;
+    }
+    const dims = try self.getElementDimensions(page);
+    return dims.height;
+}
+
 pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
-    const is_visible = try self.checkVisibility(page);
-    if (!is_visible) {
+    if (!try self.checkVisibility(page)) {
         return page._factory.create(DOMRect{
             ._x = 0.0,
             ._y = 0.0,
@@ -771,38 +815,19 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
     }
 
     const y = calculateDocumentPosition(self.asNode());
-
-    var width: f64 = 1.0;
-    var height: f64 = 1.0;
-
-    const style = try self.getStyle(page);
-    const decl = style.asCSSStyleDeclaration();
-    width = CSS.parseDimension(decl.getPropertyValue("width", page)) orelse 1.0;
-    height = CSS.parseDimension(decl.getPropertyValue("height", page)) orelse 1.0;
-
-    if (width == 1.0 or height == 1.0) {
-        const tag = self.getTag();
-        if (tag == .img or tag == .iframe) {
-            if (self.getAttributeSafe("width")) |w| {
-                width = std.fmt.parseFloat(f64, w) catch width;
-            }
-            if (self.getAttributeSafe("height")) |h| {
-                height = std.fmt.parseFloat(f64, h) catch height;
-            }
-        }
-    }
+    const dims = try self.getElementDimensions(page);
 
     const x: f64 = 0.0;
     const top = y;
     const left = x;
-    const right = x + width;
-    const bottom = y + height;
+    const right = x + dims.width;
+    const bottom = y + dims.height;
 
     return page._factory.create(DOMRect{
         ._x = x,
         ._y = y,
-        ._width = width,
-        ._height = height,
+        ._width = dims.width,
+        ._height = dims.height,
         ._top = top,
         ._right = right,
         ._bottom = bottom,
@@ -810,11 +835,19 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
     });
 }
 
+pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
+    if (!try self.checkVisibility(page)) {
+        return &.{};
+    }
+    const ptr = try self.getBoundingClientRect(page);
+    return ptr[0..1];
+}
+
 // Calculates a pseudo-position in the document using an efficient heuristic.
 //
 // Instead of walking the entire DOM tree (which would be O(total_nodes)), this
 // function walks UP the tree counting previous siblings at each level. Each level
-// uses exponential weighting (1000x per depth level) to preserve document order.
+// uses exponential weighting (10x per depth level) to preserve document order.
 //
 // This gives O(depth * avg_siblings) complexity while maintaining relative positioning
 // that's useful for scraping and understanding element flow in the document.
@@ -825,15 +858,16 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
 //       <span></span>   → position 0 (0 siblings at level 2)
 //       <span></span>   → position 1 (1 sibling at level 2)
 //     </div>
-//     <div>             → position 1000 (1 sibling at level 1, weighted by 1000)
-//       <p></p>         → position 1000 (0 siblings at level 2, parent has 1000)
+//     <div>             → position 10 (1 sibling at level 1, weighted by 10)
+//       <p></p>         → position 10 (0 siblings at level 2, parent has 10)
 //     </div>
 //   </body>
 //
 // Trade-offs:
 // - Much faster than full tree-walking for deep/large DOMs
 // - Positions reflect document order and parent-child relationships
-// - Not pixel-accurate, but sufficient for 1x1 layout heuristics
+// - Keeps positions within reasonable bounds (10-level deep tree → ~10M pixels)
+// - Not pixel-accurate, but sufficient for layout heuristics
 fn calculateDocumentPosition(node: *Node) f64 {
     var position: f64 = 0.0;
     var multiplier: f64 = 1.0;
@@ -849,7 +883,7 @@ fn calculateDocumentPosition(node: *Node) f64 {
         }
 
         position += count * multiplier;
-        multiplier *= 1000.0;
+        multiplier *= 10.0;
         current = parent;
     }
 
@@ -1145,6 +1179,9 @@ pub const JsApi = struct {
     pub const getAnimations = bridge.function(Element.getAnimations, .{});
     pub const animate = bridge.function(Element.animate, .{});
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});
+    pub const clientWidth = bridge.accessor(Element.getClientWidth, null, .{});
+    pub const clientHeight = bridge.accessor(Element.getClientHeight, null, .{});
+    pub const getClientRects = bridge.function(Element.getClientRects, .{});
     pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
     pub const getElementsByClassName = bridge.function(Element.getElementsByClassName, .{});

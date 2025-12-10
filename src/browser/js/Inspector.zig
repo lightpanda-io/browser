@@ -123,14 +123,24 @@ pub fn getRemoteObject(
 }
 
 // Gets a value by object ID regardless of which context it is in.
-pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8) !?*anyopaque {
+// Our TaggedAnyOpaque stores the "resolved" ptr value (the most specific _type,
+// e.g. we store the ptr to the Div not the EventTarget). But, this is asking for
+// the pointer to the Node, so we need to use the same resolution mechanism which
+// is used when we're calling a function to turn the Div into a Node, which is
+// what Context.typeTaggedAnyOpaque does.
+pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8) !*anyopaque {
     const unwrapped = try self.session.unwrapObject(allocator, object_id);
     // The values context and groupId are not used here
-    const toa = getTaggedAnyOpaque(unwrapped.value) orelse return null;
-    if (toa.subtype == null or toa.subtype != .node) {
+    const js_val = unwrapped.value;
+    if (js_val.isObject() == false) {
+        std.debug.print("XX-0\n", .{});
         return error.ObjectIdIsNotANode;
     }
-    return toa.value;
+    const Node = @import("../webapi/Node.zig");
+    return Context.typeTaggedAnyOpaque(*Node, js_val.castTo(v8.Object)) catch {
+        std.debug.print("XX-1\n", .{});
+        return error.ObjectIdIsNotANode;
+    };
 }
 
 const NoopInspector = struct {

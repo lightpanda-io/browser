@@ -429,12 +429,13 @@ fn getBoxModel(cmd: anytype) !void {
 
     const rect = try element.getBoundingClientRect(page);
     const quad = rectToQuad(rect);
+    const zero = [_]f64{0.0} ** 8;
 
     return cmd.sendResult(.{ .model = BoxModel{
         .content = quad,
-        .padding = quad,
-        .border = quad,
-        .margin = quad,
+        .padding = zero,
+        .border = zero,
+        .margin = zero,
         .width = @intFromFloat(rect._width),
         .height = @intFromFloat(rect._height),
     } }, .{});
@@ -649,11 +650,11 @@ test "cdp.dom: getBoxModel" {
         .params = .{ .nodeId = 6 },
     });
     try ctx.expectSentResult(.{ .model = BoxModel{
-        .content = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
-        .padding = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
-        .border = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
-        .margin = Quad{ 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 },
-        .width = 1,
-        .height = 1,
+        .content = Quad{ 0.0, 0.0, 5.0, 0.0, 5.0, 5.0, 0.0, 5.0 },
+        .padding = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
+        .border = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
+        .margin = Quad{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 },
+        .width = 5,
+        .height = 5,
     } }, .{ .id = 5 });
 }

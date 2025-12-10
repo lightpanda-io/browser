@@ -142,7 +142,7 @@ fn calculateIntersection(
 ) !IntersectionData {
     const target_rect = try target.getBoundingClientRect(page);
 
-    // Use root element's rect or viewport (simplified: assume infinite viewport)
+    // Use root element's rect or viewport (simplified: assume 1920x1080)
     const root_rect = if (self._root) |root|
         try root.getBoundingClientRect(page)
     else
@@ -158,46 +158,19 @@ fn calculateIntersection(
             ._left = 0.0,
         });
 
-    // Calculate intersection rectangle
-    const left = @max(target_rect._left, root_rect._left);
-    const top = @max(target_rect._top, root_rect._top);
-    const right = @min(target_rect._right, root_rect._right);
-    const bottom = @min(target_rect._bottom, root_rect._bottom);
+    // For a headless browser without real layout, we treat all elements as fully visible.
+    // This avoids fingerprinting issues (massive viewports) and matches the behavior
+    // scripts expect when querying element visibility.
+    const is_intersecting = true;
+    const intersection_ratio: f64 = 1.0;
 
-    const is_intersecting = left < right and top < bottom;
-
-    var intersection_rect: ?*DOMRect = null;
-    var intersection_ratio: f64 = 0.0;
-
-    if (is_intersecting) {
-        const width = right - left;
-        const height = bottom - top;
-        const intersection_area = width * height;
-        const target_area = target_rect._width * target_rect._height;
-
-        if (target_area > 0) {
-            intersection_ratio = intersection_area / target_area;
-        }
-
-        intersection_rect = try page._factory.create(DOMRect{
-            ._x = left,
-            ._y = top,
-            ._width = width,
-            ._height = height,
-            ._top = top,
-            ._right = right,
-            ._bottom = bottom,
-            ._left = left,
-        });
-    } else {
-        // No intersection - reuse shared zero rect to avoid allocation
-        intersection_rect = &zero_rect;
-    }
+    // Intersection rect is the same as the target rect (fully visible)
+    const intersection_rect = target_rect;
 
     return .{
         .is_intersecting = is_intersecting,
         .intersection_ratio = intersection_ratio,
-        .intersection_rect = intersection_rect.?,
+        .intersection_rect = intersection_rect,
         .bounding_client_rect = target_rect,
         .root_bounds = root_rect,
     };
