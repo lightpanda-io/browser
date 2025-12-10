@@ -679,6 +679,19 @@ pub const Request = struct {
         xhr,
         script,
         fetch,
+
+        // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
+        // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
+        // SignedExchange, Ping, CSPViolationReport, Preflight, FedCM, Other
+        // https://chromedevtools.github.io/devtools-protocol/tot/Network/#type-ResourceType
+        pub fn string(self: ResourceType) []const u8 {
+            return switch (self) {
+                .document => "Document",
+                .xhr => "XHR",
+                .script => "Script",
+                .fetch => "Fetch",
+            };
+        }
     };
 };
 

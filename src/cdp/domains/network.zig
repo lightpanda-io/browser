@@ -248,9 +248,12 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.
         .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
         .frameId = target_id,
         .loaderId = bc.loader_id,
-        .documentUrl = DocumentUrlWriter.init(&page.url.uri),
+        .type = msg.transfer.req.resource_type.string(),
+        .documentURL = DocumentUrlWriter.init(&page.url.uri),
         .request = TransferAsRequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
+        .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
+        .hasUserGesture = false,
     }, .{ .session_id = session_id });
 }
 
@@ -266,6 +269,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
         .loaderId = bc.loader_id,
         .frameId = target_id,
         .response = TransferAsResponseWriter.init(arena, msg.transfer),
+        .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
 
