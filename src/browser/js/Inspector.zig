@@ -133,12 +133,10 @@ pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []con
     // The values context and groupId are not used here
     const js_val = unwrapped.value;
     if (js_val.isObject() == false) {
-        std.debug.print("XX-0\n", .{});
         return error.ObjectIdIsNotANode;
     }
     const Node = @import("../webapi/Node.zig");
     return Context.typeTaggedAnyOpaque(*Node, js_val.castTo(v8.Object)) catch {
-        std.debug.print("XX-1\n", .{});
         return error.ObjectIdIsNotANode;
     };
 }

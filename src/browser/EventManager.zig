@@ -39,6 +39,7 @@ page: *Page,
 arena: Allocator,
 listener_pool: std.heap.MemoryPool(Listener),
 lookup: std.AutoHashMapUnmanaged(usize, std.DoublyLinkedList),
+dispatch_depth: u32 = 0,
 
 pub fn init(page: *Page) EventManager {
     return .{
@@ -46,6 +47,7 @@ pub fn init(page: *Page) EventManager {
         .lookup = .{},
         .arena = page.arena,
         .listener_pool = std.heap.MemoryPool(Listener).init(page.arena),
+        .dispatch_depth = 0,
     };
 }
 
@@ -247,12 +249,27 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
     const page = self.page;
     const typ = event._type_string;
 
+    // Track that we're dispatching to prevent immediate removal
+    self.dispatch_depth += 1;
+    defer {
+        self.dispatch_depth -= 1;
+        // Clean up any marked listeners in this target's list after this phase
+        // We do this regardless of depth to handle cross-target removals correctly
+        self.cleanupMarkedListeners(list);
+    }
+
     var node = list.first;
     while (node) |n| {
         // do this now, in case we need to remove n (once: true or aborted signal)
         node = n.next;
 
         const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+
+        // Skip listeners that were marked for removal
+        if (listener.marked_for_removal) {
+            continue;
+        }
+
         if (!listener.typ.eql(typ)) {
             continue;
         }
@@ -310,8 +327,27 @@ fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target:
 }
 
 fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *Listener) void {
-    list.remove(&listener.node);
-    self.listener_pool.destroy(listener);
+    if (self.dispatch_depth > 0) {
+        // We're in the middle of dispatching, just mark for removal
+        // This prevents invalidating the linked list during iteration
+        listener.marked_for_removal = true;
+    } else {
+        // Safe to remove immediately
+        list.remove(&listener.node);
+        self.listener_pool.destroy(listener);
+    }
+}
+
+fn cleanupMarkedListeners(self: *EventManager, list: *std.DoublyLinkedList) void {
+    var node = list.first;
+    while (node) |n| {
+        node = n.next;
+        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+        if (listener.marked_for_removal) {
+            list.remove(&listener.node);
+            self.listener_pool.destroy(listener);
+        }
+    }
 }
 
 fn findListener(list: *const std.DoublyLinkedList, typ: []const u8, function: js.Function, capture: bool) ?*Listener {
@@ -341,6 +377,7 @@ const Listener = struct {
     function: Function,
     signal: ?*@import("webapi/AbortSignal.zig") = null,
     node: std.DoublyLinkedList.Node,
+    marked_for_removal: bool = false,
 };
 
 const Function = union(enum) {

@@ -319,14 +319,20 @@
 </script>
 
 <script id=objectWithoutHandleEvent>
-  // Test object without handleEvent (should be ignored)
+  // Test that registration succeeds even with invalid handlers
+  // (Dispatch behavior differs: spec-compliant browsers throw, some ignore)
   const badHandler = { foo: 'bar' };
-  let badHandlerTestPassed = false;
+  let registrationSucceeded = false;
   window.addEventListener('testbad', badHandler);
-  // Event should not be triggered since there's no valid handler
-  window.dispatchEvent(new Event('testbad'));
-  badHandlerTestPassed = true;
-  testing.expectEqual(true, badHandlerTestPassed);
+  registrationSucceeded = true;
+  testing.expectEqual(true, registrationSucceeded);
+
+  // Test object with handleEvent that's not a function
+  const badHandler2 = { handleEvent: 'not a function' };
+  let registrationSucceeded2 = false;
+  window.addEventListener('testbad2', badHandler2);
+  registrationSucceeded2 = true;
+  testing.expectEqual(true, registrationSucceeded2);
 </script>
 
 <script id=passiveDetection>
@@ -346,4 +352,148 @@
   }
 
   testing.expectEqual(true, passiveSupported);
+</script>
+
+<div id=reentrancy_test></div>
+<script id=removeOtherListenerDuringDispatch>
+  // Test that removing another listener during dispatch doesn't crash
+  // This reproduces the segfault bug where n.next becomes invalid
+  const reentrancy_el = $('#reentrancy_test');
+  let reentrancy_calls = [];
+
+  const listener1 = () => {
+    reentrancy_calls.push(1);
+  };
+
+  const listener2 = () => {
+    reentrancy_calls.push(2);
+    // Remove listener3 while we're still iterating the listener list
+    reentrancy_el.removeEventListener('reentrancy', listener3);
+  };
+
+  const listener3 = () => {
+    reentrancy_calls.push(3);
+  };
+
+  const listener4 = () => {
+    reentrancy_calls.push(4);
+  };
+
+  reentrancy_el.addEventListener('reentrancy', listener1);
+  reentrancy_el.addEventListener('reentrancy', listener2);
+  reentrancy_el.addEventListener('reentrancy', listener3);
+  reentrancy_el.addEventListener('reentrancy', listener4);
+
+  reentrancy_el.dispatchEvent(new Event('reentrancy'));
+
+  // listener3 was removed during dispatch by listener2, so it should not fire
+  // But listener4 should still fire
+  testing.expectEqual(1, reentrancy_calls[0]);
+  testing.expectEqual(2, reentrancy_calls[1]);
+  testing.expectEqual(4, reentrancy_calls[2]);
+  testing.expectEqual(3, reentrancy_calls.length);
+</script>
+
+<div id=self_remove_test></div>
+<script id=removeSelfDuringDispatch>
+  // Test that a listener can remove itself during dispatch
+  const self_remove_el = $('#self_remove_test');
+  let self_remove_calls = [];
+
+  const selfRemovingListener = () => {
+    self_remove_calls.push('self');
+    self_remove_el.removeEventListener('selfremove', selfRemovingListener);
+  };
+
+  const otherListener = () => {
+    self_remove_calls.push('other');
+  };
+
+  self_remove_el.addEventListener('selfremove', selfRemovingListener);
+  self_remove_el.addEventListener('selfremove', otherListener);
+
+  // First dispatch - selfRemovingListener should fire and remove itself
+  self_remove_el.dispatchEvent(new Event('selfremove'));
+  testing.expectEqual('self', self_remove_calls[0]);
+  testing.expectEqual('other', self_remove_calls[1]);
+  testing.expectEqual(2, self_remove_calls.length);
+
+  // Second dispatch - only otherListener should fire
+  self_remove_el.dispatchEvent(new Event('selfremove'));
+  testing.expectEqual('other', self_remove_calls[2]);
+  testing.expectEqual(3, self_remove_calls.length);
+</script>
+
+<div id=multi_remove_test></div>
+<script id=removeMultipleListenersDuringDispatch>
+  // Test removing multiple listeners during dispatch (stress test)
+  const multi_el = $('#multi_remove_test');
+  let multi_calls = [];
+
+  const listeners = [];
+  for (let i = 0; i < 10; i++) {
+    const listener = () => {
+      multi_calls.push(i);
+      // Each even-numbered listener removes the next two listeners
+      if (i % 2 === 0 && listeners[i + 1] && listeners[i + 2]) {
+        multi_el.removeEventListener('multiremove', listeners[i + 1]);
+        multi_el.removeEventListener('multiremove', listeners[i + 2]);
+      }
+    };
+    listeners.push(listener);
+    multi_el.addEventListener('multiremove', listener);
+  }
+
+  multi_el.dispatchEvent(new Event('multiremove'));
+
+  // Should see: 0 (removes 1,2), 3 (but 1,2 already removed), 4 (removes 5,6), 7 (but 5,6 already removed), 8 (doesn't remove because listeners[10] doesn't exist), 9 (not removed)
+  // Expected: 0, 3, 4, 7, 8, 9
+  testing.expectEqual(0, multi_calls[0]);
+  testing.expectEqual(3, multi_calls[1]);
+  testing.expectEqual(4, multi_calls[2]);
+  testing.expectEqual(7, multi_calls[3]);
+  testing.expectEqual(8, multi_calls[4]);
+  testing.expectEqual(9, multi_calls[5]);
+  testing.expectEqual(6, multi_calls.length);
+</script>
+
+<div id=nested_dispatch_test></div>
+<script id=nestedDispatchWithRemoval>
+  // Test nested event dispatch with listener removal
+  const nested_el = $('#nested_dispatch_test');
+  let nested_calls = [];
+
+  const inner1 = () => {
+    nested_calls.push('inner1');
+  };
+
+  const inner2 = () => {
+    nested_calls.push('inner2');
+  };
+
+  const outer = () => {
+    nested_calls.push('outer-start');
+    // Dispatch another event in the middle of handling this one
+    nested_el.dispatchEvent(new Event('inner'));
+    nested_calls.push('outer-end');
+    // Remove a listener after the nested dispatch
+    nested_el.removeEventListener('inner', inner2);
+  };
+
+  nested_el.addEventListener('outer', outer);
+  nested_el.addEventListener('inner', inner1);
+  nested_el.addEventListener('inner', inner2);
+
+  nested_el.dispatchEvent(new Event('outer'));
+
+  // Should see outer-start, then both inner listeners, then outer-end
+  testing.expectEqual('outer-start', nested_calls[0]);
+  testing.expectEqual('inner1', nested_calls[1]);
+  testing.expectEqual('inner2', nested_calls[2]);
+  testing.expectEqual('outer-end', nested_calls[3]);
+
+  // Dispatch inner again - inner2 should be gone
+  nested_el.dispatchEvent(new Event('inner'));
+  testing.expectEqual('inner1', nested_calls[4]);
+  testing.expectEqual(5, nested_calls.length);
 </script>
