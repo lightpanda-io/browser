@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -27,19 +27,30 @@ _proto: *Event,
 _detail: u32,
 _view: *Window,
 
-pub const EventOptions = struct {
+pub const UIEventOptions = struct {
     detail: u32 = 0,
     view: ?*Window = null,
 };
 
-pub fn init(typ: []const u8, _options: ?EventOptions, page: *Page) !*UIEvent {
-    const options = _options orelse EventOptions{};
+const Options = Event.inheritOptions(
+    UIEvent,
+    UIEventOptions,
+);
 
-    return page._factory.event(typ, UIEvent{
-        ._proto = undefined,
-        ._detail = options.detail,
-        ._view = options.view,
-    });
+pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
+    const opts = _opts orelse Options{};
+
+    const event = try page._factory.event(
+        typ,
+        UIEvent{
+            ._proto = undefined,
+            ._detail = opts.detail,
+            ._view = opts.view orelse page.window,
+        },
+    );
+
+    Event.populatePrototypes(event, opts);
+    return event;
 }
 
 pub fn asEvent(self: *UIEvent) *Event {
@@ -56,6 +67,8 @@ pub fn getView(self: *UIEvent) *Window {
     return self._view;
 }
 
+// deprecated `initUIEvent()` not implemented
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(UIEvent);
 
@@ -69,3 +82,8 @@ pub const JsApi = struct {
     pub const detail = bridge.accessor(UIEvent.getDetail, null, .{});
     pub const view = bridge.accessor(UIEvent.getView, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: UIEvent" {
+    try testing.htmlRunner("event/ui.html", .{});
+}
