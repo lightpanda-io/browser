@@ -27,14 +27,15 @@ const Page = @import("../Page.zig");
 const Blob = @This();
 
 const _prototype_root = true;
+
 _type: Type,
 
 /// Immutable slice of blob.
 /// Note that another blob may hold a pointer/slice to this,
 /// so its better to leave the deallocation of it to arena allocator.
-slice: []const u8,
+_slice: []const u8,
 /// MIME attached to blob. Can be an empty string.
-mime: []const u8,
+_mime: []const u8,
 
 pub const Type = union(enum) {
     generic,
@@ -66,7 +67,7 @@ pub fn init(
         break :blk try page.arena.dupe(u8, t);
     };
 
-    const slice = blk: {
+    const data = blk: {
         if (maybe_blob_parts) |blob_parts| {
             var w: Writer.Allocating = .init(page.arena);
             const use_native_endings = std.mem.eql(u8, options.endings, "native");
@@ -80,8 +81,8 @@ pub fn init(
 
     return page._factory.create(Blob{
         ._type = .generic,
-        .slice = slice,
-        .mime = mime,
+        ._slice = data,
+        ._mime = mime,
     });
 }
 
@@ -147,8 +148,8 @@ fn writeBlobParts(
             while (end + vector_len <= part.len) : (end += vector_len) {
                 const cr: Vec = @splat('\r');
                 // Load chunk as vectors.
-                const slice = part[end..][0..vector_len];
-                const chunk: Vec = slice.*;
+                const data = part[end..][0..vector_len];
+                const chunk: Vec = data.*;
                 // Look for CR.
                 const match = chunk == cr;
 
@@ -160,16 +161,16 @@ fn writeBlobParts(
                 var iter = bitset.iterator(.{});
                 var relative_start: usize = 0;
                 while (iter.next()) |index| {
-                    _ = try writer.writeVec(&.{ slice[relative_start..index], "\n" });
+                    _ = try writer.writeVec(&.{ data[relative_start..index], "\n" });
 
-                    if (index + 1 != slice.len and slice[index + 1] == '\n') {
+                    if (index + 1 != data.len and data[index + 1] == '\n') {
                         relative_start = index + 2;
                     } else {
                         relative_start = index + 1;
                     }
                 }
 
-                _ = try writer.writeVec(&.{slice[relative_start..]});
+                _ = try writer.writeVec(&.{data[relative_start..]});
             }
         }
 
@@ -204,16 +205,21 @@ fn writeBlobParts(
 
 /// Returns a Promise that resolves with the contents of the blob
 /// as binary data contained in an ArrayBuffer.
-//pub fn arrayBuffer(self: *const Blob, page: *Page) !js.Promise {
-//    return page.js.resolvePromise(js.ArrayBuffer{ .values = self.slice });
-//}
+pub fn arrayBuffer(self: *const Blob, page: *Page) !js.Promise {
+    return page.js.resolvePromise(js.ArrayBuffer{ .values = self._slice });
+}
 
-// TODO: Implement `stream`; requires `ReadableStream`.
+const ReadableStream = @import("streams/ReadableStream.zig");
+/// Returns a ReadableStream which upon reading returns the data
+/// contained within the Blob.
+pub fn stream(self: *const Blob, page: *Page) !*ReadableStream {
+    return ReadableStream.initWithData(self._slice, page);
+}
 
 /// Returns a Promise that resolves with a string containing
 /// the contents of the blob, interpreted as UTF-8.
 pub fn text(self: *const Blob, page: *Page) !js.Promise {
-    return page.js.resolvePromise(self.slice);
+    return page.js.resolvePromise(self._slice);
 }
 
 /// Extension to Blob; works on Firefox and Safari.
@@ -221,12 +227,12 @@ pub fn text(self: *const Blob, page: *Page) !js.Promise {
 /// Returns a Promise that resolves with a Uint8Array containing
 /// the contents of the blob as an array of bytes.
 pub fn bytes(self: *const Blob, page: *Page) !js.Promise {
-    return page.js.resolvePromise(js.TypedArray(u8){ .values = self.slice });
+    return page.js.resolvePromise(js.TypedArray(u8){ .values = self._slice });
 }
 
 /// Returns a new Blob object which contains data
 /// from a subset of the blob on which it's called.
-pub fn getSlice(
+pub fn slice(
     self: *const Blob,
     maybe_start: ?i32,
     maybe_end: ?i32,
@@ -239,56 +245,56 @@ pub fn getSlice(
                 break :blk "";
             }
 
-            break :blk try page.arena.dupe(u8, content_type);
+            break :blk try page.dupeString(content_type);
         }
 
         break :blk "";
     };
 
-    const slice = self.slice;
+    const data = self._slice;
     if (maybe_start) |_start| {
         const start = blk: {
             if (_start < 0) {
-                break :blk slice.len -| @abs(_start);
+                break :blk data.len -| @abs(_start);
             }
 
-            break :blk @min(slice.len, @as(u31, @intCast(_start)));
+            break :blk @min(data.len, @as(u31, @intCast(_start)));
         };
 
         const end: usize = blk: {
             if (maybe_end) |_end| {
                 if (_end < 0) {
-                    break :blk @max(start, slice.len -| @abs(_end));
+                    break :blk @max(start, data.len -| @abs(_end));
                 }
 
-                break :blk @min(slice.len, @max(start, @as(u31, @intCast(_end))));
+                break :blk @min(data.len, @max(start, @as(u31, @intCast(_end))));
             }
 
-            break :blk slice.len;
+            break :blk data.len;
         };
 
         return page._factory.create(Blob{
             ._type = .generic,
-            .slice = slice[start..end],
-            .mime = mime,
+            ._slice = data[start..end],
+            ._mime = mime,
         });
     }
 
     return page._factory.create(Blob{
         ._type = .generic,
-        .slice = slice,
-        .mime = mime,
+        ._slice = data,
+        ._mime = mime,
     });
 }
 
 /// Returns the size of the Blob in bytes.
 pub fn getSize(self: *const Blob) usize {
-    return self.slice.len;
+    return self._slice.len;
 }
 
 /// Returns the type of Blob; likely a MIME type, yet anything can be given.
 pub fn getType(self: *const Blob) []const u8 {
-    return self.mime;
+    return self._mime;
 }
 
 pub const JsApi = struct {
@@ -303,9 +309,11 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Blob.init, .{});
     pub const text = bridge.function(Blob.text, .{});
     pub const bytes = bridge.function(Blob.bytes, .{});
-    pub const slice = bridge.function(Blob.getSlice, .{});
+    pub const slice = bridge.function(Blob.slice, .{});
     pub const size = bridge.accessor(Blob.getSize, null, .{});
     pub const @"type" = bridge.accessor(Blob.getType, null, .{});
+    pub const stream = bridge.function(Blob.stream, .{});
+    pub const arrayBuffer = bridge.function(Blob.arrayBuffer, .{});
 };
 
 const testing = @import("../../testing.zig");
