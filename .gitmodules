@@ -4,9 +4,6 @@
 [submodule "vendor/nghttp2"]
 	path = vendor/nghttp2
 	url = https://github.com/nghttp2/nghttp2.git
-[submodule "vendor/mbedtls"]
-	path = vendor/mbedtls
-	url = https://github.com/Mbed-TLS/mbedtls.git
 [submodule "vendor/zlib"]
 	path = vendor/zlib
 	url = https://github.com/madler/zlib.git
