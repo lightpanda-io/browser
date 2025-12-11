@@ -218,7 +218,7 @@ pub fn addFromElement(self: *ScriptManager, script_element: *Element.Html.Script
         .url = remote_url orelse page.url,
         .mode = blk: {
             if (source == .@"inline") {
-                break :blk .normal;
+                break :blk if (kind == .module) .@"defer" else .normal;
             }
             if (element.getAttributeSafe("async") != null) {
                 break :blk .async;

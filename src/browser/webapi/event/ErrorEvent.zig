@@ -103,7 +103,7 @@ pub const JsApi = struct {
     pub const filename = bridge.accessor(ErrorEvent.getFilename, null, .{});
     pub const lineno = bridge.accessor(ErrorEvent.getLineNumber, null, .{});
     pub const colno = bridge.accessor(ErrorEvent.getColumnNumber, null, .{});
-    pub const @"error" = bridge.accessor(ErrorEvent.getError, null, .{});
+    pub const @"error" = bridge.accessor(ErrorEvent.getError, null, .{ .null_as_undefined = true });
 };
 
 const testing = @import("../../../testing.zig");
