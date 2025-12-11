@@ -32,7 +32,7 @@ const PageTransitionEventOptions = struct {
     persisted: ?bool = false,
 };
 
-pub const Options = Event.inheritOptions(PageTransitionEvent, PageTransitionEventOptions);
+const Options = Event.inheritOptions(PageTransitionEvent, PageTransitionEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PageTransitionEvent {
     const opts = _opts orelse Options{};

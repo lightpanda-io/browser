@@ -32,7 +32,7 @@ const PopStateEventOptions = struct {
     state: ?[]const u8 = null,
 };
 
-pub const Options = Event.inheritOptions(PopStateEvent, PopStateEventOptions);
+const Options = Event.inheritOptions(PopStateEvent, PopStateEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PopStateEvent {
     const opts = _opts orelse Options{};

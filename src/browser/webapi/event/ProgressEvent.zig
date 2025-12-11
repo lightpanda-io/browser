@@ -31,7 +31,7 @@ const ProgressEventOptions = struct {
     lengthComputable: bool = false,
 };
 
-pub const Options = Event.inheritOptions(ProgressEvent, ProgressEventOptions);
+const Options = Event.inheritOptions(ProgressEvent, ProgressEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*ProgressEvent {
     const opts = _opts orelse Options{};

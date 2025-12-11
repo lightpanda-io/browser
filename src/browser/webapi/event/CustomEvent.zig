@@ -33,7 +33,7 @@ const CustomEventOptions = struct {
     detail: ?js.Object = null,
 };
 
-pub const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
+const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     const arena = page.arena;

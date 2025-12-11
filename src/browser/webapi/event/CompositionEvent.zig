@@ -30,7 +30,7 @@ const CompositionEventOptions = struct {
     data: ?[]const u8 = null,
 };
 
-pub const Options = Event.inheritOptions(CompositionEvent, CompositionEventOptions);
+const Options = Event.inheritOptions(CompositionEvent, CompositionEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
     const opts = opts_ orelse Options{};

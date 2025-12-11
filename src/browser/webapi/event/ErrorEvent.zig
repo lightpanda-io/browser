@@ -41,7 +41,7 @@ pub const ErrorEventOptions = struct {
     @"error": ?js.Object = null,
 };
 
-pub const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
+const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
     const arena = page.arena;

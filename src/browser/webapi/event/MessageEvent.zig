@@ -35,7 +35,7 @@ const MessageEventOptions = struct {
     source: ?*Window = null,
 };
 
-pub const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
+const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
     const opts = opts_ orelse Options{};

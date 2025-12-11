@@ -35,7 +35,7 @@ const NavigationCurrentEntryChangeEventOptions = struct {
     navigationType: ?[]const u8 = null,
 };
 
-pub const Options = Event.inheritOptions(
+const Options = Event.inheritOptions(
     NavigationCurrentEntryChangeEvent,
     NavigationCurrentEntryChangeEventOptions,
 );
