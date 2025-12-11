@@ -83,6 +83,7 @@ pub const Page = struct {
 
     // indicates intention to navigate to another page on the next loop execution.
     delayed_navigation: bool = false,
+    navigated_options: ?NavigatedOpts = null,
 
     state_pool: *std.heap.MemoryPool(State),
 
@@ -574,6 +575,11 @@ pub const Page = struct {
             });
 
             self.session.browser.notification.dispatch(.page_navigated, &.{
+                .opts = .{
+                    .cdp_id = opts.cdp_id,
+                    .reason = opts.reason,
+                    .method = opts.method,
+                },
                 .url = request_url,
                 .timestamp = timestamp(),
             });
@@ -583,6 +589,12 @@ pub const Page = struct {
 
         const owned_url = try self.arena.dupeZ(u8, request_url);
         self.url = try URL.parse(owned_url, null);
+
+        self.navigated_options = .{
+            .cdp_id = opts.cdp_id,
+            .reason = opts.reason,
+            .method = opts.method,
+        };
 
         var headers = try self.http_client.newHeaders();
         if (opts.header) |hdr| try headers.add(hdr);
@@ -656,7 +668,9 @@ pub const Page = struct {
             log.err(.browser, "document is complete", .{ .err = err });
         };
 
+        std.debug.assert(self.navigated_options != null);
         self.session.browser.notification.dispatch(.page_navigated, &.{
+            .opts = self.navigated_options.?,
             .url = self.url.raw,
             .timestamp = timestamp(),
         });
@@ -1262,6 +1276,12 @@ pub const NavigateOpts = struct {
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     force: bool = false,
+};
+
+pub const NavigatedOpts = struct {
+    cdp_id: ?i64 = null,
+    reason: NavigateReason = .address_bar,
+    method: Http.Method = .GET,
 };
 
 const IdleNotification = union(enum) {
