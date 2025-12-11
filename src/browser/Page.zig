@@ -659,10 +659,13 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
 
                     const ms = ms_to_next_task orelse blk: {
                         if (wait_ms - ms_remaining < 100) {
+                            if (comptime builtin.is_test) {
+                                return .done;
+                            }
                             // Look, we want to exit ASAP, but we don't want
                             // to exit so fast that we've run none of the
                             // background jobs.
-                            break :blk if (comptime builtin.is_test) 1 else 50;
+                            break :blk 50;
                         }
                         // No http transfers, no cdp extra socket, no
                         // scheduled tasks, we're done.
