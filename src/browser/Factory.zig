@@ -196,8 +196,8 @@ pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
     const blob_ptr = chain.get(0);
     blob_ptr.* = .{
         ._type = unionInit(Blob.Type, chain.get(1)),
-        .slice = "",
-        .mime = "",
+        ._slice = "",
+        ._mime = "",
     };
     chain.setLeaf(1, child);
 
