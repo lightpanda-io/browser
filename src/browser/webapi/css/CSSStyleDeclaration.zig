@@ -24,6 +24,8 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 
+const CSSTokenizer = @import("../../css/Tokenizer.zig");
+
 const CSSStyleDeclaration = @This();
 
 _element: ?*Element = null,
@@ -130,6 +132,15 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !vo
         self._properties.remove(n);
         page._factory.destroy(prop);
         node = next;
+    }
+
+    var tokenizer = CSSTokenizer{ .input = text };
+    while (tokenizer.next()) |token| {
+        switch (token) {
+            .white_space => continue,
+            else => {},
+        }
+        std.log.debug("token: {}", .{token});
     }
 
     // Parse and set new properties
