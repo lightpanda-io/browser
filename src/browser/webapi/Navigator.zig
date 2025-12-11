@@ -25,15 +25,19 @@ _pad: bool = false,
 pub const init: Navigator = .{};
 
 pub fn getUserAgent(_: *const Navigator) []const u8 {
-    return "Mozilla/5.0 (compatible; LiteFetch/0.1)";
+    return "Lightpanda/1.0";
 }
 
 pub fn getAppName(_: *const Navigator) []const u8 {
-    return "LiteFetch";
+    return "Netscape";
+}
+
+pub fn getAppCodeName(_: *const Navigator) []const u8 {
+    return "Netscape";
 }
 
 pub fn getAppVersion(_: *const Navigator) []const u8 {
-    return "0.1";
+    return "1.0";
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
@@ -73,7 +77,7 @@ pub fn getMaxTouchPoints(_: *const Navigator) u32 {
 
 /// Returns the vendor name
 pub fn getVendor(_: *const Navigator) []const u8 {
-    return "LiteFetch";
+    return "";
 }
 
 /// Returns the product name (typically "Gecko" for compatibility)
@@ -104,6 +108,7 @@ pub const JsApi = struct {
     // Read-only properties
     pub const userAgent = bridge.accessor(Navigator.getUserAgent, null, .{});
     pub const appName = bridge.accessor(Navigator.getAppName, null, .{});
+    pub const appCodeName = bridge.accessor(Navigator.getAppCodeName, null, .{});
     pub const appVersion = bridge.accessor(Navigator.getAppVersion, null, .{});
     pub const platform = bridge.accessor(Navigator.getPlatform, null, .{});
     pub const language = bridge.accessor(Navigator.getLanguage, null, .{});

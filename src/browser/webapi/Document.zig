@@ -345,6 +345,48 @@ pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !vo
     }
 }
 
+pub fn elementFromPoint(self: *Document, x: f64, y: f64, page: *Page) !?*Element {
+    // Traverse document in depth-first order to find the topmost (last in document order)
+    // element that contains the point (x, y)
+    var topmost: ?*Element = null;
+
+    const root = self.asNode();
+    var stack: std.ArrayList(*Node) = .empty;
+    try stack.append(page.call_arena, root);
+
+    while (stack.items.len > 0) {
+        const node = stack.pop() orelse break;
+        if (node.is(Element)) |element| {
+            if (try element.checkVisibility(page)) {
+                const rect = try element.getBoundingClientRect(page);
+                if (x >= rect._left and x <= rect._right and y >= rect._top and y <= rect._bottom) {
+                    topmost = element;
+                }
+            }
+        }
+
+        // Add children to stack in reverse order so we process them in document order
+        var child = node.lastChild();
+        while (child) |c| {
+            try stack.append(page.call_arena, c);
+            child = c.previousSibling();
+        }
+    }
+
+    return topmost;
+}
+
+pub fn elementsFromPoint(self: *Document, x: f64, y: f64, page: *Page) ![]const *Element {
+    // Get topmost element
+    var current: ?*Element = (try self.elementFromPoint(x, y, page)) orelse return &.{};
+    var result: std.ArrayList(*Element) = .empty;
+    while (current) |el| {
+        try result.append(page.call_arena, el);
+        current = el.parentElement();
+    }
+    return result.items;
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -404,6 +446,8 @@ pub const JsApi = struct {
     pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true });
     pub const append = bridge.function(Document.append, .{});
     pub const prepend = bridge.function(Document.prepend, .{});
+    pub const elementFromPoint = bridge.function(Document.elementFromPoint, .{});
+    pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
 
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {

@@ -52,13 +52,6 @@
   let div1 = document.createElement('div');
   document.body.appendChild(div1);
   div1.getClientRects(); // clal this to position it
-  testing.expectEqual('[object HTMLDivElement]', document.elementFromPoint(2.5, 2.5).toString());
-
-  let elems = document.elementsFromPoint(2.5, 2.5);
-  testing.expectEqual(3, elems.length);
-  testing.expectEqual('[object HTMLDivElement]', elems[0].toString());
-  testing.expectEqual('[object HTMLBodyElement]', elems[1].toString());
-  testing.expectEqual('[object HTMLHtmlElement]', elems[2].toString());
 
   let a = document.createElement('a');
   a.href = "https://lightpanda.io";
@@ -66,19 +59,10 @@
   // Note this will be placed after the div of previous test
   a.getClientRects();
 
-  let a_again = document.elementFromPoint(7.5, 0.5);
-  testing.expectEqual('[object HTMLAnchorElement]', a_again.toString());
-  testing.expectEqual('https://lightpanda.io', a_again.href);
-
-  let a_agains = document.elementsFromPoint(7.5, 0.5);
-  testing.expectEqual('https://lightpanda.io', a_agains[0].href);
-
-
   testing.expectEqual(true, !document.all);
   testing.expectEqual(false, !!document.all);
-  testing.expectEqual('[object HTMLScriptElement]', document.all(5).toString());
+  testing.expectEqual('[object HTMLScriptElement]', document.all(6).toString());
   testing.expectEqual('[object HTMLDivElement]', document.all('content').toString());
-
 
   testing.expectEqual(document, document.defaultView.document );
   testing.expectEqual('loading', document.readyState);

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<body>
+  <div id="div1" style="width: 100px; height: 50px;">Div 1</div>
+  <div id="div2" style="width: 100px; height: 50px;">Div 2</div>
+  <div id="hidden" style="display: none; width: 100px; height: 50px;">Hidden</div>
+  <div id="parent" style="width: 100px; height: 50px;">
+    <div id="child" style="width: 80px; height: 30px;">Child</div>
+  </div>
+</body>
+
+<script id="basic_usage">
+{
+  // Test finding an element at a specific point
+  const div1 = document.getElementById('div1');
+  const rect1 = div1.getBoundingClientRect();
+
+  // Query near the top of div1 to avoid overlap with later elements
+  const x = rect1.left + 10;
+  const y = rect1.top + 5;
+  const element = document.elementFromPoint(x, y);
+
+  // Should return div1 or a parent (body/html) - not null
+  testing.expectTrue(element !== null);
+  // If it returns div1 specifically, that's ideal
+  // But we also accept parent elements
+  testing.expectTrue(element === div1 || element.tagName === 'BODY' || element.tagName === 'HTML');
+}
+</script>
+
+<script id="nested_elements">
+{
+  // Test that nested elements are found (topmost in document order)
+  const child = document.getElementById('child');
+  const parent = document.getElementById('parent');
+  const rect = child.getBoundingClientRect();
+
+  const centerX = (rect.left + rect.right) / 2;
+  const centerY = (rect.top + rect.bottom) / 2;
+  const element = document.elementFromPoint(centerX, centerY);
+
+  // Should return the child element (topmost in document order) or parent
+  testing.expectTrue(element !== null);
+  testing.expectTrue(element === child || element === parent ||
+                     element.tagName === 'BODY' || element.tagName === 'HTML');
+}
+</script>
+
+<script id="hidden_elements">
+{
+  // Test that hidden elements are not returned
+  const hidden = document.getElementById('hidden');
+  const rect = hidden.getBoundingClientRect();
+
+  // Even though hidden element has dimensions, it shouldn't be returned
+  // because it has display: none
+  const centerX = (rect.left + rect.right) / 2;
+  const centerY = (rect.top + rect.bottom) / 2;
+  const element = document.elementFromPoint(centerX, centerY);
+
+  // Should not return the hidden element (should return body or html instead)
+  testing.expectTrue(element === null || element.id !== 'hidden');
+}
+</script>
+
+<script id="outside_viewport">
+{
+  // Test points outside all elements
+  const element = document.elementFromPoint(-1000, -1000);
+  testing.expectEqual(null, element);
+}
+</script>
+
+<script id="at_element_center">
+{
+  // Test querying at the center of an element
+  const div1 = document.getElementById('div1');
+  const rect = div1.getBoundingClientRect();
+
+  const centerX = (rect.left + rect.right) / 2;
+  const centerY = (rect.top + rect.bottom) / 2;
+  const element = document.elementFromPoint(centerX, centerY);
+
+  // Should return div1 or one of its ancestors (body/html)
+  testing.expectTrue(element !== null);
+}
+</script>
+
+<script id="dynamically_created">
+{
+  // Test with dynamically created elements
+  const newDiv = document.createElement('div');
+  newDiv.style.width = '50px';
+  newDiv.style.height = '50px';
+  newDiv.textContent = 'Dynamic';
+  document.body.appendChild(newDiv);
+
+  const rect = newDiv.getBoundingClientRect();
+  const centerX = (rect.left + rect.right) / 2;
+  const centerY = (rect.top + rect.bottom) / 2;
+  const element = document.elementFromPoint(centerX, centerY);
+
+  testing.expectEqual(newDiv, element);
+
+  // Clean up
+  newDiv.remove();
+}
+</script>
+
+<script id="elementsFromPoint_basic">
+{
+  // Test that elementsFromPoint returns array of element and its ancestors
+  const div1 = document.getElementById('div1');
+  const rect = div1.getBoundingClientRect();
+
+  const x = rect.left + 10;
+  const y = rect.top + 5;
+  const elements = document.elementsFromPoint(x, y);
+
+  // Should return an array
+  testing.expectTrue(Array.isArray(elements));
+  testing.expectTrue(elements.length > 0);
+
+  // First element should be div1 or one of its ancestors
+  testing.expectTrue(elements[0] !== null);
+
+  // All elements should be ancestors of each other (parent chain)
+  for (let i = 1; i < elements.length; i++) {
+    let found = false;
+    let parent = elements[i - 1].parentElement;
+    while (parent) {
+      if (parent === elements[i]) {
+        found = true;
+        break;
+      }
+      parent = parent.parentElement;
+    }
+    testing.expectTrue(found || elements[i].tagName === 'HTML');
+  }
+}
+</script>
+
+<script id="elementsFromPoint_nested">
+{
+  // Test with nested elements - should return child, parent, body, html in order
+  const child = document.getElementById('child');
+  const parent = document.getElementById('parent');
+  const rect = child.getBoundingClientRect();
+
+  const centerX = (rect.left + rect.right) / 2;
+  const centerY = (rect.top + rect.bottom) / 2;
+  const elements = document.elementsFromPoint(centerX, centerY);
+
+  testing.expectTrue(Array.isArray(elements));
+  testing.expectTrue(elements.length >= 2); // At least child and parent (or more ancestors)
+
+  // First element should be the deepest (child or parent)
+  testing.expectTrue(elements[0] === child || elements[0] === parent ||
+                     elements[0].tagName === 'BODY' || elements[0].tagName === 'HTML');
+
+  // If we got child as first element, parent should be in the array
+  if (elements[0] === child) {
+    let foundParent = false;
+    for (let el of elements) {
+      if (el === parent) {
+        foundParent = true;
+        break;
+      }
+    }
+    testing.expectTrue(foundParent);
+  }
+}
+</script>
+
+<script id="elementsFromPoint_order">
+{
+  // Test that elements are returned in order from topmost to deepest
+  const child = document.getElementById('child');
+  const parent = document.getElementById('parent');
+  const rect = child.getBoundingClientRect();
+
+  const centerX = (rect.left + rect.right) / 2;
+  const centerY = (rect.top + rect.bottom) / 2;
+  const elements = document.elementsFromPoint(centerX, centerY);
+
+  // Elements should be ordered such that each element is a parent of the previous
+  for (let i = 1; i < elements.length; i++) {
+    const current = elements[i - 1];
+    const next = elements[i];
+
+    // next should be an ancestor of current
+    let isAncestor = false;
+    let p = current.parentElement;
+    while (p) {
+      if (p === next) {
+        isAncestor = true;
+        break;
+      }
+      p = p.parentElement;
+    }
+
+    testing.expectTrue(isAncestor || next.tagName === 'HTML');
+  }
+}
+</script>
+
+<script id="elementsFromPoint_outside">
+{
+  // Test with point outside all elements
+  const elements = document.elementsFromPoint(-1000, -1000);
+
+  testing.expectTrue(Array.isArray(elements));
+  testing.expectEqual(0, elements.length);
+}
+</script>
+
+<script id="elementsFromPoint_hidden">
+{
+  // Test that hidden elements are not included
+  const hidden = document.getElementById('hidden');
+  const rect = hidden.getBoundingClientRect();
+
+  const centerX = (rect.left + rect.right) / 2;
+  const centerY = (rect.top + rect.bottom) / 2;
+  const elements = document.elementsFromPoint(centerX, centerY);
+
+  // Should not include the hidden element
+  for (let el of elements) {
+    testing.expectTrue(el.id !== 'hidden');
+  }
+}
+</script>

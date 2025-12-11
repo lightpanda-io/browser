@@ -30,11 +30,6 @@ const HTMLOptionsCollection = @This();
 _proto: *HTMLCollection,
 _select: *@import("../element/html/Select.zig"),
 
-pub fn deinit(self: *HTMLOptionsCollection) void {
-    const page = Page.current;
-    page._factory.destroy(self);
-}
-
 // Forward length to HTMLCollection
 pub fn length(self: *HTMLOptionsCollection, page: *Page) u32 {
     return self._proto.length(page);
@@ -102,7 +97,6 @@ pub const JsApi = struct {
         pub const name = "HTMLOptionsCollection";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const finalizer = HTMLOptionsCollection.deinit;
         pub const manage = false;
     };
 

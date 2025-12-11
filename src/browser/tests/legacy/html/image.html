@@ -26,7 +26,7 @@
   let lyric = new Image
   testing.expectEqual('', lyric.src);
   lyric.src = 'okay';
-  testing.expectEqual('okay', lyric.src);
+  testing.expectEqual('http://localhost:9589/html/okay', lyric.src);
   lyric.src = 15;
-  testing.expectEqual('15', lyric.src);
+  testing.expectEqual('http://localhost:9589/html/15', lyric.src);
 </script>

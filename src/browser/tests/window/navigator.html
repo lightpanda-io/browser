@@ -4,67 +4,26 @@
 <script id=navigator>
   // Navigator should be accessible from window
   testing.expectEqual(navigator, window.navigator);
-</script>
-
-<script id=userAgent>
   testing.expectEqual(true, navigator.userAgent.length > 0);
-  testing.expectEqual(true, navigator.userAgent.includes('LiteFetch'));
-</script>
-
-<script id=appName>
-  testing.expectEqual('LiteFetch', navigator.appName);
-</script>
-
-<script id=appVersion>
-  testing.expectEqual('0.1', navigator.appVersion);
-</script>
-
-<script id=platform>
+  testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
+  testing.expectEqual('Netscape', navigator.appName);
+  testing.expectEqual('1.0', navigator.appVersion);
   testing.expectEqual(true, navigator.platform.length > 0);
+
   // Platform should be one of the known values
   const validPlatforms = ['MacIntel', 'Win32', 'Linux x86_64', 'FreeBSD', 'Unknown'];
   testing.expectEqual(true, validPlatforms.includes(navigator.platform));
-</script>
-
-<script id=language>
   testing.expectEqual('en-US', navigator.language);
-</script>
-
-<script id=languages>
   testing.expectEqual(true, Array.isArray(navigator.languages));
   testing.expectEqual(1, navigator.languages.length);
   testing.expectEqual('en-US', navigator.languages[0]);
-</script>
-
-<script id=onLine>
   testing.expectEqual(true, navigator.onLine);
-</script>
-
-<script id=cookieEnabled>
   testing.expectEqual(false, navigator.cookieEnabled);
-</script>
-
-<script id=hardwareConcurrency>
   testing.expectEqual(true, navigator.hardwareConcurrency > 0);
   testing.expectEqual(4, navigator.hardwareConcurrency);
-</script>
-
-<script id=maxTouchPoints>
   testing.expectEqual(0, navigator.maxTouchPoints);
-</script>
-
-<script id=vendor>
-  testing.expectEqual('LiteFetch', navigator.vendor);
-</script>
-
-<script id=product>
+  testing.expectEqual('', navigator.vendor);
   testing.expectEqual('Gecko', navigator.product);
-</script>
-
-<script id=javaEnabled>
   testing.expectEqual(false, navigator.javaEnabled());
-</script>
-
-<script id=webdriver>
   testing.expectEqual(false, navigator.webdriver);
 </script>

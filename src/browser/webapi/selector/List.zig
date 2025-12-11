@@ -77,12 +77,6 @@ pub fn initOne(root: *Node, selector: Selector.Selector, page: *Page) ?*Node {
     return null;
 }
 
-pub fn deinit(self: *List) void {
-    const page = Page.current;
-    page._mem.releaseArena(self._arena);
-    page._factory.destroy(self);
-}
-
 const OptimizeResult = struct {
     root: *Node,
     exclude_root: bool,

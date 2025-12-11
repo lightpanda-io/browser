@@ -9,7 +9,7 @@
   testing.expectEqual('_blank', link.target);
   link.target = '';
 
-  testing.expectEqual('foo', link.href);
+  testing.expectEqual('http://localhost:9589/html/foo', link.href);
   link.href = 'https://lightpanda.io/';
   testing.expectEqual('https://lightpanda.io/', link.href);
 
