@@ -102,7 +102,6 @@ fn normalizeHeaderName(name: []const u8, page: *Page) []const u8 {
     return std.ascii.lowerString(&page.buf, name);
 }
 
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Headers);
 

@@ -307,7 +307,7 @@ pub const Writer = struct {
         try w.write(dom_node.getNodeName(&name_buf));
 
         try w.objectField("nodeValue");
-        try w.write(dom_node.getNodeValue() orelse  "");
+        try w.write(dom_node.getNodeValue() orelse "");
 
         if (include_child_count) {
             try w.objectField("childNodeCount");
@@ -564,7 +564,7 @@ test "cdp Node: Writer" {
                 .nodeId = 5,
                 .localName = "a",
                 .childNodeCount = 0,
-                .attributes = &.{"id", "a1"},
+                .attributes = &.{ "id", "a1" },
                 .parentId = 4,
             }, .{
                 .nodeId = 6,
@@ -576,7 +576,7 @@ test "cdp Node: Writer" {
                     .localName = "a",
                     .childNodeCount = 0,
                     .parentId = 6,
-                    .attributes = &.{"id", "a2"},
+                    .attributes = &.{ "id", "a2" },
                 }},
             }, .{
                 .nodeId = 8,

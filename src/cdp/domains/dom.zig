@@ -94,7 +94,7 @@ fn performSearch(cmd: anytype) !void {
 
     // dispatch setChildNodesEvents to inform the client of the subpart of node
     // tree covering the results.
-        try dispatchSetChildNodes(cmd, list._nodes);
+    try dispatchSetChildNodes(cmd, list._nodes);
 
     return cmd.sendResult(.{
         .searchId = search.name,

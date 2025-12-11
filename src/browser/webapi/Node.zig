@@ -777,7 +777,7 @@ pub const JsApi = struct {
     pub const DOCUMENT_POSITION_CONTAINED_BY = bridge.property(0x10);
     pub const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = bridge.property(0x20);
 
-    pub const nodeName = bridge.accessor(struct{
+    pub const nodeName = bridge.accessor(struct {
         fn wrap(self: *const Node, page: *Page) []const u8 {
             return self.getNodeName(&page.buf);
         }

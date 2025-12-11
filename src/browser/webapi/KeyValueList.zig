@@ -33,7 +33,7 @@ pub fn registerTypes() []const type {
     };
 }
 
-const Normalizer = *const fn([]const u8, *Page) []const u8;
+const Normalizer = *const fn ([]const u8, *Page) []const u8;
 pub const KeyValueList = @This();
 
 _entries: std.ArrayListUnmanaged(Entry) = .empty,
