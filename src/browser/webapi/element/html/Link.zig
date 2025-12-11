@@ -35,8 +35,14 @@ pub fn asNode(self: *Link) *Node {
 }
 
 pub fn getHref(self: *Link, page: *Page) ![]const u8 {
-    const href = self.asElement().getAttributeSafe("href");
-    return URL.resolve(page.call_arena, page.url, href orelse "", .{});
+    const element = self.asElement();
+    const href = element.getAttributeSafe("href") orelse return "";
+    if (href.len == 0) {
+        return "";
+    }
+
+    // Always resolve the href against the page URL
+    return URL.resolve(page.call_arena, page.url, href, .{});
 }
 
 pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
@@ -63,3 +69,8 @@ pub const JsApi = struct {
     pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{});
     pub const href = bridge.accessor(Link.getHref, Link.setHref, .{});
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Link" {
+    try testing.htmlRunner("element/html/link.html", .{});
+}

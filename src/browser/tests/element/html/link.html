@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id=link>
+  let l2 = document.createElement('link');
+  testing.expectEqual('', l2.href);
+  l2.href = 'https://lightpanda.io/opensource-browser/15';
+  testing.expectEqual('https://lightpanda.io/opensource-browser/15', l2.href);
+
+  l2.href = '/over/9000';
+  testing.expectEqual('http://127.0.0.1:9582/over/9000', l2.href);
+</script>

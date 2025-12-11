@@ -1,29 +1,93 @@
 <!DOCTYPE html>
 <script src="../../testing.js"></script>
+
+<!-- Test anchors with various href values -->
 <a id=a0></a>
 <a href="../anchor1.html" id=a1></a>
 <a href="/hello/world/anchor2.html" id=a2></a>
 <a href="https://www.openmymind.net/Elixirs-With-Statement/" id=a3></a>
-
-<script id=href>
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/anchor.html', $('#a0').href)
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/anchor1.html', $('#a1').href)
-  testing.expectEqual('http://127.0.0.1:9582/hello/world/anchor2.html', $('#a2').href)
-  testing.expectEqual('https://www.openmymind.net/Elixirs-With-Statement/', $('#a3').href)
-</script>
-
 <a id=link href=foo>OK</a>
 
-<script id=anchor>
-  let link = $('#link');
+<script id=empty_href>
+  testing.expectEqual('', $('#a0').href);
+
+  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/anchor1.html', $('#a1').href);
+  testing.expectEqual('http://127.0.0.1:9582/hello/world/anchor2.html', $('#a2').href);
+  testing.expectEqual('https://www.openmymind.net/Elixirs-With-Statement/', $('#a3').href);
+
+  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/foo', $('#link').href);
+</script>
+
+<script id=dynamic_anchor_defaults>
+{
+  let a = document.createElement('a');
+
+  testing.expectEqual('', a.href);
+  testing.expectEqual('', a.host);
+  testing.expectEqual('', a.hostname);
+  testing.expectEqual('', a.port);
+  testing.expectEqual('', a.pathname);
+  testing.expectEqual('', a.search);
+  testing.expectEqual('', a.hash);
+  testing.expectEqual('', a.origin);
+  testing.expectEqual('', a.target);
+  testing.expectEqual('', a.type);
+  testing.expectEqual('', a.text);
+}
+</script>
+
+<script id=dynamic_anchor_empty_href_behavior>
+{
+  let a = document.createElement('a');
+
+  a.search = 'q=test';
+  testing.expectEqual('', a.href);
+  testing.expectEqual('', a.search);
+
+  a.hash = 'section';
+  testing.expectEqual('', a.href);
+  testing.expectEqual('', a.hash);
+
+  a.port = '8080';
+  testing.expectEqual('', a.href);
+  testing.expectEqual('', a.port);
+
+  a.hostname = 'example.com';
+  testing.expectEqual('', a.href);
+  testing.expectEqual('', a.hostname);
+
+  a.host = 'example.com:9000';
+  testing.expectEqual('', a.href);
+  testing.expectEqual('', a.host);
+}
+</script>
+
+<script id=dynamic_anchor_with_href>
+{
+  let a = document.createElement('a');
+  a.href = 'https://lightpanda.io/';
+
+  testing.expectEqual('https://lightpanda.io/', a.href);
+  testing.expectEqual('lightpanda.io', a.host);
+  testing.expectEqual('lightpanda.io', a.hostname);
+  testing.expectEqual('', a.port);
+  testing.expectEqual('/', a.pathname);
+  testing.expectEqual('', a.search);
+  testing.expectEqual('', a.hash);
+  testing.expectEqual('https://lightpanda.io', a.origin);
+}
+</script>
+
+<script id=anchor_url_manipulation>
+{
+  let link = document.createElement('a');
+  link.href = 'https://lightpanda.io/';
+
   testing.expectEqual('', link.target);
   link.target = '_blank';
   testing.expectEqual('_blank', link.target);
   link.target = '';
-
-  testing.expectEqual('foo', link.href);
-  link.href = 'https://lightpanda.io/';
-  testing.expectEqual('https://lightpanda.io/', link.href);
+  testing.expectEqual('', link.target);
 
   testing.expectEqual('https://lightpanda.io', link.origin);
 
@@ -31,15 +95,16 @@
   testing.expectEqual('lightpanda.io', link.host);
   testing.expectEqual('', link.port);
   testing.expectEqual('lightpanda.io', link.hostname);
+  testing.expectEqual('https://lightpanda.io/', link.href);
 
   link.host = 'lightpanda.io';
   testing.expectEqual('lightpanda.io', link.host);
   testing.expectEqual('', link.port);
   testing.expectEqual('lightpanda.io', link.hostname);
 
-  testing.expectEqual('lightpanda.io', link.host);
-  testing.expectEqual('lightpanda.io', link.hostname);
   link.hostname = 'foo.bar';
+  testing.expectEqual('foo.bar', link.host);
+  testing.expectEqual('foo.bar', link.hostname);
   testing.expectEqual('https://foo.bar/', link.href);
 
   testing.expectEqual('', link.search);
@@ -54,19 +119,129 @@
 
   testing.expectEqual('', link.port);
   link.port = '443';
+  testing.expectEqual('', link.port);
   testing.expectEqual('foo.bar', link.host);
   testing.expectEqual('foo.bar', link.hostname);
   testing.expectEqual('https://foo.bar/?q=bar#frag', link.href);
+
   link.port = null;
+  testing.expectEqual('', link.port);
   testing.expectEqual('https://foo.bar/?q=bar#frag', link.href);
 
-  testing.expectEqual('foo', link.href = 'foo');
+  link.href = 'foo';
+  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/foo', link.href);
 
   testing.expectEqual('', link.type);
   link.type = 'text/html';
   testing.expectEqual('text/html', link.type);
 
-  testing.expectEqual('OK', link.text);
-  link.text = 'foo';
-  testing.expectEqual('foo', link.text);
+  testing.expectEqual('', link.text);
+  link.text = 'Click here';
+  testing.expectEqual('Click here', link.text);
+}
+</script>
+
+<script id=anchor_port_non_default>
+{
+  let a = document.createElement('a');
+  a.href = 'https://example.com:8443/path';
+
+  testing.expectEqual('example.com:8443', a.host);
+  testing.expectEqual('example.com', a.hostname);
+  testing.expectEqual('8443', a.port);
+  testing.expectEqual('https://example.com:8443/path', a.href);
+
+  a.href = 'http://example.com:8080/path';
+  testing.expectEqual('example.com:8080', a.host);
+  testing.expectEqual('8080', a.port);
+
+  a.href = 'http://example.com:80/path';
+  testing.expectEqual('example.com', a.host);
+  testing.expectEqual('', a.port);
+}
+</script>
+
+<script id=anchor_special_chars>
+{
+  let a = document.createElement('a');
+  a.href = 'https://example.com/';
+
+  a.search = '?test=1';
+  testing.expectEqual('?test=1', a.search);
+
+  a.search = 'test=2';
+  testing.expectEqual('?test=2', a.search);
+
+  a.hash = '#section';
+  testing.expectEqual('#section', a.hash);
+
+  a.hash = 'other';
+  testing.expectEqual('#other', a.hash);
+
+  a.search = '';
+  testing.expectEqual('', a.search);
+  testing.expectEqual('https://example.com/#other', a.href);
+
+  a.hash = '';
+  testing.expectEqual('', a.hash);
+  testing.expectEqual('https://example.com/', a.href);
+}
+</script>
+
+<script id=anchor_name_attribute>
+{
+  let a = document.createElement('a');
+  testing.expectEqual('', a.name);
+
+  a.name = 'myanchor';
+  testing.expectEqual('myanchor', a.name);
+
+  a.name = '';
+  testing.expectEqual('', a.name);
+}
+</script>
+
+<script id=anchor_pathname>
+{
+  let a = document.createElement('a');
+  a.href = 'https://example.com/path/to/page';
+
+  testing.expectEqual('/path/to/page', a.pathname);
+
+  a.pathname = '/new/path';
+  testing.expectEqual('/new/path', a.pathname);
+  testing.expectEqual('https://example.com/new/path', a.href);
+
+  a.pathname = 'another';
+  testing.expectEqual('/another', a.pathname);
+  testing.expectEqual('https://example.com/another', a.href);
+}
+</script>
+
+<script id=anchor_protocol>
+{
+  let a = document.createElement('a');
+  a.href = 'https://example.com/';
+
+  testing.expectEqual('https:', a.protocol);
+
+  a.protocol = 'http:';
+  testing.expectEqual('http:', a.protocol);
+  testing.expectEqual('http://example.com/', a.href);
+
+  a.protocol = 'https';
+  testing.expectEqual('https:', a.protocol);
+  testing.expectEqual('https://example.com/', a.href);
+}
+</script>
+
+<script id=toString>
+{
+  let a = document.createElement('a');
+  a.href = 'https://example.com/test';
+  testing.expectEqual('https://example.com/test', a.toString());
+
+  let b = document.createElement('a');
+  testing.expectEqual('', b.toString());
+}
 </script>

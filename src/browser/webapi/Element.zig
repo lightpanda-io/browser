@@ -613,13 +613,17 @@ pub fn focus(self: *Element, page: *Page) !void {
     const Event = @import("Event.zig");
 
     if (page.document._active_element) |old| {
-        if (old == self) return;
+        if (old == self) {
+            return;
+        }
 
         const blur_event = try Event.init("blur", null, page);
         try page._event_manager.dispatch(old.asEventTarget(), blur_event);
     }
 
-    page.document._active_element = self;
+    if (self.asNode().isConnected()) {
+        page.document._active_element = self;
+    }
 
     const focus_event = try Event.init("focus", null, page);
     try page._event_manager.dispatch(self.asEventTarget(), focus_event);

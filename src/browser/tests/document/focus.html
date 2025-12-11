@@ -79,3 +79,12 @@
   testing.expectEqual(1, focusCount);
 }
 </script>
+
+
+<script id="focus_disconnected">
+{
+  const focused = document.activeElement;
+  document.createElement('a').focus();
+  testing.expectEqual(focused, document.activeElement);
+}
+</script>

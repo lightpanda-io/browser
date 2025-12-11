@@ -1,6 +1,7 @@
 const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
+const URL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -33,8 +34,15 @@ pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getSrc(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe("src") orelse "";
+pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
+    const element = self.asConstElement();
+    const src = element.getAttributeSafe("src") orelse return "";
+    if (src.len == 0) {
+        return "";
+    }
+
+    // Always resolve the src against the page URL
+    return URL.resolve(page.call_arena, page.url, src, .{});
 }
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {

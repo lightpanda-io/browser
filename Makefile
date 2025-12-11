@@ -99,11 +99,11 @@ wpt-summary:
 ## Test - `grep` is used to filter out the huge compile command on build
 ifeq ($(OS), macos)
 test:
-	@script -q /dev/null sh -c 'TEST_FILTER="${F}" $(ZIG) build test -freference-trace --summary all' 2>&1 \
+	@script -q /dev/null sh -c 'TEST_FILTER="${F}" $(ZIG) build test -freference-trace' 2>&1 \
 		| grep --line-buffered -v "^/.*zig test -freference-trace"
 else
 test:
-	@script -qec 'TEST_FILTER="${F}" $(ZIG) build test -freference-trace --summary all' /dev/null 2>&1 \
+	@script -qec 'TEST_FILTER="${F}" $(ZIG) build test -freference-trace' /dev/null 2>&1 \
 		| grep --line-buffered -v "^/.*zig test -freference-trace"
 endif
 
