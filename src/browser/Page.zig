@@ -34,7 +34,6 @@ const Mime = @import("Mime.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
 const Scheduler = @import("Scheduler.zig");
-const History = @import("webapi/History.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 
@@ -58,6 +57,8 @@ const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const storage = @import("webapi/storage/storage.zig");
+const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
+const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
@@ -211,7 +212,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
         self.window = try self._factory.eventTarget(Window{
             ._document = self.document,
             ._storage_bucket = storage_bucket,
-            ._history = History.init(self),
             ._performance = Performance.init(),
             ._proto = undefined,
             ._location = &default_location,
@@ -273,7 +273,33 @@ fn registerBackgroundTasks(self: *Page) !void {
     }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
 }
 
-pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
+pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind: NavigationKind) !void {
+    const session = self._session;
+
+    const resolved_url = try URL.resolve(
+        session.transfer_arena,
+        self.url,
+        request_url,
+        .{ .always_dupe = true },
+    );
+
+    // setting opts.force = true will force a page load.
+    // otherwise, we will need to ensure this is a true (not document) navigation.
+    if (!opts.force) {
+        // If we are navigating within the same document, just change URL.
+        if (URL.eqlDocument(self.url, resolved_url)) {
+            // update page url
+            self.url = resolved_url;
+
+            // update location
+            self.window._location = try Location.init(self.url, self);
+            self.document._location = self.window._location;
+
+            try session.navigation.updateEntries(resolved_url, kind, self, true);
+            return;
+        }
+    }
+
     if (self._parse_state != .pre) {
         // it's possible for navigate to be called multiple times on the
         // same page (via CDP). We want to reset the page between each call.
@@ -329,6 +355,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .url = self.url,
         .timestamp = timestamp(.monotonic),
     });
+
+    session.navigation._current_navigation_kind = kind;
 
     http_client.request(.{
         .ctx = self,
@@ -414,6 +442,14 @@ fn _documentIsComplete(self: *Page) !void {
         self.window._on_load,
         .{ .inject_target = false, .context = "page load" },
     );
+
+    const pageshow_event = try PageTransitionEvent.init("pageshow", .{}, self);
+    try self._event_manager.dispatchWithFunction(
+        self.window.asEventTarget(),
+        pageshow_event.asEvent(),
+        self.window._on_pageshow,
+        .{ .context = "page show" },
+    );
 }
 
 fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
@@ -495,6 +531,9 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     var self: *Page = @ptrCast(@alignCast(ctx));
     self.clearTransferArena();
 
+    //We need to handle different navigation types differently.
+    try self._session.navigation.commitNavigation(self);
+
     defer if (comptime IS_DEBUG) {
         log.debug(.page, "page.load.complete", .{ .url = self.url });
     };
@@ -530,9 +569,6 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         },
         else => unreachable,
     }
-    // We need to handle different navigation types differently.
-    // @ZIGDOM
-    // try self._session.navigation.processNavigation(self);
 }
 
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -1879,12 +1915,19 @@ const IdleNotification = union(enum) {
     }
 };
 
+pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
+    const URLRaw = @import("URL.zig");
+    const current_origin = (try URLRaw.getOrigin(self.arena, self.url)) orelse return false;
+    return std.mem.startsWith(u8, url, current_origin);
+}
+
 pub const NavigateReason = enum {
     anchor,
     address_bar,
     form,
     script,
     history,
+    navigation,
 };
 
 pub const NavigateOpts = struct {
@@ -1893,6 +1936,7 @@ pub const NavigateOpts = struct {
     method: Http.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
+    force: bool = false,
 };
 
 const RequestCookieOpts = struct {

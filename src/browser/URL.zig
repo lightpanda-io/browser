@@ -68,9 +68,11 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
         return std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
     }
 
-    var normalized_base: []const u8 = base;
-    if (std.mem.lastIndexOfScalar(u8, normalized_base[authority_start..], '/')) |pos| {
-        normalized_base = normalized_base[0 .. pos + authority_start];
+    var normalized_base: []const u8 = base[0..path_start];
+    if (path_start < base.len) {
+        if (std.mem.lastIndexOfScalar(u8, base[path_start + 1 ..], '/')) |pos| {
+            normalized_base = base[0 .. path_start + 1 + pos];
+        }
     }
 
     // trailing space so that we always have space to append the null terminator
@@ -268,6 +270,14 @@ pub fn getHost(raw: [:0]const u8) []const u8 {
     return authority[0..path_start];
 }
 
+// Returns true if these two URLs point to the same document.
+pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
+    // First '#' signifies the start of the fragment.
+    const first_hash_index = std.mem.indexOfScalar(u8, first, '#') orelse first.len;
+    const second_hash_index = std.mem.indexOfScalar(u8, second, '#') orelse second.len;
+    return std.mem.eql(u8, first[0..first_hash_index], second[0..second_hash_index]);
+}
+
 const KnownProtocol = enum {
     @"http:",
     @"https:",
@@ -284,6 +294,29 @@ test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(false, isCompleteHTTPUrl("/example.com"));
     try testing.expectEqual(false, isCompleteHTTPUrl("../../about"));
     try testing.expectEqual(false, isCompleteHTTPUrl("about"));
+}
+
+test "URL: resolve regression (#1093)" {
+    defer testing.reset();
+
+    const Case = struct {
+        base: [:0]const u8,
+        path: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        .{
+            .base = "https://alas.aws.amazon.com/alas2.html",
+            .path = "../static/bootstrap.min.css",
+            .expected = "https://alas.aws.amazon.com/static/bootstrap.min.css",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        try testing.expectString(case.expected, result);
+    }
 }
 
 test "URL: resolve" {
@@ -411,5 +444,73 @@ test "URL: resolve" {
     for (cases) |case| {
         const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
         try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: eqlDocument" {
+    defer testing.reset();
+    {
+        const url = "https://lightpanda.io/about";
+        try testing.expectEqual(true, eqlDocument(url, url));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "http://lightpanda.io/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://example.com/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io:8080/about";
+        const url2 = "https://lightpanda.io:9090/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://lightpanda.io/contact";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?foo=bar";
+        const url2 = "https://lightpanda.io/about?baz=qux";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about#section1";
+        const url2 = "https://lightpanda.io/about#section2";
+        try testing.expectEqual(true, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://lightpanda.io/about/";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?foo=bar";
+        const url2 = "https://lightpanda.io/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about";
+        const url2 = "https://lightpanda.io/about?foo=bar";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?foo=bar";
+        const url2 = "https://lightpanda.io/about?foo=bar";
+        try testing.expectEqual(true, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://lightpanda.io/about?";
+        const url2 = "https://lightpanda.io/about";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+    {
+        const url1 = "https://duckduckgo.com/";
+        const url2 = "https://duckduckgo.com/?q=lightpanda";
+        try testing.expectEqual(false, eqlDocument(url1, url2));
     }
 }

@@ -22,6 +22,8 @@ const log = @import("../log.zig");
 
 const js = @import("js/js.zig");
 const storage = @import("webapi/storage/storage.zig");
+const Navigation = @import("webapi/navigation/Navigation.zig");
+const History = @import("webapi/History.zig");
 
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
@@ -54,6 +56,9 @@ executor: js.ExecutionWorld,
 cookie_jar: storage.Cookie.Jar,
 storage_shed: storage.Shed,
 
+history: History,
+navigation: Navigation,
+
 page: ?*Page = null,
 
 // If the current page want to navigate to a new page
@@ -67,13 +72,17 @@ pub fn init(self: *Session, browser: *Browser) !void {
     errdefer executor.deinit();
 
     const allocator = browser.app.allocator;
+    const session_allocator = browser.session_arena.allocator();
+
     self.* = .{
         .browser = browser,
         .executor = executor,
         .storage_shed = .{},
         .queued_navigation = null,
-        .arena = browser.session_arena.allocator(),
+        .arena = session_allocator,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
+        .navigation = Navigation.init(session_allocator),
+        .history = .{},
         .transfer_arena = browser.transfer_arena.allocator(),
     };
 }
@@ -98,6 +107,9 @@ pub fn createPage(self: *Session) !*Page {
     self.page = try Page.init(page_arena.allocator(), self.browser.call_arena.allocator(), self);
     const page = self.page.?;
 
+    // Creates a new NavigationEventTarget for this page.
+    try self.navigation.onNewPage(page);
+
     log.debug(.browser, "create page", .{});
     // start JS env
     // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
@@ -114,6 +126,8 @@ pub fn removePage(self: *Session) void {
 
     self.page.?.deinit();
     self.page = null;
+
+    self.navigation.onRemovePage();
 
     log.debug(.browser, "remove page", .{});
 }
@@ -177,7 +191,11 @@ fn processQueuedNavigation(self: *Session) !bool {
         return err;
     };
 
-    page.navigate(qn.url, qn.opts) catch |err| {
+    page.navigate(
+        qn.url,
+        qn.opts,
+        self.navigation._current_navigation_kind orelse .{ .push = null },
+    ) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
         return err;
     };

@@ -179,9 +179,11 @@ fn createTarget(cmd: anytype) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    try page.navigate(params.url, .{
-        .reason = .address_bar,
-    });
+    try page.navigate(
+        params.url,
+        .{ .reason = .address_bar },
+        .{ .push = null },
+    );
 
     try cmd.sendResult(.{
         .targetId = target_id,

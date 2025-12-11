@@ -20,67 +20,75 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
+const PopStateEvent = @import("event/PopStateEvent.zig");
 
 const History = @This();
 
-_page: *Page,
-_length: u32 = 1,
-_state: ?js.Object = null,
-
-pub fn init(page: *Page) History {
-    return .{
-        ._page = page,
-    };
+pub fn getLength(_: *const History, page: *Page) u32 {
+    return @intCast(page._session.navigation._entries.items.len);
 }
 
-pub fn deinit(self: *History) void {
-    if (self._state) |state| {
-        js.q.JS_FreeValue(self._page.js.ctx, state.value);
+pub fn getState(_: *const History, page: *Page) !?js.Value {
+    if (page._session.navigation.getCurrentEntry()._state.value) |state| {
+        const value = try js.Value.fromJson(page.js, state);
+        return value;
+    } else return null;
+}
+
+pub fn pushState(_: *History, state: js.Object, _: []const u8, _url: ?[]const u8, page: *Page) !void {
+    const arena = page._session.arena;
+    const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
+
+    const json = state.toJson(arena) catch return error.DateClone;
+    _ = try page._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
+}
+
+pub fn replaceState(_: *History, state: js.Object, _: []const u8, _url: ?[]const u8, page: *Page) !void {
+    const arena = page._session.arena;
+    const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
+
+    const json = state.toJson(arena) catch return error.DateClone;
+    _ = try page._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, page, true);
+}
+
+fn goInner(delta: i32, page: *Page) !void {
+    // 0 behaves the same as no argument, both reloadig the page.
+
+    const current = page._session.navigation._index;
+    const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
+    if (index_s < 0 or index_s > page._session.navigation._entries.items.len - 1) {
+        return;
     }
+
+    const index = @as(usize, @intCast(index_s));
+    const entry = page._session.navigation._entries.items[index];
+
+    if (entry._url) |url| {
+        if (try page.isSameOrigin(url)) {
+            const event = try PopStateEvent.init("popstate", .{ .state = entry._state.value }, page);
+
+            try page._event_manager.dispatchWithFunction(
+                page.window.asEventTarget(),
+                event.asEvent(),
+                page.window._on_popstate,
+                .{ .context = "Pop State" },
+            );
+        }
+    }
+
+    _ = try page._session.navigation.navigateInner(entry._url, .{ .traverse = index }, page);
 }
 
-pub fn getLength(self: *const History) u32 {
-    return self._length;
+pub fn back(_: *History, page: *Page) !void {
+    try goInner(-1, page);
 }
 
-pub fn getState(self: *const History) ?js.Object {
-    return self._state;
+pub fn forward(_: *History, page: *Page) !void {
+    try goInner(1, page);
 }
 
-pub fn pushState(self: *History, state: js.Object, _title: []const u8, url: ?[]const u8, page: *Page) !void {
-    _ = _title; // title is ignored in modern browsers
-    _ = url; // For minimal implementation, we don't actually navigate
-    _ = page;
-
-    self._state = try state.persist();
-    self._length += 1;
-}
-
-pub fn replaceState(self: *History, state: js.Object, _title: []const u8, url: ?[]const u8, page: *Page) !void {
-    _ = _title;
-    _ = url;
-    _ = page;
-    self._state = try state.persist();
-    // Note: replaceState doesn't change length
-}
-
-pub fn back(self: *History, page: *Page) void {
-    _ = self;
-    _ = page;
-    // Minimal implementation: no-op
-}
-
-pub fn forward(self: *History, page: *Page) void {
-    _ = self;
-    _ = page;
-    // Minimal implementation: no-op
-}
-
-pub fn go(self: *History, delta: i32, page: *Page) void {
-    _ = self;
-    _ = delta;
-    _ = page;
-    // Minimal implementation: no-op
+pub fn go(_: *History, delta: ?i32, page: *Page) !void {
+    try goInner(delta orelse 0, page);
 }
 
 pub const JsApi = struct {

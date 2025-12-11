@@ -130,7 +130,7 @@ const TestContext = struct {
                 .{url},
                 0,
             );
-            try page.navigate(full_url, .{});
+            try page.navigate(full_url, .{}, .{ .push = null });
             bc.session.fetchWait(2000);
         }
         return bc;
