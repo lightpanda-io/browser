@@ -25,20 +25,28 @@ const Page = @import("../../Page.zig");
 // https://developer.mozilla.org/en-US/docs/Web/API/PopStateEvent
 const PopStateEvent = @This();
 
-const EventOptions = struct {
-    state: ?[]const u8 = null,
-};
-
 _proto: *Event,
 _state: ?[]const u8,
 
-pub fn init(typ: []const u8, _options: ?EventOptions, page: *Page) !*PopStateEvent {
-    const options = _options orelse EventOptions{};
+const PopStateEventOptions = struct {
+    state: ?[]const u8 = null,
+};
 
-    return page._factory.event(typ, PopStateEvent{
-        ._proto = undefined,
-        ._state = options.state,
-    });
+pub const Options = Event.inheritOptions(PopStateEvent, PopStateEventOptions);
+
+pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PopStateEvent {
+    const opts = _opts orelse Options{};
+
+    const event = try page._factory.event(
+        typ,
+        PopStateEvent{
+            ._proto = undefined,
+            ._state = opts.state,
+        },
+    );
+
+    Event.populatePrototypes(event, opts);
+    return event;
 }
 
 pub fn asEvent(self: *PopStateEvent) *Event {

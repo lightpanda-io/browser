@@ -30,26 +30,37 @@ _proto: *Event,
 _from: *NavigationHistoryEntry,
 _navigation_type: ?NavigationType,
 
-pub const EventInit = struct {
+const NavigationCurrentEntryChangeEventOptions = struct {
     from: *NavigationHistoryEntry,
     navigationType: ?[]const u8 = null,
 };
 
+pub const Options = Event.inheritOptions(
+    NavigationCurrentEntryChangeEvent,
+    NavigationCurrentEntryChangeEventOptions,
+);
+
 pub fn init(
     typ: []const u8,
-    init_obj: EventInit,
+    opts: Options,
     page: *Page,
 ) !*NavigationCurrentEntryChangeEvent {
-    const navigation_type = if (init_obj.navigationType) |nav_type_str|
+    const navigation_type = if (opts.navigationType) |nav_type_str|
         std.meta.stringToEnum(NavigationType, nav_type_str)
     else
         null;
 
-    return page._factory.event(typ, NavigationCurrentEntryChangeEvent{
-        ._proto = undefined,
-        ._from = init_obj.from,
-        ._navigation_type = navigation_type,
-    });
+    const event = try page._factory.event(
+        typ,
+        NavigationCurrentEntryChangeEvent{
+            ._proto = undefined,
+            ._from = opts.from,
+            ._navigation_type = navigation_type,
+        },
+    );
+
+    Event.populatePrototypes(event, opts);
+    return event;
 }
 
 pub fn asEvent(self: *NavigationCurrentEntryChangeEvent) *Event {

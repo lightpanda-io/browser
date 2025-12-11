@@ -57,7 +57,11 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
     };
 
     const progress = progress_ orelse Progress{};
-    const event = try ProgressEvent.init(typ, progress.total, progress.loaded, page);
+    const event = try ProgressEvent.init(
+        typ,
+        .{ .total = progress.total, .loaded = progress.loaded },
+        page,
+    );
 
     return page._event_manager.dispatchWithFunction(
         self.asEventTarget(),

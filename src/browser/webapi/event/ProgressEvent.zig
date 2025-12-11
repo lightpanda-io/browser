@@ -25,12 +25,28 @@ _total: usize = 0,
 _loaded: usize = 0,
 _length_computable: bool = false,
 
-pub fn init(typ: []const u8, total: usize, loaded: usize, page: *Page) !*ProgressEvent {
-    return page._factory.event(typ, ProgressEvent{
-        ._proto = undefined,
-        ._total = total,
-        ._loaded = loaded,
-    });
+const ProgressEventOptions = struct {
+    total: usize = 0,
+    loaded: usize = 0,
+    lengthComputable: bool = false,
+};
+
+pub const Options = Event.inheritOptions(ProgressEvent, ProgressEventOptions);
+
+pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*ProgressEvent {
+    const opts = _opts orelse Options{};
+
+    const event = try page._factory.event(
+        typ,
+        ProgressEvent{
+            ._proto = undefined,
+            ._total = opts.total,
+            ._loaded = opts.loaded,
+        },
+    );
+
+    Event.populatePrototypes(event, opts);
+    return event;
 }
 
 pub fn asEvent(self: *ProgressEvent) *Event {

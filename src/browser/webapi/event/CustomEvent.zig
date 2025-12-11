@@ -29,25 +29,26 @@ _proto: *Event,
 _detail: ?js.Object = null,
 _arena: Allocator,
 
-pub const InitOptions = struct {
+const CustomEventOptions = struct {
     detail: ?js.Object = null,
-    bubbles: bool = false,
-    cancelable: bool = false,
 };
 
-pub fn init(typ: []const u8, opts_: ?InitOptions, page: *Page) !*CustomEvent {
+pub const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
+
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     const arena = page.arena;
-    const opts = opts_ orelse InitOptions{};
+    const opts = opts_ orelse Options{};
 
-    const event = try page._factory.event(typ, CustomEvent{
-        ._arena = arena,
-        ._proto = undefined,
-        ._detail = if (opts.detail) |detail| try detail.persist() else null,
-    });
+    const event = try page._factory.event(
+        typ,
+        CustomEvent{
+            ._arena = arena,
+            ._proto = undefined,
+            ._detail = if (opts.detail) |detail| try detail.persist() else null,
+        },
+    );
 
-    event._proto._bubbles = opts.bubbles;
-    event._proto._cancelable = opts.cancelable;
-
+    Event.populatePrototypes(event, opts);
     return event;
 }
 

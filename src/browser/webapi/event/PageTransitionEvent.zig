@@ -25,18 +25,28 @@ const Page = @import("../../Page.zig");
 // https://developer.mozilla.org/en-US/docs/Web/API/PageTransitionEvent
 const PageTransitionEvent = @This();
 
-const EventInit = struct {
-    persisted: ?bool = null,
-};
-
 _proto: *Event,
 _persisted: bool,
 
-pub fn init(typ: []const u8, init_obj: EventInit, page: *Page) !*PageTransitionEvent {
-    return page._factory.event(typ, PageTransitionEvent{
-        ._proto = undefined,
-        ._persisted = init_obj.persisted orelse false,
-    });
+const PageTransitionEventOptions = struct {
+    persisted: ?bool = false,
+};
+
+pub const Options = Event.inheritOptions(PageTransitionEvent, PageTransitionEventOptions);
+
+pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PageTransitionEvent {
+    const opts = _opts orelse Options{};
+
+    const event = try page._factory.event(
+        typ,
+        PageTransitionEvent{
+            ._proto = undefined,
+            ._persisted = opts.persisted orelse false,
+        },
+    );
+
+    Event.populatePrototypes(event, opts);
+    return event;
 }
 
 pub fn asEvent(self: *PageTransitionEvent) *Event {
