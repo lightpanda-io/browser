@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div class="song" rick="roll">
+    <span>we're no strangers to love</span>
+    you know the rules
+
+    <b>and so do I</b>
+</div>
+
+<div class="song" rick="roll">
+    <span>we're no strangers to love</span>
+    you know the rules
+
+    <b>and so do I</b>
+</div>
+
+<script id=isEqualNode>
+  // Compare nodes of parsed elements.
+  {
+    const elements = document.getElementsByClassName("song");
+    testing.expectEqual(true, elements.item(0).isEqualNode(elements.item(1)));
+  }
+
+  {
+    const e1 = document.createElement("div");
+    e1.innerHTML = "<h1>We come from the land of the ice and snow</h1>";
+    const e2 = document.createElement("div");
+    e2.innerHTML = "<h1>We come from the land of the ice and snow</h1>";
+    testing.expectEqual(true, e1.isEqualNode(e2));
+  }
+
+  {
+    const e1 = document.createElement("div");
+    e1.innerHTML = "<h1>From the midnight sun where the hot springs flow</h1>";
+    const e2 = document.createElement("div");
+    e2.innerHTML = "<h1>from the midnight sun where the hot springs flow</h1>";
+    testing.expectEqual(false, e1.isEqualNode(e2));
+  }
+</script>

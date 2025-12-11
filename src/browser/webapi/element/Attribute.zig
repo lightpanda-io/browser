@@ -78,6 +78,10 @@ pub fn getOwnerElement(self: *const Attribute) ?*Element {
     return self._element;
 }
 
+pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
+    return std.mem.eql(u8, self.getName(), other.getName()) and std.mem.eql(u8, self.getValue(), other.getValue());
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Attribute);
 
@@ -119,14 +123,43 @@ pub const JsApi = struct {
 // attribute in the DOM, and, again, we expect that to almost always be null.
 pub const List = struct {
     normalize: bool,
+    /// Length of items in `_list`. Not usize to increase memory usage.
+    /// Honestly, this is more than enough.
+    _len: u32 = 0,
     _list: std.DoublyLinkedList = .{},
 
     pub fn isEmpty(self: *const List) bool {
         return self._list.first == null;
     }
+
     pub fn get(self: *const List, name: []const u8, page: *Page) !?[]const u8 {
         const entry = (try self.getEntry(name, page)) orelse return null;
         return entry._value.str();
+    }
+
+    pub inline fn length(self: *const List) usize {
+        return self._len;
+    }
+
+    /// Compares 2 attribute lists for equality.
+    pub fn eql(self: *List, other: *List) bool {
+        if (self.length() != other.length()) {
+            return false;
+        }
+
+        var iter = self.iterator();
+        search: while (iter.next()) |attr| {
+            // Iterate over all `other` attributes.
+            var other_iter = other.iterator();
+            while (other_iter.next()) |other_attr| {
+                if (attr.eql(other_attr)) {
+                    continue :search; // Found match.
+                }
+            }
+            // Iterated over all `other` and not match.
+            return false;
+        }
+        return true;
     }
 
     // meant for internal usage, where the name is known to be properly cased
@@ -180,6 +213,7 @@ pub const List = struct {
                 ._value = try String.init(page.arena, value, .{}),
             });
             self._list.append(&entry._node);
+            self._len += 1;
         }
 
         if (is_id) {
@@ -203,6 +237,7 @@ pub const List = struct {
             ._value = try String.init(page.arena, value, .{}),
         });
         self._list.append(&entry._node);
+        self._len += 1;
     }
 
     // not efficient, won't be called often (if ever!)
@@ -235,6 +270,7 @@ pub const List = struct {
             ._value = try String.init(page.arena, value, .{}),
         });
         self._list.append(&entry._node);
+        self._len += 1;
     }
 
     pub fn delete(self: *List, name: []const u8, element: *Element, page: *Page) !void {
@@ -252,6 +288,7 @@ pub const List = struct {
         page.attributeRemove(element, result.normalized, old_value);
         _ = page._attribute_lookup.remove(@intFromPtr(entry));
         self._list.remove(&entry._node);
+        self._len -= 1;
         page._factory.destroy(entry);
     }
 
@@ -309,6 +346,12 @@ pub const List = struct {
 
         fn fromNode(n: *std.DoublyLinkedList.Node) *Entry {
             return @alignCast(@fieldParentPtr("_node", n));
+        }
+
+        /// Returns true if 2 entries are equal.
+        /// This doesn't compare `_node` fields.
+        pub fn eql(self: *const Entry, other: *const Entry) bool {
+            return self._name.eql(other._name) and self._value.eql(other._value);
         }
 
         pub fn format(self: *const Entry, writer: *std.Io.Writer) !void {
