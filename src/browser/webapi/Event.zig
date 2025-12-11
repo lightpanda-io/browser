@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
+const reflect = @import("../reflect.zig");
 
 const Page = @import("../Page.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -193,6 +194,54 @@ pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
     const path = try page.call_arena.alloc(*EventTarget, path_len);
     @memcpy(path, path_buffer[0..path_len]);
     return path;
+}
+
+pub fn populateFromOptions(self: *Event, opts: anytype) void {
+    self._bubbles = opts.bubbles;
+    self._cancelable = opts.cancelable;
+    self._composed = opts.composed;
+}
+
+pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
+    var all_fields: []const std.builtin.Type.StructField = &.{};
+
+    if (@hasField(T, "_proto")) {
+        const t_fields = @typeInfo(T).@"struct".fields;
+
+        inline for (t_fields) |field| {
+            if (std.mem.eql(u8, field.name, "_proto")) {
+                const ProtoType = reflect.Struct(field.type);
+                if (@hasDecl(ProtoType, "Options")) {
+                    const parent_options = @typeInfo(ProtoType.Options);
+                    all_fields = all_fields ++ parent_options.@"struct".fields;
+                }
+            }
+        }
+    }
+
+    const additions_info = @typeInfo(additions);
+    all_fields = all_fields ++ additions_info.@"struct".fields;
+
+    return @Type(.{
+        .@"struct" = .{
+            .layout = .auto,
+            .fields = all_fields,
+            .decls = &.{},
+            .is_tuple = false,
+        },
+    });
+}
+
+pub fn populatePrototypes(self: anytype, opts: anytype) void {
+    const T = @TypeOf(self.*);
+
+    if (@hasField(T, "_proto")) {
+        populatePrototypes(self._proto, opts);
+    }
+
+    if (@hasDecl(T, "populateFromOptions")) {
+        T.populateFromOptions(self, opts);
+    }
 }
 
 pub const JsApi = struct {

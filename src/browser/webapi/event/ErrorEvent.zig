@@ -33,33 +33,34 @@ _column_number: u32 = 0,
 _error: ?js.Object = null,
 _arena: Allocator,
 
-pub const InitOptions = struct {
+pub const ErrorEventOptions = struct {
     message: ?[]const u8 = null,
     filename: ?[]const u8 = null,
     lineno: u32 = 0,
     colno: u32 = 0,
     @"error": ?js.Object = null,
-    bubbles: bool = false,
-    cancelable: bool = false,
 };
 
-pub fn init(typ: []const u8, opts_: ?InitOptions, page: *Page) !*ErrorEvent {
+const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
+
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
     const arena = page.arena;
-    const opts = opts_ orelse InitOptions{};
+    const opts = opts_ orelse Options{};
 
-    const event = try page._factory.event(typ, ErrorEvent{
-        ._arena = arena,
-        ._proto = undefined,
-        ._message = if (opts.message) |str| try arena.dupe(u8, str) else "",
-        ._filename = if (opts.filename) |str| try arena.dupe(u8, str) else "",
-        ._line_number = opts.lineno,
-        ._column_number = opts.colno,
-        ._error = if (opts.@"error") |err| try err.persist() else null,
-    });
+    const event = try page._factory.event(
+        typ,
+        ErrorEvent{
+            ._arena = arena,
+            ._proto = undefined,
+            ._message = if (opts.message) |str| try arena.dupe(u8, str) else "",
+            ._filename = if (opts.filename) |str| try arena.dupe(u8, str) else "",
+            ._line_number = opts.lineno,
+            ._column_number = opts.colno,
+            ._error = if (opts.@"error") |err| try err.persist() else null,
+        },
+    );
 
-    event._proto._bubbles = opts.bubbles;
-    event._proto._cancelable = opts.cancelable;
-
+    Event.populatePrototypes(event, opts);
     return event;
 }
 

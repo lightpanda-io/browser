@@ -26,23 +26,21 @@ const CompositionEvent = @This();
 _proto: *Event,
 _data: []const u8 = "",
 
-pub const InitOptions = struct {
+const CompositionEventOptions = struct {
     data: ?[]const u8 = null,
-    bubbles: bool = false,
-    cancelable: bool = false,
 };
 
-pub fn init(typ: []const u8, opts_: ?InitOptions, page: *Page) !*CompositionEvent {
-    const opts = opts_ orelse InitOptions{};
+const Options = Event.inheritOptions(CompositionEvent, CompositionEventOptions);
+
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
+    const opts = opts_ orelse Options{};
 
     const event = try page._factory.event(typ, CompositionEvent{
         ._proto = undefined,
         ._data = if (opts.data) |str| try page.dupeString(str) else "",
     });
 
-    event._proto._bubbles = opts.bubbles;
-    event._proto._cancelable = opts.cancelable;
-
+    Event.populatePrototypes(event, opts);
     return event;
 }
 

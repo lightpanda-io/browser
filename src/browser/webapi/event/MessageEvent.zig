@@ -29,27 +29,28 @@ _data: ?js.Object = null,
 _origin: []const u8 = "",
 _source: ?*Window = null,
 
-pub const InitOptions = struct {
+const MessageEventOptions = struct {
     data: ?js.Object = null,
     origin: ?[]const u8 = null,
     source: ?*Window = null,
-    bubbles: bool = false,
-    cancelable: bool = false,
 };
 
-pub fn init(typ: []const u8, opts_: ?InitOptions, page: *Page) !*MessageEvent {
-    const opts = opts_ orelse InitOptions{};
+const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
 
-    const event = try page._factory.event(typ, MessageEvent{
-        ._proto = undefined,
-        ._data = if (opts.data) |d| try d.persist() else null,
-        ._origin = if (opts.origin) |str| try page.arena.dupe(u8, str) else "",
-        ._source = opts.source,
-    });
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
+    const opts = opts_ orelse Options{};
 
-    event._proto._bubbles = opts.bubbles;
-    event._proto._cancelable = opts.cancelable;
+    const event = try page._factory.event(
+        typ,
+        MessageEvent{
+            ._proto = undefined,
+            ._data = if (opts.data) |d| try d.persist() else null,
+            ._origin = if (opts.origin) |str| try page.arena.dupe(u8, str) else "",
+            ._source = opts.source,
+        },
+    );
 
+    Event.populatePrototypes(event, opts);
     return event;
 }
 
