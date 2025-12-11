@@ -125,6 +125,16 @@ pub fn createElementNS(_: *const Document, namespace: ?[]const u8, name: []const
     return node.as(Element);
 }
 
+pub fn createAttribute(_: *const Document, name: []const u8, page: *Page) !?*Element.Attribute {
+    try Element.Attribute.validateAttributeName(name);
+    return page._factory.node(Element.Attribute{
+        ._proto = undefined,
+        ._name = try page.dupeString(name),
+        ._value = "",
+        ._element = null,
+    });
+}
+
 pub fn getElementById(self: *const Document, id_: ?[]const u8) ?*Element {
     const id = id_ orelse return null;
     return self._elements_by_id.get(id);
@@ -317,6 +327,24 @@ pub fn importNode(_: *const Document, node: *Node, deep_: ?bool, page: *Page) !*
     return node.cloneNode(deep_, page);
 }
 
+pub fn append(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !void {
+    const parent = self.asNode();
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+        _ = try parent.appendChild(child, page);
+    }
+}
+
+pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !void {
+    const parent = self.asNode();
+    var i = nodes.len;
+    while (i > 0) {
+        i -= 1;
+        const child = try nodes[i].toNode(page);
+        _ = try parent.insertBefore(child, parent.firstChild(), page);
+    }
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -360,6 +388,7 @@ pub const JsApi = struct {
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
+    pub const createAttribute = bridge.function(Document.createAttribute, .{ .dom_exception = true });
     pub const createCDATASection = bridge.function(Document.createCDATASection, .{ .dom_exception = true });
     pub const createRange = bridge.function(Document.createRange, .{});
     pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
@@ -373,6 +402,8 @@ pub const JsApi = struct {
     pub const getElementsByName = bridge.function(Document.getElementsByName, .{});
     pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true });
     pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true });
+    pub const append = bridge.function(Document.append, .{});
+    pub const prepend = bridge.function(Document.prepend, .{});
 
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {

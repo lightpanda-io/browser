@@ -85,6 +85,9 @@
   const all = root.querySelectorAll('*');
   testing.expectEqual(true, all.length >= 6);
   testing.expectEqual('Item 1', all[0].textContent);
+  testing.expectEqual('Item 1', all.item(0).textContent);
+  testing.expectEqual(null, all.item(99));
+  testing.expectEqual(undefined, all[99]);
 
   const items = root.querySelectorAll('*.item');
   testing.expectEqual(4, items.length);

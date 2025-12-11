@@ -343,6 +343,32 @@ fn shouldAddToIdMap(normalized_name: []const u8, element: *Element) bool {
     return node.isConnected();
 }
 
+pub fn validateAttributeName(name: []const u8) !void {
+    if (name.len == 0) {
+        return error.InvalidCharacterError;
+    }
+
+    const first = name[0];
+    if ((first >= '0' and first <= '9') or first == '-' or first == '.') {
+        return error.InvalidCharacterError;
+    }
+
+    for (name) |c| {
+        if (c == 0 or c == '/' or c == '=' or c == '>' or std.ascii.isWhitespace(c)) {
+            return error.InvalidCharacterError;
+        }
+
+        const is_valid = (c >= 'a' and c <= 'z') or
+            (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or
+            c == '_' or c == '-' or c == '.' or c == ':';
+
+        if (!is_valid) {
+            return error.InvalidCharacterError;
+        }
+    }
+}
+
 pub fn normalizeNameForLookup(name: []const u8, page: *Page) ![]const u8 {
     if (!needsLowerCasing(name)) {
         return name;

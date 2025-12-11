@@ -343,6 +343,14 @@ pub fn setId(self: *Element, value: []const u8, page: *Page) !void {
     return self.setAttributeSafe("id", value, page);
 }
 
+pub fn getDir(self: *const Element) []const u8 {
+    return self.getAttributeSafe("dir") orelse "";
+}
+
+pub fn setDir(self: *Element, value: []const u8, page: *Page) !void {
+    return self.setAttributeSafe("dir", value, page);
+}
+
 pub fn getClassName(self: *const Element) []const u8 {
     return self.getAttributeSafe("class") orelse "";
 }
@@ -388,6 +396,7 @@ pub fn getAttributeNode(self: *Element, name: []const u8, page: *Page) !?*Attrib
 }
 
 pub fn setAttribute(self: *Element, name: []const u8, value: []const u8, page: *Page) !void {
+    try Attribute.validateAttributeName(name);
     const attributes = try self.getOrCreateAttributeList(page);
     _ = try attributes.put(name, value, self, page);
 }
@@ -503,6 +512,7 @@ pub fn removeAttribute(self: *Element, name: []const u8, page: *Page) !void {
 }
 
 pub fn toggleAttribute(self: *Element, name: []const u8, force: ?bool, page: *Page) !bool {
+    try Attribute.validateAttributeName(name);
     const has = try self.hasAttribute(name, page);
 
     const should_add = force orelse !has;
@@ -644,6 +654,27 @@ pub fn prepend(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !voi
         i -= 1;
         const child = try nodes[i].toNode(page);
         _ = try parent.insertBefore(child, parent.firstChild(), page);
+    }
+}
+
+pub fn before(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node.parentNode() orelse return;
+
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+        _ = try parent.insertBefore(child, node, page);
+    }
+}
+
+pub fn after(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node.parentNode() orelse return;
+    const next = node.nextSibling();
+
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+        _ = try parent.insertBefore(child, next, page);
     }
 }
 
@@ -946,6 +977,10 @@ pub fn cloneElement(self: *Element, deep: bool, page: *Page) !*Node {
     return node;
 }
 
+pub fn scrollIntoViewIfNeeded(_: *const Element, center_if_needed: ?bool) void {
+    _ = center_if_needed;
+}
+
 pub fn format(self: *Element, writer: *std.Io.Writer) !void {
     try writer.writeByte('<');
     try writer.writeAll(self.getTagNameDump());
@@ -1136,6 +1171,7 @@ pub const JsApi = struct {
 
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
+    pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{});
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
     pub const classList = bridge.accessor(Element.getClassList, null, .{});
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
@@ -1145,10 +1181,10 @@ pub const JsApi = struct {
     pub const hasAttributes = bridge.function(Element.hasAttributes, .{});
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
-    pub const setAttribute = bridge.function(Element.setAttribute, .{});
+    pub const setAttribute = bridge.function(Element.setAttribute, .{ .dom_exception = true });
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{});
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
-    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{});
+    pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true });
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
@@ -1167,6 +1203,8 @@ pub const JsApi = struct {
     pub const remove = bridge.function(Element.remove, .{});
     pub const append = bridge.function(Element.append, .{});
     pub const prepend = bridge.function(Element.prepend, .{});
+    pub const before = bridge.function(Element.before, .{});
+    pub const after = bridge.function(Element.after, .{});
     pub const firstElementChild = bridge.accessor(Element.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Element.lastElementChild, null, .{});
     pub const nextElementSibling = bridge.accessor(Element.nextElementSibling, null, .{});
@@ -1188,6 +1226,7 @@ pub const JsApi = struct {
     pub const children = bridge.accessor(Element.getChildren, null, .{});
     pub const focus = bridge.function(Element.focus, .{});
     pub const blur = bridge.function(Element.blur, .{});
+    pub const scrollIntoViewIfNeeded = bridge.function(Element.scrollIntoViewIfNeeded, .{});
 };
 
 pub const Build = struct {

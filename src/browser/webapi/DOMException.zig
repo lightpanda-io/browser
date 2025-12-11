@@ -57,7 +57,7 @@ pub fn getName(self: *const DOMException) []const u8 {
 pub fn getMessage(self: *const DOMException) []const u8 {
     return switch (self._code) {
         .none => "",
-        .invalid_character_error => "Invalid Character",
+        .invalid_character_error => "Error: Invalid Character",
         .index_size_error => "IndexSizeError: Index or size is negative or greater than the allowed amount",
         .syntax_error => "Syntax Error",
         .not_supported => "Not Supported",

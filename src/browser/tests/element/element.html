@@ -9,7 +9,7 @@
     <span id="span1">Span 1</span>
     <p id="p2">Paragraph 2</p>
 </div>
-<div id="empty"></div>
+<div id="empty" dir=ltr></div>
 
 <script id="relatedElements">
     const container = $('#container');
@@ -64,4 +64,92 @@
   const p = document.createElement('p');
   p.textContent = 'XAnge\xa0Privacy';
   testing.expectEqual('<p>XAnge&nbsp;Privacy</p>', p.outerHTML);
+</script>
+
+<script id=element>
+  {
+    const empty = $('#empty');
+    testing.expectEqual('empty', empty.id);
+    testing.expectEqual('ltr', empty.dir);
+
+    // good enough that it doesn't throw
+    empty.scrollIntoViewIfNeeded();
+    empty.scrollIntoViewIfNeeded(false);
+  }
+</script>
+
+<script id=before>
+{
+  const parent = document.createElement('div');
+  const existing = document.createElement('span');
+  parent.appendChild(existing);
+
+  const div1 = document.createElement('div');
+  const div2 = document.createElement('div');
+  existing.before(div1, div2);
+
+  testing.expectEqual(3, parent.childNodes.length);
+  testing.expectEqual(div1, parent.childNodes[0]);
+  testing.expectEqual(div2, parent.childNodes[1]);
+  testing.expectEqual(existing, parent.childNodes[2]);
+
+  existing.before('text node');
+  testing.expectEqual(4, parent.childNodes.length);
+  testing.expectEqual(3, parent.childNodes[2].nodeType);
+  testing.expectEqual('text node', parent.childNodes[2].textContent);
+  testing.expectEqual(existing, parent.childNodes[3]);
+
+  const detached = document.createElement('div');
+  detached.before(document.createElement('p'));
+  testing.expectEqual(null, detached.parentNode);
+}
+</script>
+
+<script id=after>
+{
+  const parent = document.createElement('div');
+  const existing = document.createElement('span');
+  parent.appendChild(existing);
+
+  const div1 = document.createElement('div');
+  const div2 = document.createElement('div');
+  existing.after(div1, div2);
+
+  testing.expectEqual(3, parent.childNodes.length);
+  testing.expectEqual(existing, parent.childNodes[0]);
+  testing.expectEqual(div1, parent.childNodes[1]);
+  testing.expectEqual(div2, parent.childNodes[2]);
+
+  existing.after('text node');
+  testing.expectEqual(4, parent.childNodes.length);
+  testing.expectEqual(existing, parent.childNodes[0]);
+  testing.expectEqual(3, parent.childNodes[1].nodeType);
+  testing.expectEqual('text node', parent.childNodes[1].textContent);
+
+  const detached = document.createElement('div');
+  detached.after(document.createElement('p'));
+  testing.expectEqual(null, detached.parentNode);
+}
+</script>
+
+<script id=beforeAfterOrdering>
+{
+  const parent = document.createElement('div');
+  const a = document.createElement('a');
+  const b = document.createElement('b');
+  const c = document.createElement('c');
+  const d = document.createElement('d');
+
+  parent.appendChild(b);
+  parent.appendChild(c);
+
+  b.before(a);
+  c.after(d);
+
+  testing.expectEqual(4, parent.childNodes.length);
+  testing.expectEqual(a, parent.childNodes[0]);
+  testing.expectEqual(b, parent.childNodes[1]);
+  testing.expectEqual(c, parent.childNodes[2]);
+  testing.expectEqual(d, parent.childNodes[3]);
+}
 </script>

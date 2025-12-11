@@ -181,3 +181,80 @@
   document.cookie = 'IgnoreMy=Ghost; HttpOnly';
   testing.expectEqual('name=Oeschger; favorite_food=tripe', document.cookie);
 </script>
+
+<script id=createAttribute>
+  {
+    var attr = document.createAttribute('hello');
+    testing.expectEqual('hello', attr.name);
+    testing.expectEqual('', attr.value);
+
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => document.createAttribute(''));
+
+    testing.withError((err) => {
+      testing.expectEqual(5, err.code);
+      testing.expectEqual("InvalidCharacterError", err.name);
+    }, () => document.createAttribute('.over'));
+  }
+</script>
+
+<script id=append>
+{
+  const doc = new Document();
+  const html = doc.createElement('html');
+  const body = doc.createElement('body');
+  const div1 = doc.createElement('div');
+  const div2 = doc.createElement('div');
+
+  doc.append(html);
+  testing.expectEqual(1, doc.childNodes.length);
+  testing.expectEqual(html, doc.childNodes[0]);
+
+  html.append(body);
+  testing.expectEqual(1, html.childNodes.length);
+  testing.expectEqual(body, html.childNodes[0]);
+
+  body.append(div1, div2);
+  testing.expectEqual(2, body.childNodes.length);
+  testing.expectEqual(div1, body.childNodes[0]);
+  testing.expectEqual(div2, body.childNodes[1]);
+
+  body.append('text node');
+  testing.expectEqual(3, body.childNodes.length);
+  testing.expectEqual(3, body.childNodes[2].nodeType);
+  testing.expectEqual('text node', body.childNodes[2].textContent);
+}
+</script>
+
+<script id=prepend>
+{
+  const doc = new Document();
+  const html = doc.createElement('html');
+  const body = doc.createElement('body');
+  const div1 = doc.createElement('div');
+  const div2 = doc.createElement('div');
+  const div3 = doc.createElement('div');
+
+  doc.prepend(html);
+  testing.expectEqual(1, doc.childNodes.length);
+  testing.expectEqual(html, doc.childNodes[0]);
+
+  html.prepend(body);
+  testing.expectEqual(1, html.childNodes.length);
+  testing.expectEqual(body, html.childNodes[0]);
+
+  body.append(div1);
+  body.prepend(div2, div3);
+  testing.expectEqual(3, body.childNodes.length);
+  testing.expectEqual(div2, body.childNodes[0]);
+  testing.expectEqual(div3, body.childNodes[1]);
+  testing.expectEqual(div1, body.childNodes[2]);
+
+  body.prepend('text node');
+  testing.expectEqual(4, body.childNodes.length);
+  testing.expectEqual(3, body.childNodes[0].nodeType);
+  testing.expectEqual('text node', body.childNodes[0].textContent);
+}
+</script>

@@ -111,6 +111,7 @@ pub const JsApi = struct {
 
     pub const length = bridge.accessor(NodeList.length, null, .{});
     pub const @"[]" = bridge.indexed(NodeList.getAtIndex, .{ .null_as_undefined = true });
+    pub const item = bridge.function(NodeList.getAtIndex, .{});
     pub const keys = bridge.function(NodeList.keys, .{});
     pub const values = bridge.function(NodeList.values, .{});
     pub const entries = bridge.function(NodeList.entries, .{});

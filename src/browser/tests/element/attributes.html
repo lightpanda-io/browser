@@ -165,3 +165,84 @@
   testing.expectEqual(false, div.hasAttributes());
 }
 </script>
+
+<script id=invalidAttributeNames>
+{
+  const div = document.createElement('div');
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('0abc', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('123', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('-invalid', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('.foo', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('my attr', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('my@attr', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('attr!', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('~', 'value'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.setAttribute('', 'value'));
+
+  div.setAttribute('valid-name', 'value1');
+  testing.expectEqual('value1', div.getAttribute('valid-name'));
+
+  div.setAttribute('valid_name', 'value2');
+  testing.expectEqual('value2', div.getAttribute('valid_name'));
+
+  div.setAttribute('valid.name', 'value3');
+  testing.expectEqual('value3', div.getAttribute('valid.name'));
+
+  div.setAttribute('a123', 'value4');
+  testing.expectEqual('value4', div.getAttribute('a123'));
+
+  div.setAttribute('data-test-123', 'value5');
+  testing.expectEqual('value5', div.getAttribute('data-test-123'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.toggleAttribute('.invalid'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.toggleAttribute('0invalid'));
+
+  testing.withError((err) => {
+    testing.expectEqual(5, err.code);
+    testing.expectEqual("InvalidCharacterError", err.name);
+  }, () => div.toggleAttribute('-invalid'));
+}
+</script>
