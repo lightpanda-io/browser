@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 const CdpStorage = @import("storage.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
 const Notification = @import("../../notification.zig").Notification;
+const Mime = @import("../../browser/mime.zig").Mime;
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -242,14 +243,18 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.
     }
 
     const transfer = msg.transfer;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id});
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
+        .requestId = loader_id,
         .frameId = target_id,
-        .loaderId = bc.loader_id,
-        .documentUrl = DocumentUrlWriter.init(&page.url.uri),
+        .loaderId = loader_id,
+        .type = msg.transfer.req.resource_type.string(),
+        .documentURL = DocumentUrlWriter.init(&page.url.uri),
         .request = TransferAsRequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
+        .redirectHasExtraInfo = false, // TODO change after adding Network.requestWillBeSentExtraInfo
+        .hasUserGesture = false,
     }, .{ .session_id = session_id });
 }
 
@@ -259,12 +264,16 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
     const session_id = bc.session_id orelse return;
     const target_id = bc.target_id orelse unreachable;
 
+    const transfer = msg.transfer;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id});
+
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
-        .loaderId = bc.loader_id,
+        .requestId = loader_id,
         .frameId = target_id,
+        .loaderId = loader_id,
         .response = TransferAsResponseWriter.init(arena, msg.transfer),
+        .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
 
@@ -390,6 +399,20 @@ const TransferAsResponseWriter = struct {
 
             try jws.objectField("statusText");
             try jws.write(@as(std.http.Status, @enumFromInt(status)).phrase() orelse "Unknown");
+        }
+
+        {
+            const mime: Mime = blk: {
+                if (transfer.response_header.?.contentType()) |ct| {
+                    break :blk try Mime.parse(ct);
+                }
+                break :blk .unknown;
+            };
+
+            try jws.objectField("mimeType");
+            try jws.write(mime.contentTypeString());
+            try jws.objectField("charset");
+            try jws.write(mime.charsetString());
         }
 
         {
