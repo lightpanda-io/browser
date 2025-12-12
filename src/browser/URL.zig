@@ -128,7 +128,7 @@ fn isNullTerminated(comptime value: type) bool {
 }
 
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
-    if (url.len < 6) {
+    if (url.len < 3) { // Minimum is "x://"
         return false;
     }
 
@@ -137,9 +137,32 @@ pub fn isCompleteHTTPUrl(url: []const u8) bool {
         return false;
     }
 
-    return std.ascii.startsWithIgnoreCase(url, "https://") or
-        std.ascii.startsWithIgnoreCase(url, "http://") or
-        std.ascii.startsWithIgnoreCase(url, "ftp://");
+    // Check if there's a scheme (protocol) ending with ://
+    const colon_pos = std.mem.indexOfScalar(u8, url, ':') orelse return false;
+
+    // Check if it's followed by //
+    if (colon_pos + 2 >= url.len or url[colon_pos + 1] != '/' or url[colon_pos + 2] != '/') {
+        return false;
+    }
+
+    // Validate that everything before the colon is a valid scheme
+    // A scheme must start with a letter and contain only letters, digits, +, -, .
+    if (colon_pos == 0) {
+        return false;
+    }
+
+    const scheme = url[0..colon_pos];
+    if (!std.ascii.isAlphabetic(scheme[0])) {
+        return false;
+    }
+
+    for (scheme[1..]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 pub fn getUsername(raw: [:0]const u8) []const u8 {
@@ -276,6 +299,139 @@ pub fn eqlDocument(first: [:0]const u8, second: [:0]const u8) bool {
     const first_hash_index = std.mem.indexOfScalar(u8, first, '#') orelse first.len;
     const second_hash_index = std.mem.indexOfScalar(u8, second, '#') orelse second.len;
     return std.mem.eql(u8, first[0..first_hash_index], second[0..second_hash_index]);
+}
+
+// Helper function to build a URL from components
+pub fn buildUrl(
+    allocator: Allocator,
+    protocol: []const u8,
+    host: []const u8,
+    pathname: []const u8,
+    search: []const u8,
+    hash: []const u8,
+) ![:0]const u8 {
+    return std.fmt.allocPrintSentinel(allocator, "{s}//{s}{s}{s}{s}", .{
+        protocol,
+        host,
+        pathname,
+        search,
+        hash,
+    }, 0);
+}
+
+pub fn setProtocol(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const host = getHost(current);
+    const pathname = getPathname(current);
+    const search = getSearch(current);
+    const hash = getHash(current);
+
+    // Add : suffix if not present
+    const protocol = if (value.len > 0 and value[value.len - 1] != ':')
+        try std.fmt.allocPrint(allocator, "{s}:", .{value})
+    else
+        value;
+
+    return buildUrl(allocator, protocol, host, pathname, search, hash);
+}
+
+pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const protocol = getProtocol(current);
+    const pathname = getPathname(current);
+    const search = getSearch(current);
+    const hash = getHash(current);
+
+    // Check if the host includes a port
+    const colon_pos = std.mem.lastIndexOfScalar(u8, value, ':');
+    const clean_host = if (colon_pos) |pos| blk: {
+        const port_str = value[pos + 1 ..];
+        // Remove default ports
+        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
+            break :blk value[0..pos];
+        }
+        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
+            break :blk value[0..pos];
+        }
+        break :blk value;
+    } else value;
+
+    return buildUrl(allocator, protocol, clean_host, pathname, search, hash);
+}
+
+pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const current_port = getPort(current);
+    const new_host = if (current_port.len > 0)
+        try std.fmt.allocPrint(allocator, "{s}:{s}", .{ value, current_port })
+    else
+        value;
+
+    return setHost(current, new_host, allocator);
+}
+
+pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) ![:0]const u8 {
+    const hostname = getHostname(current);
+    const protocol = getProtocol(current);
+
+    // Handle null or default ports
+    const new_host = if (value) |port_str| blk: {
+        if (port_str.len == 0) {
+            break :blk hostname;
+        }
+        // Check if this is a default port for the protocol
+        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
+            break :blk hostname;
+        }
+        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
+            break :blk hostname;
+        }
+        break :blk try std.fmt.allocPrint(allocator, "{s}:{s}", .{ hostname, port_str });
+    } else hostname;
+
+    return setHost(current, new_host, allocator);
+}
+
+pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const protocol = getProtocol(current);
+    const host = getHost(current);
+    const search = getSearch(current);
+    const hash = getHash(current);
+
+    // Add / prefix if not present and value is not empty
+    const pathname = if (value.len > 0 and value[0] != '/')
+        try std.fmt.allocPrint(allocator, "/{s}", .{value})
+    else
+        value;
+
+    return buildUrl(allocator, protocol, host, pathname, search, hash);
+}
+
+pub fn setSearch(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const protocol = getProtocol(current);
+    const host = getHost(current);
+    const pathname = getPathname(current);
+    const hash = getHash(current);
+
+    // Add ? prefix if not present and value is not empty
+    const search = if (value.len > 0 and value[0] != '?')
+        try std.fmt.allocPrint(allocator, "?{s}", .{value})
+    else
+        value;
+
+    return buildUrl(allocator, protocol, host, pathname, search, hash);
+}
+
+pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const protocol = getProtocol(current);
+    const host = getHost(current);
+    const pathname = getPathname(current);
+    const search = getSearch(current);
+
+    // Add # prefix if not present and value is not empty
+    const hash = if (value.len > 0 and value[0] != '#')
+        try std.fmt.allocPrint(allocator, "#{s}", .{value})
+    else
+        value;
+
+    return buildUrl(allocator, protocol, host, pathname, search, hash);
 }
 
 const KnownProtocol = enum {

@@ -61,6 +61,10 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
     });
 }
 
+pub fn updateFromString(self: *URLSearchParams, query_string: []const u8, page: *Page) !void {
+    self._params = try paramsFromString(self._arena, query_string, &page.buf);
+}
+
 pub fn getSize(self: *const URLSearchParams) usize {
     return self._params.len();
 }
@@ -277,7 +281,7 @@ fn escape(input: []const u8, writer: *std.Io.Writer) !void {
 
 fn isUnreserved(c: u8) bool {
     return switch (c) {
-        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_' => true,
         else => false,
     };
 }

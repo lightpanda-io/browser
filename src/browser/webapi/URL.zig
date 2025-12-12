@@ -35,6 +35,23 @@ _search_params: ?*URLSearchParams = null,
 pub const resolve = @import("../URL.zig").resolve;
 pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
+pub fn canParse(url: []const u8, base_: ?[]const u8, page: *Page) bool {
+    _ = page;
+    const url_is_absolute = U.isCompleteHTTPUrl(url);
+
+    if (base_) |b| {
+        // Base must be valid even if URL is absolute
+        if (!U.isCompleteHTTPUrl(b)) {
+            return false;
+        }
+        return true;
+    } else if (!url_is_absolute) {
+        return false;
+    } else {
+        return true;
+    }
+}
+
 pub fn init(url: [:0]const u8, base_: ?[:0]const u8, page: *Page) !*URL {
     const url_is_absolute = @import("../URL.zig").isCompleteHTTPUrl(url);
 
@@ -96,7 +113,17 @@ pub fn getOrigin(self: *const URL, page: *const Page) ![]const u8 {
     };
 }
 
-pub fn getSearch(self: *const URL) []const u8 {
+pub fn getSearch(self: *const URL, page: *const Page) ![]const u8 {
+    // If searchParams has been accessed, generate search from it
+    if (self._search_params) |sp| {
+        if (sp.getSize() == 0) {
+            return "";
+        }
+        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+        try buf.writer.writeByte('?');
+        try sp.toString(&buf.writer);
+        return buf.written();
+    }
     return U.getSearch(self._raw);
 }
 
@@ -110,12 +137,67 @@ pub fn getSearchParams(self: *URL, page: *Page) !*URLSearchParams {
     }
 
     // Get current search string (without the '?')
-    const search = self.getSearch();
+    const search = try self.getSearch(page);
     const search_value = if (search.len > 0) search[1..] else "";
 
     const params = try URLSearchParams.init(.{ .query_string = search_value }, page);
     self._search_params = params;
     return params;
+}
+
+pub fn setHref(self: *URL, value: []const u8, page: *Page) !void {
+    const base = if (U.isCompleteHTTPUrl(value)) page.url else self._raw;
+    const raw = try U.resolve(self._arena orelse page.arena, base, value, .{ .always_dupe = true });
+    self._raw = raw;
+
+    // Update existing searchParams if it exists
+    if (self._search_params) |sp| {
+        const search = U.getSearch(raw);
+        const search_value = if (search.len > 0) search[1..] else "";
+        try sp.updateFromString(search_value, page);
+    }
+}
+
+pub fn setProtocol(self: *URL, value: []const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setProtocol(self._raw, value, allocator);
+}
+
+pub fn setHost(self: *URL, value: []const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setHost(self._raw, value, allocator);
+}
+
+pub fn setHostname(self: *URL, value: []const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setHostname(self._raw, value, allocator);
+}
+
+pub fn setPort(self: *URL, value: ?[]const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setPort(self._raw, value, allocator);
+}
+
+pub fn setPathname(self: *URL, value: []const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setPathname(self._raw, value, allocator);
+}
+
+pub fn setSearch(self: *URL, value: []const u8, page: *Page) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setSearch(self._raw, value, allocator);
+
+    // Update existing searchParams if it exists
+    if (self._search_params) |sp| {
+        const search = U.getSearch(self._raw);
+        const search_value = if (search.len > 0) search[1..] else "";
+        try sp.updateFromString(search_value, page);
+    }
+}
+
+pub fn setHash(self: *URL, value: []const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setHash(self._raw, value, allocator);
 }
 
 pub fn toString(self: *const URL, page: *const Page) ![:0]const u8 {
@@ -136,6 +218,13 @@ pub fn toString(self: *const URL, page: *const Page) ![:0]const u8 {
     // Build the new URL string
     var buf = std.Io.Writer.Allocating.init(page.call_arena);
     try buf.writer.writeAll(base);
+
+    // Add / if missing (e.g., "https://example.com" -> "https://example.com/")
+    // Only add if pathname is just "/" and not already in the base
+    const pathname = U.getPathname(raw);
+    if (std.mem.eql(u8, pathname, "/") and !std.mem.endsWith(u8, base, "/")) {
+        try buf.writer.writeByte('/');
+    }
 
     // Only add ? if there are params
     if (sp.getSize() > 0) {
@@ -159,19 +248,20 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(URL.init, .{});
+    pub const canParse = bridge.function(URL.canParse, .{ .static = true });
     pub const toString = bridge.function(URL.toString, .{});
     pub const toJSON = bridge.function(URL.toString, .{});
-    pub const href = bridge.accessor(URL.toString, null, .{});
-    pub const search = bridge.accessor(URL.getSearch, null, .{});
-    pub const hash = bridge.accessor(URL.getHash, null, .{});
-    pub const pathname = bridge.accessor(URL.getPathname, null, .{});
+    pub const href = bridge.accessor(URL.toString, URL.setHref, .{});
+    pub const search = bridge.accessor(URL.getSearch, URL.setSearch, .{});
+    pub const hash = bridge.accessor(URL.getHash, URL.setHash, .{});
+    pub const pathname = bridge.accessor(URL.getPathname, URL.setPathname, .{});
     pub const username = bridge.accessor(URL.getUsername, null, .{});
     pub const password = bridge.accessor(URL.getPassword, null, .{});
-    pub const hostname = bridge.accessor(URL.getHostname, null, .{});
-    pub const host = bridge.accessor(URL.getHost, null, .{});
-    pub const port = bridge.accessor(URL.getPort, null, .{});
+    pub const hostname = bridge.accessor(URL.getHostname, URL.setHostname, .{});
+    pub const host = bridge.accessor(URL.getHost, URL.setHost, .{});
+    pub const port = bridge.accessor(URL.getPort, URL.setPort, .{});
     pub const origin = bridge.accessor(URL.getOrigin, null, .{});
-    pub const protocol = bridge.accessor(URL.getProtocol, null, .{});
+    pub const protocol = bridge.accessor(URL.getProtocol, URL.setProtocol, .{});
     pub const searchParams = bridge.accessor(URL.getSearchParams, null, .{});
 };
 

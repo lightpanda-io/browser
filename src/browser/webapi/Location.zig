@@ -57,8 +57,8 @@ pub fn getOrigin(self: *const Location, page: *const Page) ![]const u8 {
     return self._url.getOrigin(page);
 }
 
-pub fn getSearch(self: *const Location) []const u8 {
-    return self._url.getSearch();
+pub fn getSearch(self: *const Location, page: *const Page) ![]const u8 {
+    return self._url.getSearch(page);
 }
 
 pub fn getHash(self: *const Location) []const u8 {

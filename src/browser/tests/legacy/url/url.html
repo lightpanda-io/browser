@@ -31,14 +31,14 @@
 </script>
 
 <script id="constructor">
-  testing.expectError("TypeError: invalid argument", () => {
+  testing.expectError("Error: TypeError", () => {
     new URL(document.createElement('a'));
   });
 
   let a = document.createElement('a');
   a.href = 'https://www.lightpanda.io/over?9000=!!';
   const url3 = new URL(a);
-  testing.expectEqual("https://www.lightpanda.io/over?9000=%21%21", url3.href);
+  testing.expectEqual("https://www.lightpanda.io/over?9000=!!", url3.href);
  </script>
 
 <script id=searchParams>
@@ -53,10 +53,10 @@
   testing.expectEqual(3, url.searchParams.size);
 
   // search is dynamic
-  testing.expectEqual("?a=~&b=~&c=foo", url.search);
+  testing.expectEqual("?a=%7E&b=%7E&c=foo", url.search);
 
   // href is dynamic
-  testing.expectEqual("https://foo.bar/path?a=~&b=~&c=foo#fragment", url.href);
+  testing.expectEqual("https://foo.bar/path?a=%7E&b=%7E&c=foo#fragment", url.href);
 
   url.searchParams.delete('c', 'foo');
   testing.expectEqual(null, url.searchParams.get('c'));
@@ -95,7 +95,7 @@
 </script>
 
 <script id=invalidUrl>
-  testing.expectError("Error: Invalid", () => {
+  testing.expectError("Error: TypeError", () => {
     _ = new URL("://foo.bar/path?query#fragment");
   });
 </script>

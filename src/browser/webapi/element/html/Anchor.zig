@@ -84,26 +84,7 @@ pub fn getHost(self: *Anchor, page: *Page) ![]const u8 {
 
 pub fn setHost(self: *Anchor, value: []const u8, page: *Page) !void {
     const href = try getResolvedHref(self, page) orelse return;
-    const protocol = URL.getProtocol(href);
-    const pathname = URL.getPathname(href);
-    const search = URL.getSearch(href);
-    const hash = URL.getHash(href);
-
-    // Check if the host includes a port
-    const colon_pos = std.mem.lastIndexOfScalar(u8, value, ':');
-    const clean_host = if (colon_pos) |pos| blk: {
-        const port_str = value[pos + 1 ..];
-        // Remove default ports
-        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
-            break :blk value[0..pos];
-        }
-        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
-            break :blk value[0..pos];
-        }
-        break :blk value;
-    } else value;
-
-    const new_href = try buildUrl(page.call_arena, protocol, clean_host, pathname, search, hash);
+    const new_href = try URL.setHost(href, value, page.call_arena);
     try setHref(self, new_href, page);
 }
 
@@ -114,13 +95,8 @@ pub fn getHostname(self: *Anchor, page: *Page) ![]const u8 {
 
 pub fn setHostname(self: *Anchor, value: []const u8, page: *Page) !void {
     const href = try getResolvedHref(self, page) orelse return;
-    const current_port = URL.getPort(href);
-    const new_host = if (current_port.len > 0)
-        try std.fmt.allocPrint(page.call_arena, "{s}:{s}", .{ value, current_port })
-    else
-        value;
-
-    try setHost(self, new_host, page);
+    const new_href = try URL.setHostname(href, value, page.call_arena);
+    try setHref(self, new_href, page);
 }
 
 pub fn getPort(self: *Anchor, page: *Page) ![]const u8 {
@@ -142,25 +118,8 @@ pub fn getPort(self: *Anchor, page: *Page) ![]const u8 {
 
 pub fn setPort(self: *Anchor, value: ?[]const u8, page: *Page) !void {
     const href = try getResolvedHref(self, page) orelse return;
-    const hostname = URL.getHostname(href);
-    const protocol = URL.getProtocol(href);
-
-    // Handle null or default ports
-    const new_host = if (value) |port_str| blk: {
-        if (port_str.len == 0) {
-            break :blk hostname;
-        }
-        // Check if this is a default port for the protocol
-        if (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port_str, "443")) {
-            break :blk hostname;
-        }
-        if (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port_str, "80")) {
-            break :blk hostname;
-        }
-        break :blk try std.fmt.allocPrint(page.call_arena, "{s}:{s}", .{ hostname, port_str });
-    } else hostname;
-
-    try setHost(self, new_host, page);
+    const new_href = try URL.setPort(href, value, page.call_arena);
+    try setHref(self, new_href, page);
 }
 
 pub fn getSearch(self: *Anchor, page: *Page) ![]const u8 {
@@ -170,18 +129,7 @@ pub fn getSearch(self: *Anchor, page: *Page) ![]const u8 {
 
 pub fn setSearch(self: *Anchor, value: []const u8, page: *Page) !void {
     const href = try getResolvedHref(self, page) orelse return;
-    const protocol = URL.getProtocol(href);
-    const host = URL.getHost(href);
-    const pathname = URL.getPathname(href);
-    const hash = URL.getHash(href);
-
-    // Add ? prefix if not present and value is not empty
-    const search = if (value.len > 0 and value[0] != '?')
-        try std.fmt.allocPrint(page.call_arena, "?{s}", .{value})
-    else
-        value;
-
-    const new_href = try buildUrl(page.call_arena, protocol, host, pathname, search, hash);
+    const new_href = try URL.setSearch(href, value, page.call_arena);
     try setHref(self, new_href, page);
 }
 
@@ -192,18 +140,7 @@ pub fn getHash(self: *Anchor, page: *Page) ![]const u8 {
 
 pub fn setHash(self: *Anchor, value: []const u8, page: *Page) !void {
     const href = try getResolvedHref(self, page) orelse return;
-    const protocol = URL.getProtocol(href);
-    const host = URL.getHost(href);
-    const pathname = URL.getPathname(href);
-    const search = URL.getSearch(href);
-
-    // Add # prefix if not present and value is not empty
-    const hash = if (value.len > 0 and value[0] != '#')
-        try std.fmt.allocPrint(page.call_arena, "#{s}", .{value})
-    else
-        value;
-
-    const new_href = try buildUrl(page.call_arena, protocol, host, pathname, search, hash);
+    const new_href = try URL.setHash(href, value, page.call_arena);
     try setHref(self, new_href, page);
 }
 
@@ -214,18 +151,7 @@ pub fn getPathname(self: *Anchor, page: *Page) ![]const u8 {
 
 pub fn setPathname(self: *Anchor, value: []const u8, page: *Page) !void {
     const href = try getResolvedHref(self, page) orelse return;
-    const protocol = URL.getProtocol(href);
-    const host = URL.getHost(href);
-    const search = URL.getSearch(href);
-    const hash = URL.getHash(href);
-
-    // Add / prefix if not present and value is not empty
-    const pathname = if (value.len > 0 and value[0] != '/')
-        try std.fmt.allocPrint(page.call_arena, "/{s}", .{value})
-    else
-        value;
-
-    const new_href = try buildUrl(page.call_arena, protocol, host, pathname, search, hash);
+    const new_href = try URL.setPathname(href, value, page.call_arena);
     try setHref(self, new_href, page);
 }
 
@@ -236,18 +162,7 @@ pub fn getProtocol(self: *Anchor, page: *Page) ![]const u8 {
 
 pub fn setProtocol(self: *Anchor, value: []const u8, page: *Page) !void {
     const href = try getResolvedHref(self, page) orelse return;
-    const host = URL.getHost(href);
-    const pathname = URL.getPathname(href);
-    const search = URL.getSearch(href);
-    const hash = URL.getHash(href);
-
-    // Add : suffix if not present
-    const protocol = if (value.len > 0 and value[value.len - 1] != ':')
-        try std.fmt.allocPrint(page.call_arena, "{s}:", .{value})
-    else
-        value;
-
-    const new_href = try buildUrl(page.call_arena, protocol, host, pathname, search, hash);
+    const new_href = try URL.setProtocol(href, value, page.call_arena);
     try setHref(self, new_href, page);
 }
 
@@ -281,24 +196,6 @@ fn getResolvedHref(self: *Anchor, page: *Page) !?[:0]const u8 {
         return null;
     }
     return try URL.resolve(page.call_arena, page.url, href, .{});
-}
-
-// Helper function to build a new URL from components
-fn buildUrl(
-    allocator: std.mem.Allocator,
-    protocol: []const u8,
-    host: []const u8,
-    pathname: []const u8,
-    search: []const u8,
-    hash: []const u8,
-) ![:0]const u8 {
-    return std.fmt.allocPrintSentinel(allocator, "{s}//{s}{s}{s}{s}", .{
-        protocol,
-        host,
-        pathname,
-        search,
-        hash,
-    }, 0);
 }
 
 pub const JsApi = struct {
