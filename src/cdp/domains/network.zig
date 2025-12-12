@@ -243,11 +243,12 @@ pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.
     }
 
     const transfer = msg.transfer;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id});
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
+        .requestId = loader_id,
         .frameId = target_id,
-        .loaderId = bc.loader_id,
+        .loaderId = loader_id,
         .type = msg.transfer.req.resource_type.string(),
         .documentURL = DocumentUrlWriter.init(&page.url.uri),
         .request = TransferAsRequestWriter.init(transfer),
@@ -263,11 +264,14 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
     const session_id = bc.session_id orelse return;
     const target_id = bc.target_id orelse unreachable;
 
+    const transfer = msg.transfer;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id});
+
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
-        .loaderId = bc.loader_id,
+        .requestId = loader_id,
         .frameId = target_id,
+        .loaderId = loader_id,
         .response = TransferAsResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });

@@ -90,12 +90,14 @@ pub const Notification = struct {
     pub const PageRemove = struct {};
 
     pub const PageNavigate = struct {
+        req_id: usize,
         timestamp: u32,
         url: []const u8,
         opts: page.NavigateOpts,
     };
 
     pub const PageNavigated = struct {
+        req_id: usize,
         timestamp: u32,
         url: []const u8,
         opts: page.NavigatedOpts,
@@ -297,6 +299,7 @@ test "Notification" {
 
     // noop
     notifier.dispatch(.page_navigate, &.{
+        .req_id = 1,
         .timestamp = 4,
         .url = undefined,
         .opts = .{},
@@ -306,6 +309,7 @@ test "Notification" {
 
     try notifier.register(.page_navigate, &tc, TestClient.pageNavigate);
     notifier.dispatch(.page_navigate, &.{
+        .req_id = 1,
         .timestamp = 4,
         .url = undefined,
         .opts = .{},
@@ -314,6 +318,7 @@ test "Notification" {
 
     notifier.unregisterAll(&tc);
     notifier.dispatch(.page_navigate, &.{
+        .req_id = 1,
         .timestamp = 10,
         .url = undefined,
         .opts = .{},
@@ -323,21 +328,23 @@ test "Notification" {
     try notifier.register(.page_navigate, &tc, TestClient.pageNavigate);
     try notifier.register(.page_navigated, &tc, TestClient.pageNavigated);
     notifier.dispatch(.page_navigate, &.{
+        .req_id = 1,
         .timestamp = 10,
         .url = undefined,
         .opts = .{},
     });
-    notifier.dispatch(.page_navigated, &.{ .timestamp = 6, .url = undefined, .opts = .{} });
+    notifier.dispatch(.page_navigated, &.{ .req_id = 1, .timestamp = 6, .url = undefined, .opts = .{} });
     try testing.expectEqual(14, tc.page_navigate);
     try testing.expectEqual(6, tc.page_navigated);
 
     notifier.unregisterAll(&tc);
     notifier.dispatch(.page_navigate, &.{
+        .req_id = 1,
         .timestamp = 100,
         .url = undefined,
         .opts = .{},
     });
-    notifier.dispatch(.page_navigated, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
+    notifier.dispatch(.page_navigated, &.{ .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
     try testing.expectEqual(14, tc.page_navigate);
     try testing.expectEqual(6, tc.page_navigated);
 
@@ -345,27 +352,27 @@ test "Notification" {
         // unregister
         try notifier.register(.page_navigate, &tc, TestClient.pageNavigate);
         try notifier.register(.page_navigated, &tc, TestClient.pageNavigated);
-        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigate, &.{ .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
         try testing.expectEqual(114, tc.page_navigate);
         try testing.expectEqual(1006, tc.page_navigated);
 
         notifier.unregister(.page_navigate, &tc);
-        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigate, &.{ .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
         try testing.expectEqual(114, tc.page_navigate);
         try testing.expectEqual(2006, tc.page_navigated);
 
         notifier.unregister(.page_navigated, &tc);
-        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigate, &.{ .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
         try testing.expectEqual(114, tc.page_navigate);
         try testing.expectEqual(2006, tc.page_navigated);
 
         // already unregistered, try anyways
         notifier.unregister(.page_navigated, &tc);
-        notifier.dispatch(.page_navigate, &.{ .timestamp = 100, .url = undefined, .opts = .{} });
-        notifier.dispatch(.page_navigated, &.{ .timestamp = 1000, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigate, &.{ .req_id = 1, .timestamp = 100, .url = undefined, .opts = .{} });
+        notifier.dispatch(.page_navigated, &.{ .req_id = 1, .timestamp = 1000, .url = undefined, .opts = .{} });
         try testing.expectEqual(114, tc.page_navigate);
         try testing.expectEqual(2006, tc.page_navigated);
     }

@@ -261,6 +261,16 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     return transfer.fulfill(status, headers, body);
 }
 
+pub fn nextReqId(self: *Client) usize {
+    return self.next_request_id + 1;
+}
+
+pub fn incrReqId(self: *Client) usize {
+    const id = self.next_request_id + 1;
+    self.next_request_id = id;
+    return id;
+}
+
 fn makeTransfer(self: *Client, req: Request) !*Transfer {
     errdefer req.headers.deinit();
 
@@ -273,8 +283,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     const transfer = try self.transfer_pool.create();
     errdefer self.transfer_pool.destroy(transfer);
 
-    const id = self.next_request_id + 1;
-    self.next_request_id = id;
+    const id = self.incrReqId();
     transfer.* = .{
         .arena = ArenaAllocator.init(self.allocator),
         .id = id,

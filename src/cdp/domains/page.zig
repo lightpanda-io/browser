@@ -176,7 +176,6 @@ fn navigate(cmd: anytype) !void {
     }
 
     var page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    bc.loader_id = bc.cdp.loader_id_gen.next();
 
     try page.navigate(params.url, .{
         .reason = .address_bar,
@@ -184,13 +183,12 @@ fn navigate(cmd: anytype) !void {
     });
 }
 
-pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void {
+pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.PageNavigate) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    bc.loader_id = bc.cdp.loader_id_gen.next();
-    const loader_id = bc.loader_id;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{event.req_id});
     const target_id = bc.target_id orelse unreachable;
 
     bc.reset();
@@ -253,7 +251,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    const loader_id = bc.loader_id;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{event.req_id});
     const target_id = bc.target_id orelse unreachable;
     const timestamp = event.timestamp;
 
@@ -335,7 +333,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         .frame = Frame{
             .id = target_id,
             .url = event.url,
-            .loaderId = bc.loader_id,
+            .loaderId = loader_id,
             .securityOrigin = bc.security_origin,
             .secureContextType = bc.secure_context_type,
         },
