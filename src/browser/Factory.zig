@@ -239,6 +239,13 @@ pub fn htmlElement(self: *Factory, child: anytype) !*@TypeOf(child) {
     ).create(allocator, child);
 }
 
+pub fn htmlMediaElement(self: *Factory, child: anytype) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+    return try AutoPrototypeChain(
+        &.{ EventTarget, Node, Element, Element.Html, Element.Html.Media, @TypeOf(child) },
+    ).create(allocator, child);
+}
+
 pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
     const ChildT = @TypeOf(child);

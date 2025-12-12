@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<audio id="audio1" src="test.mp3"></audio>
+<video id="video1" src="test.mp4"></video>
+
+<script id="canPlayType_audio">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual('probably', audio.canPlayType('audio/mp3'));
+    testing.expectEqual('probably', audio.canPlayType('audio/mpeg'));
+    testing.expectEqual('probably', audio.canPlayType('audio/webm'));
+    testing.expectEqual('probably', audio.canPlayType('audio/ogg'));
+    testing.expectEqual('probably', audio.canPlayType('audio/wav'));
+    testing.expectEqual('maybe', audio.canPlayType('audio/aac'));
+    testing.expectEqual('maybe', audio.canPlayType('audio/flac'));
+    testing.expectEqual('', audio.canPlayType('audio/invalid'));
+    testing.expectEqual('', audio.canPlayType('video/invalid'));
+  }
+</script>
+
+<script id="canPlayType_video">
+  {
+    const video = document.getElementById('video1');
+    testing.expectEqual('probably', video.canPlayType('video/mp4'));
+    testing.expectEqual('probably', video.canPlayType('video/webm'));
+    testing.expectEqual('probably', video.canPlayType('video/ogg'));
+    testing.expectEqual('', video.canPlayType('video/invalid'));
+  }
+</script>
+
+<script id="canPlayType_with_codecs">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual('probably', audio.canPlayType('audio/mp3; codecs="mp3"'));
+    testing.expectEqual('probably', audio.canPlayType('video/mp4; codecs="avc1.42E01E"'));
+  }
+</script>
+
+<script id="play_pause">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual(true, audio.paused);
+
+    audio.play();
+    testing.expectEqual(false, audio.paused);
+
+    audio.pause();
+    testing.expectEqual(true, audio.paused);
+  }
+</script>
+
+<script id="volume_muted">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual(1.0, audio.volume);
+    testing.expectEqual(false, audio.muted);
+
+    audio.volume = 0.5;
+    testing.expectEqual(0.5, audio.volume);
+
+    audio.volume = 1.5; // Should clamp to 1.0
+    testing.expectEqual(1.0, audio.volume);
+
+    audio.volume = -0.5; // Should clamp to 0.0
+    testing.expectEqual(0.0, audio.volume);
+
+    audio.muted = true;
+    testing.expectEqual(true, audio.muted);
+  }
+</script>
+
+<script id="playback_rate">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual(1.0, audio.playbackRate);
+
+    audio.playbackRate = 2.0;
+    testing.expectEqual(2.0, audio.playbackRate);
+
+    audio.playbackRate = 0.5;
+    testing.expectEqual(0.5, audio.playbackRate);
+  }
+</script>
+
+<script id="currentTime">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual(0, audio.currentTime);
+
+    audio.currentTime = 10.5;
+    testing.expectEqual(10.5, audio.currentTime);
+  }
+</script>
+
+<script id="duration_nan">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual(true, isNaN(audio.duration));
+  }
+</script>
+
+<script id="ended_seeking">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual(false, audio.ended);
+    testing.expectEqual(false, audio.seeking);
+  }
+</script>
+
+<script id="ready_state_network_state">
+  {
+    // Create a fresh element to test initial state
+    const audio = document.createElement('audio');
+    testing.expectEqual(0, audio.readyState); // HAVE_NOTHING initially
+    testing.expectEqual(0, audio.networkState); // NETWORK_EMPTY initially
+
+    audio.play();
+    // In headless mode, play() immediately succeeds without actual media loading
+    testing.expectEqual(4, audio.readyState); // HAVE_ENOUGH_DATA in headless
+    testing.expectEqual(1, audio.networkState); // NETWORK_IDLE in headless
+  }
+</script>
+
+<script id="load_reset">
+  {
+    // Create a fresh element to test load() behavior
+    const audio = document.createElement('audio');
+    audio.currentTime = 50;
+    audio.play();
+
+    audio.load();
+    testing.expectEqual(true, audio.paused);
+    testing.expectEqual(0, audio.currentTime);
+    testing.expectEqual(0, audio.readyState);
+  }
+</script>
+
+<script id="attributes_autoplay">
+  {
+    const video = document.createElement('video');
+    testing.expectEqual(false, video.autoplay);
+
+    video.setAttribute('autoplay', '');
+    testing.expectEqual(true, video.autoplay);
+
+    video.autoplay = false;
+    testing.expectEqual(false, video.autoplay);
+
+    video.autoplay = true;
+    testing.expectEqual(true, video.autoplay);
+  }
+</script>
+
+<script id="attributes_controls">
+  {
+    const video = document.createElement('video');
+    testing.expectEqual(false, video.controls);
+
+    video.controls = true;
+    testing.expectEqual(true, video.controls);
+
+    video.controls = false;
+    testing.expectEqual(false, video.controls);
+  }
+</script>
+
+<script id="attributes_loop">
+  {
+    const audio = document.createElement('audio');
+    testing.expectEqual(false, audio.loop);
+
+    audio.loop = true;
+    testing.expectEqual(true, audio.loop);
+  }
+</script>
+
+<script id="attributes_preload">
+  {
+    const audio = document.createElement('audio');
+    testing.expectEqual('auto', audio.preload);
+
+    audio.preload = 'none';
+    testing.expectEqual('none', audio.preload);
+
+    audio.preload = 'metadata';
+    testing.expectEqual('metadata', audio.preload);
+  }
+</script>
+
+<script id="attributes_src">
+  {
+    const audio = document.createElement('audio');
+    testing.expectEqual('', audio.src);
+
+    audio.src = 'test.mp3';
+    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/test.mp3', audio.src);
+  }
+</script>
+
+<script id="video_poster">
+  {
+    const video = document.createElement('video');
+    testing.expectEqual('', video.poster);
+
+    video.poster = 'poster.jpg';
+    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/poster.jpg', video.poster);
+  }
+</script>
+
+<script id="video_dimensions">
+  {
+    const video = document.getElementById('video1');
+    testing.expectEqual(0, video.videoWidth);
+    testing.expectEqual(0, video.videoHeight);
+  }
+</script>
+
+<script id="constants">
+  {
+    const audio = document.getElementById('audio1');
+    testing.expectEqual(0, audio.NETWORK_EMPTY);
+    testing.expectEqual(1, audio.NETWORK_IDLE);
+    testing.expectEqual(2, audio.NETWORK_LOADING);
+    testing.expectEqual(3, audio.NETWORK_NO_SOURCE);
+
+    testing.expectEqual(0, audio.HAVE_NOTHING);
+    testing.expectEqual(1, audio.HAVE_METADATA);
+    testing.expectEqual(2, audio.HAVE_CURRENT_DATA);
+    testing.expectEqual(3, audio.HAVE_FUTURE_DATA);
+    testing.expectEqual(4, audio.HAVE_ENOUGH_DATA);
+  }
+</script>
+
+<script id="create_audio_element">
+  {
+    const audio = document.createElement('audio');
+    testing.expectEqual('[object HTMLAudioElement]', audio.toString());
+    testing.expectEqual(true, audio.paused);
+  }
+</script>
+
+<script id="create_video_element">
+  {
+    const video = document.createElement('video');
+    testing.expectEqual('[object HTMLVideoElement]', video.toString());
+    testing.expectEqual(true, video.paused);
+  }
+</script>

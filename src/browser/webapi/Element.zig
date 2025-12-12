@@ -188,6 +188,11 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
                 .input => "input",
                 .li => "li",
                 .link => "link",
+                .media => |m| switch (m._type) {
+                    .audio => "audio",
+                    .video => "video",
+                    .generic => "media",
+                },
                 .meta => "meta",
                 .ol => "ol",
                 .option => "option",
@@ -236,6 +241,11 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
                 .li => "LI",
                 .link => "LINK",
                 .meta => "META",
+                .media => |m| switch (m._type) {
+                    .audio => "AUDIO",
+                    .video => "VIDEO",
+                    .generic => "MEDIA",
+                },
                 .ol => "OL",
                 .option => "OPTION",
                 .p => "P",
@@ -1077,6 +1087,11 @@ pub fn getTag(self: *const Element) Tag {
             .ul => .ul,
             .ol => .ol,
             .generic => |g| g._tag,
+            .media => |m| switch (m._type) {
+                .audio => .audio,
+                .video => .video,
+                .generic => .media,
+            },
             .script => .script,
             .select => .select,
             .slot => .slot,
@@ -1103,6 +1118,7 @@ pub fn getTag(self: *const Element) Tag {
 
 pub const Tag = enum {
     anchor,
+    audio,
     b,
     body,
     br,
@@ -1137,6 +1153,7 @@ pub const Tag = enum {
     link,
     main,
     meta,
+    media,
     nav,
     ol,
     option,
@@ -1157,6 +1174,7 @@ pub const Tag = enum {
     textarea,
     title,
     ul,
+    video,
     unknown,
 
     // If the tag is "unknown", we can't use the optimized tag matching, but

@@ -1186,6 +1186,16 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined },
             ),
+            asUint("audio") => return self.createHtmlMediaElementT(
+                Element.Html.Media.Audio,
+                namespace,
+                attribute_iterator,
+            ),
+            asUint("video") => return self.createHtmlMediaElementT(
+                Element.Html.Media.Video,
+                namespace,
+                attribute_iterator,
+            ),
             else => {},
         },
         6 => switch (@as(u48, @bitCast(name[0..6].*))) {
@@ -1341,6 +1351,14 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
         };
     }
     return node;
+}
+
+fn createHtmlMediaElementT(self: *Page, comptime E: type, namespace: Element.Namespace, attribute_iterator: anytype) !*Node {
+    const media_element = try self._factory.htmlMediaElement(E{ ._proto = undefined });
+    const element = media_element.asElement();
+    element._namespace = namespace;
+    try self.populateElementAttributes(element, attribute_iterator);
+    return element.asNode();
 }
 
 fn createSvgElementT(self: *Page, comptime E: type, tag_name: []const u8, attribute_iterator: anytype, svg_element: E) !*Node {
