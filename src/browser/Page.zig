@@ -52,6 +52,7 @@ const Document = @import("webapi/Document.zig");
 const DocumentFragment = @import("webapi/DocumentFragment.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
+const Screen = @import("webapi/Screen.zig");
 const HtmlScript = @import("webapi/Element.zig").Html.Script;
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
@@ -209,12 +210,14 @@ fn reset(self: *Page, comptime initializing: bool) !void {
 
     if (comptime initializing == true) {
         const storage_bucket = try self._factory.create(storage.Bucket{});
+        const screen = try Screen.init(self);
         self.window = try self._factory.eventTarget(Window{
             ._document = self.document,
             ._storage_bucket = storage_bucket,
             ._performance = Performance.init(),
             ._proto = undefined,
             ._location = &default_location,
+            ._screen = screen,
         });
     } else {
         self.window._document = self.document;

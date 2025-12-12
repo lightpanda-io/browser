@@ -50,7 +50,7 @@ _css: CSS = .init,
 _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
-_screen: Screen = .init,
+_screen: *Screen,
 _performance: Performance,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function = null,
@@ -88,7 +88,7 @@ pub fn getNavigator(self: *Window) *Navigator {
 }
 
 pub fn getScreen(self: *Window) *Screen {
-    return &self._screen;
+    return self._screen;
 }
 
 pub fn getCrypto(self: *Window) *Crypto {

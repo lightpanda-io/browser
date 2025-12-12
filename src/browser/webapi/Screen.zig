@@ -17,40 +17,63 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+const EventTarget = @import("EventTarget.zig");
+
+pub fn registerTypes() []const type {
+    return &.{
+        Screen,
+        Orientation,
+    };
+}
 
 const Screen = @This();
-_pad: bool = false,
 
-pub const init: Screen = .{};
+_proto: *EventTarget,
+_orientation: ?*Orientation = null,
 
-/// Total width of the screen in pixels
+pub fn init(page: *Page) !*Screen {
+    return page._factory.eventTarget(Screen{
+        ._proto = undefined,
+        ._orientation = null,
+    });
+}
+
+pub fn asEventTarget(self: *Screen) *EventTarget {
+    return self._proto;
+}
+
 pub fn getWidth(_: *const Screen) u32 {
     return 1920;
 }
 
-/// Total height of the screen in pixels
 pub fn getHeight(_: *const Screen) u32 {
     return 1080;
 }
 
-/// Available width (excluding OS UI elements like taskbar)
 pub fn getAvailWidth(_: *const Screen) u32 {
     return 1920;
 }
 
-/// Available height (excluding OS UI elements like taskbar)
 pub fn getAvailHeight(_: *const Screen) u32 {
     return 1040; // 40px reserved for taskbar/dock
 }
 
-/// Color depth in bits per pixel
 pub fn getColorDepth(_: *const Screen) u32 {
     return 24;
 }
 
-/// Pixel depth in bits per pixel (typically same as colorDepth)
 pub fn getPixelDepth(_: *const Screen) u32 {
     return 24;
+}
+
+pub fn getOrientation(self: *Screen, page: *Page) !*Orientation {
+    if (self._orientation) |orientation| {
+        return orientation;
+    }
+    const orientation = try Orientation.init(page);
+    self._orientation = orientation;
+    return orientation;
 }
 
 pub const JsApi = struct {
@@ -60,14 +83,48 @@ pub const JsApi = struct {
         pub const name = "Screen";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
-    // Read-only properties
     pub const width = bridge.accessor(Screen.getWidth, null, .{});
     pub const height = bridge.accessor(Screen.getHeight, null, .{});
     pub const availWidth = bridge.accessor(Screen.getAvailWidth, null, .{});
     pub const availHeight = bridge.accessor(Screen.getAvailHeight, null, .{});
     pub const colorDepth = bridge.accessor(Screen.getColorDepth, null, .{});
     pub const pixelDepth = bridge.accessor(Screen.getPixelDepth, null, .{});
+    pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});
+};
+
+pub const Orientation = struct {
+    _proto: *EventTarget,
+
+    pub fn init(page: *Page) !*Orientation {
+        return page._factory.eventTarget(Orientation{
+            ._proto = undefined,
+        });
+    }
+
+    pub fn asEventTarget(self: *Orientation) *EventTarget {
+        return self._proto;
+    }
+
+    pub fn getAngle(_: *const Orientation) u32 {
+        return 0;
+    }
+
+    pub fn getType(_: *const Orientation) []const u8 {
+        return "landscape-primary";
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(Orientation);
+
+        pub const Meta = struct {
+            pub const name = "ScreenOrientation";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const angle = bridge.accessor(Orientation.getAngle, null, .{});
+        pub const @"type" = bridge.accessor(Orientation.getType, null, .{});
+    };
 };

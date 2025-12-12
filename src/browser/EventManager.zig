@@ -119,7 +119,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, &was_handled),
-        .xhr, .window, .abort_signal, .media_query_list, .message_port, .text_track_cue, .navigation => {
+        .xhr, .window, .abort_signal, .media_query_list, .message_port, .text_track_cue, .navigation, .screen, .screen_orientation => {
             const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
             try self.dispatchAll(list, target, event, &was_handled);
         },

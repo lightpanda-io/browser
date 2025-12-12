@@ -38,6 +38,8 @@ pub const Type = union(enum) {
     message_port: *@import("MessagePort.zig"),
     text_track_cue: *@import("media/TextTrackCue.zig"),
     navigation: *@import("navigation/NavigationEventTarget.zig"),
+    screen: *@import("Screen.zig"),
+    screen_orientation: *@import("Screen.zig").Orientation,
 };
 
 pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
