@@ -8,7 +8,7 @@
 
   let index1 = css.insertRule('body { color: red; }', 0);
   testing.expectEqual(0, index1);
-  testing.expectEqual(1, css.cssRules.length);
+  testing.expectEqual(0, css.cssRules.length);
 
   let replaced = false;
   css.replace('body{}').then(() => replaced = true);

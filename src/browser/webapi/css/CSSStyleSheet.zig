@@ -62,6 +62,19 @@ pub fn deleteRule(self: *CSSStyleSheet, index: u32, page: *Page) !void {
     _ = page;
 }
 
+pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise {
+    _ = self;
+    _ = text;
+    // TODO: clear self.css_rules
+    return page.js.resolvePromise({});
+}
+
+pub fn replaceSync(self: *CSSStyleSheet, text: []const u8) !void {
+    _ = self;
+    _ = text;
+    // TODO: clear self.css_rules
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSStyleSheet);
 
@@ -71,14 +84,17 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const constructor = bridge.constructor(CSSStyleSheet.init, .{});
     pub const ownerNode = bridge.accessor(CSSStyleSheet.getOwnerNode, null, .{ .null_as_undefined = true });
     pub const href = bridge.accessor(CSSStyleSheet.getHref, null, .{ .null_as_undefined = true });
     pub const title = bridge.accessor(CSSStyleSheet.getTitle, null, .{});
     pub const disabled = bridge.accessor(CSSStyleSheet.getDisabled, CSSStyleSheet.setDisabled, .{});
     pub const cssRules = bridge.accessor(CSSStyleSheet.getCssRules, null, .{});
-    pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{ .null_as_undefined = true });
+    pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{});
     pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{});
     pub const deleteRule = bridge.function(CSSStyleSheet.deleteRule, .{});
+    pub const replace = bridge.function(CSSStyleSheet.replace, .{});
+    pub const replaceSync = bridge.function(CSSStyleSheet.replaceSync, .{});
 };
 
 const testing = @import("../../../testing.zig");

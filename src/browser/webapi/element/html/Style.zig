@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -27,8 +29,55 @@ _proto: *HtmlElement,
 pub fn asElement(self: *Style) *Element {
     return self._proto._proto;
 }
+pub fn asConstElement(self: *const Style) *const Element {
+    return self._proto._proto;
+}
 pub fn asNode(self: *Style) *Node {
     return self.asElement().asNode();
+}
+
+// Attribute-backed properties
+
+pub fn getBlocking(self: *const Style) []const u8 {
+    return self.asConstElement().getAttributeSafe("blocking") orelse "";
+}
+
+pub fn setBlocking(self: *Style, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("blocking", value, page);
+}
+
+pub fn getMedia(self: *const Style) []const u8 {
+    return self.asConstElement().getAttributeSafe("media") orelse "";
+}
+
+pub fn setMedia(self: *Style, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("media", value, page);
+}
+
+pub fn getType(self: *const Style) []const u8 {
+    return self.asConstElement().getAttributeSafe("type") orelse "text/css";
+}
+
+pub fn setType(self: *Style, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("type", value, page);
+}
+
+pub fn getDisabled(self: *const Style) bool {
+    return self.asConstElement().getAttributeSafe("disabled") != null;
+}
+
+pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
+    if (disabled) {
+        try self.asElement().setAttributeSafe("disabled", "", page);
+    } else {
+        try self.asElement().removeAttribute("disabled", page);
+    }
+}
+
+const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
+pub fn getSheet(_: *const Style) ?*CSSStyleSheet {
+    // TODO?
+    return null;
 }
 
 pub const JsApi = struct {
@@ -39,4 +88,15 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const blocking = bridge.accessor(Style.getBlocking, Style.setBlocking, .{});
+    pub const media = bridge.accessor(Style.getMedia, Style.setMedia, .{});
+    pub const @"type" = bridge.accessor(Style.getType, Style.setType, .{});
+    pub const disabled = bridge.accessor(Style.getDisabled, Style.setDisabled, .{});
+    pub const sheet = bridge.accessor(Style.getSheet, null, .{});
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: Style" {
+    try testing.htmlRunner("element/html/style.html", .{});
+}

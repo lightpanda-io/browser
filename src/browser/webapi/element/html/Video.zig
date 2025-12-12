@@ -23,7 +23,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Media = @import("Media.zig");
 
-pub const Video = @This();
+const Video = @This();
 
 _proto: *Media,
 

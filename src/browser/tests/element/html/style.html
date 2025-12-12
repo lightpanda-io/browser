@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<script id="sheet">
+  {
+    testing.expectEqual(null, document.createElement('style').sheet);
+  }
+</script>
+
+<script id="type">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual('text/css', style.type);
+
+    style.type = 'text/plain';
+    testing.expectEqual('text/plain', style.type);
+  }
+</script>
+
+<script id="media">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual('', style.media);
+
+    style.media = 'screen';
+    testing.expectEqual('screen', style.media);
+
+    style.media = 'print and (max-width: 600px)';
+    testing.expectEqual('print and (max-width: 600px)', style.media);
+  }
+</script>
+
+<script id="blocking">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual('', style.blocking);
+
+    style.blocking = 'render';
+    testing.expectEqual('render', style.blocking);
+  }
+</script>
+
+<script id="disabled">
+  {
+    const style = document.createElement('style');
+    testing.expectEqual(false, style.disabled);
+
+    style.disabled = true;
+    testing.expectEqual(true, style.disabled);
+
+    style.disabled = false;
+    testing.expectEqual(false, style.disabled);
+  }
+</script>
+
+<script id="attributes">
+  {
+    const style = document.createElement('style');
+
+    style.setAttribute('media', 'screen');
+    testing.expectEqual('screen', style.media);
+
+    style.setAttribute('type', 'text/less');
+    testing.expectEqual('text/less', style.type);
+
+    style.setAttribute('disabled', '');
+    testing.expectEqual(true, style.disabled);
+  }
+</script>
