@@ -412,7 +412,7 @@ const TransferAsResponseWriter = struct {
             try jws.objectField("mimeType");
             try jws.write(mime.contentTypeString());
             try jws.objectField("charset");
-            try jws.write(mime.charsetString()[0..]);
+            try jws.write(mime.charsetString());
         }
 
         {

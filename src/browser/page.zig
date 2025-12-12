@@ -740,14 +740,14 @@ pub const Page = struct {
             log.debug(.http, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len });
 
             self.mode = switch (mime.content_type) {
-                .text_html => .{ .html = try parser.Parser.init(mime.charsetString()) },
+                .text_html => .{ .html = try parser.Parser.init(mime.charsetStringZ()) },
 
                 .application_json,
                 .text_javascript,
                 .text_css,
                 .text_plain,
                 => blk: {
-                    var p = try parser.Parser.init(mime.charsetString());
+                    var p = try parser.Parser.init(mime.charsetStringZ());
                     try p.process("<html><head><meta charset=\"utf-8\"></head><body><pre>");
                     break :blk .{ .text = p };
                 },
