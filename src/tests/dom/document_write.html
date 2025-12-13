@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="content">
+  <a id="a1" href="foo" class="ok">OK</a>
+  <p id="p1" class="ok empty">
+    <span id="s1"></span>
+  </p>
+  <p id="p2"> And</p>
+</div>
+
+
+<script id=document_write>
+  document.open();
+  document.write("<p id=ok>Hello world!</p>");
+  document.write("<p>I am a fish</p>");
+  document.write("<p>The number is 42</p>");
+  document.close();
+
+  const ok = document.getElementById("ok");
+  testing.expectEqual('Hello world!', ok.innerText);
+
+  const content = document.firstElementChild.innerHTML;
+  testing.expectEqual('<head></head><body><p id="ok">Hello world!</p><p>I am a fish</p><p>The number is 42</p></body>', content);
+</script>
