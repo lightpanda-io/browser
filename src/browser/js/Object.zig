@@ -32,6 +32,10 @@ const Object = @This();
 js_obj: v8.Object,
 context: *js.Context,
 
+pub fn getId(self: Object) u32 {
+    return self.js_obj.getIdentityHash();
+}
+
 pub const SetOpts = packed struct(u32) {
     READ_ONLY: bool = false,
     DONT_ENUM: bool = false,

@@ -57,7 +57,13 @@ pub const RegisterOptions = struct {
     passive: bool = false,
     signal: ?*@import("webapi/AbortSignal.zig") = null,
 };
-pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, function: js.Function, opts: RegisterOptions) !void {
+
+pub const Callback = union(enum) {
+    function: js.Function,
+    object: js.Object,
+};
+
+pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.register", .{ .type = typ, .capture = opts.capture, .once = opts.once });
     }
@@ -71,11 +77,15 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, func
 
     const gop = try self.lookup.getOrPut(self.arena, @intFromPtr(target));
     if (gop.found_existing) {
-        // check for duplicate functions already registered
+        // check for duplicate callbacks already registered
         var node = gop.value_ptr.first;
         while (node) |n| {
             const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-            if (listener.function.eql(function) and listener.capture == opts.capture) {
+            const is_duplicate = switch (callback) {
+                .object => |obj| listener.function.eqlObject(obj),
+                .function => |func| listener.function.eqlFunction(func),
+            };
+            if (is_duplicate and listener.capture == opts.capture) {
                 return;
             }
             node = n.next;
@@ -84,13 +94,18 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, func
         gop.value_ptr.* = .{};
     }
 
+    const func = switch (callback) {
+        .function => |f| Function{ .value = f },
+        .object => |o| Function{ .object = o },
+    };
+
     const listener = try self.listener_pool.create();
     listener.* = .{
         .node = .{},
         .once = opts.once,
         .capture = opts.capture,
         .passive = opts.passive,
-        .function = .{ .value = function },
+        .function = func,
         .signal = opts.signal,
         .typ = try String.init(self.arena, typ, .{}),
     };
@@ -98,9 +113,9 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, func
     gop.value_ptr.append(&listener.node);
 }
 
-pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, function: js.Function, use_capture: bool) void {
+pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
     const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
-    if (findListener(list, typ, function, use_capture)) |listener| {
+    if (findListener(list, typ, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
     }
 }
@@ -119,7 +134,17 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, &was_handled),
-        .xhr, .window, .abort_signal, .media_query_list, .message_port, .text_track_cue, .navigation, .screen, .screen_orientation => {
+        .xhr,
+        .window,
+        .abort_signal,
+        .media_query_list,
+        .message_port,
+        .text_track_cue,
+        .navigation,
+        .screen,
+        .screen_orientation,
+        .generic,
+        => {
             const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
             try self.dispatchAll(list, target, event, &was_handled);
         },
@@ -304,6 +329,11 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
                 const str = try page.call_arena.dupeZ(u8, string.str());
                 try self.page.js.eval(str, null);
             },
+            .object => |obj| {
+                if (try obj.getFunction("handleEvent")) |handleEvent| {
+                    try handleEvent.callWithThis(void, obj, .{event});
+                }
+            },
         }
 
         // Restore original target (only if we changed it)
@@ -350,12 +380,16 @@ fn cleanupMarkedListeners(self: *EventManager, list: *std.DoublyLinkedList) void
     }
 }
 
-fn findListener(list: *const std.DoublyLinkedList, typ: []const u8, function: js.Function, capture: bool) ?*Listener {
+fn findListener(list: *const std.DoublyLinkedList, typ: []const u8, callback: Callback, capture: bool) ?*Listener {
     var node = list.first;
     while (node) |n| {
         node = n.next;
         const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-        if (!listener.function.eql(function)) {
+        const matches = switch (callback) {
+            .object => |obj| listener.function.eqlObject(obj),
+            .function => |func| listener.function.eqlFunction(func),
+        };
+        if (!matches) {
             continue;
         }
         if (listener.capture != capture) {
@@ -383,11 +417,19 @@ const Listener = struct {
 const Function = union(enum) {
     value: js.Function,
     string: String,
+    object: js.Object,
 
-    fn eql(self: Function, func: js.Function) bool {
+    fn eqlFunction(self: Function, func: js.Function) bool {
         return switch (self) {
-            .string => false,
             .value => |v| return v.id == func.id,
+            else => false,
+        };
+    }
+
+    fn eqlObject(self: Function, obj: js.Object) bool {
+        return switch (self) {
+            .object => |o| return o.getId() == obj.getId(),
+            else => false,
         };
     }
 };

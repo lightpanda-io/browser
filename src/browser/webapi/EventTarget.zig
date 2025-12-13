@@ -20,7 +20,8 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
-const RegisterOptions = @import("../EventManager.zig").RegisterOptions;
+const EventManager = @import("../EventManager.zig");
+const RegisterOptions = EventManager.RegisterOptions;
 
 const Event = @import("Event.zig");
 
@@ -30,6 +31,7 @@ const _prototype_root = true;
 _type: Type,
 
 pub const Type = union(enum) {
+    generic: void,
     node: *@import("Node.zig"),
     window: *@import("Window.zig"),
     xhr: *@import("net/XMLHttpRequestEventTarget.zig"),
@@ -41,6 +43,12 @@ pub const Type = union(enum) {
     screen: *@import("Screen.zig"),
     screen_orientation: *@import("Screen.zig").Orientation,
 };
+
+pub fn init(page: *Page) !*EventTarget {
+    return page._factory.create(EventTarget{
+        ._type = .generic,
+    });
+}
 
 pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
     try page._event_manager.dispatch(self, event);
@@ -59,9 +67,15 @@ pub const EventListenerCallback = union(enum) {
 pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, page: *Page) !void {
     const callback = callback_ orelse return;
 
-    const actual_callback = switch (callback) {
-        .function => |func| func,
-        .object => |obj| (try obj.getFunction("handleEvent")) orelse return,
+    if (callback == .object) {
+        if (try callback.object.getFunction("handleEvent") == null) {
+            return;
+        }
+    }
+
+    const em_callback = switch (callback) {
+        .function => |func| EventManager.Callback{ .function = func },
+        .object => |obj| EventManager.Callback{ .object = try obj.persist() },
     };
 
     const options = blk: {
@@ -71,7 +85,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
             .capture => |capture| RegisterOptions{ .capture = capture },
         };
     };
-    return page._event_manager.register(self, typ, actual_callback, options);
+    return page._event_manager.register(self, typ, em_callback, options);
 }
 
 const RemoveEventListenerOptions = union(enum) {
@@ -79,36 +93,63 @@ const RemoveEventListenerOptions = union(enum) {
     options: Options,
 
     const Options = struct {
-        useCapture: bool = false,
+        capture: bool = false,
     };
 };
 pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?RemoveEventListenerOptions, page: *Page) !void {
     const callback = callback_ orelse return;
 
-    const actual_callback = switch (callback) {
-        .function => |func| func,
-        .object => |obj| (try obj.getFunction("handleEvent")) orelse return,
+    // For object callbacks, check if handleEvent exists
+    if (callback == .object) {
+        if (try callback.object.getFunction("handleEvent") == null) {
+            return;
+        }
+    }
+
+    const em_callback = switch (callback) {
+        .function => |func| EventManager.Callback{ .function = func },
+        .object => |obj| EventManager.Callback{ .object = try obj.persist() },
     };
 
     const use_capture = blk: {
         const o = opts_ orelse break :blk false;
         break :blk switch (o) {
             .capture => |capture| capture,
-            .options => |opts| opts.useCapture,
+            .options => |opts| opts.capture,
         };
     };
-    return page._event_manager.remove(self, typ, actual_callback, use_capture);
+    return page._event_manager.remove(self, typ, em_callback, use_capture);
 }
 
 pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
     return switch (self._type) {
         .node => |n| n.format(writer),
-        .window => writer.writeAll("<window>"),
+        .generic => writer.writeAll("<EventTarget>"),
+        .window => writer.writeAll("<Window>"),
         .xhr => writer.writeAll("<XMLHttpRequestEventTarget>"),
-        .abort_signal => writer.writeAll("<abort_signal>"),
+        .abort_signal => writer.writeAll("<AbortSignal>"),
         .media_query_list => writer.writeAll("<MediaQueryList>"),
         .message_port => writer.writeAll("<MessagePort>"),
         .text_track_cue => writer.writeAll("<TextTrackCue>"),
+        .navigation => writer.writeAll("<Navigation>"),
+        .screen => writer.writeAll("<Screen>"),
+        .screen_orientation => writer.writeAll("<ScreenOrientation>"),
+    };
+}
+
+pub fn toString(self: *EventTarget) []const u8 {
+    return switch (self._type) {
+        .node => |n| return n.className(),
+        .generic => return "[object EventTarget]",
+        .window => return "[object Window]",
+        .xhr => return "[object XMLHttpRequestEventTarget]",
+        .abort_signal => return "[object AbortSignal]",
+        .media_query_list => return "[object MediaQueryList]",
+        .message_port => return "[object MessagePort]",
+        .text_track_cue => return "[object TextTrackCue]",
+        .navigation => return "[object Navigation]",
+        .screen => return "[object Screen]",
+        .screen_orientation => return "[object ScreenOrientation]",
     };
 }
 
@@ -122,15 +163,16 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const constructor = bridge.constructor(EventTarget.init, .{});
     pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{});
     pub const addEventListener = bridge.function(EventTarget.addEventListener, .{});
     pub const removeEventListener = bridge.function(EventTarget.removeEventListener, .{});
+    pub const toString = bridge.function(EventTarget.toString, .{});
 };
 
 const testing = @import("../../testing.zig");
 test "WebApi: EventTarget" {
     // we create thousands of these per page. Nothing should bloat it.
     try testing.expectEqual(16, @sizeOf(EventTarget));
-
     try testing.htmlRunner("events.html", .{});
 }
