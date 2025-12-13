@@ -161,11 +161,13 @@ fn calculateIntersection(
     // For a headless browser without real layout, we treat all elements as fully visible.
     // This avoids fingerprinting issues (massive viewports) and matches the behavior
     // scripts expect when querying element visibility.
-    const is_intersecting = true;
-    const intersection_ratio: f64 = 1.0;
+    // However, elements without a parent cannot intersect (they have no containing block).
+    const has_parent = target.asNode().parentNode() != null;
+    const is_intersecting = has_parent;
+    const intersection_ratio: f64 = if (has_parent) 1.0 else 0.0;
 
-    // Intersection rect is the same as the target rect (fully visible)
-    const intersection_rect = target_rect;
+    // Intersection rect is the same as the target rect if visible, otherwise zero rect
+    const intersection_rect = if (has_parent) target_rect else &zero_rect;
 
     return .{
         .is_intersecting = is_intersecting,
@@ -199,11 +201,10 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
     const is_now_intersecting = data.is_intersecting and self.meetsThreshold(data.intersection_ratio);
 
     // Create entry if:
-    // 1. First time observing this target (was_intersecting_opt == null)
+    // 1. First time observing this target AND it's intersecting
     // 2. State changed
-    // 3. Currently intersecting
-    const should_report = was_intersecting_opt == null or
-        was_intersecting_opt.? != is_now_intersecting;
+    const should_report = (was_intersecting_opt == null and is_now_intersecting) or
+        (was_intersecting_opt != null and was_intersecting_opt.? != is_now_intersecting);
 
     if (should_report) {
         const entry = try page.arena.create(IntersectionObserverEntry);
@@ -218,8 +219,11 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
         };
 
         try self._pending_entries.append(page.arena, entry);
-        try self._previous_states.put(page.arena, target, is_now_intersecting);
     }
+
+    // Always update the previous state, even if we didn't report
+    // This ensures we can detect state changes on subsequent checks
+    try self._previous_states.put(page.arena, target, is_now_intersecting);
 }
 
 pub fn checkIntersections(self: *IntersectionObserver, page: *Page) !void {

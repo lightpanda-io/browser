@@ -1973,6 +1973,15 @@ pub fn queueMutationDelivery(self: *Context) !void {
     }.run, self.page);
 }
 
+pub fn queueIntersectionChecks(self: *Context) !void {
+    self.isolate.enqueueMicrotask(struct {
+        fn run(data: ?*anyopaque) callconv(.c) void {
+            const page: *Page = @ptrCast(@alignCast(data.?));
+            page.performScheduledIntersectionChecks();
+        }
+    }.run, self.page);
+}
+
 pub fn queueIntersectionDelivery(self: *Context) !void {
     self.isolate.enqueueMicrotask(struct {
         fn run(data: ?*anyopaque) callconv(.c) void {

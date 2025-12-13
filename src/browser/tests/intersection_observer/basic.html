@@ -29,3 +29,33 @@
         observer.disconnect();
     });
 </script>
+
+<script id=detached>
+  {
+    // never attached
+    let count = 0;
+    const div = document.createElement('div');
+    new IntersectionObserver((entries) => {
+      count += 1;
+    }).observe(div);
+
+    testing.eventually(() => {
+      testing.expectEqual(0, count);
+    });
+  }
+
+  {
+    // not connected, but has parent
+    let count = 0;
+    const div1 = document.createElement('div');
+    const div2 = document.createElement('div');
+    new IntersectionObserver((entries) => {
+      count += 1;
+    }).observe(div1);
+
+    div2.appendChild(div1);
+    testing.eventually(() => {
+      testing.expectEqual(1, count);
+    });
+  }
+</script>

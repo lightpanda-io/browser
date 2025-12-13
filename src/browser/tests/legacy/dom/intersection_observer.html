@@ -22,7 +22,6 @@
     const div1 = document.createElement('div');
     const div2 = document.createElement('div');
     new IntersectionObserver((entries) => {
-      console.log(entries[0]);
       count += 1;
     }).observe(div1);
 
@@ -33,7 +32,7 @@
   }
 </script>
 
-<script id=reobserve>
+<!-- <script id=reobserve>
   {
     let count = 0;
     let observer = new IntersectionObserver(entries => {
@@ -160,4 +159,4 @@
       ], capture)
     });
   }
-</script>
+</script> -->

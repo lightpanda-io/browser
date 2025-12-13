@@ -106,6 +106,7 @@ _mutation_delivery_depth: u32 = 0,
 
 // List of active IntersectionObservers
 _intersection_observers: std.ArrayList(*IntersectionObserver) = .{},
+_intersection_check_scheduled: bool = false,
 _intersection_delivery_scheduled: bool = false,
 
 // Lookup for customized built-in elements. Maps element pointer to definition.
@@ -250,6 +251,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._mutation_delivery_scheduled = false;
     self._mutation_delivery_depth = 0;
     self._intersection_observers = .{};
+    self._intersection_check_scheduled = false;
     self._intersection_delivery_scheduled = false;
     self._customized_builtin_definitions = .{};
     self._customized_builtin_connected_callback_invoked = .{};
@@ -781,6 +783,15 @@ pub fn scriptAddedCallback(self: *Page, script: *HtmlScript) !void {
 
 pub fn domChanged(self: *Page) void {
     self.version += 1;
+
+    if (self._intersection_check_scheduled) {
+        return;
+    }
+
+    self._intersection_check_scheduled = true;
+    self.js.queueIntersectionChecks() catch |err| {
+        log.err(.page, "page.schedIntersectChecks", .{ .err = err });
+    };
 }
 
 pub fn getElementIdMap(page: *Page, node: *Node) *std.StringHashMapUnmanaged(*Element) {
@@ -849,25 +860,29 @@ pub fn checkIntersections(self: *Page) !void {
 }
 
 pub fn scheduleMutationDelivery(self: *Page) !void {
-    // Only queue if not already scheduled
     if (self._mutation_delivery_scheduled) {
         return;
     }
     self._mutation_delivery_scheduled = true;
-
-    // Queue mutation delivery as a microtask
     try self.js.queueMutationDelivery();
 }
 
 pub fn scheduleIntersectionDelivery(self: *Page) !void {
-    // Only queue if not already scheduled
     if (self._intersection_delivery_scheduled) {
         return;
     }
     self._intersection_delivery_scheduled = true;
-
-    // Queue intersection delivery as a microtask
     try self.js.queueIntersectionDelivery();
+}
+
+pub fn performScheduledIntersectionChecks(self: *Page) void {
+    if (!self._intersection_check_scheduled) {
+        return;
+    }
+    self._intersection_check_scheduled = false;
+    self.checkIntersections() catch |err| {
+        log.err(.page, "page.schedIntersectChecks", .{ .err = err });
+    };
 }
 
 pub fn deliverIntersections(self: *Page) void {
