@@ -22,6 +22,7 @@
     const div1 = document.createElement('div');
     const div2 = document.createElement('div');
     new IntersectionObserver((entries) => {
+      console.log(entries[0]);
       count += 1;
     }).observe(div1);
 
@@ -32,7 +33,7 @@
   }
 </script>
 
-<!-- <script id=reobserve>
+<script id=reobserve>
   {
     let count = 0;
     let observer = new IntersectionObserver(entries => {
@@ -120,14 +121,14 @@
       testing.expectEqual(0, entry.boundingClientRect.x);
       testing.expectEqual(1, entry.intersectionRatio);
       testing.expectEqual(0, entry.intersectionRect.x);
-      testing.expectEqual(0, entry.intersectionRect.y);
+      testing.expectEqual(315, entry.intersectionRect.y);
       testing.expectEqual(5, entry.intersectionRect.width);
       testing.expectEqual(5, entry.intersectionRect.height);
       testing.expectEqual(true, entry.isIntersecting);
       testing.expectEqual(0, entry.rootBounds.x);
       testing.expectEqual(0, entry.rootBounds.y);
-      testing.expectEqual(5, entry.rootBounds.width);
-      testing.expectEqual(5, entry.rootBounds.height);
+      testing.expectEqual(1920, entry.rootBounds.width);
+      testing.expectEqual(1080, entry.rootBounds.height);
       testing.expectEqual('[object HTMLDivElement]', entry.target.toString());
     });
   }
@@ -159,4 +160,4 @@
       ], capture)
     });
   }
-</script> -->
+</script>
