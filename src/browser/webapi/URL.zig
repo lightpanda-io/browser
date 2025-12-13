@@ -35,23 +35,6 @@ _search_params: ?*URLSearchParams = null,
 pub const resolve = @import("../URL.zig").resolve;
 pub const eqlDocument = @import("../URL.zig").eqlDocument;
 
-pub fn canParse(url: []const u8, base_: ?[]const u8, page: *Page) bool {
-    _ = page;
-    const url_is_absolute = U.isCompleteHTTPUrl(url);
-
-    if (base_) |b| {
-        // Base must be valid even if URL is absolute
-        if (!U.isCompleteHTTPUrl(b)) {
-            return false;
-        }
-        return true;
-    } else if (!url_is_absolute) {
-        return false;
-    } else {
-        return true;
-    }
-}
-
 pub fn init(url: [:0]const u8, base_: ?[:0]const u8, page: *Page) !*URL {
     const url_is_absolute = @import("../URL.zig").isCompleteHTTPUrl(url);
 
@@ -236,6 +219,13 @@ pub fn toString(self: *const URL, page: *const Page) ![:0]const u8 {
     try buf.writer.writeByte(0);
 
     return buf.written()[0 .. buf.written().len - 1 :0];
+}
+
+pub fn canParse(url: []const u8, base_: ?[]const u8) bool {
+    if (base_) |b| {
+        return U.isCompleteHTTPUrl(b);
+    }
+    return U.isCompleteHTTPUrl(url);
 }
 
 pub const JsApi = struct {

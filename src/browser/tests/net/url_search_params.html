@@ -353,3 +353,17 @@
   testing.expectEqual(['a', 'a', 'b', 'b', 'c'], Array.from(usp.keys()));
 }
 </script>
+
+<script id=formData>
+  {
+    let fd = new FormData();
+    fd.append('a', '1');
+    fd.append('a', '2');
+    fd.append('b', '3');
+    ups = new URLSearchParams(fd);
+
+    testing.expectEqual(3, ups.size);
+    testing.expectEqual(['1', '2'], ups.getAll('a'));
+    testing.expectEqual(['3'], ups.getAll('b'));
+  }
+</script>

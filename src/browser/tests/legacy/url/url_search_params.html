@@ -81,7 +81,6 @@
 
   testing.expectEqual(3, ups.size);
   testing.expectEqual(['1', '2'], ups.getAll('a'));
-
   testing.expectEqual(['3'], ups.getAll('b'));
 
   fd.delete('a'); // the two aren't linked, it created a copy

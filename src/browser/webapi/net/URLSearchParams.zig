@@ -24,8 +24,9 @@ const String = @import("../../../string.zig").String;
 const Allocator = std.mem.Allocator;
 
 const Page = @import("../../Page.zig");
-const GenericIterator = @import("../collections/iterator.zig").Entry;
+const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
+const GenericIterator = @import("../collections/iterator.zig").Entry;
 
 const URLSearchParams = @This();
 
@@ -33,6 +34,7 @@ _arena: Allocator,
 _params: KeyValueList,
 
 const InitOpts = union(enum) {
+    form_data: *FormData,
     value: js.Value,
     query_string: []const u8,
 };
@@ -43,6 +45,7 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
         const opts = opts_ orelse break :blk .empty;
         switch (opts) {
             .query_string => |qs| break :blk try paramsFromString(arena, qs, &page.buf),
+            .form_data => |fd| break :blk try KeyValueList.copy(arena, fd._list),
             .value => |js_val| {
                 if (js_val.isObject()) {
                     break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, page);
