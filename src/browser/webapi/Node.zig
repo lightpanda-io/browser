@@ -202,6 +202,10 @@ pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
     // then we can remove + add a bit more efficiently (we don't have to fully
     // disconnect then reconnect)
     const child_connected = child.isConnected();
+    // Check if we're adopting the node to a different document
+    const child_root = child.getRootNode(null);
+    const parent_root = self.getRootNode(null);
+    const adopting_to_new_document = child_connected and child_root != parent_root;
 
     if (child._parent) |parent| {
         // we can signal removeNode that the child will remain connected
@@ -209,7 +213,10 @@ pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
         page.removeNode(parent, child, .{ .will_be_reconnected = self.isConnected() });
     }
 
-    try page.appendNode(self, child, .{ .child_already_connected = child_connected });
+    try page.appendNode(self, child, .{
+        .child_already_connected = child_connected,
+        .adopting_to_new_document = adopting_to_new_document,
+    });
     return child;
 }
 
@@ -319,19 +326,14 @@ pub fn isInShadowTree(self: *Node) bool {
 }
 
 pub fn isConnected(self: *const Node) bool {
-    const target = Page.current.document.asNode();
-    if (self == target) {
-        return true;
+    // Walk up to find the root node
+    var root = self;
+    while (root._parent) |parent| {
+        root = parent;
     }
 
-    var node = self._parent;
-    while (node) |n| {
-        if (n == target) {
-            return true;
-        }
-        node = n._parent;
-    }
-    return false;
+    // A node is connected if its root is a document
+    return root._type == .document;
 }
 
 const GetRootNodeOpts = struct {
@@ -432,6 +434,10 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
     }
 
     const child_already_connected = new_node.isConnected();
+    // Check if we're adopting the node to a different document
+    const child_root = new_node.getRootNode(null);
+    const parent_root = self.getRootNode(null);
+    const adopting_to_new_document = child_already_connected and child_root != parent_root;
 
     page.domChanged();
     const will_be_reconnected = self.isConnected();
@@ -443,7 +449,10 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
         self,
         new_node,
         .{ .before = ref_node },
-        .{ .child_already_connected = child_already_connected },
+        .{
+            .child_already_connected = child_already_connected,
+            .adopting_to_new_document = adopting_to_new_document,
+        },
     );
 
     return new_node;

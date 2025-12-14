@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body>
+<div id="test-content">
+  <p id="p1">Connected paragraph</p>
+</div>
+
+<script id=isConnected_elementsInMainDocument>
+{
+  const p1 = document.getElementById('p1');
+  testing.expectEqual(true, p1.isConnected);
+
+  const body = document.body;
+  testing.expectEqual(true, body.isConnected);
+
+  const html = document.documentElement;
+  testing.expectEqual(true, html.isConnected);
+}
+</script>
+
+<script id=isConnected_detachedElement>
+{
+  const div = document.createElement('div');
+  testing.expectEqual(false, div.isConnected);
+
+  // Even if it has content, still not connected
+  div.textContent = 'Hello';
+  testing.expectEqual(false, div.isConnected);
+}
+</script>
+
+<script id=isConnected_afterAppending>
+{
+  const div = document.createElement('div');
+  testing.expectEqual(false, div.isConnected);
+
+  document.body.appendChild(div);
+  testing.expectEqual(true, div.isConnected);
+
+  // Remove it
+  div.remove();
+  testing.expectEqual(false, div.isConnected);
+}
+</script>
+
+<script id=isConnected_nestedDetachedElements>
+{
+  const parent = document.createElement('div');
+  const child = document.createElement('span');
+
+  parent.appendChild(child);
+
+  // Neither should be connected
+  testing.expectEqual(false, parent.isConnected);
+  testing.expectEqual(false, child.isConnected);
+
+  // Add parent to document
+  document.body.appendChild(parent);
+
+  // Now both should be connected
+  testing.expectEqual(true, parent.isConnected);
+  testing.expectEqual(true, child.isConnected);
+}
+</script>
+
+<script id=isConnected_parsedDocument>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="parsed">Parsed content</div>', 'text/html');
+
+  // Use querySelector instead of getElementById for now
+  const div = doc.querySelector('div');
+  // CRITICAL: Elements in a parsed document should be connected to their own document
+  testing.expectEqual(true, div.isConnected);
+
+  const body = doc.body;
+  testing.expectEqual(true, body.isConnected);
+}
+</script>
+
+<script id=isConnected_documentNode>
+{
+  // The document itself should be connected
+  testing.expectEqual(true, document.isConnected);
+
+  // A parsed document should also be connected (to itself)
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div>test</div>', 'text/html');
+  testing.expectEqual(true, doc.isConnected);
+}
+</script>
+
+<script id=isConnected_removedFromParsedDoc>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="test">Content</div>', 'text/html');
+
+  // Use querySelector instead of getElementById for now
+  const div = doc.querySelector('div');
+  testing.expectEqual(true, div.isConnected);
+
+  // Remove it from the parsed document
+  div.remove();
+  testing.expectEqual(false, div.isConnected);
+}
+</script>
+
+</body>

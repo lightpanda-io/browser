@@ -64,7 +64,6 @@ const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
-pub threadlocal var current: *Page = undefined;
 var default_url = URL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
 
@@ -171,7 +170,6 @@ pub fn init(arena: Allocator, call_arena: Allocator, session: *Session) !*Page {
 
     page.scheduler = Scheduler.init(page.arena);
     try page.reset(true);
-    current = page;
     return page;
 }
 
@@ -794,19 +792,25 @@ pub fn domChanged(self: *Page) void {
     };
 }
 
-pub fn getElementIdMap(page: *Page, node: *Node) *std.StringHashMapUnmanaged(*Element) {
-    if (node.is(ShadowRoot)) |shadow_root| {
-        return &shadow_root._elements_by_id;
-    }
-
-    var parent = node._parent;
-    while (parent) |n| {
-        if (n.is(ShadowRoot)) |shadow_root| {
+fn getElementIdMap(page: *Page, node: *Node) *std.StringHashMapUnmanaged(*Element) {
+    // Walk up the tree checking for ShadowRoot and tracking the root
+    var current = node;
+    while (true) {
+        if (current.is(ShadowRoot)) |shadow_root| {
             return &shadow_root._elements_by_id;
         }
-        parent = n._parent;
+
+        const parent = current._parent orelse {
+            if (current._type == .document) {
+                return &current._type.document._elements_by_id;
+            }
+            // Detached nodes should not have IDs registered
+            std.debug.assert(false);
+            return &page.document._elements_by_id;
+        };
+
+        current = parent;
     }
-    return &page.document._elements_by_id;
 }
 
 pub fn addElementId(self: *Page, parent: *Node, element: *Element, id: []const u8) !void {
@@ -823,8 +827,18 @@ pub fn removeElementId(self: *Page, element: *Element, id: []const u8) void {
 }
 
 pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Element {
-    const id_map = self.getElementIdMap(node);
-    return id_map.get(id);
+    if (node.isConnected() or node.isInShadowTree()) {
+        const id_map = self.getElementIdMap(node);
+        return id_map.get(id);
+    }
+    var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
+    while (tw.next()) |el| {
+        const element_id = el.getAttributeSafe("id") orelse continue;
+        if (std.mem.eql(u8, element_id, id)) {
+            return el;
+        }
+    }
+    return null;
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
@@ -1509,6 +1523,8 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     }
     // grab this before we null the parent
     const was_connected = child.isConnected();
+    // Capture the ID map before disconnecting, so we can remove IDs from the correct document
+    const id_map = if (was_connected) self.getElementIdMap(child) else null;
 
     child._parent = null;
     child._child_link = .{};
@@ -1537,7 +1553,7 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe("id")) |id| {
-            self.removeElementId(el, id);
+            _ = id_map.?.remove(id);
         }
 
         Element.Html.Custom.invokeDisconnectedCallbackOnElement(el, self);
@@ -1588,7 +1604,10 @@ const InsertNodeRelative = union(enum) {
     after: *Node,
     before: *Node,
 };
-const InsertNodeOpts = struct { child_already_connected: bool = false };
+const InsertNodeOpts = struct {
+    child_already_connected: bool = false,
+    adopting_to_new_document: bool = false,
+};
 pub fn insertNodeRelative(self: *Page, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     return self._insertNodeRelative(false, parent, child, relative, opts);
 }
@@ -1666,22 +1685,21 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
 
     if (comptime from_parser) {
         if (child.is(Element)) |el| {
-            if (el.getAttributeSafe("id")) |id| {
-                try self.addElementId(parent, el, id);
-            }
-
             // Invoke connectedCallback for custom elements during parsing
             // For main document parsing, we know nodes are connected (fast path)
             // For fragment parsing (innerHTML), we need to check connectivity
-            if (self._parse_mode == .document or child.isConnected()) {
+            if (child.isConnected() or child.isInShadowTree()) {
+                if (el.getAttributeSafe("id")) |id| {
+                    try self.addElementId(parent, el, id);
+                }
                 try Element.Html.Custom.invokeConnectedCallbackOnElement(true, el, self);
             }
         }
         return;
     }
 
-    if (opts.child_already_connected) {
-        // The child is already connected, we don't have to reconnect it
+    if (opts.child_already_connected and !opts.adopting_to_new_document) {
+        // The child is already connected in the same document, we don't have to reconnect it
         return;
     }
 

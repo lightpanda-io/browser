@@ -17,6 +17,13 @@
 
 <template id="empty"></template>
 
+<script id=ids>
+  testing.expectEqual(null, document.querySelector('#inner1'));
+  testing.expectEqual(null, document.getElementById('inner1'));
+  testing.expectEqual('First', document.getElementById('nested').content.getElementById('inner1').textContent);
+  testing.expectEqual('First', document.getElementById('nested').content.querySelector('#inner1').textContent);
+</script>
+
 <script id=content_property>
 {
   const template = $('#basic');
@@ -205,4 +212,4 @@
   // NOT the DocumentFragment, so it should be empty
   testing.expectEqual('', template.textContent);
 }
-</script>
+</script> -->

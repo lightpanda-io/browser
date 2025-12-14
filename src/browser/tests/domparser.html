@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <script src="testing.js"></script>
+<body></body>
 
 <script id=basic>
 {
@@ -116,5 +117,123 @@
   }, () => {
     parser.parseFromString('<div>test</div>', 'application/xml');
   });
+}
+</script>
+
+<script id=getElementById>
+{
+  const doc = new DOMParser().parseFromString('<div id="new-node">new-node</div>', 'text/html');
+  testing.expectEqual('new-node', doc.getElementById('new-node').textContent);
+}
+</script>
+
+<script id=getElementById_isolationBetweenDocuments>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="shared-id">From parsed doc</div>', 'text/html');
+
+  // Create element with same ID in main document
+  const mainEl = document.createElement('div');
+  mainEl.id = 'shared-id';
+  mainEl.textContent = 'From main doc';
+  document.body.appendChild(mainEl);
+
+  // Each document should find its own element
+  const mainFound = document.getElementById('shared-id');
+  testing.expectEqual('From main doc', mainFound.textContent);
+
+  const parsedFound = doc.getElementById('shared-id');
+  testing.expectEqual('From parsed doc', parsedFound.textContent);
+
+  // Clean up
+  mainEl.remove();
+}
+</script>
+
+<script id=getElementById_afterSettingId>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div>No ID initially</div>', 'text/html');
+
+  const div = doc.querySelector('div');
+
+  // Should not find it yet
+  testing.expectEqual(null, doc.getElementById('new-id'));
+
+  // Set ID via JavaScript
+  div.id = 'new-id';
+
+  // Should now find it
+  const found = doc.getElementById('new-id');
+  testing.expectEqual(div, found);
+}
+</script>
+
+<script id=getElementById_afterRemovingId>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="remove-me">Content</div>', 'text/html');
+
+  // Should find it initially
+  const div = doc.getElementById('remove-me');
+  testing.expectEqual('Content', div.textContent);
+
+  // Remove the ID
+  div.removeAttribute('id');
+
+  // Should not find it anymore
+  testing.expectEqual(null, doc.getElementById('remove-me'));
+}
+</script>
+
+<script id=getElementById_afterChangingId>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="old-id">Content</div>', 'text/html');
+
+  const div = doc.querySelector('div');
+
+  // Change the ID
+  div.id = 'new-id';
+
+  // Should not find old ID
+  testing.expectEqual(null, doc.getElementById('old-id'));
+
+  // Should find new ID
+  const found = doc.getElementById('new-id');
+  testing.expectEqual(div, found);
+}
+</script>
+
+<script id=getElementById_detachedFromParsedDoc>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<div id="will-detach">Content</div>', 'text/html');
+
+  const div = doc.querySelector('div');
+
+  // Should find it while connected
+  testing.expectEqual(div, doc.getElementById('will-detach'));
+
+  // Remove it from the document
+  div.remove();
+
+  // Should not find it after removal
+  testing.expectEqual(null, doc.getElementById('will-detach'));
+}
+</script>
+
+<script id=getElementById_multipleDocuments>
+{
+  const parser = new DOMParser();
+  const doc1 = parser.parseFromString('<div id="doc1-el">Doc 1</div>', 'text/html');
+  const doc2 = parser.parseFromString('<div id="doc2-el">Doc 2</div>', 'text/html');
+
+  // Each document should only find its own element
+  testing.expectEqual('Doc 1', doc1.getElementById('doc1-el').textContent);
+  testing.expectEqual(null, doc1.getElementById('doc2-el'));
+
+  testing.expectEqual('Doc 2', doc2.getElementById('doc2-el').textContent);
+  testing.expectEqual(null, doc2.getElementById('doc1-el'));
 }
 </script>
