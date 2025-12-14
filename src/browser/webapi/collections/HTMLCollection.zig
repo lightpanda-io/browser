@@ -23,6 +23,7 @@ const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const NodeLive = @import("node_live.zig").NodeLive;
+const Form = @import("../element/html/Form.zig");
 
 const Mode = enum {
     tag,
@@ -35,11 +36,13 @@ const Mode = enum {
     selected_options,
     links,
     anchors,
+    form,
 };
 
 const HTMLCollection = @This();
 
-data: union(Mode) {
+_type: Type = .{ .generic = {} },
+_data: union(Mode) {
     tag: NodeLive(.tag),
     tag_name: NodeLive(.tag_name),
     class_name: NodeLive(.class_name),
@@ -50,22 +53,28 @@ data: union(Mode) {
     selected_options: NodeLive(.selected_options),
     links: NodeLive(.links),
     anchors: NodeLive(.anchors),
+    form: NodeLive(.form),
 },
 
+const Type = union(enum) {
+    generic: void,
+    form: *Form,
+};
+
 pub fn length(self: *HTMLCollection, page: *const Page) u32 {
-    return switch (self.data) {
+    return switch (self._data) {
         inline else => |*impl| impl.length(page),
     };
 }
 
 pub fn getAtIndex(self: *HTMLCollection, index: usize, page: *const Page) ?*Element {
-    return switch (self.data) {
+    return switch (self._data) {
         inline else => |*impl| impl.getAtIndex(index, page),
     };
 }
 
 pub fn getByName(self: *HTMLCollection, name: []const u8, page: *Page) ?*Element {
-    return switch (self.data) {
+    return switch (self._data) {
         inline else => |*impl| impl.getByName(name, page),
     };
 }
@@ -73,7 +82,7 @@ pub fn getByName(self: *HTMLCollection, name: []const u8, page: *Page) ?*Element
 pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
     return Iterator.init(.{
         .list = self,
-        .tw = switch (self.data) {
+        .tw = switch (self._data) {
             .tag => |*impl| .{ .tag = impl._tw.clone() },
             .tag_name => |*impl| .{ .tag_name = impl._tw.clone() },
             .class_name => |*impl| .{ .class_name = impl._tw.clone() },
@@ -84,6 +93,7 @@ pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
             .selected_options => |*impl| .{ .selected_options = impl._tw.clone() },
             .links => |*impl| .{ .links = impl._tw.clone() },
             .anchors => |*impl| .{ .anchors = impl._tw.clone() },
+            .form => |*impl| .{ .form = impl._tw.clone() },
         },
     }, page);
 }
@@ -102,10 +112,11 @@ pub const Iterator = GenericIterator(struct {
         selected_options: TreeWalker.Children,
         links: TreeWalker.FullExcludeSelf,
         anchors: TreeWalker.FullExcludeSelf,
+        form: TreeWalker.FullExcludeSelf,
     },
 
     pub fn next(self: *@This(), _: *Page) ?*Element {
-        return switch (self.list.data) {
+        return switch (self.list._data) {
             .tag => |*impl| impl.nextTw(&self.tw.tag),
             .tag_name => |*impl| impl.nextTw(&self.tw.tag_name),
             .class_name => |*impl| impl.nextTw(&self.tw.class_name),
@@ -116,6 +127,7 @@ pub const Iterator = GenericIterator(struct {
             .selected_options => |*impl| impl.nextTw(&self.tw.selected_options),
             .links => |*impl| impl.nextTw(&self.tw.links),
             .anchors => |*impl| impl.nextTw(&self.tw.anchors),
+            .form => |*impl| impl.nextTw(&self.tw.form),
         };
     }
 }, null);

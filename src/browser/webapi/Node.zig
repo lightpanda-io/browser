@@ -339,7 +339,7 @@ pub fn isConnected(self: *const Node) bool {
 const GetRootNodeOpts = struct {
     composed: bool = false,
 };
-pub fn getRootNode(self: *const Node, opts_: ?GetRootNodeOpts) *const Node {
+pub fn getRootNode(self: *Node, opts_: ?GetRootNodeOpts) *Node {
     const opts = opts_ orelse GetRootNodeOpts{};
 
     var root = self;
@@ -613,7 +613,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, Str
     }
 }
 
-pub fn compareDocumentPosition(self: *const Node, other: *const Node) u16 {
+pub fn compareDocumentPosition(self: *Node, other: *Node) u16 {
     const DISCONNECTED: u16 = 0x01;
     const PRECEDING: u16 = 0x02;
     const FOLLOWING: u16 = 0x04;

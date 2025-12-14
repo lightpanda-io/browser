@@ -28,6 +28,7 @@ const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const Selector = @import("../selector/Selector.zig");
+const Form = @import("../element/html/Form.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -42,6 +43,7 @@ const Mode = enum {
     selected_options,
     links,
     anchors,
+    form,
 };
 
 const Filters = union(Mode) {
@@ -55,6 +57,7 @@ const Filters = union(Mode) {
     selected_options,
     links,
     anchors,
+    form: *Form,
 
     fn TypeOf(comptime mode: Mode) type {
         @setEvalBranchQuota(2000);
@@ -82,7 +85,7 @@ const Filters = union(Mode) {
 pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
-        .tag, .tag_name, .class_name, .name, .all_elements, .links, .anchors => TreeWalker.FullExcludeSelf,
+        .tag, .tag_name, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .selected_options => TreeWalker.Children,
     };
     return struct {
@@ -259,7 +262,44 @@ pub fn NodeLive(comptime mode: Mode) type {
                     if (el.is(Anchor) == null) return false;
                     return el.hasAttributeSafe("name");
                 },
+                .form => {
+                    const el = node.is(Element) orelse return false;
+                    if (!isFormControl(el)) {
+                        return false;
+                    }
+
+                    if (el.getAttributeSafe("form")) |form_attr| {
+                        const form_id = self._filter.asElement().getAttributeSafe("id") orelse return false;
+                        return std.mem.eql(u8, form_attr, form_id);
+                    }
+
+                    // No form attribute - match if descendant of our form
+                    // This does an O(depth) ancestor walk for each control in the form.
+                    //
+                    // TODO: If profiling shows this is a bottleneck:
+                    // When we first encounter the form element during tree walk, we could
+                    // do a one-time reverse walk to find the LAST control that belongs to
+                    // this form (checking both form controls and their form= attributes).
+                    // Store that element in a new FormState. Then as we traverse
+                    // forward:
+                    //   - Set is_within_form = true when we enter the form element
+                    //   - Return true immediately for any control while is_within_form
+                    //   - Set is_within_form = false when we reach that last element
+                    // This trades one O(form_size) reverse walk for N O(depth) ancestor
+                    // checks, where N = number of controls. For forms with many nested
+                    // controls, this could be significantly faster.
+                    return self._filter.asNode().contains(node);
+                },
             }
+        }
+
+        fn isFormControl(el: *Element) bool {
+            if (el._type != .html) return false;
+            const html = el._type.html;
+            return switch (html._type) {
+                .input, .button, .select, .text_area => true,
+                else => false,
+            };
         }
 
         fn versionCheck(self: *Self, page: *const Page) bool {
@@ -278,16 +318,17 @@ pub fn NodeLive(comptime mode: Mode) type {
         const HTMLCollection = @import("HTMLCollection.zig");
         pub fn runtimeGenericWrap(self: Self, page: *Page) !*HTMLCollection {
             const collection = switch (mode) {
-                .tag => HTMLCollection{ .data = .{ .tag = self } },
-                .tag_name => HTMLCollection{ .data = .{ .tag_name = self } },
-                .class_name => HTMLCollection{ .data = .{ .class_name = self } },
-                .name => HTMLCollection{ .data = .{ .name = self } },
-                .all_elements => HTMLCollection{ .data = .{ .all_elements = self } },
-                .child_elements => HTMLCollection{ .data = .{ .child_elements = self } },
-                .child_tag => HTMLCollection{ .data = .{ .child_tag = self } },
-                .selected_options => HTMLCollection{ .data = .{ .selected_options = self } },
-                .links => HTMLCollection{ .data = .{ .links = self } },
-                .anchors => HTMLCollection{ .data = .{ .anchors = self } },
+                .tag => HTMLCollection{ ._data = .{ .tag = self } },
+                .tag_name => HTMLCollection{ ._data = .{ .tag_name = self } },
+                .class_name => HTMLCollection{ ._data = .{ .class_name = self } },
+                .name => HTMLCollection{ ._data = .{ .name = self } },
+                .all_elements => HTMLCollection{ ._data = .{ .all_elements = self } },
+                .child_elements => HTMLCollection{ ._data = .{ .child_elements = self } },
+                .child_tag => HTMLCollection{ ._data = .{ .child_tag = self } },
+                .selected_options => HTMLCollection{ ._data = .{ .selected_options = self } },
+                .links => HTMLCollection{ ._data = .{ .links = self } },
+                .anchors => HTMLCollection{ ._data = .{ .anchors = self } },
+                .form => HTMLCollection{ ._type = .{ .form = self._filter }, ._data = .{ .form = self } },
             };
             return page._factory.create(collection);
         }

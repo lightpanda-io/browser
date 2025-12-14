@@ -23,6 +23,7 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const TreeWalker = @import("../../TreeWalker.zig");
+const collections = @import("../../collections.zig");
 
 const Input = @import("Input.zig");
 const Button = @import("Button.zig");
@@ -32,6 +33,9 @@ const TextArea = @import("TextArea.zig");
 const Form = @This();
 _proto: *HtmlElement,
 
+fn asConstElement(self: *const Form) *const Element {
+    return self._proto._proto;
+}
 pub fn asElement(self: *Form) *Element {
     return self._proto._proto;
 }
@@ -39,90 +43,49 @@ pub fn asNode(self: *Form) *Node {
     return self.asElement().asNode();
 }
 
-// Untested / unused right now. Iterates over all the controls of a form,
-// including those outside the <form>...</form> but with a form=$FORM_ID attribute
-pub const Iterator = struct {
-    _form_id: ?[]const u8,
-    _walkers: union(enum) {
-        nested: TreeWalker.FullExcludeSelf,
-        names: TreeWalker.FullExcludeSelf,
-    },
+pub fn getName(self: *const Form) []const u8 {
+    return self.asConstElement().getAttributeSafe("name") orelse "";
+}
 
-    pub fn init(form: *Form) Iterator {
-        const form_element = form.asElement();
-        const form_id = form_element.getAttributeSafe("id");
+pub fn setName(self: *Form, name: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("name", name, page);
+}
 
-        return .{
-            ._form_id = form_id,
-            ._walkers = .{
-                .nested = TreeWalker.FullExcludeSelf.init(form.asNode(), .{}),
-            },
-        };
+pub fn getMethod(self: *const Form) []const u8 {
+    const method = self.asConstElement().getAttributeSafe("method") orelse return "get";
+
+    if (std.ascii.eqlIgnoreCase(method, "post")) {
+        return "post";
     }
-
-    pub fn next(self: *Iterator) ?FormControl {
-        switch (self._walkers) {
-            .nested => |*tw| {
-                // find controls nested directly in the form
-                while (tw.next()) |node| {
-                    const element = node.is(Element) orelse continue;
-                    const control = asFormControl(element) orelse continue;
-                    // Skip if it has a form attribute (will be handled in phase 2)
-                    if (element.getAttributeSafe("form") == null) {
-                        return control;
-                    }
-                }
-                if (self._form_id == null) {
-                    return null;
-                }
-
-                const doc = tw._root.getRootNode();
-                self._walkers = .{
-                    .names = TreeWalker.FullExcludeSelf(doc, .{}),
-                };
-                return self.next();
-            },
-            .names => |*tw| {
-                // find controls with a name matching the form id
-                while (tw.next()) |node| {
-                    const input = node.is(Input) orelse continue;
-                    if (input._type != .radio) {
-                        continue;
-                    }
-                    const input_form = input.asElement().getAttributeSafe("form") orelse continue;
-                    // must have a self._form_id, else we never would have transitioned
-                    // from a nested walker to a namew walker
-                    if (!std.mem.eql(u8, input_form, self._form_id.?)) {
-                        continue;
-                    }
-                    return .{ .input = input };
-                }
-
-                return null;
-            },
-        }
+    if (std.ascii.eqlIgnoreCase(method, "dialog")) {
+        return "dialog";
     }
-};
+    // invalid, or it was get all along
+    return "get";
+}
 
-pub const FormControl = union(enum) {
-    input: *Input,
-    button: *Button,
-    select: *Select,
-    textarea: *TextArea,
-};
+pub fn setMethod(self: *Form, method: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("method", method, page);
+}
 
-fn asFormControl(element: *Element) ?FormControl {
-    if (element._type != .html) {
-        return null;
-    }
-    const html = element._type.html;
-    switch (html._type) {
-        .input => |cntrl| return .{ .input = cntrl },
-        .button => |cntrl| return .{ .button = cntrl },
-        .select => |cntrl| return .{ .select = cntrl },
-        .textarea => |cntrl| return .{ .textarea = cntrl },
-        else => return null,
-    }
+pub fn getElements(self: *Form, page: *Page) !*collections.HTMLFormControlsCollection {
+    const form_id = self.asElement().getAttributeSafe("id");
+    const root = if (form_id != null)
+        self.asNode().getRootNode(null) // Has ID: walk entire document to find form=ID controls
+    else
+        self.asNode(); // No ID: walk only form subtree (no external controls possible)
+
+    const node_live = collections.NodeLive(.form).init(root, self, page);
+    const html_collection = try node_live.runtimeGenericWrap(page);
+
+    return page._factory.create(collections.HTMLFormControlsCollection{
+        ._proto = html_collection,
+    });
+}
+
+pub fn getLength(self: *Form, page: *Page) !u32 {
+    const elements = try self.getElements(page);
+    return elements.length(page);
 }
 
 pub const JsApi = struct {
@@ -132,4 +95,14 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const name = bridge.accessor(Form.getName, Form.setName, .{});
+    pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{});
+    pub const elements = bridge.accessor(Form.getElements, null, .{});
+    pub const length = bridge.accessor(Form.getLength, null, .{});
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.Form" {
+    try testing.htmlRunner("element/html/form.html", .{});
+}
