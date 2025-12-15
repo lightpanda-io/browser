@@ -64,10 +64,8 @@
   }
 
   async function async(cb) {
-    const script_id = document.currentScript.id;
-    const stack = new Error().stack;
-    async_capture = {script_id: script_id, stack: stack};
-    await cb();
+    let capture = {script_id: document.currentScript.id, stack: new Error().stack};
+    await cb(() => { async_capture = capture; });
     async_capture = null;
   }
 

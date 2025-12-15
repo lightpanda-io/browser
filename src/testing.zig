@@ -407,7 +407,6 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     test_session.fetchWait(2000);
 
     page._session.browser.runMicrotasks();
-    page._session.browser.runMessageLoop();
 
     js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
         const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";
@@ -508,12 +507,6 @@ fn serveCDP(wg: *std.Thread.WaitGroup) !void {
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
     const path = req.head.target;
 
-    if (std.mem.eql(u8, path, "/loader")) {
-        return req.respond("Hello!", .{
-            .extra_headers = &.{.{ .name = "Connection", .value = "close" }},
-        });
-    }
-
     if (std.mem.eql(u8, path, "/xhr")) {
         return req.respond("1234567890" ** 10, .{
             .extra_headers = &.{
@@ -526,6 +519,33 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         return req.respond("{\"over\":\"9000!!!\"}", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/redirect")) {
+        return req.respond("", .{
+            .status = .found,
+            .extra_headers = &.{
+                .{ .name = "Location", .value = "http://127.0.0.1:9582/xhr" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/404")) {
+        return req.respond("Not Found", .{
+            .status = .not_found,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
+            },
+        });
+    }
+
+    if (std.mem.eql(u8, path, "/xhr/500")) {
+        return req.respond("Internal Server Error", .{
+            .status = .internal_server_error,
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "text/plain" },
             },
         });
     }

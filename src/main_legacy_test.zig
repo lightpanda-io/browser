@@ -170,6 +170,22 @@ const TestHTTPServer = struct {
     fn handler(server: *TestHTTPServer, req: *std.http.Server.Request) !void {
         const path = req.head.target;
 
+        if (std.mem.eql(u8, path, "/xhr")) {
+            return req.respond("1234567890" ** 10, .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "text/html; charset=utf-8" },
+                },
+            });
+        }
+
+        if (std.mem.eql(u8, path, "/xhr/json")) {
+            return req.respond("{\"over\":\"9000!!!\"}", .{
+                .extra_headers = &.{
+                    .{ .name = "Content-Type", .value = "application/json" },
+                },
+            });
+        }
+
         // strip out leading '/' to make the path relative
         const file = try server.dir.openFile(path[1..], .{});
         defer file.close();
