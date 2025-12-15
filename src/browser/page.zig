@@ -105,6 +105,10 @@ pub const Page = struct {
     notified_network_idle: IdleNotification = .init,
     notified_network_almost_idle: IdleNotification = .init,
 
+    // Indicates if the page's document is open or close.
+    // Relates with https://developer.mozilla.org/en-US/docs/Web/API/Document/open
+    open: bool = false,
+
     const Mode = union(enum) {
         pre: void,
         err: anyerror,

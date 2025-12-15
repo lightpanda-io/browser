@@ -319,9 +319,67 @@ pub const Document = struct {
         log.debug(.web_api, "not implemented", .{ .feature = "Document hasFocus" });
         return true;
     }
+
+    pub fn _open(_: *parser.Document, page: *Page) !*parser.DocumentHTML {
+        if (page.open) {
+            return page.window.document;
+        }
+
+        // This implementation is invalid.
+        // According to MDN, we should cleanup registered listeners.
+        // So we sould cleanup previous DOM memory.
+        // But this implementation is more simple for now.
+        const html_doc = try parser.documentHTMLParseFromStr("");
+        try page.setDocument(html_doc);
+        page.open = true;
+
+        return page.window.document;
+    }
+
+    pub fn _close(_: *parser.Document, page: *Page) !void {
+        page.open = false;
+    }
+
+    pub fn _write(self: *parser.Document, str: []const u8, page: *Page) !void {
+        _ = try _open(self, page);
+
+        const document = parser.documentHTMLToDocument(page.window.document);
+        const fragment = try parser.documentParseFragmentFromStr(document, str);
+        const fragment_node = parser.documentFragmentToNode(fragment);
+
+        const fragment_html = parser.nodeFirstChild(fragment_node) orelse return;
+        const fragment_head = parser.nodeFirstChild(fragment_html) orelse return;
+        const fragment_body = parser.nodeNextSibling(fragment_head) orelse return;
+
+        const document_node = parser.documentToNode(document);
+        const document_html = parser.nodeFirstChild(document_node) orelse return;
+        const document_head = parser.nodeFirstChild(document_html) orelse return;
+        const document_body = parser.nodeNextSibling(document_head) orelse return;
+
+        {
+            const children = try parser.nodeGetChildNodes(fragment_head);
+            // always index 0, because nodeAppendChild moves the node out of
+            // the nodeList and into the new tree
+            while (parser.nodeListItem(children, 0)) |child| {
+                _ = try parser.nodeAppendChild(document_head, child);
+            }
+        }
+
+        {
+            const children = try parser.nodeGetChildNodes(fragment_body);
+            // always index 0, because nodeAppendChild moves the node out of
+            // the nodeList and into the new tree
+            while (parser.nodeListItem(children, 0)) |child| {
+                _ = try parser.nodeAppendChild(document_body, child);
+            }
+        }
+    }
 };
 
 const testing = @import("../../testing.zig");
 test "Browser: DOM.Document" {
     try testing.htmlRunner("dom/document.html");
+}
+test "Browser: DOM.Document.write" {
+    try testing.htmlRunner("dom/document_write.html");
 }
