@@ -328,7 +328,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .selected_options => HTMLCollection{ ._data = .{ .selected_options = self } },
                 .links => HTMLCollection{ ._data = .{ .links = self } },
                 .anchors => HTMLCollection{ ._data = .{ .anchors = self } },
-                .form => HTMLCollection{ ._type = .{ .form = self._filter }, ._data = .{ .form = self } },
+                .form => HTMLCollection{ ._data = .{ .form = self } },
             };
             return page._factory.create(collection);
         }

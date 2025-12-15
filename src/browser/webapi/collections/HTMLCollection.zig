@@ -41,7 +41,6 @@ const Mode = enum {
 
 const HTMLCollection = @This();
 
-_type: Type = .{ .generic = {} },
 _data: union(Mode) {
     tag: NodeLive(.tag),
     tag_name: NodeLive(.tag_name),
@@ -55,11 +54,6 @@ _data: union(Mode) {
     anchors: NodeLive(.anchors),
     form: NodeLive(.form),
 },
-
-const Type = union(enum) {
-    generic: void,
-    form: *Form,
-};
 
 pub fn length(self: *HTMLCollection, page: *const Page) u32 {
     return switch (self._data) {
