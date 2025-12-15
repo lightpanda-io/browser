@@ -341,9 +341,8 @@ pub const Document = struct {
     }
 
     pub fn _write(self: *parser.Document, str: []const u8, page: *Page) !void {
-        if (!page.open) {
-            _ = try _open(self, page);
-        }
+        _ = try _open(self, page);
+
         const document = parser.documentHTMLToDocument(page.window.document);
         const fragment = try parser.documentParseFragmentFromStr(document, str);
         const fragment_node = parser.documentFragmentToNode(fragment);
