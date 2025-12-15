@@ -24,6 +24,7 @@ pub const Mime = struct {
     // IANA defines max. charset value length as 40.
     // We keep 41 for null-termination since HTML parser expects in this format.
     charset: [41]u8 = default_charset,
+    charset_len: usize = 5,
 
     /// String "UTF-8" continued by null characters.
     pub const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
@@ -53,9 +54,25 @@ pub const Mime = struct {
         other: struct { type: []const u8, sub_type: []const u8 },
     };
 
+    pub fn contentTypeString(mime: *const Mime) []const u8 {
+        return switch (mime.content_type) {
+            .text_xml => "text/xml",
+            .text_html => "text/html",
+            .text_javascript => "application/javascript",
+            .text_plain => "text/plain",
+            .text_css => "text/css",
+            .application_json => "application/json",
+            else => "",
+        };
+    }
+
     /// Returns the null-terminated charset value.
-    pub fn charsetString(mime: *const Mime) [:0]const u8 {
-        return @ptrCast(&mime.charset);
+    pub fn charsetStringZ(mime: *const Mime) [:0]const u8 {
+        return mime.charset[0..mime.charset_len :0];
+    }
+
+    pub fn charsetString(mime: *const Mime) []const u8 {
+        return mime.charset[0..mime.charset_len];
     }
 
     /// Removes quotes of value if quotes are given.
@@ -99,6 +116,7 @@ pub const Mime = struct {
         const params = trimLeft(normalized[type_len..]);
 
         var charset: [41]u8 = undefined;
+        var charset_len: usize = undefined;
 
         var it = std.mem.splitScalar(u8, params, ';');
         while (it.next()) |attr| {
@@ -124,6 +142,7 @@ pub const Mime = struct {
                     @memcpy(charset[0..attribute_value.len], attribute_value);
                     // Null-terminate right after attribute value.
                     charset[attribute_value.len] = 0;
+                    charset_len = attribute_value.len;
                 },
             }
         }
@@ -131,6 +150,7 @@ pub const Mime = struct {
         return .{
             .params = params,
             .charset = charset,
+            .charset_len = charset_len,
             .content_type = content_type,
         };
     }
@@ -511,9 +531,9 @@ fn expect(expected: Expectation, input: []const u8) !void {
 
     if (expected.charset) |ec| {
         // We remove the null characters for testing purposes here.
-        try testing.expectEqual(ec, actual.charsetString()[0..ec.len]);
+        try testing.expectEqual(ec, actual.charsetString());
     } else {
         const m: Mime = .unknown;
-        try testing.expectEqual(m.charsetString(), actual.charsetString());
+        try testing.expectEqual(m.charsetStringZ(), actual.charsetStringZ());
     }
 }

@@ -83,6 +83,8 @@ pub const Page = struct {
 
     // indicates intention to navigate to another page on the next loop execution.
     delayed_navigation: bool = false,
+    req_id: ?usize = null,
+    navigated_options: ?NavigatedOpts = null,
 
     state_pool: *std.heap.MemoryPool(State),
 
@@ -546,11 +548,14 @@ pub const Page = struct {
             try self.reset();
         }
 
+        const req_id = self.http_client.nextReqId();
+
         log.info(.http, "navigate", .{
             .url = request_url,
             .method = opts.method,
             .reason = opts.reason,
             .body = opts.body != null,
+            .req_id = req_id,
         });
 
         // if the url is about:blank, we load an empty HTML document in the
@@ -568,21 +573,38 @@ pub const Page = struct {
             self.documentIsComplete();
 
             self.session.browser.notification.dispatch(.page_navigate, &.{
+                .req_id = req_id,
                 .opts = opts,
                 .url = request_url,
                 .timestamp = timestamp(),
             });
 
             self.session.browser.notification.dispatch(.page_navigated, &.{
+                .req_id = req_id,
+                .opts = .{
+                    .cdp_id = opts.cdp_id,
+                    .reason = opts.reason,
+                    .method = opts.method,
+                },
                 .url = request_url,
                 .timestamp = timestamp(),
             });
+
+            // force next request id manually b/c we won't create a real req.
+            _ = self.http_client.incrReqId();
 
             return;
         }
 
         const owned_url = try self.arena.dupeZ(u8, request_url);
         self.url = try URL.parse(owned_url, null);
+
+        self.req_id = req_id;
+        self.navigated_options = .{
+            .cdp_id = opts.cdp_id,
+            .reason = opts.reason,
+            .method = opts.method,
+        };
 
         var headers = try self.http_client.newHeaders();
         if (opts.header) |hdr| try headers.add(hdr);
@@ -591,6 +613,7 @@ pub const Page = struct {
         // We dispatch page_navigate event before sending the request.
         // It ensures the event page_navigated is not dispatched before this one.
         self.session.browser.notification.dispatch(.page_navigate, &.{
+            .req_id = req_id,
             .opts = opts,
             .url = owned_url,
             .timestamp = timestamp(),
@@ -656,7 +679,11 @@ pub const Page = struct {
             log.err(.browser, "document is complete", .{ .err = err });
         };
 
+        std.debug.assert(self.req_id != null);
+        std.debug.assert(self.navigated_options != null);
         self.session.browser.notification.dispatch(.page_navigated, &.{
+            .req_id = self.req_id.?,
+            .opts = self.navigated_options.?,
             .url = self.url.raw,
             .timestamp = timestamp(),
         });
@@ -713,14 +740,14 @@ pub const Page = struct {
             log.debug(.http, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len });
 
             self.mode = switch (mime.content_type) {
-                .text_html => .{ .html = try parser.Parser.init(mime.charsetString()) },
+                .text_html => .{ .html = try parser.Parser.init(mime.charsetStringZ()) },
 
                 .application_json,
                 .text_javascript,
                 .text_css,
                 .text_plain,
                 => blk: {
-                    var p = try parser.Parser.init(mime.charsetString());
+                    var p = try parser.Parser.init(mime.charsetStringZ());
                     try p.process("<html><head><meta charset=\"utf-8\"></head><body><pre>");
                     break :blk .{ .text = p };
                 },
@@ -1262,6 +1289,12 @@ pub const NavigateOpts = struct {
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     force: bool = false,
+};
+
+pub const NavigatedOpts = struct {
+    cdp_id: ?i64 = null,
+    reason: NavigateReason = .address_bar,
+    method: Http.Method = .GET,
 };
 
 const IdleNotification = union(enum) {
