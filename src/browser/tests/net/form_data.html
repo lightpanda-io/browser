@@ -349,7 +349,7 @@
   testing.expectEqual([['b', '3']], acc);
 </script>
 
-<!-- <script id=serialize>
+<script id=serialize>
   {
     let form1 = $('#form1');
     let submit1 = $('#s1');
@@ -380,4 +380,249 @@
     testing.expectEqual(['mlt-2', 'tea'], acc[12]);
     testing.expectEqual(['s1', 's1-v'], acc[13]);
   }
-</script> -->
+</script>
+
+<script id=submitterBehavior>
+{
+  // Test that only the specified submitter is included in FormData
+  const form = document.createElement('form');
+
+  const input1 = document.createElement('input');
+  input1.name = 'field1';
+  input1.value = 'value1';
+  form.appendChild(input1);
+
+  const submit1 = document.createElement('input');
+  submit1.type = 'submit';
+  submit1.name = 'action';
+  submit1.value = 'save';
+  form.appendChild(submit1);
+
+  const submit2 = document.createElement('input');
+  submit2.type = 'submit';
+  submit2.name = 'action';
+  submit2.value = 'delete';
+  form.appendChild(submit2);
+
+  const submit3 = document.createElement('input');
+  submit3.type = 'submit';
+  submit3.name = 'action';
+  submit3.value = 'cancel';
+  form.appendChild(submit3);
+
+  // FormData with submit2 as submitter - should only include submit2
+  const fd = new FormData(form, submit2);
+  testing.expectEqual('value1', fd.get('field1'));
+  testing.expectEqual('delete', fd.get('action'));
+  testing.expectEqual(['delete'], fd.getAll('action'));
+
+  // FormData with no submitter - should not include any submit buttons
+  const fd2 = new FormData(form);
+  testing.expectEqual('value1', fd2.get('field1'));
+  testing.expectEqual(null, fd2.get('action'));
+  testing.expectEqual([], fd2.getAll('action'));
+
+  // FormData with submit1 as submitter
+  const fd3 = new FormData(form, submit1);
+  testing.expectEqual('value1', fd3.get('field1'));
+  testing.expectEqual('save', fd3.get('action'));
+  testing.expectEqual(['save'], fd3.getAll('action'));
+}
+</script>
+
+<script id=imageSubmitter>
+{
+  // Test that image inputs add name.x and name.y coordinates
+  const form = document.createElement('form');
+
+  const input1 = document.createElement('input');
+  input1.name = 'username';
+  input1.value = 'alice';
+  form.appendChild(input1);
+
+  const image1 = document.createElement('input');
+  image1.type = 'image';
+  image1.name = 'submit';
+  image1.value = 'ignored'; // value is ignored for image inputs
+  form.appendChild(image1);
+
+  const fd = new FormData(form, image1);
+  testing.expectEqual('alice', fd.get('username'));
+  testing.expectEqual('0', fd.get('submit.x'));
+  testing.expectEqual('0', fd.get('submit.y'));
+  testing.expectEqual(null, fd.get('submit')); // name without .x/.y should not exist
+
+  // Verify order and that .x comes before .y
+  const entries = Array.from(fd.entries());
+  testing.expectEqual([['username', 'alice'], ['submit.x', '0'], ['submit.y', '0']], entries);
+}
+</script>
+
+<script id=multipleImagesWithSameName>
+{
+  // Test that when multiple images share a name, only submitter's coordinates are included
+  const form = document.createElement('form');
+
+  const img1 = document.createElement('input');
+  img1.type = 'image';
+  img1.name = 'coords';
+  form.appendChild(img1);
+
+  const img2 = document.createElement('input');
+  img2.type = 'image';
+  img2.name = 'coords';
+  form.appendChild(img2);
+
+  const img3 = document.createElement('input');
+  img3.type = 'image';
+  img3.name = 'coords';
+  form.appendChild(img3);
+
+  // Only img2 should be included
+  const fd = new FormData(form, img2);
+  testing.expectEqual(['0'], fd.getAll('coords.x'));
+  testing.expectEqual(['0'], fd.getAll('coords.y'));
+
+  const entries = Array.from(fd.entries());
+  testing.expectEqual([['coords.x', '0'], ['coords.y', '0']], entries);
+}
+</script>
+
+<script id=buttonSubmitter>
+{
+  // Test that <button> elements work as submitters
+  const form = document.createElement('form');
+
+  const input1 = document.createElement('input');
+  input1.name = 'data';
+  input1.value = 'test';
+  form.appendChild(input1);
+
+  const button1 = document.createElement('button');
+  button1.name = 'btn';
+  button1.value = 'first';
+  button1.type = 'submit';
+  form.appendChild(button1);
+
+  const button2 = document.createElement('button');
+  button2.name = 'btn';
+  button2.value = 'second';
+  button2.type = 'submit';
+  form.appendChild(button2);
+
+  // With button1 as submitter
+  const fd1 = new FormData(form, button1);
+  testing.expectEqual('test', fd1.get('data'));
+  testing.expectEqual('first', fd1.get('btn'));
+  testing.expectEqual(['first'], fd1.getAll('btn'));
+
+  // With button2 as submitter
+  const fd2 = new FormData(form, button2);
+  testing.expectEqual('test', fd2.get('data'));
+  testing.expectEqual('second', fd2.get('btn'));
+  testing.expectEqual(['second'], fd2.getAll('btn'));
+
+  // No submitter - no button included
+  const fd3 = new FormData(form);
+  testing.expectEqual('test', fd3.get('data'));
+  testing.expectEqual(null, fd3.get('btn'));
+}
+</script>
+
+<script id=mixedSubmitTypes>
+{
+  // Test mix of input[type=submit], input[type=image], and button
+  const form = document.createElement('form');
+
+  const field = document.createElement('input');
+  field.name = 'name';
+  field.value = 'Bob';
+  form.appendChild(field);
+
+  const submit = document.createElement('input');
+  submit.type = 'submit';
+  submit.name = 'op';
+  submit.value = 'save';
+  form.appendChild(submit);
+
+  const image = document.createElement('input');
+  image.type = 'image';
+  image.name = 'map';
+  form.appendChild(image);
+
+  const button = document.createElement('button');
+  button.type = 'submit';
+  button.name = 'op';
+  button.value = 'delete';
+  form.appendChild(button);
+
+  // Using image as submitter - only image coordinates included
+  const fd1 = new FormData(form, image);
+  testing.expectEqual('Bob', fd1.get('name'));
+  testing.expectEqual('0', fd1.get('map.x'));
+  testing.expectEqual('0', fd1.get('map.y'));
+  testing.expectEqual(null, fd1.get('op'));
+
+  // Using submit as submitter
+  const fd2 = new FormData(form, submit);
+  testing.expectEqual('Bob', fd2.get('name'));
+  testing.expectEqual('save', fd2.get('op'));
+  testing.expectEqual(null, fd2.get('map.x'));
+  testing.expectEqual(null, fd2.get('map.y'));
+
+  // Using button as submitter
+  const fd3 = new FormData(form, button);
+  testing.expectEqual('Bob', fd3.get('name'));
+  testing.expectEqual('delete', fd3.get('op'));
+  testing.expectEqual(null, fd3.get('map.x'));
+}
+</script>
+
+<script id=submitterWithoutName>
+{
+  // Test that submitter without name is not included
+  const form = document.createElement('form');
+
+  const input = document.createElement('input');
+  input.name = 'field';
+  input.value = 'data';
+  form.appendChild(input);
+
+  const submit = document.createElement('input');
+  submit.type = 'submit';
+  // no name attribute
+  submit.value = 'Submit';
+  form.appendChild(submit);
+
+  const fd = new FormData(form, submit);
+  testing.expectEqual('data', fd.get('field'));
+  // Should not have any submit-related entries
+  const entries = Array.from(fd.entries());
+  testing.expectEqual([['field', 'data']], entries);
+}
+</script>
+
+<script id=imageWithoutName>
+{
+  // Test that image input without name still submits x and y coordinates
+  const form = document.createElement('form');
+
+  const input = document.createElement('input');
+  input.name = 'field';
+  input.value = 'data';
+  form.appendChild(input);
+
+  const image = document.createElement('input');
+  image.type = 'image';
+  // no name attribute
+  form.appendChild(image);
+
+  const fd = new FormData(form, image);
+  testing.expectEqual('data', fd.get('field'));
+  // Image without name submits plain 'x' and 'y' keys
+  testing.expectEqual('0', fd.get('x'));
+  testing.expectEqual('0', fd.get('y'));
+  const entries = Array.from(fd.entries());
+  testing.expectEqual([['field', 'data'], ['x', '0'], ['y', '0']], entries);
+}
+</script>

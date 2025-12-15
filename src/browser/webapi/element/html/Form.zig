@@ -25,10 +25,10 @@ const HtmlElement = @import("../Html.zig");
 const TreeWalker = @import("../../TreeWalker.zig");
 const collections = @import("../../collections.zig");
 
-const Input = @import("Input.zig");
-const Button = @import("Button.zig");
-const Select = @import("Select.zig");
-const TextArea = @import("TextArea.zig");
+pub const Input = @import("Input.zig");
+pub const Button = @import("Button.zig");
+pub const Select = @import("Select.zig");
+pub const TextArea = @import("TextArea.zig");
 
 const Form = @This();
 _proto: *HtmlElement,

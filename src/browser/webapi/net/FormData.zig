@@ -26,19 +26,17 @@ const Form = @import("../element/html/Form.zig");
 const Element = @import("../Element.zig");
 const KeyValueList = @import("../KeyValueList.zig");
 
-const Alloctor = std.mem.Allocator;
+const Allocator = std.mem.Allocator;
 
 const FormData = @This();
 
-_arena: Alloctor,
+_arena: Allocator,
 _list: KeyValueList,
 
-pub fn init(form_: ?*Form, submitter_: ?*Element, page: *Page) !*FormData {
-    _ = form_;
-    _ = submitter_;
+pub fn init(form: ?*Form, submitter: ?*Element, page: *Page) !*FormData {
     return page._factory.create(FormData{
         ._arena = page.arena,
-        ._list = KeyValueList.init(),
+        ._list = try collectForm(page.arena, form, submitter, page),
     });
 }
 
@@ -108,6 +106,82 @@ pub const Iterator = struct {
     }
 };
 
+fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Page) !KeyValueList {
+    var list: KeyValueList = .empty;
+    const form = form_ orelse return list;
+
+    var elements = try form.getElements(page);
+    var it = try elements.iterator();
+    while (it.next()) |element| {
+        if (element.getAttributeSafe("disabled") != null) {
+            continue;
+        }
+
+        // Handle image submitters first - they can submit without a name
+        if (element.is(Form.Input)) |input| {
+            if (input._input_type == .image) {
+                const submitter = submitter_ orelse continue;
+                if (submitter != element) {
+                    continue;
+                }
+
+                const name = element.getAttributeSafe("name");
+                const x_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.x", .{n}) else "x";
+                const y_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.y", .{n}) else "y";
+                try list.append(arena, x_key, "0");
+                try list.append(arena, y_key, "0");
+                continue;
+            }
+        }
+
+        const name = element.getAttributeSafe("name") orelse continue;
+        const value = blk: {
+            if (element.is(Form.Input)) |input| {
+                const input_type = input._input_type;
+                if (input_type == .checkbox or input_type == .radio) {
+                    if (!input.getChecked()) {
+                        continue;
+                    }
+                }
+                if (input_type == .submit) {
+                    const submitter = submitter_ orelse continue;
+                    if (submitter != element) {
+                        continue;
+                    }
+                }
+                break :blk input.getValue();
+            }
+
+            if (element.is(Form.Select)) |select| {
+                if (select.getMultiple() == false) {
+                    break :blk select.getValue(page);
+                }
+
+                var options = try select.getSelectedOptions(page);
+                while (options.next()) |option| {
+                    try list.append(arena, name, option.as(Form.Select.Option).getValue(page));
+                }
+                continue;
+            }
+
+            if (element.is(Form.TextArea)) |textarea| {
+                break :blk textarea.getValue();
+            }
+
+            if (submitter_) |submitter| {
+                if (submitter == element) {
+                    // The form iterator only yields form controls. If we're here
+                    // all other control types have been handled. So the cast is safe.
+                    break :blk element.as(Form.Button).getValue();
+                }
+            }
+            continue;
+        };
+        try list.append(arena, name, value);
+    }
+    return list;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(FormData);
 
@@ -130,97 +204,6 @@ pub const JsApi = struct {
     pub const symbol_iterator = bridge.iterator(FormData.entries, .{});
     pub const forEach = bridge.function(FormData.forEach, .{});
 };
-
-// fn collectForm(form: *Form, submitter_: ?*Element, page: *Page) !KeyValueList {
-//     const arena = page.arena;
-
-//     // Don't use libdom's formGetCollection (aka dom_html_form_element_get_elements)
-//     // It doesn't work with dynamically added elements, because their form
-//     // property doesn't get set. We should fix that.
-//     // However, even once fixed, there are other form-collection features we
-//     // probably want to implement (like disabled fieldsets), so we might want
-//     // to stick with our own walker even if fix libdom to properly support
-//     // dynamically added elements.
-//     const node_list = try @import("../dom/css.zig").querySelectorAll(arena, @ptrCast(@alignCast(form)), "input,select,button,textarea");
-//     const nodes = node_list.nodes.items;
-
-//     var entries: kv.List = .{};
-//     try entries.ensureTotalCapacity(arena, nodes.len);
-
-//     var submitter_included = false;
-//     const submitter_name_ = try getSubmitterName(submitter_);
-
-//     for (nodes) |node| {
-//         const element = parser.nodeToElement(node);
-
-//         // must have a name
-//         const name = try parser.elementGetAttribute(element, "name") orelse continue;
-//         if (try parser.elementGetAttribute(element, "disabled") != null) {
-//             continue;
-//         }
-
-//         const tag = try parser.elementTag(element);
-//         switch (tag) {
-//             .input => {
-//                 const tpe = try parser.inputGetType(@ptrCast(element));
-//                 if (std.ascii.eqlIgnoreCase(tpe, "image")) {
-//                     if (submitter_name_) |submitter_name| {
-//                         if (std.mem.eql(u8, submitter_name, name)) {
-//                             const key_x = try std.fmt.allocPrint(arena, "{s}.x", .{name});
-//                             const key_y = try std.fmt.allocPrint(arena, "{s}.y", .{name});
-//                             try entries.appendOwned(arena, key_x, "0");
-//                             try entries.appendOwned(arena, key_y, "0");
-//                             submitter_included = true;
-//                         }
-//                     }
-//                     continue;
-//                 }
-
-//                 if (std.ascii.eqlIgnoreCase(tpe, "checkbox") or std.ascii.eqlIgnoreCase(tpe, "radio")) {
-//                     if (try parser.inputGetChecked(@ptrCast(element)) == false) {
-//                         continue;
-//                     }
-//                 }
-//                 if (std.ascii.eqlIgnoreCase(tpe, "submit")) {
-//                     if (submitter_name_ == null or !std.mem.eql(u8, submitter_name_.?, name)) {
-//                         continue;
-//                     }
-//                     submitter_included = true;
-//                 }
-//                 const value = try parser.inputGetValue(@ptrCast(element));
-//                 try entries.appendOwned(arena, name, value);
-//             },
-//             .select => {
-//                 const select: *parser.Select = @ptrCast(node);
-//                 try collectSelectValues(arena, select, name, &entries, page);
-//             },
-//             .textarea => {
-//                 const textarea: *parser.TextArea = @ptrCast(node);
-//                 const value = try parser.textareaGetValue(textarea);
-//                 try entries.appendOwned(arena, name, value);
-//             },
-//             .button => if (submitter_name_) |submitter_name| {
-//                 if (std.mem.eql(u8, submitter_name, name)) {
-//                     const value = (try parser.elementGetAttribute(element, "value")) orelse "";
-//                     try entries.appendOwned(arena, name, value);
-//                     submitter_included = true;
-//                 }
-//             },
-//             else => unreachable,
-//         }
-//     }
-
-//     if (submitter_included == false) {
-//         if (submitter_name_) |submitter_name| {
-//             // this can happen if the submitter is outside the form, but associated
-//             // with the form via a form=ID attribute
-//             const value = (try parser.elementGetAttribute(@ptrCast(submitter_.?), "value")) orelse "";
-//             try entries.appendOwned(arena, submitter_name, value);
-//         }
-//     }
-
-//     return entries;
-// }
 
 const testing = @import("../../../testing.zig");
 test "WebApi: FormData" {

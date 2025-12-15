@@ -24,7 +24,7 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const collections = @import("../../collections.zig");
 const Form = @import("Form.zig");
-const Option = @import("Option.zig");
+pub const Option = @import("Option.zig");
 
 const Select = @This();
 
@@ -50,11 +50,15 @@ pub fn getValue(self: *Select, page: *Page) []const u8 {
     var iter = self.asNode().childrenIterator();
     while (iter.next()) |child| {
         const option = child.is(Option) orelse continue;
-        if (first_option == null) {
-            first_option = option;
+        if (option.getDisabled()) {
+            continue;
         }
+
         if (option.getSelected()) {
             return option.getValue(page);
+        }
+        if (first_option == null) {
+            first_option = option;
         }
     }
     // No explicitly selected option, return first option's value

@@ -194,6 +194,10 @@ pub fn NodeLive(comptime mode: Mode) type {
             return null;
         }
 
+        pub fn next(self: *Self) ?*Element {
+            return self.nextTw(&self._tw);
+        }
+
         pub fn nextTw(self: *Self, tw: *TW) ?*Element {
             while (tw.next()) |node| {
                 if (self.matches(node)) {
@@ -297,7 +301,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             if (el._type != .html) return false;
             const html = el._type.html;
             return switch (html._type) {
-                .input, .button, .select, .text_area => true,
+                .input, .button, .select, .textarea => true,
                 else => false,
             };
         }
