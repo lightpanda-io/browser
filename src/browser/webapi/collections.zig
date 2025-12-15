@@ -19,6 +19,7 @@
 pub const NodeLive = @import("collections/node_live.zig").NodeLive;
 pub const ChildNodes = @import("collections/ChildNodes.zig");
 pub const DOMTokenList = @import("collections/DOMTokenList.zig");
+pub const RadioNodeList = @import("collections/RadioNodeList.zig");
 pub const HTMLAllCollection = @import("collections/HTMLAllCollection.zig");
 pub const HTMLOptionsCollection = @import("collections/HTMLOptionsCollection.zig");
 pub const HTMLFormControlsCollection = @import("collections/HTMLFormControlsCollection.zig");
@@ -35,6 +36,7 @@ pub fn registerTypes() []const type {
         @import("collections/HTMLAllCollection.zig").Iterator,
         HTMLOptionsCollection,
         HTMLFormControlsCollection,
+        RadioNodeList,
         DOMTokenList,
         DOMTokenList.KeyIterator,
         DOMTokenList.ValueIterator,

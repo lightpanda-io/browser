@@ -20,11 +20,19 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
+
+const NodeList = @import("NodeList.zig");
+const RadioNodeList = @import("RadioNodeList.zig");
 const HTMLCollection = @import("HTMLCollection.zig");
 
 const HTMLFormControlsCollection = @This();
 
 _proto: *HTMLCollection,
+
+pub const NamedItemResult = union(enum) {
+    element: *Element,
+    radio_node_list: *RadioNodeList,
+};
 
 pub fn length(self: *HTMLFormControlsCollection, page: *Page) u32 {
     return self._proto.length(page);
@@ -34,11 +42,86 @@ pub fn getAtIndex(self: *HTMLFormControlsCollection, index: usize, page: *Page) 
     return self._proto.getAtIndex(index, page);
 }
 
-pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Page) ?*Element {
-    // TODO: When multiple elements have same name (radio buttons),
-    // should return RadioNodeList instead of first element
-    return self._proto.getByName(name, page);
+pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Page) !?NamedItemResult {
+    if (name.len == 0) {
+        return null;
+    }
+
+    // We need special handling for radio, where multiple inputs can have the
+    // same name, but we also need to handle the [incorrect] case where non-
+    // radios share names.
+
+    var count: u32 = 0;
+    var first_element: ?*Element = null;
+
+    var it = try self.iterator();
+    while (it.next()) |element| {
+        const is_match = blk: {
+            if (element.getAttributeSafe("id")) |id| {
+                if (std.mem.eql(u8, id, name)) {
+                    break :blk true;
+                }
+            }
+            if (element.getAttributeSafe("name")) |elem_name| {
+                if (std.mem.eql(u8, elem_name, name)) {
+                    break :blk true;
+                }
+            }
+            break :blk false;
+        };
+
+        if (is_match) {
+            if (first_element == null) {
+                first_element = element;
+            }
+            count += 1;
+
+            if (count == 2) {
+                const radio_node_list = try page._factory.create(RadioNodeList{
+                    ._proto = undefined,
+                    ._form_collection = self,
+                    ._name = try page.dupeString(name),
+                });
+
+                radio_node_list._proto = try page._factory.create(NodeList{ .data = .{ .radio_node_list = radio_node_list } });
+
+                return .{ .radio_node_list = radio_node_list };
+            }
+        }
+    }
+
+    if (count == 0) {
+        return null;
+    }
+
+    // case == 2 was handled inside the loop
+    std.debug.assert(count == 1);
+
+    return .{ .element = first_element.? };
 }
+
+// used internally, by HTMLFormControlsCollection and RadioNodeList
+pub fn iterator(self: *HTMLFormControlsCollection) !Iterator {
+    const form_collection = self._proto._data.form;
+    return .{
+        .tw = form_collection._tw.clone(),
+        .nodes = form_collection,
+    };
+}
+
+// Used internally. Presents a nicer (more zig-like) iterator and strips away
+// some of the abstraction.
+pub const Iterator = struct {
+    tw: TreeWalker,
+    nodes: NodeLive,
+
+    const NodeLive = @import("node_live.zig").NodeLive(.form);
+    const TreeWalker = @import("../TreeWalker.zig").FullExcludeSelf;
+
+    pub fn next(self: *Iterator) ?*Element {
+        return self.nodes.nextTw(&self.tw);
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLFormControlsCollection);

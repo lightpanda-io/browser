@@ -249,11 +249,22 @@
   testing.expectEqual('b', form.elements[1].value)
   testing.expectEqual('c', form.elements[2].value)
 
-  // Note: In spec-compliant browsers, namedItem with duplicate names returns RadioNodeList
-  // RadioNodeList.value returns the checked radio's value (or "" if none checked)
-  // Our implementation currently returns the first element (TODO: implement RadioNodeList)
-  // For now, test that we can access by index which works in all browsers
-  testing.expectEqual('choice', form.elements[0].name)
+  // Ensure all radios are unchecked at start (cleanup from any previous tests)
+  form.elements[0].checked = false
+  form.elements[1].checked = false
+  form.elements[2].checked = false
+
+  // namedItem with duplicate names returns RadioNodeList
+  const result = form.elements.namedItem('choice')
+  testing.expectEqual('RadioNodeList', result.constructor.name)
+  testing.expectEqual(3, result.length)
+  testing.expectEqual('', result.value)
+
+  form.elements[1].checked = true
+  testing.expectEqual('b', result.value)
+
+  result.value = 'c'
+  testing.expectEqual(true, form.elements[2].checked)
 }
 </script>
 
@@ -295,5 +306,24 @@
 {
   const form = $('#form_no_id_attr')
   testing.expectEqual(0, form.elements.length)
+}
+</script>
+
+<form id="duplicate_names">
+  <input type="text" name="choice" value="a">
+  <input type="text" name="choice" value="b">
+  <input type="text" name="choice" value="c">
+</form>
+
+<script id="duplicate_names_handling">
+{
+  const form = $('#duplicate_names')
+  testing.expectEqual(3, form.elements.length)
+
+  testing.expectEqual('a', form.elements[0].value)
+  testing.expectEqual('b', form.elements[1].value)
+  testing.expectEqual('c', form.elements[2].value)
+
+  testing.expectEqual('', form.elements['choice'].value)
 }
 </script>

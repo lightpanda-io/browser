@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- Test fixtures for RadioNodeList -->
+<form id="test_form">
+  <input type="radio" name="color" value="red">
+  <input type="radio" name="color" value="green">
+  <input type="radio" name="color" value="blue">
+  <input type="text" name="single_field" value="test">
+</form>
+
+<script id="multiple_returns_radio_node_list">
+{
+  const form = $('#test_form');
+  const result = form.elements.namedItem('color');
+
+  testing.expectEqual('RadioNodeList', result.constructor.name);
+}
+</script>
+
+<script id="single_returns_element">
+{
+  const form = $('#test_form');
+  const result = form.elements.namedItem('single_field');
+
+  testing.expectEqual('HTMLInputElement', result.constructor.name);
+  testing.expectEqual('single_field', result.name);
+}
+</script>
+
+<script id="none_returns_null">
+{
+  const form = $('#test_form');
+  const result = form.elements.namedItem('nonexistent');
+
+  testing.expectEqual(null, result);
+}
+</script>
+
+<script id="length">
+{
+  const form = $('#test_form');
+  const radios = form.elements.namedItem('color');
+
+  testing.expectEqual(3, radios.length);
+}
+</script>
+
+<script id="indexed_access">
+{
+  const form = $('#test_form');
+  const radios = form.elements.namedItem('color');
+
+  testing.expectEqual('red', radios[0].value);
+  testing.expectEqual('green', radios[1].value);
+  testing.expectEqual('blue', radios[2].value);
+}
+</script>
+
+<script id="value_getter_no_checked">
+{
+  const form = $('#test_form');
+  const radios = form.elements.namedItem('color');
+
+  testing.expectEqual('', radios.value);
+}
+</script>
+
+<script id="value_getter_with_checked">
+{
+  const form = $('#test_form');
+  const inputs = form.querySelectorAll('input[name="color"]');
+  inputs[1].checked = true;
+
+  const radios = form.elements.namedItem('color');
+  testing.expectEqual('green', radios.value);
+}
+</script>
+
+<script id="value_getter_on_default">
+{
+  const form = document.createElement('form');
+  const r1 = document.createElement('input');
+  r1.type = 'radio';
+  r1.name = 'test';
+  r1.checked = true;
+  // no value attribute
+
+  const r2 = document.createElement('input');
+  r2.type = 'radio';
+  r2.name = 'test';
+  // no value attribute
+
+  form.appendChild(r1);
+  form.appendChild(r2);
+  document.body.appendChild(form);
+
+  // Multiple elements with same name returns RadioNodeList
+  const radios = form.elements.namedItem('test');
+  testing.expectEqual('RadioNodeList', radios.constructor.name);
+  testing.expectEqual('on', radios.value); // Checked radio with no value returns "on"
+
+  form.remove();
+}
+</script>
+
+<script id="value_setter">
+{
+  const form = $('#test_form');
+  const radios = form.elements.namedItem('color');
+  const inputs = form.querySelectorAll('input[name="color"]');
+
+  radios.value = 'blue';
+
+  testing.expectEqual(false, inputs[0].checked);
+  testing.expectEqual(false, inputs[1].checked);
+  testing.expectEqual(true, inputs[2].checked);
+  testing.expectEqual('blue', radios.value);
+}
+</script>
+
+<script id="value_setter_on">
+{
+  const form = document.createElement('form');
+  const r1 = document.createElement('input');
+  r1.type = 'radio';
+  r1.name = 'test';
+  // no value attribute
+
+  const r2 = document.createElement('input');
+  r2.type = 'radio';
+  r2.name = 'test';
+  r2.value = 'on';
+
+  const r3 = document.createElement('input');
+  r3.type = 'radio';
+  r3.name = 'test';
+  r3.value = 'other';
+
+  form.appendChild(r1);
+  form.appendChild(r2);
+  form.appendChild(r3);
+  document.body.appendChild(form);
+
+  const radios = form.elements.namedItem('test');
+  radios.value = 'on';
+
+  // Should check first match (r1 with no value attribute)
+  testing.expectEqual(true, r1.checked);
+  testing.expectEqual(false, r2.checked);
+  testing.expectEqual(false, r3.checked);
+
+  form.remove();
+}
+</script>
+
+<script id="live_collection">
+{
+  const form = document.createElement('form');
+  const r1 = document.createElement('input');
+  r1.type = 'radio';
+  r1.name = 'dynamic';
+  r1.value = 'a';
+
+  const r2 = document.createElement('input');
+  r2.type = 'radio';
+  r2.name = 'dynamic';
+  r2.value = 'b';
+
+  form.appendChild(r1);
+  form.appendChild(r2);
+  document.body.appendChild(form);
+
+  const radios = form.elements.namedItem('dynamic');
+  testing.expectEqual('RadioNodeList', radios.constructor.name);
+  testing.expectEqual(2, radios.length);
+
+  const r3 = document.createElement('input');
+  r3.type = 'radio';
+  r3.name = 'dynamic';
+  r3.value = 'c';
+  form.appendChild(r3);
+
+  testing.expectEqual(3, radios.length);
+  testing.expectEqual('c', radios[2].value);
+
+  r1.remove();
+  testing.expectEqual(2, radios.length);
+  testing.expectEqual('b', radios[0].value);
+
+  form.remove();
+}
+</script>
+
+<!-- Test non-radio elements with same name -->
+<form id="mixed_form">
+  <input type="text" name="mixed" value="text1">
+  <input type="text" name="mixed" value="text2">
+</form>
+
+<script id="non_radio_elements">
+{
+  const form = $('#mixed_form');
+  const result = form.elements.namedItem('mixed');
+
+  // Should still return RadioNodeList even for non-radio elements
+  testing.expectEqual('RadioNodeList', result.constructor.name);
+  testing.expectEqual(2, result.length);
+
+  // getValue should return "" for non-radio elements
+  testing.expectEqual('', result.value);
+}
+</script>

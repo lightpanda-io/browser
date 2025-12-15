@@ -22,13 +22,17 @@ const log = @import("../../..//log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
+const Element = @import("../Element.zig");
 
 const ChildNodes = @import("ChildNodes.zig");
+const RadioNodeList = @import("RadioNodeList.zig");
 const SelectorList = @import("../selector/List.zig");
+const HTMLFormControlsCollection = @import("HTMLFormControlsCollection.zig");
 
 const Mode = enum {
     child_nodes,
     selector_list,
+    radio_node_list,
 };
 
 const NodeList = @This();
@@ -36,12 +40,14 @@ const NodeList = @This();
 data: union(Mode) {
     child_nodes: *ChildNodes,
     selector_list: *SelectorList,
+    radio_node_list: *RadioNodeList,
 },
 
 pub fn length(self: *NodeList, page: *Page) !u32 {
     return switch (self.data) {
         .child_nodes => |impl| impl.length(page),
         .selector_list => |impl| @intCast(impl.getLength()),
+        .radio_node_list => |impl| impl.getLength(),
     };
 }
 
@@ -49,6 +55,7 @@ pub fn getAtIndex(self: *NodeList, index: usize, page: *Page) !?*Node {
     return switch (self.data) {
         .child_nodes => |impl| impl.getAtIndex(index, page),
         .selector_list => |impl| impl.getAtIndex(index),
+        .radio_node_list => |impl| impl.getAtIndex(index, page),
     };
 }
 
