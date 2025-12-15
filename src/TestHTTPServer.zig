@@ -100,6 +100,11 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "application/json";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".mjs")) {
+        // mjs are ECMAScript modules
+        return "application/json";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".html")) {
         return "text/html";
     }
