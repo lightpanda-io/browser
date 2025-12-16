@@ -23,6 +23,7 @@ const Http = @import("../../../http/Http.zig");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const URL = @import("../../URL.zig");
 
 const Headers = @import("Headers.zig");
 const Request = @import("Request.zig");
@@ -96,7 +97,30 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
     }
 
     const res = self._response;
-    res._status = transfer.response_header.?.status;
+    const header = transfer.response_header.?;
+
+    res._status = header.status;
+    res._url = try self._page.arena.dupeZ(u8, std.mem.span(header.url));
+    res._is_redirected = header.redirect_count > 0;
+
+    // Determine response type based on origin comparison
+    const page_origin = URL.getOrigin(self._page.call_arena, self._page.url) catch null;
+    const response_origin = URL.getOrigin(self._page.call_arena, res._url) catch null;
+
+    if (page_origin) |po| {
+        if (response_origin) |ro| {
+            if (std.mem.eql(u8, po, ro)) {
+                res._type = .basic; // Same-origin
+            } else {
+                res._type = .cors; // Cross-origin (for simplicity, assume CORS passed)
+            }
+        } else {
+            res._type = .basic;
+        }
+    } else {
+        res._type = .basic;
+    }
+
     var it = transfer.responseHeaderIterator();
     while (it.next()) |hdr| {
         try res._headers.append(hdr.name, hdr.value, self._page);
@@ -116,5 +140,12 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
+    self._response._type = .@"error"; // Set type to error for network failures
     self._resolver.reject("fetch error", @errorName(err));
+}
+
+
+const testing = @import("../../../testing.zig");
+test "WebApi: fetch" {
+    try testing.htmlRunner("net/fetch.html", .{});
 }

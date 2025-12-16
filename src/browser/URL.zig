@@ -240,29 +240,66 @@ pub fn getHash(raw: [:0]const u8) []const u8 {
 }
 
 pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
-    const port = getPort(raw);
-    const protocol = getProtocol(raw);
-    const hostname = getHostname(raw);
+    const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
 
-    const p = std.meta.stringToEnum(KnownProtocol, getProtocol(raw)) orelse return null;
-
-    const include_port = blk: {
-        if (port.len == 0) {
-            break :blk false;
-        }
-        if (p == .@"https:" and std.mem.eql(u8, port, "443")) {
-            break :blk false;
-        }
-        if (p == .@"http:" and std.mem.eql(u8, port, "80")) {
-            break :blk false;
-        }
-        break :blk true;
-    };
-
-    if (include_port) {
-        return try std.fmt.allocPrint(allocator, "{s}//{s}:{s}", .{ protocol, hostname, port });
+    // Only HTTP and HTTPS schemes have origins
+    const protocol = raw[0..scheme_end + 1];
+    if (!std.mem.eql(u8, protocol, "http:") and !std.mem.eql(u8, protocol, "https:")) {
+        return null;
     }
-    return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, hostname });
+
+    var authority_start = scheme_end + 3;
+    const has_user_info = if (std.mem.indexOf(u8, raw[authority_start..], "@")) |pos| blk: {
+        authority_start += pos + 1;
+        break :blk true;
+    } else false;
+
+    // Find end of authority (start of path/query/fragment or end of string)
+    const authority_end_relative = std.mem.indexOfAny(u8, raw[authority_start..], "/?#");
+    const authority_end = if (authority_end_relative) |end|
+        authority_start + end
+    else
+        raw.len;
+
+    // Check for port in the host:port section
+    const host_part = raw[authority_start..authority_end];
+    if (std.mem.lastIndexOfScalar(u8, host_part, ':')) |colon_pos_in_host| {
+        const port = host_part[colon_pos_in_host + 1..];
+
+        // Validate it's actually a port (all digits)
+        for (port) |c| {
+            if (c < '0' or c > '9') {
+                // Not a port (probably IPv6)
+                if (has_user_info) {
+                    // Need to allocate to exclude user info
+                    return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
+                }
+                // Can return a slice
+                return raw[0..authority_end];
+            }
+        }
+
+        // Check if it's a default port that should be excluded from origin
+        const is_default =
+            (std.mem.eql(u8, protocol, "http:") and std.mem.eql(u8, port, "80")) or
+            (std.mem.eql(u8, protocol, "https:") and std.mem.eql(u8, port, "443"));
+
+        if (is_default or has_user_info) {
+            // Need to allocate to build origin without default port and/or user info
+            const hostname = host_part[0..colon_pos_in_host];
+            if (is_default) {
+                return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, hostname });
+            } else {
+                return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ protocol, host_part });
+            }
+        }
+    } else if (has_user_info) {
+        // No port, but has user info - need to allocate
+        return try std.fmt.allocPrint(allocator, "{s}//{s}", .{ raw[0 .. scheme_end + 1], host_part });
+    }
+
+    // Common case: no user info, no default port - return slice (zero allocation!)
+    return raw[0..authority_end];
 }
 
 fn getUserInfo(raw: [:0]const u8) ?[]const u8 {

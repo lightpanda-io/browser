@@ -40,6 +40,8 @@ _headers: *Headers,
 _body: ?[]const u8,
 _type: Type,
 _status_text: []const u8,
+_url: [:0]const u8,
+_is_redirected: bool,
 
 const InitOpts = struct {
     status: u16 = 200,
@@ -58,8 +60,10 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
         ._arena = page.arena,
         ._status = opts.status,
         ._status_text = status_text,
+        ._url = "",
         ._body = body,
         ._type = .basic,
+        ._is_redirected = false,
         ._headers = try Headers.init(opts.headers, page),
     });
 }
@@ -69,18 +73,19 @@ pub fn getStatus(self: *const Response) u16 {
 }
 
 pub fn getStatusText(self: *const Response) []const u8 {
+    // @TODO
     // This property is meant to actually capture the response status text, not
     // just return the text representation of self._status. If we do,
     // new Response(null, {status: 200}).statusText, we should get empty string.
     return self._status_text;
 }
 
-pub fn getURL(_: *const Response) []const u8 {
-    return "";
+pub fn getURL(self: *const Response) []const u8 {
+    return self._url;
 }
 
-pub fn isRedirected(_: *const Response) bool {
-    return false;
+pub fn isRedirected(self: *const Response) bool {
+    return self._is_redirected;
 }
 
 pub fn getHeaders(self: *const Response) *Headers {

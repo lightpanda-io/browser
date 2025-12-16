@@ -2006,7 +2006,7 @@ const IdleNotification = union(enum) {
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     const URLRaw = @import("URL.zig");
-    const current_origin = (try URLRaw.getOrigin(self.arena, self.url)) orelse return false;
+    const current_origin = (try URLRaw.getOrigin(self.call_arena, self.url)) orelse return false;
     return std.mem.startsWith(u8, url, current_origin);
 }
 

@@ -3,7 +3,7 @@
   const promise1 = new Promise((resolve) => {
     fetch('http://127.0.0.1:9589/xhr/json')
     .then((res) => {
-      testing.expectEqual('basic', res.type);
+      testing.expectEqual('cors', res.type);
       return res.json()
     })
     .then((json) => {

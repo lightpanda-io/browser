@@ -781,9 +781,13 @@ pub const Transfer = struct {
             try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status));
         }
 
+        var redirect_count: c_long = undefined;
+        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_REDIRECT_COUNT, &redirect_count));
+
         self.response_header = .{
             .url = url,
             .status = @intCast(status),
+            .redirect_count = @intCast(redirect_count),
         };
 
         if (getResponseHeader(easy, "content-type", 0)) |ct| {
@@ -1122,6 +1126,7 @@ pub const Transfer = struct {
         transfer.response_header = .{
             .status = status,
             .url = req.url,
+            .redirect_count = 0,
             ._injected_headers = headers,
         };
         for (headers) |hdr| {
@@ -1177,6 +1182,7 @@ pub const ResponseHeader = struct {
 
     status: u16,
     url: [*c]const u8,
+    redirect_count: u32,
     _content_type_len: usize = 0,
     _content_type: [MAX_CONTENT_TYPE_LEN]u8 = undefined,
     // this is normally an empty list, but if the response is being injected

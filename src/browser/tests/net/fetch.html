@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=fetch_basic>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr');
+    restore();
+
+    testing.expectEqual(200, response.status);
+    testing.expectEqual(true, response.ok);
+    testing.expectEqual('basic', response.type);
+    testing.expectEqual('http://127.0.0.1:9582/xhr', response.url);
+    testing.expectEqual(false, response.redirected);
+
+    // Check headers
+    const headers = response.headers;
+    testing.expectEqual('text/html; charset=utf-8', headers.get('Content-Type'));
+    testing.expectEqual('100', headers.get('content-length'));
+
+    // Check text response
+    const text = await response.text();
+    testing.expectEqual(100, text.length);
+  });
+</script>
+
+<script id=fetch_json>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr/json');
+    restore();
+
+    testing.expectEqual(200, response.status);
+    testing.expectEqual(true, response.ok);
+    testing.expectEqual('basic', response.type);
+    testing.expectEqual(false, response.redirected);
+
+    const json = await response.json();
+    testing.expectEqual('9000!!!', json.over);
+
+  });
+</script>
+
+<script id=fetch_post>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr', {
+      method: 'POST',
+      body: 'foo'
+    });
+    restore();
+
+    testing.expectEqual(200, response.status);
+    testing.expectEqual(true, response.ok);
+
+    const text = await response.text();
+    testing.expectEqual(true, text.length > 64);
+  });
+</script>
+
+<script id=fetch_redirect>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr/redirect');
+    restore();
+
+    testing.expectEqual(200, response.status);
+    testing.expectEqual(true, response.ok);
+    testing.expectEqual('http://127.0.0.1:9582/xhr', response.url);
+    testing.expectEqual(true, response.redirected);
+
+    const text = await response.text();
+    testing.expectEqual(100, text.length);
+  });
+</script>
+
+<script id=fetch_404>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr/404');
+    restore();
+
+    testing.expectEqual(404, response.status);
+    testing.expectEqual(false, response.ok);
+
+    const text = await response.text();
+    testing.expectEqual('Not Found', text);
+  });
+</script>
+
+<script id=fetch_500>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr/500');
+    restore();
+
+    testing.expectEqual(500, response.status);
+    testing.expectEqual(false, response.ok);
+
+    const text = await response.text();
+    testing.expectEqual('Internal Server Error', text);
+  });
+</script>
+
+<script id=fetch_request_object>
+  testing.async(async (restore) => {
+    const request = new Request('http://127.0.0.1:9582/xhr', {
+      method: 'GET'
+    });
+
+    testing.expectEqual('http://127.0.0.1:9582/xhr', request.url);
+    testing.expectEqual('GET', request.method);
+
+    const response = await fetch(request);
+    restore();
+
+    testing.expectEqual(200, response.status);
+    testing.expectEqual(true, response.ok);
+
+    const text = await response.text();
+    testing.expectEqual(100, text.length);
+  });
+</script>
+
+<script id=fetch_request_with_headers>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr', {
+      method: 'GET',
+      headers: {
+        'X-Custom-Header': 'test-value'
+      }
+    });
+    restore();
+
+    testing.expectEqual(200, response.status);
+    testing.expectEqual(true, response.ok);
+  });
+</script>
+
+<script id=fetch_request_with_method_variations>
+  for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']) {
+    const request = new Request('http://127.0.0.1:9582/xhr', {
+      method: method
+    });
+    testing.expectEqual(method, request.method);
+  }
+</script>
+
+<script id=fetch_cache_credentials>
+  {
+    const request = new Request('http://127.0.0.1:9582/xhr', {
+      cache: 'no-cache',
+      credentials: 'same-origin'
+    });
+
+    testing.expectEqual('no-cache', request.cache);
+    testing.expectEqual('same-origin', request.credentials);
+  }
+</script>
+
+<script id=response_constructor>
+  testing.async(async (restore) => {
+    const response1 = new Response(null);
+    testing.expectEqual(200, response1.status);
+    testing.expectEqual(true, response1.ok);
+
+    const response2 = new Response('Hello', {
+      status: 201,
+    });
+    testing.expectEqual(201, response2.status);
+    testing.expectEqual(true, response2.ok);
+
+    const text = await response2.text();
+    restore();
+
+    testing.expectEqual('Hello', text);
+  });
+</script>
+
+<script id=response_body_stream>
+  testing.async(async (restore) => {
+    const response = await fetch('http://127.0.0.1:9582/xhr');
+    restore();
+
+    testing.expectEqual(true, response.body !== null);
+    testing.expectEqual(true, response.body instanceof ReadableStream);
+  });
+</script>
+
+<script id=response_empty_body>
+  testing.async(async (restore) => {
+    const response = new Response('');
+    testing.expectEqual(200, response.status);
+
+    const text = await response.text();
+    restore();
+
+    testing.expectEqual('', text);
+    // Empty body should still create a valid stream
+    testing.expectEqual(true, response.body !== null);
+  });
+</script>
