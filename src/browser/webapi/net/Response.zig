@@ -39,10 +39,11 @@ _arena: Allocator,
 _headers: *Headers,
 _body: ?[]const u8,
 _type: Type,
+_status_text: []const u8,
 
 const InitOpts = struct {
     status: u16 = 200,
-    headers: ?*Headers = null,
+    headers: ?Headers.InitOpts = null,
     statusText: ?[]const u8 = null,
 };
 
@@ -51,18 +52,35 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
 
     // Store empty string as empty string, not null
     const body = if (body_) |b| try page.arena.dupe(u8, b) else null;
+    const status_text = if (opts.statusText) |st| try page.dupeString(st) else "";
 
     return page._factory.create(Response{
         ._arena = page.arena,
         ._status = opts.status,
+        ._status_text = status_text,
         ._body = body,
-        ._headers = opts.headers orelse try Headers.init(null, page),
-        ._type = .basic, // @ZIGDOM: todo
+        ._type = .basic,
+        ._headers = try Headers.init(opts.headers, page),
     });
 }
 
 pub fn getStatus(self: *const Response) u16 {
     return self._status;
+}
+
+pub fn getStatusText(self: *const Response) []const u8 {
+    // This property is meant to actually capture the response status text, not
+    // just return the text representation of self._status. If we do,
+    // new Response(null, {status: 200}).statusText, we should get empty string.
+    return self._status_text;
+}
+
+pub fn getURL(_: *const Response) []const u8 {
+    return "";
+}
+
+pub fn isRedirected(_: *const Response) bool {
+    return false;
 }
 
 pub fn getHeaders(self: *const Response) *Headers {
@@ -89,6 +107,7 @@ pub fn getBody(self: *const Response, page: *Page) !?*ReadableStream {
 pub fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
+
 
 pub fn getText(self: *const Response, page: *Page) !js.Promise {
     const body = self._body orelse "";
@@ -120,9 +139,17 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(Response.init, .{});
     pub const ok = bridge.accessor(Response.isOK, null, .{});
     pub const status = bridge.accessor(Response.getStatus, null, .{});
+    pub const statusText = bridge.accessor(Response.getStatusText, null, .{});
     pub const @"type" = bridge.accessor(Response.getType, null, .{});
     pub const text = bridge.function(Response.getText, .{});
     pub const json = bridge.function(Response.getJson, .{});
     pub const headers = bridge.accessor(Response.getHeaders, null, .{});
     pub const body = bridge.accessor(Response.getBody, null, .{});
+    pub const url = bridge.accessor(Response.getURL, null, .{});
+    pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: Response" {
+    try testing.htmlRunner("net/response.html", .{});
+}

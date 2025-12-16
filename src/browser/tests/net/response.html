@@ -24,7 +24,7 @@
   testing.expectEqual("text/plain", response2.headers.get("Content-Type"));
   testing.expectEqual("test-value", response2.headers.get("X-Custom"));
   testing.expectEqual("no-cache", response2.headers.get("cache-control"));
-        
+
   let response3 = new Response("Created", { status: 201, statusText: "Created" });
   testing.expectEqual("basic", response3.type);
   testing.expectEqual(201, response3.status);
@@ -39,13 +39,12 @@
   testing.expectEqual(200, emptyResponse.status);
 </script>
 
-<script id=json type=module>
-  const promise1 = new Promise((resolve) => {
-    let response = new Response('[]');
-    response.json().then(resolve)
-  });
-
-  testing.async(promise1, (json) => {
+<script id=json>
+  testing.async(async () => {
+    const json = await new Promise((resolve) => {
+      let response = new Response('[]');
+      response.json().then(resolve)
+    });
     testing.expectEqual([], json);
   });
 </script>

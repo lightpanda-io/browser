@@ -33,6 +33,8 @@ _method: Http.Method,
 _headers: ?*Headers,
 _body: ?[]const u8,
 _arena: Allocator,
+_cache: Cache,
+_credentials: Credentials,
 
 pub const Input = union(enum) {
     request: *Request,
@@ -43,6 +45,25 @@ pub const InitOpts = struct {
     method: ?[]const u8 = null,
     headers: ?Headers.InitOpts = null,
     body: ?[]const u8 = null,
+    cache: Cache = .default,
+    credentials: Credentials = .@"same-origin",
+};
+
+const Credentials = enum {
+    omit,
+    include,
+    @"same-origin",
+    pub const js_enum_from_string = true;
+};
+
+const Cache = enum {
+    default,
+    @"no-store",
+    @"reload",
+    @"no-cache",
+    @"force-cache",
+    @"only-if-cached",
+    pub const js_enum_from_string = true;
 };
 
 pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
@@ -80,6 +101,8 @@ pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
         ._arena = arena,
         ._method = method,
         ._headers = headers,
+        ._cache = opts.cache,
+        ._credentials = opts.credentials,
         ._body = body,
     });
 }
@@ -111,6 +134,14 @@ pub fn getMethod(self: *const Request) []const u8 {
     return @tagName(self._method);
 }
 
+pub fn getCache(self: *const Request) []const u8 {
+    return @tagName(self._cache);
+}
+
+pub fn getCredentials(self: *const Request) []const u8 {
+    return @tagName(self._credentials);
+}
+
 pub fn getHeaders(self: *Request, page: *Page) !*Headers {
     if (self._headers) |headers| {
         return headers;
@@ -134,6 +165,8 @@ pub const JsApi = struct {
     pub const url = bridge.accessor(Request.getUrl, null, .{});
     pub const method = bridge.accessor(Request.getMethod, null, .{});
     pub const headers = bridge.accessor(Request.getHeaders, null, .{});
+    pub const cache = bridge.accessor(Request.getCache, null, .{});
+    pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
 };
 
 const testing = @import("../../../testing.zig");

@@ -1,9 +1,9 @@
 <script src="../testing.js"></script>
 <script id=fetch type=module>
   const promise1 = new Promise((resolve) => {
-    fetch('http://127.0.0.1:9582/xhr/json')
+    fetch('http://127.0.0.1:9589/xhr/json')
     .then((res) => {
-      testing.expectEqual('cors', res.type);
+      testing.expectEqual('basic', res.type);
       return res.json()
     })
     .then((json) => {
@@ -18,7 +18,7 @@
 
 <script id=same-origin type=module>
   const promise1 = new Promise((resolve) => {
-    fetch('http://localhost:9582/xhr/json')
+    fetch('http://localhost:9589/xhr/json')
     .then((res) => {
       testing.expectEqual('basic', res.type);
       return res.json()

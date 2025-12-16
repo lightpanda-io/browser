@@ -807,6 +807,12 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
             unreachable;
         },
         .@"enum" => |e| {
+            if (@hasDecl(T, "js_enum_from_string")) {
+                if (!js_value.isString()) {
+                    return error.InvalidArgument;
+                }
+                return std.meta.stringToEnum(T, try self.valueToString(js_value, .{})) orelse return error.InvalidArgument;
+            }
             switch (@typeInfo(e.tag_type)) {
                 .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value, self.v8_context)),
                 else => @compileError("unsupported enum parameter type: " ++ @typeName(T)),

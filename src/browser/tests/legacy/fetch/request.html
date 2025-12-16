@@ -1,8 +1,9 @@
+<!DOCTYPE html>
 <script src="../testing.js"></script>
 
 <script id=request>
   let request = new Request("flower.png");
-  testing.expectEqual("http://localhost:9582/src/tests/fetch/flower.png", request.url);
+  testing.expectEqual("http://localhost:9589/fetch/flower.png", request.url);
   testing.expectEqual("GET", request.method);
 
   let request2 = new Request("https://google.com", {
