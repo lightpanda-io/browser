@@ -530,6 +530,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/element/html/Body.zig"),
     @import("../webapi/element/html/BR.zig"),
     @import("../webapi/element/html/Button.zig"),
+    @import("../webapi/element/html/Canvas.zig"),
     @import("../webapi/element/html/Custom.zig"),
     @import("../webapi/element/html/Data.zig"),
     @import("../webapi/element/html/Dialog.zig"),

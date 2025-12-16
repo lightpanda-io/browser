@@ -1122,8 +1122,18 @@ fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnm
     if (depth > 20) {
         return writer.writeAll("...deeply nested object...");
     }
+    const own_len = js_obj.getOwnPropertyNames(v8_context).length();
+    if (own_len == 0) {
+        const js_val_str = try self.valueToString(js_val, .{});
+        if (js_val_str.len > 2000) {
+            try writer.writeAll(js_val_str[0..2000]);
+            return writer.writeAll(" ... (truncated)");
+        }
+        return writer.writeAll(js_val_str);
+    }
 
-    try writer.print("({d}/{d})", .{ js_obj.getOwnPropertyNames(v8_context).length(), js_obj.getPropertyNames(v8_context).length() });
+    const all_len = js_obj.getPropertyNames(v8_context).length();
+    try writer.print("({d}/{d})", .{ own_len, all_len });
     for (0..len) |i| {
         if (i == 0) {
             try writer.writeByte('\n');

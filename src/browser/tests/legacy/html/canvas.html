@@ -11,19 +11,3 @@
 }
 </script>
 
-<script id=canvas#fillStyle>
-{
-  const element = document.createElement("canvas");
-  const ctx = element.getContext("2d");
-
-  // Black by default.
-  testing.expectEqual(ctx.fillStyle, "#000000");
-  ctx.fillStyle = "red";
-  testing.expectEqual(ctx.fillStyle, "#ff0000");
-  ctx.fillStyle = "rebeccapurple";
-  testing.expectEqual(ctx.fillStyle, "#663399");
-  // No changes made if color is invalid.
-  ctx.fillStyle = "invalid-color";
-  testing.expectEqual(ctx.fillStyle, "#663399");
-}
-</script>

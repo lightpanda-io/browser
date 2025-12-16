@@ -27,6 +27,7 @@ pub const Anchor = @import("html/Anchor.zig");
 pub const Body = @import("html/Body.zig");
 pub const BR = @import("html/BR.zig");
 pub const Button = @import("html/Button.zig");
+pub const Canvas = @import("html/Canvas.zig");
 pub const Custom = @import("html/Custom.zig");
 pub const Data = @import("html/Data.zig");
 pub const Dialog = @import("html/Dialog.zig");
@@ -74,6 +75,7 @@ pub const Type = union(enum) {
     body: *Body,
     br: *BR,
     button: *Button,
+    canvas: *Canvas,
     custom: *Custom,
     data: *Data,
     dialog: *Dialog,
@@ -126,6 +128,7 @@ pub fn className(self: *const HtmlElement) []const u8 {
         .body => "[object HTMLBodyElement]",
         .br => "[object HTMLBRElement]",
         .button => "[object HTMLButtonElement]",
+        .canvas => "[object HTMLCanvasElement]",
         .custom => "[object CUSTOM-TODO]",
         .data => "[object HTMLDataElement]",
         .dialog => "[object HTMLDialogElement]",
