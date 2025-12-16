@@ -10,10 +10,9 @@
   let link = $('#link');
 
   testing.withError((err) => {
-    const msg = "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.";
     testing.expectEqual(3, err.code);
-    testing.expectEqual(msg, err.message);
-    testing.expectEqual('HierarchyRequestError: ' + msg, err.toString());
+    testing.expectEqual('Hierarchy Error', err.message);
+    testing.expectEqual('HierarchyRequestError: Hierarchy Error', err.toString());
     testing.expectEqual(true, err instanceof DOMException);
     testing.expectEqual(true, err instanceof Error);
   }, () => link.appendChild(content));

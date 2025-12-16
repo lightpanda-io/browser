@@ -45,8 +45,8 @@
     const container = $('#container');
 
     // Empty selectors
-    testing.expectError("Syntax Error", () => container.querySelector(''));
-    testing.expectError("Syntax Error", () => document.querySelectorAll(''));
+    testing.expectError("SyntaxError: Syntax Error", () => container.querySelector(''));
+    testing.expectError("SyntaxError: Syntax Error", () => document.querySelectorAll(''));
 }
 </script>
 

@@ -23,7 +23,7 @@
 <main>Main content</main>
 
 <script id=byId name="test1">
-  testing.expectError("Syntax Error", () => document.querySelector(''));
+  testing.expectError("SyntaxError: Syntax Error", () => document.querySelector(''));
   testing.withError((err) => {
     testing.expectEqual(12, err.code);
     testing.expectEqual("SyntaxError", err.name);

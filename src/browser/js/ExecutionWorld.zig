@@ -91,8 +91,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         const global_template = js_global.getInstanceTemplate();
         global_template.setInternalFieldCount(1);
 
-        // Configure the missing property callback on the global
-        // object.
+        // Configure the missing property callback on the global object.
         if (global_callback != null) {
             const configuration = v8.NamedPropertyHandlerConfiguration{
                 .getter = struct {
@@ -162,15 +161,17 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
     }
     errdefer if (enter) handle_scope.?.deinit();
 
+    const js_global = v8_context.getGlobal();
     {
         // If we want to overwrite the built-in console, we have to
         // delete the built-in one.
-        const js_obj = v8_context.getGlobal();
+
         const console_key = v8.String.initUtf8(isolate, "console");
-        if (js_obj.deleteValue(v8_context, console_key) == false) {
+        if (js_global.deleteValue(v8_context, console_key) == false) {
             return error.ConsoleDeleteError;
         }
     }
+
     const context_id = env.context_id;
     env.context_id = context_id + 1;
 
@@ -195,17 +196,11 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         v8_context.setEmbedderData(1, data);
     }
 
-    // @ZIGDOM
     // Custom exception
-    // NOTE: there is no way in v8 to subclass the Error built-in type
-    // TODO: this is an horrible hack
-    // inline for (JsApi) |JsApi| {
-    //     const Struct = s.defaultValue().?;
-    //     if (@hasDecl(Struct, "ErrorSet")) {
-    //         const script = comptime JsApi.Meta.name ++ ".prototype.__proto__ = Error.prototype";
-    //         _ = try context.exec(script, "errorSubclass");
-    //     }
-    // }
+    // TODO: this is an horrible hack, I can't figure out how to do this cleanly.
+    {
+        _ = try context.exec("DOMException.prototype.__proto__ = Error.prototype", "errorSubclass");
+    }
 
     try context.setupGlobal();
     return context;

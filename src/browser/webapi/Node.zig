@@ -190,11 +190,26 @@ pub fn parentElement(self: *const Node) ?*Element {
     return parent.is(Element);
 }
 
+// Validates that a node can be inserted as a child of parent.
+fn validateNodeInsertion(parent: *Node, node: *Node) !void {
+    // Check if parent is a valid type to have children
+    if (parent._type != .document and parent._type != .element and parent._type != .document_fragment) {
+        return error.HierarchyError;
+    }
+
+    // Check if node contains parent (would create a cycle)
+    if (node.contains(parent)) {
+        return error.HierarchyError;
+    }
+}
+
 pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
     if (child.is(DocumentFragment)) |_| {
         try page.appendAllChildren(child, self);
         return child;
     }
+
+    try validateNodeInsertion(self, child);
 
     page.domChanged();
 
@@ -435,6 +450,8 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
         return new_node;
     }
 
+    try validateNodeInsertion(self, new_node);
+
     const child_already_connected = new_node.isConnected();
     // Check if we're adopting the node to a different document
     const child_root = new_node.getRootNode(null);
@@ -464,12 +481,8 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, page: *Page
     if (old_child._parent == null or old_child._parent.? != self) {
         return error.HierarchyError;
     }
-    if (self._type != .document and self._type != .element) {
-        return error.HierarchyError;
-    }
-    if (new_child.contains(self)) {
-        return error.HierarchyError;
-    }
+
+    try validateNodeInsertion(self, new_child);
 
     _ = try self.insertBefore(new_child, old_child, page);
     page.removeNode(self, old_child, .{ .will_be_reconnected = false });
@@ -840,7 +853,7 @@ pub const JsApi = struct {
     pub const previousSibling = bridge.accessor(Node.previousSibling, null, .{});
     pub const parentNode = bridge.accessor(Node.parentNode, null, .{});
     pub const parentElement = bridge.accessor(Node.parentElement, null, .{});
-    pub const appendChild = bridge.function(Node.appendChild, .{});
+    pub const appendChild = bridge.function(Node.appendChild, .{ .dom_exception = true });
     pub const childNodes = bridge.accessor(Node.childNodes, null, .{});
     pub const isConnected = bridge.accessor(Node.isConnected, null, .{});
     pub const ownerDocument = bridge.accessor(Node.ownerDocument, null, .{});

@@ -24,7 +24,7 @@
 <script id=errors>
 {
   const root = $('#root');
-  testing.expectError("Syntax Error", () => root.querySelectorAll(''));
+  testing.expectError("SyntaxError: Syntax Error", () => root.querySelectorAll(''));
   testing.withError((err) => {
     testing.expectEqual(12, err.code);
     testing.expectEqual("SyntaxError", err.name);

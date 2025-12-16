@@ -23,16 +23,16 @@ const Page = @import("../Page.zig");
 const DOMException = @This();
 
 _code: Code = .none,
-_custom_message: ?[]const u8 = null,
 _custom_name: ?[]const u8 = null,
+_custom_message: ?[]const u8 = null,
 
 pub fn init(message: ?[]const u8, name: ?[]const u8) DOMException {
     // If name is provided, try to map it to a legacy code
     const code = if (name) |n| Code.fromName(n) else .none;
     return .{
         ._code = code,
-        ._custom_message = message,
         ._custom_name = name,
+        ._custom_message = message,
     };
 }
 
@@ -104,8 +104,8 @@ pub fn getMessage(self: *const DOMException) []const u8 {
     }
     return switch (self._code) {
         .none => "",
-        .invalid_character_error => "Error: Invalid Character",
-        .index_size_error => "IndexSizeError: Index or size is negative or greater than the allowed amount",
+        .invalid_character_error => "Invalid Character",
+        .index_size_error => "Index or size is negative or greater than the allowed amount",
         .syntax_error => "Syntax Error",
         .not_supported => "Not Supported",
         .not_found => "Not Found",
@@ -114,14 +114,17 @@ pub fn getMessage(self: *const DOMException) []const u8 {
     };
 }
 
-pub fn toString(self: *const DOMException) []const u8 {
-    if (self._custom_message) |msg| {
-        return msg;
-    }
-    return switch (self._code) {
-        .none => "Error",
-        else => self.getMessage(),
+pub fn toString(self: *const DOMException, page: *Page) ![]const u8 {
+    const msg = blk: {
+        if (self._custom_message) |msg| {
+            break :blk msg;
+        }
+        switch (self._code) {
+            .none => return "Error",
+            else => break :blk self.getMessage(),
+        }
     };
+    return std.fmt.bufPrint(&page.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
 }
 
 pub fn className(_: *const DOMException) []const u8 {
