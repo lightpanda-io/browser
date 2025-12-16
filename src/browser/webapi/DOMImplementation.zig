@@ -21,14 +21,17 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
+const Document = @import("Document.zig");
+const HTMLDocument = @import("HTMLDocument.zig");
 const DocumentType = @import("DocumentType.zig");
 
 const DOMImplementation = @This();
 
 pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, page: *Page) !*DocumentType {
     const name = try page.dupeString(qualified_name);
-    const pub_id = try page.dupeString(public_id orelse "");
-    const sys_id = try page.dupeString(system_id orelse "");
+    // Firefox converts null to the string "null", not empty string
+    const pub_id = if (public_id) |p| try page.dupeString(p) else "null";
+    const sys_id = if (system_id) |s| try page.dupeString(s) else "null";
 
     const doctype = try page._factory.node(DocumentType{
         ._proto = undefined,
@@ -40,7 +43,60 @@ pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u
     return doctype;
 }
 
-pub fn hasFeature(_: *const DOMImplementation, _: []const u8, _: ?[]const u8) bool {
+pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page: *Page) !*Document {
+    const document = (try page._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
+    document._ready_state = .complete;
+
+    {
+        const doctype = try page._factory.node(DocumentType{
+            ._proto = undefined,
+            ._name = "html",
+            ._public_id = "",
+            ._system_id = "",
+        });
+        _ = try document.asNode().appendChild(doctype.asNode(), page);
+    }
+
+    const html_node = try page.createElement(null, "html", null);
+    _ = try document.asNode().appendChild(html_node, page);
+
+    const head_node = try page.createElement(null, "head", null);
+    _ = try html_node.appendChild(head_node, page);
+
+    if (title) |t| {
+        const title_node = try page.createElement(null, "title", null);
+        _ = try head_node.appendChild(title_node, page);
+        const text_node = try page.createTextNode(t);
+        _ = try title_node.appendChild(text_node, page);
+    }
+
+    const body_node = try page.createElement(null, "body", null);
+    _ = try html_node.appendChild(body_node, page);
+
+    return document;
+}
+
+pub fn createDocument(_: *const DOMImplementation, namespace: ?[]const u8, qualified_name: ?[]const u8, doctype: ?*DocumentType, page: *Page) !*Document {
+    // Create XML Document
+    const document = (try page._factory.document(Node.Document.XMLDocument{ ._proto = undefined })).asDocument();
+
+    // Append doctype if provided
+    if (doctype) |dt| {
+        _ = try document.asNode().appendChild(dt.asNode(), page);
+    }
+
+    // Create and append root element if qualified_name provided
+    if (qualified_name) |qname| {
+        if (qname.len > 0) {
+            const root = try page.createElement(namespace, qname, null);
+            _ = try document.asNode().appendChild(root, page);
+        }
+    }
+
+    return document;
+}
+
+pub fn hasFeature(_: *const DOMImplementation, _: ?[]const u8, _: ?[]const u8) bool {
     // Modern DOM spec says this should always return true
     // This method is deprecated and kept for compatibility only
     return true;
@@ -61,6 +117,8 @@ pub const JsApi = struct {
     };
 
     pub const createDocumentType = bridge.function(DOMImplementation.createDocumentType, .{ .dom_exception = true });
+    pub const createDocument = bridge.function(DOMImplementation.createDocument, .{});
+    pub const createHTMLDocument = bridge.function(DOMImplementation.createHTMLDocument, .{});
     pub const hasFeature = bridge.function(DOMImplementation.hasFeature, .{});
 
     pub const toString = bridge.function(_toString, .{});

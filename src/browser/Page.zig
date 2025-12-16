@@ -1492,6 +1492,35 @@ pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
     return cd.asNode();
 }
 
+pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []const u8) !*Node {
+    // Validate target doesn't contain "?>"
+    if (std.mem.indexOf(u8, target, "?>") != null) {
+        return error.InvalidCharacterError;
+    }
+
+    // Validate target follows XML name rules (similar to attribute name validation)
+    try Element.Attribute.validateAttributeName(target);
+
+    const owned_target = try self.dupeString(target);
+    const owned_data = try self.dupeString(data);
+
+    const pi = try self._factory.create(CData.ProcessingInstruction{
+        ._proto = undefined,
+        ._target = owned_target,
+    });
+
+    const cd = try self._factory.node(CData{
+        ._proto = undefined,
+        ._type = .{ .processing_instruction = pi },
+        ._data = owned_data,
+    });
+
+    // Set up the back pointer from ProcessingInstruction to CData
+    pi._proto = cd;
+
+    return cd.asNode();
+}
+
 pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {
     if (String.intern(value)) |v| {
         return v;

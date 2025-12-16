@@ -71,8 +71,3 @@ pub const JsApi = struct {
         return self.className();
     }
 };
-
-const testing = @import("../../testing.zig");
-test "WebApi: DOMImplementation" {
-    try testing.htmlRunner("domimplementation.html", .{});
-}

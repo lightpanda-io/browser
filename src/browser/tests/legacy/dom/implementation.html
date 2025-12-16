@@ -8,7 +8,7 @@
   testing.expectEqual("[object HTMLDocument]", doc.toString());
   testing.expectEqual("foo", doc.title);
   testing.expectEqual("[object HTMLBodyElement]", doc.body.toString());
-  testing.expectEqual("[object Document]", impl.createDocument(null, 'foo').toString());
+  testing.expectEqual("[object XMLDocument]", impl.createDocument(null, 'foo').toString());
   testing.expectEqual("[object DocumentType]", impl.createDocumentType('foo', 'bar', 'baz').toString());
   testing.expectEqual(true, impl.hasFeature());
 </script>

@@ -229,8 +229,8 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
         .element => {
             var it = self.childrenIterator();
             while (it.next()) |child| {
-                // ignore comments and TODO processing instructions.
-                if (child.is(CData.Comment) != null) {
+                // ignore comments and processing instructions.
+                if (child.is(CData.Comment) != null or child.is(CData.ProcessingInstruction) != null) {
                     continue;
                 }
                 try child.getTextContent(writer);
@@ -270,6 +270,7 @@ pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
             .text => "#text",
             .cdata_section => "#cdata-section",
             .comment => "#comment",
+            .processing_instruction => |pi| pi._target,
         },
         .document => "#document",
         .document_type => |dt| dt.getName(),
@@ -285,6 +286,7 @@ pub fn getNodeType(self: *const Node) u8 {
         .cdata => |cd| switch (cd._type) {
             .text => 3,
             .cdata_section => 4,
+            .processing_instruction => 7,
             .comment => 8,
         },
         .document => 9,
@@ -603,6 +605,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, Str
                 .text => page.createTextNode(data),
                 .cdata_section => page.createCDATASection(data),
                 .comment => page.createComment(data),
+                .processing_instruction => |pi| page.createProcessingInstruction(pi._target, data),
             };
         },
         .element => |el| return el.cloneElement(deep, page),

@@ -35,6 +35,7 @@ const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 
 pub const HTMLDocument = @import("HTMLDocument.zig");
+pub const XMLDocument = @import("XMLDocument.zig");
 
 const Document = @This();
 
@@ -50,6 +51,7 @@ _style_sheets: ?*StyleSheetList = null,
 pub const Type = union(enum) {
     generic,
     html: *HTMLDocument,
+    xml: *XMLDocument,
 };
 
 pub fn is(self: *Document, comptime T: type) ?*T {
@@ -57,6 +59,11 @@ pub fn is(self: *Document, comptime T: type) ?*T {
         .html => |html| {
             if (T == HTMLDocument) {
                 return html;
+            }
+        },
+        .xml => |xml| {
+            if (T == XMLDocument) {
+                return xml;
             }
         },
         .generic => {},
@@ -83,6 +90,7 @@ pub fn getURL(_: *const Document, page: *const Page) [:0]const u8 {
 pub fn getContentType(self: *const Document) []const u8 {
     return switch (self._type) {
         .html => "text/html",
+        .xml => "application/xml",
         .generic => "application/xml",
     };
 }
@@ -217,6 +225,7 @@ pub fn className(self: *const Document) []const u8 {
     return switch (self._type) {
         .generic => "[object Document]",
         .html => "[object HTMLDocument]",
+        .xml => "[object XMLDocument]",
     };
 }
 
@@ -239,8 +248,13 @@ pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node 
 pub fn createCDATASection(self: *const Document, data: []const u8, page: *Page) !*Node {
     switch (self._type) {
         .html => return error.NotSupported,
+        .xml => return page.createCDATASection(data),
         .generic => return page.createCDATASection(data),
     }
+}
+
+pub fn createProcessingInstruction(_: *const Document, target: []const u8, data: []const u8, page: *Page) !*Node {
+    return page.createProcessingInstruction(target, data);
 }
 
 const Range = @import("Range.zig");
@@ -432,6 +446,7 @@ pub const JsApi = struct {
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
     pub const createAttribute = bridge.function(Document.createAttribute, .{ .dom_exception = true });
     pub const createCDATASection = bridge.function(Document.createCDATASection, .{ .dom_exception = true });
+    pub const createProcessingInstruction = bridge.function(Document.createProcessingInstruction, .{ .dom_exception = true });
     pub const createRange = bridge.function(Document.createRange, .{});
     pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});

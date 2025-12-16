@@ -332,6 +332,8 @@ fn _getInnerText(self: *Element, writer: *std.Io.Writer, state: *innerTextState)
                 // CDATA sections should not be used within HTML. They are
                 // considered comments and are not displayed.
                 .cdata_section => {},
+                // Processing instructions are not displayed in innerText
+                .processing_instruction => {},
             },
             .document => {},
             .document_type => {},

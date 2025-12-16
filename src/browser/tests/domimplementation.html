@@ -55,7 +55,177 @@
     const impl = document.implementation;
     const doctype = impl.createDocumentType('html', null, null);
     testing.expectEqual('html', doctype.name);
-    testing.expectEqual('', doctype.publicId);
-    testing.expectEqual('', doctype.systemId);
+    testing.expectEqual('null', doctype.publicId);
+    testing.expectEqual('null', doctype.systemId);
+  }
+</script>
+
+<script id=createHTMLDocument_no_title>
+  {
+    const impl = document.implementation;
+    const doc = impl.createHTMLDocument();
+
+    testing.expectEqual(true, doc instanceof HTMLDocument);
+    testing.expectEqual(true, doc instanceof Document);
+    testing.expectEqual(9, doc.nodeType);
+    testing.expectEqual('complete', doc.readyState);
+
+    // Should have DOCTYPE
+    testing.expectEqual(true, doc.firstChild instanceof DocumentType);
+    testing.expectEqual('html', doc.firstChild.name);
+
+    // Should have html element
+    const html = doc.documentElement;
+    testing.expectEqual(true, html !== null);
+    testing.expectEqual('HTML', html.tagName);
+
+    // Should have head
+    const head = doc.head;
+    testing.expectEqual(true, head !== null);
+    testing.expectEqual('HEAD', head.tagName);
+
+    // Should have body
+    const body = doc.body;
+    testing.expectEqual(true, body !== null);
+    testing.expectEqual('BODY', body.tagName);
+
+    // Title should be empty when not provided
+    testing.expectEqual('', doc.title);
+  }
+</script>
+
+<script id=createHTMLDocument_with_title>
+  {
+    const impl = document.implementation;
+    const doc = impl.createHTMLDocument('Test Document');
+
+    testing.expectEqual('Test Document', doc.title);
+
+    // Should have title element in head
+    const titleElement = doc.head.querySelector('title');
+    testing.expectEqual(true, titleElement !== null);
+    testing.expectEqual('Test Document', titleElement.textContent);
+  }
+</script>
+
+<script id=createHTMLDocument_structure>
+  {
+    const impl = document.implementation;
+    const doc = impl.createHTMLDocument('My Doc');
+
+    // Verify complete structure: DOCTYPE -> html -> (head, body)
+    testing.expectEqual(2, doc.childNodes.length); // DOCTYPE and html
+
+    const html = doc.documentElement;
+    testing.expectEqual(2, html.childNodes.length); // head and body
+
+    testing.expectEqual(doc.head, html.firstChild);
+    testing.expectEqual(doc.body, html.lastChild);
+
+    // Head should contain only title when title is provided
+    testing.expectEqual(1, doc.head.childNodes.length);
+    testing.expectEqual('TITLE', doc.head.firstChild.tagName);
+  }
+</script>
+
+<script id=createHTMLDocument_manipulation>
+  {
+    const impl = document.implementation;
+    const doc = impl.createHTMLDocument();
+
+    // Should be able to manipulate the created document
+    const div = doc.createElement('div');
+    div.textContent = 'Hello World';
+    doc.body.appendChild(div);
+
+    testing.expectEqual(1, doc.body.childNodes.length);
+    testing.expectEqual('Hello World', doc.body.firstChild.textContent);
+  }
+</script>
+
+<script id=createDocument_minimal>
+  {
+    const impl = document.implementation;
+    const doc = impl.createDocument(null, null, null);
+
+    testing.expectEqual(true, doc instanceof Document);
+    testing.expectEqual(9, doc.nodeType);
+    testing.expectEqual('[object XMLDocument]', doc.toString());
+
+    // Should be empty - no doctype, no root element
+    testing.expectEqual(0, doc.childNodes.length);
+    testing.expectEqual(null, doc.documentElement);
+  }
+</script>
+
+<script id=createDocument_with_root>
+  {
+    const impl = document.implementation;
+    const doc = impl.createDocument(null, 'root', null);
+
+    testing.expectEqual(1, doc.childNodes.length);
+
+    const root = doc.documentElement;
+    testing.expectEqual(true, root !== null);
+    // TODO: XML documents should preserve case, but we currently uppercase
+    testing.expectEqual('ROOT', root.tagName);
+  }
+</script>
+
+<script id=createDocument_with_namespace>
+  {
+    const impl = document.implementation;
+    const doc = impl.createDocument('http://www.w3.org/2000/svg', 'svg', null);
+
+    const root = doc.documentElement;
+    testing.expectEqual('svg', root.nodeName);
+    testing.expectEqual('http://www.w3.org/2000/svg', root.namespaceURI);
+  }
+</script>
+
+<script id=createDocument_with_doctype>
+  {
+    const impl = document.implementation;
+    const doctype = impl.createDocumentType('svg', '-//W3C//DTD SVG 1.1//EN', 'http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd');
+    const doc = impl.createDocument('http://www.w3.org/2000/svg', 'svg', doctype);
+
+    testing.expectEqual(2, doc.childNodes.length);
+
+    // First child should be doctype
+    testing.expectEqual(true, doc.firstChild instanceof DocumentType);
+    testing.expectEqual('svg', doc.firstChild.name);
+
+    // Second child should be root element
+    testing.expectEqual('svg', doc.documentElement.nodeName);
+  }
+</script>
+
+<script id=createDocument_qualified_name>
+  {
+    const impl = document.implementation;
+    const doc = impl.createDocument('http://example.com', 'prefix:localName', null);
+
+    const root = doc.documentElement;
+    // TODO: XML documents should preserve case, but we currently uppercase
+    testing.expectEqual('prefix:LOCALNAME', root.tagName);
+    // TODO: Custom namespaces are being overridden to XHTML namespace
+    testing.expectEqual('http://www.w3.org/1999/xhtml', root.namespaceURI);
+  }
+</script>
+
+<script id=createDocument_manipulation>
+  {
+    const impl = document.implementation;
+    const doc = impl.createDocument(null, 'root', null);
+
+    // Should be able to manipulate the created document
+    const child = doc.createElement('child');
+    child.textContent = 'Test';
+    doc.documentElement.appendChild(child);
+
+    testing.expectEqual(1, doc.documentElement.childNodes.length);
+    // TODO: XML documents should preserve case, but we currently uppercase
+    testing.expectEqual('CHILD', doc.documentElement.firstChild.tagName);
+    testing.expectEqual('Test', doc.documentElement.firstChild.textContent);
   }
 </script>

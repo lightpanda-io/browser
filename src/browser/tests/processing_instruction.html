@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=basic>
+{
+  const pi = document.createProcessingInstruction('xml-stylesheet', 'href="style.css"');
+  testing.expectEqual('object', typeof pi);
+  testing.expectEqual(true, pi instanceof ProcessingInstruction);
+  testing.expectEqual(true, pi instanceof Node);
+}
+</script>
+
+<script id=properties>
+{
+  const pi = document.createProcessingInstruction('foo', 'bar');
+  testing.expectEqual('foo', pi.target);
+  testing.expectEqual('bar', pi.data);
+  testing.expectEqual(3, pi.length);
+  testing.expectEqual(7, pi.nodeType);
+  testing.expectEqual('foo', pi.nodeName);
+  testing.expectEqual('bar', pi.nodeValue);
+  testing.expectEqual('bar', pi.textContent);
+}
+</script>
+
+<script id=empty_data>
+{
+  const pi = document.createProcessingInstruction('target', '');
+  testing.expectEqual('target', pi.target);
+  testing.expectEqual('', pi.data);
+  testing.expectEqual(0, pi.length);
+}
+</script>
+
+<script id=set_data>
+{
+  const pi = document.createProcessingInstruction('foo', 'bar');
+  pi.data = 'baz';
+  testing.expectEqual('baz', pi.data);
+  testing.expectEqual('foo', pi.target); // target shouldn't change
+  testing.expectEqual(3, pi.length);
+}
+</script>
+
+<script id=set_textContent>
+{
+  const pi = document.createProcessingInstruction('target', 'original');
+  pi.textContent = 'modified';
+  testing.expectEqual('modified', pi.data);
+  testing.expectEqual('modified', pi.textContent);
+}
+</script>
+
+<script id=set_nodeValue>
+{
+  const pi = document.createProcessingInstruction('target', 'original');
+  pi.nodeValue = 'changed';
+  testing.expectEqual('changed', pi.data);
+  testing.expectEqual('changed', pi.nodeValue);
+}
+</script>
+
+<script id=cloneNode>
+{
+  const pi = document.createProcessingInstruction('xml-stylesheet', 'href="style.css"');
+  const clone = pi.cloneNode();
+  testing.expectEqual('xml-stylesheet', clone.target);
+  testing.expectEqual('href="style.css"', clone.data);
+  testing.expectEqual(7, clone.nodeType);
+  testing.expectEqual(true, clone instanceof ProcessingInstruction);
+
+  // Clone should be a different object
+  testing.expectEqual(false, pi === clone);
+
+  // Modifying clone shouldn't affect original
+  clone.data = 'different';
+  testing.expectEqual('href="style.css"', pi.data);
+  testing.expectEqual('different', clone.data);
+}
+</script>
+
+<script id=isEqualNode>
+{
+  const pi1 = document.createProcessingInstruction('target1', 'data1');
+  const pi2 = document.createProcessingInstruction('target2', 'data2');
+  const pi3 = document.createProcessingInstruction('target1', 'data1');
+  const pi4 = document.createProcessingInstruction('target1', 'data2');
+
+  testing.expectEqual(true, pi1.isEqualNode(pi1));
+  testing.expectEqual(true, pi1.isEqualNode(pi3));
+  testing.expectEqual(false, pi1.isEqualNode(pi2));
+  testing.expectEqual(false, pi2.isEqualNode(pi3));
+  testing.expectEqual(false, pi1.isEqualNode(pi4)); // different data
+  testing.expectEqual(false, pi1.isEqualNode(document));
+  testing.expectEqual(false, document.isEqualNode(pi1));
+}
+</script>
+
+<script id=invalid_target_question_mark_gt>
+{
+  try {
+    document.createProcessingInstruction('tar?>get', 'data');
+    testing.fail('Should throw InvalidCharacterError for "?>" in target');
+  } catch (e) {
+    testing.expectEqual('InvalidCharacterError', e.name);
+  }
+}
+</script>
+
+<script id=invalid_target_empty>
+{
+  try {
+    document.createProcessingInstruction('', 'data');
+    testing.fail('Should throw InvalidCharacterError for empty target');
+  } catch (e) {
+    testing.expectEqual('InvalidCharacterError', e.name);
+  }
+}
+</script>
+
+<script id=invalid_target_starts_with_number>
+{
+  try {
+    document.createProcessingInstruction('0target', 'data');
+    testing.fail('Should throw InvalidCharacterError for target starting with number');
+  } catch (e) {
+    testing.expectEqual('InvalidCharacterError', e.name);
+  }
+}
+</script>
+
+<script id=valid_target_with_colon>
+{
+  // xml:foo should be valid
+  const pi = document.createProcessingInstruction('xml:stylesheet', 'data');
+  testing.expectEqual('xml:stylesheet', pi.target);
+}
+</script>
+
+<script id=characterData_methods>
+{
+  const pi = document.createProcessingInstruction('target', 'abcdef');
+
+  // substringData
+  testing.expectEqual('bcd', pi.substringData(1, 3));
+  testing.expectEqual('def', pi.substringData(3, 10)); // should clamp to end
+
+  // appendData
+  pi.appendData('ghi');
+  testing.expectEqual('abcdefghi', pi.data);
+
+  // insertData
+  pi.insertData(3, 'XXX');
+  testing.expectEqual('abcXXXdefghi', pi.data);
+
+  // deleteData
+  pi.deleteData(3, 3);
+  testing.expectEqual('abcdefghi', pi.data);
+
+  // replaceData
+  pi.replaceData(3, 3, 'YYY');
+  testing.expectEqual('abcYYYghi', pi.data);
+}
+</script>
+
+<script id=owner_document>
+{
+  const pi = document.createProcessingInstruction('target', 'data');
+  testing.expectEqual(document, pi.ownerDocument);
+}
+</script>

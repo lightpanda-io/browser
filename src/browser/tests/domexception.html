@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<head>
+  <title>DOMException Test</title>
+  <script src="testing.js"></script>
+</head>
+
+<body>
+</body>
+
+<script id=constructor_no_args>
+  {
+    const ex = new DOMException();
+    testing.expectEqual('Error', ex.toString());
+    testing.expectEqual('Error', ex.name);
+    testing.expectEqual('', ex.message);
+    testing.expectEqual(0, ex.code);
+  }
+</script>
+
+<script id=constructor_with_message>
+  {
+    const ex = new DOMException('Something went wrong');
+    testing.expectEqual('Error', ex.name);
+    testing.expectEqual('Something went wrong', ex.message);
+    testing.expectEqual(0, ex.code);
+  }
+</script>
+
+<script id=constructor_with_message_and_name>
+  {
+    const ex = new DOMException('Custom error message', 'NotFoundError');
+    testing.expectEqual('NotFoundError', ex.name);
+    testing.expectEqual('Custom error message', ex.message);
+    testing.expectEqual(8, ex.code);
+  }
+</script>
+
+<script id=legacy_error_codes>
+  {
+    // Test standard errors with legacy codes
+    const errors = [
+      { name: 'IndexSizeError', code: 1 },
+      { name: 'HierarchyRequestError', code: 3 },
+      { name: 'WrongDocumentError', code: 4 },
+      { name: 'InvalidCharacterError', code: 5 },
+      { name: 'NoModificationAllowedError', code: 7 },
+      { name: 'NotFoundError', code: 8 },
+      { name: 'NotSupportedError', code: 9 },
+      { name: 'InUseAttributeError', code: 10 },
+      { name: 'InvalidStateError', code: 11 },
+      { name: 'SyntaxError', code: 12 },
+      { name: 'InvalidModificationError', code: 13 },
+      { name: 'NamespaceError', code: 14 },
+      { name: 'InvalidAccessError', code: 15 },
+      { name: 'SecurityError', code: 18 },
+      { name: 'NetworkError', code: 19 },
+      { name: 'AbortError', code: 20 },
+      { name: 'URLMismatchError', code: 21 },
+      { name: 'QuotaExceededError', code: 22 },
+      { name: 'TimeoutError', code: 23 },
+      { name: 'InvalidNodeTypeError', code: 24 },
+      { name: 'DataCloneError', code: 25 },
+    ];
+
+    for (const { name, code } of errors) {
+      const ex = new DOMException('test', name);
+      testing.expectEqual(name, ex.name);
+      testing.expectEqual(code, ex.code);
+      testing.expectEqual('test', ex.message);
+    }
+  }
+</script>
+
+<script id=custom_error_name>
+  {
+    // Non-standard error names should have code 0
+    const ex = new DOMException('Custom message', 'MyCustomError');
+    testing.expectEqual('MyCustomError', ex.name);
+    testing.expectEqual('Custom message', ex.message);
+    testing.expectEqual(0, ex.code);
+  }
+</script>
+
+<script id=modern_errors_no_code>
+  {
+    // Modern errors that don't have legacy codes
+    const modernErrors = [
+      'EncodingError',
+      'NotReadableError',
+      'UnknownError',
+      'ConstraintError',
+      'DataError',
+      'TransactionInactiveError',
+      'ReadOnlyError',
+      'VersionError',
+      'OperationError',
+      'NotAllowedError'
+    ];
+
+    for (const name of modernErrors) {
+      const ex = new DOMException('test', name);
+      testing.expectEqual(name, ex.name);
+      testing.expectEqual(0, ex.code);
+    }
+  }
+</script>
+
+<script id=thrown_exception>
+  {
+    try {
+      throw new DOMException('Operation failed', 'InvalidStateError');
+    } catch (e) {
+      testing.expectEqual('InvalidStateError', e.name);
+      testing.expectEqual('Operation failed', e.message);
+      testing.expectEqual(11, e.code);
+    }
+  }
+</script>
+
+<div id="content">
+  <a id="link" href="foo" class="ok">OK</a>
+</div>
+<!-- <script id=hierarchy_error>
+  let link = $('#link');
+  let content = $('#content');
+
+  testing.withError((err) => {
+    const msg = "Failed to execute 'appendChild' on 'Node': The new child element contains the parent.";
+    testing.expectEqual(3, err.code);
+    testing.expectEqual(msg, err.message);
+    testing.expectEqual('HierarchyRequestError: ' + msg, err.toString());
+    testing.expectEqual(true, err instanceof DOMException);
+    testing.expectEqual(true, err instanceof Error);
+  }, () => link.appendChild(content));
+</script> -->

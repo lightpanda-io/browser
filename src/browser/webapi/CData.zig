@@ -25,6 +25,7 @@ const Node = @import("Node.zig");
 pub const Text = @import("cdata/Text.zig");
 pub const Comment = @import("cdata/Comment.zig");
 pub const CDATASection = @import("cdata/CDATASection.zig");
+pub const ProcessingInstruction = @import("cdata/ProcessingInstruction.zig");
 
 const CData = @This();
 
@@ -38,6 +39,7 @@ pub const Type = union(enum) {
     // This should be under Text, but that would require storing a _type union
     // in text, which would add 8 bytes to every text node.
     cdata_section: CDATASection,
+    processing_instruction: *ProcessingInstruction,
 };
 
 pub fn asNode(self: *CData) *Node {
@@ -58,6 +60,7 @@ pub fn className(self: *const CData) []const u8 {
         .text => "[object Text]",
         .comment => "[object Comment]",
         .cdata_section => "[object CDATASection]",
+        .processing_instruction => "[object ProcessingInstruction]",
     };
 }
 
@@ -139,6 +142,7 @@ pub fn format(self: *const CData, writer: *std.io.Writer) !void {
         .text => writer.print("<text>{s}</text>", .{self._data}),
         .comment => writer.print("<!-- {s} -->", .{self._data}),
         .cdata_section => writer.print("<![CDATA[{s}]]>", .{self._data}),
+        .processing_instruction => |pi| writer.print("<?{s} {s}?>", .{ pi._target, self._data }),
     };
 }
 
@@ -147,6 +151,18 @@ pub fn getLength(self: *const CData) usize {
 }
 
 pub fn isEqualNode(self: *const CData, other: *const CData) bool {
+    if (std.meta.activeTag(self._type) != std.meta.activeTag(other._type)) {
+        return false;
+    }
+
+    if (self._type == .processing_instruction) {
+        @branchHint(.unlikely);
+        if (std.mem.eql(u8, self._type.processing_instruction._target, other._type.processing_instruction._target) == false) {
+            return false;
+        }
+        // if the _targets are equal, we still want to compare the data
+    }
+
     return std.mem.eql(u8, self.getData(), other.getData());
 }
 
