@@ -62,6 +62,7 @@ fn collectAssignedNodes(self: *Slot, comptime elements: bool, coll: CollectionTy
     const allocator = page.call_arena;
 
     const host = shadow_root.getHost();
+    const initial_count = coll.items.len;
     var it = host.asNode().childrenIterator();
     while (it.next()) |child| {
         if (!isAssignedToSlot(child, slot_name)) {
@@ -85,6 +86,20 @@ fn collectAssignedNodes(self: *Slot, comptime elements: bool, coll: CollectionTy
             }
         } else {
             try coll.append(allocator, child);
+        }
+    }
+
+    // If flatten is true and no assigned nodes were found, return fallback content
+    if (opts.flatten and coll.items.len == initial_count) {
+        var child_it = self.asNode().childrenIterator();
+        while (child_it.next()) |child| {
+            if (comptime elements) {
+                if (child.is(Element)) |el| {
+                    try coll.append(allocator, el);
+                }
+            } else {
+                try coll.append(allocator, child);
+            }
         }
     }
 }

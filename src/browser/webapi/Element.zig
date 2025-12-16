@@ -45,6 +45,7 @@ pub const DatasetLookup = std.AutoHashMapUnmanaged(*Element, *DOMStringMap);
 pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
+pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
 
 pub const Namespace = enum(u8) {
     html,
@@ -400,6 +401,14 @@ pub fn setId(self: *Element, value: []const u8, page: *Page) !void {
     return self.setAttributeSafe("id", value, page);
 }
 
+pub fn getSlot(self: *const Element) []const u8 {
+    return self.getAttributeSafe("slot") orelse "";
+}
+
+pub fn setSlot(self: *Element, value: []const u8, page: *Page) !void {
+    return self.setAttributeSafe("slot", value, page);
+}
+
 pub fn getDir(self: *const Element) []const u8 {
     return self.getAttributeSafe("dir") orelse "";
 }
@@ -479,6 +488,10 @@ pub fn getShadowRoot(self: *Element, page: *Page) ?*ShadowRoot {
     const shadow_root = page._element_shadow_roots.get(self) orelse return null;
     if (shadow_root._mode == .closed) return null;
     return shadow_root;
+}
+
+pub fn getAssignedSlot(self: *Element, page: *Page) ?*Html.Slot {
+    return page._element_assigned_slots.get(self);
 }
 
 pub fn attachShadow(self: *Element, mode_str: []const u8, page: *Page) !*ShadowRoot {
@@ -1242,6 +1255,7 @@ pub const JsApi = struct {
 
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
+    pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{});
     pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{});
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
     pub const classList = bridge.accessor(Element.getClassList, null, .{});
@@ -1259,6 +1273,7 @@ pub const JsApi = struct {
     pub const getAttributeNames = bridge.function(Element.getAttributeNames, .{});
     pub const removeAttributeNode = bridge.function(Element.removeAttributeNode, .{ .dom_exception = true });
     pub const shadowRoot = bridge.accessor(Element.getShadowRoot, null, .{});
+    pub const assignedSlot = bridge.accessor(Element.getAssignedSlot, null, .{});
     pub const attachShadow = bridge.function(_attachShadow, .{ .dom_exception = true });
     pub const insertAdjacentHTML = bridge.function(Element.insertAdjacentHTML, .{ .dom_exception = true });
     pub const insertAdjacentElement = bridge.function(Element.insertAdjacentElement, .{ .dom_exception = true });

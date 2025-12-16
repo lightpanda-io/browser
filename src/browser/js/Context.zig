@@ -2007,6 +2007,15 @@ pub fn queueIntersectionDelivery(self: *Context) !void {
     }.run, self.page);
 }
 
+pub fn queueSlotchangeDelivery(self: *Context) !void {
+    self.isolate.enqueueMicrotask(struct {
+        fn run(data: ?*anyopaque) callconv(.c) void {
+            const page: *Page = @ptrCast(@alignCast(data.?));
+            page.deliverSlotchangeEvents();
+        }
+    }.run, self.page);
+}
+
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     self.isolate.enqueueMicrotaskFunc(cb.func.castToFunction());
 }

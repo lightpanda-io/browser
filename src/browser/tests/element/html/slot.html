@@ -382,3 +382,137 @@
     testing.expectTrue(flattened[2] === span);
 }
 </script>
+
+<script id="Slot#assignedSlot_returns_null_when_not_assigned">
+{
+    const div = document.createElement('div');
+    testing.expectEqual(null, div.assignedSlot);
+}
+</script>
+
+<script id="Slot#assignedSlot_property">
+{
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    slot.name = 'header';
+    shadow.appendChild(slot);
+
+    const h1 = document.createElement('h1');
+    h1.setAttribute('slot', 'header');
+    host.appendChild(h1);
+
+    testing.expectEqual(slot, h1.assignedSlot);
+}
+</script>
+
+<script id="Slot#slotchange_on_insertion">
+{
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    slot.name = 'content';
+    shadow.appendChild(slot);
+
+    slot.addEventListener('slotchange', (e) => {
+        const nodes = slot.assignedNodes();
+        testing.expectEqual(1, nodes.length);
+        calls += 1;
+    });
+
+    const div = document.createElement('div');
+    div.setAttribute('slot', 'content');
+    host.appendChild(div);
+
+    testing.eventually(() => {
+        testing.expectEqual(1, calls);
+    });
+}
+</script>
+
+<script id="Slot#slotchange_on_attribute_change">
+{
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    slot.name = 'content';
+    shadow.appendChild(slot);
+
+    const div = document.createElement('div');
+    div.setAttribute('slot', 'content');
+    host.appendChild(div);
+
+    slot.addEventListener('slotchange', (e) => {
+        const nodes = slot.assignedNodes();
+        testing.expectEqual(0, nodes.length);
+        calls += 1;
+    });
+
+    div.setAttribute('slot', 'other');
+
+    testing.eventually(() => {
+        testing.expectEqual(1, calls);
+    });
+}
+</script>
+
+<script id="Slot#slotchange_on_removal">
+{
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    slot.name = 'content';
+    shadow.appendChild(slot);
+
+    const div = document.createElement('div');
+    div.setAttribute('slot', 'content');
+    host.appendChild(div);
+
+    slot.addEventListener('slotchange', (e) => {
+        const nodes = slot.assignedNodes();
+        testing.expectEqual(0, nodes.length);
+        calls += 1;
+    });
+
+    div.remove();
+
+    testing.eventually(() => {
+        testing.expectEqual(1, calls);
+    });
+}
+</script>
+
+<script id="Slot#slotchange_with_slot_property">
+{
+    let calls = 0;
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const slot = document.createElement('slot');
+    slot.name = 'content';
+    shadow.appendChild(slot);
+
+    const div = document.createElement('div');
+    div.slot = 'content';
+    host.appendChild(div);
+
+    slot.addEventListener('slotchange', (e) => {
+        const nodes = slot.assignedNodes();
+        testing.expectEqual(0, nodes.length);
+        calls += 1;
+    });
+
+    div.slot = 'other';
+
+    testing.eventually(() => {
+        testing.expectEqual(1, calls);
+    });
+}
+</script>

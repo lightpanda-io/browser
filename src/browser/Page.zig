@@ -53,7 +53,6 @@ const DocumentFragment = @import("webapi/DocumentFragment.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
-const HtmlScript = @import("webapi/Element.zig").Html.Script;
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -95,6 +94,7 @@ _element_styles: Element.StyleLookup = .{},
 _element_datasets: Element.DatasetLookup = .{},
 _element_class_lists: Element.ClassListLookup = .{},
 _element_shadow_roots: Element.ShadowRootLookup = .{},
+_element_assigned_slots: Element.AssignedSlotLookup = .{},
 
 _script_manager: ScriptManager,
 
@@ -107,6 +107,10 @@ _mutation_delivery_depth: u32 = 0,
 _intersection_observers: std.ArrayList(*IntersectionObserver) = .{},
 _intersection_check_scheduled: bool = false,
 _intersection_delivery_scheduled: bool = false,
+
+// Slots that need slotchange events to be fired
+_slots_pending_slotchange: std.AutoHashMapUnmanaged(*Element.Html.Slot, void) = .{},
+_slotchange_delivery_scheduled: bool = false,
 
 // Lookup for customized built-in elements. Maps element pointer to definition.
 _customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
@@ -242,6 +246,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_datasets = .{};
     self._element_class_lists = .{};
     self._element_shadow_roots = .{};
+    self._element_assigned_slots = .{};
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
 
@@ -251,6 +256,8 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._intersection_observers = .{};
     self._intersection_check_scheduled = false;
     self._intersection_delivery_scheduled = false;
+    self._slots_pending_slotchange = .{};
+    self._slotchange_delivery_scheduled = false;
     self._customized_builtin_definitions = .{};
     self._customized_builtin_connected_callback_invoked = .{};
     self._customized_builtin_disconnected_callback_invoked = .{};
@@ -770,7 +777,7 @@ pub fn tick(self: *Page) void {
     self.js.runMicrotasks();
 }
 
-pub fn scriptAddedCallback(self: *Page, script: *HtmlScript) !void {
+pub fn scriptAddedCallback(self: *Page, script: *Element.Html.Script) !void {
     self._script_manager.addFromElement(script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
@@ -889,6 +896,14 @@ pub fn scheduleIntersectionDelivery(self: *Page) !void {
     try self.js.queueIntersectionDelivery();
 }
 
+pub fn scheduleSlotchangeDelivery(self: *Page) !void {
+    if (self._slotchange_delivery_scheduled) {
+        return;
+    }
+    self._slotchange_delivery_scheduled = true;
+    try self.js.queueSlotchangeDelivery();
+}
+
 pub fn performScheduledIntersectionChecks(self: *Page) void {
     if (!self._intersection_check_scheduled) {
         return;
@@ -941,6 +956,42 @@ pub fn deliverMutations(self: *Page) void {
         const observer = self._mutation_observers.items[i];
         observer.deliverRecords(self) catch |err| {
             log.err(.page, "page.deliverMutations", .{ .err = err });
+        };
+    }
+}
+
+pub fn deliverSlotchangeEvents(self: *Page) void {
+    if (!self._slotchange_delivery_scheduled) {
+        return;
+    }
+    self._slotchange_delivery_scheduled = false;
+
+    // we need to collect the pending slots, and then clear it and THEN exeute
+    // the slot change. We do this in case the slotchange event itself schedules
+    // more slot changes (which should only be executed on the next microtask)
+    const pending = self._slots_pending_slotchange.count();
+
+    var i: usize = 0;
+    var slots = self.call_arena.alloc(*Element.Html.Slot, pending) catch |err| {
+        log.err(.page, "deliverSlotchange.append", .{ .err = err });
+        return;
+    };
+
+    var it = self._slots_pending_slotchange.keyIterator();
+    while (it.next()) |slot| {
+        slots[i] = slot.*;
+        i += 1;
+    }
+    self._slots_pending_slotchange.clearRetainingCapacity();
+
+    for (slots) |slot| {
+        const event = Event.init("slotchange", .{ .bubbles = true }, self) catch |err| {
+            log.err(.page, "deliverSlotchange.init", .{ .err = err });
+            continue;
+        };
+        const target = slot.asNode().asEventTarget();
+        _ = target.dispatchEvent(event, self) catch |err| {
+            log.err(.page, "deliverSlotchange.dispatch", .{ .err = err });
         };
     }
 }
@@ -1564,6 +1615,28 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     child._parent = null;
     child._child_link = .{};
 
+    // Handle slot assignment removal before mutation observers
+    if (child.is(Element)) |el| {
+        // Check if the parent was a shadow host
+        if (parent.is(Element)) |parent_el| {
+            if (self._element_shadow_roots.get(parent_el)) |shadow_root| {
+                // Signal slot changes for any affected slots
+                const slot_name = el.getAttributeSafe("slot") orelse "";
+                var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(shadow_root.asNode(), .{});
+                while (tw.next()) |slot_el| {
+                    if (slot_el.is(Element.Html.Slot)) |slot| {
+                        if (std.mem.eql(u8, slot.getName(), slot_name)) {
+                            self.signalSlotChange(slot);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Remove from assigned slot lookup
+        _ = self._element_assigned_slots.remove(el);
+    }
+
     if (self.hasMutationObservers()) {
         const removed = [_]*Node{child};
         self.childListChange(parent, &.{}, &removed, previous_sibling, next_sibling);
@@ -1733,6 +1806,12 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         return;
     }
 
+    // Update slot assignments for the inserted child if parent is a shadow host
+    // This needs to happen even if the element isn't connected to the document
+    if (child.is(Element)) |el| {
+        self.updateElementAssignedSlot(el);
+    }
+
     if (opts.child_already_connected and !opts.adopting_to_new_document) {
         // The child is already connected in the same document, we don't have to reconnect it
         return;
@@ -1779,6 +1858,16 @@ pub fn attributeChange(self: *Page, element: *Element, name: []const u8, value: 
             log.err(.page, "attributeChange.notifyObserver", .{ .err = err });
         };
     }
+
+    // Handle slot assignment changes
+    if (std.mem.eql(u8, name, "slot")) {
+        self.updateSlotAssignments(element);
+    } else if (std.mem.eql(u8, name, "name")) {
+        // Check if this is a slot element
+        if (element.is(Element.Html.Slot)) |slot| {
+            self.signalSlotChange(slot);
+        }
+    }
 }
 
 pub fn attributeRemove(self: *Page, element: *Element, name: []const u8, old_value: []const u8) void {
@@ -1793,6 +1882,88 @@ pub fn attributeRemove(self: *Page, element: *Element, name: []const u8, old_val
             log.err(.page, "attributeRemove.notifyObserver", .{ .err = err });
         };
     }
+
+    // Handle slot assignment changes
+    if (std.mem.eql(u8, name, "slot")) {
+        self.updateSlotAssignments(element);
+    } else if (std.mem.eql(u8, name, "name")) {
+        // Check if this is a slot element
+        if (element.is(Element.Html.Slot)) |slot| {
+            self.signalSlotChange(slot);
+        }
+    }
+}
+
+fn signalSlotChange(self: *Page, slot: *Element.Html.Slot) void {
+    self._slots_pending_slotchange.put(self.arena, slot, {}) catch |err| {
+        log.err(.page, "signalSlotChange.put", .{ .err = err });
+        return;
+    };
+    self.scheduleSlotchangeDelivery() catch |err| {
+        log.err(.page, "signalSlotChange.schedule", .{ .err = err });
+    };
+}
+
+fn updateSlotAssignments(self: *Page, element: *Element) void {
+    // Find all slots in the shadow root that might be affected
+    const parent = element.asNode()._parent orelse return;
+
+    // Check if parent is a shadow host
+    const parent_el = parent.is(Element) orelse return;
+    _ = self._element_shadow_roots.get(parent_el) orelse return;
+
+    // Signal change for the old slot (if any)
+    if (self._element_assigned_slots.get(element)) |old_slot| {
+        self.signalSlotChange(old_slot);
+    }
+
+    // Update the assignedSlot lookup to the new slot
+    self.updateElementAssignedSlot(element);
+
+    // Signal change for the new slot (if any)
+    if (self._element_assigned_slots.get(element)) |new_slot| {
+        self.signalSlotChange(new_slot);
+    }
+}
+
+fn updateElementAssignedSlot(self: *Page, element: *Element) void {
+    // Remove old assignment
+    _ = self._element_assigned_slots.remove(element);
+
+    // Find the new assigned slot
+    const parent = element.asNode()._parent orelse return;
+    const parent_el = parent.is(Element) orelse return;
+    const shadow_root = self._element_shadow_roots.get(parent_el) orelse return;
+
+    const slot_name = element.getAttributeSafe("slot") orelse "";
+
+    // Recursively search through the shadow root for a matching slot
+    if (findMatchingSlot(shadow_root.asNode(), slot_name)) |slot| {
+        self._element_assigned_slots.put(self.arena, element, slot) catch |err| {
+            log.err(.page, "updateElementAssignedSlot.put", .{ .err = err });
+        };
+    }
+}
+
+fn findMatchingSlot(node: *Node, slot_name: []const u8) ?*Element.Html.Slot {
+    // Check if this node is a matching slot
+    if (node.is(Element)) |el| {
+        if (el.is(Element.Html.Slot)) |slot| {
+            if (std.mem.eql(u8, slot.getName(), slot_name)) {
+                return slot;
+            }
+        }
+    }
+
+    // Search children
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        if (findMatchingSlot(child, slot_name)) |slot| {
+            return slot;
+        }
+    }
+
+    return null;
 }
 
 pub fn hasMutationObservers(self: *const Page) bool {
