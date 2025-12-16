@@ -144,7 +144,6 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._resolver.reject("fetch error", @errorName(err));
 }
 
-
 const testing = @import("../../../testing.zig");
 test "WebApi: fetch" {
     try testing.htmlRunner("net/fetch.html", .{});

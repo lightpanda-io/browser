@@ -113,7 +113,6 @@ pub fn isOK(self: *const Response) bool {
     return self._status >= 200 and self._status <= 299;
 }
 
-
 pub fn getText(self: *const Response, page: *Page) !js.Promise {
     const body = self._body orelse "";
     return page.js.resolvePromise(body);

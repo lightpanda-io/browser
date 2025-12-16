@@ -59,7 +59,7 @@ const Credentials = enum {
 const Cache = enum {
     default,
     @"no-store",
-    @"reload",
+    reload,
     @"no-cache",
     @"force-cache",
     @"only-if-cached",

@@ -243,7 +243,7 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
     const scheme_end = std.mem.indexOf(u8, raw, "://") orelse return null;
 
     // Only HTTP and HTTPS schemes have origins
-    const protocol = raw[0..scheme_end + 1];
+    const protocol = raw[0 .. scheme_end + 1];
     if (!std.mem.eql(u8, protocol, "http:") and !std.mem.eql(u8, protocol, "https:")) {
         return null;
     }
@@ -264,7 +264,7 @@ pub fn getOrigin(allocator: Allocator, raw: [:0]const u8) !?[]const u8 {
     // Check for port in the host:port section
     const host_part = raw[authority_start..authority_end];
     if (std.mem.lastIndexOfScalar(u8, host_part, ':')) |colon_pos_in_host| {
-        const port = host_part[colon_pos_in_host + 1..];
+        const port = host_part[colon_pos_in_host + 1 ..];
 
         // Validate it's actually a port (all digits)
         for (port) |c| {
