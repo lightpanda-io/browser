@@ -47,3 +47,8 @@
     testing.expectEqual(0, evt5.detail);
     testing.expectEqual(100, evt6.detail);
 </script>
+
+<script id=uiEventDetailTypes2>
+    const evt7 = new UIEvent('custom', { bubbles: true });
+    testing.expectEqual(0, evt7.detail);
+</script>

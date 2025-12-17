@@ -23,16 +23,22 @@ const js = @import("../../js/js.zig");
 
 const UIEvent = @This();
 
+_type: Type,
 _proto: *Event,
-_detail: u32,
-_view: *Window,
+_detail: u32 = 0,
+_view: ?*Window = null,
+
+pub const Type = union(enum) {
+    generic,
+    mouse_event: *@import("MouseEvent.zig"),
+};
 
 pub const UIEventOptions = struct {
     detail: u32 = 0,
     view: ?*Window = null,
 };
 
-const Options = Event.inheritOptions(
+pub const Options = Event.inheritOptions(
     UIEvent,
     UIEventOptions,
 );
@@ -43,6 +49,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
     const event = try page._factory.event(
         typ,
         UIEvent{
+            ._type = .generic,
             ._proto = undefined,
             ._detail = opts.detail,
             ._view = opts.view orelse page.window,
@@ -51,6 +58,11 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
 
     Event.populatePrototypes(event, opts);
     return event;
+}
+
+pub fn populateFromOptions(self: *UIEvent, opts: anytype) void {
+    self._detail = opts.detail;
+    self._view = opts.view;
 }
 
 pub fn asEvent(self: *UIEvent) *Event {
@@ -63,8 +75,8 @@ pub fn getDetail(self: *UIEvent) u32 {
 
 // sourceCapabilities not implemented
 
-pub fn getView(self: *UIEvent) *Window {
-    return self._view;
+pub fn getView(self: *UIEvent, page: *Page) *Window {
+    return self._view orelse page.window;
 }
 
 // deprecated `initUIEvent()` not implemented

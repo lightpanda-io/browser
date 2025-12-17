@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
-const reflect = @import("../reflect.zig");
 
 const Page = @import("../Page.zig");
 const EventTarget = @import("EventTarget.zig");
@@ -63,7 +62,7 @@ pub const Type = union(enum) {
     ui_event: *@import("event/UIEvent.zig"),
 };
 
-const Options = struct {
+pub const Options = struct {
     bubbles: bool = false,
     cancelable: bool = false,
     composed: bool = false,
@@ -211,7 +210,7 @@ pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
 
         inline for (t_fields) |field| {
             if (std.mem.eql(u8, field.name, "_proto")) {
-                const ProtoType = reflect.Struct(field.type);
+                const ProtoType = @typeInfo(field.type).pointer.child;
                 if (@hasDecl(ProtoType, "Options")) {
                     const parent_options = @typeInfo(ProtoType.Options);
                     all_fields = all_fields ++ parent_options.@"struct".fields;
