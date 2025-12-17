@@ -31,6 +31,7 @@ _view: ?*Window = null,
 pub const Type = union(enum) {
     generic,
     mouse_event: *@import("MouseEvent.zig"),
+    keyboard_event: *@import("KeyboardEvent.zig"),
 };
 
 pub const UIEventOptions = struct {
