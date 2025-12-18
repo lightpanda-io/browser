@@ -581,6 +581,11 @@ const TestHTTPServer = struct {
             return "text/xml";
         }
 
+        if (std.mem.endsWith(u8, file_path, ".mjs")) {
+            // mjs are ECMAScript modules
+            return "application/json";
+        }
+
         std.debug.print("TestHTTPServer asked to serve an unknown file type: {s}\n", .{file_path});
         return "text/html";
     }
