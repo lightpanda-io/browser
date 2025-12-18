@@ -169,10 +169,8 @@ Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on
-[zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime/) (with v8),
-[Libcurl](https://curl.se/libcurl/),
-[Netsurf libs](https://www.netsurf-browser.org/) and
-[Mimalloc](https://microsoft.github.io/mimalloc).
+[zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime/) (with v8) and
+[Libcurl](https://curl.se/libcurl/).
 
 To be able to build the v8 engine for zig-js-runtime, you have to install some libs:
 
