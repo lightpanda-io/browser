@@ -30,6 +30,7 @@ const Browser = @import("Browser.zig");
 
 const Allocator = std.mem.Allocator;
 const NavigateOpts = Page.NavigateOpts;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Session is like a browser's tab.
 // It owns the js env and the loader for all the pages of the session.
@@ -110,7 +111,9 @@ pub fn createPage(self: *Session) !*Page {
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
 
-    log.debug(.browser, "create page", .{});
+    if (comptime IS_DEBUG) {
+        log.debug(.browser, "create page", .{});
+    }
     // start JS env
     // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
     self.browser.notification.dispatch(.page_created, page);
@@ -129,7 +132,9 @@ pub fn removePage(self: *Session) void {
 
     self.navigation.onRemovePage();
 
-    log.debug(.browser, "remove page", .{});
+    if (comptime IS_DEBUG) {
+        log.debug(.browser, "remove page", .{});
+    }
 }
 
 pub fn currentPage(self: *Session) ?*Page {

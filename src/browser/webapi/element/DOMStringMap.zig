@@ -28,17 +28,17 @@ const DOMStringMap = @This();
 
 _element: *Element,
 
-fn _getProperty(self: *DOMStringMap, name: []const u8, page: *Page) !?[]const u8 {
+fn getProperty(self: *DOMStringMap, name: []const u8, page: *Page) !?[]const u8 {
     const attr_name = try camelToKebab(page.call_arena, name);
     return try self._element.getAttribute(attr_name, page);
 }
 
-fn _setProperty(self: *DOMStringMap, name: []const u8, value: []const u8, page: *Page) !void {
+fn setProperty(self: *DOMStringMap, name: []const u8, value: []const u8, page: *Page) !void {
     const attr_name = try camelToKebab(page.call_arena, name);
     return self._element.setAttributeSafe(attr_name, value, page);
 }
 
-fn _deleteProperty(self: *DOMStringMap, name: []const u8, page: *Page) !void {
+fn deleteProperty(self: *DOMStringMap, name: []const u8, page: *Page) !void {
     const attr_name = try camelToKebab(page.call_arena, name);
     try self._element.removeAttribute(attr_name, page);
 }
@@ -101,5 +101,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(_getProperty, _setProperty, _deleteProperty, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.namedIndexed(getProperty, setProperty, deleteProperty, .{ .null_as_undefined = true });
 };

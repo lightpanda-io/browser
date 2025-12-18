@@ -472,11 +472,13 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
 
-    log.debug(.page, "navigate header", .{
-        .url = self.url,
-        .status = header.status,
-        .content_type = header.contentType(),
-    });
+    if (comptime IS_DEBUG) {
+        log.debug(.page, "navigate header", .{
+            .url = self.url,
+            .status = header.status,
+            .content_type = header.contentType(),
+        });
+    }
 }
 
 fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {

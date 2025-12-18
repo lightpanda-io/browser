@@ -27,6 +27,8 @@ const App = @import("../App.zig");
 const HttpClient = @import("../http/Client.zig");
 const Notification = @import("../Notification.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Session = @import("Session.zig");
 
 // Browser is an instance of the browser.
@@ -104,7 +106,9 @@ pub fn runMicrotasks(self: *const Browser) void {
 
 pub fn runMessageLoop(self: *const Browser) void {
     while (self.env.pumpMessageLoop()) {
-        log.debug(.browser, "pumpMessageLoop", .{});
+        if (comptime IS_DEBUG) {
+            log.debug(.browser, "pumpMessageLoop", .{});
+        }
     }
     self.env.runIdleTasks();
 }

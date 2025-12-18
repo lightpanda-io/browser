@@ -99,6 +99,14 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
     const res = self._response;
     const header = transfer.response_header.?;
 
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "request header", .{
+            .source = "xhr",
+            .url = self._url,
+            .status = header.status,
+        });
+    }
+
     res._status = header.status;
     res._url = try self._page.arena.dupeZ(u8, std.mem.span(header.url));
     res._is_redirected = header.redirect_count > 0;
@@ -135,6 +143,14 @@ fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     self._response._body = self._buf.items;
+
+    log.info(.http, "request complete", .{
+        .source = "fetch",
+        .url = self._url,
+        .status = self._response._status,
+        .len = self._buf.items.len,
+    });
+
     return self._resolver.resolve("fetch done", self._response);
 }
 
