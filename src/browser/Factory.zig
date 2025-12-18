@@ -30,6 +30,7 @@ const SlabAllocator = @import("../slab.zig").SlabAllocator;
 const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
+const UIEvent = @import("webapi/event/UIEvent.zig");
 const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -170,11 +171,11 @@ pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
 pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
 
-    // Special case: Event has a _type_string field, so we need manual setup
     const chain = try PrototypeChain(
         &.{ Event, @TypeOf(child) },
     ).allocate(allocator);
 
+    // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
     event_ptr.* = .{
         ._type = unionInit(Event.Type, chain.get(1)),
@@ -183,6 +184,25 @@ pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
     chain.setLeaf(1, child);
 
     return chain.get(1);
+}
+
+pub fn uiEvent(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+
+    const chain = try PrototypeChain(
+        &.{ Event, UIEvent, @TypeOf(child) },
+    ).allocate(allocator);
+
+    // Special case: Event has a _type_string field, so we need manual setup
+    const event_ptr = chain.get(0);
+    event_ptr.* = .{
+        ._type = unionInit(Event.Type, chain.get(1)),
+        ._type_string = try String.init(self._page.arena, typ, .{}),
+    };
+    chain.setMiddle(1, UIEvent.Type);
+    chain.setLeaf(2, child);
+
+    return chain.get(2);
 }
 
 pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {

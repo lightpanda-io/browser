@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=uiEventConstructor>
+    const evt = new UIEvent('click', {
+      detail: 5,
+      bubbles: true,
+      cancelable: true
+    });
+    testing.expectEqual('click', evt.type);
+    testing.expectEqual(5, evt.detail);
+    testing.expectEqual(true, evt.bubbles);
+    testing.expectEqual(true, evt.cancelable);
+    testing.expectEqual(window, evt.view);
+</script>
+
+<script id=uiEventWithView>
+    const evt2 = new UIEvent('mousedown', {
+      detail: 2,
+      view: window
+    });
+    testing.expectEqual('mousedown', evt2.type);
+    testing.expectEqual(2, evt2.detail);
+    testing.expectEqual(window, evt2.view);
+</script>
+
+<script id=uiEventDefaults>
+    const evt3 = new UIEvent('focus');
+    testing.expectEqual('focus', evt3.type);
+    testing.expectEqual(0, evt3.detail);
+    testing.expectEqual(false, evt3.bubbles);
+    testing.expectEqual(false, evt3.cancelable);
+    testing.expectEqual(window, evt3.view);
+</script>
+
+<script id=uiEventInheritance>
+    const evt4 = new UIEvent('blur', { detail: 1 });
+    testing.expectEqual('blur', evt4.type);
+    testing.expectEqual(Event.NONE, evt4.eventPhase);
+    testing.expectEqual(false, evt4.defaultPrevented);
+    testing.expectEqual(1, evt4.detail);
+</script>
+
+<script id=uiEventDetailTypes>
+    const evt5 = new UIEvent('custom', { detail: 0 });
+    const evt6 = new UIEvent('custom', { detail: 100 });
+    testing.expectEqual(0, evt5.detail);
+    testing.expectEqual(100, evt6.detail);
+</script>
+
+<script id=uiEventDetailTypes2>
+    const evt7 = new UIEvent('custom', { bubbles: true });
+    testing.expectEqual(0, evt7.detail);
+</script>
