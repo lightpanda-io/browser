@@ -1025,23 +1025,25 @@ fn resolveT(comptime T: type, value: *anyopaque) Resolved {
 const valueToStringOpts = struct {
     allocator: ?Allocator = null,
 };
-pub fn valueToString(self: *const Context, value: v8.Value, opts: valueToStringOpts) ![]u8 {
+pub fn valueToString(self: *const Context, js_val: v8.Value, opts: valueToStringOpts) ![]u8 {
     const allocator = opts.allocator orelse self.call_arena;
-    if (value.isSymbol()) {
-        // symbol's can't be converted to a string
-        return allocator.dupe(u8, "$Symbol");
+    if (js_val.isSymbol()) {
+        const js_sym = v8.Symbol{.handle = js_val.handle};
+        const js_sym_desc = js_sym.getDescription(self.isolate);
+        return self.valueToString(js_sym_desc, .{});
     }
-    const str = try value.toString(self.v8_context);
+    const str = try js_val.toString(self.v8_context);
     return self.jsStringToZig(str, .{ .allocator = allocator });
 }
 
-pub fn valueToStringZ(self: *const Context, value: v8.Value, opts: valueToStringOpts) ![:0]u8 {
+pub fn valueToStringZ(self: *const Context, js_val: v8.Value, opts: valueToStringOpts) ![:0]u8 {
     const allocator = opts.allocator orelse self.call_arena;
-    if (value.isSymbol()) {
-        // symbol's can't be converted to a string
-        return allocator.dupeZ(u8, "$Symbol");
+    if (js_val.isSymbol()) {
+        const js_sym = v8.Symbol{.handle = js_val.handle};
+        const js_sym_desc = js_sym.getDescription(self.isolate);
+        return self.valueToStringZ(js_sym_desc, .{});
     }
-    const str = try value.toString(self.v8_context);
+    const str = try js_val.toString(self.v8_context);
     return self.jsStringToZigZ(str, .{ .allocator = allocator });
 }
 
@@ -1090,15 +1092,13 @@ fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnm
         if (js_val.isFalse()) {
             return writer.writeAll("false");
         }
-        // TODO: KARL wait for v8 build to work again, this works with
-        // the latest version of zig-v8-fork, I just can't build it right now
-        // APPLY THIS change to valueToString and valueToStringz
-        // if (js_val.isSymbol()) {
-        //     const js_sym = v8.Symbol{.handle = js_val.handle};
-        //     const js_sym_desc = js_sym.getDescription(self.isolate);
-        //     const js_sym_str = try self.valueToString(js_sym_desc, .{});
-        //     return writer.print("{s} (symbol)", .{js_sym_str});
-        // }
+
+        if (js_val.isSymbol()) {
+            const js_sym = v8.Symbol{.handle = js_val.handle};
+            const js_sym_desc = js_sym.getDescription(self.isolate);
+            const js_sym_str = try self.valueToString(js_sym_desc, .{});
+            return writer.print("{s} (symbol)", .{js_sym_str});
+        }
         const js_type = try self.jsStringToZig(try js_val.typeOf(self.isolate), .{});
         const js_val_str = try self.valueToString(js_val, .{});
         if (js_val_str.len > 2000) {
