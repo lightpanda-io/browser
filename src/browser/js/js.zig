@@ -26,6 +26,8 @@ pub const bridge = @import("bridge.zig");
 pub const ExecutionWorld = @import("ExecutionWorld.zig");
 pub const Context = @import("Context.zig");
 pub const Inspector = @import("Inspector.zig");
+pub const Snapshot = @import("Snapshot.zig");
+pub const Platform = @import("Platform.zig");
 
 // TODO: Is "This" really necessary?
 pub const This = @import("This.zig");
@@ -38,7 +40,6 @@ pub const Function = @import("Function.zig");
 const Caller = @import("Caller.zig");
 const Page = @import("../Page.zig");
 const Allocator = std.mem.Allocator;
-const NamedFunction = Context.NamedFunction;
 
 pub fn Bridge(comptime T: type) type {
     return bridge.Builder(T);

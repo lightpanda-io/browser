@@ -37,8 +37,6 @@ const Scheduler = @import("Scheduler.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 
-const polyfill = @import("polyfill/polyfill.zig");
-
 const Parser = @import("parser/Parser.zig");
 
 const URL = @import("webapi/URL.zig");
@@ -123,8 +121,6 @@ _upgrading_element: ?*Node = null,
 
 // List of custom elements that were created before their definition was registered
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
-
-_polyfill_loader: polyfill.Loader = .{},
 
 // for heap allocations and managing WebAPI objects
 _factory: Factory,
@@ -230,6 +226,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
 
     self._parse_state = .pre;
     self._load_state = .parsing;
+    self._parse_mode = .document;
     self._attribute_lookup = .empty;
     self._attribute_named_node_map_lookup = .empty;
     self._event_manager = EventManager.init(self);
@@ -238,7 +235,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     errdefer self._script_manager.deinit();
 
     if (comptime initializing == true) {
-        self.js = try self._session.executor.createContext(self, true, JS.GlobalMissingCallback.init(&self._polyfill_loader));
+        self.js = try self._session.executor.createContext(self, true);
         errdefer self.js.deinit();
     }
 

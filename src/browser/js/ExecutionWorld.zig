@@ -17,13 +17,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const log = @import("../../log.zig");
 
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const bridge = @import("bridge.zig");
 const Env = @import("Env.zig");
 const Context = @import("Context.zig");
 
@@ -33,8 +33,6 @@ const ScriptManager = @import("../ScriptManager.zig");
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const CONTEXT_ARENA_RETAIN = 1024 * 64;
-
-const JsApis = bridge.JsApis;
 
 // ExecutionWorld closely models a JS World.
 // https://chromium.googlesource.com/chromium/src/+/master/third_party/blink/renderer/bindings/core/v8/V8BindingDesign.md#World
@@ -72,82 +70,32 @@ pub fn deinit(self: *ExecutionWorld) void {
 // when the handle_scope is freed.
 // We also maintain our own "context_arena" which allows us to have
 // all page related memory easily managed.
-pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_callback: ?js.GlobalMissingCallback) !*Context {
+pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context {
     std.debug.assert(self.context == null);
 
     const env = self.env;
     const isolate = env.isolate;
-    const templates = &self.env.templates;
 
     var v8_context: v8.Context = blk: {
         var temp_scope: v8.HandleScope = undefined;
         v8.HandleScope.init(&temp_scope, isolate);
         defer temp_scope.deinit();
 
-        const js_global = v8.FunctionTemplate.initDefault(isolate);
-        js_global.setClassName(v8.String.initUtf8(isolate, "Window"));
-        Env.attachClass(@TypeOf(page.window.*).JsApi, isolate, js_global);
+        if (comptime IS_DEBUG) {
+            // Getting this into the snapshot is tricky (anything involving the
+            // global is tricky). Easier to do here, and in debug more, we're
+            // find with paying the small perf hit.
+            const js_global = v8.FunctionTemplate.initDefault(isolate);
+            const global_template = js_global.getInstanceTemplate();
 
-        const global_template = js_global.getInstanceTemplate();
-        global_template.setInternalFieldCount(1);
-
-        // Configure the missing property callback on the global object.
-        if (global_callback != null) {
-            const configuration = v8.NamedPropertyHandlerConfiguration{
-                .getter = struct {
-                    fn callback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
-                        const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-                        const context = Context.fromIsolate(info.getIsolate());
-
-                        const property = context.valueToString(.{ .handle = c_name.? }, .{}) catch "???";
-                        if (context.global_callback.?.missing(property, context)) {
-                            return v8.Intercepted.Yes;
-                        }
-                        return v8.Intercepted.No;
-                    }
-                }.callback,
+            global_template.setNamedProperty(v8.NamedPropertyHandlerConfiguration{
+                .getter = unknownPropertyCallback,
                 .flags = v8.PropertyHandlerFlags.NonMasking | v8.PropertyHandlerFlags.OnlyInterceptStrings,
-            };
-            global_template.setNamedProperty(configuration, null);
+            }, null);
         }
 
-        // All the FunctionTemplates that we created and setup in Env.init
-        // are now going to get associated with our global instance.
-        inline for (JsApis, 0..) |JsApi, i| {
-            if (@hasDecl(JsApi.Meta, "name")) {
-                const class_name = if (@hasDecl(JsApi.Meta, "constructor_alias")) JsApi.Meta.constructor_alias else JsApi.Meta.name;
-                const v8_class_name = v8.String.initUtf8(isolate, class_name);
-                global_template.set(v8_class_name.toName(), templates[i], v8.PropertyAttribute.None);
-            }
-        }
-
-        // The global object (Window) has already been hooked into the v8
-        // engine when the Env was initialized - like every other type.
-        // But the V8 global is its own FunctionTemplate instance so even
-        // though it's also a Window, we need to set the prototype for this
-        // specific instance of the the Window.
-        {
-            const proto_type = @typeInfo(@TypeOf(page.window._proto)).pointer.child;
-            const proto_index = bridge.JsApiLookup.getId(proto_type.JsApi);
-            js_global.inherit(templates[proto_index]);
-        }
-
-        const context_local = v8.Context.init(isolate, global_template, null);
+        const context_local = v8.Context.init(isolate, null, null);
         const v8_context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
-        v8_context.enter();
-        errdefer if (enter) v8_context.exit();
-        defer if (!enter) v8_context.exit();
-
-        // This shouldn't be necessary, but it is:
-        // https://groups.google.com/g/v8-users/c/qAQQBmbi--8
-        // TODO: see if newer V8 engines have a way around this.
-        inline for (JsApis, 0..) |JsApi, i| {
-            if (comptime Env.protoIndexLookup(JsApi)) |proto_index| {
-                const proto_obj = templates[proto_index].getFunction(v8_context).toObject();
-                const self_obj = templates[i].getFunction(v8_context).toObject();
-                _ = self_obj.setPrototype(v8_context, proto_obj);
-            }
-        }
         break :blk v8_context;
     };
 
@@ -158,19 +106,12 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
     if (enter) {
         handle_scope = @as(v8.HandleScope, undefined);
         v8.HandleScope.init(&handle_scope.?, isolate);
+        v8_context.enter();
     }
-    errdefer if (enter) handle_scope.?.deinit();
-
-    const js_global = v8_context.getGlobal();
-    {
-        // If we want to overwrite the built-in console, we have to
-        // delete the built-in one.
-
-        const console_key = v8.String.initUtf8(isolate, "console");
-        if (js_global.deleteValue(v8_context, console_key) == false) {
-            return error.ConsoleDeleteError;
-        }
-    }
+    errdefer if (enter) {
+        v8_context.exit();
+        handle_scope.?.deinit();
+    };
 
     const context_id = env.context_id;
     env.context_id = context_id + 1;
@@ -180,27 +121,18 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool, global_cal
         .id = context_id,
         .isolate = isolate,
         .v8_context = v8_context,
-        .templates = &env.templates,
+        .templates = env.templates,
         .handle_scope = handle_scope,
         .script_manager = &page._script_manager,
         .call_arena = page.call_arena,
         .arena = self.context_arena.allocator(),
-        .global_callback = global_callback,
     };
 
     var context = &self.context.?;
-    {
-        // Store a pointer to our context inside the v8 context so that, given
-        // a v8 context, we can get our context out
-        const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
-        v8_context.setEmbedderData(1, data);
-    }
-
-    // Custom exception
-    // TODO: this is an horrible hack, I can't figure out how to do this cleanly.
-    {
-        _ = try context.exec("DOMException.prototype.__proto__ = Error.prototype", "errorSubclass");
-    }
+    // Store a pointer to our context inside the v8 context so that, given
+    // a v8 context, we can get our context out
+    const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
+    v8_context.setEmbedderData(1, data);
 
     try context.setupGlobal();
     return context;
@@ -224,4 +156,43 @@ pub fn terminateExecution(self: *const ExecutionWorld) void {
 
 pub fn resumeExecution(self: *const ExecutionWorld) void {
     self.env.isolate.cancelTerminateExecution();
+}
+
+pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
+    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
+    const context = Context.fromIsolate(info.getIsolate());
+
+    const property = context.valueToString(.{ .handle = c_name.? }, .{}) catch "???";
+
+    const ignored = std.StaticStringMap(void).initComptime(.{
+        .{ "process", {} },
+        .{ "ShadyDOM", {} },
+        .{ "ShadyCSS", {} },
+
+        .{ "litNonce", {} },
+        .{ "litHtmlVersions", {} },
+        .{ "litElementVersions", {} },
+        .{ "litHtmlPolyfillSupport", {} },
+        .{ "litElementHydrateSupport", {} },
+        .{ "litElementPolyfillSupport", {} },
+        .{ "reactiveElementVersions", {} },
+
+        .{ "recaptcha", {} },
+        .{ "grecaptcha", {} },
+        .{ "___grecaptcha_cfg", {} },
+        .{ "__recaptcha_api", {} },
+        .{ "__google_recaptcha_client", {} },
+
+        .{ "CLOSURE_FLAGS", {} },
+    });
+
+    if (!ignored.has(property)) {
+        log.debug(.unknown_prop, "unkown global property", .{
+            .info = "but the property can exist in pure JS",
+            .stack = context.stackTrace() catch "???",
+            .property = property,
+        });
+    }
+
+    return v8.Intercepted.No;
 }
