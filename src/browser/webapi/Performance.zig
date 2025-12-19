@@ -11,7 +11,7 @@ const std = @import("std");
 const Performance = @This();
 
 _time_origin: u64,
-_entries: std.ArrayListUnmanaged(*Entry) = .{},
+_entries: std.ArrayList(*Entry) = .{},
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
@@ -42,9 +42,16 @@ pub fn getTimeOrigin(self: *const Performance) f64 {
     return @as(f64, @floatFromInt(self._time_origin)) / 1000.0;
 }
 
-pub fn mark(self: *Performance, name: []const u8, _options: ?Mark.Options, page: *Page) !*Mark {
+pub fn mark(
+    self: *Performance,
+    name: []const u8,
+    _options: ?Mark.Options,
+    page: *Page,
+) !*Mark {
     const m = try Mark.init(name, _options, page);
     try self._entries.append(page.arena, m._proto);
+    // Notify about the change.
+    try page.notifyPerformanceObservers(m._proto);
     return m;
 }
 
@@ -230,21 +237,40 @@ pub const Entry = struct {
     _name: []const u8,
     _start_time: f64 = 0.0,
 
-    const Type = union(enum) {
+    pub const Type = union(Enum) {
         element,
         event,
         first_input,
-        largest_contentful_paint,
-        layout_shift,
-        long_animation_frame,
+        @"largest-contentful-paint",
+        @"layout-shift",
+        @"long-animation-frame",
         longtask,
         measure: *Measure,
         navigation,
         paint,
         resource,
         taskattribution,
-        visibility_state,
+        @"visibility-state",
         mark: *Mark,
+
+        pub const Enum = enum(u8) {
+            element = 1, // Changing this affect PerformanceObserver's behavior.
+            event = 2,
+            first_input = 3,
+            @"largest-contentful-paint" = 4,
+            @"layout-shift" = 5,
+            @"long-animation-frame" = 6,
+            longtask = 7,
+            measure = 8,
+            navigation = 9,
+            paint = 10,
+            resource = 11,
+            taskattribution = 12,
+            @"visibility-state" = 13,
+            mark = 14,
+            // If we ever have types more than 16, we have to update entry
+            // table of PerformanceObserver too.
+        };
     };
 
     pub fn getDuration(self: *const Entry) f64 {
@@ -253,11 +279,6 @@ pub const Entry = struct {
 
     pub fn getEntryType(self: *const Entry) []const u8 {
         return switch (self._type) {
-            .first_input => "first-input",
-            .largest_contentful_paint => "largest-contentful-paint",
-            .layout_shift => "layout-shift",
-            .long_animation_frame => "long-animation-frame",
-            .visibility_state => "visibility-state",
             else => |t| @tagName(t),
         };
     }
