@@ -24,6 +24,7 @@ const LOADER_ID = "LOADERID42AA389647D702B4D805F49A";
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
+        getTargets,
         attachToTarget,
         closeTarget,
         createBrowserContext,
@@ -38,6 +39,7 @@ pub fn processMessage(cmd: anytype) !void {
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
+        .getTargets => return getTargets(cmd),
         .attachToTarget => return attachToTarget(cmd),
         .closeTarget => return closeTarget(cmd),
         .createBrowserContext => return createBrowserContext(cmd),
@@ -50,6 +52,31 @@ pub fn processMessage(cmd: anytype) !void {
         .setAutoAttach => return setAutoAttach(cmd),
         .setDiscoverTargets => return setDiscoverTargets(cmd),
     }
+}
+
+fn getTargets(cmd: anytype) !void {
+    // Some clients like Stagehand expects to have an existing context.
+    const bc = cmd.browser_context orelse cmd.createBrowserContext() catch |err| switch (err) {
+        error.AlreadyExists => unreachable,
+        else => return err,
+    };
+
+    const target_id = bc.target_id orelse {
+        return cmd.sendResult(.{
+            .targetInfos = [_]TargetInfo{},
+        }, .{ .include_session_id = false });
+    };
+
+    return cmd.sendResult(.{
+        .targetInfos = [_]TargetInfo{.{
+            .targetId = target_id,
+            .type = "page",
+            .title = bc.getTitle() orelse "about:blank",
+            .url = bc.getURL() orelse "about:blank",
+            .attached = true,
+            .canAccessOpener = false,
+        }},
+    }, .{ .include_session_id = false });
 }
 
 fn getBrowserContexts(cmd: anytype) !void {
@@ -168,7 +195,7 @@ fn createTarget(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .attached = false,
             .targetId = target_id,
-            .title = params.url,
+            .title = "about:blank",
             .browserContextId = bc.id,
             .url = "about:blank",
         },
@@ -179,11 +206,13 @@ fn createTarget(cmd: anytype) !void {
         try doAttachtoTarget(cmd, target_id);
     }
 
-    try page.navigate(
-        params.url,
-        .{ .reason = .address_bar },
-        .{ .push = null },
-    );
+    if (!std.mem.eql(u8, "about:blank", params.url)) {
+        try page.navigate(
+            params.url,
+            .{ .reason = .address_bar },
+            .{ .push = null },
+        );
+    }
 
     try cmd.sendResult(.{
         .targetId = target_id,
@@ -206,7 +235,9 @@ fn attachToTarget(cmd: anytype) !void {
         return error.SessionAlreadyLoaded;
     }
 
-    try doAttachtoTarget(cmd, target_id);
+    if (bc.session_id == null) {
+        try doAttachtoTarget(cmd, target_id);
+    }
 
     return cmd.sendResult(
         .{ .sessionId = bc.session_id },
@@ -272,8 +303,8 @@ fn getTargetInfo(cmd: anytype) !void {
             .targetInfo = TargetInfo{
                 .targetId = target_id,
                 .type = "page",
-                .title = "",
-                .url = "",
+                .title = bc.getTitle() orelse "about:blank",
+                .url = bc.getURL() orelse "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
             },
@@ -284,8 +315,8 @@ fn getTargetInfo(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .targetId = "TID-STARTUP-B",
             .type = "browser",
-            .title = "",
-            .url = "",
+            .title = "about:blank",
+            .url = "about:blank",
             .attached = true,
             .canAccessOpener = false,
         },
@@ -631,8 +662,8 @@ test "cdp.target: getTargetInfo" {
         try ctx.expectSentResult(.{
             .targetInfo = .{
                 .type = "browser",
-                .title = "",
-                .url = "",
+                .title = "about:blank",
+                .url = "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
             },
@@ -665,7 +696,7 @@ test "cdp.target: getTargetInfo" {
                 .targetId = "TID-A",
                 .type = "page",
                 .title = "",
-                .url = "",
+                .url = "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
             },

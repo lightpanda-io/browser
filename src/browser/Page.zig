@@ -283,6 +283,13 @@ fn registerBackgroundTasks(self: *Page) !void {
     }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
 }
 
+pub fn getTitle(self: *Page) !?[]const u8 {
+    if (self.window._document.is(Document.HTMLDocument)) |html_doc| {
+        return try html_doc.getTitle(self);
+    }
+    return null;
+}
+
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind: NavigationKind) !void {
     const session = self._session;
 

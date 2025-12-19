@@ -33,6 +33,7 @@ pub fn processMessage(cmd: anytype) !void {
         createIsolatedWorld,
         navigate,
         stopLoading,
+        close,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -43,6 +44,7 @@ pub fn processMessage(cmd: anytype) !void {
         .createIsolatedWorld => return createIsolatedWorld(cmd),
         .navigate => return navigate(cmd),
         .stopLoading => return cmd.sendResult(null, .{}),
+        .close => return close(cmd),
     }
 }
 
@@ -131,6 +133,43 @@ fn addScriptToEvaluateOnNewDocument(cmd: anytype) !void {
     return cmd.sendResult(.{
         .identifier = "1",
     }, .{});
+}
+
+fn close(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+
+    // can't be null if we have a target_id
+    std.debug.assert(bc.session.page != null);
+
+    try cmd.sendResult(.{}, .{});
+
+    // Following code is similar to target.closeTarget
+    //
+    // could be null, created but never attached
+    if (bc.session_id) |session_id| {
+        // Inspector.detached event
+        try cmd.sendEvent("Inspector.detached", .{
+            .reason = "Render process gone.",
+        }, .{ .session_id = session_id });
+
+        // detachedFromTarget event
+        try cmd.sendEvent("Target.detachedFromTarget", .{
+            .targetId = target_id,
+            .sessionId = session_id,
+            .reason = "Render process gone.",
+        }, .{});
+
+        bc.session_id = null;
+    }
+
+    bc.session.removePage();
+    for (bc.isolated_worlds.items) |*world| {
+        world.deinit();
+    }
+    bc.isolated_worlds.clearRetainingCapacity();
+    bc.target_id = null;
 }
 
 fn createIsolatedWorld(cmd: anytype) !void {
