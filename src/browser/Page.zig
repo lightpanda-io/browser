@@ -49,6 +49,8 @@ const Document = @import("webapi/Document.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
+const HtmlScript = @import("webapi/Element.zig").Html.Script;
+const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -110,6 +112,9 @@ _intersection_delivery_scheduled: bool = false,
 // Slots that need slotchange events to be fired
 _slots_pending_slotchange: std.AutoHashMapUnmanaged(*Element.Html.Slot, void) = .{},
 _slotchange_delivery_scheduled: bool = false,
+
+// List of active PerformanceObservers.
+_performance_observers: std.ArrayList(*PerformanceObserver) = .{},
 
 // Lookup for customized built-in elements. Maps element pointer to definition.
 _customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
@@ -262,6 +267,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
 
+    self._performance_observers = .{};
     self._mutation_observers = .{};
     self._mutation_delivery_scheduled = false;
     self._mutation_delivery_depth = 0;
@@ -1023,6 +1029,32 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
         }
     }
     return null;
+}
+
+pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
+    return self._performance_observers.append(self.arena, observer);
+}
+
+pub fn unregisterPerformanceObserver(self: *Page, observer: *PerformanceObserver) void {
+    for (self._performance_observers.items, 0..) |perf_observer, i| {
+        if (perf_observer == observer) {
+            _ = self._performance_observers.swapRemove(i);
+            return;
+        }
+    }
+}
+
+/// Updates performance observers with the new entry.
+/// This doesn't emit callbacks but rather fills the queues of observers;
+/// microtask queue runs them periodically.
+pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void {
+    for (self._performance_observers.items) |observer| {
+        if (observer.interested(entry)) {
+            observer._entries.append(self.arena, entry) catch |err| {
+                log.err(.page, "notifyPerformanceObservers", .{ .err = err });
+            };
+        }
+    }
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {

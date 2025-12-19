@@ -2017,6 +2017,16 @@ fn zigJsonToJs(isolate: v8.Isolate, v8_context: v8.Context, value: std.json.Valu
 }
 
 // Microtasks
+pub fn queuePerformanceDelivery(self: *Context) !void {
+    self.isolate.enqueueMicrotask(struct {
+        fn run(data: ?*anyopaque) callconv(.c) void {
+            const page: *Page = @ptrCast(@alignCast(data.?));
+            _ = page;
+            @panic("TODO");
+        }
+    }, self.page);
+}
+
 pub fn queueMutationDelivery(self: *Context) !void {
     self.isolate.enqueueMicrotask(struct {
         fn run(data: ?*anyopaque) callconv(.c) void {

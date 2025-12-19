@@ -16,41 +16,144 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+const Performance = @import("Performance.zig");
 
-const Entry = @import("Performance.zig").Entry;
-
-// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver
+/// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver
 const PerformanceObserver = @This();
 
-pub fn init(callback: js.Function) PerformanceObserver {
-    _ = callback;
-    return .{};
+/// Emitted when there are events with same interests.
+_callback: js.Function,
+/// The threshold to deliver `PerformanceEventTiming` entries.
+_duration_threshold: f64,
+/// Entry types we're looking for are encoded as bit flags.
+_interests: u16,
+/// Entries this observer hold.
+/// Don't mutate these; other observers may hold pointers to them.
+_entries: std.ArrayList(*Performance.Entry),
+
+const DefaultDurationThreshold: f64 = 104;
+
+/// Creates a new PerformanceObserver object with the given observer callback.
+pub fn init(callback: js.Function, page: *Page) !*PerformanceObserver {
+    return page._factory.create(PerformanceObserver{
+        ._callback = callback,
+        ._duration_threshold = DefaultDurationThreshold,
+        ._interests = 0,
+        ._entries = .{},
+    });
 }
 
-const ObserverOptions = struct {
-    buffered: ?bool = null,
-    durationThreshold: ?f64 = null,
+// We don't have to mark this as public but the declarations have to be public;
+// otherwise @typeInfo don't allow accessing them.
+//
+// Note that we also use this to report supported entry types.
+//const Interest = struct {
+//    pub const element = 0x01;
+//    pub const event = 0x02;
+//    pub const @"first-input" = 0x04;
+//    pub const @"largest-contentful-paint" = 0x08;
+//    pub const @"layout-shift" = 0x010;
+//    pub const @"long-animation-frame" = 0x020;
+//    pub const longtask = 0x040;
+//    pub const mark = 0x080;
+//    pub const measure = 0x0100;
+//    pub const navigation = 0x0200;
+//    pub const pant = 0x0400;
+//    pub const resource = 0x0800;
+//    pub const @"visibility-state" = 0x01000;
+//};
+
+const ObserveOptions = struct {
+    buffered: bool = false,
+    durationThreshold: f64 = DefaultDurationThreshold,
     entryTypes: ?[]const []const u8 = null,
     type: ?[]const u8 = null,
 };
 
-pub fn observe(self: *const PerformanceObserver, opts_: ?ObserverOptions) void {
-    _ = self;
-    _ = opts_;
-    return;
+/// TODO: Support `buffered` option.
+pub fn observe(
+    self: *PerformanceObserver,
+    maybe_options: ?ObserveOptions,
+    page: *Page,
+) !void {
+    const options: ObserveOptions = maybe_options orelse .{};
+    // Update threshold.
+    self._duration_threshold = @max(@floor(options.durationThreshold / 8) * 8, 16);
+
+    const entry_types: []const []const u8 = blk: {
+        // More likely.
+        if (options.type) |entry_type| {
+            // Can't have both.
+            if (options.entryTypes != null) {
+                return error.TypeError;
+            }
+
+            break :blk &.{entry_type};
+        }
+
+        if (options.entryTypes) |entry_types| {
+            break :blk entry_types;
+        }
+
+        return error.TypeError;
+    };
+
+    // Update entries.
+    var interests: u16 = 0;
+    for (entry_types) |entry_type| {
+        const fields = @typeInfo(Performance.Entry.Type.Enum).@"enum".fields;
+        inline for (fields) |field| {
+            if (std.mem.eql(u8, field.name, entry_type)) {
+                const flag = @as(u16, 1) << @as(u16, field.value);
+                interests |= flag;
+            }
+        }
+    }
+
+    // Nothing has updated; no need to go further.
+    if (interests == 0) {
+        return;
+    }
+
+    // If we had no interests before, it means Page is not aware of
+    // this observer.
+    if (self._interests == 0) {
+        try page.registerPerformanceObserver(self);
+    }
+
+    // Update interests.
+    self._interests = interests;
 }
 
 pub fn disconnect(self: *PerformanceObserver) void {
     _ = self;
 }
 
-pub fn takeRecords(_: *const PerformanceObserver) []const Entry {
-    return &.{};
+/// Returns the current list of PerformanceEntry objects
+/// stored in the performance observer, emptying it out.
+pub fn takeRecords(self: *PerformanceObserver, page: *Page) ![]*Performance.Entry {
+    const records = try page.call_arena.dupe(*Performance.Entry, self._entries.items);
+    self._entries.clearRetainingCapacity();
+    return records;
 }
 
-pub fn getSupportedEntryTypes(_: *const PerformanceObserver) [][]const u8 {
-    return &.{};
+/// Returns true if observer interested with given entry.
+pub fn interested(
+    self: *const PerformanceObserver,
+    entry: *const Performance.Entry,
+) bool {
+    // TODO.
+    _ = self;
+    _ = entry;
+    return true;
+}
+
+pub fn getSupportedEntryTypes(_: *const PerformanceObserver) []const []const u8 {
+    return &.{ "mark", "measure" };
 }
 
 pub const JsApi = struct {
@@ -60,13 +163,35 @@ pub const JsApi = struct {
         pub const name = "PerformanceObserver";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
-    pub const constructor = bridge.constructor(PerformanceObserver.init, .{});
+    pub const constructor = bridge.constructor(PerformanceObserver.init, .{ .dom_exception = true });
 
-    pub const observe = bridge.function(PerformanceObserver.observe, .{});
+    pub const observe = bridge.function(PerformanceObserver.observe, .{ .dom_exception = true });
     pub const disconnect = bridge.function(PerformanceObserver.disconnect, .{});
-    pub const takeRecords = bridge.function(PerformanceObserver.takeRecords, .{});
+    pub const takeRecords = bridge.function(PerformanceObserver.takeRecords, .{ .dom_exception = true });
     pub const supportedEntryTypes = bridge.accessor(PerformanceObserver.getSupportedEntryTypes, null, .{ .static = true });
+};
+
+/// List of performance events that were explicitly
+/// observed via the observe() method.
+/// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserverEntryList
+pub const EntryList = struct {
+    _entries: []*Performance.Entry,
+
+    pub fn getEntries(self: *const EntryList) []*Performance.Entry {
+        return self._entries;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(EntryList);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceEntryList";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+
+            pub const getEntries = bridge.function(EntryList.getEntries, .{});
+        };
+    };
 };
