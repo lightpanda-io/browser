@@ -58,3 +58,9 @@ runs:
       run: |
         mkdir -p v8
         ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/libc_v8.a
+
+    - name: hmtl5ever
+      shell: bash
+      run: |
+        zig build html5ever
+        zig build -Doptimize=ReleaseFast html5ever
