@@ -18,7 +18,7 @@ Lightpanda is the open-source browser made for headless usage:
 
 - Javascript execution
 - Support of Web APIs (partial, WIP)
-- Compatible with Playwright[^1], Puppeteer, chromedp through CDP
+- Compatible with Playwright[^1], Puppeteer, chromedp through [CDP](https://chromedevtools.github.io/devtools-protocol/)
 
 Fast web automation for AI agents, LLM training, scraping and testing:
 

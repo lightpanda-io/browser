@@ -769,6 +769,76 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
     }
 }
 
+fn printWaitAnalysis(self: *Page) void {
+    std.debug.print("load_state: {s}\n", .{@tagName(self._load_state)});
+    std.debug.print("parse_state: {s}\n", .{@tagName(std.meta.activeTag(self._parse_state))});
+    {
+        std.debug.print("\nactive requests: {d}\n", .{self._session.browser.http_client.active});
+        var n_ = self._session.browser.http_client.handles.in_use.first;
+        while (n_) |n| {
+            const handle: *Http.Client.Handle = @fieldParentPtr("node", n);
+            const transfer = Http.Transfer.fromEasy(handle.conn.easy) catch |err| {
+                std.debug.print(" - failed to load transfer: {any}\n", .{err});
+                break;
+            };
+            std.debug.print(" - {f}\n", .{transfer});
+            n_ = n.next;
+        }
+    }
+
+    {
+        std.debug.print("\nqueued requests: {d}\n", .{self._session.browser.http_client.queue.len()});
+        var n_ = self._session.browser.http_client.queue.first;
+        while (n_) |n| {
+            const transfer: *Http.Transfer = @fieldParentPtr("_node", n);
+            std.debug.print(" - {f}\n", .{transfer});
+            n_ = n.next;
+        }
+    }
+
+
+    {
+        std.debug.print("\ndeferreds: {d}\n", .{self._script_manager.defer_scripts.len()});
+        var n_ = self._script_manager.defer_scripts.first;
+        while (n_) |n| {
+            const script: *ScriptManager.Script = @fieldParentPtr("node", n);
+            std.debug.print(" - {s} complete: {any}\n", .{ script.url, script.complete });
+            n_ = n.next;
+        }
+    }
+
+    {
+        std.debug.print("\nasyncs: {d}\n", .{self._script_manager.async_scripts.len()});
+    }
+
+    {
+        std.debug.print("\nasyncs ready: {d}\n", .{self._script_manager.ready_scripts.len()});
+        var n_ = self._script_manager.ready_scripts.first;
+        while (n_) |n| {
+            const script: *ScriptManager.Script = @fieldParentPtr("node", n);
+            std.debug.print(" - {s} complete: {any}\n", .{ script.url, script.complete });
+            n_ = n.next;
+        }
+    }
+
+    const now = milliTimestamp(.monotonic);
+    {
+        std.debug.print("\nhigh_priority schedule: {d}\n", .{self.scheduler.high_priority.count()});
+        var it = self.scheduler.high_priority.iterator();
+        while (it.next()) |task| {
+            std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.run_at - now });
+        }
+    }
+
+    {
+        std.debug.print("\nlow_priority schedule: {d}\n", .{self.scheduler.low_priority.count()});
+        var it = self.scheduler.low_priority.iterator();
+        while (it.next()) |task| {
+            std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.run_at - now });
+        }
+    }
+}
+
 pub fn tick(self: *Page) void {
     if (comptime IS_DEBUG) {
         log.debug(.page, "tick", .{});

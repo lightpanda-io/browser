@@ -20,7 +20,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const log = @import("../log.zig");
-const timestamp = @import("../datetime.zig").milliTimestamp;
+const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -71,7 +71,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         .callback = cb,
         .sequence = seq,
         .name = opts.name,
-        .run_at = timestamp(.monotonic) + run_in_ms,
+        .run_at = milliTimestamp(.monotonic) + run_in_ms,
     });
 }
 
@@ -85,7 +85,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
         return null;
     }
 
-    const now = timestamp(.monotonic);
+    const now = milliTimestamp(.monotonic);
 
     while (queue.peek()) |*task_| {
         if (task_.run_at > now) {

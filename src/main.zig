@@ -311,7 +311,7 @@ const Command = struct {
             \\                Filter out too verbose logs per scope:
             \\                http, unknown_prop, event, ...
             \\
-            \\ --user_agent_suffix
+            \\--user_agent_suffix
             \\                Suffix to append to the Lightpanda/X.Y User-Agent
             \\
         ;

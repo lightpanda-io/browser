@@ -360,7 +360,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
 
     // This seems wrong since we're not dealing with an async import (unlike
     // getAsyncModule below), but all we're trying to do here is pre-load the
-    // script for execution at some point in the future (when waitForModule is
+    // script for execution at some point in the future (when waitForImport is
     // called).
     self.async_scripts.append(&script.node);
 }
@@ -564,7 +564,7 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
     }
 }
 
-const Script = struct {
+pub const Script = struct {
     complete: bool,
     kind: Kind,
     status: u16 = 0,
