@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -18,9 +18,9 @@
 
 const std = @import("std");
 const Page = @import("../../browser/Page.zig");
+const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
 const log = @import("../../log.zig");
-const timestampF = @import("../../datetime.zig").timestamp;
 
 const Allocator = std.mem.Allocator;
 
@@ -51,7 +51,7 @@ pub fn processMessage(cmd: anytype) !void {
 const Frame = struct {
     id: []const u8,
     loaderId: []const u8,
-    url: [:0]const u8,
+    url: []const u8,
     domainAndRegistry: []const u8 = "",
     securityOrigin: []const u8,
     mimeType: []const u8 = "text/html",
@@ -101,11 +101,10 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
 
     if (page._load_state == .complete) {
         const now = timestampF(.monotonic);
-        const http_client = page._session.browser.http_client;
-
         try sendPageLifecycle(bc, "DOMContentLoaded", now);
         try sendPageLifecycle(bc, "load", now);
 
+        const http_client = page._session.browser.http_client;
         const http_active = http_client.active;
         const total_network_activity = http_active + http_client.intercepted;
         if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
@@ -176,7 +175,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         frameId: []const u8,
         worldName: []const u8,
-        grantUniveralAccess: bool,
+        grantUniveralAccess: bool = false,
     })) orelse return error.InvalidParams;
     if (!params.grantUniveralAccess) {
         log.warn(.cdp, "not implemented", .{ .feature = "grantUniveralAccess == false is not yet implemented" });
@@ -218,7 +217,6 @@ fn navigate(cmd: anytype) !void {
     }
 
     var page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    bc.loader_id = bc.cdp.loader_id_gen.next();
 
     try page.navigate(params.url, .{
         .reason = .address_bar,
@@ -231,8 +229,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    bc.loader_id = bc.cdp.loader_id_gen.next();
-    const loader_id = bc.loader_id;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{event.req_id});
     const target_id = bc.target_id orelse unreachable;
 
     bc.reset();
@@ -240,13 +237,13 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
     var cdp = bc.cdp;
     const reason_: ?[]const u8 = switch (event.opts.reason) {
         .anchor => "anchorClick",
-        .script, .history => "scriptInitiated",
+        .script, .history, .navigation => "scriptInitiated",
         .form => switch (event.opts.method) {
             .GET => "formSubmissionGet",
             .POST => "formSubmissionPost",
             else => unreachable,
         },
-        .address_bar, .navigation => null,
+        .address_bar => null,
     };
     if (reason_) |reason| {
         try cdp.sendEvent("Page.frameScheduledNavigation", .{
@@ -276,6 +273,30 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
     try cdp.sendEvent("Page.frameStartedLoading", .{
         .frameId = target_id,
     }, .{ .session_id = session_id });
+}
+
+pub fn pageRemove(bc: anytype) !void {
+    // The main page is going to be removed, we need to remove contexts from other worlds first.
+    for (bc.isolated_worlds.items) |*isolated_world| {
+        try isolated_world.removeContext();
+    }
+}
+
+pub fn pageCreated(bc: anytype, page: *Page) !void {
+    for (bc.isolated_worlds.items) |*isolated_world| {
+        try isolated_world.createContextAndLoadPolyfills(page);
+    }
+}
+
+pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.PageNavigated) !void {
+    // detachTarget could be called, in which case, we still have a page doing
+    // things, but no session.
+    const session_id = bc.session_id orelse return;
+    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{event.req_id});
+    const target_id = bc.target_id orelse unreachable;
+    const timestamp = event.timestamp;
+
+    var cdp = bc.cdp;
 
     // Drivers are sensitive to the order of events. Some more than others.
     // The result for the Page.navigate seems like it _must_ come after
@@ -302,6 +323,17 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         }, .{ .session_id = session_id });
     }
 
+    const reason_: ?[]const u8 = switch (event.opts.reason) {
+        .anchor => "anchorClick",
+        .script, .history, .navigation => "scriptInitiated",
+        .form => switch (event.opts.method) {
+            .GET => "formSubmissionGet",
+            .POST => "formSubmissionPost",
+            else => unreachable,
+        },
+        .address_bar => null,
+    };
+
     if (reason_ != null) {
         try cdp.sendEvent("Page.frameClearedScheduledNavigation", .{
             .frameId = target_id,
@@ -319,8 +351,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
         bc.inspector.contextCreated(
             page.js,
             "",
-            "", // @ZIGDOM
-            // try page.origin(arena),
+            try page.getOrigin(arena) orelse "",
             aux_data,
             true,
         );
@@ -336,37 +367,14 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
             false,
         );
     }
-}
 
-pub fn pageRemove(bc: anytype) !void {
-    // The main page is going to be removed, we need to remove contexts from other worlds first.
-    for (bc.isolated_worlds.items) |*isolated_world| {
-        try isolated_world.removeContext();
-    }
-}
-
-pub fn pageCreated(bc: anytype, page: *Page) !void {
-    for (bc.isolated_worlds.items) |*isolated_world| {
-        try isolated_world.createContextAndLoadPolyfills(page);
-    }
-}
-
-pub fn pageNavigated(bc: anytype, event: *const Notification.PageNavigated) !void {
-    // detachTarget could be called, in which case, we still have a page doing
-    // things, but no session.
-    const session_id = bc.session_id orelse return;
-    const loader_id = bc.loader_id;
-    const target_id = bc.target_id orelse unreachable;
-    const timestamp = event.timestamp;
-
-    var cdp = bc.cdp;
     // frameNavigated event
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
         .frame = Frame{
             .id = target_id,
             .url = event.url,
-            .loaderId = bc.loader_id,
+            .loaderId = loader_id,
             .securityOrigin = bc.security_origin,
             .secureContextType = bc.secure_context_type,
         },

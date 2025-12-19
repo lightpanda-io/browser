@@ -260,14 +260,23 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     return transfer.fulfill(status, headers, body);
 }
 
+pub fn nextReqId(self: *Client) usize {
+    return self.next_request_id + 1;
+}
+
+pub fn incrReqId(self: *Client) usize {
+    const id = self.next_request_id + 1;
+    self.next_request_id = id;
+    return id;
+}
+
 fn makeTransfer(self: *Client, req: Request) !*Transfer {
     errdefer req.headers.deinit();
 
     const transfer = try self.transfer_pool.create();
     errdefer self.transfer_pool.destroy(transfer);
 
-    const id = self.next_request_id + 1;
-    self.next_request_id = id;
+    const id = self.incrReqId();
     transfer.* = .{
         .arena = ArenaAllocator.init(self.allocator),
         .id = id,
@@ -673,6 +682,19 @@ pub const Request = struct {
         xhr,
         script,
         fetch,
+
+        // Allowed Values: Document, Stylesheet, Image, Media, Font, Script,
+        // TextTrack, XHR, Fetch, Prefetch, EventSource, WebSocket, Manifest,
+        // SignedExchange, Ping, CSPViolationReport, Preflight, FedCM, Other
+        // https://chromedevtools.github.io/devtools-protocol/tot/Network/#type-ResourceType
+        pub fn string(self: ResourceType) []const u8 {
+            return switch (self) {
+                .document => "Document",
+                .xhr => "XHR",
+                .script => "Script",
+                .fetch => "Fetch",
+            };
+        }
     };
 };
 

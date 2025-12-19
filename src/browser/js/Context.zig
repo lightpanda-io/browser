@@ -1028,7 +1028,7 @@ const valueToStringOpts = struct {
 pub fn valueToString(self: *const Context, js_val: v8.Value, opts: valueToStringOpts) ![]u8 {
     const allocator = opts.allocator orelse self.call_arena;
     if (js_val.isSymbol()) {
-        const js_sym = v8.Symbol{.handle = js_val.handle};
+        const js_sym = v8.Symbol{ .handle = js_val.handle };
         const js_sym_desc = js_sym.getDescription(self.isolate);
         return self.valueToString(js_sym_desc, .{});
     }
@@ -1039,7 +1039,7 @@ pub fn valueToString(self: *const Context, js_val: v8.Value, opts: valueToString
 pub fn valueToStringZ(self: *const Context, js_val: v8.Value, opts: valueToStringOpts) ![:0]u8 {
     const allocator = opts.allocator orelse self.call_arena;
     if (js_val.isSymbol()) {
-        const js_sym = v8.Symbol{.handle = js_val.handle};
+        const js_sym = v8.Symbol{ .handle = js_val.handle };
         const js_sym_desc = js_sym.getDescription(self.isolate);
         return self.valueToStringZ(js_sym_desc, .{});
     }
@@ -1094,7 +1094,7 @@ fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnm
         }
 
         if (js_val.isSymbol()) {
-            const js_sym = v8.Symbol{.handle = js_val.handle};
+            const js_sym = v8.Symbol{ .handle = js_val.handle };
             const js_sym_desc = js_sym.getDescription(self.isolate);
             const js_sym_str = try self.valueToString(js_sym_desc, .{});
             return writer.print("{s} (symbol)", .{js_sym_str});

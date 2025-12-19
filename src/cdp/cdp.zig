@@ -552,7 +552,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn onPageNavigated(ctx: *anyopaque, msg: *const Notification.PageNavigated) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
-            return @import("domains/page.zig").pageNavigated(self, msg);
+            defer self.resetNotificationArena();
+            return @import("domains/page.zig").pageNavigated(self.notification_arena, self, msg);
         }
 
         pub fn onPageNetworkIdle(ctx: *anyopaque, msg: *const Notification.PageNetworkIdle) !void {

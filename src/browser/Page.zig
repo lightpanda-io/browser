@@ -161,6 +161,9 @@ version: usize,
 
 scheduler: Scheduler,
 
+_req_id: ?usize = null,
+_navigated_options: ?NavigatedOpts = null,
+
 pub fn init(arena: Allocator, call_arena: Allocator, session: *Session) !*Page {
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.init", .{});
@@ -290,6 +293,17 @@ pub fn getTitle(self: *Page) !?[]const u8 {
     return null;
 }
 
+pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
+    const URLRaw = @import("URL.zig");
+    return try URLRaw.getOrigin(allocator, self.url);
+}
+
+pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
+    const URLRaw = @import("URL.zig");
+    const current_origin = (try URLRaw.getOrigin(self.call_arena, self.url)) orelse return false;
+    return std.mem.startsWith(u8, url, current_origin);
+}
+
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind: NavigationKind) !void {
     const session = self._session;
 
@@ -323,11 +337,13 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind
         try self.reset(false);
     }
 
+    const req_id = self._session.browser.http_client.nextReqId();
     log.info(.page, "navigate", .{
         .url = request_url,
         .method = opts.method,
         .reason = opts.reason,
         .body = opts.body != null,
+        .req_id = req_id,
     });
 
     // if the url is about:blank, we load an empty HTML document in the
@@ -342,22 +358,38 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind
         self.documentIsComplete();
 
         self._session.browser.notification.dispatch(.page_navigate, &.{
+            .req_id = req_id,
             .opts = opts,
             .url = request_url,
             .timestamp = timestamp(.monotonic),
         });
 
         self._session.browser.notification.dispatch(.page_navigated, &.{
+            .req_id = req_id,
+            .opts = .{
+                .cdp_id = opts.cdp_id,
+                .reason = opts.reason,
+                .method = opts.method,
+            },
             .url = request_url,
             .timestamp = timestamp(.monotonic),
         });
 
+        // force next request id manually b/c we won't create a real req.
+        _ = self._session.browser.http_client.incrReqId();
         return;
     }
 
     var http_client = self._session.browser.http_client;
 
     self.url = try self.arena.dupeZ(u8, request_url);
+
+    self._req_id = req_id;
+    self._navigated_options = .{
+        .cdp_id = opts.cdp_id,
+        .reason = opts.reason,
+        .method = opts.method,
+    };
 
     var headers = try http_client.newHeaders();
     if (opts.header) |hdr| {
@@ -368,6 +400,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind
     // We dispatch page_navigate event before sending the request.
     // It ensures the event page_navigated is not dispatched before this one.
     self._session.browser.notification.dispatch(.page_navigate, &.{
+        .req_id = req_id,
         .opts = opts,
         .url = self.url,
         .timestamp = timestamp(.monotonic),
@@ -439,7 +472,14 @@ pub fn documentIsComplete(self: *Page) void {
         log.err(.page, "document is complete", .{ .err = err });
     };
 
+    if (IS_DEBUG) {
+        std.debug.assert(self._req_id != null);
+        std.debug.assert(self._navigated_options != null);
+    }
+
     self._session.browser.notification.dispatch(.page_navigated, &.{
+        .req_id = self._req_id.?,
+        .opts = self._navigated_options.?,
         .url = self.url,
         .timestamp = timestamp(.monotonic),
     });
@@ -802,7 +842,6 @@ fn printWaitAnalysis(self: *Page) void {
             n_ = n.next;
         }
     }
-
 
     {
         std.debug.print("\ndeferreds: {d}\n", .{self._script_manager.defer_scripts.len()});
@@ -2254,12 +2293,6 @@ const IdleNotification = union(enum) {
     }
 };
 
-pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
-    const URLRaw = @import("URL.zig");
-    const current_origin = (try URLRaw.getOrigin(self.call_arena, self.url)) orelse return false;
-    return std.mem.startsWith(u8, url, current_origin);
-}
-
 pub const NavigateReason = enum {
     anchor,
     address_bar,
@@ -2276,6 +2309,12 @@ pub const NavigateOpts = struct {
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     force: bool = false,
+};
+
+pub const NavigatedOpts = struct {
+    cdp_id: ?i64 = null,
+    reason: NavigateReason = .address_bar,
+    method: Http.Method = .GET,
 };
 
 const RequestCookieOpts = struct {
