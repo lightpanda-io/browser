@@ -257,7 +257,7 @@ pub fn navigate(
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
+                try page.navigateAsync(url, .{ .reason = .navigation }, kind);
             }
         },
         .replace => |state| {
@@ -270,7 +270,7 @@ pub fn navigate(
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
+                try page.navigateAsync(url, .{ .reason = .navigation }, kind);
             }
         },
         .traverse => |index| {
@@ -283,11 +283,11 @@ pub fn navigate(
                 // todo: Fire navigate event
                 try finished.resolve({});
             } else {
-                try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
+                try page.navigateAsync(url, .{ .reason = .navigation }, kind);
             }
         },
         .reload => {
-            try page.navigateFromWebAPI(url, .{ .reason = .navigation }, kind);
+            try page.navigateAsync(url, .{ .reason = .navigation }, kind);
         },
     }
 

@@ -38,7 +38,7 @@ pub const Location = struct {
     }
 
     pub fn set_href(_: *const Location, href: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(href, .{ .reason = .script }, .{ .push = null });
+        return page.navigateAsync(href, .{ .reason = .script }, .{ .push = null });
     }
 
     pub fn set_hash(_: *const Location, hash: []const u8, page: *Page) !void {
@@ -56,7 +56,7 @@ pub const Location = struct {
                 break :blk try std.fmt.allocPrint(page.arena, "#{s}", .{hash});
         };
 
-        return page.navigateFromWebAPI(normalized_hash, .{ .reason = .script }, .{ .replace = null });
+        return page.navigateAsync(normalized_hash, .{ .reason = .script }, .{ .replace = null });
     }
 
     pub fn get_protocol(self: *Location) []const u8 {
@@ -92,15 +92,15 @@ pub const Location = struct {
     }
 
     pub fn _assign(_: *const Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .push = null });
+        return page.navigateAsync(url, .{ .reason = .script }, .{ .push = null });
     }
 
     pub fn _replace(_: *const Location, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .replace = null });
+        return page.navigateAsync(url, .{ .reason = .script }, .{ .replace = null });
     }
 
     pub fn _reload(_: *const Location, page: *Page) !void {
-        return page.navigateFromWebAPI(page.url.raw, .{ .reason = .script }, .reload);
+        return page.navigateAsync(page.url.raw, .{ .reason = .script }, .reload);
     }
 
     pub fn _toString(self: *Location, page: *Page) ![]const u8 {

@@ -191,7 +191,7 @@ pub const Session = struct {
         // bad if old requests went to the new page, so let's make double sure
         self.browser.http_client.abort();
 
-        // Page.navigateFromWebAPI terminatedExecution. If we don't resume
+        // Page.navigateAsync terminatedExecution. If we don't resume
         // it before doing a shutdown we'll get an error.
         self.executor.resumeExecution();
         self.removePage();

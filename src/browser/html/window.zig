@@ -137,7 +137,7 @@ pub const Window = struct {
     }
 
     pub fn set_location(_: *const Window, url: []const u8, page: *Page) !void {
-        return page.navigateFromWebAPI(url, .{ .reason = .script }, .{ .push = null });
+        return page.navigateAsync(url, .{ .reason = .script }, .{ .push = null });
     }
 
     // frames return the window itself, but accessing it via a pseudo

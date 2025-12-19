@@ -167,21 +167,6 @@ pub const Page = struct {
         self.script_manager.deinit();
     }
 
-    fn reset(self: *Page) !void {
-        // Force running the micro task to drain the queue.
-        self.session.browser.env.runMicrotasks();
-
-        self.scheduler.reset();
-        self.http_client.abort();
-        self.script_manager.reset();
-
-        self.load_state = .parsing;
-        self.mode = .{ .pre = {} };
-        _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
-
-        try self.registerBackgroundTasks();
-    }
-
     fn registerBackgroundTasks(self: *Page) !void {
         if (comptime builtin.is_test) {
             // HTML test runner manually calls these as necessary
@@ -544,14 +529,9 @@ pub const Page = struct {
         };
     }
 
+    // You are no supposed to call this function directly.
     // spec reference: https://html.spec.whatwg.org/#document-lifecycle
     pub fn navigate(self: *Page, request_url: []const u8, opts: NavigateOpts) !void {
-        if (self.mode != .pre) {
-            // it's possible for navigate to be called multiple times on the
-            // same page (via CDP). We want to reset the page between each call.
-            try self.reset();
-        }
-
         const req_id = self.http_client.nextReqId();
 
         log.info(.http, "navigate", .{
@@ -964,7 +944,7 @@ pub const Page = struct {
                 const element: *parser.Element = @ptrCast(node);
                 const href = (try parser.elementGetAttribute(element, "href")) orelse return;
                 log.debug(.input, "window click on link", .{ .tag = tag, .href = href });
-                try self.navigateFromWebAPI(href, .{}, .{ .push = null });
+                try self.navigateAsync(href, .{}, .{ .push = null });
                 return;
             },
             .input => {
@@ -1118,7 +1098,7 @@ pub const Page = struct {
     // As such we schedule the function to be called as soon as possible.
     // The page.arena is safe to use here, but the transfer_arena exists
     // specifically for this type of lifetime.
-    pub fn navigateFromWebAPI(self: *Page, url: []const u8, opts: NavigateOpts, kind: NavigationKind) !void {
+    pub fn navigateAsync(self: *Page, url: []const u8, opts: NavigateOpts, kind: NavigationKind) !void {
         const session = self.session;
         const stitched_url = try URL.stitch(
             session.transfer_arena,
@@ -1221,7 +1201,7 @@ pub const Page = struct {
         } else {
             action = try URL.concatQueryString(transfer_arena, action, buf.items);
         }
-        try self.navigateFromWebAPI(action, opts, .{ .push = null });
+        try self.navigateAsync(action, opts, .{ .push = null });
     }
 
     pub fn isNodeAttached(self: *const Page, node: *parser.Node) bool {
