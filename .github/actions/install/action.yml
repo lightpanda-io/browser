@@ -59,12 +59,8 @@ runs:
         mkdir -p v8
         ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/libc_v8.a
 
-    - name: hmtl5ever release
-      if: ${{ inputs.mode == 'release' }}
+    - name: hmtl5ever
       shell: bash
-      run: zig build -Doptimize=ReleaseFast html5ever
-
-    - name: hmtl5ever debug
-      if: ${{ inputs.mode == 'debug' }}
-      shell: bash
-      run: zig build html5ever
+      run: |
+        zig build html5ever
+        zig build -Doptimize=ReleaseFast html5ever
