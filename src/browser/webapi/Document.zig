@@ -26,6 +26,7 @@ const URL = @import("../URL.zig");
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
 const Location = @import("Location.zig");
+const Parser = @import("../parser/Parser.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const NodeFilter = @import("NodeFilter.zig");
@@ -34,8 +35,8 @@ const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
 
-pub const HTMLDocument = @import("HTMLDocument.zig");
 pub const XMLDocument = @import("XMLDocument.zig");
+pub const HTMLDocument = @import("HTMLDocument.zig");
 
 const Document = @This();
 
@@ -47,6 +48,8 @@ _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
+_write_insertion_point: ?*Node = null,
+_script_created_parser: ?Parser.Streaming = null,
 
 pub const Type = union(enum) {
     generic,
@@ -233,8 +236,8 @@ pub fn getImplementation(_: *const Document) DOMImplementation {
     return .{};
 }
 
-pub fn createDocumentFragment(_: *const Document, page: *Page) !*@import("DocumentFragment.zig") {
-    return @import("DocumentFragment.zig").init(page);
+pub fn createDocumentFragment(_: *const Document, page: *Page) !*Node.DocumentFragment {
+    return Node.DocumentFragment.init(page);
 }
 
 pub fn createComment(_: *const Document, data: []const u8, page: *Page) !*Node {
@@ -401,6 +404,135 @@ pub fn elementsFromPoint(self: *Document, x: f64, y: f64, page: *Page) ![]const 
     return result.items;
 }
 
+pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
+    if (self._type == .xml) {
+        return error.InvalidStateError;
+    }
+
+    const html = blk: {
+        var joined: std.ArrayList(u8) = .empty;
+        for (text) |str| {
+            try joined.appendSlice(page.call_arena, str);
+        }
+        break :blk joined.items;
+    };
+
+    if (self._current_script == null or page._load_state != .parsing) {
+        // Post-parsing (destructive behavior)
+        if (self._script_created_parser == null) {
+            _ = try self.open(page);
+        }
+        if (html.len > 0) {
+            self._script_created_parser.?.read(html);
+        }
+        return;
+    }
+
+    // Inline script during parsing
+    const script = self._current_script.?;
+    const parent = script.asNode().parentNode() orelse return;
+
+    // Our implemnetation is hacky. We'll write to a DocumentFragment, then
+    // append its children.
+    const fragment = try Node.DocumentFragment.init(page);
+    const fragment_node = fragment.asNode();
+
+    const previous_parse_mode = page._parse_mode;
+    page._parse_mode = .document_write;
+    defer page._parse_mode = previous_parse_mode;
+
+    var parser = Parser.init(page.call_arena, fragment_node, page);
+    parser.parseFragment(html);
+
+    // Extract children from wrapper HTML element (html5ever wraps fragments)
+    // https://github.com/servo/html5ever/issues/583
+    const children = fragment_node._children orelse return;
+    const first = children.first();
+
+    // Collect all children to insert (to avoid iterator invalidation)
+    var children_to_insert: std.ArrayList(*Node) = .empty;
+
+    var it = if (first.is(Element.Html.Html) == null) fragment_node.childrenIterator() else first.childrenIterator();
+    while (it.next()) |child| {
+        try children_to_insert.append(page.call_arena, child);
+    }
+
+    if (children_to_insert.items.len == 0) {
+        return;
+    }
+
+    // Determine insertion point:
+    // - If _write_insertion_point is set, continue from there (subsequent write)
+    // - Otherwise, start after the script (first write)
+    var insert_after: ?*Node = self._write_insertion_point orelse script.asNode();
+
+    for (children_to_insert.items) |child| {
+        // Clear parent pointer (child is currently parented to fragment/HTML wrapper)
+        child._parent = null;
+        try page.insertNodeRelative(parent, child, .{ .after = insert_after.? }, .{});
+        insert_after = child;
+    }
+
+    page.domChanged();
+    self._write_insertion_point = children_to_insert.getLast();
+}
+
+pub fn open(self: *Document, page: *Page) !*Document {
+    if (self._type == .xml) {
+        return error.InvalidStateError;
+    }
+
+    if (page._load_state == .parsing) {
+        return self;
+    }
+
+    if (self._script_created_parser != null) {
+        return self;
+    }
+
+    // If we aren't parsing, then open clears the document.
+    const doc_node = self.asNode();
+
+    {
+        // Remove all children from document
+        var it = doc_node.childrenIterator();
+        while (it.next()) |child| {
+            page.removeNode(doc_node, child, .{ .will_be_reconnected = false });
+        }
+    }
+
+    // reset the document
+    self._elements_by_id.clearAndFree(page.arena);
+    self._active_element = null;
+    self._style_sheets = null;
+    self._ready_state = .loading;
+
+    self._script_created_parser = Parser.Streaming.init(page.arena, doc_node, page);
+    try self._script_created_parser.?.start();
+    page._parse_mode = .document;
+
+    return self;
+}
+
+pub fn close(self: *Document, page: *Page) !void {
+    if (self._type == .xml) {
+        return error.InvalidStateError;
+    }
+
+    if (self._script_created_parser == null) {
+        return;
+    }
+
+    // done() calls html5ever_streaming_parser_finish which frees the parser
+    // We must NOT call deinit() after done() as that would be a double-free
+    self._script_created_parser.?.done();
+    // Just null out the handle since done() already freed it
+    self._script_created_parser.?.handle = null;
+    self._script_created_parser = null;
+
+    page.documentIsComplete();
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -463,6 +595,9 @@ pub const JsApi = struct {
     pub const prepend = bridge.function(Document.prepend, .{});
     pub const elementFromPoint = bridge.function(Document.elementFromPoint, .{});
     pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
+    pub const write = bridge.function(Document.write, .{ .dom_exception = true });
+    pub const open = bridge.function(Document.open, .{ .dom_exception = true });
+    pub const close = bridge.function(Document.close, .{ .dom_exception = true });
 
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {

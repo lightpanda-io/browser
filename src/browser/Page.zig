@@ -74,7 +74,7 @@ _session: *Session,
 
 _event_manager: EventManager,
 
-_parse_mode: enum { document, fragment },
+_parse_mode: enum { document, fragment, document_write },
 
 // See Attribute.List for what this is. TL;DR: proper DOM Attribute Nodes are
 // fat yet rarely needed. We only create them on-demand, but still need proper
