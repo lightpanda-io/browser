@@ -175,6 +175,9 @@ pub const Page = struct {
         self.http_client.abort();
         self.script_manager.reset();
 
+        parser.deinit();
+        parser.init();
+
         self.load_state = .parsing;
         self.mode = .{ .pre = {} };
         _ = self.session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
