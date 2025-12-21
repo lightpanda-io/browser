@@ -895,8 +895,8 @@ pub fn tick(self: *Page) void {
     self.js.runMicrotasks();
 }
 
-pub fn scriptAddedCallback(self: *Page, script: *Element.Html.Script) !void {
-    self._script_manager.addFromElement(script, "parsing") catch |err| {
+pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Element.Html.Script) !void {
+    self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
             .src = script.asElement().getAttributeSafe("src"),
@@ -2180,7 +2180,7 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
             return;
         }
 
-        self.scriptAddedCallback(script) catch |err| {
+        self.scriptAddedCallback(from_parser, script) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err });
             return err;
         };

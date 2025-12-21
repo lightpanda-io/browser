@@ -143,7 +143,7 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-pub fn addFromElement(self: *ScriptManager, script_element: *Element.Html.Script, comptime ctx: []const u8) !void {
+pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_element: *Element.Html.Script, comptime ctx: []const u8) !void {
     if (script_element._executed) {
         // If a script tag gets dynamically created and added to the dom:
         //    document.getElementsByTagName('head')[0].appendChild(script)
@@ -220,12 +220,25 @@ pub fn addFromElement(self: *ScriptManager, script_element: *Element.Html.Script
             if (source == .@"inline") {
                 break :blk if (kind == .module) .@"defer" else .normal;
             }
+
             if (element.getAttributeSafe("async") != null) {
                 break :blk .async;
             }
+
+            // Check for defer or module (before checking dynamic script default)
             if (kind == .module or element.getAttributeSafe("defer") != null) {
                 break :blk .@"defer";
             }
+
+            // For dynamically-inserted scripts (not from parser), default to async
+            // unless async was explicitly set to false (which removes the attribute)
+            // and defer was set to true (checked above)
+            if (comptime !from_parser) {
+                // Script has src and no explicit async/defer attributes
+                // Per HTML spec, dynamically created scripts default to async
+                break :blk .async;
+            }
+
             break :blk .normal;
         },
     };

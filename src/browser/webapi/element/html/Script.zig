@@ -54,7 +54,7 @@ pub fn setSrc(self: *Script, src: []const u8, page: *Page) !void {
     try element.setAttributeSafe("src", src, page);
     self._src = element.getAttributeSafe("src") orelse unreachable;
     if (element.asNode().isConnected()) {
-        try page.scriptAddedCallback(self);
+        try page.scriptAddedCallback(false, self);
     }
 }
 

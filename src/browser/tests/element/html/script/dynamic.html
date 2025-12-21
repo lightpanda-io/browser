@@ -2,12 +2,15 @@
 <head></head>
 <script src="../../../testing.js"></script>
 
-<script id=append_before_src>
+<script id=append_before_src1>
   loaded1 = 0;
   const script1 = document.createElement('script');
+  script1.async = false;
   script1.src = "dynamic1.js";
   document.getElementsByTagName('head')[0].appendChild(script1);
-  testing.expectEqual(1, loaded1);
+  testing.eventually(() => {
+    testing.expectEqual(1, loaded1);
+  });
 </script>
 
 <script id=no_double_execute>
@@ -17,7 +20,7 @@
   });
 </script>
 
-<script id=append_before_src>
+<script id=append_before_src2>
   loaded2 = 0;
   const script2a = document.createElement('script');
   script2a.src = "dynamic2.js";
