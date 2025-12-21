@@ -223,7 +223,7 @@ pub fn requestAnimationFrame(self: *Window, cb: js.Function, page: *Page) !u32 {
         .repeat = false,
         .params = &.{},
         .low_priority = false,
-        .animation_frame = true,
+        .mode = .animation_frame,
         .name = "window.requestAnimationFrame",
     }, page);
 }
@@ -258,6 +258,7 @@ const RequestIdleCallbackOpts = struct {
 pub fn requestIdleCallback(self: *Window, cb: js.Function, opts_: ?RequestIdleCallbackOpts, page: *Page) !u32 {
     const opts = opts_ orelse RequestIdleCallbackOpts{};
     return self.scheduleCallback(cb, opts.timeout orelse 50, .{
+        .mode = .idle,
         .repeat = false,
         .params = &.{},
         .low_priority = true,
@@ -364,6 +365,7 @@ const ScheduleOpts = struct {
     name: []const u8,
     low_priority: bool = false,
     animation_frame: bool = false,
+    mode: ScheduleCallback.Mode = .normal,
 };
 fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
     if (self._timers.count() > 512) {
@@ -393,10 +395,10 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
     const callback = try page._factory.create(ScheduleCallback{
         .cb = cb,
         .page = page,
+        .mode = opts.mode,
         .name = opts.name,
         .timer_id = timer_id,
         .params = persisted_params,
-        .animation_frame = opts.animation_frame,
         .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
     });
     gop.value_ptr.* = callback;
@@ -428,7 +430,13 @@ const ScheduleCallback = struct {
 
     removed: bool = false,
 
-    animation_frame: bool = false,
+    mode: Mode,
+
+    const Mode = enum {
+        idle,
+        normal,
+        animation_frame,
+    };
 
     fn deinit(self: *ScheduleCallback) void {
         self.page._factory.destroy(self);
@@ -443,16 +451,23 @@ const ScheduleCallback = struct {
             return null;
         }
 
-        if (self.animation_frame) {
-            self.cb.call(void, .{page.window._performance.now()}) catch |err| {
-                // a non-JS error
-                log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
-            };
-        } else {
-            self.cb.call(void, .{self.params}) catch |err| {
-                // a non-JS error
-                log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
-            };
+        switch (self.mode) {
+            .idle => {
+                const IdleDeadline = @import("IdleDeadline.zig");
+                self.cb.call(void, .{IdleDeadline{}}) catch |err| {
+                    log.warn(.js, "window.idleCallback", .{ .name = self.name, .err = err });
+                };
+            },
+            .animation_frame => {
+                self.cb.call(void, .{page.window._performance.now()}) catch |err| {
+                    log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
+                };
+            },
+            .normal => {
+                self.cb.call(void, .{self.params}) catch |err| {
+                    log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
+                };
+            },
         }
 
         if (self.repeat_ms) |ms| {
