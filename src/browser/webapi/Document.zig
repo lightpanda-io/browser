@@ -30,6 +30,7 @@ const Parser = @import("../parser/Parser.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const NodeFilter = @import("NodeFilter.zig");
+const DocumentType = @import("DocumentType.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
@@ -404,6 +405,10 @@ pub fn elementsFromPoint(self: *Document, x: f64, y: f64, page: *Page) ![]const 
     return result.items;
 }
 
+pub fn getDocType(_: *const Document) ?*DocumentType {
+    return null;
+}
+
 pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     if (self._type == .xml) {
         return error.InvalidStateError;
@@ -598,6 +603,7 @@ pub const JsApi = struct {
     pub const write = bridge.function(Document.write, .{ .dom_exception = true });
     pub const open = bridge.function(Document.open, .{ .dom_exception = true });
     pub const close = bridge.function(Document.close, .{ .dom_exception = true });
+    pub const doctype = bridge.accessor(Document.getDocType, null, .{});
 
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {

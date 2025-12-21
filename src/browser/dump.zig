@@ -50,9 +50,9 @@ pub const Opts = struct {
 };
 
 pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
-    if (opts.with_base) {
-        if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
-            try writer.writeAll("<!DOCTYPE html>");
+    if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
+        try writer.writeAll("<!DOCTYPE html>");
+        if (opts.with_base) {
             const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
             const base = try doc.createElement("base", null, page);
             try base.setAttributeSafe("base", page.url, page);

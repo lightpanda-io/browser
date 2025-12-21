@@ -24,11 +24,13 @@ const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const Document = @import("Document.zig");
 const Element = @import("Element.zig");
+const DocumentType = @import("DocumentType.zig");
 const collections = @import("collections.zig");
 
 const HTMLDocument = @This();
 
 _proto: *Document,
+_document_type: ?*DocumentType = null,
 
 pub fn asDocument(self: *HTMLDocument) *Document {
     return self._proto;
@@ -163,6 +165,19 @@ pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, page: *Page) ![]const
     return cookie_str;
 }
 
+pub fn getDocType(self: *HTMLDocument, page: *Page) !*DocumentType {
+    if (self._document_type) |dt| {
+        return dt;
+    }
+    self._document_type = try page._factory.node(DocumentType{
+        ._proto = undefined,
+        ._name = "html",
+        ._public_id = "",
+        ._system_id = "",
+    });
+    return self._document_type.?;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HTMLDocument);
 
@@ -194,4 +209,5 @@ pub const JsApi = struct {
     pub const location = bridge.accessor(HTMLDocument.getLocation, null, .{ .cache = "location" });
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
     pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
+    pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
 };
