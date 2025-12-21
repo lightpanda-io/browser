@@ -113,18 +113,40 @@ pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
 // TODO: this takes an opitonal 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
+    // Abort any in-progress request
+    if (self._transfer) |transfer| {
+        transfer.abort();
+        self._transfer = null;
+    }
+
+    // Reset internal state
+    self._response = null;
+    self._response_data.clearRetainingCapacity();
+    self._response_status = 0;
+    self._response_len = 0;
+    self._response_url = "";
+    self._response_mime = null;
+    self._response_headers.clearRetainingCapacity();
+    self._request_body = null;
+
     self._method = try parseMethod(method_);
     self._url = try URL.resolve(self._arena, self._page.url, url, .{ .always_dupe = true });
     try self.stateChanged(.opened, self._page);
 }
 
 pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8, page: *Page) !void {
+    if (self._ready_state != .opened) {
+        return error.InvalidStateError;
+    }
     return self._request_headers.append(name, value, page);
 }
 
 pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     if (comptime IS_DEBUG) {
         log.debug(.http, "XMLHttpRequest.send", .{ .url = self._url });
+    }
+    if (self._ready_state != .opened) {
+        return error.InvalidStateError;
     }
 
     if (body_) |b| {
@@ -387,8 +409,10 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
 }
 
 fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
-    // there are more rules than this, but it's a start
-    std.debug.assert(state != self._ready_state);
+    if (state == self._ready_state) {
+        return;
+    }
+
     self._ready_state = state;
 
     const event = try Event.init("readystatechange", .{}, page);
@@ -434,7 +458,7 @@ pub const JsApi = struct {
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
     pub const open = bridge.function(XMLHttpRequest.open, .{});
-    pub const send = bridge.function(XMLHttpRequest.send, .{});
+    pub const send = bridge.function(XMLHttpRequest.send, .{.dom_exception = true});
     pub const responseType = bridge.accessor(XMLHttpRequest.getResponseType, XMLHttpRequest.setResponseType, .{});
     pub const status = bridge.accessor(XMLHttpRequest.getStatus, null, .{});
     pub const statusText = bridge.accessor(XMLHttpRequest.getStatusText, null, .{});
@@ -443,7 +467,7 @@ pub const JsApi = struct {
     pub const responseText = bridge.accessor(XMLHttpRequest.getResponseText, null, .{});
     pub const responseXML = bridge.accessor(XMLHttpRequest.getResponseXML, null, .{});
     pub const responseURL = bridge.accessor(XMLHttpRequest.getResponseURL, null, .{});
-    pub const setRequestHeader = bridge.function(XMLHttpRequest.setRequestHeader, .{});
+    pub const setRequestHeader = bridge.function(XMLHttpRequest.setRequestHeader, .{.dom_exception = true});
     pub const getResponseHeader = bridge.function(XMLHttpRequest.getResponseHeader, .{});
     pub const getAllResponseHeaders = bridge.function(XMLHttpRequest.getAllResponseHeaders, .{});
     pub const abort = bridge.function(XMLHttpRequest.abort, .{});
