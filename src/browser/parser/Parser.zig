@@ -64,6 +64,7 @@ const Error = struct {
         append,
         create_element,
         create_comment,
+        create_processing_instruction,
         append_doctype_to_document,
         add_attrs_if_missing,
         get_template_content,
@@ -84,6 +85,7 @@ pub fn parse(self: *Parser, html: []const u8) void {
         parseErrorCallback,
         popCallback,
         createCommentCallback,
+        createProcessingInstruction,
         appendDoctypeToDocument,
         addAttrsIfMissingCallback,
         getTemplateContentsCallback,
@@ -104,6 +106,7 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         parseErrorCallback,
         popCallback,
         createCommentCallback,
+        createProcessingInstruction,
         appendDoctypeToDocument,
         addAttrsIfMissingCallback,
         getTemplateContentsCallback,
@@ -141,6 +144,7 @@ pub const Streaming = struct {
             parseErrorCallback,
             popCallback,
             createCommentCallback,
+            createProcessingInstruction,
             appendDoctypeToDocument,
             addAttrsIfMissingCallback,
             getTemplateContentsCallback,
@@ -210,6 +214,24 @@ fn createCommentCallback(ctx: *anyopaque, str: h5e.StringSlice) callconv(.c) ?*a
 fn _createCommentCallback(self: *Parser, str: []const u8) !*anyopaque {
     const page = self.page;
     const node = try page.createComment(str);
+    const pn = try self.arena.create(ParsedNode);
+    pn.* = .{
+        .data = null,
+        .node = node,
+    };
+    return pn;
+}
+
+fn createProcessingInstruction(ctx: *anyopaque, target: h5e.StringSlice, data: h5e.StringSlice) callconv(.c) ?*anyopaque {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    return self._createProcessingInstruction(target.slice(), data.slice()) catch |err| {
+        self.err = .{ .err = err, .source = .create_processing_instruction };
+        return null;
+    };
+}
+fn _createProcessingInstruction(self: *Parser, target: []const u8, data: []const u8) !*anyopaque {
+    const page = self.page;
+    const node = try page.createProcessingInstruction(target, data);
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{
         .data = null,

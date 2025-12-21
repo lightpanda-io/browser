@@ -458,7 +458,7 @@ pub const JsApi = struct {
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
     pub const open = bridge.function(XMLHttpRequest.open, .{});
-    pub const send = bridge.function(XMLHttpRequest.send, .{.dom_exception = true});
+    pub const send = bridge.function(XMLHttpRequest.send, .{ .dom_exception = true });
     pub const responseType = bridge.accessor(XMLHttpRequest.getResponseType, XMLHttpRequest.setResponseType, .{});
     pub const status = bridge.accessor(XMLHttpRequest.getStatus, null, .{});
     pub const statusText = bridge.accessor(XMLHttpRequest.getStatusText, null, .{});
@@ -467,7 +467,7 @@ pub const JsApi = struct {
     pub const responseText = bridge.accessor(XMLHttpRequest.getResponseText, null, .{});
     pub const responseXML = bridge.accessor(XMLHttpRequest.getResponseXML, null, .{});
     pub const responseURL = bridge.accessor(XMLHttpRequest.getResponseURL, null, .{});
-    pub const setRequestHeader = bridge.function(XMLHttpRequest.setRequestHeader, .{.dom_exception = true});
+    pub const setRequestHeader = bridge.function(XMLHttpRequest.setRequestHeader, .{ .dom_exception = true });
     pub const getResponseHeader = bridge.function(XMLHttpRequest.getResponseHeader, .{});
     pub const getAllResponseHeaders = bridge.function(XMLHttpRequest.getAllResponseHeaders, .{});
     pub const abort = bridge.function(XMLHttpRequest.abort, .{});

@@ -54,6 +54,7 @@ pub struct Sink<'arena> {
     pub parse_error_callback: ParseErrorCallback,
     pub create_element_callback: CreateElementCallback,
     pub create_comment_callback: CreateCommentCallback,
+    pub create_processing_instruction: CreateProcessingInstruction,
     pub append_doctype_to_document: AppendDoctypeToDocumentCallback,
     pub add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
     pub get_template_contents_callback: GetTemplateContentsCallback,
@@ -144,9 +145,11 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn create_pi(&self, target: StrTendril, data: StrTendril) -> Ref {
-        _ = target;
-        _ = data;
-        panic!("create_pi");
+        let str_target = StringSlice{ ptr: target.as_ptr(), len: target.len()};
+        let str_data = StringSlice{ ptr: data.as_ptr(), len: data.len()};
+        unsafe {
+            return (self.create_processing_instruction)(self.ctx, str_target, str_data);
+        }
     }
 
     fn append(&self, parent: &Ref, child: NodeOrText<Ref>) {
