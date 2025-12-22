@@ -471,6 +471,30 @@ pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) !
     return buildUrl(allocator, protocol, host, pathname, search, hash);
 }
 
+pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![:0]const u8 {
+    if (query_string.len == 0) {
+        return arena.dupeZ(u8, url);
+    }
+
+    var buf: std.ArrayList(u8) = .empty;
+
+    // the most space well need is the url + ('?' or '&') + the query_string + null terminator
+    try buf.ensureTotalCapacity(arena, url.len + 2 + query_string.len);
+    buf.appendSliceAssumeCapacity(url);
+
+    if (std.mem.indexOfScalar(u8, url, '?')) |index| {
+        const last_index = url.len - 1;
+        if (index != last_index and url[last_index] != '&') {
+            buf.appendAssumeCapacity('&');
+        }
+    } else {
+        buf.appendAssumeCapacity('?');
+    }
+    buf.appendSliceAssumeCapacity(query_string);
+    buf.appendAssumeCapacity(0);
+    return buf.items[0 .. buf.items.len - 1 :0];
+}
+
 const KnownProtocol = enum {
     @"http:",
     @"https:",
@@ -705,5 +729,35 @@ test "URL: eqlDocument" {
         const url1 = "https://duckduckgo.com/";
         const url2 = "https://duckduckgo.com/?q=lightpanda";
         try testing.expectEqual(false, eqlDocument(url1, url2));
+    }
+}
+
+test "URL: concatQueryString" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    {
+        const url = try concatQueryString(arena, "https://www.lightpanda.io/", "");
+        try testing.expectEqual("https://www.lightpanda.io/", url);
+    }
+
+    {
+        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?", "");
+        try testing.expectEqual("https://www.lightpanda.io/index?", url);
+    }
+
+    {
+        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?a=b", url);
+    }
+
+    {
+        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?1=2", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+    }
+
+    {
+        const url = try concatQueryString(arena, "https://www.lightpanda.io/index?1=2&", "a=b");
+        try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
     }
 }

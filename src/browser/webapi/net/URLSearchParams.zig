@@ -109,22 +109,7 @@ pub fn entries(self: *URLSearchParams, page: *Page) !*KeyValueList.EntryIterator
 }
 
 pub fn toString(self: *const URLSearchParams, writer: *std.Io.Writer) !void {
-    const items = self._params._entries.items;
-    if (items.len == 0) {
-        return;
-    }
-
-    try writeEntry(&items[0], writer);
-    for (items[1..]) |entry| {
-        try writer.writeByte('&');
-        try writeEntry(&entry, writer);
-    }
-}
-
-fn writeEntry(entry: *const KeyValueList.Entry, writer: *std.Io.Writer) !void {
-    try escape(entry.name.str(), writer);
-    try writer.writeByte('=');
-    try escape(entry.value.str(), writer);
+    return self._params.urlEncode(.query, writer);
 }
 
 pub fn format(self: *const URLSearchParams, writer: *std.Io.Writer) !void {

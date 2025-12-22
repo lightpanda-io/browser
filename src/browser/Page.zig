@@ -39,7 +39,7 @@ const ScriptManager = @import("ScriptManager.zig");
 
 const Parser = @import("parser/Parser.zig");
 
-const URL = @import("webapi/URL.zig");
+const URL = @import("URL.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const CData = @import("webapi/CData.zig");
@@ -62,7 +62,9 @@ const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
-var default_url = URL{ ._raw = "about:blank" };
+const WebApiURL = @import("webapi/URL.zig");
+
+var default_url = WebApiURL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
 
 pub const BUF_SIZE = 1024;
@@ -297,13 +299,11 @@ pub fn getTitle(self: *Page) !?[]const u8 {
 }
 
 pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
-    const URLRaw = @import("URL.zig");
-    return try URLRaw.getOrigin(allocator, self.url);
+    return try URL.getOrigin(allocator, self.url);
 }
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
-    const URLRaw = @import("URL.zig");
-    const current_origin = (try URLRaw.getOrigin(self.call_arena, self.url)) orelse return false;
+    const current_origin = (try URL.getOrigin(self.call_arena, self.url)) orelse return false;
     return std.mem.startsWith(u8, url, current_origin);
 }
 
@@ -440,7 +440,6 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
     }
 
     const session = self._session;
-    const URLRaw = @import("URL.zig");
 
     const resolved_url = try URL.resolve(
         session.transfer_arena,
@@ -449,7 +448,7 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
         .{ .always_dupe = true },
     );
 
-    if (!opts.force and URLRaw.eqlDocument(self.url, resolved_url)) {
+    if (!opts.force and URL.eqlDocument(self.url, resolved_url)) {
         self.url = try self.arena.dupeZ(u8, resolved_url);
         self.window._location = try Location.init(self.url, self);
         self.document._location = self.window._location;
@@ -2421,50 +2420,73 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
 pub fn handleClick(self: *Page, target: *Node) !void {
     // TODO: Also support <area> elements when implement
     const element = target.is(Element) orelse return;
-    const anchor = element.is(Element.Html.Anchor) orelse return;
+    const html_element = element.is(Element.Html) orelse return;
 
-    const href = element.getAttributeSafe("href") orelse return;
-    if (href.len == 0) {
-        return;
+    switch (html_element._type) {
+        .anchor => |anchor| {
+            const href = element.getAttributeSafe("href") orelse return;
+            if (href.len == 0) {
+                return;
+            }
+
+            if (std.mem.startsWith(u8, href, "#")) {
+                // Hash-only links (#foo) should be handled as same-document navigation
+                return;
+            }
+
+            if (std.mem.startsWith(u8, href, "javascript:")) {
+                return;
+            }
+
+            // Check target attribute - don't navigate if opening in new window/tab
+            const target_val = anchor.getTarget();
+            if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
+                log.warn(.browser, "not implemented", .{
+                    .feature = "anchor with target attribute click",
+                });
+                return;
+            }
+
+            if (try element.hasAttribute("download", self)) {
+                log.warn(.browser, "not implemented", .{
+                    .feature = "anchor with download attribute click",
+                });
+                return;
+            }
+
+            try self.scheduleNavigation(href, .{
+                .reason = .script,
+                .kind = .{ .push = null },
+            }, .anchor);
+        },
+        .input => |input| switch (input._input_type) {
+            .submit => return self.submitForm(element, input.getForm(self)),
+            else => self.window._document._active_element = element,
+        },
+        .button => |button| {
+            if (std.mem.eql(u8, button.getType(), "submit")) {
+                return self.submitForm(element, button.getForm(self));
+            }
+        },
+        .select, .textarea => self.window._document._active_element = element,
+        else => {},
     }
-
-    if (std.mem.startsWith(u8, href, "#")) {
-        // Hash-only links (#foo) should be handled as same-document navigation
-        return;
-    }
-
-    if (std.mem.startsWith(u8, href, "javascript:")) {
-        return;
-    }
-
-    // Check target attribute - don't navigate if opening in new window/tab
-    const target_val = anchor.getTarget();
-    if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
-        log.warn(.browser, "not implemented", .{
-            .feature = "anchor with target attribute click",
-        });
-        return;
-    }
-
-    if (try element.hasAttribute("download", self)) {
-        log.warn(.browser, "not implemented", .{
-            .feature = "anchor with download attribute click",
-        });
-        return;
-    }
-
-    try self.scheduleNavigation(href, .{
-        .reason = .script,
-        .kind = .{ .push = null },
-    }, .anchor);
 }
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const element = self.window._document._active_element orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.page, "page keydown", .{
+            .url = self.url,
+            .node = element,
+            .key = keyboard_event._key,
+        });
+    }
     try self._event_manager.dispatch(element.asEventTarget(), keyboard_event.asEvent());
 }
 
-pub fn handleKeydown(self: *Page, target: *Element, keyboard_event: *KeyboardEvent) !void {
+pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
+    const keyboard_event = event.as(KeyboardEvent);
     const key = keyboard_event.getKey();
 
     if (key == .Dead) {
@@ -2473,11 +2495,7 @@ pub fn handleKeydown(self: *Page, target: *Element, keyboard_event: *KeyboardEve
 
     if (target.is(Element.Html.Input)) |input| {
         if (key == .Enter) {
-            if (input.getForm(self)) |form| {
-                // TODO: Implement form submission
-                _ = form;
-            }
-            return;
+            return self.submitForm(input.asElement(), input.getForm(self));
         }
 
         // Don't handle text input for radio/checkbox
@@ -2496,12 +2514,57 @@ pub fn handleKeydown(self: *Page, target: *Element, keyboard_event: *KeyboardEve
     }
 
     if (target.is(Element.Html.TextArea)) |textarea| {
+        // zig fmt: off
         const append =
-            if (key == .Enter) "\n" else if (key.isPrintable()) key.asString() else return;
+            if (key == .Enter) "\n"
+            else if (key.isPrintable()) key.asString()
+            else return
+        ;
+        // zig fmt: on
         const current_value = textarea.getValue();
         const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, append });
         return textarea.setValue(new_value, self);
     }
+}
+
+pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form) !void {
+    const form = form_ orelse return;
+
+    if (submitter_) |submitter| {
+        if (submitter.getAttributeSafe("disabled") != null) {
+            return;
+        }
+    }
+    const form_element = form.asElement();
+
+    const FormData = @import("webapi/net/FormData.zig");
+    // The submitter can be an input box (if enter was entered on the box)
+    // I don't think this is technically correct, but FormData handles it ok
+    const form_data = try FormData.init(form, submitter_, self);
+
+    const transfer_arena = self._session.transfer_arena;
+
+    const encoding = form_element.getAttributeSafe("enctype");
+
+    var buf = std.Io.Writer.Allocating.init(transfer_arena);
+    try form_data.write(encoding, &buf.writer);
+
+    const method = form_element.getAttributeSafe("method") orelse "";
+    var action = form_element.getAttributeSafe("action") orelse self.url;
+
+    var opts = NavigateOpts{
+        .reason = .form,
+        .kind = .{ .push = null },
+    };
+    if (std.ascii.eqlIgnoreCase(method, "post")) {
+        opts.method = .POST;
+        opts.body = buf.written();
+        // form_data.write currently only supports this encoding, so we know this has to be the content type
+        opts.header = "Content-Type: application/x-www-form-urlencoded";
+    } else {
+        action = try URL.concatQueryString(transfer_arena, action, buf.written());
+    }
+    return self.scheduleNavigation(action, opts, .form);
 }
 
 const RequestCookieOpts = struct {

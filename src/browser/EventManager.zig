@@ -197,9 +197,15 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
         event._event_phase = .none;
 
         // Execute default action if not prevented
-        if (!event._prevent_default and event._type_string.eqlSlice("click")) {
+        if (event._prevent_default) {
+            // can't return in a defer (╯°□°)╯︵ ┻━┻
+        } else if (event._type_string.eqlSlice("click")) {
             self.page.handleClick(target) catch |err| {
                 log.warn(.event, "page.click", .{ .err = err });
+            };
+        } else if (event._type_string.eqlSlice("keydown")) {
+            self.page.handleKeydown(target, event) catch |err| {
+                log.warn(.event, "page.keydown", .{ .err = err });
             };
         }
     }

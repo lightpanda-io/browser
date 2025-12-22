@@ -77,7 +77,7 @@ pub fn is(self: *Element, comptime T: type) ?*T {
     const type_name = @typeName(T);
     switch (self._type) {
         .html => |el| {
-            if (T == *Html) {
+            if (T == Html) {
                 return el;
             }
             if (comptime std.mem.startsWith(u8, type_name, "browser.webapi.element.html.")) {
@@ -85,7 +85,7 @@ pub fn is(self: *Element, comptime T: type) ?*T {
             }
         },
         .svg => |svg| {
-            if (T == *Svg) {
+            if (T == Svg) {
                 return svg;
             }
             if (comptime std.mem.startsWith(u8, type_name, "webapi.element.svg.")) {

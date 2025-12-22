@@ -61,6 +61,19 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
     return event;
 }
 
+pub fn as(self: *UIEvent, comptime T: type) *T {
+    return self.is(T).?;
+}
+
+pub fn is(self: *UIEvent, comptime T: type) ?*T {
+    switch (self._type) {
+        .generic => return if (T == UIEvent) self else null,
+        .mouse_event => |e| return if (T == @import("MouseEvent.zig")) e else null,
+        .keyboard_event => |e| return if (T == @import("KeyboardEvent.zig")) e else null,
+    }
+    return null;
+}
+
 pub fn populateFromOptions(self: *UIEvent, opts: anytype) void {
     self._detail = opts.detail;
     self._view = opts.view;

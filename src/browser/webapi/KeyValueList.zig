@@ -34,6 +34,16 @@ pub fn registerTypes() []const type {
 }
 
 const Normalizer = *const fn ([]const u8, *Page) []const u8;
+
+pub const Entry = struct {
+    name: String,
+    value: String,
+
+    pub fn format(self: Entry, writer: *std.Io.Writer) !void {
+        return writer.print("{f}: {f}", .{ self.name, self.value });
+    }
+};
+
 pub const KeyValueList = @This();
 
 _entries: std.ArrayListUnmanaged(Entry) = .empty,
@@ -84,15 +94,6 @@ pub fn fromArray(arena: Allocator, kvs: []const [2][]const u8, comptime normaliz
     }
     return list;
 }
-
-pub const Entry = struct {
-    name: String,
-    value: String,
-
-    pub fn format(self: Entry, writer: *std.Io.Writer) !void {
-        return writer.print("{f}: {f}", .{ self.name, self.value });
-    }
-};
 
 pub fn init() KeyValueList {
     return .{};
@@ -170,6 +171,77 @@ pub fn len(self: *const KeyValueList) usize {
 
 pub fn items(self: *const KeyValueList) []const Entry {
     return self._entries.items;
+}
+
+const URLEncodeMode = enum {
+    form,
+    query,
+};
+
+pub fn urlEncode(self: *const KeyValueList, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
+    const entries = self._entries.items;
+    if (entries.len == 0) {
+        return;
+    }
+
+    try urlEncodeEntry(entries[0], mode, writer);
+    for (entries[1..]) |entry| {
+        try writer.writeByte('&');
+        try urlEncodeEntry(entry, mode, writer);
+    }
+}
+
+fn urlEncodeEntry(entry: Entry, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
+    try urlEncodeValue(entry.name.str(), mode, writer);
+
+    // for a form, for an empty value, we'll do "spice="
+    // but for a query, we do "spice"
+    if ((comptime mode == .query) and entry.value.len == 0) {
+        return;
+    }
+
+    try writer.writeByte('=');
+    try urlEncodeValue(entry.value.str(), mode, writer);
+}
+
+fn urlEncodeValue(value: []const u8, comptime mode: URLEncodeMode, writer: *std.Io.Writer) !void {
+    if (!urlEncodeShouldEscape(value, mode)) {
+        return writer.writeAll(value);
+    }
+
+    for (value) |b| {
+        if (urlEncodeUnreserved(b, mode)) {
+            try writer.writeByte(b);
+        } else if (b == ' ') {
+            try writer.writeByte('+');
+        } else if (b >= 0x80) {
+            // Double-encode: treat byte as Latin-1 code point, encode to UTF-8, then percent-encode
+            // For bytes 0x80-0xFF (U+0080 to U+00FF), UTF-8 encoding is 2 bytes:
+            // [0xC0 | (b >> 6), 0x80 | (b & 0x3F)]
+            const byte1 = 0xC0 | (b >> 6);
+            const byte2 = 0x80 | (b & 0x3F);
+            try writer.print("%{X:0>2}%{X:0>2}", .{ byte1, byte2 });
+        } else {
+            try writer.print("%{X:0>2}", .{b});
+        }
+    }
+}
+
+fn urlEncodeShouldEscape(value: []const u8, comptime mode: URLEncodeMode) bool {
+    for (value) |b| {
+        if (!urlEncodeUnreserved(b, mode)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn urlEncodeUnreserved(b: u8, comptime mode: URLEncodeMode) bool {
+    return switch (b) {
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '*' => true,
+        '~' => comptime mode == .form,
+        else => false,
+    };
 }
 
 pub const Iterator = struct {

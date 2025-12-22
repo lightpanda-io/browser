@@ -87,6 +87,21 @@ pub fn forEach(self: *FormData, cb_: js.Function, js_this_: ?js.Object) !void {
     }
 }
 
+pub fn write(self: *const FormData, encoding_: ?[]const u8, writer: *std.Io.Writer) !void {
+    const encoding = encoding_ orelse {
+        return self._list.urlEncode(.form, writer);
+    };
+
+    if (std.ascii.eqlIgnoreCase(encoding, "application/x-www-form-urlencoded")) {
+        return self._list.urlEncode(.form, writer);
+    }
+
+    log.debug(.not_implemented, "not implemented", .{
+        .feature = "form data encoding",
+        .encoding = encoding,
+    });
+}
+
 pub const Iterator = struct {
     index: u32 = 0,
     list: *const FormData,

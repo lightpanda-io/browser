@@ -88,6 +88,10 @@ pub fn getLength(self: *Form, page: *Page) !u32 {
     return elements.length(page);
 }
 
+pub fn submit(self: *Form, page: *Page) !void {
+    return page.submitForm(null, self);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Form);
     pub const Meta = struct {
@@ -100,6 +104,7 @@ pub const JsApi = struct {
     pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{});
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
+    pub const submit = bridge.function(Form.submit, .{});
 };
 
 const testing = @import("../../../../testing.zig");

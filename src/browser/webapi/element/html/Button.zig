@@ -58,6 +58,14 @@ pub fn setName(self: *Button, name: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe("name", name, page);
 }
 
+pub fn getType(self: *const Button) []const u8 {
+    return self.asConstElement().getAttributeSafe("type") orelse "submit";
+}
+
+pub fn setType(self: *Button, typ: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("type", typ, page);
+}
+
 pub fn getValue(self: *const Button) []const u8 {
     return self.asConstElement().getAttributeSafe("value") orelse "";
 }
@@ -116,6 +124,7 @@ pub const JsApi = struct {
     pub const required = bridge.accessor(Button.getRequired, Button.setRequired, .{});
     pub const form = bridge.accessor(Button.getForm, null, .{});
     pub const value = bridge.accessor(Button.getValue, Button.setValue, .{});
+    pub const @"type" = bridge.accessor(Button.getType, Button.setType, .{});
 };
 
 pub const Build = struct {

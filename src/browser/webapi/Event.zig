@@ -85,6 +85,31 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
     });
 }
 
+pub fn as(self: *Event, comptime T: type) *T {
+    return self.is(T).?;
+}
+
+pub fn is(self: *Event, comptime T: type) ?*T {
+    switch (self._type) {
+        .generic => return if (T == Event) self else null,
+        .error_event => |e| return if (T == @import("event/ErrorEvent.zig")) e else null,
+        .custom_event => |e| return if (T == @import("event/CustomEvent.zig")) e else null,
+        .message_event => |e| return if (T == @import("event/MessageEvent.zig")) e else null,
+        .progress_event => |e| return if (T == @import("event/ProgressEvent.zig")) e else null,
+        .composition_event => |e| return if (T == @import("event/CompositionEvent.zig")) e else null,
+        .navigation_current_entry_change_event => |e| return if (T == @import("event/NavigationCurrentEntryChangeEvent.zig")) e else null,
+        .page_transition_event => |e| return if (T == @import("event/PageTransitionEvent.zig")) e else null,
+        .pop_state_event => |e| return if (T == @import("event/PopStateEvent.zig")) e else null,
+        .ui_event => |e| {
+            if (T == @import("event/UIEvent.zig")) {
+                return e;
+            }
+            return e.is(T);
+        },
+    }
+    return null;
+}
+
 pub fn getType(self: *const Event) []const u8 {
     return self._type_string.str();
 }
