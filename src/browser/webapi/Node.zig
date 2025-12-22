@@ -876,7 +876,7 @@ pub const JsApi = struct {
     }
 
     fn _baseURI(_: *Node, page: *const Page) []const u8 {
-        return page.url[0..];
+        return page.base();
     }
     pub const baseURI = bridge.accessor(_baseURI, null, .{});
 };

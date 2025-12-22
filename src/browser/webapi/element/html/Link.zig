@@ -42,7 +42,7 @@ pub fn getHref(self: *Link, page: *Page) ![]const u8 {
     }
 
     // Always resolve the href against the page URL
-    return URL.resolve(page.call_arena, page.url, href, .{});
+    return URL.resolve(page.call_arena, page.base(), href, .{});
 }
 
 pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {

@@ -130,7 +130,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
     self._request_body = null;
 
     self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, self._page.url, url, .{ .always_dupe = true });
+    self._url = try URL.resolve(self._arena, self._page.base(), url, .{ .always_dupe = true });
     try self.stateChanged(.opened, self._page);
 }
 

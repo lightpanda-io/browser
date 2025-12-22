@@ -190,11 +190,12 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     const page = self.page;
     var source: Script.Source = undefined;
     var remote_url: ?[:0]const u8 = null;
+    const base_url = page.base();
     if (element.getAttributeSafe("src")) |src| {
         if (try parseDataURI(page.arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
         } else {
-            remote_url = try URL.resolve(page.arena, page.url, src, .{});
+            remote_url = try URL.resolve(page.arena, base_url, src, .{});
             source = .{ .remote = .{} };
         }
     } else {
@@ -215,7 +216,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         .script_element = script_element,
         .complete = is_inline,
         .status = if (is_inline) 200 else 0,
-        .url = remote_url orelse page.url,
+        .url = remote_url orelse base_url,
         .mode = blk: {
             if (source == .@"inline") {
                 break :blk if (kind == .module) .@"defer" else .normal;
@@ -568,7 +569,7 @@ fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
         // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules#importing_modules_using_import_maps
         const resolved_url = try URL.resolve(
             self.page.arena,
-            self.page.url,
+            self.page.base(),
             entry.value_ptr.*,
             .{},
         );
