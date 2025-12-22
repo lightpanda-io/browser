@@ -211,7 +211,7 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, pre
         const html5ever_exec_cargo = b.addSystemCommand(html5ever_argv);
         const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
         html5ever_step.dependOn(&html5ever_exec_cargo.step);
-        b.getInstallStep().dependOn(html5ever_step);
+        opts.step.dependOn(html5ever_step);
 
         const html5ever_obj = switch (mod.optimize.?) {
             .Debug => b.getInstallPath(.prefix, "html5ever/debug/liblitefetch_html5ever.a"),
