@@ -4,7 +4,7 @@
 <script id=navigation>
     testing.expectEqual('object', typeof navigation);
     testing.expectEqual('object', typeof navigation.currentEntry);
-    
+
     testing.expectEqual('string', typeof navigation.currentEntry.id);
     testing.expectEqual('string', typeof navigation.currentEntry.key);
     testing.expectEqual('string', typeof navigation.currentEntry.url);
@@ -12,7 +12,7 @@
     const currentIndex = navigation.currentEntry.index;
 
     navigation.navigate(
-        'http://localhost:9582/src/tests/html/navigation/navigation2.html',
+        'http://localhost:9589/html/navigation/navigation2.html',
         { state: { currentIndex: currentIndex, navTestInProgress: true } }
     );
 </script>

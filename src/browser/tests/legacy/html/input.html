@@ -54,11 +54,11 @@
 
   testing.expectEqual('', input.src);
   input.src = 'foo'
-  testing.expectEqual('http://localhost:9582/src/tests/html/foo', input.src);
+  testing.expectEqual('http://localhost:9589/html/foo', input.src);
   input.src = '-3'
-  testing.expectEqual('http://localhost:9582/src/tests/html/-3', input.src);
+  testing.expectEqual('http://localhost:9589/html/-3', input.src);
   input.src = ''
-  testing.expectEqual('http://localhost:9582/src/tests/html/input.html', input.src);
+  testing.expectEqual('http://localhost:9589/html/input.html', input.src);
 
   testing.expectEqual('text', input.type);
   input.type = 'checkbox';

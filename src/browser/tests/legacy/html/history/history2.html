@@ -5,7 +5,7 @@
     history.pushState(
       {"new": "field", testComplete: true },
       null,
-      'http://127.0.0.1:9582/src/tests/html/history/history_after_nav.html'
+      'http://127.0.0.1:9589/html/history/history_after_nav.html'
     );
 
     let popstateEventFired = false;
@@ -16,7 +16,7 @@
         popstateEventFired = true;
         popstateEventState = event.state;
     };
-    
+
     testing.eventually(() => {
       testing.expectEqual(true, popstateEventFired);
       testing.expectEqual(true, popstateEventState.testComplete);
