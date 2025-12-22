@@ -47,26 +47,6 @@ pub fn init(callback: js.Function, page: *Page) !*PerformanceObserver {
     });
 }
 
-// We don't have to mark this as public but the declarations have to be public;
-// otherwise @typeInfo don't allow accessing them.
-//
-// Note that we also use this to report supported entry types.
-//const Interest = struct {
-//    pub const element = 0x01;
-//    pub const event = 0x02;
-//    pub const @"first-input" = 0x04;
-//    pub const @"largest-contentful-paint" = 0x08;
-//    pub const @"layout-shift" = 0x010;
-//    pub const @"long-animation-frame" = 0x020;
-//    pub const longtask = 0x040;
-//    pub const mark = 0x080;
-//    pub const measure = 0x0100;
-//    pub const navigation = 0x0200;
-//    pub const pant = 0x0400;
-//    pub const resource = 0x0800;
-//    pub const @"visibility-state" = 0x01000;
-//};
-
 const ObserveOptions = struct {
     buffered: bool = false,
     durationThreshold: f64 = DefaultDurationThreshold,
@@ -146,10 +126,9 @@ pub fn interested(
     self: *const PerformanceObserver,
     entry: *const Performance.Entry,
 ) bool {
-    // TODO.
-    _ = self;
-    _ = entry;
-    return true;
+    const index = @as(u16, @intFromEnum(entry._type));
+    const flag = @as(u16, 1) << index;
+    return self._interests & flag != 0;
 }
 
 pub fn getSupportedEntryTypes(_: *const PerformanceObserver) []const []const u8 {
