@@ -38,7 +38,8 @@ pub const EventManager = @This();
 page: *Page,
 arena: Allocator,
 listener_pool: std.heap.MemoryPool(Listener),
-lookup: std.AutoHashMapUnmanaged(usize, std.DoublyLinkedList),
+list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
+lookup: std.AutoHashMapUnmanaged(usize, *std.DoublyLinkedList),
 dispatch_depth: u32 = 0,
 
 pub fn init(page: *Page) EventManager {
@@ -46,6 +47,7 @@ pub fn init(page: *Page) EventManager {
         .page = page,
         .lookup = .{},
         .arena = page.arena,
+        .list_pool = std.heap.MemoryPool(std.DoublyLinkedList).init(page.arena),
         .listener_pool = std.heap.MemoryPool(Listener).init(page.arena),
         .dispatch_depth = 0,
     };
@@ -65,7 +67,7 @@ pub const Callback = union(enum) {
 
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
     if (comptime IS_DEBUG) {
-        log.debug(.event, "eventManager.register", .{ .type = typ, .capture = opts.capture, .once = opts.once });
+        log.debug(.event, "eventManager.register", .{ .type = typ, .capture = opts.capture, .once = opts.once, .target = target });
     }
 
     // If a signal is provided and already aborted, don't register the listener
@@ -78,7 +80,7 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
     const gop = try self.lookup.getOrPut(self.arena, @intFromPtr(target));
     if (gop.found_existing) {
         // check for duplicate callbacks already registered
-        var node = gop.value_ptr.first;
+        var node = gop.value_ptr.*.first;
         while (node) |n| {
             const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
             const is_duplicate = switch (callback) {
@@ -91,7 +93,8 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
             node = n.next;
         }
     } else {
-        gop.value_ptr.* = .{};
+        gop.value_ptr.* = try self.list_pool.create();
+        gop.value_ptr.*.* = .{};
     }
 
     const func = switch (callback) {
@@ -110,11 +113,14 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
         .typ = try String.init(self.arena, typ, .{}),
     };
     // append the listener to the list of listeners for this target
-    gop.value_ptr.append(&listener.node);
+    gop.value_ptr.*.append(&listener.node);
 }
 
 pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
-    const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.event, "eventManager.remove", .{ .type = typ, .capture = use_capture, .target = target });
+    }
+    const list = self.lookup.get(@intFromPtr(target)) orelse return;
     if (findListener(list, typ, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
     }
@@ -145,7 +151,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
         .screen_orientation,
         .generic,
         => {
-            const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
+            const list = self.lookup.get(@intFromPtr(target)) orelse return;
             try self.dispatchAll(list, target, event, &was_handled);
         },
     }
@@ -184,7 +190,7 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
         }
     }
 
-    const list = self.lookup.getPtr(@intFromPtr(target)) orelse return;
+    const list = self.lookup.get(@intFromPtr(target)) orelse return;
     try self.dispatchAll(list, target, event, &was_dispatched);
 }
 
@@ -252,7 +258,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     while (i > 1) {
         i -= 1;
         const current_target = path[i];
-        if (self.lookup.getPtr(@intFromPtr(current_target))) |list| {
+        if (self.lookup.get(@intFromPtr(current_target))) |list| {
             try self.dispatchPhase(list, current_target, event, was_handled, true);
             if (event._stop_propagation) {
                 return;
@@ -263,7 +269,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     // Phase 2: At target
     event._event_phase = .at_target;
     const target_et = target.asEventTarget();
-    if (self.lookup.getPtr(@intFromPtr(target_et))) |list| {
+    if (self.lookup.get(@intFromPtr(target_et))) |list| {
         try self.dispatchPhase(list, target_et, event, was_handled, null);
         if (event._stop_propagation) {
             return;
@@ -275,7 +281,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     if (event._bubbles) {
         event._event_phase = .bubbling_phase;
         for (path[1..]) |current_target| {
-            if (self.lookup.getPtr(@intFromPtr(current_target))) |list| {
+            if (self.lookup.get(@intFromPtr(current_target))) |list| {
                 try self.dispatchPhase(list, current_target, event, was_handled, false);
                 if (event._stop_propagation) {
                     break;
