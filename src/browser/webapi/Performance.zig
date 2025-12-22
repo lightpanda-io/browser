@@ -102,6 +102,8 @@ pub fn measure(
                 page,
             );
             try self._entries.append(page.arena, m._proto);
+            // Notify about the change.
+            try page.notifyPerformanceObservers(m._proto);
             return m;
         },
         .start_mark => |start_mark| {
@@ -125,12 +127,16 @@ pub fn measure(
                 page,
             );
             try self._entries.append(page.arena, m._proto);
+            // Notify about the change.
+            try page.notifyPerformanceObservers(m._proto);
             return m;
         },
     };
 
     const m = try Measure.init(name, null, 0.0, self.now(), null, page);
     try self._entries.append(page.arena, m._proto);
+    // Notify about the change.
+    try page.notifyPerformanceObservers(m._proto);
     return m;
 }
 
