@@ -121,18 +121,27 @@ pub fn takeRecords(self: *PerformanceObserver, page: *Page) ![]*Performance.Entr
     return records;
 }
 
+pub fn getSupportedEntryTypes(_: *const PerformanceObserver) []const []const u8 {
+    return &.{ "mark", "measure" };
+}
+
 /// Returns true if observer interested with given entry.
 pub fn interested(
     self: *const PerformanceObserver,
     entry: *const Performance.Entry,
 ) bool {
-    const index = @as(u16, @intFromEnum(entry._type));
-    const flag = @as(u16, 1) << index;
+    const flag = @as(u16, 1) << @intCast(@intFromEnum(entry._type));
     return self._interests & flag != 0;
 }
 
-pub fn getSupportedEntryTypes(_: *const PerformanceObserver) []const []const u8 {
-    return &.{ "mark", "measure" };
+pub inline fn hasRecords(self: *const PerformanceObserver) bool {
+    return self._entries.items.len > 0;
+}
+
+/// Runs the PerformanceObserver's callback with records; emptying it out.
+pub fn dispatch(self: *PerformanceObserver, page: *Page) !void {
+    const records = try self.takeRecords(page);
+    _ = try self._callback.call(void, .{records});
 }
 
 pub const JsApi = struct {
