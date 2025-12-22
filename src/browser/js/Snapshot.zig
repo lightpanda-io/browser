@@ -33,7 +33,7 @@ const Snapshot = @This();
 const embedded_snapshot_blob = if (@import("build_config").snapshot_path) |path| @embedFile(path) else "";
 
 // When creating our Snapshot, we use local function templates for every Zig type.
-// You cannot, from what I can tell, create persisted FunctoinTemplates at
+// You cannot, from what I can tell, create persisted FunctionTemplates at
 // snapshot creation time. But you can embedd those templates (or any other v8
 // Data) so that it's available to contexts created from the snapshot. This is
 // the starting index of those function templtes, which we can extract. At
