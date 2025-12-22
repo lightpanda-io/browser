@@ -81,7 +81,7 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
 
     isolate.setHostInitializeImportMetaObjectCallback(Context.metaObjectCallback);
 
-    // // Allocate templates array dynamically to avoid comptime dependency on JsApis.len
+    // Allocate templates array dynamically to avoid comptime dependency on JsApis.len
     const templates = try allocator.alloc(v8.FunctionTemplate, JsApis.len);
     errdefer allocator.free(templates);
 
