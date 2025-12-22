@@ -26,8 +26,8 @@ const Caller = @import("Caller.zig");
 
 pub fn Builder(comptime T: type) type {
     return struct {
-        pub const ClassId = u16;
         pub const @"type" = T;
+        pub const ClassId = u16;
 
         pub fn constructor(comptime func: anytype, comptime opts: Constructor.Opts) Constructor {
             return Constructor.init(T, func, opts);

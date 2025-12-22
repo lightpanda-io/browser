@@ -106,9 +106,6 @@ module_identifier: std.AutoHashMapUnmanaged(u32, [:0]const u8) = .empty,
 // the page's script manager
 script_manager: ?*ScriptManager,
 
-// Global callback is called on missing property.
-global_callback: ?js.GlobalMissingCallback = null,
-
 const ModuleEntry = struct {
     // Can be null if we're asynchrously loading the module, in
     // which case resolver_promise cannot be null.
@@ -645,7 +642,12 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
                     .prototype_len = @intCast(resolved.prototype_chain.len),
                     .subtype = if (@hasDecl(JsApi.Meta, "subtype")) JsApi.Meta.subype else .node,
                 };
-                js_obj.setInternalField(0, v8.External.init(isolate, tao));
+
+                // Skip setting internal field for the global object (Window)
+                // Window accessors get the instance from context.page.window instead
+                if (resolved.class_id != @import("../webapi/Window.zig").JsApi.Meta.class_id) {
+                    js_obj.setInternalField(0, v8.External.init(isolate, tao));
+                }
             } else {
                 // If the struct is empty, we don't need to do all
                 // the TOA stuff and setting the internal data.
@@ -1594,6 +1596,33 @@ pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
         // stored in the JSObject's IntenrnalField. Why bother when
         // we can just return an empty struct here?
         return @constCast(@as(*const T, &.{}));
+    }
+
+    // Special case for Window: the global object doesn't have internal fields
+    // Window instance is stored in context.page.window instead
+    if (js_obj.internalFieldCount() == 0) {
+        // Normally, this would be an error. All JsObject that map to a Zig type
+        // are either `empty_with_no_proto` (handled above) or have an
+        // interalFieldCount. The only exception to that is the Window...
+        const isolate = js_obj.getIsolate();
+        const context = fromIsolate(isolate);
+
+        const Window = @import("../webapi/Window.zig");
+        if (T == Window) {
+            return context.page.window;
+        }
+
+        // ... Or the window's prototype.
+        // We could make this all comptime-fancy, but it's easier to hard-code
+        // the EventTarget
+
+        const EventTarget = @import("../webapi/EventTarget.zig");
+        if (T == EventTarget) {
+            return context.page.window._proto;
+        }
+
+        // Type not found in Window's prototype chain
+        return error.InvalidArgument;
     }
 
     // if it isn't an empty struct, then the v8.Object should have an

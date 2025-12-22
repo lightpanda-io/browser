@@ -29,10 +29,12 @@ pub fn build(b: *Build) !void {
 
     const git_commit = b.option([]const u8, "git_commit", "Current git commit");
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
+    const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
 
     var opts = b.addOptions();
     opts.addOption([]const u8, "version", manifest.version);
     opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
+    opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
     // Build step to install html5ever dependency.
     const html5ever_argv = blk: {
@@ -109,6 +111,30 @@ pub fn build(b: *Build) !void {
             run_cmd.addArgs(args);
         }
         const run_step = b.step("run", "Run the app");
+        run_step.dependOn(&run_cmd.step);
+    }
+
+    {
+        // snapshot creator
+        const exe = b.addExecutable(.{
+            .name = "lightpanda-snapshot-creator",
+            .use_llvm = true,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main_snapshot_creator.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "lightpanda", .module = lightpanda_module },
+                },
+            }),
+        });
+        b.installArtifact(exe);
+
+        const run_cmd = b.addRunArtifact(exe);
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+        const run_step = b.step("snapshot_creator", "Generate a v8 snapshot");
         run_step.dependOn(&run_cmd.step);
     }
 

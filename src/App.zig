@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const Http = @import("http/Http.zig");
+const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 
 const Notification = @import("Notification.zig");
@@ -34,6 +35,7 @@ const App = @This();
 http: Http,
 config: Config,
 platform: Platform,
+snapshot: Snapshot,
 telemetry: Telemetry,
 allocator: Allocator,
 app_dir_path: ?[]const u8,
@@ -83,6 +85,9 @@ pub fn init(allocator: Allocator, config: Config) !*App {
     app.platform = try Platform.init();
     errdefer app.platform.deinit();
 
+    app.snapshot = try Snapshot.load(allocator);
+    errdefer app.snapshot.deinit(allocator);
+
     app.app_dir_path = getAndMakeAppDir(allocator);
 
     app.telemetry = try Telemetry.init(app, config.run_mode);
@@ -101,6 +106,7 @@ pub fn deinit(self: *App) void {
     self.telemetry.deinit();
     self.notification.deinit();
     self.http.deinit();
+    self.snapshot.deinit(allocator);
     self.platform.deinit();
 
     allocator.destroy(self);

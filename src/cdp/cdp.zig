@@ -22,7 +22,6 @@ const json = std.json;
 
 const log = @import("../log.zig");
 const js = @import("../browser/js/js.zig");
-const polyfill = @import("../browser/polyfill/polyfill.zig");
 
 const App = @import("../App.zig");
 const Browser = @import("../browser/Browser.zig");
@@ -711,10 +710,6 @@ const IsolatedWorld = struct {
     executor: js.ExecutionWorld,
     grant_universal_access: bool,
 
-    // Polyfill loader for the isolated world.
-    // We want to load polyfill in the world's context.
-    polyfill_loader: polyfill.Loader = .{},
-
     pub fn deinit(self: *IsolatedWorld) void {
         self.executor.deinit();
     }
@@ -740,7 +735,6 @@ const IsolatedWorld = struct {
         _ = try self.executor.createContext(
             page,
             false,
-            js.GlobalMissingCallback.init(&self.polyfill_loader),
         );
     }
 

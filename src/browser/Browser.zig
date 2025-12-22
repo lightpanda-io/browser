@@ -36,7 +36,7 @@ const Session = @import("Session.zig");
 // A browser contains only one session.
 const Browser = @This();
 
-env: *js.Env,
+env: js.Env,
 app: *App,
 session: ?Session,
 allocator: Allocator,
@@ -50,7 +50,7 @@ notification: *Notification,
 pub fn init(app: *App) !Browser {
     const allocator = app.allocator;
 
-    const env = try js.Env.init(allocator, &app.platform, .{});
+    var env = try js.Env.init(allocator, &app.platform, &app.snapshot);
     errdefer env.deinit();
 
     const notification = try Notification.init(allocator, app.notification);
