@@ -138,6 +138,10 @@ pub fn getLocation(self: *const HTMLDocument) ?*@import("Location.zig") {
     return self._proto._location;
 }
 
+pub fn setLocation(_: *const HTMLDocument, url: [:0]const u8, page: *Page) !void {
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .script);
+}
+
 pub fn getAll(self: *HTMLDocument, page: *Page) !*collections.HTMLAllCollection {
     return page._factory.create(collections.HTMLAllCollection.init(self.asNode(), page));
 }
@@ -206,7 +210,7 @@ pub const JsApi = struct {
     pub const applets = bridge.accessor(HTMLDocument.getApplets, null, .{});
     pub const plugins = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
-    pub const location = bridge.accessor(HTMLDocument.getLocation, null, .{ .cache = "location" });
+    pub const location = bridge.accessor(HTMLDocument.getLocation, HTMLDocument.setLocation, .{ .cache = "location" });
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
     pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});

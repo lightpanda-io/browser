@@ -86,7 +86,7 @@ pub fn run(allocator: Allocator, file: []const u8, session: *lp.Session) !void {
     defer try_catch.deinit();
 
     try page.navigate(url, .{}, .{ .push = null });
-    session.fetchWait(2000);
+    session.wait(2000);
 
     page._session.browser.runMicrotasks();
     page._session.browser.runMessageLoop();

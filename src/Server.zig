@@ -173,6 +173,7 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
                 }
                 ms_remaining -= @intCast(elapsed);
             },
+            .navigate => unreachable, // must have been handled by the session
         }
     }
 }

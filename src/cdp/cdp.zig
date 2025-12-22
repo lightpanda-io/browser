@@ -115,8 +115,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // A bit hacky right now. The main server loop doesn't unblock for
         // scheduled task. So we run this directly in order to process any
         // timeouts (or http events) which are ready to be processed.
-
-        pub fn hasPage() bool {}
         pub fn pageWait(self: *Self, ms: u32) Session.WaitResult {
             const session = &(self.browser.session orelse return .no_page);
             return session.wait(ms);

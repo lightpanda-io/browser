@@ -115,6 +115,10 @@ pub fn getLocation(self: *const Window) *Location {
     return self._location;
 }
 
+pub fn setLocation(_: *const Window, url: [:0]const u8, page: *Page) !void {
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .script);
+}
+
 pub fn getHistory(_: *Window, page: *Page) *History {
     return &page._session.history;
 }
@@ -530,7 +534,7 @@ pub const JsApi = struct {
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{ .cache = "localStorage" });
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
-    pub const location = bridge.accessor(Window.getLocation, null, .{ .cache = "location" });
+    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .cache = "location" });
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });

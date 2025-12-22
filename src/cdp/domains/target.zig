@@ -209,8 +209,7 @@ fn createTarget(cmd: anytype) !void {
     if (!std.mem.eql(u8, "about:blank", params.url)) {
         try page.navigate(
             params.url,
-            .{ .reason = .address_bar },
-            .{ .push = null },
+            .{ .reason = .address_bar, .kind = .{ .push = null } },
         );
     }
 

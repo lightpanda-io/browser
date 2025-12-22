@@ -77,11 +77,25 @@ pub fn setHash(_: *const Location, hash: []const u8, page: *Page) !void {
         } else if (hash[0] == '#')
             break :blk hash
         else
-            break :blk try std.fmt.allocPrint(page.arena, "#{s}", .{hash});
+            break :blk try std.fmt.allocPrint(page.call_arena, "#{s}", .{hash});
     };
 
-    const duped_hash = try page.arena.dupeZ(u8, normalized_hash);
-    return page.navigate(duped_hash, .{ .reason = .script }, .{ .replace = null });
+    return page.scheduleNavigation(normalized_hash, .{
+        .reason = .script,
+        .kind = .{ .replace = null },
+    }, .script);
+}
+
+pub fn assign(_: *const Location, url: [:0]const u8, page: *Page) !void {
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .script);
+}
+
+pub fn replace(_: *const Location, url: [:0]const u8, page: *Page) !void {
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .script);
+}
+
+pub fn reload(_: *const Location, page: *Page) !void {
+    return page.scheduleNavigation(page.url, .{ .reason = .script, .kind = .reload }, .script);
 }
 
 pub fn toString(self: *const Location, page: *const Page) ![:0]const u8 {
@@ -98,7 +112,11 @@ pub const JsApi = struct {
     };
 
     pub const toString = bridge.function(Location.toString, .{});
-    pub const href = bridge.accessor(Location.toString, null, .{});
+    pub const href = bridge.accessor(Location.toString, setHref, .{});
+    fn setHref(self: *const Location, url: [:0]const u8, page: *Page) !void {
+        return self.assign(url, page);
+    }
+
     pub const search = bridge.accessor(Location.getSearch, null, .{});
     pub const hash = bridge.accessor(Location.getHash, Location.setHash, .{});
     pub const pathname = bridge.accessor(Location.getPathname, null, .{});
@@ -107,4 +125,7 @@ pub const JsApi = struct {
     pub const port = bridge.accessor(Location.getPort, null, .{});
     pub const origin = bridge.accessor(Location.getOrigin, null, .{});
     pub const protocol = bridge.accessor(Location.getProtocol, null, .{});
+    pub const assign = bridge.function(Location.assign, .{});
+    pub const replace = bridge.function(Location.replace, .{});
+    pub const reload = bridge.function(Location.reload, .{});
 };

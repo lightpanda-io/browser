@@ -130,8 +130,8 @@ const TestContext = struct {
                 .{url},
                 0,
             );
-            try page.navigate(full_url, .{}, .{ .push = null });
-            bc.session.fetchWait(2000);
+            try page.navigate(full_url, .{});
+            _ = bc.session.wait(2000);
         }
         return bc;
     }

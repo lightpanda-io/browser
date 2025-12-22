@@ -289,7 +289,7 @@ pub fn navigateInner(
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigate(url, .{ .reason = .navigation }, kind);
+                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
             }
         },
         .replace => |state| {
@@ -302,7 +302,7 @@ pub fn navigateInner(
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigate(url, .{ .reason = .navigation }, kind);
+                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
             }
         },
         .traverse => |index| {
@@ -315,11 +315,11 @@ pub fn navigateInner(
                 // todo: Fire navigate event
                 finished.resolve("navigation traverse", {});
             } else {
-                try page.navigate(url, .{ .reason = .navigation }, kind);
+                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
             }
         },
         .reload => {
-            try page.navigate(url, .{ .reason = .navigation }, kind);
+            try page.navigate(url, .{ .reason = .navigation, .kind = kind });
         },
     }
 

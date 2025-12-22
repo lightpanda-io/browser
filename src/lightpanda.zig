@@ -44,7 +44,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
 
     // // Comment this out to get a profile of the JS code in v8/profile.json.
     // // You can open this in Chrome's profiler.
-    // // I've seen it generate invalid JSON, but I'm not sure why. It only
+    // // I've seen it generate invalid JSON, but I'm not sure why. It
     // // happens rarely, and I manually fix the file.
     // page.js.startCpuProfiler();
     // defer {
@@ -60,8 +60,11 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     //     }
     // }
 
-    _ = try page.navigate(url, .{}, .{ .push = null });
-    _ = session.fetchWait(opts.wait_ms);
+    _ = try page.navigate(url, .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+    });
+    _ = session.wait(opts.wait_ms);
 
     const writer = opts.writer orelse return;
     try dump.root(page.window._document, opts.dump, writer, page);

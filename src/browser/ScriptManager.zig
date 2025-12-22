@@ -734,6 +734,11 @@ pub const Script = struct {
         // never evaluated, source is passed back to v8 when asked for it.
         std.debug.assert(self.mode != .import);
 
+        if (page.isGoingAway()) {
+            // don't evaluate scripts for a dying page.
+            return;
+        }
+
         const script_element = self.script_element.?;
 
         const previous_script = page.document._current_script;

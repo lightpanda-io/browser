@@ -62,12 +62,6 @@ navigation: Navigation,
 
 page: ?*Page = null,
 
-// If the current page want to navigate to a new page
-//  (form submit, link click, top.location = xxx)
-// the details are stored here so that, on the next call to session.wait
-// we can destroy the current page and start a new one.
-queued_navigation: ?QueuedNavigation,
-
 pub fn init(self: *Session, browser: *Browser) !void {
     var executor = try browser.env.newExecutionWorld();
     errdefer executor.deinit();
@@ -79,7 +73,6 @@ pub fn init(self: *Session, browser: *Browser) !void {
         .browser = browser,
         .executor = executor,
         .storage_shed = .{},
-        .queued_navigation = null,
         .arena = session_allocator,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
         .navigation = Navigation.init(session_allocator),
@@ -145,48 +138,29 @@ pub const WaitResult = enum {
     done,
     no_page,
     extra_socket,
+    navigate,
 };
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
-    _ = self.processQueuedNavigation() catch {
-        // There was an error processing the queue navigation. This already
-        // logged the error, just return.
-        return .done;
-    };
-
-    if (self.page) |page| {
-        return page.wait(wait_ms);
-    }
-    return .no_page;
-}
-
-pub fn fetchWait(self: *Session, wait_ms: u32) void {
     while (true) {
-        const page = self.page orelse return;
-        _ = page.wait(wait_ms);
-        const navigated = self.processQueuedNavigation() catch {
-            // There was an error processing the queue navigation. This already
-            // logged the error, just return.
-            return;
-        };
-
-        if (navigated == false) {
-            return;
+        const page = self.page orelse return .no_page;
+        switch (page.wait(wait_ms)) {
+            .navigate => self.processScheduledNavigation() catch return .done,
+            else => |result| return result,
         }
+        // if we've successfull navigated, we'll give the new page another
+        // page.wait(wait_ms)
     }
 }
 
-fn processQueuedNavigation(self: *Session) !bool {
-    const qn = self.queued_navigation orelse return false;
+fn processScheduledNavigation(self: *Session) !void {
+    const qn = self.page.?._queued_navigation.?;
+    defer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 8 * 1024 });
+
     // This was already aborted on the page, but it would be pretty
     // bad if old requests went to the new page, so let's make double sure
     self.browser.http_client.abort();
-
-    // Page.navigateFromWebAPI terminatedExecution. If we don't resume
-    // it before doing a shutdown we'll get an error.
-    self.executor.resumeExecution();
     self.removePage();
-    self.queued_navigation = null;
 
     const page = self.createPage() catch |err| {
         log.err(.browser, "queued navigation page error", .{
@@ -196,19 +170,8 @@ fn processQueuedNavigation(self: *Session) !bool {
         return err;
     };
 
-    page.navigate(
-        qn.url,
-        qn.opts,
-        self.navigation._current_navigation_kind orelse .{ .push = null },
-    ) catch |err| {
+    page.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
         return err;
     };
-
-    return true;
 }
-
-const QueuedNavigation = struct {
-    url: [:0]const u8,
-    opts: NavigateOpts,
-};

@@ -136,6 +136,10 @@ _parse_state: ParseState,
 _notified_network_idle: IdleNotification = .init,
 _notified_network_almost_idle: IdleNotification = .init,
 
+// A navigation event that happens from a script gets scheduled to run on the
+// next tick.
+_queued_navigation: ?QueuedNavigation = null,
+
 // The URL of the current page
 url: [:0]const u8,
 
@@ -233,6 +237,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
 
     self._parse_state = .pre;
     self._load_state = .parsing;
+    self._queued_navigation = null;
     self._attribute_lookup = .empty;
     self._attribute_named_node_map_lookup = .empty;
     self._event_manager = EventManager.init(self);
@@ -304,11 +309,11 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     return std.mem.startsWith(u8, url, current_origin);
 }
 
-pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind: NavigationKind) !void {
+pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
     const session = self._session;
 
     const resolved_url = try URL.resolve(
-        session.transfer_arena,
+        self.arena,
         self.url,
         request_url,
         .{ .always_dupe = true },
@@ -316,19 +321,13 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind
 
     // setting opts.force = true will force a page load.
     // otherwise, we will need to ensure this is a true (not document) navigation.
-    if (!opts.force) {
-        // If we are navigating within the same document, just change URL.
-        if (URL.eqlDocument(self.url, resolved_url)) {
-            // update page url
-            self.url = resolved_url;
-
-            // update location
-            self.window._location = try Location.init(self.url, self);
-            self.document._location = self.window._location;
-
-            try session.navigation.updateEntries(resolved_url, kind, self, true);
-            return;
-        }
+    if (!opts.force and URL.eqlDocument(self.url, resolved_url)) {
+        // update page url
+        self.url = resolved_url;
+        self.window._location = try Location.init(self.url, self);
+        self.document._location = self.window._location;
+        try session.navigation.updateEntries(resolved_url, opts.kind, self, true);
+        return;
     }
 
     if (self._parse_state != .pre) {
@@ -406,7 +405,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind
         .timestamp = timestamp(.monotonic),
     });
 
-    session.navigation._current_navigation_kind = kind;
+    session.navigation._current_navigation_kind = opts.kind;
 
     http_client.request(.{
         .ctx = self,
@@ -423,6 +422,79 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts, kind
     }) catch |err| {
         log.err(.page, "navigate request", .{ .url = self.url, .err = err });
         return err;
+    };
+}
+
+// We cannot navigate immediately as navigating will delete the DOM tree,
+// which holds this event's node.
+// As such we schedule the function to be called as soon as possible.
+// The page.arena is safe to use here, but the transfer_arena exists
+// specifically for this type of lifetime.
+pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
+    if (self.canScheduleNavigation(priority) == false) {
+        if (comptime IS_DEBUG) {
+            log.debug(.browser, "ignored navigation", .{
+                .target = request_url,
+                .reason = opts.reason,
+            });
+        }
+        return;
+    }
+
+    const session = self._session;
+    const URLRaw = @import("URL.zig");
+
+    const resolved_url = try URL.resolve(
+        session.transfer_arena,
+        self.url,
+        request_url,
+        .{ .always_dupe = true },
+    );
+
+    if (!opts.force and URLRaw.eqlDocument(self.url, resolved_url)) {
+        self.url = try self.arena.dupeZ(u8, resolved_url);
+        self.window._location = try Location.init(self.url, self);
+        self.document._location = self.window._location;
+        return session.navigation.updateEntries(self.url, opts.kind, self, true);
+    }
+
+    log.info(.browser, "schedule navigation", .{
+        .url = resolved_url,
+        .reason = opts.reason,
+        .target = resolved_url,
+    });
+
+    self._session.browser.http_client.abort();
+
+    self._queued_navigation = .{
+        .opts = opts,
+        .url = resolved_url,
+        .priority = priority,
+    };
+}
+
+// A script can have multiple competing navigation events, say it starts off
+// by doing top.location = 'x' and then does a form submission.
+// You might think that we just stop at the first one, but that doesn't seem
+// to be what browsers do, and it isn't particularly well supported by v8 (i.e.
+// halting execution mid-script).
+// From what I can tell, there are 3 "levels" of priority, in order:
+// 1 - form submission
+// 2 - JavaScript apis (e.g. top.location)
+// 3 - anchor clicks
+// Within, each category, it's last-one-wins.
+fn canScheduleNavigation(self: *Page, priority: NavigationPriority) bool {
+    const existing = self._queued_navigation orelse return true;
+
+    if (existing.priority == priority) {
+        // same reason, than this latest one wins
+        return true;
+    }
+
+    return switch (existing.priority) {
+        .anchor => true, // everything is higher priority than an anchor
+        .form => false, // nothing is higher priority than a form
+        .script => priority == .form, // a form is higher priority than a script
     };
 }
 
@@ -707,8 +779,6 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                     // haven't started navigating, I guess.
                     return .done;
                 }
-                self.js.runMicrotasks();
-
                 // Either we have active http connections, or we're in CDP
                 // mode with an extra socket. Either way, we're waiting
                 // for http traffic
@@ -724,6 +794,10 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                 }
             },
             .html, .complete => {
+                if (self._queued_navigation != null) {
+                    return .navigate;
+                }
+
                 // The HTML page was parsed. We now either have JS scripts to
                 // download, or scheduled tasks to execute, or both.
 
@@ -895,7 +969,16 @@ pub fn tick(self: *Page) void {
     self.js.runMicrotasks();
 }
 
+pub fn isGoingAway(self: *const Page) bool {
+    return self._queued_navigation != null;
+}
+
 pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Element.Html.Script) !void {
+    if (self.isGoingAway()) {
+        // if we're planning on navigating to another page, don't run this script
+        return;
+    }
+
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
@@ -2309,12 +2392,25 @@ pub const NavigateOpts = struct {
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     force: bool = false,
+    kind: NavigationKind = .{ .push = null },
 };
 
 pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
     method: Http.Method = .GET,
+};
+
+const NavigationPriority = enum {
+    form,
+    script,
+    anchor,
+};
+
+const QueuedNavigation = struct {
+    url: [:0]const u8,
+    opts: NavigateOpts,
+    priority: NavigationPriority,
 };
 
 const RequestCookieOpts = struct {
