@@ -1067,7 +1067,28 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
         }
     }
 
-    self._performance_delivery_scheduled = true;
+    if (self._performance_delivery_scheduled == false) {
+        self._performance_delivery_scheduled = true;
+        try self.scheduler.add(
+            self,
+            struct {
+                fn run(_page: *anyopaque) anyerror!?u32 {
+                    const page: *Page = @ptrCast(@alignCast(_page));
+                    page._performance_delivery_scheduled = true;
+                    // Dispatch performance observer events.
+                    for (page._performance_observers.items) |observer| {
+                        if (observer.hasRecords()) {
+                            try observer.dispatch(page);
+                        }
+                    }
+
+                    return null;
+                }
+            }.run,
+            0,
+            .{ .low_priority = true },
+        );
+    }
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
