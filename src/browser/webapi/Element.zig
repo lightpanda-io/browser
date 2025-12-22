@@ -1178,6 +1178,7 @@ pub const Tag = enum {
     body,
     br,
     button,
+    base,
     canvas,
     circle,
     custom,

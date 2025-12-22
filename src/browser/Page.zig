@@ -1430,6 +1430,24 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined },
             ),
+            asUint("base") => {
+                const n = try self.createHtmlElementT(
+                    Element.Html.Generic,
+                    namespace,
+                    attribute_iterator,
+                    .{ ._proto = undefined, ._tag_name = String.init(undefined, "base", .{}) catch unreachable, ._tag = .base },
+                );
+
+                // If page's base url is not already set, fill it with the base
+                // tag.
+                if (self.base_url == null) {
+                    if (n.as(Element).getAttributeSafe("href")) |href| {
+                        self.base_url = try URL.resolve(self.arena, self.url, href, .{});
+                    }
+                }
+
+                return n;
+            },
             else => {},
         },
         5 => switch (@as(u40, @bitCast(name[0..5].*))) {
