@@ -37,6 +37,51 @@ pub fn asCSSStyleDeclaration(self: *CSSStyleProperties) *CSSStyleDeclaration {
     return self._proto;
 }
 
+pub fn getNamed(self: *CSSStyleProperties, name: []const u8, page: *Page) ![]const u8 {
+    if (method_names.has(name)) {
+        return error.NotHandled;
+    }
+
+    const dash_case = camelCaseToDashCase(name, &page.buf);
+
+    // Only apply vendor prefix filtering for camelCase access (no dashes in input)
+    // Bracket notation with dash-case (e.g., div.style['-moz-user-select']) should return the actual value
+    const is_camelcase_access = std.mem.indexOfScalar(u8, name, '-') == null;
+    if (is_camelcase_access and std.mem.startsWith(u8, dash_case, "-")) {
+        // We only support -webkit-, other vendor prefixes return undefined for camelCase access
+        const is_webkit = std.mem.startsWith(u8, dash_case, "-webkit-");
+        const is_moz = std.mem.startsWith(u8, dash_case, "-moz-");
+        const is_ms = std.mem.startsWith(u8, dash_case, "-ms-");
+        const is_o = std.mem.startsWith(u8, dash_case, "-o-");
+
+        if ((is_moz or is_ms or is_o) and !is_webkit) {
+            return error.NotHandled;
+        }
+    }
+
+    const value = self._proto.getPropertyValue(dash_case, page);
+
+    // Property accessors have special handling for empty values:
+    // - Known CSS properties return '' when not set
+    // - Vendor-prefixed properties return undefined when not set
+    // - Unknown properties return undefined
+    if (value.len == 0) {
+        // Vendor-prefixed properties always return undefined when not set
+        if (std.mem.startsWith(u8, dash_case, "-")) {
+            return error.NotHandled;
+        }
+
+        // Known CSS properties return '', unknown properties return undefined
+        if (!isKnownCSSProperty(dash_case)) {
+            return error.NotHandled;
+        }
+
+        return "";
+    }
+
+    return value;
+}
+
 fn isKnownCSSProperty(dash_case: []const u8) bool {
     // List of common/known CSS properties
     // In a full implementation, this would include all standard CSS properties
@@ -131,6 +176,16 @@ fn camelCaseToDashCase(name: []const u8, buf: []u8) []const u8 {
     return buf[0..write_pos];
 }
 
+const method_names = std.StaticStringMap(void).initComptime(.{
+    .{ "getPropertyValue", {} },
+    .{ "setProperty", {} },
+    .{ "removeProperty", {} },
+    .{ "getPropertyPriority", {} },
+    .{ "item", {} },
+    .{ "cssText", {} },
+    .{ "length", {} },
+});
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSStyleProperties);
 
@@ -140,60 +195,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(_getPropertyIndexed, null, null, .{});
-
-    const method_names = std.StaticStringMap(void).initComptime(.{
-        .{ "getPropertyValue", {} },
-        .{ "setProperty", {} },
-        .{ "removeProperty", {} },
-        .{ "getPropertyPriority", {} },
-        .{ "item", {} },
-        .{ "cssText", {} },
-        .{ "length", {} },
-    });
-
-    fn _getPropertyIndexed(self: *CSSStyleProperties, name: []const u8, page: *Page) ![]const u8 {
-        if (method_names.has(name)) {
-            return error.NotHandled;
-        }
-
-        const dash_case = camelCaseToDashCase(name, &page.buf);
-
-        // Only apply vendor prefix filtering for camelCase access (no dashes in input)
-        // Bracket notation with dash-case (e.g., div.style['-moz-user-select']) should return the actual value
-        const is_camelcase_access = std.mem.indexOfScalar(u8, name, '-') == null;
-        if (is_camelcase_access and std.mem.startsWith(u8, dash_case, "-")) {
-            // We only support -webkit-, other vendor prefixes return undefined for camelCase access
-            const is_webkit = std.mem.startsWith(u8, dash_case, "-webkit-");
-            const is_moz = std.mem.startsWith(u8, dash_case, "-moz-");
-            const is_ms = std.mem.startsWith(u8, dash_case, "-ms-");
-            const is_o = std.mem.startsWith(u8, dash_case, "-o-");
-
-            if ((is_moz or is_ms or is_o) and !is_webkit) {
-                return error.NotHandled;
-            }
-        }
-
-        const value = self._proto.getPropertyValue(dash_case, page);
-
-        // Property accessors have special handling for empty values:
-        // - Known CSS properties return '' when not set
-        // - Vendor-prefixed properties return undefined when not set
-        // - Unknown properties return undefined
-        if (value.len == 0) {
-            // Vendor-prefixed properties always return undefined when not set
-            if (std.mem.startsWith(u8, dash_case, "-")) {
-                return error.NotHandled;
-            }
-
-            // Known CSS properties return '', unknown properties return undefined
-            if (!isKnownCSSProperty(dash_case)) {
-                return error.NotHandled;
-            }
-
-            return "";
-        }
-
-        return value;
-    }
+    pub const @"[]" = bridge.namedIndexed(CSSStyleProperties.getNamed, null, null, .{});
 };

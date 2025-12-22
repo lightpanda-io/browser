@@ -201,8 +201,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 },
                 5 => switch (@as(u40, @bitCast(domain[0..5].*))) {
                     asUint(u40, "Fetch") => return @import("domains/fetch.zig").processMessage(command),
-                    // @ZIGDOM
-                    // asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
+                    asUint(u40, "Input") => return @import("domains/input.zig").processMessage(command),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(domain[0..6].*))) {

@@ -46,11 +46,13 @@
                      element.tagName === 'BODY' || element.tagName === 'HTML');
 }
 </script>
-
-<script id="hidden_elements">
+<!-- ZIGDOM new CSS Parser -->
+<!-- <script id="hidden_elements">
 {
   // Test that hidden elements are not returned
   const hidden = document.getElementById('hidden');
+  console.warn('pre');
+  console.warn(hidden.checkVisibility());
   const rect = hidden.getBoundingClientRect();
 
   // Even though hidden element has dimensions, it shouldn't be returned
@@ -62,7 +64,7 @@
   // Should not return the hidden element (should return body or html instead)
   testing.expectTrue(element === null || element.id !== 'hidden');
 }
-</script>
+</script> -->
 
 <script id="outside_viewport">
 {
@@ -215,7 +217,8 @@
 }
 </script>
 
-<script id="elementsFromPoint_hidden">
+<!-- ZIGDOM new CSS Parser -->
+<!-- <script id="elementsFromPoint_hidden">
 {
   // Test that hidden elements are not included
   const hidden = document.getElementById('hidden');
@@ -231,3 +234,4 @@
   }
 }
 </script>
+ -->

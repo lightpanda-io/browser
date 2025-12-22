@@ -36,7 +36,7 @@ fn dispatchKeyEvent(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         type: Type,
         key: []const u8 = "",
-        code: []const u8 = "",
+        code: ?[]const u8 = null,
         modifiers: u4 = 0,
         // Many optional parameters are not implemented yet, see documentation url.
 
@@ -59,28 +59,25 @@ fn dispatchKeyEvent(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return;
     const page = bc.session.currentPage() orelse return;
 
-    const keyboard_event = Page.KeyboardEvent{
+    const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
+    const keyboard_event = try KeyboardEvent.init("keydown", .{
         .key = params.key,
         .code = params.code,
-        .type = switch (params.type) {
-            .keyDown => .keydown,
-            else => unreachable,
-        },
-        .alt = params.modifiers & 1 == 1,
-        .ctrl = params.modifiers & 2 == 2,
-        .meta = params.modifiers & 4 == 4,
-        .shift = params.modifiers & 8 == 8,
-    };
-    try page.keyboardEvent(keyboard_event);
+        .altKey = params.modifiers & 1 == 1,
+        .ctrlKey = params.modifiers & 2 == 2,
+        .metaKey = params.modifiers & 4 == 4,
+        .shiftKey = params.modifiers & 8 == 8,
+    }, page);
+    try page.triggerKeyboard(keyboard_event);
     // result already sent
 }
 
 // https://chromedevtools.github.io/devtools-protocol/tot/Input/#method-dispatchMouseEvent
 fn dispatchMouseEvent(cmd: anytype) !void {
     const params = (try cmd.params(struct {
-        type: Type, // Type of the mouse event.
-        x: f32, // X coordinate of the event relative to the main frame's viewport.
-        y: f32, // Y coordinate of the event relative to the main frame's viewport. 0 refers to the top of the viewport and Y increases as it proceeds towards the bottom of the viewport.
+        x: f64,
+        y: f64,
+        type: Type,
         // Many optional parameters are not implemented yet, see documentation url.
 
         const Type = enum {
@@ -95,23 +92,13 @@ fn dispatchMouseEvent(cmd: anytype) !void {
 
     // quickly ignore types we know we don't handle
     switch (params.type) {
-        .mouseMoved, .mouseWheel => return,
+        .mouseMoved, .mouseWheel, .mouseReleased => return,
         else => {},
     }
 
     const bc = cmd.browser_context orelse return;
     const page = bc.session.currentPage() orelse return;
-
-    const mouse_event = Page.MouseEvent{
-        .x = @intFromFloat(@floor(params.x)), // Decimal pixel values are not understood by netsurf or our renderer
-        .y = @intFromFloat(@floor(params.y)), // So we convert them once at intake here. Using floor such that -0.5 becomes -1 and 0.5 becomes 0.
-        .type = switch (params.type) {
-            .mousePressed => .pressed,
-            .mouseReleased => .released,
-            else => unreachable,
-        },
-    };
-    try page.mouseEvent(mouse_event);
+    try page.triggerMouseClick(params.x, params.y);
     // result already sent
 }
 

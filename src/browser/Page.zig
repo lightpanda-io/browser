@@ -59,6 +59,7 @@ const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
 const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
+const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
@@ -2270,19 +2271,6 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
     }
 }
 
-fn asUint(comptime string: anytype) std.meta.Int(
-    .unsigned,
-    @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
-) {
-    const byteLength = @sizeOf(@TypeOf(string.*)) - 1;
-    const expectedType = *const [byteLength:0]u8;
-    if (@TypeOf(string) != expectedType) {
-        @compileError("expected : " ++ @typeName(expectedType) ++ ", got: " ++ @typeName(@TypeOf(string)));
-    }
-
-    return @bitCast(@as(*const [byteLength]u8, string).*);
-}
-
 const ParseState = union(enum) {
     pre,
     complete,
@@ -2413,6 +2401,112 @@ const QueuedNavigation = struct {
     priority: NavigationPriority,
 };
 
+pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.page, "page mouse click", .{
+            .url = self.url,
+            .node = target,
+            .x = x,
+            .y = y,
+        });
+    }
+    const event = try @import("webapi/event/MouseEvent.zig").init("click", .{
+        .bubbles = true,
+        .cancelable = true,
+        .clientX = x,
+        .clientY = y,
+    }, self);
+    try self._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+}
+
+// callback when the "click" event reaches the pages.
+pub fn handleClick(self: *Page, target: *Node) !void {
+    // TODO: Also support <area> elements when implement
+    const element = target.is(Element) orelse return;
+    const anchor = element.is(Element.Html.Anchor) orelse return;
+
+    const href = element.getAttributeSafe("href") orelse return;
+    if (href.len == 0) {
+        return;
+    }
+
+    if (std.mem.startsWith(u8, href, "#")) {
+        // Hash-only links (#foo) should be handled as same-document navigation
+        return;
+    }
+
+    if (std.mem.startsWith(u8, href, "javascript:")) {
+        return;
+    }
+
+    // Check target attribute - don't navigate if opening in new window/tab
+    const target_val = anchor.getTarget();
+    if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
+        log.warn(.browser, "not implemented", .{
+            .feature = "anchor with target attribute click",
+        });
+        return;
+    }
+
+    if (try element.hasAttribute("download", self)) {
+        log.warn(.browser, "not implemented", .{
+            .feature = "anchor with download attribute click",
+        });
+        return;
+    }
+
+    try self.scheduleNavigation(href, .{
+        .reason = .script,
+        .kind = .{ .push = null },
+    }, .anchor);
+}
+
+pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
+    const element = self.window._document._active_element orelse return;
+    try self._event_manager.dispatch(element.asEventTarget(), keyboard_event.asEvent());
+}
+
+pub fn handleKeydown(self: *Page, target: *Element, keyboard_event: *KeyboardEvent) !void {
+    const key = keyboard_event.getKey();
+
+    if (key == .Dead) {
+        return;
+    }
+
+    if (target.is(Element.Html.Input)) |input| {
+        if (key == .Enter) {
+            if (input.getForm(self)) |form| {
+                // TODO: Implement form submission
+                _ = form;
+            }
+            return;
+        }
+
+        // Don't handle text input for radio/checkbox
+        const input_type = input._input_type;
+        if (input_type == .radio or input_type == .checkbox) {
+            return;
+        }
+
+        // Handle printable characters
+        if (key.isPrintable()) {
+            const current_value = input.getValue();
+            const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, key.asString() });
+            try input.setValue(new_value, self);
+        }
+        return;
+    }
+
+    if (target.is(Element.Html.TextArea)) |textarea| {
+        const append =
+            if (key == .Enter) "\n" else if (key.isPrintable()) key.asString() else return;
+        const current_value = textarea.getValue();
+        const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, append });
+        return textarea.setValue(new_value, self);
+    }
+}
+
 const RequestCookieOpts = struct {
     is_http: bool = true,
     is_navigation: bool = false,
@@ -2424,6 +2518,19 @@ pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.Req
         .is_http = opts.is_http,
         .is_navigation = opts.is_navigation,
     };
+}
+
+fn asUint(comptime string: anytype) std.meta.Int(
+    .unsigned,
+    @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
+) {
+    const byteLength = @sizeOf(@TypeOf(string.*)) - 1;
+    const expectedType = *const [byteLength:0]u8;
+    if (@TypeOf(string) != expectedType) {
+        @compileError("expected : " ++ @typeName(expectedType) ++ ", got: " ++ @typeName(@TypeOf(string)));
+    }
+
+    return @bitCast(@as(*const [byteLength]u8, string).*);
 }
 
 const testing = @import("../testing.zig");

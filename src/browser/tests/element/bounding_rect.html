@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<head>
+  <title>Lightpanda Browser demo</title>
+  <meta charset="UTF-8">
+</head>
+<body>
+  <h1>Lightpanda Browser Demo</h1>
+
+  <h2><a href="campfire-commerce/">Campfire Commerce</a></h2>
+  <a href="campfire-commerce/"><img src="campfire-commerce/images/logo.jpg"></a>
+  <p>
+    Demo of an e-commerce product offer page with data loaded from XHR request.
+    <br>
+    All images and texts have been generated with AI.
+    Template by <a href="https://codepen.io/Sunil_Pradhan/pen/qBqgLxK">Sunil Pradhan</a>
+  </p>
+
+  <h2><a href="amiibo/">Amiibo characters</a></h2>
+  <a href="amiibo/"><img src="https://raw.githubusercontent.com/N3evin/AmiiboAPI/master/images/icon_04380001-03000502.png"></a>
+  <p>
+    Pages of Amiibo characters generated from
+    <a href="https://www.amiiboapi.com">Amiibo API</a>.
+  </p>
+</body>
+<script src="../testing.js"></script>
+<script id="rect">
+  const a1 = document.querySelector('[href="campfire-commerce/"]');
+  const rect1 = a1.getBoundingClientRect();
+  console.log("a1:", { x: rect1.x, y: rect1.y });
+
+  const a2 = document.querySelector('[href="amiibo/"]');
+  const rect2 = a2.getBoundingClientRect();
+
+  testing.expectTrue(rect1.x != rect2.x)
+  testing.expectTrue(rect1.y != rect2.y);
+  testing.expectEqual(a1, document.elementFromPoint(rect1.x, rect1.y))
+  testing.expectEqual(a2, document.elementFromPoint(rect2.x, rect2.y))
+</script>

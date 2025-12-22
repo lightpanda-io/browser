@@ -191,6 +191,19 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool) !void {
     const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
+    // Defer runs even on early return - ensures event phase is reset
+    // and default actions execute (unless prevented)
+    defer {
+        event._event_phase = .none;
+
+        // Execute default action if not prevented
+        if (!event._prevent_default and event._type_string.eqlSlice("click")) {
+            self.page.handleClick(target) catch |err| {
+                log.warn(.event, "page.click", .{ .err = err });
+            };
+        }
+    }
+
     var path_len: usize = 0;
     var path_buffer: [128]*EventTarget = undefined;
 
@@ -236,7 +249,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
         if (self.lookup.getPtr(@intFromPtr(current_target))) |list| {
             try self.dispatchPhase(list, current_target, event, was_handled, true);
             if (event._stop_propagation) {
-                event._event_phase = .none;
                 return;
             }
         }
@@ -248,7 +260,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     if (self.lookup.getPtr(@intFromPtr(target_et))) |list| {
         try self.dispatchPhase(list, target_et, event, was_handled, null);
         if (event._stop_propagation) {
-            event._event_phase = .none;
             return;
         }
     }
@@ -266,8 +277,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
             }
         }
     }
-
-    event._event_phase = .none;
 }
 
 fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime capture_only: ?bool) !void {

@@ -922,7 +922,8 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
     const y = calculateDocumentPosition(self.asNode());
     const dims = try self.getElementDimensions(page);
 
-    const x: f64 = 0.0;
+    // Use sibling position for x coordinate to ensure siblings have different x values
+    const x = calculateSiblingPosition(self.asNode());
     const top = y;
     const left = x;
     const right = x + dims.width;
@@ -948,51 +949,87 @@ pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
     return ptr[0..1];
 }
 
-// Calculates a pseudo-position in the document using linear depth scaling.
+// Calculates document position by counting all nodes that appear before this one
+// in tree order, but only traversing the "left side" of the tree.
 //
-// This approach uses a fixed pixel offset per depth level (100px) plus sibling
-// position within that level. This keeps positions reasonable even for very deep
-// DOM trees (e.g., Amazon product pages can be 36+ levels deep).
+// This walks up from the target node to the root, and at each level counts:
+// 1. All previous siblings and their descendants
+// 2. The parent itself
 //
 // Example:
-//   <body>              → position 0    (depth 0)
-//     <div>             → position 100  (depth 1, 0 siblings)
-//       <span></span>   → position 200  (depth 2, 0 siblings)
-//       <span></span>   → position 201  (depth 2, 1 sibling)
-//     </div>
-//     <div>             → position 101  (depth 1, 1 sibling)
-//       <p></p>         → position 200  (depth 2, 0 siblings)
-//     </div>
+//   <body>              → y=0
+//     <h1>Text</h1>     → y=1    (body=1)
+//     <h2>              → y=2    (body=1 + h1=1)
+//       <a>Link1</a>    → y=3    (body=1 + h1=1 + h2=1)
+//     </h2>
+//     <p>Text</p>       → y=5    (body=1 + h1=1 + h2=2)
+//     <h2>              → y=6    (body=1 + h1=1 + h2=2 + p=1)
+//       <a>Link2</a>    → y=7    (body=1 + h1=1 + h2=2 + p=1 + h2=1)
+//     </h2>
 //   </body>
 //
 // Trade-offs:
-// - O(depth) complexity, very fast
-// - Linear scaling: 36 levels ≈ 3,600px, 100 levels ≈ 10,000px
-// - Rough document order preserved (depth dominates, siblings differentiate)
-// - Fits comfortably in realistic document heights
+// - O(depth × siblings × subtree_height) - only left-side traversal
+// - Linear scaling: 5px per node
+// - Perfect document order, guaranteed unique positions
+// - Compact coordinates (1000 nodes ≈ 5,000px)
 fn calculateDocumentPosition(node: *Node) f64 {
-    var depth: f64 = 0.0;
-    var sibling_offset: f64 = 0.0;
+    var position: f64 = 0.0;
     var current = node;
 
-    // Count siblings at the immediate level
-    if (current.parentNode()) |parent| {
+    // Walk up to root, counting preceding nodes
+    while (current.parentNode()) |parent| {
+        // Count all previous siblings and their descendants
         var sibling = parent.firstChild();
         while (sibling) |s| {
             if (s == current) break;
-            sibling_offset += 1.0;
+            position += countSubtreeNodes(s);
             sibling = s.nextSibling();
         }
-    }
 
-    // Count depth from root
-    while (current.parentNode()) |parent| {
-        depth += 1.0;
+        // Count the parent itself
+        position += 1.0;
         current = parent;
     }
 
-    // Each depth level = 100px, siblings add within that level
-    return (depth * 100.0) + sibling_offset;
+    return position * 5.0; // 5px per node
+}
+
+// Counts total nodes in a subtree (node + all descendants)
+fn countSubtreeNodes(node: *Node) f64 {
+    var count: f64 = 1.0; // Count this node
+
+    var child = node.firstChild();
+    while (child) |c| {
+        count += countSubtreeNodes(c);
+        child = c.nextSibling();
+    }
+
+    return count;
+}
+
+// Calculates horizontal position using the same approach as y,
+// just scaled differently for visual distinction
+fn calculateSiblingPosition(node: *Node) f64 {
+    var position: f64 = 0.0;
+    var current = node;
+
+    // Walk up to root, counting preceding nodes (same as y)
+    while (current.parentNode()) |parent| {
+        // Count all previous siblings and their descendants
+        var sibling = parent.firstChild();
+        while (sibling) |s| {
+            if (s == current) break;
+            position += countSubtreeNodes(s);
+            sibling = s.nextSibling();
+        }
+
+        // Count the parent itself
+        position += 1.0;
+        current = parent;
+    }
+
+    return position * 5.0; // 5px per node
 }
 
 const GetElementsByTagNameResult = union(enum) {

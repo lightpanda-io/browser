@@ -28,6 +28,7 @@ const KeyboardEvent = @This();
 
 _proto: *UIEvent,
 _key: Key,
+_code: []const u8,
 _ctrl_key: bool,
 _shift_key: bool,
 _alt_key: bool,
@@ -41,6 +42,9 @@ pub const Key = union(enum) {
     // Special Key Values
     Dead,
     Undefined,
+    Unidentified,
+
+    // Modifier Keys
     Alt,
     AltGraph,
     CapsLock,
@@ -55,6 +59,68 @@ pub const Key = union(enum) {
     Super,
     Symbol,
     SymbolLock,
+
+    // Whitespace Keys
+    Enter,
+    Tab,
+
+    // Navigation Keys
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    End,
+    Home,
+    PageDown,
+    PageUp,
+
+    // Editing Keys
+    Backspace,
+    Clear,
+    Copy,
+    CrSel,
+    Cut,
+    Delete,
+    EraseEof,
+    ExSel,
+    Insert,
+    Paste,
+    Redo,
+    Undo,
+
+    // UI Keys
+    Accept,
+    Again,
+    Attn,
+    Cancel,
+    ContextMenu,
+    Escape,
+    Execute,
+    Find,
+    Finish,
+    Help,
+    Pause,
+    Play,
+    Props,
+    Select,
+    ZoomIn,
+    ZoomOut,
+
+    // Function Keys
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
+
+    // Printable keys (single character, space, etc.)
     standard: []const u8,
 
     pub fn fromString(allocator: std.mem.Allocator, str: []const u8) !Key {
@@ -70,6 +136,26 @@ pub const Key = union(enum) {
         const duped = try allocator.dupe(u8, str);
         return .{ .standard = duped };
     }
+
+    /// Returns true if this key represents a printable character that should be
+    /// inserted into text input elements. This includes alphanumeric characters,
+    /// punctuation, symbols, and space.
+    pub fn isPrintable(self: Key) bool {
+        return switch (self) {
+            .standard => |s| s.len > 0,
+            else => false,
+        };
+    }
+
+    /// Returns the string representation that should be inserted into text input.
+    /// For most keys this is just the key itself, but some keys like Enter need
+    /// special handling (e.g., newline for textarea, form submission for input).
+    pub fn asString(self: Key) []const u8 {
+        return switch (self) {
+            .standard => |s| s,
+            else => |k| @tagName(k),
+        };
+    }
 };
 
 pub const Location = enum(i32) {
@@ -81,7 +167,7 @@ pub const Location = enum(i32) {
 
 pub const KeyboardEventOptions = struct {
     key: []const u8 = "",
-    // TODO: code but it is not baseline.
+    code: ?[]const u8 = null,
     location: i32 = 0,
     repeat: bool = false,
     isComposing: bool = false,
@@ -105,6 +191,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
             ._proto = undefined,
             ._key = try Key.fromString(page.arena, opts.key),
             ._location = std.meta.intToEnum(Location, opts.location) catch return error.TypeError,
+            ._code = if (opts.code) |c| try page.dupeString(c) else "",
             ._repeat = opts.repeat,
             ._is_composing = opts.isComposing,
             ._ctrl_key = opts.ctrlKey,
@@ -134,11 +221,12 @@ pub fn getIsComposing(self: *const KeyboardEvent) bool {
     return self._is_composing;
 }
 
-pub fn getKey(self: *const KeyboardEvent) []const u8 {
-    return switch (self._key) {
-        .standard => |key| key,
-        else => |x| @tagName(x),
-    };
+pub fn getKey(self: *const KeyboardEvent) Key {
+    return self._key;
+}
+
+pub fn getCode(self: *const KeyboardEvent) []const u8 {
+    return self._code;
 }
 
 pub fn getLocation(self: *const KeyboardEvent) i32 {
@@ -182,7 +270,12 @@ pub const JsApi = struct {
     pub const altKey = bridge.accessor(KeyboardEvent.getAltKey, null, .{});
     pub const ctrlKey = bridge.accessor(KeyboardEvent.getCtrlKey, null, .{});
     pub const isComposing = bridge.accessor(KeyboardEvent.getIsComposing, null, .{});
-    pub const key = bridge.accessor(KeyboardEvent.getKey, null, .{});
+    pub const key = bridge.accessor(struct {
+        fn keyAsString(self: *const KeyboardEvent) []const u8 {
+            return self._key.asString();
+        }
+    }.keyAsString, null, .{});
+    pub const code = bridge.accessor(KeyboardEvent.getCode, null, .{});
     pub const location = bridge.accessor(KeyboardEvent.getLocation, null, .{});
     pub const metaKey = bridge.accessor(KeyboardEvent.getMetaKey, null, .{});
     pub const repeat = bridge.accessor(KeyboardEvent.getRepeat, null, .{});
