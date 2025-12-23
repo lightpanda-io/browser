@@ -10,7 +10,7 @@ const Slab = struct {
     max_slot_count: usize,
 
     bitset: std.bit_set.DynamicBitSetUnmanaged,
-    chunks: std.ArrayListUnmanaged([]u8),
+    chunks: std.ArrayList([]u8),
 
     pub fn init(
         allocator: Allocator,

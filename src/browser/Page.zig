@@ -172,7 +172,7 @@ pub fn init(arena: Allocator, call_arena: Allocator, session: *Session) !*Page {
         log.debug(.page, "page.init", .{});
     }
 
-    const page = try arena.create(Page);
+    const page = try session.browser.allocator.create(Page);
 
     page.arena = arena;
     page.call_arena = call_arena;
@@ -197,11 +197,13 @@ pub fn deinit(self: *Page) void {
     // registered a destructor (e.g. XMLHttpRequest).
     // Should be called before we deinit the page, because these objects
     // could be referencing it.
-    self._session.executor.removeContext();
+    const session = self._session;
+    session.executor.removeContext();
 
     self._script_manager.shutdown = true;
-    self._session.browser.http_client.abort();
+    session.browser.http_client.abort();
     self._script_manager.deinit();
+    session.browser.allocator.destroy(self);
 }
 
 fn reset(self: *Page, comptime initializing: bool) !void {
@@ -307,7 +309,6 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
     const session = self._session;
-
     if (self._parse_state != .pre) {
         // it's possible for navigate to be called multiple times on the
         // same page (via CDP). We want to reset the page between each call.
