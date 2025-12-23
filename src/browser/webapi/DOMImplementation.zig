@@ -26,6 +26,7 @@ const HTMLDocument = @import("HTMLDocument.zig");
 const DocumentType = @import("DocumentType.zig");
 
 const DOMImplementation = @This();
+_pad: bool = false,
 
 pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, page: *Page) !*DocumentType {
     const name = try page.dupeString(qualified_name);
