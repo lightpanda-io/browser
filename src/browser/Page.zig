@@ -743,7 +743,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
     var scheduler = &self.scheduler;
     var http_client = self._session.browser.http_client;
 
-    // I'd like the page to know NOTHING about extra_socket / CDP, but the
+    // I'd like the page to know NOTHING about cdp_socket / CDP, but the
     // fact is that the behavior of wait changes depending on whether or
     // not we're using CDP.
     // If we aren't using CDP, as soon as we think there's nothing left
@@ -753,7 +753,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
     // we could let CDP poll http (like it does for HTTP requests), the fact
     // is that we know more about the timing of stuff (e.g. how long to
     // poll/sleep) in the page.
-    const exit_when_done = http_client.extra_socket == null;
+    const exit_when_done = http_client.cdp_client == null;
 
     // for debugging
     // defer self.printWaitAnalysis();
@@ -770,15 +770,15 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                 // Either we have active http connections, or we're in CDP
                 // mode with an extra socket. Either way, we're waiting
                 // for http traffic
-                if (try http_client.tick(@intCast(ms_remaining)) == .extra_socket) {
+                if (try http_client.tick(@intCast(ms_remaining)) == .cdp_socket) {
                     // exit_when_done is explicitly set when there isn't
                     // an extra socket, so it should not be possibl to
-                    // get an extra_socket message when exit_when_done
+                    // get an cdp_socket message when exit_when_done
                     // is true.
                     std.debug.assert(exit_when_done == false);
 
                     // data on a socket we aren't handling, return to caller
-                    return .extra_socket;
+                    return .cdp_socket;
                 }
             },
             .html, .complete => {
@@ -846,13 +846,13 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                 } else {
                     // We're here because we either have active HTTP
                     // connections, or exit_when_done == false (aka, there's
-                    // an extra_socket registered with the http client).
+                    // an cdp_socket registered with the http client).
                     // We should continue to run lowPriority tasks, so we
                     // minimize how long we'll poll for network I/O.
                     const ms_to_wait = @min(200, @min(ms_remaining, ms_to_next_task orelse 200));
-                    if (try http_client.tick(ms_to_wait) == .extra_socket) {
+                    if (try http_client.tick(ms_to_wait) == .cdp_socket) {
                         // data on a socket we aren't handling, return to caller
-                        return .extra_socket;
+                        return .cdp_socket;
                     }
                 }
             },

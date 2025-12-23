@@ -137,7 +137,7 @@ pub fn currentPage(self: *Session) ?*Page {
 pub const WaitResult = enum {
     done,
     no_page,
-    extra_socket,
+    cdp_socket,
     navigate,
 };
 

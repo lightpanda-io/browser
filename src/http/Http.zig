@@ -90,12 +90,13 @@ pub fn poll(self: *Http, timeout_ms: u32) Client.PerformStatus {
     };
 }
 
-pub fn monitorSocket(self: *Http, socket: posix.socket_t) void {
-    self.client.extra_socket = socket;
+pub fn addCDPClient(self: *Http, cdp_client: Client.CDPClient) void {
+    std.debug.assert(self.client.cdp_client == null);
+    self.client.cdp_client = cdp_client;
 }
 
-pub fn unmonitorSocket(self: *Http) void {
-    self.client.extra_socket = null;
+pub fn removeCDPClient(self: *Http) void {
+    self.client.cdp_client = null;
 }
 
 pub fn newConnection(self: *Http) !Connection {
