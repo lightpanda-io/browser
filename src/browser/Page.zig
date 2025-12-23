@@ -178,7 +178,6 @@ pub fn init(arena: Allocator, call_arena: Allocator, session: *Session) !*Page {
     page.call_arena = call_arena;
     page._session = session;
 
-    page.scheduler = Scheduler.init(page.arena);
     try page.reset(true);
     return page;
 }
@@ -207,32 +206,33 @@ pub fn deinit(self: *Page) void {
 
 fn reset(self: *Page, comptime initializing: bool) !void {
     if (comptime initializing == false) {
-        self.scheduler.reset();
+        self._session.executor.removeContext();
+        self._script_manager.shutdown = true;
+        self._session.browser.http_client.abort();
+        self._script_manager.deinit();
+        _ = self._session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
     }
 
     self._factory = Factory.init(self);
+    self.scheduler = Scheduler.init(self.arena);
 
     self.version = 0;
     self.url = "about:blank";
 
     self.document = (try self._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
 
-    if (comptime initializing == true) {
-        const storage_bucket = try self._factory.create(storage.Bucket{});
-        const screen = try Screen.init(self);
-        self.window = try self._factory.eventTarget(Window{
-            ._document = self.document,
-            ._storage_bucket = storage_bucket,
-            ._performance = Performance.init(),
-            ._proto = undefined,
-            ._location = &default_location,
-            ._screen = screen,
-        });
-    } else {
-        self.window._document = self.document;
-        self.window._location = &default_location;
-        // TODO reset _custom_elements?
-    }
+    const storage_bucket = try self._factory.create(storage.Bucket{});
+    const screen = try Screen.init(self);
+    self.window = try self._factory.eventTarget(Window{
+        ._document = self.document,
+        ._storage_bucket = storage_bucket,
+        ._performance = Performance.init(),
+        ._proto = undefined,
+        ._location = &default_location,
+        ._screen = screen,
+    });
+    self.window._document = self.document;
+    self.window._location = &default_location;
 
     self._parse_state = .pre;
     self._load_state = .parsing;
@@ -245,10 +245,8 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._script_manager = ScriptManager.init(self);
     errdefer self._script_manager.deinit();
 
-    if (comptime initializing == true) {
-        self.js = try self._session.executor.createContext(self, true);
-        errdefer self.js.deinit();
-    }
+    self.js = try self._session.executor.createContext(self, true);
+    errdefer self.js.deinit();
 
     self._element_styles = .{};
     self._element_datasets = .{};
@@ -309,24 +307,6 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
     const session = self._session;
-
-    const resolved_url = try URL.resolve(
-        self.arena,
-        self.url,
-        request_url,
-        .{ .always_dupe = true },
-    );
-
-    // setting opts.force = true will force a page load.
-    // otherwise, we will need to ensure this is a true (not document) navigation.
-    if (!opts.force and URL.eqlDocument(self.url, resolved_url)) {
-        // update page url
-        self.url = resolved_url;
-        self.window._location = try Location.init(self.url, self);
-        self.document._location = self.window._location;
-        try session.navigation.updateEntries(resolved_url, opts.kind, self, true);
-        return;
-    }
 
     if (self._parse_state != .pre) {
         // it's possible for navigate to be called multiple times on the

@@ -47,14 +47,6 @@ pub fn init(allocator: std.mem.Allocator) Scheduler {
     };
 }
 
-pub fn reset(self: *Scheduler) void {
-    self.low_priority.cap = 0;
-    self.low_priority.items.len = 0;
-
-    self.high_priority.cap = 0;
-    self.high_priority.items.len = 0;
-}
-
 const AddOpts = struct {
     name: []const u8 = "",
     low_priority: bool = false,
