@@ -36,6 +36,8 @@ runs:
 
     # Zig version used from the `minimum_zig_version` field in build.zig.zon
     - uses: mlugg/setup-zig@v2
+    # Rust Toolchain for html5ever
+    - uses: dtolnay/rust-toolchain@stable
 
     - name: Cache v8
       id: cache-v8
@@ -58,9 +60,3 @@ runs:
       run: |
         mkdir -p v8
         ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/libc_v8.a
-
-    - name: hmtl5ever
-      shell: bash
-      run: |
-        zig build html5ever
-        zig build -Doptimize=ReleaseFast html5ever
