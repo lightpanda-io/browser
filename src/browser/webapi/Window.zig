@@ -63,7 +63,19 @@ _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
 _custom_elements: CustomElementRegistry = .{},
-_scroll_pos: struct { x: u32, y: u32 } = .{ .x = 0, .y = 0 },
+_scroll_pos: struct {
+    x: u32,
+    y: u32,
+    state: enum {
+        scroll,
+        end,
+        done,
+    },
+} = .{
+    .x = 0,
+    .y = 0,
+    .state = .done,
+},
 
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
@@ -387,18 +399,60 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
         },
     }
 
-    {
-        // TODO According to the doc, scroll event should be throttled.
-        // see https://developer.mozilla.org/en-US/docs/Web/API/Document/scroll_event#scroll_event_throttling
-        const event = try Event.init("scroll", .{ .bubbles = true }, page);
-        try page._event_manager.dispatch(self._document.asEventTarget(), event);
-    }
+    self._scroll_pos.state = .scroll;
 
-    {
-        // TODO scrollend must be dispatched once the scroll really ends.
-        const event = try Event.init("scrollend", .{ .bubbles = true }, page);
-        try page._event_manager.dispatch(self._document.asEventTarget(), event);
-    }
+    // We dispatch scroll event asynchronously after 10ms. So we can throttle
+    // them.
+    try page.scheduler.add(
+        page,
+        struct {
+            fn dispatch(_page: *anyopaque) anyerror!?u32 {
+                const p: *Page = @ptrCast(@alignCast(_page));
+                const pos = &p.window._scroll_pos;
+                // If the state isn't scroll, we can ignore safely to throttle
+                // the events.
+                if (pos.state != .scroll) {
+                    return null;
+                }
+
+                const event = try Event.init("scroll", .{ .bubbles = true }, p);
+                try p._event_manager.dispatch(p.document.asEventTarget(), event);
+
+                pos.state = .end;
+
+                return null;
+            }
+        }.dispatch,
+        10,
+        .{ .low_priority = true },
+    );
+    // We dispatch scrollend event asynchronously after 20ms.
+    try page.scheduler.add(
+        page,
+        struct {
+            fn dispatch(_page: *anyopaque) anyerror!?u32 {
+                const p: *Page = @ptrCast(@alignCast(_page));
+                const pos = &p.window._scroll_pos;
+                // Dispatch only if the state is .end.
+                // If a scroll is pending, retry in 10ms.
+                // If the state is .end, the event has been dispatched, so
+                // ignore safely.
+                switch (pos.state) {
+                    .scroll => return 10,
+                    .end => {},
+                    .done => return null,
+                }
+                const event = try Event.init("scrollend", .{ .bubbles = true }, p);
+                try p._event_manager.dispatch(p.document.asEventTarget(), event);
+
+                pos.state = .done;
+
+                return null;
+            }
+        }.dispatch,
+        20,
+        .{ .low_priority = true },
+    );
 }
 
 const ScheduleOpts = struct {
