@@ -33,6 +33,7 @@ const Performance = @import("Performance.zig");
 const Document = @import("Document.zig");
 const Location = @import("Location.zig");
 const Fetch = @import("net/Fetch.zig");
+const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
@@ -62,6 +63,7 @@ _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
 _custom_elements: CustomElementRegistry = .{},
+_scroll_pos: struct { x: u32, y: u32 } = .{ .x = 0, .y = 0 },
 
 pub fn asEventTarget(self: *Window) *EventTarget {
     return self._proto;
@@ -355,12 +357,48 @@ pub fn getInnerHeight(_: *const Window) u32 {
     return 1080;
 }
 
-pub fn getScrollX(_: *const Window) u32 {
-    return 0;
+pub fn getScrollX(self: *const Window) u32 {
+    return self._scroll_pos.x;
 }
 
-pub fn getScrollY(_: *const Window) u32 {
-    return 0;
+pub fn getScrollY(self: *const Window) u32 {
+    return self._scroll_pos.y;
+}
+
+const ScrollToOpts = union(enum) {
+    x: i32,
+    opts: Opts,
+
+    const Opts = struct {
+        top: i32,
+        left: i32,
+        behavior: []const u8 = "",
+    };
+};
+pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
+    switch (opts) {
+        .x => |x| {
+            self._scroll_pos.x = @intCast(@max(x, 0));
+            self._scroll_pos.y = @intCast(@max(0, y orelse 0));
+        },
+        .opts => |o| {
+            self._scroll_pos.x = @intCast(@max(0, o.left));
+            self._scroll_pos.y = @intCast(@max(0, o.top));
+        },
+    }
+
+    {
+        // TODO According to the doc, scroll event should be throttled.
+        // see https://developer.mozilla.org/en-US/docs/Web/API/Document/scroll_event#scroll_event_throttling
+        const event = try Event.init("scroll", .{ .bubbles = true }, page);
+        try page._event_manager.dispatch(self._document.asEventTarget(), event);
+    }
+
+    {
+        // TODO scrollend must be dispatched once the scroll really ends.
+        const event = try Event.init("scrollend", .{ .bubbles = true }, page);
+        try page._event_manager.dispatch(self._document.asEventTarget(), event);
+    }
 }
 
 const ScheduleOpts = struct {
@@ -571,6 +609,8 @@ pub const JsApi = struct {
     pub const scrollY = bridge.accessor(Window.getScrollY, null, .{ .cache = "scrollY" });
     pub const pageXOffset = bridge.accessor(Window.getScrollX, null, .{ .cache = "pageXOffset" });
     pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{ .cache = "pageYOffset" });
+    pub const scrollTo = bridge.function(Window.scrollTo, .{});
+    pub const scroll = bridge.function(Window.scrollTo, .{});
 };
 
 const testing = @import("../../testing.zig");
