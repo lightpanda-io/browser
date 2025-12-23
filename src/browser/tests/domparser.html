@@ -237,3 +237,10 @@
   testing.expectEqual(null, doc2.getElementById('doc1-el'));
 }
 </script>
+
+<script id=documentElement>
+  testing.expectEqual('', new DOMParser().parseFromString('', "text/html").documentElement.textContent);
+  testing.expectEqual('spice', new DOMParser().parseFromString('spice', "text/html").documentElement.textContent);
+  testing.expectEqual('<html><head></head><body>spice</body></html>', new DOMParser().parseFromString('spice', "text/html").documentElement.outerHTML);
+  testing.expectEqual('<html><head></head><body></body></html>', new DOMParser().parseFromString('<html></html>', "text/html").documentElement.outerHTML);
+</script>

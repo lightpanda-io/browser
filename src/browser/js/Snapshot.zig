@@ -196,12 +196,22 @@ pub fn create(allocator: Allocator) !Snapshot {
 
             // Attach to global if it has a name
             if (@hasDecl(JsApi.Meta, "name")) {
-                const class_name = if (@hasDecl(JsApi.Meta, "constructor_alias"))
-                    JsApi.Meta.constructor_alias
-                else
-                    JsApi.Meta.name;
-                const v8_class_name = v8.String.initUtf8(isolate, class_name);
-                _ = global_obj.setValue(context, v8_class_name, func);
+                if (@hasDecl(JsApi.Meta, "constructor_alias")) {
+                    const v8_class_name = v8.String.initUtf8(isolate, JsApi.Meta.constructor_alias);
+                    _ = global_obj.setValue(context, v8_class_name, func);
+
+                    // @TODO: This is wrong. This name should be registered with the
+                    // illegalConstructorCallback. I.e. new Image() is OK, but
+                    // new HTMLImageElement() isn't.
+                    // But we _have_ to register the name, i.e. HTMLImageElement
+                    // has to be registered so, for now, instead of creating another
+                    // template, we just hook it into the constructor.
+                   const illegal_class_name = v8.String.initUtf8(isolate, JsApi.Meta.name);
+                    _ = global_obj.setValue(context, illegal_class_name, func);
+                } else {
+                    const v8_class_name = v8.String.initUtf8(isolate, JsApi.Meta.name);
+                    _ = global_obj.setValue(context, v8_class_name, func);
+                }
             }
         }
 

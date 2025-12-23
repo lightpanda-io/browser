@@ -42,10 +42,15 @@ pub fn parseFromString(self: *const DOMParser, html: []const u8, mime_type: []co
         ._proto = undefined,
     });
 
+    var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
+    if (normalized.len == 0) {
+        normalized = "<html></html>";
+    }
+
     // Parse HTML into the document
     const Parser = @import("../parser/Parser.zig");
     var parser = Parser.init(page.arena, doc.asNode(), page);
-    parser.parse(html);
+    parser.parse(normalized);
 
     if (parser.err) |pe| {
         return pe.err;
