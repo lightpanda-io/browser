@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<base href="https://example.com/">
+
+<a href="foo" id="foo">foo</a>
+
+<script id=baseURI>
+  testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/node/base_uri.html", document.URL);
+  testing.expectEqual("https://example.com/", document.baseURI);
+
+  const link = $('#foo');
+  testing.expectEqual("https://example.com/foo", link.href);
+</script>
+

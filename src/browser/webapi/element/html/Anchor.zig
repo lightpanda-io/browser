@@ -44,7 +44,7 @@ pub fn getHref(self: *Anchor, page: *Page) ![]const u8 {
     if (href.len == 0) {
         return "";
     }
-    return URL.resolve(page.call_arena, page.url, href, .{});
+    return URL.resolve(page.call_arena, page.base(), href, .{});
 }
 
 pub fn setHref(self: *Anchor, value: []const u8, page: *Page) !void {
@@ -195,7 +195,7 @@ fn getResolvedHref(self: *Anchor, page: *Page) !?[:0]const u8 {
     if (href.len == 0) {
         return null;
     }
-    return try URL.resolve(page.call_arena, page.url, href, .{});
+    return try URL.resolve(page.call_arena, page.base(), href, .{});
 }
 
 pub const JsApi = struct {

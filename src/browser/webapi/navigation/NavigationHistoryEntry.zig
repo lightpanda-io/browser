@@ -69,7 +69,7 @@ pub fn key(self: *const NavigationHistoryEntry) []const u8 {
 
 pub fn sameDocument(self: *const NavigationHistoryEntry, page: *Page) bool {
     const got_url = self._url orelse return false;
-    return URL.eqlDocument(got_url, page.url);
+    return URL.eqlDocument(got_url, page.base());
 }
 
 pub fn url(self: *const NavigationHistoryEntry) ?[:0]const u8 {

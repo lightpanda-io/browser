@@ -142,6 +142,11 @@ _queued_navigation: ?QueuedNavigation = null,
 // The URL of the current page
 url: [:0]const u8,
 
+// The base url specifies the base URL used to resolve the relative urls.
+// It is set by a <base> tag.
+// If null the url must be used.
+base_url: ?[:0]const u8,
+
 // Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
 // guarantee - it's valid until someone else uses it.
 buf: [BUF_SIZE]u8,
@@ -220,6 +225,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
 
     self.version = 0;
     self.url = "about:blank";
+    self.base_url = null;
 
     self.document = (try self._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
 
@@ -272,6 +278,10 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._undefined_custom_elements = .{};
 
     try self.registerBackgroundTasks();
+}
+
+pub fn base(self: *const Page) [:0]const u8 {
+    return self.base_url orelse self.url;
 }
 
 fn registerBackgroundTasks(self: *Page) !void {
@@ -424,7 +434,7 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
 
     const resolved_url = try URL.resolve(
         session.transfer_arena,
-        self.url,
+        self.base(),
         request_url,
         .{ .always_dupe = true },
     );
@@ -1421,6 +1431,24 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
                 attribute_iterator,
                 .{ ._proto = undefined },
             ),
+            asUint("base") => {
+                const n = try self.createHtmlElementT(
+                    Element.Html.Generic,
+                    namespace,
+                    attribute_iterator,
+                    .{ ._proto = undefined, ._tag_name = String.init(undefined, "base", .{}) catch unreachable, ._tag = .base },
+                );
+
+                // If page's base url is not already set, fill it with the base
+                // tag.
+                if (self.base_url == null) {
+                    if (n.as(Element).getAttributeSafe("href")) |href| {
+                        self.base_url = try URL.resolve(self.arena, self.url, href, .{});
+                    }
+                }
+
+                return n;
+            },
             else => {},
         },
         5 => switch (@as(u40, @bitCast(name[0..5].*))) {

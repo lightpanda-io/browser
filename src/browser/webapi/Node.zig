@@ -874,6 +874,11 @@ pub const JsApi = struct {
     fn _toString(self: *const Node) []const u8 {
         return self.className();
     }
+
+    fn _baseURI(_: *Node, page: *const Page) []const u8 {
+        return page.base();
+    }
+    pub const baseURI = bridge.accessor(_baseURI, null, .{});
 };
 
 pub const Build = struct {
