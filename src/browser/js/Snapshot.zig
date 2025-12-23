@@ -206,7 +206,7 @@ pub fn create(allocator: Allocator) !Snapshot {
                     // But we _have_ to register the name, i.e. HTMLImageElement
                     // has to be registered so, for now, instead of creating another
                     // template, we just hook it into the constructor.
-                   const illegal_class_name = v8.String.initUtf8(isolate, JsApi.Meta.name);
+                    const illegal_class_name = v8.String.initUtf8(isolate, JsApi.Meta.name);
                     _ = global_obj.setValue(context, illegal_class_name, func);
                 } else {
                     const v8_class_name = v8.String.initUtf8(isolate, JsApi.Meta.name);

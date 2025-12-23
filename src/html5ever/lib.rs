@@ -49,6 +49,8 @@ pub extern "C" fn html5ever_parse_document(
     get_template_contents_callback: GetTemplateContentsCallback,
     remove_from_parent_callback: RemoveFromParentCallback,
     reparent_children_callback: ReparentChildrenCallback,
+    append_before_sibling_callback: AppendBeforeSiblingCallback,
+    append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -73,6 +75,8 @@ pub extern "C" fn html5ever_parse_document(
         get_template_contents_callback: get_template_contents_callback,
         remove_from_parent_callback: remove_from_parent_callback,
         reparent_children_callback: reparent_children_callback,
+        append_before_sibling_callback: append_before_sibling_callback,
+        append_based_on_parent_node_callback: append_based_on_parent_node_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -99,6 +103,8 @@ pub extern "C" fn html5ever_parse_fragment(
     get_template_contents_callback: GetTemplateContentsCallback,
     remove_from_parent_callback: RemoveFromParentCallback,
     reparent_children_callback: ReparentChildrenCallback,
+    append_before_sibling_callback: AppendBeforeSiblingCallback,
+    append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
 ) -> () {
     if html.is_null() || len == 0 {
         return ();
@@ -123,6 +129,8 @@ pub extern "C" fn html5ever_parse_fragment(
         get_template_contents_callback: get_template_contents_callback,
         remove_from_parent_callback: remove_from_parent_callback,
         reparent_children_callback: reparent_children_callback,
+        append_before_sibling_callback: append_before_sibling_callback,
+        append_based_on_parent_node_callback: append_based_on_parent_node_callback,
     };
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
@@ -209,6 +217,8 @@ pub extern "C" fn html5ever_streaming_parser_create(
     get_template_contents_callback: GetTemplateContentsCallback,
     remove_from_parent_callback: RemoveFromParentCallback,
     reparent_children_callback: ReparentChildrenCallback,
+    append_before_sibling_callback: AppendBeforeSiblingCallback,
+    append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
 ) -> *mut c_void {
     let arena = Box::new(typed_arena::Arena::new());
 
@@ -236,6 +246,8 @@ pub extern "C" fn html5ever_streaming_parser_create(
         get_template_contents_callback: get_template_contents_callback,
         remove_from_parent_callback: remove_from_parent_callback,
         reparent_children_callback: reparent_children_callback,
+        append_before_sibling_callback: append_before_sibling_callback,
+        append_based_on_parent_node_callback: append_based_on_parent_node_callback,
     };
 
     // Create a parser which implements TendrilSink for streaming parsing

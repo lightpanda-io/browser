@@ -60,6 +60,8 @@ pub struct Sink<'arena> {
     pub get_template_contents_callback: GetTemplateContentsCallback,
     pub remove_from_parent_callback: RemoveFromParentCallback,
     pub reparent_children_callback: ReparentChildrenCallback,
+    pub append_before_sibling_callback: AppendBeforeSiblingCallback,
+    pub append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
 }
 
 impl<'arena> TreeSink for Sink<'arena> {
@@ -189,9 +191,30 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn append_before_sibling(&self, sibling: &Ref, child: NodeOrText<Ref>) {
-        _ = sibling;
-        _ = child;
-        panic!("append_before_sibling");
+        match child {
+            NodeOrText::AppendText(ref t) => {
+                let byte_slice = t.as_ref().as_bytes();
+                let static_slice: &'static [u8] = unsafe {
+                    std::mem::transmute(byte_slice)
+                };
+                unsafe {
+                    (self.append_before_sibling_callback)(self.ctx, *sibling, CNodeOrText{
+                        tag: 1,
+                        node: ptr::null(),
+                        text: StringSlice { ptr: static_slice.as_ptr(), len: static_slice.len()},
+                     });
+                };
+            },
+            NodeOrText::AppendNode(node) => {
+               unsafe {
+                    (self.append_before_sibling_callback)(self.ctx, *sibling, CNodeOrText{
+                        tag: 0,
+                        node: node,
+                        text: StringSlice::default()
+                    });
+                };
+            }
+        }
     }
 
     fn append_based_on_parent_node(
@@ -200,10 +223,30 @@ impl<'arena> TreeSink for Sink<'arena> {
         prev_element: &Ref,
         child: NodeOrText<Ref>,
     ) {
-        _ = element;
-        _ = prev_element;
-        _ = child;
-        panic!("append_based_on_parent_node");
+        match child {
+            NodeOrText::AppendText(ref t) => {
+                let byte_slice = t.as_ref().as_bytes();
+                let static_slice: &'static [u8] = unsafe {
+                    std::mem::transmute(byte_slice)
+                };
+                unsafe {
+                    (self.append_based_on_parent_node_callback)(self.ctx, *element, *prev_element, CNodeOrText{
+                        tag: 1,
+                        node: ptr::null(),
+                        text: StringSlice { ptr: static_slice.as_ptr(), len: static_slice.len()},
+                     });
+                };
+            },
+            NodeOrText::AppendNode(node) => {
+               unsafe {
+                    (self.append_based_on_parent_node_callback)(self.ctx, *element, *prev_element, CNodeOrText{
+                        tag: 0,
+                        node: node,
+                        text: StringSlice::default()
+                    });
+                };
+            }
+        }
     }
 
     fn append_doctype_to_document(

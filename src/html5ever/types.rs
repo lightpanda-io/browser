@@ -69,6 +69,19 @@ pub type RemoveFromParentCallback = unsafe extern "C" fn(ctx: Ref, target: Ref) 
 
 pub type ReparentChildrenCallback = unsafe extern "C" fn(ctx: Ref, node: Ref, new_parent: Ref) -> ();
 
+pub type AppendBeforeSiblingCallback = unsafe extern "C" fn(
+    ctx: Ref,
+    sibling: Ref,
+    node_or_text: CNodeOrText
+) -> ();
+
+pub type AppendBasedOnParentNodeCallback = unsafe extern "C" fn(
+    ctx: Ref,
+    element: Ref,
+    prev_element: Ref,
+    node_or_text: CNodeOrText
+) -> ();
+
 pub type Ref = *const c_void;
 
 #[repr(C)]

@@ -70,6 +70,8 @@ const Error = struct {
         get_template_content,
         remove_from_parent,
         reparent_children,
+        append_before_sibling,
+        append_based_on_parent_node,
     };
 };
 
@@ -91,6 +93,8 @@ pub fn parse(self: *Parser, html: []const u8) void {
         getTemplateContentsCallback,
         removeFromParentCallback,
         reparentChildrenCallback,
+        appendBeforeSiblingCallback,
+        appendBasedOnParentNodeCallback,
     );
 }
 
@@ -112,6 +116,8 @@ pub fn parseFragment(self: *Parser, html: []const u8) void {
         getTemplateContentsCallback,
         removeFromParentCallback,
         reparentChildrenCallback,
+        appendBeforeSiblingCallback,
+        appendBasedOnParentNodeCallback,
     );
 }
 
@@ -150,6 +156,8 @@ pub const Streaming = struct {
             getTemplateContentsCallback,
             removeFromParentCallback,
             reparentChildrenCallback,
+            appendBeforeSiblingCallback,
+            appendBasedOnParentNodeCallback,
         ) orelse return error.ParserCreationFailed;
     }
 
@@ -318,15 +326,13 @@ fn appendCallback(ctx: *anyopaque, parent_ref: *anyopaque, node_or_text: h5e.Nod
     };
 }
 fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !void {
+    // child node is guaranteed not to belong to another parent
     switch (node_or_text.toUnion()) {
         .node => |cpn| {
             const child = getNode(cpn);
-            // child node is guaranteed not to belong to another parent
             try self.page.appendNew(parent, .{ .node = child });
         },
-        .text => |txt| {
-            try self.page.appendNew(parent, .{ .text = txt });
-        },
+        .text => |txt| try self.page.appendNew(parent, .{ .text = txt }),
     }
 }
 
@@ -349,6 +355,35 @@ fn reparentChildrenCallback(ctx: *anyopaque, node_ref: *anyopaque, new_parent_re
 }
 fn _reparentChildrenCallback(self: *Parser, node: *Node, new_parent: *Node) !void {
     try self.page.appendAllChildren(node, new_parent);
+}
+
+fn appendBeforeSiblingCallback(ctx: *anyopaque, sibling_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    self._appendBeforeSiblingCallback(getNode(sibling_ref), node_or_text) catch |err| {
+        self.err = .{ .err = err, .source = .append_before_sibling };
+    };
+}
+fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e.NodeOrText) !void {
+    const parent = sibling.parentNode() orelse return error.NoParent;
+    const node: *Node = switch (node_or_text.toUnion()) {
+        .node => |cpn| getNode(cpn),
+        .text => |txt| try self.page.createTextNode(txt),
+    };
+    try self.page.insertNodeRelative(parent, node, .{ .before = sibling }, .{});
+}
+
+fn appendBasedOnParentNodeCallback(ctx: *anyopaque, element_ref: *anyopaque, prev_element_ref: *anyopaque, node_or_text: h5e.NodeOrText) callconv(.c) void {
+    const self: *Parser = @ptrCast(@alignCast(ctx));
+    self._appendBasedOnParentNodeCallback(getNode(element_ref), getNode(prev_element_ref), node_or_text) catch |err| {
+        self.err = .{ .err = err, .source = .append_based_on_parent_node };
+    };
+}
+fn _appendBasedOnParentNodeCallback(self: *Parser, element: *Node, prev_element: *Node, node_or_text: h5e.NodeOrText) !void {
+    if (element.parentNode()) |_| {
+        try self._appendBeforeSiblingCallback(element, node_or_text);
+    } else {
+        try self._appendCallback(prev_element, node_or_text);
+    }
 }
 
 fn getNode(ref: *anyopaque) *Node {
