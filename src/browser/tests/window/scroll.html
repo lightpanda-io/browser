@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<!-- Chrome don't scroll if the body isn't big enough. -->
+<body style=height:4000px;width:4000px></body>
+
+<script id=scroll_evt>
+  testing.async(async (restore) => {
+    let scrollevt = 0;
+    let scrollendevt = 0;
+    await new Promise((resolve) => {
+      document.addEventListener("scroll", (event) => {
+        scrollevt++;
+      });
+      document.addEventListener("scrollend", (event) => {
+        scrollendevt++;
+      });
+
+      window.scrollTo(10, 20);
+      testing.expectEqual(0, scrollevt);
+      testing.expectEqual(0, scrollendevt);
+
+      // scroll immediately: the scroll event must be throttled.
+      window.scrollTo(20, 40);
+      testing.expectEqual(0, scrollevt);
+      testing.expectEqual(0, scrollendevt);
+
+      // wait 10ms and scroll again: we should have a 2nd scroll, but no scrollend.
+      window.setTimeout(() => {
+        window.scrollTo(30, 40);
+      }, 10);
+
+      // wait until scrollend happens.
+      window.setTimeout(() => {
+        resolve();
+      }, 100);
+    });
+
+    restore();
+    testing.expectEqual(2, scrollevt);
+    testing.expectEqual(1, scrollendevt);
+  });
+</script>
