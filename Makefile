@@ -114,13 +114,10 @@ end2end:
 
 # Install and build required dependencies commands
 # ------------
-.PHONY: install install-dev
+.PHONY: install
 
 ## Install and build dependencies for release
 install: install-submodule
-
-## Install and build dependencies for dev
-install-dev: install-submodule
 
 data:
 	cd src/data && go run public_suffix_list_gen.go > public_suffix_list.zig
