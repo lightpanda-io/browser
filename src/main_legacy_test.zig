@@ -62,6 +62,10 @@ pub fn main() !void {
             continue;
         }
 
+        if (std.mem.endsWith(u8, entry.basename, ".skip.html")) {
+            continue;
+        }
+
         // These are crashing, comment this out to skip them.
 
         // if (std.mem.indexOf(u8, entry.basename, "navigation") != null) {

@@ -4,12 +4,7 @@
 <script id=history2>
     let state = { "new": "field", testComplete: true, testInProgress: true };
     history.replaceState(state, "");
-
-    history.pushState(
-      null,
-      null,
-      'http://127.0.0.1:9589/html/history/history_after_nav.html'
-    );
+    history.pushState(null, null, 'http://127.0.0.1:9589/html/history/history_after_nav.skip.html');
 
     let popstateEventFired = false;
     let popstateEventState = null;
