@@ -61,6 +61,8 @@ pub const Unknown = @import("html/Unknown.zig");
 
 const HtmlElement = @This();
 
+const std = @import("std");
+
 _type: Type,
 _proto: *Element,
 
@@ -166,6 +168,124 @@ pub fn className(self: *const HtmlElement) []const u8 {
     };
 }
 
+pub fn asElement(self: *HtmlElement) *Element {
+    return self._proto;
+}
+
+// innerText represents the **rendered** text content of a node and its
+// descendants.
+pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer) !void {
+    var state = innerTextState{};
+    return try self._getInnerText(writer, &state);
+}
+
+const innerTextState = struct {
+    pre_w: bool = false,
+    trim_left: bool = true,
+};
+
+fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextState) !void {
+    var it = self.asElement().asNode().childrenIterator();
+    while (it.next()) |child| {
+        switch (child._type) {
+            .element => |e| switch (e._type) {
+                .html => |he| switch (he._type) {
+                    .br => {
+                        try writer.writeByte('\n');
+                        state.pre_w = false; // prevent a next pre space.
+                        state.trim_left = true;
+                    },
+                    .script, .style, .template => {
+                        state.pre_w = false; // prevent a next pre space.
+                        state.trim_left = true;
+                    },
+                    else => try he._getInnerText(writer, state), // TODO check if elt is hidden.
+                },
+                .svg => {},
+            },
+            .cdata => |c| switch (c._type) {
+                .comment => {
+                    state.pre_w = false; // prevent a next pre space.
+                    state.trim_left = true;
+                },
+                .text => {
+                    if (state.pre_w) try writer.writeByte(' ');
+                    state.pre_w = try c.render(writer, .{ .trim_left = state.trim_left });
+                    // if we had a pre space, trim left next one.
+                    state.trim_left = state.pre_w;
+                },
+                // CDATA sections should not be used within HTML. They are
+                // considered comments and are not displayed.
+                .cdata_section => {},
+                // Processing instructions are not displayed in innerText
+                .processing_instruction => {},
+            },
+            .document => {},
+            .document_type => {},
+            .document_fragment => {},
+            .attribute => |attr| try writer.writeAll(attr._value),
+        }
+    }
+}
+
+pub fn setInnerText(self: *HtmlElement, text: []const u8, page: *Page) !void {
+    const parent = self.asElement().asNode();
+
+    // Remove all existing children
+    page.domChanged();
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        page.removeNode(parent, child, .{ .will_be_reconnected = false });
+    }
+
+    // Fast path: skip if text is empty
+    if (text.len == 0) {
+        return;
+    }
+
+    // Create and append text node
+    const text_node = try page.createTextNode(text);
+    try page.appendNode(parent, text_node, .{ .child_already_connected = false });
+}
+
+pub fn insertAdjacentHTML(
+    self: *HtmlElement,
+    position: []const u8,
+    /// TODO: Add support for XML parsing.
+    html_or_xml: []const u8,
+    page: *Page,
+) !void {
+    // Create a new HTMLDocument.
+    const doc = try page._factory.document(@import("../HTMLDocument.zig"){
+        ._proto = undefined,
+    });
+    const doc_node = doc.asNode();
+
+    const Parser = @import("../../parser/Parser.zig");
+    var parser = Parser.init(page.call_arena, doc_node, page);
+    parser.parse(html_or_xml);
+    // Check if there's parsing error.
+    if (parser.err) |_| return error.Invalid;
+
+    // We always get it wrapped like so:
+    // <html><head></head><body>{ ... }</body></html>
+    // None of the following can be null.
+    const maybe_html_node = doc_node.firstChild();
+    std.debug.assert(maybe_html_node != null);
+    const html_node = maybe_html_node orelse return;
+
+    const maybe_body_node = html_node.lastChild();
+    std.debug.assert(maybe_body_node != null);
+    const body = maybe_body_node orelse return;
+
+    const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position);
+
+    var iter = body.childrenIterator();
+    while (iter.next()) |child_node| {
+        _ = try target_node.insertBefore(child_node, prev_node, page);
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HtmlElement);
 
@@ -176,6 +296,15 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(HtmlElement.construct, .{});
+
+    pub const innerText = bridge.accessor(_innerText, HtmlElement.setInnerText, .{});
+    fn _innerText(self: *HtmlElement, page: *const Page) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+        try self.getInnerText(&buf.writer);
+        return buf.written();
+    }
+
+    pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true });
 };
 
 pub const Build = struct {
