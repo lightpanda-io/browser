@@ -153,3 +153,16 @@
   testing.expectEqual(d, parent.childNodes[3]);
 }
 </script>
+
+<script id=textContent>
+{
+  const parent = document.createElement('div');
+  parent.appendChild(document.createElement('div'));
+  testing.expectEqual(1, parent.childNodes.length);
+  parent.textContent = '';
+  testing.expectEqual(0, parent.childNodes.length);
+
+  parent.textContent = ' ';
+  testing.expectEqual(1, parent.childNodes.length);
+}
+</script>

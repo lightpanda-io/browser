@@ -176,3 +176,16 @@
   testing.expectEqual("Nested content", clonedInner.textContent);
 }
 </script>
+
+<script id=textContent>
+{
+  const df = document.createDocumentFragment();
+  df.appendChild(document.createElement("div"));
+  testing.expectEqual(1, df.childNodes.length);
+  df.textContent = '';
+  testing.expectEqual(0, df.childNodes.length);
+
+  df.textContent = ' ';
+  testing.expectEqual(1, df.childNodes.length);
+}
+</script>

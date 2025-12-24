@@ -269,11 +269,21 @@ pub fn getTextContentAlloc(self: *Node, allocator: Allocator) error{WriteFailed}
 
 pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
     switch (self._type) {
-        .element => |el| return el.replaceChildren(&.{.{ .text = data }}, page),
+        .element => |el| {
+            if (data.len == 0) {
+                return el.replaceChildren(&.{}, page);
+            }
+            return el.replaceChildren(&.{.{ .text = data }}, page);
+        },
         .cdata => |c| c._data = try page.arena.dupe(u8, data),
         .document => {},
         .document_type => {},
-        .document_fragment => |frag| return frag.replaceChildren(&.{.{ .text = data }}, page),
+        .document_fragment => |frag| {
+            if (data.len == 0) {
+                return frag.replaceChildren(&.{}, page);
+            }
+            return frag.replaceChildren(&.{.{ .text = data }}, page);
+        },
         .attribute => |attr| return attr.setValue(data, page),
     }
 }
