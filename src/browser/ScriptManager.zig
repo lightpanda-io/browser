@@ -244,6 +244,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         },
     };
 
+    const is_blocking = script.mode == .normal;
     if (remote_url) |url| {
         errdefer script.deinit(true);
 
@@ -255,6 +256,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .ctx = script,
             .method = .GET,
             .headers = headers,
+            .blocking = is_blocking,
             .cookie_jar = &page._session.cookie_jar,
             .resource_type = .script,
             .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -274,7 +276,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
     }
 
-    if (script.mode != .normal) {
+    if (is_blocking == false) {
         const list = self.scriptList(script);
         list.append(&script.node);
         return;

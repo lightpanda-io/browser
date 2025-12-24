@@ -123,17 +123,23 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
     defer client.deinit();
 
     var http = &self.app.http;
-    http.monitorSocket(socket);
-    defer http.unmonitorSocket();
+    http.addCDPClient(.{
+        .socket = socket,
+        .ctx = client,
+        .blocking_read_start = Client.blockingReadStart,
+        .blocking_read = Client.blockingRead,
+        .blocking_read_end = Client.blockingReadStop,
+    });
+    defer http.removeCDPClient();
 
     std.debug.assert(client.mode == .http);
     while (true) {
-        if (http.poll(timeout_ms) != .extra_socket) {
+        if (http.poll(timeout_ms) != .cdp_socket) {
             log.info(.app, "CDP timeout", .{});
             return;
         }
 
-        if (try client.readSocket() == false) {
+        if (client.readSocket() == false) {
             return;
         }
 
@@ -147,19 +153,19 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
     var ms_remaining = timeout_ms;
     while (true) {
         switch (cdp.pageWait(ms_remaining)) {
-            .extra_socket => {
-                if (try client.readSocket() == false) {
+            .cdp_socket => {
+                if (client.readSocket() == false) {
                     return;
                 }
                 last_message = timestamp(.monotonic);
                 ms_remaining = timeout_ms;
             },
             .no_page => {
-                if (http.poll(ms_remaining) != .extra_socket) {
+                if (http.poll(ms_remaining) != .cdp_socket) {
                     log.info(.app, "CDP timeout", .{});
                     return;
                 }
-                if (try client.readSocket() == false) {
+                if (client.readSocket() == false) {
                     return;
                 }
                 last_message = timestamp(.monotonic);
@@ -229,7 +235,30 @@ pub const Client = struct {
         self.send_arena.deinit();
     }
 
-    fn readSocket(self: *Client) !bool {
+    fn blockingReadStart(ctx: *anyopaque) bool {
+        const self: *Client = @ptrCast(@alignCast(ctx));
+        _ = posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true }))) catch |err| {
+            log.warn(.app, "CDP blockingReadStart", .{ .err = err });
+            return false;
+        };
+        return true;
+    }
+
+    fn blockingRead(ctx: *anyopaque) bool {
+        const self: *Client = @ptrCast(@alignCast(ctx));
+        return self.readSocket();
+    }
+
+    fn blockingReadStop(ctx: *anyopaque) bool {
+        const self: *Client = @ptrCast(@alignCast(ctx));
+        _ = posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
+            log.warn(.app, "CDP blockingReadStop", .{ .err = err });
+            return false;
+        };
+        return true;
+    }
+
+    fn readSocket(self: *Client) bool {
         const n = posix.read(self.socket, self.readBuf()) catch |err| {
             log.warn(.app, "CDP read", .{ .err = err });
             return false;

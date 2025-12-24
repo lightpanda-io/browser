@@ -89,7 +89,7 @@ pub fn init(page: *Page) !*XMLHttpRequest {
 
 pub fn deinit(self: *XMLHttpRequest) void {
     if (self.transfer) |transfer| {
-        transfer.abort();
+        transfer.abort(error.Abort);
         self.transfer = null;
     }
 }
@@ -115,7 +115,7 @@ pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
     // Abort any in-progress request
     if (self._transfer) |transfer| {
-        transfer.abort();
+        transfer.abort(error.Abort);
         self._transfer = null;
     }
 
@@ -373,7 +373,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 pub fn abort(self: *XMLHttpRequest) void {
     self.handleError(error.Abort);
     if (self._transfer) |transfer| {
-        transfer.abort();
+        transfer.abort(error.Abort);
         self._transfer = null;
     }
 }
