@@ -12,7 +12,8 @@
   });
 
   testing.async(promise1, (json) => {
-    testing.expectEqual({over: '9000!!!'}, json);
+    testing.expectEqual("number", typeof json.updated_at);
+    testing.expectEqual({over: '9000!!!',updated_at:1765867200000}, json);
   });
 </script>
 
@@ -29,6 +30,7 @@
   });
 
   testing.async(promise1, (json) => {
-    testing.expectEqual({over: '9000!!!'}, json);
+    testing.expectEqual("number", typeof json.updated_at);
+    testing.expectEqual({over: '9000!!!',updated_at:1765867200000}, json);
   });
 </script>
