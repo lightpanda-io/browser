@@ -172,6 +172,14 @@ pub fn asElement(self: *HtmlElement) *Element {
     return self._proto;
 }
 
+pub fn asNode(self: *HtmlElement) *Node {
+    return self._proto._proto;
+}
+
+pub fn asEventTarget(self: *HtmlElement) *@import("../EventTarget.zig") {
+    return self._proto._proto._proto;
+}
+
 // innerText represents the **rendered** text content of a node and its
 // descendants.
 pub fn getInnerText(self: *HtmlElement, writer: *std.Io.Writer) !void {
@@ -286,6 +294,25 @@ pub fn insertAdjacentHTML(
     }
 }
 
+pub fn click(self: *HtmlElement, page: *Page) !void {
+    switch (self._type) {
+        inline .button, .input, .textarea, .select => |i| {
+            if (i.getDisabled()) {
+                return;
+            }
+        },
+        else => {},
+    }
+
+    const event = try @import("../event/MouseEvent.zig").init("click", .{
+        .bubbles = true,
+        .cancelable = true,
+        .clientX = 0,
+        .clientY = 0,
+    }, page);
+    try page._event_manager.dispatch(self.asEventTarget(), event.asEvent());
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(HtmlElement);
 
@@ -303,8 +330,8 @@ pub const JsApi = struct {
         try self.getInnerText(&buf.writer);
         return buf.written();
     }
-
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true });
+    pub const click = bridge.function(HtmlElement.click, .{});
 };
 
 pub const Build = struct {

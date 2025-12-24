@@ -166,3 +166,16 @@
   testing.expectEqual(1, parent.childNodes.length);
 }
 </script>
+
+<script id=click>
+{
+  let clicked = 0;
+  window.addEventListener('click', (e) => {
+    testing.expectEqual(0, e.clientX);
+    testing.expectEqual(0, e.clientY);
+    clicked += 1;
+  });
+  $('#container').click();
+  testing.expectEqual(1, clicked);
+}
+</script>
