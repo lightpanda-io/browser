@@ -31,6 +31,7 @@ const Mime = @import("../mime.zig").Mime;
 const parser = @import("../netsurf.zig");
 const Page = @import("../page.zig").Page;
 const Http = @import("../../http/Http.zig");
+const js = @import("../js/js.zig");
 
 // XHR interfaces
 // https://xhr.spec.whatwg.org/#interface-xmlhttprequest
@@ -128,21 +129,19 @@ pub const XMLHttpRequest = struct {
         JSON,
     };
 
-    const JSONValue = std.json.Value;
-
     const Response = union(ResponseType) {
         Empty: void,
         Text: []const u8,
         ArrayBuffer: void,
         Blob: void,
         Document: *parser.Document,
-        JSON: JSONValue,
+        JSON: js.Value,
     };
 
     const ResponseObj = union(enum) {
         Document: *parser.Document,
         Failure: void,
-        JSON: JSONValue,
+        JSON: js.Value,
 
         fn deinit(self: ResponseObj) void {
             switch (self) {
@@ -605,7 +604,7 @@ pub const XMLHttpRequest = struct {
     }
 
     // https://xhr.spec.whatwg.org/#the-response-attribute
-    pub fn get_response(self: *XMLHttpRequest) !?Response {
+    pub fn get_response(self: *XMLHttpRequest, page: *Page) !?Response {
         if (self.response_type == .Empty or self.response_type == .Text) {
             if (self.state == .loading or self.state == .done) {
                 return .{ .Text = try self.get_responseText() };
@@ -652,7 +651,7 @@ pub const XMLHttpRequest = struct {
             // TODO Let jsonObject be the result of running parse JSON from bytes
             // on this’s received bytes. If that threw an exception, then return
             // null.
-            self.setResponseObjJSON();
+            self.setResponseObjJSON(page);
         }
 
         if (self.response_obj) |obj| {
@@ -691,22 +690,18 @@ pub const XMLHttpRequest = struct {
         };
     }
 
-    // setResponseObjJSON parses the received bytes as a std.json.Value.
-    fn setResponseObjJSON(self: *XMLHttpRequest) void {
-        // TODO should we use parseFromSliceLeaky if we expect the allocator is
-        // already an arena?
-        const p = std.json.parseFromSliceLeaky(
-            JSONValue,
-            self.arena,
+    // setResponseObjJSON parses the received bytes as a js.Value.
+    fn setResponseObjJSON(self: *XMLHttpRequest, page: *Page) void {
+        const value = js.Value.fromJson(
+            page.js,
             self.response_bytes.items,
-            .{},
         ) catch |e| {
             log.warn(.http, "invalid json", .{ .err = e, .url = self.url, .source = "xhr" });
             self.response_obj = .{ .Failure = {} };
             return;
         };
 
-        self.response_obj = .{ .JSON = p };
+        self.response_obj = .{ .JSON = value };
     }
 
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {

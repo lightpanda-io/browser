@@ -179,17 +179,12 @@ pub fn _json(self: *Response, page: *Page) !js.Promise {
 
     if (self.body) |body| {
         self.body_used = true;
-        const p = std.json.parseFromSliceLeaky(
-            std.json.Value,
-            page.call_arena,
-            body,
-            .{},
-        ) catch |e| {
+        const value = js.Value.fromJson(page.js, body) catch |e| {
             log.info(.browser, "invalid json", .{ .err = e, .source = "Response" });
             return error.SyntaxError;
         };
 
-        return page.js.resolvePromise(p);
+        return page.js.resolvePromise(value);
     }
     return page.js.resolvePromise(null);
 }
