@@ -153,3 +153,11 @@
 }
 </script>
 
+<script id=list_caching>
+  {
+    // this ordering used to crash
+    const list = document.getElementsByTagName('div');
+    testing.expectEqual('0', list[0].textContent);
+    testing.expectEqual(3, list.length);
+  }
+</script>

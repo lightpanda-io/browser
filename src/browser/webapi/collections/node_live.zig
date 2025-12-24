@@ -114,8 +114,11 @@ pub fn NodeLive(comptime mode: Mode) type {
                 if (self._last_length) |cached_length| {
                     return cached_length;
                 }
+                // not ideal, but this can happen if list[x] is called followed
+                // by list.length.
+                self._tw.reset();
+                self._last_index = 0;
             }
-
             // If we're here, it means it's either the first time we're called
             // or the DOM version has changed. Either way, the _tw should be
             // at the start position. It's important that self._last_index == 0
