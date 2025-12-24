@@ -284,7 +284,7 @@ pub fn navigateInner(
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
             }
         },
         .replace => |state| {
@@ -297,7 +297,7 @@ pub fn navigateInner(
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
             }
         },
         .traverse => |index| {
@@ -314,7 +314,7 @@ pub fn navigateInner(
             }
         },
         .reload => {
-            try page.navigate(url, .{ .reason = .navigation, .kind = kind });
+            try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
         },
     }
 
