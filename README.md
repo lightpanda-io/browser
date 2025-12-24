@@ -213,16 +213,6 @@ To init or update the submodules in the `vendor/` directory:
 make install-submodule
 ```
 
-**html5ever**
-
-[html5ver](https://github.com/servo/html5ever) is high-performance browser-grade HTML5 parser.
-
-```
-zig build html5ever
-```
-
-For a release build, use `zig build -Doptimize=ReleaseFast html5ever`.
-
 ## Test
 
 ### Unit Tests
