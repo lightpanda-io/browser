@@ -127,3 +127,74 @@
   testing.expectEqual('important', div.style.getPropertyPriority('color'));
 }
 </script>
+
+<script id="defaultVisibilityProperties">
+{
+  // Test default values for visibility-related properties
+  const div = document.createElement('div');
+  const span = document.createElement('span');
+  const anchor = document.createElement('a');
+
+  // Test display defaults on element.style
+  testing.expectEqual('block', div.style.getPropertyValue('display'));
+  testing.expectEqual('inline', span.style.getPropertyValue('display'));
+  testing.expectEqual('inline', anchor.style.getPropertyValue('display'));
+
+  // Test visibility default
+  testing.expectEqual('visible', div.style.getPropertyValue('visibility'));
+
+  // Test opacity default
+  testing.expectEqual('1', div.style.getPropertyValue('opacity'));
+
+  // Test that explicit values override defaults
+  div.style.setProperty('display', 'flex');
+  testing.expectEqual('flex', div.style.getPropertyValue('display'));
+  testing.expectEqual(1, div.style.length);
+
+  // Test that removing property returns to default
+  div.style.setProperty('display', '');
+  testing.expectEqual('block', div.style.getPropertyValue('display'));
+  testing.expectEqual(0, div.style.length);
+
+  // Test that other properties still return empty when not set
+  testing.expectEqual('', div.style.getPropertyValue('color'));
+  testing.expectEqual('', div.style.getPropertyValue('width'));
+}
+</script>
+
+<script id="computedStyleDefaults">
+{
+  // Test that getComputedStyle returns default visibility properties
+  const div = document.createElement('div');
+  const span = document.createElement('span');
+  const anchor = document.createElement('a');
+  document.body.appendChild(div);
+  document.body.appendChild(span);
+  document.body.appendChild(anchor);
+
+  // Test element.style defaults
+  testing.expectEqual('block', div.style.display);
+  testing.expectEqual('inline', span.style.display);
+  testing.expectEqual('inline', anchor.style.display);
+  testing.expectEqual('visible', div.style.visibility);
+  testing.expectEqual('1', div.style.opacity);
+
+  // Test getComputedStyle with getPropertyValue
+  const divStyle = window.getComputedStyle(div);
+  const spanStyle = window.getComputedStyle(span);
+  const anchorStyle = window.getComputedStyle(anchor);
+
+  testing.expectEqual('block', divStyle.getPropertyValue('display'));
+  testing.expectEqual('inline', spanStyle.getPropertyValue('display'));
+  testing.expectEqual('inline', anchorStyle.getPropertyValue('display'));
+  testing.expectEqual('visible', divStyle.getPropertyValue('visibility'));
+  testing.expectEqual('1', divStyle.getPropertyValue('opacity'));
+
+  // Test getComputedStyle with named property access (camelCase)
+  testing.expectEqual('block', divStyle.display);
+  testing.expectEqual('inline', spanStyle.display);
+  testing.expectEqual('inline', anchorStyle.display);
+  testing.expectEqual('visible', divStyle.visibility);
+  testing.expectEqual('1', divStyle.opacity);
+}
+</script>

@@ -40,7 +40,7 @@ const MessageEvent = @import("event/MessageEvent.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
 const Element = @import("Element.zig");
-const CSSStyleDeclaration = @import("css/CSSStyleDeclaration.zig");
+const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 
 const Window = @This();
@@ -319,8 +319,8 @@ pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQuery
     });
 }
 
-pub fn getComputedStyle(_: *const Window, _: *Element, page: *Page) !*CSSStyleDeclaration {
-    return CSSStyleDeclaration.init(null, page);
+pub fn getComputedStyle(_: *const Window, element: *Element, page: *Page) !*CSSStyleProperties {
+    return CSSStyleProperties.init(element, page);
 }
 
 pub fn postMessage(self: *Window, message: js.Object, target_origin: ?[]const u8, page: *Page) !void {

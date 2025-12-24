@@ -106,6 +106,8 @@ fn isKnownCSSProperty(dash_case: []const u8) bool {
         .{ "width", {} },
         .{ "height", {} },
         .{ "display", {} },
+        .{ "visibility", {} },
+        .{ "opacity", {} },
         .{ "position", {} },
         .{ "top", {} },
         .{ "bottom", {} },
@@ -139,10 +141,14 @@ fn camelCaseToDashCase(name: []const u8, buf: []u8) []const u8 {
     }
 
     // Check for vendor prefixes: webkitTransform -> -webkit-transform
-    const has_vendor_prefix = name.len > 6 and (std.mem.startsWith(u8, name, "webkit") or
-        std.mem.startsWith(u8, name, "moz") or
-        std.mem.startsWith(u8, name, "ms") or
-        std.mem.startsWith(u8, name, "o"));
+    // Must have uppercase letter after the prefix
+    const has_vendor_prefix = blk: {
+        if (name.len > 6 and std.mem.startsWith(u8, name, "webkit") and std.ascii.isUpper(name[6])) break :blk true;
+        if (name.len > 3 and std.mem.startsWith(u8, name, "moz") and std.ascii.isUpper(name[3])) break :blk true;
+        if (name.len > 2 and std.mem.startsWith(u8, name, "ms") and std.ascii.isUpper(name[2])) break :blk true;
+        if (name.len > 1 and std.mem.startsWith(u8, name, "o") and std.ascii.isUpper(name[1])) break :blk true;
+        break :blk false;
+    };
 
     var write_pos: usize = 0;
 

@@ -55,7 +55,9 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
 
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
-    const prop = self.findProperty(normalized) orelse return "";
+    const prop = self.findProperty(normalized) orelse {
+        return getDefaultPropertyValue(self, normalized);
+    };
     return prop._value.str();
 }
 
@@ -190,6 +192,54 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, normalized_name, "visibility")) {
+        return "visible";
+    }
+    if (std.mem.eql(u8, normalized_name, "opacity")) {
+        return "1";
+    }
+    if (std.mem.eql(u8, normalized_name, "display")) {
+        const element = self._element orelse return "";
+        return getDefaultDisplay(element);
+    }
+
+    return "";
+}
+
+fn getDefaultDisplay(element: *const Element) []const u8 {
+    switch (element._type) {
+        .html => |html| {
+            return switch (html._type) {
+                .anchor, .br => "inline",
+                .body, .div, .p, .heading, .form, .button, .canvas, .dialog, .embed, .head, .html, .hr, .iframe, .img, .input, .li, .link, .meta, .ol, .option, .script, .select, .slot, .style, .template, .textarea, .title, .ul, .media => "block",
+                .generic, .custom, .unknown, .data => blk: {
+                    const tag = element.getTagNameLower();
+                    if (isInlineTag(tag)) break :blk "inline";
+                    break :blk "block";
+                },
+            };
+        },
+        .svg => return "inline",
+    }
+}
+
+fn isInlineTag(tag_name: []const u8) bool {
+    const inline_tags = [_][]const u8{
+        "abbr",  "b",    "bdi",    "bdo",  "cite", "code", "dfn",
+        "em",    "i",    "kbd",    "mark", "q",    "s",    "samp",
+        "small", "span", "strong", "sub",  "sup",  "time", "u",
+        "var",   "wbr",
+    };
+
+    for (inline_tags) |inline_tag| {
+        if (std.mem.eql(u8, tag_name, inline_tag)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub const Property = struct {
