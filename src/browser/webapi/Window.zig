@@ -354,9 +354,9 @@ pub fn getFramesLength(self: *const Window) u32 {
 
     var ln: u32 = 0;
     while (walker.next()) |node| {
-        const other_element = node.is(Element) orelse continue;
-        _ = other_element.is(Element.Html.IFrame) orelse continue;
-        ln += 1;
+        if (node.is(Element.Html.IFrame) != null) {
+            ln += 1;
+        }
     }
 
     return ln;
