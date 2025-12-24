@@ -24,6 +24,10 @@ const PopStateEvent = @import("event/PopStateEvent.zig");
 
 const History = @This();
 
+const ScrollRestoration = enum { auto, manual };
+
+_scroll_restoration: ScrollRestoration = .auto,
+
 pub fn getLength(_: *const History, page: *Page) u32 {
     return @intCast(page._session.navigation._entries.items.len);
 }
@@ -35,11 +39,21 @@ pub fn getState(_: *const History, page: *Page) !?js.Value {
     } else return null;
 }
 
+pub fn getScrollRestoration(self: *History) []const u8 {
+    return @tagName(self._scroll_restoration);
+}
+
+pub fn setScrollRestoration(self: *History, str: []const u8) void {
+    if (std.meta.stringToEnum(ScrollRestoration, str)) |sr| {
+        self._scroll_restoration = sr;
+    }
+}
+
 pub fn pushState(_: *History, state: js.Object, _: []const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page._session.arena;
     const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
 
-    const json = state.toJson(arena) catch return error.DateClone;
+    const json = state.toJson(arena) catch return error.DataClone;
     _ = try page._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
 }
 
@@ -47,12 +61,12 @@ pub fn replaceState(_: *History, state: js.Object, _: []const u8, _url: ?[]const
     const arena = page._session.arena;
     const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
 
-    const json = state.toJson(arena) catch return error.DateClone;
+    const json = state.toJson(arena) catch return error.DataClone;
     _ = try page._session.navigation.replaceEntry(url, .{ .source = .history, .value = json }, page, true);
 }
 
 fn goInner(delta: i32, page: *Page) !void {
-    // 0 behaves the same as no argument, both reloadig the page.
+    // 0 behaves the same as no argument, both reloading the page.
 
     const current = page._session.navigation._index;
     const index_s: i64 = @intCast(@as(i64, @intCast(current)) + @as(i64, @intCast(delta)));
@@ -101,6 +115,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(History.getLength, null, .{});
+    pub const scrollRestoration = bridge.accessor(History.getScrollRestoration, History.setScrollRestoration, .{});
     pub const state = bridge.accessor(History.getState, null, .{});
     pub const pushState = bridge.function(History.pushState, .{});
     pub const replaceState = bridge.function(History.replaceState, .{});
