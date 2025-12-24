@@ -73,6 +73,7 @@ _default_value: ?[]const u8 = null,
 _default_checked: bool = false,
 _value: ?[]const u8 = null,
 _checked: bool = false,
+_checked_dirty: bool = false,
 _input_type: Type = .text,
 
 pub fn asElement(self: *Input) *Element {
@@ -122,8 +123,9 @@ pub fn setChecked(self: *Input, checked: bool, page: *Page) !void {
     if (checked and self._input_type == .radio) {
         try self.uncheckRadioGroup(page);
     }
-    // This should _not_ call setAttribute. It updates the default state only
+    // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
+    self._checked_dirty = true;
 }
 
 pub fn getDefaultChecked(self: *const Input) bool {
@@ -158,6 +160,78 @@ pub fn getName(self: *const Input) []const u8 {
 
 pub fn setName(self: *Input, name: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe("name", name, page);
+}
+
+pub fn getAccept(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe("accept") orelse "";
+}
+
+pub fn setAccept(self: *Input, accept: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("accept", accept, page);
+}
+
+pub fn getAlt(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe("alt") orelse "";
+}
+
+pub fn setAlt(self: *Input, alt: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("alt", alt, page);
+}
+
+pub fn getMaxLength(self: *const Input) i32 {
+    const attr = self.asConstElement().getAttributeSafe("maxlength") orelse return -1;
+    return std.fmt.parseInt(i32, attr, 10) catch -1;
+}
+
+pub fn setMaxLength(self: *Input, max_length: i32, page: *Page) !void {
+    if (max_length < 0) {
+        return error.NegativeValueNotAllowed;
+    }
+    var buf: [32]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
+    try self.asElement().setAttributeSafe("maxlength", value, page);
+}
+
+pub fn getSize(self: *const Input) i32 {
+    const attr = self.asConstElement().getAttributeSafe("size") orelse return 20;
+    const parsed = std.fmt.parseInt(i32, attr, 10) catch return 20;
+    return if (parsed == 0) 20 else parsed;
+}
+
+pub fn setSize(self: *Input, size: i32, page: *Page) !void {
+    if (size == 0) {
+        return error.ZeroNotAllowed;
+    }
+    if (size < 0) {
+        return self.asElement().setAttributeSafe("size", "20", page);
+    }
+
+    var buf: [32]u8 = undefined;
+    const value = std.fmt.bufPrint(&buf, "{d}", .{size}) catch unreachable;
+    try self.asElement().setAttributeSafe("size", value, page);
+}
+
+pub fn getSrc(self: *const Input, page: *Page) ![]const u8 {
+    const src = self.asConstElement().getAttributeSafe("src") orelse return "";
+    // If attribute is explicitly set (even if empty), resolve it against the base URL
+    return @import("../../URL.zig").resolve(page.call_arena, page.base(), src, .{});
+}
+
+pub fn setSrc(self: *Input, src: []const u8, page: *Page) !void {
+    const trimmed = std.mem.trim(u8, src, &std.ascii.whitespace);
+    try self.asElement().setAttributeSafe("src", trimmed, page);
+}
+
+pub fn getReadonly(self: *const Input) bool {
+    return self.asConstElement().getAttributeSafe("readonly") != null;
+}
+
+pub fn setReadonly(self: *Input, readonly: bool, page: *Page) !void {
+    if (readonly) {
+        try self.asElement().setAttributeSafe("readonly", "", page);
+    } else {
+        try self.asElement().removeAttribute("readonly", page);
+    }
 }
 
 pub fn getRequired(self: *const Input) bool {
@@ -256,6 +330,12 @@ pub const JsApi = struct {
     pub const disabled = bridge.accessor(Input.getDisabled, Input.setDisabled, .{});
     pub const name = bridge.accessor(Input.getName, Input.setName, .{});
     pub const required = bridge.accessor(Input.getRequired, Input.setRequired, .{});
+    pub const accept = bridge.accessor(Input.getAccept, Input.setAccept, .{});
+    pub const readOnly = bridge.accessor(Input.getReadonly, Input.setReadonly, .{});
+    pub const alt = bridge.accessor(Input.getAlt, Input.setAlt, .{});
+    pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{});
+    pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
+    pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
 };
 
@@ -291,10 +371,13 @@ pub const Build = struct {
             .value => self._default_value = value,
             .checked => {
                 self._default_checked = true;
-                self._checked = true;
-                // If setting a radio button to checked, uncheck others in the group
-                if (self._input_type == .radio) {
-                    try self.uncheckRadioGroup(page);
+                // Only update checked state if it hasn't been manually modified
+                if (!self._checked_dirty) {
+                    self._checked = true;
+                    // If setting a radio button to checked, uncheck others in the group
+                    if (self._input_type == .radio) {
+                        try self.uncheckRadioGroup(page);
+                    }
                 }
             },
         }
@@ -308,7 +391,10 @@ pub const Build = struct {
             .value => self._default_value = null,
             .checked => {
                 self._default_checked = false;
-                self._checked = false;
+                // Only update checked state if it hasn't been manually modified
+                if (!self._checked_dirty) {
+                    self._checked = false;
+                }
             },
         }
     }

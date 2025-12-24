@@ -9,7 +9,7 @@
   localStorage.setItem('foo', 'bar');
   testing.expectEqual(1, localStorage.length)
   testing.expectEqual('bar', localStorage.getItem('foo'));
-  testing.expectEqual('bar', localStorage.key(0));
+  testing.expectEqual('foo', localStorage.key(0));
   testing.expectEqual(null, localStorage.key(1));
 
   localStorage.removeItem('foo');

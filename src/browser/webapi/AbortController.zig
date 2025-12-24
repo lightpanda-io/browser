@@ -37,8 +37,8 @@ pub fn getSignal(self: *const AbortController) *AbortSignal {
     return self._signal;
 }
 
-pub fn abort(self: *AbortController, reason: ?js.Object, page: *Page) !void {
-    try self._signal.abort(reason, page);
+pub fn abort(self: *AbortController, reason_: ?js.Object, page: *Page) !void {
+    try self._signal.abort(if (reason_) |r| .{.js_obj = r} else null, page);
 }
 
 pub const JsApi = struct {

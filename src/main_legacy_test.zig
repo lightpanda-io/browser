@@ -61,6 +61,13 @@ pub fn main() !void {
         if (!std.mem.endsWith(u8, entry.basename, ".html")) {
             continue;
         }
+        if (std.mem.indexOf(u8, entry.basename, "navigation") != null) {
+            continue;
+        }
+        if (std.mem.indexOf(u8, entry.basename, "history") != null) {
+            continue;
+        }
+
         if (filter) |f| {
             if (std.mem.indexOf(u8, entry.path, f) == null) {
                 continue;

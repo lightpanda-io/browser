@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
+const log = @import("../../log.zig");
 
 const Page = @import("../Page.zig");
 const Event = @import("Event.zig");
@@ -27,15 +28,12 @@ const AbortSignal = @This();
 
 _proto: *EventTarget,
 _aborted: bool = false,
-_reason: ?js.Object = null,
+_reason: Reason = .undefined,
 _on_abort: ?js.Function = null,
 
 pub fn init(page: *Page) !*AbortSignal {
     return page._factory.eventTarget(AbortSignal{
         ._proto = undefined,
-        ._aborted = false,
-        ._reason = null,
-        ._on_abort = null,
     });
 }
 
@@ -43,7 +41,7 @@ pub fn getAborted(self: *const AbortSignal) bool {
     return self._aborted;
 }
 
-pub fn getReason(self: *const AbortSignal) ?js.Object {
+pub fn getReason(self: *const AbortSignal) Reason {
     return self._reason;
 }
 
@@ -63,14 +61,22 @@ pub fn asEventTarget(self: *AbortSignal) *EventTarget {
     return self._proto;
 }
 
-pub fn abort(self: *AbortSignal, reason_: ?js.Object, page: *Page) !void {
-    if (self._aborted) return;
+pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
+    if (self._aborted) {
+        return;
+    }
 
     self._aborted = true;
 
     // Store the abort reason (default to a simple string if none provided)
     if (reason_) |reason| {
-        self._reason = try reason.persist();
+        switch (reason) {
+            .js_obj => |js_obj| self._reason = .{.js_obj = try js_obj.persist()},
+            .string => |str| self._reason = .{.string = try page.dupeString(str)},
+            .undefined => self._reason = reason,
+        }
+    } else {
+        self._reason = .{.string = "AbortError"};
     }
 
     // Dispatch abort event
@@ -86,15 +92,58 @@ pub fn abort(self: *AbortSignal, reason_: ?js.Object, page: *Page) !void {
 // Static method to create an already-aborted signal
 pub fn createAborted(reason_: ?js.Object, page: *Page) !*AbortSignal {
     const signal = try init(page);
-    try signal.abort(reason_, page);
+    try signal.abort(if (reason_) |r| .{.js_obj = r} else null, page);
     return signal;
 }
 
-pub fn throwIfAborted(self: *const AbortSignal) !void {
-    if (self._aborted) {
-        return error.Aborted;
-    }
+pub fn createTimeout(delay: u32, page: *Page) !*AbortSignal {
+    const callback = try page.arena.create(TimeoutCallback);
+    callback.* = .{
+        .page = page,
+        .signal = try init(page),
+    };
+
+    try page.scheduler.add(callback, TimeoutCallback.run, delay, .{
+        .name = "AbortSignal.timeout",
+    });
+
+    return callback.signal;
 }
+
+const ThrowIfAborted = union(enum) {
+    exception: js.Exception,
+    undefined: void,
+};
+pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
+    if (self._aborted) {
+        const exception = switch (self._reason) {
+            .string => |str| page.js.throw(str),
+            .js_obj => |js_obj| page.js.throw(try js_obj.toString()),
+            .undefined => page.js.throw("AbortError"),
+        };
+        return .{ .exception = exception };
+    }
+    return .undefined;
+}
+
+const Reason = union(enum) {
+    js_obj: js.Object,
+    string: []const u8,
+    undefined: void,
+};
+
+const TimeoutCallback = struct {
+    page: *Page,
+    signal: *AbortSignal,
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
+        self.signal.abort(.{.string = "TimeoutError"}, self.page) catch |err| {
+            log.warn(.app, "abort signal timeout", .{ .err = err });
+        };
+        return null;
+    }
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(AbortSignal);
@@ -116,4 +165,5 @@ pub const JsApi = struct {
 
     // Static method
     pub const abort = bridge.function(AbortSignal.createAborted, .{ .static = true });
+    pub const timeout = bridge.function(AbortSignal.createTimeout, .{ .static = true });
 };

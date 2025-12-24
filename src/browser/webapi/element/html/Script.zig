@@ -66,6 +66,14 @@ pub fn setType(self: *Script, value: []const u8, page: *Page) !void {
     return self.asElement().setAttributeSafe("type", value, page);
 }
 
+pub fn getNonce(self: *const Script) []const u8 {
+    return self.asConstElement().getAttributeSafe("nonce") orelse "";
+}
+
+pub fn setNonce(self: *Script, value: []const u8, page: *Page) !void {
+    return self.asElement().setAttributeSafe("nonce", value, page);
+}
+
 pub fn getOnLoad(self: *const Script) ?js.Function {
     return self._on_load;
 }
@@ -109,6 +117,7 @@ pub const JsApi = struct {
 
     pub const src = bridge.accessor(Script.getSrc, Script.setSrc, .{});
     pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{});
+    pub const nonce = bridge.accessor(Script.getNonce, Script.setNonce, .{});
     pub const onload = bridge.accessor(Script.getOnLoad, Script.setOnLoad, .{});
     pub const onerror = bridge.accessor(Script.getOnError, Script.setOnError, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});

@@ -116,6 +116,7 @@ pub const Lookup = struct {
         pub const removeItem = bridge.function(Lookup.removeItem, .{});
         pub const clear = bridge.function(Lookup.clear, .{});
         pub const key = bridge.function(Lookup.key, .{});
+        pub const @"[str]" = bridge.namedIndexed(Lookup.getItem, Lookup.setItem, null, .{ .null_as_undefined = true });
     };
 };
 

@@ -23,6 +23,47 @@
   testing.expectEqual('radio', $('#radio1').type)
 </script>
 
+<script id=attributes>
+  {
+    const input = $('#text1');
+
+    testing.expectEqual('', input.accept);
+    input.accept = 'anything';
+    testing.expectEqual('anything', input.accept);
+
+    testing.expectEqual('', input.alt);
+    input.alt = 'x1';
+    testing.expectEqual('x1', input.alt);
+
+    testing.expectEqual(false, input.readOnly);
+    input.readOnly = true;
+    testing.expectEqual(true, input.readOnly);
+    input.readOnly = false;
+    testing.expectEqual(false, input.readOnly);
+
+    testing.expectEqual(-1, input.maxLength);
+    input.maxLength = 5;
+    testing.expectEqual(5, input.maxLength);
+    input.maxLength = 'banana';
+    testing.expectEqual(0, input.maxLength);
+    testing.expectError('Error: NegativeValueNotAllowed', () => { input.maxLength = -45;});
+
+    testing.expectEqual(20, input.size);
+    input.size = 5;
+    testing.expectEqual(5, input.size);
+    input.size = -449;
+    testing.expectEqual(20, input.size);
+    testing.expectError('Error: ZeroNotAllowed', () => { input.size = 0; });
+
+    testing.expectEqual('', input.src);
+    input.src = 'foo'
+    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/foo', input.src);
+    input.src = '-3'
+    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/-3', input.src);
+    input.src = ''
+  }
+</script>
+
 <script id="type_case_insensitive">
   {
     const input = document.createElement('input')
@@ -395,4 +436,23 @@
   testing.expectEqual(null, document.querySelector('input[type="checkbox"]:checked'))
   testing.expectEqual($('#radio3'), document.querySelector('input[type="radio"]:checked'))
   testing.expectEqual($('#radio3'), document.querySelector('input[type="radio"][name="group1"]:checked'))
+</script>
+
+<script id=related>
+  {
+    let input_checked = document.createElement('input')
+    testing.expectEqual(false, input_checked.defaultChecked);
+    testing.expectEqual(false, input_checked.checked);
+
+    input_checked.defaultChecked = true;
+    testing.expectEqual(true, input_checked.defaultChecked);
+    testing.expectEqual(true, input_checked.checked);
+
+    input_checked.checked = false;
+    testing.expectEqual(true, input_checked.defaultChecked);
+    testing.expectEqual(false, input_checked.checked);
+
+    input_checked.defaultChecked = true;
+    testing.expectEqual(false, input_checked.checked);
+  }
 </script>

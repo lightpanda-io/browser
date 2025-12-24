@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../js/js.zig");
 const reflect = @import("../../reflect.zig");
 
@@ -60,8 +61,6 @@ pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
 const HtmlElement = @This();
-
-const std = @import("std");
 
 _type: Type,
 _proto: *Element,

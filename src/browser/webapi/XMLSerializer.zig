@@ -37,7 +37,10 @@ pub fn serializeToString(self: *const XMLSerializer, node: *Node, page: *Page) !
     } else {
         try dump.deep(node, .{ .shadow = .skip }, &buf.writer, page);
     }
-    return buf.written();
+    // Not sure about this trim. But `dump` is meant to display relatively
+    // pretty HTML, so it does include newlines, which can result in a trailing
+    // newline. XMLSerializer is a bit more strict.
+    return std.mem.trim(u8, buf.written(), &std.ascii.whitespace);
 }
 
 pub const JsApi = struct {
