@@ -75,7 +75,7 @@ pub fn init(self: *Session, browser: *Browser) !void {
         .storage_shed = .{},
         .arena = session_allocator,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
-        .navigation = Navigation.init(session_allocator),
+        .navigation = .{},
         .history = .{},
         .transfer_arena = browser.transfer_arena.allocator(),
     };
