@@ -148,6 +148,8 @@ pub const Exception = struct {
 };
 
 pub const Value = struct {
+    const PersistentValue = v8.Persistent(v8.Value);
+
     value: v8.Value,
     context: *const Context,
 
@@ -159,7 +161,11 @@ pub const Value = struct {
     pub fn fromJson(ctx: *Context, json: []const u8) !Value {
         const json_string = v8.String.initUtf8(ctx.isolate, json);
         const value = try v8.Json.parse(ctx.v8_context, json_string);
-        return Value{ .context = ctx, .value = value };
+
+        const persisted = PersistentValue.init(ctx.isolate, value);
+        try ctx.js_value_list.append(ctx.arena, persisted);
+
+        return Value{ .context = ctx, .value = persisted.toValue() };
     }
 };
 
