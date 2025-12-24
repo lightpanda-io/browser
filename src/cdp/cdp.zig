@@ -408,7 +408,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // abort all intercepted requests before closing the sesion/page
             // since some of these might callback into the page/scriptmanager
             for (self.intercept_state.pendingTransfers()) |transfer| {
-                transfer.abort();
+                transfer.abort(error.ClientDisconnect);
             }
 
             // If the session has a page, we need to clear it first. The page

@@ -241,22 +241,30 @@ pub fn request(self: *Client, req: Request) !void {
         return;
     }
 
+    if (try self.waitForInterceptedResponse(transfer)) {
+        return self.process(transfer);
+    }
+}
+
+fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
     // The request was intercepted and is blocking. This is messy, but our
     // callers, the ScriptManager -> Page, don't have a great way to stop the
     // parser and return control to the CDP server to wait for the interception
     // response. We have some information on the CDPClient, so we'll do the
-    // blocking here. (This is a bit of a legacy thing. Initially the Client)
+    // blocking here. (This is a bit of a legacy thing. Initially the Client
     // had a 'extra_socket' that it could monitor. It was named 'extra_socket'
     // to appear generic, but really, that 'extra_socket' was always the CDP
-    // socket that we could monitor in libcurm. Because we already had
-    // the "extra_socket" here, it was easier just to make it even more CDP-
-    // aware and turn `extra_socket: socket_t` into the current CDPClient).
+    // socket. Because we already had the "extra_socket" here, it was easier to
+    // make it even more CDP- aware and turn `extra_socket: socket_t` into the
+    // current CDPClient and do the blocking here).
     const cdp_client = self.cdp_client.?;
     const ctx = cdp_client.ctx;
 
     if (cdp_client.blocking_read_start(ctx) == false) {
         return error.BlockingInterceptFailure;
     }
+
+    defer _ = cdp_client.blocking_read_end(ctx);
 
     while (true) {
         if (cdp_client.blocking_read(ctx) == false) {
@@ -265,22 +273,18 @@ pub fn request(self: *Client, req: Request) !void {
 
         switch (transfer._intercept_state) {
             .pending => continue, // keep waiting
-            .@"continue" => return self.process(transfer),
-            .abort => {
-                transfer.abort();
-                return;
+            .@"continue" => return true,
+            .abort => |err| {
+                transfer.abort(err);
+                return false;
             },
             .fulfilled => {
                 // callbacks already called, just need to cleanups
                 transfer.deinit();
-                return;
+                return false;
             },
             .not_intercepted => unreachable,
         }
-    }
-
-    if (cdp_client.blocking_read_end(ctx) == false) {
-        return error.BlockingInterceptFailure;
     }
 }
 
@@ -303,10 +307,10 @@ pub fn continueTransfer(self: *Client, transfer: *Transfer) !void {
     }
     self.intercepted -= 1;
 
-    transfer._intercept_state = .@"continue";
     if (!transfer.req.blocking) {
         return self.process(transfer);
     }
+    transfer._intercept_state = .@"continue";
 }
 
 // For an intercepted request
@@ -317,10 +321,10 @@ pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
     }
     self.intercepted -= 1;
 
-    transfer._intercept_state = .abort;
     if (!transfer.req.blocking) {
-        transfer.abort();
+        transfer.abort(error.Abort);
     }
+    transfer._intercept_state = .{ .abort = error.Abort };
 }
 
 // For an intercepted request
@@ -331,11 +335,11 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     }
     self.intercepted -= 1;
 
-    transfer._intercept_state = .fulfilled;
     try transfer.fulfill(status, headers, body);
     if (!transfer.req.blocking) {
         transfer.deinit();
     }
+    transfer._intercept_state = .fulfilled;
 }
 
 pub fn nextReqId(self: *Client) usize {
@@ -560,17 +564,21 @@ fn processMessages(self: *Client) !bool {
                 var wait_for_interception = false;
                 notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
                 if (wait_for_interception) {
-                    // the request is put on hold to be intercepted.
-                    // In this case we ignore callbacks for now.
-                    // Note: we don't deinit transfer on purpose: we want to keep
-                    // using it for the following request.
                     self.intercepted += 1;
                     if (comptime IS_DEBUG) {
                         log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
                     }
                     transfer._intercept_state = .pending;
-                    self.endTransfer(transfer);
-                    continue;
+                    if (!transfer.req.blocking) {
+                        // the request is put on hold to be intercepted.
+                        // In this case we ignore callbacks for now.
+                        // Note: we don't deinit transfer on purpose: we want to keep
+                        // using it for the following request
+                        self.endTransfer(transfer);
+                        continue;
+                    }
+
+                    _ = try self.waitForInterceptedResponse(transfer);
                 }
             }
         }
@@ -856,11 +864,11 @@ pub const Transfer = struct {
     _node: std.DoublyLinkedList.Node = .{},
     _intercept_state: InterceptState = .not_intercepted,
 
-    const InterceptState = enum {
+    const InterceptState = union(enum) {
         not_intercepted,
         pending,
         @"continue",
-        abort,
+        abort: anyerror,
         fulfilled,
     };
 
@@ -952,8 +960,8 @@ pub const Transfer = struct {
         self.req.headers = new_headers;
     }
 
-    pub fn abort(self: *Transfer) void {
-        self.client.requestFailed(self, error.Abort);
+    pub fn abort(self: *Transfer, err: anyerror) void {
+        self.client.requestFailed(self, err);
         if (self._handle != null) {
             self.client.endTransfer(self);
         }
@@ -978,8 +986,11 @@ pub const Transfer = struct {
             log.debug(.http, "abort auth transfer", .{ .intercepted = self.client.intercepted });
         }
         self.client.intercepted -= 1;
-        self.client.requestFailed(self, error.AbortAuthChallenge);
-        self.deinit();
+        if (!self.req.blocking) {
+            self.abort(error.AbortAuthChallenge);
+            return;
+        }
+        self._intercept_state = .{ .abort = error.AbortAuthChallenge };
     }
 
     // redirectionCookies manages cookies during redirections handled by Curl.
