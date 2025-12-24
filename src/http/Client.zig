@@ -756,7 +756,7 @@ pub const Request = struct {
     credentials: ?[:0]const u8 = null,
 
     // This is only relevant for intercepted requests. If a request is flagged
-    // as blocking AND is interecepted, then it'll be up to us to wait until
+    // as blocking AND is intercepted, then it'll be up to us to wait until
     // we receive a response to the interception. This probably isn't ideal,
     // but it's harder for our caller (ScriptManager) to deal with this. One
     // reason for that is the Http Client is already a bit CDP-aware.
