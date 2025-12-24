@@ -357,8 +357,23 @@ pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     return decoded;
 }
 
-pub fn getLength(_: *const Window) u32 {
-    return 0;
+pub fn getFrame(_: *Window, _: usize) !?*Window {
+    // TODO return the iframe's window.
+    return null;
+}
+
+pub fn getFramesLength(self: *const Window) u32 {
+    const TreeWalker = @import("TreeWalker.zig");
+    var walker = TreeWalker.Full.init(self._document.asNode(), .{});
+
+    var ln: u32 = 0;
+    while (walker.next()) |node| {
+        if (node.is(Element.Html.IFrame) != null) {
+            ln += 1;
+        }
+    }
+
+    return ln;
 }
 
 pub fn getInnerWidth(_: *const Window) u32 {
@@ -654,9 +669,10 @@ pub const JsApi = struct {
     pub const btoa = bridge.function(Window.btoa, .{});
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
-    pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
-    pub const length = bridge.accessor(Window.getLength, null, .{ .cache = "length" });
+    pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
+    pub const index = bridge.indexed(Window.getFrame, .{ .null_as_undefined = true });
+    pub const length = bridge.accessor(Window.getFramesLength, null, .{ .cache = "length" });
     pub const innerWidth = bridge.accessor(Window.getInnerWidth, null, .{ .cache = "innerWidth" });
     pub const innerHeight = bridge.accessor(Window.getInnerHeight, null, .{ .cache = "innerHeight" });
     pub const scrollX = bridge.accessor(Window.getScrollX, null, .{ .cache = "scrollX" });
