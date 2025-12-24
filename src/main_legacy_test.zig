@@ -98,8 +98,8 @@ pub fn run(allocator: Allocator, file: []const u8, session: *lp.Session) !void {
     try page.navigate(url, .{});
     _ = session.wait(2000);
 
-    page._session.browser.runMicrotasks();
-    page._session.browser.runMessageLoop();
+    // page._session.browser.runMicrotasks();
+    // page._session.browser.runMessageLoop();
 
     js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
         const msg = try_catch.err(allocator) catch @errorName(err) orelse "unknown";
