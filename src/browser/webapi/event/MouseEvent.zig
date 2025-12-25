@@ -63,7 +63,7 @@ pub const MouseEventOptions = struct {
     relatedTarget: ?*EventTarget = null,
 };
 
-pub const Options = Event.inheritOptions(
+const Options = Event.inheritOptions(
     MouseEvent,
     MouseEventOptions,
 );

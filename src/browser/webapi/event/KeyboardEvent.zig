@@ -177,7 +177,7 @@ pub const KeyboardEventOptions = struct {
     metaKey: bool = false,
 };
 
-pub const Options = Event.inheritOptions(
+const Options = Event.inheritOptions(
     KeyboardEvent,
     KeyboardEventOptions,
 );
@@ -253,8 +253,12 @@ pub fn getModifierState(self: *const KeyboardEvent, str: []const u8, page: *Page
         .Shift => return self._shift_key,
         .Control => return self._ctrl_key,
         .Meta => return self._meta_key,
-        else => return false,
+        .standard => |s| if (std.mem.eql(u8, s, "Accel")) {
+            return self._ctrl_key or self._meta_key;
+        },
+        else => {},
     }
+    return false;
 }
 
 pub const JsApi = struct {

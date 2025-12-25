@@ -46,7 +46,7 @@ pub fn format(self: *const Attribute, writer: *std.Io.Writer) !void {
 }
 
 pub fn className(_: *const Attribute) []const u8 {
-    return "Attr";
+    return "[object Attr]";
 }
 
 pub fn getName(self: *const Attribute) []const u8 {
@@ -60,13 +60,13 @@ pub fn getValue(self: *const Attribute) []const u8 {
 pub fn setValue(self: *Attribute, data_: ?[]const u8, page: *Page) !void {
     const data = data_ orelse "";
     const el = self._element orelse {
-        self._value = try page.arena.dupe(u8, data);
+        self._value = try page.dupeString(data);
         return;
     };
     // this takes ownership of the data
     try el.setAttribute(self._name, data, page);
 
-    // not the most efficient, but we don't expect this to be called oftens
+    // not the most efficient, but we don't expect this to be called often
     self._value = (try el.getAttribute(self._name, page)) orelse "";
 }
 
@@ -97,7 +97,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(Attribute.getName, null, .{});
     pub const localName = bridge.accessor(Attribute.getName, null, .{});
-    pub const value = bridge.accessor(Attribute.getValue, null, .{});
+    pub const value = bridge.accessor(Attribute.getValue, Attribute.setValue, .{});
     pub const namespaceURI = bridge.accessor(Attribute.getNamespaceURI, null, .{});
     pub const ownerElement = bridge.accessor(Attribute.getOwnerElement, null, .{});
 };
@@ -447,7 +447,7 @@ pub const NamedNodeMap = struct {
 
     // Whenever the NamedNodeMap creates an Attribute, it needs to provide the
     // "ownerElement".
-    _element: ?*Element = null,
+    _element: *Element,
 
     pub fn length(self: *const NamedNodeMap) u32 {
         return @intCast(self._list._list.len());
@@ -475,6 +475,11 @@ pub const NamedNodeMap = struct {
 
     pub fn getByName(self: *const NamedNodeMap, name: []const u8, page: *Page) !?*Attribute {
         return self._list.getAttribute(name, self._element, page);
+    }
+
+    pub fn setByName(self: *const NamedNodeMap, attribute: *Attribute, page: *Page) !?*Attribute {
+        attribute._element = null; // just a requirement of list.putAttribute, it'll re-set it.
+        return self._list.putAttribute(attribute, self._element, page);
     }
 
     pub fn iterator(self: *const NamedNodeMap, page: *Page) !*Iterator {
@@ -505,6 +510,7 @@ pub const NamedNodeMap = struct {
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, .{ .null_as_undefined = true });
         pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, .{ .null_as_undefined = true });
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
+        pub const setNamedItem = bridge.function(NamedNodeMap.setByName, .{});
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, page: *Page) !?*Attribute {
             // the bridge.indexed handles this, so if we want

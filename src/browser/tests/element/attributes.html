@@ -57,6 +57,7 @@
     for (let i = 0; i < expected.length; i++) {
       const ex = expected[i];
       let attribute = attributes[ex.name];
+      testing.expectEqual('[object Attr]', attribute.toString());
       testing.expectEqual(ex.name, attribute.name)
       testing.expectEqual(ex.value, attribute.value)
 
@@ -245,4 +246,23 @@
     testing.expectEqual("InvalidCharacterError", err.name);
   }, () => div.toggleAttribute('-invalid'));
 }
+</script>
+
+<div id=legacy></a>
+<script id=legacy>
+  {
+    let a = document.getElementById('legacy').attributes;
+    testing.expectEqual(1, a.length);
+    testing.expectEqual('[object Attr]', a.item(0).toString());
+    testing.expectEqual(null, a.item(1));
+    testing.expectEqual('[object Attr]', a.getNamedItem('id').toString());
+    testing.expectEqual(null, a.getNamedItem('foo'));
+    testing.expectEqual('[object Attr]', a.setNamedItem(a.getNamedItem('id')).toString());
+
+    testing.expectEqual('id', a['id'].name);
+    testing.expectEqual('legacy', a['id'].value);
+    testing.expectEqual(undefined, a['other']);
+    a[0].value = 'abc123';
+    testing.expectEqual('abc123', a[0].value);
+  }
 </script>
