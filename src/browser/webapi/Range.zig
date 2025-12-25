@@ -22,65 +22,39 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
+const AbstractRange = @import("AbstractRange.zig");
 
 const Range = @This();
 
-_end_offset: u32,
-_start_offset: u32,
-_end_container: *Node,
-_start_container: *Node,
+_proto: *AbstractRange,
+
+pub fn asAbstractRange(self: *Range) *AbstractRange {
+    return self._proto;
+}
 
 pub fn init(page: *Page) !*Range {
-    // Per spec, a new range starts collapsed at the document's first position
-    const doc = page.document.asNode();
-    return page._factory.create(Range{
-        ._end_offset = 0,
-        ._start_offset = 0,
-        ._end_container = doc,
-        ._start_container = doc,
-    });
-}
-
-pub fn getStartContainer(self: *const Range) *Node {
-    return self._start_container;
-}
-
-pub fn getStartOffset(self: *const Range) u32 {
-    return self._start_offset;
-}
-
-pub fn getEndContainer(self: *const Range) *Node {
-    return self._end_container;
-}
-
-pub fn getEndOffset(self: *const Range) u32 {
-    return self._end_offset;
-}
-
-pub fn getCollapsed(self: *const Range) bool {
-    return self._start_container == self._end_container and
-        self._start_offset == self._end_offset;
+    return page._factory.abstractRange(Range{._proto = undefined}, page);
 }
 
 pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
-    self._start_container = node;
-    self._start_offset = offset;
+    self._proto._start_container = node;
+    self._proto._start_offset = offset;
 
     // If start is now after end, collapse to start
-    if (self.isStartAfterEnd()) {
-        self._end_container = self._start_container;
-        self._end_offset = self._start_offset;
+    if (self._proto.isStartAfterEnd()) {
+        self._proto._end_container = self._proto._start_container;
+        self._proto._end_offset = self._proto._start_offset;
     }
 }
 
 pub fn setEnd(self: *Range, node: *Node, offset: u32) !void {
-    self._end_container = node;
-    self._end_offset = offset;
+    self._proto._end_container = node;
+    self._proto._end_offset = offset;
 
     // If end is now before start, collapse to end
-    if (self.isStartAfterEnd()) {
-        self._start_container = self._end_container;
-        self._start_offset = self._end_offset;
+    if (self._proto.isStartAfterEnd()) {
+        self._proto._start_container = self._proto._end_container;
+        self._proto._start_offset = self._proto._end_offset;
     }
 }
 
@@ -123,27 +97,27 @@ pub fn selectNodeContents(self: *Range, node: *Node) !void {
 
 pub fn collapse(self: *Range, to_start: ?bool) void {
     if (to_start orelse true) {
-        self._end_container = self._start_container;
-        self._end_offset = self._start_offset;
+        self._proto._end_container = self._proto._start_container;
+        self._proto._end_offset = self._proto._start_offset;
     } else {
-        self._start_container = self._end_container;
-        self._start_offset = self._end_offset;
+        self._proto._start_container = self._proto._end_container;
+        self._proto._start_offset = self._proto._end_offset;
     }
 }
 
 pub fn cloneRange(self: *const Range, page: *Page) !*Range {
-    return page._factory.create(Range{
-        ._end_offset = self._end_offset,
-        ._start_offset = self._start_offset,
-        ._end_container = self._end_container,
-        ._start_container = self._start_container,
-    });
+    const clone = try page._factory.abstractRange(Range{._proto = undefined}, page);
+    clone._proto._end_offset = self._proto._end_offset;
+    clone._proto._start_offset = self._proto._start_offset;
+    clone._proto._end_container = self._proto._end_container;
+    clone._proto._start_container = self._proto._start_container;
+    return clone;
 }
 
 pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
     // Insert node at the start of the range
-    const container = self._start_container;
-    const offset = self._start_offset;
+    const container = self._proto._start_container;
+    const offset = self._proto._start_offset;
 
     if (container.is(Node.CData)) |_| {
         // If container is a text node, we need to split it
@@ -175,33 +149,33 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
     }
 
     // Update range to be after the inserted node
-    if (self._start_container == self._end_container) {
-        self._end_offset += 1;
+    if (self._proto._start_container == self._proto._end_container) {
+        self._proto._end_offset += 1;
     }
 }
 
 pub fn deleteContents(self: *Range, page: *Page) !void {
-    if (self.getCollapsed()) {
+    if (self._proto.getCollapsed()) {
         return;
     }
 
     // Simple case: same container
-    if (self._start_container == self._end_container) {
-        if (self._start_container.is(Node.CData)) |_| {
+    if (self._proto._start_container == self._proto._end_container) {
+        if (self._proto._start_container.is(Node.CData)) |_| {
             // Delete part of text node
-            const text_data = self._start_container.getData();
+            const text_data = self._proto._start_container.getData();
             const new_text = try std.mem.concat(
                 page.arena,
                 u8,
-                &.{ text_data[0..self._start_offset], text_data[self._end_offset..] },
+                &.{ text_data[0..self._proto._start_offset], text_data[self._proto._end_offset..] },
             );
-            self._start_container.setData(new_text);
+            self._proto._start_container.setData(new_text);
         } else {
             // Delete child nodes in range
-            var offset = self._start_offset;
-            while (offset < self._end_offset) : (offset += 1) {
-                if (self._start_container.getChildAt(self._start_offset)) |child| {
-                    _ = try self._start_container.removeChild(child, page);
+            var offset = self._proto._start_offset;
+            while (offset < self._proto._end_offset) : (offset += 1) {
+                if (self._proto._start_container.getChildAt(self._proto._start_offset)) |child| {
+                    _ = try self._proto._start_container.removeChild(child, page);
                 }
             }
         }
@@ -217,23 +191,23 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
 pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
     const fragment = try DocumentFragment.init(page);
 
-    if (self.getCollapsed()) return fragment;
+    if (self._proto.getCollapsed()) return fragment;
 
     // Simple case: same container
-    if (self._start_container == self._end_container) {
-        if (self._start_container.is(Node.CData)) |_| {
+    if (self._proto._start_container == self._proto._end_container) {
+        if (self._proto._start_container.is(Node.CData)) |_| {
             // Clone part of text node
-            const text_data = self._start_container.getData();
-            if (self._start_offset < text_data.len and self._end_offset <= text_data.len) {
-                const cloned_text = text_data[self._start_offset..self._end_offset];
+            const text_data = self._proto._start_container.getData();
+            if (self._proto._start_offset < text_data.len and self._proto._end_offset <= text_data.len) {
+                const cloned_text = text_data[self._proto._start_offset..self._proto._end_offset];
                 const text_node = try page.createTextNode(cloned_text);
                 _ = try fragment.asNode().appendChild(text_node, page);
             }
         } else {
             // Clone child nodes in range
-            var offset = self._start_offset;
-            while (offset < self._end_offset) : (offset += 1) {
-                if (self._start_container.getChildAt(offset)) |child| {
+            var offset = self._proto._start_offset;
+            while (offset < self._proto._end_offset) : (offset += 1) {
+                if (self._proto._start_container.getChildAt(offset)) |child| {
                     const cloned = try child.cloneNode(true, page);
                     _ = try fragment.asNode().appendChild(cloned, page);
                 }
@@ -265,7 +239,7 @@ pub fn surroundContents(self: *Range, new_parent: *Node, page: *Page) !void {
 }
 
 pub fn createContextualFragment(self: *const Range, html: []const u8, page: *Page) !*DocumentFragment {
-    var context_node = self._start_container;
+    var context_node = self._proto._start_container;
 
     // If start container is a text node, use its parent as context
     if (context_node.is(Node.CData)) |_| {
@@ -306,15 +280,15 @@ pub fn toString(self: *const Range, page: *Page) ![]const u8 {
 }
 
 fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
-    if (self.getCollapsed()) {
+    if (self._proto.getCollapsed()) {
         return;
     }
 
-    if (self._start_container == self._end_container) {
-        if (self._start_container.is(Node.CData)) |cdata| {
+    if (self._proto._start_container == self._proto._end_container) {
+        if (self._proto._start_container.is(Node.CData)) |cdata| {
             const data = cdata.getData();
-            if (self._start_offset < data.len and self._end_offset <= data.len) {
-                try writer.writeAll(data[self._start_offset..self._end_offset]);
+            if (self._proto._start_offset < data.len and self._proto._end_offset <= data.len) {
+                try writer.writeAll(data[self._proto._start_offset..self._proto._end_offset]);
             }
         }
         // For elements, would need to iterate children
@@ -323,134 +297,6 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
 
     // Complex case: different containers - would need proper tree walking
     // For now, just return empty
-}
-
-fn isStartAfterEnd(self: *const Range) bool {
-    return compareBoundaryPoints(
-        self._start_container,
-        self._start_offset,
-        self._end_container,
-        self._end_offset,
-    ) == .after;
-}
-
-const BoundaryComparison = enum {
-    before,
-    equal,
-    after,
-};
-
-/// Compare two boundary points in tree order
-/// Returns whether (nodeA, offsetA) is before/equal/after (nodeB, offsetB)
-fn compareBoundaryPoints(
-    node_a: *Node,
-    offset_a: u32,
-    node_b: *Node,
-    offset_b: u32,
-) BoundaryComparison {
-    // If same container, just compare offsets
-    if (node_a == node_b) {
-        if (offset_a < offset_b) return .before;
-        if (offset_a > offset_b) return .after;
-        return .equal;
-    }
-
-    // Check if one contains the other
-    if (isAncestorOf(node_a, node_b)) {
-        // A contains B, so A's position comes before B
-        // But we need to check if the offset in A comes after B
-        var child = node_b;
-        var parent = child.parentNode();
-        while (parent) |p| {
-            if (p == node_a) {
-                const child_index = p.getChildIndex(child) orelse unreachable;
-                if (offset_a <= child_index) {
-                    return .before;
-                }
-                return .after;
-            }
-            child = p;
-            parent = p.parentNode();
-        }
-        unreachable;
-    }
-
-    if (isAncestorOf(node_b, node_a)) {
-        // B contains A, so B's position comes before A
-        var child = node_a;
-        var parent = child.parentNode();
-        while (parent) |p| {
-            if (p == node_b) {
-                const child_index = p.getChildIndex(child) orelse unreachable;
-                if (child_index < offset_b) {
-                    return .before;
-                }
-                return .after;
-            }
-            child = p;
-            parent = p.parentNode();
-        }
-        unreachable;
-    }
-
-    // Neither contains the other, find their relative position in tree order
-    // Walk up from A to find all ancestors
-    var current = node_a;
-    var a_count: usize = 0;
-    var a_ancestors: [64]*Node = undefined;
-    while (a_count < 64) {
-        a_ancestors[a_count] = current;
-        a_count += 1;
-        current = current.parentNode() orelse break;
-    }
-
-    // Walk up from B and find first common ancestor
-    current = node_b;
-    while (current.parentNode()) |parent| {
-        for (a_ancestors[0..a_count]) |ancestor| {
-            if (ancestor != parent) {
-                continue;
-            }
-
-            // Found common ancestor
-            // Now compare positions of the children in this ancestor
-            const a_child = blk: {
-                var node = node_a;
-                while (node.parentNode()) |p| {
-                    if (p == parent) break :blk node;
-                    node = p;
-                }
-                unreachable;
-            };
-            const b_child = current;
-
-            const a_index = parent.getChildIndex(a_child) orelse unreachable;
-            const b_index = parent.getChildIndex(b_child) orelse unreachable;
-
-            if (a_index < b_index) {
-                return .before;
-            }
-            if (a_index > b_index) {
-                return .after;
-            }
-            return .equal;
-        }
-        current = parent;
-    }
-
-    // Should not reach here if nodes are in the same tree
-    return .before;
-}
-
-fn isAncestorOf(potential_ancestor: *Node, node: *Node) bool {
-    var current = node.parentNode();
-    while (current) |parent| {
-        if (parent == potential_ancestor) {
-            return true;
-        }
-        current = parent.parentNode();
-    }
-    return false;
 }
 
 pub const JsApi = struct {
@@ -463,11 +309,6 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(Range.init, .{});
-    pub const startContainer = bridge.accessor(Range.getStartContainer, null, .{});
-    pub const startOffset = bridge.accessor(Range.getStartOffset, null, .{});
-    pub const endContainer = bridge.accessor(Range.getEndContainer, null, .{});
-    pub const endOffset = bridge.accessor(Range.getEndOffset, null, .{});
-    pub const collapsed = bridge.accessor(Range.getCollapsed, null, .{});
     pub const setStart = bridge.function(Range.setStart, .{});
     pub const setEnd = bridge.function(Range.setEnd, .{});
     pub const setStartBefore = bridge.function(Range.setStartBefore, .{});

@@ -12,6 +12,7 @@
   const range = document.createRange();
   testing.expectEqual('object', typeof range);
   testing.expectEqual(true, range instanceof Range);
+  testing.expectEqual(true, range instanceof AbstractRange);
 }
 </script>
 

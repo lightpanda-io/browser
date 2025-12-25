@@ -36,6 +36,7 @@ const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 const Blob = @import("webapi/Blob.zig");
+const AbstractRange = @import("webapi/AbstractRange.zig");
 
 const Factory = @This();
 _page: *Page,
@@ -221,6 +222,22 @@ pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
     };
     chain.setLeaf(1, child);
 
+    return chain.get(1);
+}
+
+pub fn abstractRange(self: *Factory, child: anytype, page: *Page) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+    const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(allocator);
+
+    const doc = page.document.asNode();
+    chain.set(0, AbstractRange{
+        ._type = unionInit(AbstractRange.Type, chain.get(1)),
+        ._end_offset = 0,
+        ._start_offset = 0,
+        ._end_container = doc,
+        ._start_container = doc,
+    });
+    chain.setLeaf(1, child);
     return chain.get(1);
 }
 
