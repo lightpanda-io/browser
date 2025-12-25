@@ -724,8 +724,8 @@ pub fn getAnimations(_: *const Element) []*Animation {
     return &.{};
 }
 
-pub fn animate(_: *Element, _: js.Object, _: js.Object) !Animation {
-    return Animation.init();
+pub fn animate(_: *Element, _: js.Object, _: js.Object, page: *Page) !*Animation {
+    return Animation.init(page);
 }
 
 pub fn closest(self: *Element, selector: []const u8, page: *Page) !?*Element {

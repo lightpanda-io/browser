@@ -85,12 +85,12 @@ pub const PromiseResolver = struct {
     }
     fn _resolve(self: PromiseResolver, value: anytype) !void {
         const context = self.context;
-        const js_value = try context.zigValueToJs(value);
+        const js_value = try context.zigValueToJs(value, .{});
 
         if (self.resolver.resolve(context.v8_context, js_value) == null) {
             return error.FailedToResolvePromise;
         }
-        self.runMicrotasks();
+        self.context.runMicrotasks();
     }
 
     pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
@@ -105,7 +105,7 @@ pub const PromiseResolver = struct {
         if (self.resolver.reject(context.v8_context, js_value) == null) {
             return error.FailedToRejectPromise;
         }
-        self.runMicrotasks();
+        self.context.runMicrotasks();
     }
 };
 
