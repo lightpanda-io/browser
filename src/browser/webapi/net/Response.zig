@@ -120,15 +120,11 @@ pub fn getText(self: *const Response, page: *Page) !js.Promise {
 
 pub fn getJson(self: *Response, page: *Page) !js.Promise {
     const body = self._body orelse "";
-    const value = std.json.parseFromSliceLeaky(
-        std.json.Value,
-        page.call_arena,
-        body,
-        .{},
-    ) catch |err| {
+    const value = js.Value.fromJson(page.js, body) catch |err| {
         return page.js.rejectPromise(.{@errorName(err)});
     };
-    return page.js.resolvePromise(value);
+    const pvalue = try value.persist();
+    return page.js.resolvePromise(pvalue);
 }
 
 pub const JsApi = struct {
