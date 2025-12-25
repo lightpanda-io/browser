@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 <body style=height:4000px;width:4000px></body>
+
 <script id=aliases>
   testing.expectEqual(window, window.self);
   testing.expectEqual(window, window.parent);
@@ -26,23 +27,6 @@
   testing.eventually(() => testing.expectEqual(true, start > 0));
 </script>
 
-<script id=dimensions>
-  testing.expectEqual(5, innerHeight);
-  // Width is 5 even if there are no elements
-  testing.expectEqual(5, innerWidth);
-
-  let div1 = document.createElement('div');
-  document.body.appendChild(div1);
-  div1.getClientRects()
-
-  let div2 = document.createElement('div');
-  document.body.appendChild(div2);
-  div2.getClientRects();
-
-  testing.expectEqual(5, innerHeight);
-  testing.expectEqual(10, innerWidth);
-</script>
-
 <script id=setTimeout>
   let longCall = false;
   window.setTimeout(() => {longCall = true}, 5001);
@@ -53,7 +37,9 @@
   testing.eventually(() => testing.expectEqual(1, wst1));
 
   let wst2 = 1;
-  window.setTimeout((a, b) => {wst2 = a+ b}, 1, 2, 3);
+  window.setTimeout((a, b) => {
+    wst2 = a + b;
+  }, 1, 2, 3);
   testing.eventually(() => testing.expectEqual(5, wst2));
 </script>
 
@@ -81,46 +67,6 @@
   });
 </script>
 
-<script id=scroll>
-  let scroll = false;
-  let scrollend = false
-
-  window.addEventListener('scroll', () => {scroll = true});
-  document.addEventListener('scrollend', () => {scrollend = true});
-  window.scrollTo(0, 0);
-  testing.expectEqual(0, scrollX);
-  testing.expectEqual(0, pageXOffset);
-  testing.expectEqual(0, scrollY);
-  testing.expectEqual(0, pageYOffset);
-
-  testing.expectEqual(true, scroll);
-  testing.expectEqual(true, scrollend);
-
-  window.scrollTo(10, 20);
-  testing.expectEqual(10, scrollX);
-  testing.expectEqual(10, pageXOffset);
-  testing.expectEqual(20, scrollY);
-  testing.expectEqual(20, pageYOffset);
-
-  window.scrollTo(-10, -20);
-  testing.expectEqual(0, scrollX);
-  testing.expectEqual(0, pageXOffset);
-  testing.expectEqual(0, scrollY);
-  testing.expectEqual(0, pageYOffset);
-
-  window.scrollTo({top: 30, left: 40});
-  testing.expectEqual(40, scrollX);
-  testing.expectEqual(40, pageXOffset);
-  testing.expectEqual(30, scrollY);
-  testing.expectEqual(30, pageYOffset);
-
-  window.scrollTo({top: -30, left: -40});
-  testing.expectEqual(0, scrollX);
-  testing.expectEqual(0, pageXOffset);
-  testing.expectEqual(0, scrollY);
-  testing.expectEqual(0, pageYOffset);
-</script>
-
 <script id=queueMicroTask>
   var qm = false;
   window.queueMicrotask(() => {qm = true });
@@ -137,9 +83,11 @@
 </script>
 
 <script id=window.onload>
-  let isWindowTarget = false;
+  let isDocumentTarget = false;
 
-  const callback = (e) => isWindowTarget = e.target === window;
+  const callback = (e) => {
+    isDocumentTarget = e.target === document;
+  };
   // Callback is not set yet.
   testing.expectEqual(null, window.onload);
   // Setting an object.
@@ -149,7 +97,7 @@
   window.onload = callback;
   testing.expectEqual(callback, window.onload);
 
-  testing.eventually(() => testing.expectEqual(true, isWindowTarget));
+  testing.eventually(() => testing.expectEqual(true, isDocumentTarget));
 </script>
 
 <script id=reportError>

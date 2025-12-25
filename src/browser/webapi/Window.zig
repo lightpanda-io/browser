@@ -149,60 +149,40 @@ pub fn getOnLoad(self: *const Window) ?js.Function {
     return self._on_load;
 }
 
-pub fn setOnLoad(self: *Window, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_load = cb;
-    } else {
-        self._on_load = null;
-    }
+pub fn setOnLoad(self: *Window, setter: ?FunctionSetter) !void {
+    self._on_load = getFunctionFromSetter(setter);
 }
 
 pub fn getOnPageShow(self: *const Window) ?js.Function {
     return self._on_pageshow;
 }
 
-pub fn setOnPageShow(self: *Window, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_pageshow = cb;
-    } else {
-        self._on_pageshow = null;
-    }
+pub fn setOnPageShow(self: *Window, setter: ?FunctionSetter) !void {
+    self._on_pageshow = getFunctionFromSetter(setter);
 }
 
 pub fn getOnPopState(self: *const Window) ?js.Function {
     return self._on_popstate;
 }
 
-pub fn setOnPopState(self: *Window, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_popstate = cb;
-    } else {
-        self._on_popstate = null;
-    }
+pub fn setOnPopState(self: *Window, setter: ?FunctionSetter) !void {
+    self._on_popstate = getFunctionFromSetter(setter);
 }
 
 pub fn getOnError(self: *const Window) ?js.Function {
     return self._on_error;
 }
 
-pub fn setOnError(self: *Window, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_error = cb;
-    } else {
-        self._on_error = null;
-    }
+pub fn setOnError(self: *Window, setter: ?FunctionSetter) !void {
+    self._on_error = getFunctionFromSetter(setter);
 }
 
 pub fn getOnUnhandledRejection(self: *const Window) ?js.Function {
     return self._on_unhandled_rejection;
 }
 
-pub fn setOnUnhandledRejection(self: *Window, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_unhandled_rejection = cb;
-    } else {
-        self._on_unhandled_rejection = null;
-    }
+pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) !void {
+    self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
 pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
@@ -351,9 +331,9 @@ pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
 }
 
 pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(input);
+    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(input) catch return error.InvalidCharacterError;
     const decoded = try page.call_arena.alloc(u8, decoded_len);
-    try std.base64.standard.Decoder.decode(decoded, input);
+    std.base64.standard.Decoder.decode(decoded, input) catch return error.InvalidCharacterError;
     return decoded;
 }
 
@@ -575,7 +555,7 @@ const ScheduleCallback = struct {
                 };
             },
             .normal => {
-                self.cb.call(void, .{self.params}) catch |err| {
+                self.cb.call(void, self.params) catch |err| {
                     log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
                 };
             },
@@ -620,6 +600,22 @@ const PostMessageCallback = struct {
         return null;
     }
 };
+
+const FunctionSetter = union(enum) {
+    func: js.Function,
+    anything: js.Value,
+};
+
+// window.onload = {}; doesn't fail, but it doesn't do anything.
+// seems like setting to null is ok (though, at least on Firefix, it preserves
+// the original value, which we could do, but why?)
+fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function {
+    const setter = setter_ orelse return null;
+    return switch (setter) {
+        .func => |func| func,
+        .anything => null,
+    };
+}
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Window);

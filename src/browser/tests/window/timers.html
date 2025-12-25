@@ -22,3 +22,12 @@
     testing.expectEqual(false, set_interval2);
   });
 </script>
+
+
+<script id=setTimeout>
+  let wst2 = 1;
+  window.setTimeout((a, b) => {
+    wst2 = a + b;
+  }, 1, 2, 3);
+  testing.eventually(() => testing.expectEqual(5, wst2));
+</script>

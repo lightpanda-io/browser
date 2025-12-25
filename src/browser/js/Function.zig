@@ -135,7 +135,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
         .pointer => blk: {
             var values = try context.call_arena.alloc(v8.Value, args.len);
             for (args, 0..) |a, i| {
-                values[i] = try context.zigValueToJs(a);
+                values[i] = try context.zigValueToJs(a, .{});
             }
             break :blk values;
         },
