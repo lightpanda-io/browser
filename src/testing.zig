@@ -516,7 +516,7 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
     }
 
     if (std.mem.eql(u8, path, "/xhr/json")) {
-        return req.respond("{\"over\":\"9000!!!\"}", .{
+        return req.respond("{\"over\":\"9000!!!\",\"updated_at\":1765867200000}", .{
             .extra_headers = &.{
                 .{ .name = "Content-Type", .value = "application/json" },
             },

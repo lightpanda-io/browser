@@ -67,7 +67,7 @@ const ReadyState = enum(u8) {
 
 const Response = union(ResponseType) {
     text: []const u8,
-    json: std.json.Value,
+    json: js.Value,
     document: *Node.Document,
 };
 
@@ -254,8 +254,9 @@ pub fn getResponse(self: *XMLHttpRequest, page: *Page) !?Response {
     const res: Response = switch (self._response_type) {
         .text => .{ .text = data },
         .json => blk: {
-            const parsed = try std.json.parseFromSliceLeaky(std.json.Value, page.call_arena, data, .{});
-            break :blk .{ .json = parsed };
+            const value = try js.Value.fromJson(page.js, data);
+            const pvalue = try value.persist();
+            break :blk .{ .json = pvalue };
         },
         .document => blk: {
             const document = try page._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });

@@ -23,6 +23,8 @@ const v8 = js.v8;
 
 const Allocator = std.mem.Allocator;
 
+const PersistentValue = v8.Persistent(v8.Value);
+
 const Value = @This();
 js_val: v8.Value,
 context: *js.Context,
@@ -47,6 +49,16 @@ pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
     const json_string = v8.String.initUtf8(ctx.isolate, json);
     const value = try v8.Json.parse(ctx.v8_context, json_string);
     return Value{ .context = ctx, .js_val = value };
+}
+
+pub fn persist(self: Value) !Value {
+    const js_val = self.js_val;
+    var context = self.context;
+
+    const persisted = PersistentValue.init(context.isolate, js_val);
+    try context.js_value_list.append(context.arena, persisted);
+
+    return Value{ .context = context, .js_val = persisted.toValue() };
 }
 
 pub fn toObject(self: Value) js.Object {
