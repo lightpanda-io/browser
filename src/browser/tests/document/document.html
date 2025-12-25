@@ -258,3 +258,27 @@
   testing.expectEqual('text node', body.childNodes[0].textContent);
 }
 </script>
+
+<script id=children>
+  testing.expectEqual(1, document.children.length);
+  testing.expectEqual('HTML', document.children.item(0).nodeName)
+  testing.expectEqual('HTML', document.firstElementChild.nodeName);
+  testing.expectEqual('HTML', document.lastElementChild.nodeName);
+  testing.expectEqual(1, document.childElementCount);
+
+  let nd = new Document();
+  testing.expectEqual(0, nd.children.length);
+  testing.expectEqual(null, nd.children.item(0));
+  testing.expectEqual(null, nd.firstElementChild);
+  testing.expectEqual(null, nd.lastElementChild);
+  testing.expectEqual(0, nd.childElementCount);
+</script>
+
+<script id=adoptedStyleSheets>
+  {
+    const acss = document.adoptedStyleSheets;
+    testing.expectEqual(0, acss.length);
+    acss.push(new CSSStyleSheet());
+    testing.expectEqual(1, acss.length);
+  }
+</script>

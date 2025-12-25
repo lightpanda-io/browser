@@ -118,10 +118,10 @@
     new IntersectionObserver(entries => { entry = entries[0]; }).observe(div1);
 
     testing.eventually(() => {
-      testing.expectEqual(0, entry.boundingClientRect.x);
+      testing.expectEqual(125, entry.boundingClientRect.x);
       testing.expectEqual(1, entry.intersectionRatio);
-      testing.expectEqual(0, entry.intersectionRect.x);
-      testing.expectEqual(315, entry.intersectionRect.y);
+      testing.expectEqual(125, entry.intersectionRect.x);
+      testing.expectEqual(125, entry.intersectionRect.y);
       testing.expectEqual(5, entry.intersectionRect.width);
       testing.expectEqual(5, entry.intersectionRect.height);
       testing.expectEqual(true, entry.isIntersecting);

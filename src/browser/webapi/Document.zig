@@ -51,6 +51,7 @@ _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
+_adopted_style_sheets: ?js.Object = null,
 
 pub const Type = union(enum) {
     generic,
@@ -250,7 +251,7 @@ pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node 
 
 pub fn createCDATASection(self: *const Document, data: []const u8, page: *Page) !*Node {
     switch (self._type) {
-        .html => return error.NotSupported,
+        .html => return error.NotSupported,  // cannot create a CDataSection in an HTMLDocument
         .xml => return page.createCDATASection(data),
         .generic => return page.createCDATASection(data),
     }
@@ -537,6 +538,51 @@ pub fn close(self: *Document, page: *Page) !void {
     page.documentIsComplete();
 }
 
+pub fn getFirstElementChild(self: *Document) ?*Element {
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Element)) |el| {
+            return el;
+        }
+    }
+    return null;
+}
+
+pub fn getLastElementChild(self: *Document) ?*Element {
+    var maybe_child = self.asNode().lastChild();
+    while (maybe_child) |child| {
+        if (child.is(Element)) |el| {
+            return el;
+        }
+        maybe_child = child.previousSibling();
+    }
+    return null;
+}
+
+pub fn getChildElementCount(self: *Document) u32 {
+    var i: u32 = 0;
+    var it = self.asNode().childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Element) != null) {
+            i += 1;
+        }
+    }
+    return i;
+}
+
+ pub fn getAdoptedStyleSheets(self: *Document, page: *Page) !js.Object {
+    if (self._adopted_style_sheets) |ass| {
+        return ass;
+    }
+    const obj = try page.js.createArray(0).persist();
+    self._adopted_style_sheets = obj;
+    return obj;
+}
+
+pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
+    self._adopted_style_sheets = try sheets.persist();
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -603,6 +649,10 @@ pub const JsApi = struct {
     pub const open = bridge.function(Document.open, .{ .dom_exception = true });
     pub const close = bridge.function(Document.close, .{ .dom_exception = true });
     pub const doctype = bridge.accessor(Document.getDocType, null, .{});
+    pub const firstElementChild = bridge.accessor(Document.getFirstElementChild, null, .{});
+    pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});
+    pub const childElementCount = bridge.accessor(Document.getChildElementCount, null, .{});
+    pub const adoptedStyleSheets = bridge.accessor(Document.getAdoptedStyleSheets, Document.setAdoptedStyleSheets, .{});
 
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {

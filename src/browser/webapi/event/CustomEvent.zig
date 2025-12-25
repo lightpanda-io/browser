@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
+const String = @import("../../..//string.zig").String;
 
 const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
@@ -52,6 +53,25 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     return event;
 }
 
+ pub fn initCustomEvent(
+    self: *CustomEvent,
+    event_string: []const u8,
+    bubbles: bool,
+    cancelable: bool,
+    detail_: ?js.Object,
+    page: *Page,
+) !void {
+    // This function can only be called after the constructor has called.
+    // So we assume proto is initialized already by constructor.
+    self._proto._type_string = try String.init(page.arena, event_string, .{});
+    self._proto._bubbles = bubbles;
+    self._proto._cancelable = cancelable;
+    // Detail is stored separately.
+    if (detail_) |detail| {
+        self._detail = try detail.persist();
+    }
+}
+
 pub fn asEvent(self: *CustomEvent) *Event {
     return self._proto;
 }
@@ -71,6 +91,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(CustomEvent.init, .{});
     pub const detail = bridge.accessor(CustomEvent.getDetail, null, .{});
+    pub const initCustomEvent = bridge.function(CustomEvent.initCustomEvent, .{});
 };
 
 const testing = @import("../../../testing.zig");

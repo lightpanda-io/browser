@@ -56,7 +56,14 @@
 {
   const event = document.createEvent('CustomEvent');
   testing.expectEqual('', event.type);
+  testing.expectEqual(false, event.bubbles);
+  testing.expectEqual(false, event.cancelable);
   testing.expectEqual(null, event.detail);
+
+  event.initCustomEvent('tea', true, true);
+  testing.expectEqual('tea', event.type);
+  testing.expectEqual(true, event.bubbles);
+  testing.expectEqual(true, event.cancelable);
 }
 </script>
 
