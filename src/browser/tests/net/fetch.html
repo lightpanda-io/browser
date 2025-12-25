@@ -35,7 +35,9 @@
 
     const json = await response.json();
     testing.expectEqual('9000!!!', json.over);
-
+    testing.expectEqual("number", typeof json.updated_at);
+    testing.expectEqual(1765867200000, json.updated_at);
+    testing.expectEqual({over: '9000!!!',updated_at:1765867200000}, json);
   });
 </script>
 
