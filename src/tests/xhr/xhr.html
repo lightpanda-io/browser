@@ -65,6 +65,8 @@
     testing.expectEqual(200, req3.status);
     testing.expectEqual('OK', req3.statusText);
     testing.expectEqual('9000!!!', req3.response.over);
+    testing.expectEqual("number", typeof req3.response.updated_at);
+    testing.expectEqual(1765867200000, req3.response.updated_at);
   });
 </script>
 

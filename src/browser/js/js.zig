@@ -148,6 +148,8 @@ pub const Exception = struct {
 };
 
 pub const Value = struct {
+    const PersistentValue = v8.Persistent(v8.Value);
+
     value: v8.Value,
     context: *const Context,
 
@@ -160,6 +162,15 @@ pub const Value = struct {
         const json_string = v8.String.initUtf8(ctx.isolate, json);
         const value = try v8.Json.parse(ctx.v8_context, json_string);
         return Value{ .context = ctx, .value = value };
+    }
+
+    pub fn persist(self: Value, context: *Context) !Value {
+        const js_value = self.value;
+
+        const persisted = PersistentValue.init(context.isolate, js_value);
+        try context.js_value_list.append(context.arena, persisted);
+
+        return Value{ .context = context, .value = persisted.toValue() };
     }
 };
 

@@ -254,17 +254,13 @@ pub fn _json(self: *Response, page: *Page) !js.Promise {
     self.body_used = true;
 
     if (self.body) |body| {
-        const p = std.json.parseFromSliceLeaky(
-            std.json.Value,
-            page.call_arena,
-            body,
-            .{},
-        ) catch |e| {
+        const value = js.Value.fromJson(page.js, body) catch |e| {
             log.info(.browser, "invalid json", .{ .err = e, .source = "Request" });
             return error.SyntaxError;
         };
+        const pvalue = try value.persist(page.js);
 
-        return page.js.resolvePromise(p);
+        return page.js.resolvePromise(pvalue);
     }
     return page.js.resolvePromise(null);
 }
