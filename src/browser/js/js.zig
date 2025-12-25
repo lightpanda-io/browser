@@ -161,11 +161,16 @@ pub const Value = struct {
     pub fn fromJson(ctx: *Context, json: []const u8) !Value {
         const json_string = v8.String.initUtf8(ctx.isolate, json);
         const value = try v8.Json.parse(ctx.v8_context, json_string);
+        return Value{ .context = ctx, .value = value };
+    }
 
-        const persisted = PersistentValue.init(ctx.isolate, value);
-        try ctx.js_value_list.append(ctx.arena, persisted);
+    pub fn persist(self: Value, context: *Context) !Value {
+        const js_value = self.value;
 
-        return Value{ .context = ctx, .value = persisted.toValue() };
+        const persisted = PersistentValue.init(context.isolate, js_value);
+        try context.js_value_list.append(context.arena, persisted);
+
+        return Value{ .context = context, .value = persisted.toValue() };
     }
 };
 

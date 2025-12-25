@@ -701,7 +701,13 @@ pub const XMLHttpRequest = struct {
             return;
         };
 
-        self.response_obj = .{ .JSON = value };
+        const pvalue = value.persist(page.js) catch |e| {
+            log.warn(.http, "persist v8 json value", .{ .err = e, .url = self.url, .source = "xhr" });
+            self.response_obj = .{ .Failure = {} };
+            return;
+        };
+
+        self.response_obj = .{ .JSON = pvalue };
     }
 
     pub fn get_responseText(self: *XMLHttpRequest) ![]const u8 {

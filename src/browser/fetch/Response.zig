@@ -183,8 +183,9 @@ pub fn _json(self: *Response, page: *Page) !js.Promise {
             log.info(.browser, "invalid json", .{ .err = e, .source = "Response" });
             return error.SyntaxError;
         };
+        const pvalue = try value.persist(page.js);
 
-        return page.js.resolvePromise(value);
+        return page.js.resolvePromise(pvalue);
     }
     return page.js.resolvePromise(null);
 }
