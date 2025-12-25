@@ -32,6 +32,7 @@ const ScriptManager = @import("../ScriptManager.zig");
 
 const Allocator = std.mem.Allocator;
 const PersistentObject = v8.Persistent(v8.Object);
+const PersistentValue = v8.Persistent(v8.Value);
 const PersistentModule = v8.Persistent(v8.Module);
 const PersistentPromise = v8.Persistent(v8.Promise);
 const PersistentFunction = v8.Persistent(v8.Function);
@@ -84,6 +85,9 @@ identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 // a reliable way to know if an object has already been persisted,
 // we now simply persist every time persist() is called.
 js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
+
+// js_value_list tracks persisted js values.
+js_value_list: std.ArrayListUnmanaged(PersistentValue) = .empty,
 
 // Various web APIs depend on having a persistent promise resolver. They
 // require for this PromiseResolver to be valid for a lifetime longer than
@@ -158,6 +162,10 @@ pub fn deinit(self: *Context) void {
     }
 
     for (self.js_object_list.items) |*p| {
+        p.deinit();
+    }
+
+    for (self.js_value_list.items) |*p| {
         p.deinit();
     }
 
