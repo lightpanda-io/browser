@@ -71,12 +71,12 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     // Store the abort reason (default to a simple string if none provided)
     if (reason_) |reason| {
         switch (reason) {
-            .js_obj => |js_obj| self._reason = .{.js_obj = try js_obj.persist()},
-            .string => |str| self._reason = .{.string = try page.dupeString(str)},
+            .js_obj => |js_obj| self._reason = .{ .js_obj = try js_obj.persist() },
+            .string => |str| self._reason = .{ .string = try page.dupeString(str) },
             .undefined => self._reason = reason,
         }
     } else {
-        self._reason = .{.string = "AbortError"};
+        self._reason = .{ .string = "AbortError" };
     }
 
     // Dispatch abort event
@@ -92,7 +92,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
 // Static method to create an already-aborted signal
 pub fn createAborted(reason_: ?js.Object, page: *Page) !*AbortSignal {
     const signal = try init(page);
-    try signal.abort(if (reason_) |r| .{.js_obj = r} else null, page);
+    try signal.abort(if (reason_) |r| .{ .js_obj = r } else null, page);
     return signal;
 }
 
@@ -138,7 +138,7 @@ const TimeoutCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
-        self.signal.abort(.{.string = "TimeoutError"}, self.page) catch |err| {
+        self.signal.abort(.{ .string = "TimeoutError" }, self.page) catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
         return null;

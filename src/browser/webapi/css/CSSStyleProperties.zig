@@ -27,9 +27,9 @@ const CSSStyleProperties = @This();
 
 _proto: *CSSStyleDeclaration,
 
-pub fn init(element: ?*Element, page: *Page) !*CSSStyleProperties {
+pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleProperties {
     return page._factory.create(CSSStyleProperties{
-        ._proto = try CSSStyleDeclaration.init(element, page),
+        ._proto = try CSSStyleDeclaration.init(element, is_computed, page),
     });
 }
 

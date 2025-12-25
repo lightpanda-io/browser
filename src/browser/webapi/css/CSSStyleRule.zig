@@ -29,7 +29,7 @@ pub fn getStyle(self: *CSSStyleRule, page: *Page) !*CSSStyleDeclaration {
     if (self._style) |style| {
         return style;
     }
-    const style = try CSSStyleDeclaration.init(null, page);
+    const style = try CSSStyleDeclaration.init(null, false, page);
     self._style = style;
     return style;
 }

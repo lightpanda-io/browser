@@ -300,7 +300,7 @@ pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQuery
 }
 
 pub fn getComputedStyle(_: *const Window, element: *Element, page: *Page) !*CSSStyleProperties {
-    return CSSStyleProperties.init(element, page);
+    return CSSStyleProperties.init(element, true, page);
 }
 
 pub fn postMessage(self: *Window, message: js.Object, target_origin: ?[]const u8, page: *Page) !void {

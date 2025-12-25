@@ -28,10 +28,12 @@ const CSSStyleDeclaration = @This();
 
 _element: ?*Element = null,
 _properties: std.DoublyLinkedList = .{},
+_is_computed: bool = false,
 
-pub fn init(element: ?*Element, page: *Page) !*CSSStyleDeclaration {
+pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleDeclaration {
     return page._factory.create(CSSStyleDeclaration{
         ._element = element,
+        ._is_computed = is_computed,
     });
 }
 
@@ -56,7 +58,11 @@ pub fn item(self: *const CSSStyleDeclaration, index: u32) []const u8 {
 pub fn getPropertyValue(self: *const CSSStyleDeclaration, property_name: []const u8, page: *Page) []const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
     const prop = self.findProperty(normalized) orelse {
-        return getDefaultPropertyValue(self, normalized);
+        // Only return default values for computed styles
+        if (self._is_computed) {
+            return getDefaultPropertyValue(self, normalized);
+        }
+        return "";
     };
     return prop._value.str();
 }
@@ -78,7 +84,7 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 
     // Validate priority
     const important = if (priority.len > 0) blk: {
-        if (!std.mem.eql(u8, priority, "important")) {
+        if (!std.ascii.eqlIgnoreCase(priority, "important")) {
             return;
         }
         break :blk true;
@@ -111,6 +117,14 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, pag
     self._properties.remove(&prop._node);
     page._factory.destroy(prop);
     return old_value;
+}
+
+pub fn getFloat(self: *const CSSStyleDeclaration, page: *Page) []const u8 {
+    return self.getPropertyValue("float", page);
+}
+
+pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, page: *Page) !void {
+    return self.setProperty("float", value_ orelse "", null, page);
 }
 
 pub fn getCssText(self: *const CSSStyleDeclaration, page: *Page) ![]const u8 {
@@ -288,4 +302,5 @@ pub const JsApi = struct {
     pub const getPropertyPriority = bridge.function(CSSStyleDeclaration.getPropertyPriority, .{});
     pub const setProperty = bridge.function(CSSStyleDeclaration.setProperty, .{});
     pub const removeProperty = bridge.function(CSSStyleDeclaration.removeProperty, .{});
+    pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{});
 };

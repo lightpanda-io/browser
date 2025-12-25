@@ -534,7 +534,7 @@ pub fn getAttributeNamedNodeMap(self: *Element, page: *Page) !*Attribute.NamedNo
 pub fn getStyle(self: *Element, page: *Page) !*CSSStyleProperties {
     const gop = try page._element_styles.getOrPut(page.arena, self);
     if (!gop.found_existing) {
-        gop.value_ptr.* = try CSSStyleProperties.init(self, page);
+        gop.value_ptr.* = try CSSStyleProperties.init(self, false, page);
     }
     return gop.value_ptr.*;
 }

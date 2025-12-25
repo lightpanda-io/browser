@@ -130,33 +130,33 @@
 
 <script id="defaultVisibilityProperties">
 {
-  // Test default values for visibility-related properties
+  // Test that inline styles return empty string when not explicitly set
   const div = document.createElement('div');
   const span = document.createElement('span');
   const anchor = document.createElement('a');
 
-  // Test display defaults on element.style
-  testing.expectEqual('block', div.style.getPropertyValue('display'));
-  testing.expectEqual('inline', span.style.getPropertyValue('display'));
-  testing.expectEqual('inline', anchor.style.getPropertyValue('display'));
+  // Test that element.style returns empty for unset properties
+  testing.expectEqual('', div.style.getPropertyValue('display'));
+  testing.expectEqual('', span.style.getPropertyValue('display'));
+  testing.expectEqual('', anchor.style.getPropertyValue('display'));
 
-  // Test visibility default
-  testing.expectEqual('visible', div.style.getPropertyValue('visibility'));
+  // Test visibility - also returns empty when not set
+  testing.expectEqual('', div.style.getPropertyValue('visibility'));
 
-  // Test opacity default
-  testing.expectEqual('1', div.style.getPropertyValue('opacity'));
+  // Test opacity - also returns empty when not set
+  testing.expectEqual('', div.style.getPropertyValue('opacity'));
 
-  // Test that explicit values override defaults
+  // Test that explicit values can be set
   div.style.setProperty('display', 'flex');
   testing.expectEqual('flex', div.style.getPropertyValue('display'));
   testing.expectEqual(1, div.style.length);
 
-  // Test that removing property returns to default
+  // Test that removing property returns to empty string
   div.style.setProperty('display', '');
-  testing.expectEqual('block', div.style.getPropertyValue('display'));
+  testing.expectEqual('', div.style.getPropertyValue('display'));
   testing.expectEqual(0, div.style.length);
 
-  // Test that other properties still return empty when not set
+  // Test that other properties also return empty when not set
   testing.expectEqual('', div.style.getPropertyValue('color'));
   testing.expectEqual('', div.style.getPropertyValue('width'));
 }
@@ -172,12 +172,12 @@
   document.body.appendChild(span);
   document.body.appendChild(anchor);
 
-  // Test element.style defaults
-  testing.expectEqual('block', div.style.display);
-  testing.expectEqual('inline', span.style.display);
-  testing.expectEqual('inline', anchor.style.display);
-  testing.expectEqual('visible', div.style.visibility);
-  testing.expectEqual('1', div.style.opacity);
+  // Test element.style returns empty when not explicitly set
+  testing.expectEqual('', div.style.display);
+  testing.expectEqual('', span.style.display);
+  testing.expectEqual('', anchor.style.display);
+  testing.expectEqual('', div.style.visibility);
+  testing.expectEqual('', div.style.opacity);
 
   // Test getComputedStyle with getPropertyValue
   const divStyle = window.getComputedStyle(div);
