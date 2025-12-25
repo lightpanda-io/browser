@@ -16,19 +16,53 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const js = @import("../../js/js.zig");
-
+const Page = @import("../../Page.zig");
 const CData = @import("../CData.zig");
 
 const Text = @This();
 
 _proto: *CData,
 
+pub fn init(str: ?[]const u8, page: *Page) !*Text {
+    const node = try page.createTextNode(str orelse "");
+    return node.as(Text);
+}
+
 pub fn getWholeText(self: *Text) []const u8 {
     return self._proto._data;
 }
 
+pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
+    const data = self._proto._data;
+
+    if (offset > data.len) {
+        return error.IndexSizeError;
+    }
+
+    const new_data = data[offset..];
+    const new_node = try page.createTextNode(new_data);
+    const new_text = new_node.as(Text);
+
+    const old_data = data[0..offset];
+    try self._proto.setData(old_data, page);
+
+    // If this node has a parent, insert the new node right after this one
+    const node = self._proto.asNode();
+    if (node.parentNode()) |parent| {
+        const next_sibling = node.nextSibling();
+        _ = try parent.insertBefore(new_node, next_sibling, page);
+    }
+
+    return new_text;
+}
+
+const testing = @import("../../../testing.zig");
+test "WebApi: CData.Text" {
+    try testing.htmlRunner("cdata/text", .{});
+}
+
 pub const JsApi = struct {
+    const js = @import("../../js/js.zig");
     pub const bridge = js.Bridge(Text);
 
     pub const Meta = struct {
@@ -37,5 +71,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const constructor = bridge.constructor(Text.init, .{});
     pub const wholeText = bridge.accessor(Text.getWholeText, null, .{});
+    pub const splitText = bridge.function(Text.splitText, .{ .dom_exception = true });
 };

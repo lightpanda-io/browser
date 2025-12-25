@@ -53,6 +53,12 @@ pub fn className(_: *const DocumentType) []const u8 {
     return "[object DocumentType]";
 }
 
+pub fn isEqualNode(self: *const DocumentType, other: *const DocumentType) bool {
+    return std.mem.eql(u8, self._name, other._name) and
+        std.mem.eql(u8, self._public_id, other._public_id) and
+        std.mem.eql(u8, self._system_id, other._system_id);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DocumentType);
 

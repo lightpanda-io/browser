@@ -41,6 +41,7 @@
 {
   const container = $('#container');
 
+  testing.expectEqual(5, container.getElementsByTagName('*').length);
   testing.expectEqual(0, container.getElementsByTagName('a').length);
   testing.expectEqual(0, container.getElementsByTagName('unknown').length);
 

@@ -331,7 +331,10 @@ pub fn isEqualNode(self: *Node, other: *Node) bool {
         .element => self.as(Element).isEqualNode(other.as(Element)),
         .attribute => self.as(Element.Attribute).isEqualNode(other.as(Element.Attribute)),
         .cdata => self.as(CData).isEqualNode(other.as(CData)),
-        else => {
+        .document_fragment => self.as(DocumentFragment).isEqualNode(other.as(DocumentFragment)),
+        .document_type => self.as(DocumentType).isEqualNode(other.as(DocumentType)),
+        .document => {
+            // Document comparison is complex and rarely used in practice
             log.warn(.browser, "not implemented", .{
                 .type = self._type,
                 .feature = "Node.isEqualNode",

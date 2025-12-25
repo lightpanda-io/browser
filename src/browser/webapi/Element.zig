@@ -944,11 +944,18 @@ fn calculateSiblingPosition(node: *Node) f64 {
 const GetElementsByTagNameResult = union(enum) {
     tag: collections.NodeLive(.tag),
     tag_name: collections.NodeLive(.tag_name),
+    all_elements: collections.NodeLive(.all_elements),
 };
 pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !GetElementsByTagNameResult {
     if (tag_name.len > 256) {
         // 256 seems generous.
         return error.InvalidTagName;
+    }
+
+    if (std.mem.eql(u8, tag_name, "*")) {
+        return .{
+            .all_elements = collections.NodeLive(.all_elements).init(self.asNode(), {}, page),
+        };
     }
 
     const lower = std.ascii.lowerString(&page.buf, tag_name);

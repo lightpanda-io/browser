@@ -23,6 +23,7 @@
 <main>Main</main>
 
 <script id=basic>
+  testing.expectEqual(24, document.getElementsByTagName('*').length);
   testing.expectEqual(0, document.getElementsByTagName('a').length);
   testing.expectEqual(0, document.getElementsByTagName('unknown').length);
 

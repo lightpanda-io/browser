@@ -189,3 +189,13 @@
   testing.expectEqual(1, df.childNodes.length);
 }
 </script>
+
+<script id=isEqualNode>
+  testing.expectEqual('DocumentFragment', new DocumentFragment().constructor.name);
+
+  const dc1 = new DocumentFragment();
+  testing.expectEqual(true, dc1.isEqualNode(dc1))
+
+  const dc2 = new DocumentFragment();
+  testing.expectEqual(true, dc1.isEqualNode(dc2))
+</script>

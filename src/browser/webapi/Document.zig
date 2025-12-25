@@ -163,7 +163,6 @@ pub fn getElementsByTagName(self: *Document, tag_name: []const u8, page: *Page) 
         return error.InvalidTagName;
     }
 
-    // Handle wildcard '*' - return all elements
     if (std.mem.eql(u8, tag_name, "*")) {
         return .{
             .all_elements = collections.NodeLive(.all_elements).init(self.asNode(), {}, page),

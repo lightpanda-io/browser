@@ -71,7 +71,7 @@
   testing.expectEqual('bar', content.getAttribute('foo'));
   testing.expectEqual(['id', 'dir', 'foo'], content.getAttributeNames());
 
-  testing.expectError('Error: Invalid Character', () => {
+  testing.expectError('InvalidCharacterError: Invalid Character', () => {
     content.setAttribute('.foo', 'invalid')
   });
 
