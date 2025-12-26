@@ -38,7 +38,6 @@ const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEnt
 const NavigationEventTarget = @import("NavigationEventTarget.zig");
 
 _proto: *NavigationEventTarget = undefined,
-_arena: std.mem.Allocator,
 _current_navigation_kind: ?NavigationKind = null,
 
 _index: usize = 0,
@@ -46,10 +45,6 @@ _index: usize = 0,
 _entries: std.ArrayList(*NavigationHistoryEntry) = .empty,
 _next_entry_id: usize = 0,
 _activation: ?NavigationActivation = null,
-
-pub fn init(arena: std.mem.Allocator) Navigation {
-    return Navigation{ ._arena = arena };
-}
 
 fn asEventTarget(self: *Navigation) *EventTarget {
     return self._proto.asEventTarget();
@@ -171,7 +166,7 @@ pub fn pushEntry(
     page: *Page,
     dispatch: bool,
 ) !*NavigationHistoryEntry {
-    const arena = self._arena;
+    const arena = page._session.arena;
     const url = try arena.dupeZ(u8, _url);
 
     // truncates our history here.
@@ -220,7 +215,7 @@ pub fn replaceEntry(
     page: *Page,
     dispatch: bool,
 ) !*NavigationHistoryEntry {
-    const arena = self._arena;
+    const arena = page._session.arena;
     const url = try arena.dupeZ(u8, _url);
 
     const previous = self.getCurrentEntry();
@@ -263,7 +258,7 @@ pub fn navigateInner(
     kind: NavigationKind,
     page: *Page,
 ) !NavigationReturn {
-    const arena = self._arena;
+    const arena = page._session.arena;
     const url = _url orelse return error.MissingURL;
 
     // https://github.com/WICG/navigation-api/issues/95
@@ -289,7 +284,7 @@ pub fn navigateInner(
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
             }
         },
         .replace => |state| {
@@ -302,7 +297,7 @@ pub fn navigateInner(
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
             }
         },
         .traverse => |index| {
@@ -315,11 +310,11 @@ pub fn navigateInner(
                 // todo: Fire navigate event
                 finished.resolve("navigation traverse", {});
             } else {
-                try page.navigate(url, .{ .reason = .navigation, .kind = kind });
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
             }
         },
         .reload => {
-            try page.navigate(url, .{ .reason = .navigation, .kind = kind });
+            try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
         },
     }
 
@@ -338,8 +333,9 @@ pub fn navigateInner(
 }
 
 pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, page: *Page) !NavigationReturn {
+    const arena = page._session.arena;
     const opts = _opts orelse NavigateOptions{};
-    const json = if (opts.state) |state| state.toJson(self._arena) catch return error.DataClone else null;
+    const json = if (opts.state) |state| state.toJson(arena) catch return error.DataClone else null;
 
     const kind: NavigationKind = if (opts.history) |history|
         if (std.mem.eql(u8, "replace", history)) .{ .replace = json } else .{ .push = json }
@@ -355,7 +351,7 @@ pub const ReloadOptions = struct {
 };
 
 pub fn reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !NavigationReturn {
-    const arena = self._arena;
+    const arena = page._session.arena;
 
     const opts = _opts orelse ReloadOptions{};
     const entry = self.getCurrentEntry();
@@ -397,7 +393,7 @@ pub const UpdateCurrentEntryOptions = struct {
 };
 
 pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, page: *Page) !void {
-    const arena = self._arena;
+    const arena = page._session.arena;
 
     const previous = self.getCurrentEntry();
     self.getCurrentEntry()._state = .{

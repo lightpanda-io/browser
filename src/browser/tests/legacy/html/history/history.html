@@ -11,7 +11,7 @@
     testing.expectEqual('auto', history.scrollRestoration);
     testing.expectEqual(null, history.state)
 
-    history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9589/html/history/history_after_nav.html');
+    history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9589/html/history/history_after_nav.skip.html');
     testing.expectEqual({ testInProgress: true }, history.state);
 
     history.pushState({ testInProgress: false }, null, 'http://127.0.0.1:9589/xhr/json');

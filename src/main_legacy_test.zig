@@ -62,13 +62,9 @@ pub fn main() !void {
             continue;
         }
 
-        // These are crashing, comment this out to skip them.
-        // if (std.mem.indexOf(u8, entry.basename, "navigation") != null) {
-        //     continue;
-        // }
-        // if (std.mem.indexOf(u8, entry.basename, "history") != null) {
-        //     continue;
-        // }
+        if (std.mem.endsWith(u8, entry.basename, ".skip.html")) {
+            continue;
+        }
 
         if (filter) |f| {
             if (std.mem.indexOf(u8, entry.path, f) == null) {
