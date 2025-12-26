@@ -7,12 +7,12 @@ ARG ZIG_V8=v0.1.37
 ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \
-    apt-get install -yq xz-utils \
-        python3 ca-certificates git \
-        pkg-config libglib2.0-dev \
-        gperf libexpat1-dev \
-        cmake clang \
-        curl git
+    apt-get install -yq xz-utils ca-certificates \
+        clang make curl git
+
+# Get Rust
+RUN curl https://sh.rustup.rs -sSf | sh -s -- --profile minimal -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # install minisig
 RUN curl --fail -L -O https://github.com/jedisct1/minisign/releases/download/${MINISIG}/minisign-${MINISIG}-linux.tar.gz && \
@@ -49,7 +49,7 @@ RUN case $TARGETPLATFORM in \
     mv libc_v8.a v8/libc_v8.a
 
 # build release
-RUN zig build -Doptimize=ReleaseSafe -Dprebuilt_v8_path=v8/libc_v8.a -Dgit_commit=$$(git rev-parse --short HEAD)
+RUN zig build -Doptimize=ReleaseFast -Dprebuilt_v8_path=v8/libc_v8.a -Dgit_commit=$(git rev-parse --short HEAD)
 
 FROM debian:stable-slim
 
