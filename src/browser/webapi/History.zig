@@ -79,7 +79,7 @@ fn goInner(delta: i32, page: *Page) !void {
 
     if (entry._url) |url| {
         if (try page.isSameOrigin(url)) {
-            const event = try PopStateEvent.init("popstate", .{ .state = entry._state.value }, page);
+            const event = try PopStateEvent.initTrusted("popstate", .{ .state = entry._state.value }, page);
 
             try page._event_manager.dispatchWithFunction(
                 page.window.asEventTarget(),

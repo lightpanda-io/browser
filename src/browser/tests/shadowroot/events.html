@@ -184,3 +184,100 @@
     host.remove();
 }
 </script>
+
+<script id="composedPath_open_shadow_from_host">
+{
+    // Test that open shadow root exposes internals in composedPath
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'open' });
+    const button = document.createElement('button');
+
+    shadow.appendChild(button);
+    document.body.appendChild(host);
+
+    let capturedPath = null;
+
+    host.addEventListener('click', (e) => {
+        capturedPath = e.composedPath();
+    });
+
+    const event = new Event('click', { bubbles: true, composed: true });
+    button.dispatchEvent(event);
+
+    // Open shadow: external listener should see shadow internals
+    testing.expectEqual(7, capturedPath.length);
+    testing.expectEqual(button, capturedPath[0]);
+    testing.expectEqual(shadow, capturedPath[1]);
+    testing.expectEqual(host, capturedPath[2]);
+    testing.expectEqual(document.body, capturedPath[3]);
+    testing.expectEqual(document.documentElement, capturedPath[4]);
+    testing.expectEqual(document, capturedPath[5]);
+    testing.expectEqual(window, capturedPath[6]);
+
+    host.remove();
+}
+</script>
+
+<script id="composedPath_closed_shadow_from_host">
+{
+    // Test that closed shadow root hides internals in composedPath
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'closed' });
+    const button = document.createElement('button');
+
+    shadow.appendChild(button);
+    document.body.appendChild(host);
+
+    let capturedPath = null;
+
+    host.addEventListener('click', (e) => {
+        capturedPath = e.composedPath();
+    });
+
+    const event = new Event('click', { bubbles: true, composed: true });
+    button.dispatchEvent(event);
+
+    // Closed shadow: external listener should NOT see shadow internals
+    testing.expectEqual(5, capturedPath.length);
+    testing.expectEqual(host, capturedPath[0]);
+    testing.expectEqual(document.body, capturedPath[1]);
+    testing.expectEqual(document.documentElement, capturedPath[2]);
+    testing.expectEqual(document, capturedPath[3]);
+    testing.expectEqual(window, capturedPath[4]);
+
+    host.remove();
+}
+</script>
+
+<script id="composedPath_closed_shadow_from_inside">
+{
+    // Test that closed shadow root still exposes internals to internal listeners
+    const host = document.createElement('div');
+    const shadow = host.attachShadow({ mode: 'closed' });
+    const button = document.createElement('button');
+
+    shadow.appendChild(button);
+    document.body.appendChild(host);
+
+    let capturedPath = null;
+
+    button.addEventListener('click', (e) => {
+        capturedPath = e.composedPath();
+    });
+
+    const event = new Event('click', { bubbles: true, composed: true });
+    button.dispatchEvent(event);
+
+    // Inside the shadow: should see full path including shadow internals
+    testing.expectEqual(7, capturedPath.length);
+    testing.expectEqual(button, capturedPath[0]);
+    testing.expectEqual(shadow, capturedPath[1]);
+    testing.expectEqual(host, capturedPath[2]);
+    testing.expectEqual(document.body, capturedPath[3]);
+    testing.expectEqual(document.documentElement, capturedPath[4]);
+    testing.expectEqual(document, capturedPath[5]);
+    testing.expectEqual(window, capturedPath[6]);
+
+    host.remove();
+}
+</script>

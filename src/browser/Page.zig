@@ -503,7 +503,7 @@ pub fn documentIsLoaded(self: *Page) void {
 }
 
 pub fn _documentIsLoaded(self: *Page) !void {
-    const event = try Event.init("DOMContentLoaded", .{ .bubbles = true }, self);
+    const event = try Event.initTrusted("DOMContentLoaded", .{ .bubbles = true }, self);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -549,7 +549,7 @@ fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
     // dispatch window.load event
-    const event = try Event.init("load", .{}, self);
+    const event = try Event.initTrusted("load", .{}, self);
     // this event is weird, it's dispatched directly on the window, but
     // with the document as the target
     event._target = self.document.asEventTarget();
@@ -560,7 +560,7 @@ fn _documentIsComplete(self: *Page) !void {
         .{ .inject_target = false, .context = "page load" },
     );
 
-    const pageshow_event = try PageTransitionEvent.init("pageshow", .{}, self);
+    const pageshow_event = try PageTransitionEvent.initTrusted("pageshow", .{}, self);
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
         pageshow_event.asEvent(),
@@ -1174,7 +1174,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
     self._slots_pending_slotchange.clearRetainingCapacity();
 
     for (slots) |slot| {
-        const event = Event.init("slotchange", .{ .bubbles = true }, self) catch |err| {
+        const event = Event.initTrusted("slotchange", .{ .bubbles = true }, self) catch |err| {
             log.err(.page, "deliverSlotchange.init", .{ .err = err });
             continue;
         };
@@ -2419,6 +2419,7 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
     const event = try @import("webapi/event/MouseEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
+        .composed = true,
         .clientX = x,
         .clientY = y,
     }, self);

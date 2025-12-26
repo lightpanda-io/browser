@@ -833,7 +833,7 @@ pub const Script = struct {
         const cb = cb_ orelse return;
 
         const Event = @import("webapi/Event.zig");
-        const event = Event.init(typ, .{}, page) catch |err| {
+        const event = Event.initTrusted(typ, .{}, page) catch |err| {
             log.warn(.js, "script internal callback", .{
                 .url = self.url,
                 .type = typ,

@@ -35,6 +35,14 @@ const PageTransitionEventOptions = struct {
 const Options = Event.inheritOptions(PageTransitionEvent, PageTransitionEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PageTransitionEvent {
+    return initWithTrusted(typ, _opts, false, page);
+}
+
+pub fn initTrusted(typ: []const u8, _opts: ?Options, page: *Page) !*PageTransitionEvent {
+    return initWithTrusted(typ, _opts, true, page);
+}
+
+fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page) !*PageTransitionEvent {
     const opts = _opts orelse Options{};
 
     const event = try page._factory.event(
@@ -45,7 +53,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PageTransitionEvent
         },
     );
 
-    Event.populatePrototypes(event, opts);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 

@@ -251,7 +251,7 @@ pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node 
 
 pub fn createCDATASection(self: *const Document, data: []const u8, page: *Page) !*Node {
     switch (self._type) {
-        .html => return error.NotSupported,  // cannot create a CDataSection in an HTMLDocument
+        .html => return error.NotSupported, // cannot create a CDataSection in an HTMLDocument
         .xml => return page.createCDATASection(data),
         .generic => return page.createCDATASection(data),
     }
@@ -570,7 +570,7 @@ pub fn getChildElementCount(self: *Document) u32 {
     return i;
 }
 
- pub fn getAdoptedStyleSheets(self: *Document, page: *Page) !js.Object {
+pub fn getAdoptedStyleSheets(self: *Document, page: *Page) !js.Object {
     if (self._adopted_style_sheets) |ass| {
         return ass;
     }

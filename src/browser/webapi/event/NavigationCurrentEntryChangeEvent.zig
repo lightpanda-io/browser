@@ -40,9 +40,18 @@ const Options = Event.inheritOptions(
     NavigationCurrentEntryChangeEventOptions,
 );
 
-pub fn init(
+pub fn init(typ: []const u8, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
+    return initWithTrusted(typ, opts, false, page);
+}
+
+pub fn initTrusted(typ: []const u8, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
+    return initWithTrusted(typ, opts, true, page);
+}
+
+fn initWithTrusted(
     typ: []const u8,
     opts: Options,
+    trusted: bool,
     page: *Page,
 ) !*NavigationCurrentEntryChangeEvent {
     const navigation_type = if (opts.navigationType) |nav_type_str|
@@ -59,7 +68,7 @@ pub fn init(
         },
     );
 
-    Event.populatePrototypes(event, opts);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 

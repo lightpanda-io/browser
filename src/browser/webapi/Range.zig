@@ -33,7 +33,7 @@ pub fn asAbstractRange(self: *Range) *AbstractRange {
 }
 
 pub fn init(page: *Page) !*Range {
-    return page._factory.abstractRange(Range{._proto = undefined}, page);
+    return page._factory.abstractRange(Range{ ._proto = undefined }, page);
 }
 
 pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
@@ -106,7 +106,7 @@ pub fn collapse(self: *Range, to_start: ?bool) void {
 }
 
 pub fn cloneRange(self: *const Range, page: *Page) !*Range {
-    const clone = try page._factory.abstractRange(Range{._proto = undefined}, page);
+    const clone = try page._factory.abstractRange(Range{ ._proto = undefined }, page);
     clone._proto._end_offset = self._proto._end_offset;
     clone._proto._start_offset = self._proto._start_offset;
     clone._proto._end_container = self._proto._end_container;

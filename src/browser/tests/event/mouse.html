@@ -35,3 +35,18 @@
   testing.expectEqual('click', evt.type);
   testing.expectEqual(true, evt instanceof MouseEvent);
 </script>
+
+<script id=isTrusted>
+  // Test isTrusted on MouseEvent
+  let mouseEvent = new MouseEvent('click');
+  testing.expectEqual(false, mouseEvent.isTrusted);
+
+  // Test isTrusted on dispatched MouseEvent
+  let mouseIsTrusted = null;
+  document.addEventListener('mousetest', (e) => {
+    mouseIsTrusted = e.isTrusted;
+    testing.expectEqual(true, e instanceof MouseEvent);
+  });
+  document.dispatchEvent(new MouseEvent('mousetest'));
+  testing.expectEqual(false, mouseIsTrusted);
+</script>

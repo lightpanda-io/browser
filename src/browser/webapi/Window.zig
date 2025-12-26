@@ -270,7 +270,7 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
 }
 
 pub fn reportError(self: *Window, err: js.Object, page: *Page) !void {
-    const error_event = try ErrorEvent.init("error", .{
+    const error_event = try ErrorEvent.initTrusted("error", .{
         .@"error" = err,
         .message = err.toString() catch "Unknown error",
         .bubbles = false,
@@ -410,7 +410,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                     return null;
                 }
 
-                const event = try Event.init("scroll", .{ .bubbles = true }, p);
+                const event = try Event.initTrusted("scroll", .{ .bubbles = true }, p);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .end;
@@ -437,7 +437,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                     .end => {},
                     .done => return null,
                 }
-                const event = try Event.init("scrollend", .{ .bubbles = true }, p);
+                const event = try Event.initTrusted("scrollend", .{ .bubbles = true }, p);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .done;
@@ -586,7 +586,7 @@ const PostMessageCallback = struct {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
 
-        const message_event = try MessageEvent.init("message", .{
+        const message_event = try MessageEvent.initTrusted("message", .{
             .data = self.message,
             .origin = self.origin,
             .source = self.window,

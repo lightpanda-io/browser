@@ -88,3 +88,18 @@
 
   testing.expectEqual(true, isKeyPress);
 </script>
+
+<script id=isTrusted>
+  // Test isTrusted on KeyboardEvent
+  let keyEvent = new KeyboardEvent('keydown', {key: 'a'});
+  testing.expectEqual(false, keyEvent.isTrusted);
+
+  // Test isTrusted on dispatched KeyboardEvent
+  let keyIsTrusted = null;
+  document.addEventListener('keytest', (e) => {
+    keyIsTrusted = e.isTrusted;
+    testing.expectEqual(true, e instanceof KeyboardEvent);
+  });
+  document.dispatchEvent(new KeyboardEvent('keytest', {key: 'b'}));
+  testing.expectEqual(false, keyIsTrusted);
+</script>

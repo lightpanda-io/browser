@@ -40,7 +40,7 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
         ._data = if (opts.data) |str| try page.dupeString(str) else "",
     });
 
-    Event.populatePrototypes(event, opts);
+    Event.populatePrototypes(event, opts, false);
     return event;
 }
 

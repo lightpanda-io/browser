@@ -44,6 +44,14 @@ pub const ErrorEventOptions = struct {
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
+    return initWithTrusted(typ, opts_, false, page);
+}
+
+pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
+    return initWithTrusted(typ, opts_, true, page);
+}
+
+fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*ErrorEvent {
     const arena = page.arena;
     const opts = opts_ orelse Options{};
 
@@ -60,7 +68,7 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 

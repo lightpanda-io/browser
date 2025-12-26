@@ -306,6 +306,7 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
     const event = try @import("../event/MouseEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
+        .composed = true,
         .clientX = 0,
         .clientY = 0,
     }, page);

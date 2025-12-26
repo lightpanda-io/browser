@@ -612,3 +612,21 @@
     content.dispatchEvent(new Event('he2'));
   }
 </script>
+
+<script id=isTrusted>
+  // Test isTrusted property on generic Event
+  let untrustedEvent = new Event('test');
+  testing.expectEqual(false, untrustedEvent.isTrusted);
+
+  // Test isTrusted on dispatched events
+  let isTrustedValue = null;
+  document.addEventListener('trusttest', (e) => {
+    isTrustedValue = e.isTrusted;
+  });
+  document.dispatchEvent(new Event('trusttest'));
+  testing.expectEqual(false, isTrustedValue);
+
+  // Test isTrusted with bubbling events
+  let bubbledEvent = new Event('bubble', {bubbles: true});
+  testing.expectEqual(false, bubbledEvent.isTrusted);
+</script>

@@ -83,12 +83,14 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
         var node = gop.value_ptr.*.first;
         while (node) |n| {
             const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-            const is_duplicate = switch (callback) {
-                .object => |obj| listener.function.eqlObject(obj),
-                .function => |func| listener.function.eqlFunction(func),
-            };
-            if (is_duplicate and listener.capture == opts.capture) {
-                return;
+            if (listener.typ.eqlSlice(typ)) {
+                const is_duplicate = switch (callback) {
+                    .object => |obj| listener.function.eqlObject(obj),
+                    .function => |func| listener.function.eqlFunction(func),
+                };
+                if (is_duplicate and listener.capture == opts.capture) {
+                    return;
+                }
             }
             node = n.next;
         }
@@ -132,6 +134,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
     }
 
     event._target = target;
+    event._dispatch_target = target; // Store original target for composedPath()
     var was_handled = false;
 
     defer if (was_handled) {
@@ -173,6 +176,7 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
 
     if (comptime opts.inject_target) {
         event._target = target;
+        event._dispatch_target = target; // Store original target for composedPath()
     }
 
     var was_dispatched = false;

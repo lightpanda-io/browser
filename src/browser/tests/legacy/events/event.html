@@ -27,7 +27,7 @@
   testing.expectEqual(true, evt.bubbles);
   testing.expectEqual(true, evt.cancelable);
   testing.expectEqual(true, evt.defaultPrevented);
-  testing.expectEqual(true, evt.isTrusted);
+  testing.expectEqual(false, evt.isTrusted);
   testing.expectEqual(true, evt.timeStamp >= Math.floor(startTime));
 </script>
 

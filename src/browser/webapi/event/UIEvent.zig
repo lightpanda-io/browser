@@ -57,7 +57,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts);
+    Event.populatePrototypes(event, opts, false);
     return event;
 }
 

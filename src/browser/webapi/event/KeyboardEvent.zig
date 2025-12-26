@@ -182,7 +182,15 @@ const Options = Event.inheritOptions(
     KeyboardEventOptions,
 );
 
+pub fn initTrusted(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
+    return initWithTrusted(typ, _opts, true, page);
+}
+
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
+    return initWithTrusted(typ, _opts, false, page);
+}
+
+fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page) !*KeyboardEvent {
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(
@@ -201,7 +209,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 

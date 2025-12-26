@@ -129,7 +129,7 @@ const PostMessageCallback = struct {
             return null;
         }
 
-        const event = MessageEvent.init("message", .{
+        const event = MessageEvent.initTrusted("message", .{
             .data = self.message,
             .origin = "",
             .source = null,

@@ -38,6 +38,14 @@ const MessageEventOptions = struct {
 const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
+    return initWithTrusted(typ, opts_, false, page);
+}
+
+pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
+    return initWithTrusted(typ, opts_, true, page);
+}
+
+fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*MessageEvent {
     const opts = opts_ orelse Options{};
 
     const event = try page._factory.event(
@@ -50,7 +58,7 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 

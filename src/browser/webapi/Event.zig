@@ -35,12 +35,14 @@ _composed: bool = false,
 _type_string: String,
 _target: ?*EventTarget = null,
 _current_target: ?*EventTarget = null,
+_dispatch_target: ?*EventTarget = null, // Original target for composedPath()
 _prevent_default: bool = false,
 _stop_propagation: bool = false,
 _stop_immediate_propagation: bool = false,
 _event_phase: EventPhase = .none,
 _time_stamp: u64 = 0,
 _needs_retargeting: bool = false,
+_isTrusted: bool = false,
 
 pub const EventPhase = enum(u8) {
     none = 0,
@@ -68,14 +70,22 @@ pub const Options = struct {
     composed: bool = false,
 };
 
+pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
+    return initWithTrusted(typ, opts_, true, page);
+}
+
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
+    return initWithTrusted(typ, opts_, false, page);
+}
+
+fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*Event {
     const opts = opts_ orelse Options{};
 
     // Round to 2ms for privacy (browsers do this)
     const raw_timestamp = @import("../../datetime.zig").milliTimestamp(.monotonic);
     const time_stamp = (raw_timestamp / 2) * 2;
 
-    return page._factory.create(Event{
+    const event = try page._factory.create(Event{
         ._type = .generic,
         ._bubbles = opts.bubbles,
         ._time_stamp = time_stamp,
@@ -83,6 +93,21 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
         ._composed = opts.composed,
         ._type_string = try String.init(page.arena, typ, .{}),
     });
+
+    event._isTrusted = trusted;
+    return event;
+}
+
+pub fn initEvent(
+    self: *Event,
+    event_string: []const u8,
+    bubbles: ?bool,
+    cancelable: ?bool,
+    page: *Page,
+) !void {
+    self._type_string = try String.init(page.arena, event_string, .{});
+    self._bubbles = bubbles orelse false;
+    self._cancelable = cancelable orelse false;
 }
 
 pub fn as(self: *Event, comptime T: type) *T {
@@ -159,14 +184,27 @@ pub fn getTimeStamp(self: *const Event) u64 {
     return self._time_stamp;
 }
 
+pub fn setTrusted(self: *Event) void {
+    self._isTrusted = true;
+}
+
+pub fn setUntrusted(self: *Event) void {
+    self._isTrusted = false;
+}
+
+pub fn getIsTrusted(self: *const Event) bool {
+    return self._isTrusted;
+}
+
 pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
     // Return empty array if event is not being dispatched
     if (self._event_phase == .none) {
         return &.{};
     }
 
-    // If there's no target, return empty array
-    const target = self._target orelse return &.{};
+    // Use dispatch_target (original target) if available, otherwise fall back to target
+    // This is important because _target gets retargeted during event dispatch
+    const target = self._dispatch_target orelse self._target orelse return &.{};
 
     // Only nodes have a propagation path
     const target_node = switch (target._type) {
@@ -178,6 +216,9 @@ pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
     var path_len: usize = 0;
     var path_buffer: [128]*EventTarget = undefined;
     var stopped_at_shadow_boundary = false;
+
+    // Track closed shadow boundaries (position in path and host position)
+    var closed_shadow_boundary: ?struct { shadow_end: usize, host_start: usize } = null;
 
     var node: ?*Node = target_node;
     while (node) |n| {
@@ -198,7 +239,17 @@ pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
                     break;
                 }
 
-                // Otherwise, jump to the shadow host and continue
+                // Track the first closed shadow boundary we encounter
+                if (shadow._mode == .closed and closed_shadow_boundary == null) {
+                    // Mark where the shadow root is in the path
+                    // The next element will be the host
+                    closed_shadow_boundary = .{
+                        .shadow_end = path_len - 1, // index of shadow root
+                        .host_start = path_len, // index where host will be
+                    };
+                }
+
+                // Jump to the shadow host and continue
                 node = shadow._host.asNode();
                 continue;
             }
@@ -215,9 +266,40 @@ pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
         }
     }
 
-    // Allocate and return the path using call_arena (short-lived)
-    const path = try page.call_arena.alloc(*EventTarget, path_len);
-    @memcpy(path, path_buffer[0..path_len]);
+    // Determine visible path based on current_target and closed shadow boundaries
+    var visible_start_index: usize = 0;
+
+    if (closed_shadow_boundary) |boundary| {
+        // Check if current_target is outside the closed shadow
+        // If current_target is null or is at/after the host position, hide shadow internals
+        const current_target = self._current_target;
+
+        if (current_target) |ct| {
+            // Find current_target in the path
+            var ct_index: ?usize = null;
+            for (path_buffer[0..path_len], 0..) |elem, i| {
+                if (elem == ct) {
+                    ct_index = i;
+                    break;
+                }
+            }
+
+            // If current_target is at or after the host (outside the closed shadow),
+            // hide everything from target up to the host
+            if (ct_index) |idx| {
+                if (idx >= boundary.host_start) {
+                    visible_start_index = boundary.host_start;
+                }
+            }
+        }
+    }
+
+    // Calculate the visible portion of the path
+    const visible_path_len = if (path_len > visible_start_index) path_len - visible_start_index else 0;
+
+    // Allocate and return the visible path using call_arena (short-lived)
+    const path = try page.call_arena.alloc(*EventTarget, visible_path_len);
+    @memcpy(path, path_buffer[visible_start_index..path_len]);
     return path;
 }
 
@@ -257,15 +339,20 @@ pub fn inheritOptions(comptime T: type, comptime additions: anytype) type {
     });
 }
 
-pub fn populatePrototypes(self: anytype, opts: anytype) void {
+pub fn populatePrototypes(self: anytype, opts: anytype, trusted: bool) void {
     const T = @TypeOf(self.*);
 
     if (@hasField(T, "_proto")) {
-        populatePrototypes(self._proto, opts);
+        populatePrototypes(self._proto, opts, trusted);
     }
 
     if (@hasDecl(T, "populateFromOptions")) {
         T.populateFromOptions(self, opts);
+    }
+
+    // Set isTrusted at the Event level (base of prototype chain)
+    if (T == Event or @hasField(T, "_isTrusted")) {
+        self._isTrusted = trusted;
     }
 }
 
@@ -289,10 +376,12 @@ pub const JsApi = struct {
     pub const eventPhase = bridge.accessor(Event.getEventPhase, null, .{});
     pub const defaultPrevented = bridge.accessor(Event.getDefaultPrevented, null, .{});
     pub const timeStamp = bridge.accessor(Event.getTimeStamp, null, .{});
+    pub const isTrusted = bridge.accessor(Event.getIsTrusted, null, .{});
     pub const preventDefault = bridge.function(Event.preventDefault, .{});
     pub const stopPropagation = bridge.function(Event.stopPropagation, .{});
     pub const stopImmediatePropagation = bridge.function(Event.stopImmediatePropagation, .{});
     pub const composedPath = bridge.function(Event.composedPath, .{});
+    pub const initEvent = bridge.function(Event.initEvent, .{});
 
     // Event phase constants
     pub const NONE = bridge.property(@intFromEnum(EventPhase.none));

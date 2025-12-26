@@ -80,7 +80,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     }
 
     // Dispatch abort event
-    const event = try Event.init("abort", .{}, page);
+    const event = try Event.initTrusted("abort", .{}, page);
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,

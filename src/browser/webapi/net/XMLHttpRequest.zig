@@ -416,7 +416,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
 
     self._ready_state = state;
 
-    const event = try Event.init("readystatechange", .{}, page);
+    const event = try Event.initTrusted("readystatechange", .{}, page);
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,

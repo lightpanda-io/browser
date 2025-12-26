@@ -201,7 +201,7 @@ pub fn pushEntry(
 
     if (previous) |prev| {
         if (dispatch) {
-            const event = try NavigationCurrentEntryChangeEvent.init(
+            const event = try NavigationCurrentEntryChangeEvent.initTrusted(
                 "currententrychange",
                 .{ .from = prev, .navigationType = @tagName(.push) },
                 page,
@@ -240,7 +240,7 @@ pub fn replaceEntry(
     self._entries.items[self._index] = entry;
 
     if (dispatch) {
-        const event = try NavigationCurrentEntryChangeEvent.init(
+        const event = try NavigationCurrentEntryChangeEvent.initTrusted(
             "currententrychange",
             .{ .from = previous, .navigationType = @tagName(.replace) },
             page,
@@ -324,7 +324,7 @@ pub fn navigateInner(
     }
 
     // If we haven't navigated off, let us fire off an a currententrychange.
-    const event = try NavigationCurrentEntryChangeEvent.init(
+    const event = try NavigationCurrentEntryChangeEvent.initTrusted(
         "currententrychange",
         .{ .from = previous, .navigationType = @tagName(kind) },
         page,
@@ -363,7 +363,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !Navigation
         const previous = entry;
         entry._state = .{ .source = .navigation, .value = state.toJson(arena) catch return error.DataClone };
 
-        const event = try NavigationCurrentEntryChangeEvent.init(
+        const event = try NavigationCurrentEntryChangeEvent.initTrusted(
             "currententrychange",
             .{ .from = previous, .navigationType = @tagName(.reload) },
             page,
@@ -405,7 +405,7 @@ pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions,
         .value = options.state.toJson(arena) catch return error.DataClone,
     };
 
-    const event = try NavigationCurrentEntryChangeEvent.init(
+    const event = try NavigationCurrentEntryChangeEvent.initTrusted(
         "currententrychange",
         .{ .from = previous, .navigationType = null },
         page,
