@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
@@ -139,6 +140,20 @@ pub fn createElementNS(_: *const Document, namespace: ?[]const u8, name: []const
 }
 
 pub fn createAttribute(_: *const Document, name: []const u8, page: *Page) !?*Element.Attribute {
+    try Element.Attribute.validateAttributeName(name);
+    return page._factory.node(Element.Attribute{
+        ._proto = undefined,
+        ._name = try page.dupeString(name),
+        ._value = "",
+        ._element = null,
+    });
+}
+
+pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: []const u8, page: *Page) !?*Element.Attribute {
+    if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml") == false) {
+        log.warn(.not_implemented, "document.createAttributeNS", .{.namespace = namespace});
+    }
+
     try Element.Attribute.validateAttributeName(name);
     return page._factory.node(Element.Attribute{
         ._proto = undefined,
@@ -627,6 +642,7 @@ pub const JsApi = struct {
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
     pub const createAttribute = bridge.function(Document.createAttribute, .{ .dom_exception = true });
+    pub const createAttributeNS = bridge.function(Document.createAttributeNS, .{ .dom_exception = true });
     pub const createCDATASection = bridge.function(Document.createCDATASection, .{ .dom_exception = true });
     pub const createProcessingInstruction = bridge.function(Document.createProcessingInstruction, .{ .dom_exception = true });
     pub const createRange = bridge.function(Document.createRange, .{});
