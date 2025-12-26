@@ -178,7 +178,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
         grantUniveralAccess: bool = false,
     })) orelse return error.InvalidParams;
     if (!params.grantUniveralAccess) {
-        log.warn(.cdp, "not implemented", .{ .feature = "grantUniveralAccess == false is not yet implemented" });
+        log.warn(.not_implemented, "Page.createIsolatedWorld", .{ .param = "grantUniveralAccess" });
         // When grantUniveralAccess == false and the client attempts to resolve
         // or otherwise access a DOM or other JS Object from another context that should fail.
     }

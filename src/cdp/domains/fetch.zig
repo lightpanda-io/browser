@@ -142,7 +142,7 @@ fn disable(cmd: anytype) !void {
 fn enable(cmd: anytype) !void {
     const params = (try cmd.params(EnableParam)) orelse EnableParam{};
     if (!arePatternsSupported(params.patterns)) {
-        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.enable advanced patterns are not" });
+        log.warn(.not_implemented, "Fetch.enable", .{ .params = "pattern" });
         return cmd.sendResult(null, .{});
     }
 
@@ -331,7 +331,7 @@ fn fulfillRequest(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     if (params.binaryResponseHeaders != null) {
-        log.warn(.cdp, "not implemented", .{ .feature = "Fetch.fulfillRequest binaryResponseHeade" });
+        log.warn(.not_implemented, "Fetch.fulfillRequest", .{ .param = "binaryResponseHeaders" });
         return error.NotImplemented;
     }
 

@@ -376,7 +376,7 @@ pub const TraverseToOptions = struct {
 
 pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions, page: *Page) !NavigationReturn {
     if (_opts != null) {
-        log.debug(.browser, "not implemented", .{ .options = _opts });
+        log.warn(.not_implemented, "Navigation.traverseTo", .{ .has_options = true });
     }
 
     for (self._entries.items, 0..) |entry, i| {

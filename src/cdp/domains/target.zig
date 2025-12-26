@@ -101,7 +101,7 @@ fn createBrowserContext(cmd: anytype) !void {
     });
     if (params) |p| {
         if (p.disposeOnDetach or p.proxyBypassList != null or p.originsWithUniversalNetworkAccess != null) {
-            log.warn(.cdp, "not implemented", .{ .feature = "Target.createBrowserContext: Not implemented param set" });
+            log.warn(.not_implemented, "Target.createBrowserContext", .{ .disposeOnDetach = p.disposeOnDetach, .has_proxyBypassList = p.proxyBypassList != null, .has_originsWithUniversalNetworkAccess = p.originsWithUniversalNetworkAccess != null });
         }
     }
 

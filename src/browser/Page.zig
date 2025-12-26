@@ -2451,16 +2451,12 @@ pub fn handleClick(self: *Page, target: *Node) !void {
             // Check target attribute - don't navigate if opening in new window/tab
             const target_val = anchor.getTarget();
             if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
-                log.warn(.browser, "not implemented", .{
-                    .feature = "anchor with target attribute click",
-                });
+                log.warn(.not_implemented, "a.target", .{});
                 return;
             }
 
             if (try element.hasAttribute("download", self)) {
-                log.warn(.browser, "not implemented", .{
-                    .feature = "anchor with download attribute click",
-                });
+                log.warn(.browser, "a.download", .{});
                 return;
             }
 

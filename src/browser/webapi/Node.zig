@@ -321,6 +321,10 @@ pub fn getNodeType(self: *const Node) u8 {
 }
 
 pub fn isEqualNode(self: *Node, other: *Node) bool {
+    if (self == other) {
+        return true;
+    }
+
     // Make sure types match.
     if (self.getNodeType() != other.getNodeType()) {
         return false;
@@ -335,9 +339,8 @@ pub fn isEqualNode(self: *Node, other: *Node) bool {
         .document_type => self.as(DocumentType).isEqualNode(other.as(DocumentType)),
         .document => {
             // Document comparison is complex and rarely used in practice
-            log.warn(.browser, "not implemented", .{
-                .type = self._type,
-                .feature = "Node.isEqualNode",
+            log.warn(.not_implemented, "Node.isEqualNode", .{
+                .type = "document",
             });
             return false;
         },

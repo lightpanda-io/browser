@@ -76,7 +76,7 @@ fn getDocument(cmd: anytype) !void {
     const params = try cmd.params(Params) orelse Params{};
 
     if (params.pierce) {
-        log.warn(.cdp, "not implemented", .{ .feature = "DOM.getDocument: Not implemented pierce parameter" });
+        log.warn(.not_implemented, "DOM.getDocument", .{ .param = "pierce" });
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
@@ -315,7 +315,7 @@ fn describeNode(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     if (params.pierce) {
-        log.warn(.cdp, "not implemented", .{ .feature = "DOM.describeNode: Not implemented pierce parameter" });
+        log.warn(.not_implemented, "DOM.describeNode", .{ .param = "pierce" });
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
@@ -497,7 +497,7 @@ fn getOuterHTML(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     if (params.includeShadowDOM) {
-        log.warn(.cdp, "not implemented", .{ .feature = "DOM.getOuterHTML: Not implemented includeShadowDOM parameter" });
+        log.warn(.not_implemented, "DOM.getOuterHTML", .{ .param = "includeShadowDOM" });
     }
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;

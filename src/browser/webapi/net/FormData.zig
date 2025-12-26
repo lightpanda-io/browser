@@ -96,8 +96,7 @@ pub fn write(self: *const FormData, encoding_: ?[]const u8, writer: *std.Io.Writ
         return self._list.urlEncode(.form, writer);
     }
 
-    log.debug(.not_implemented, "not implemented", .{
-        .feature = "form data encoding",
+    log.warn(.not_implemented, "FormData.encoding", .{
         .encoding = encoding,
     });
 }
