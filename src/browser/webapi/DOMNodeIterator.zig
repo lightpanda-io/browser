@@ -22,7 +22,6 @@ const Page = @import("../Page.zig");
 
 const Node = @import("Node.zig");
 const NodeFilter = @import("NodeFilter.zig");
-const TreeWalker = @import("TreeWalker.zig");
 pub const FilterOpts = NodeFilter.FilterOpts;
 
 const DOMNodeIterator = @This();

@@ -26,7 +26,7 @@ const Page = @import("../Page.zig");
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
 const Blob = @This();
 
-const _prototype_root = true;
+pub const _prototype_root = true;
 
 _type: Type,
 

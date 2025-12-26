@@ -19,7 +19,6 @@
 const std = @import("std");
 const Event = @import("../Event.zig");
 const Page = @import("../../Page.zig");
-const Navigaton = @import("../navigation/Navigation.zig");
 const NavigationHistoryEntry = @import("../navigation/NavigationHistoryEntry.zig");
 const NavigationType = @import("../navigation/root.zig").NavigationType;
 const js = @import("../../js/js.zig");

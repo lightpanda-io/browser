@@ -18,7 +18,6 @@
 
 const std = @import("std");
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
 const Element = @import("Element.zig");
 
 pub const ResizeObserver = @This();

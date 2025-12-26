@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const EventTarget = @import("../EventTarget.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
-const Event = @import("../Event.zig");
+
+const EventTarget = @import("../EventTarget.zig");
 const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEntryChangeEvent.zig");
 
 pub const NavigationEventTarget = @This();

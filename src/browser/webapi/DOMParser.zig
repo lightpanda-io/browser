@@ -20,7 +20,6 @@ const std = @import("std");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
-const Document = @import("Document.zig");
 const HTMLDocument = @import("HTMLDocument.zig");
 
 const DOMParser = @This();

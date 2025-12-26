@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const posix = std.posix;
 
 pub const c = @cImport({
     @cInclude("curl/curl.h");

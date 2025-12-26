@@ -19,7 +19,6 @@
 const std = @import("std");
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 
 const DocumentType = @This();

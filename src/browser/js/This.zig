@@ -18,9 +18,6 @@
 
 const std = @import("std");
 const js = @import("js.zig");
-const v8 = js.v8;
-
-const Allocator = std.mem.Allocator;
 
 // This only exists so that we know whether a function wants the opaque
 // JS argument (js.Object), or if it wants the receiver as an opaque

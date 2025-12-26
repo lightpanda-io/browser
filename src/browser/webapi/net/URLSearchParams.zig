@@ -26,7 +26,6 @@ const Allocator = std.mem.Allocator;
 const Page = @import("../../Page.zig");
 const FormData = @import("FormData.zig");
 const KeyValueList = @import("../KeyValueList.zig");
-const GenericIterator = @import("../collections/iterator.zig").Entry;
 
 const URLSearchParams = @This();
 

@@ -29,7 +29,6 @@ const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
 
 const Allocator = std.mem.Allocator;
-const NavigateOpts = Page.NavigateOpts;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Session is like a browser's tab.

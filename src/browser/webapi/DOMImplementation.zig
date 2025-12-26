@@ -22,7 +22,6 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const Document = @import("Document.zig");
-const HTMLDocument = @import("HTMLDocument.zig");
 const DocumentType = @import("DocumentType.zig");
 
 const DOMImplementation = @This();

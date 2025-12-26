@@ -26,7 +26,7 @@ const String = @import("../../string.zig").String;
 
 pub const Event = @This();
 
-const _prototype_root = true;
+pub const _prototype_root = true;
 _type: Type,
 
 _bubbles: bool = false,

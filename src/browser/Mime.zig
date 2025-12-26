@@ -274,14 +274,6 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
     } }, attribute_start };
 }
 
-const T_SPECIAL = blk: {
-    var v = [_]bool{false} ** 256;
-    for ("()<>@,;:\\\"/[]?=") |b| {
-        v[b] = true;
-    }
-    break :blk v;
-};
-
 const VALID_CODEPOINTS = blk: {
     var v: [256]bool = undefined;
     for (0..256) |i| {

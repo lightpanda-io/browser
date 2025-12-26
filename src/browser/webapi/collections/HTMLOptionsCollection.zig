@@ -23,7 +23,6 @@ const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 const HTMLCollection = @import("HTMLCollection.zig");
-const NodeLive = @import("node_live.zig").NodeLive;
 
 const HTMLOptionsCollection = @This();
 

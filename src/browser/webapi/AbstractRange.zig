@@ -24,7 +24,7 @@ const Range = @import("Range.zig");
 
 const AbstractRange = @This();
 
-const _prototype_root = true;
+pub const _prototype_root = true;
 
 _type: Type,
 

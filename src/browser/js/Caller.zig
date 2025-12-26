@@ -23,7 +23,6 @@ const log = @import("../../log.zig");
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 
 const Page = @import("../Page.zig");

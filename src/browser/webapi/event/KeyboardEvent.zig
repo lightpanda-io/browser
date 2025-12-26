@@ -19,8 +19,6 @@
 const std = @import("std");
 const Event = @import("../Event.zig");
 const UIEvent = @import("UIEvent.zig");
-const EventTarget = @import("../EventTarget.zig");
-const Window = @import("../Window.zig");
 const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");
 

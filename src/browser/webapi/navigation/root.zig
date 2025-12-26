@@ -17,13 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const log = @import("../../../log.zig");
 
 const js = @import("../../js/js.zig");
-const Page = @import("../../Page.zig");
 
-const Navigation = @import("Navigation.zig");
-const NavigationEventTarget = @import("NavigationEventTarget.zig");
 const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
 
 pub const NavigationType = enum {

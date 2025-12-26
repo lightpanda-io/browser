@@ -22,7 +22,6 @@ const v8 = js.v8;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
-const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 const PersistentObject = v8.Persistent(v8.Object);
 

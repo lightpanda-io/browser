@@ -28,7 +28,6 @@ const Env = @import("Env.zig");
 const Context = @import("Context.zig");
 
 const Page = @import("../Page.zig");
-const ScriptManager = @import("../ScriptManager.zig");
 
 const ArenaAllocator = std.heap.ArenaAllocator;
 
@@ -83,7 +82,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
 
         if (comptime IS_DEBUG) {
             // Getting this into the snapshot is tricky (anything involving the
-            // global is tricky). Easier to do here, and in debug more, we're
+            // global is tricky). Easier to do here, and in debug mode, we're
             // fine with paying the small perf hit.
             const js_global = v8.FunctionTemplate.initDefault(isolate);
             const global_template = js_global.getInstanceTemplate();

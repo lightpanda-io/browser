@@ -22,7 +22,6 @@ const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
-const TreeWalker = @import("../../TreeWalker.zig");
 const collections = @import("../../collections.zig");
 
 pub const Input = @import("Input.zig");

@@ -495,11 +495,6 @@ pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []cons
     return buf.items[0 .. buf.items.len - 1 :0];
 }
 
-const KnownProtocol = enum {
-    @"http:",
-    @"https:",
-};
-
 const testing = @import("../testing.zig");
 test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(true, isCompleteHTTPUrl("http://example.com/about"));

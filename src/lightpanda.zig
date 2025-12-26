@@ -28,8 +28,6 @@ pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const build_config = @import("build_config");
 
-const Allocator = std.mem.Allocator;
-
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     dump: dump.RootOpts,

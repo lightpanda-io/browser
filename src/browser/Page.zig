@@ -19,7 +19,6 @@
 const std = @import("std");
 const JS = @import("js/js.zig");
 const builtin = @import("builtin");
-const reflect = @import("reflect.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -47,7 +46,6 @@ const Element = @import("webapi/Element.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
-const DocumentFragment = @import("webapi/DocumentFragment.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");

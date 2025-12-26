@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("../../js/js.zig");
 
 const Node = @import("../Node.zig");
 const Page = @import("../../Page.zig");

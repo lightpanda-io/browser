@@ -19,7 +19,6 @@
 const DOMRect = @This();
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
 
 _x: f64,
 _y: f64,

@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 const String = @import("../../../string.zig").String;
 
@@ -29,8 +28,6 @@ const Element = @import("../Element.zig");
 const TreeWalker = @import("../TreeWalker.zig");
 const Selector = @import("../selector/Selector.zig");
 const Form = @import("../element/html/Form.zig");
-
-const Allocator = std.mem.Allocator;
 
 const Mode = enum {
     tag,

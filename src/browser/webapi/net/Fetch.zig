@@ -25,11 +25,9 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
 
-const Headers = @import("Headers.zig");
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
 
-const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Fetch = @This();

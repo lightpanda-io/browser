@@ -332,7 +332,6 @@ pub var test_browser: Browser = undefined;
 pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";
-const WEB_API_HELPER_PATH = WEB_API_TEST_ROOT ++ "testing.js";
 const HtmlRunnerOpts = struct {};
 
 pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {

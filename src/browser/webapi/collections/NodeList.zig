@@ -22,12 +22,10 @@ const log = @import("../../..//log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
-const Element = @import("../Element.zig");
 
 const ChildNodes = @import("ChildNodes.zig");
 const RadioNodeList = @import("RadioNodeList.zig");
 const SelectorList = @import("../selector/List.zig");
-const HTMLFormControlsCollection = @import("HTMLFormControlsCollection.zig");
 
 const Mode = enum {
     child_nodes,

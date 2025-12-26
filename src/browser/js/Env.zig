@@ -23,7 +23,6 @@ const v8 = js.v8;
 const log = @import("../../log.zig");
 
 const bridge = @import("bridge.zig");
-const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
 const Platform = @import("Platform.zig");
 const Snapshot = @import("Snapshot.zig");

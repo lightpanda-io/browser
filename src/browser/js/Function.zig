@@ -20,8 +20,6 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const Caller = @import("Caller.zig");
-const Context = @import("Context.zig");
 const PersistentFunction = v8.Persistent(v8.Function);
 
 const Allocator = std.mem.Allocator;
