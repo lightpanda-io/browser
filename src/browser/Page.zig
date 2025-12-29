@@ -2510,6 +2510,13 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
 
         // Handle printable characters
         if (key.isPrintable()) {
+            // if the input is selected, replace the content.
+            if (input._selected) {
+                const new_value = try self.arena.dupe(u8, key.asString());
+                try input.setValue(new_value, self);
+                input._selected = false;
+                return;
+            }
             const current_value = input.getValue();
             const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, key.asString() });
             try input.setValue(new_value, self);
