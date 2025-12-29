@@ -1,8 +1,5 @@
 name: zig-fmt
 
-env:
-  ZIG_VERSION: 0.15.2
-
 on:
   pull_request:
 
@@ -32,13 +29,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: ${{ env.ZIG_VERSION }}
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # Zig version used from the `minimum_zig_version` field in build.zig.zon
+      - uses: mlugg/setup-zig@v2
 
       - name: Run zig fmt
         id: fmt
@@ -58,6 +54,7 @@ jobs:
           fi
 
           echo "${delimiter}" >> "${GITHUB_OUTPUT}"
+
       - name: Fail the job
         if: steps.fmt.outputs.zig_fmt_errs != ''
         run: exit 1

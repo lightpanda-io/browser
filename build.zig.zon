@@ -2,7 +2,7 @@
     .name = .browser,
     .paths = .{""},
     .version = "0.0.0",
-    .fingerprint = 0xda130f3af836cea0,
+    .fingerprint = 0xda130f3af836cea0, // Changing this has security and trust implications.
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .v8 = .{
