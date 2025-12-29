@@ -75,6 +75,7 @@ _value: ?[]const u8 = null,
 _checked: bool = false,
 _checked_dirty: bool = false,
 _input_type: Type = .text,
+_selected: bool = false,
 
 pub fn asElement(self: *Input) *Element {
     return self._proto._proto;
@@ -246,6 +247,10 @@ pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
     }
 }
 
+pub fn select(self: *Input) void {
+    self._selected = true;
+}
+
 pub fn getForm(self: *Input, page: *Page) ?*Form {
     const element = self.asElement();
 
@@ -337,6 +342,7 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
+    pub const select = bridge.function(Input.select, .{});
 };
 
 pub const Build = struct {
