@@ -594,6 +594,11 @@ pub fn getAdoptedStyleSheets(self: *Document, page: *Page) !js.Object {
     return obj;
 }
 
+pub fn hasFocus(_: *Document) bool {
+    log.debug(.not_implemented, "Document.hasFocus", .{});
+    return true;
+}
+
 pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
@@ -675,6 +680,7 @@ pub const JsApi = struct {
             return page.window;
         }
     }.defaultView, null, .{ .cache = "defaultView" });
+    pub const hasFocus = bridge.function(Document.hasFocus, .{});
 };
 
 const testing = @import("../../testing.zig");

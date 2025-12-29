@@ -2500,6 +2500,13 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
 
         // Handle printable characters
         if (key.isPrintable()) {
+            // if the input is selected, replace the content.
+            if (input._selected) {
+                const new_value = try self.arena.dupe(u8, key.asString());
+                try input.setValue(new_value, self);
+                input._selected = false;
+                return;
+            }
             const current_value = input.getValue();
             const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, key.asString() });
             try input.setValue(new_value, self);
@@ -2559,6 +2566,37 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
         action = try URL.concatQueryString(transfer_arena, action, buf.written());
     }
     return self.scheduleNavigation(action, opts, .form);
+}
+
+// insertText is a shortcut to insert text into the active element.
+pub fn insertText(self: *Page, v: []const u8) !void {
+    const html_element = self.document._active_element orelse return;
+
+    if (html_element.is(Element.Html.Input)) |input| {
+        const input_type = input._input_type;
+        if (input_type == .radio or input_type == .checkbox) {
+            return;
+        }
+
+        // If the input is selected, replace the existing value
+        if (input._selected) {
+            const new_value = try self.arena.dupe(u8, v);
+            try input.setValue(new_value, self);
+            input._selected = false;
+            return;
+        }
+
+        // Or append the value
+        const current_value = input.getValue();
+        const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, v });
+        return input.setValue(new_value, self);
+    }
+
+    if (html_element.is(Element.Html.TextArea)) |textarea| {
+        const current_value = textarea.getValue();
+        const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, v });
+        return textarea.setValue(new_value, self);
+    }
 }
 
 const RequestCookieOpts = struct {

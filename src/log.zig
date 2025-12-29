@@ -159,7 +159,7 @@ fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
         const value = @field(data, f.name);
         if (std.meta.hasMethod(@TypeOf(value), "logFmt")) {
-            try value.logFmt(f.name, LogFormatWriter{.writer = writer});
+            try value.logFmt(f.name, LogFormatWriter{ .writer = writer });
         } else {
             const key = " " ++ f.name ++ "=";
             try writer.writeAll(key);
