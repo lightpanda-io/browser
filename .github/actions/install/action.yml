@@ -36,6 +36,7 @@ runs:
 
     # Zig version used from the `minimum_zig_version` field in build.zig.zon
     - uses: mlugg/setup-zig@v2
+
     # Rust Toolchain for html5ever
     - uses: dtolnay/rust-toolchain@stable
 
