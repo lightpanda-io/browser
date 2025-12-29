@@ -801,8 +801,13 @@ pub const Script = struct {
             log.debug(.browser, "executed script", .{ .src = url, .success = success, .on_load = script_element._on_load != null });
         }
 
-        // We should run microtasks even if script execution fails.
-        defer page.js.runMicrotasks();
+        defer {
+            // We should run microtasks even if script execution fails.
+            page.js.runMicrotasks();
+            _ = page.scheduler.run() catch |err| {
+                log.err(.page, "scheduler", .{ .err = err });
+            };
+        }
 
         if (success) {
             self.executeCallback("load", script_element._on_load, page);
