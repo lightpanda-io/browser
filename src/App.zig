@@ -40,6 +40,7 @@ telemetry: Telemetry,
 allocator: Allocator,
 app_dir_path: ?[]const u8,
 notification: *Notification,
+shutdown: bool = false,
 
 pub const RunMode = enum {
     help,
@@ -99,9 +100,14 @@ pub fn init(allocator: Allocator, config: Config) !*App {
 }
 
 pub fn deinit(self: *App) void {
+    if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
+        return;
+    }
+
     const allocator = self.allocator;
     if (self.app_dir_path) |app_dir_path| {
         allocator.free(app_dir_path);
+        self.app_dir_path = null;
     }
     self.telemetry.deinit();
     self.notification.deinit();

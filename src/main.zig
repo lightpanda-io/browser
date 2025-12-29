@@ -23,32 +23,34 @@ const Allocator = std.mem.Allocator;
 
 const log = lp.log;
 const App = lp.App;
-
-var _app: ?*App = null;
-var _server: ?lp.Server = null;
+const SigHandler = @import("Sighandler.zig");
 
 pub fn main() !void {
     // allocator
     // - in Debug mode we use the General Purpose Allocator to detect memory leaks
     // - in Release mode we use the c allocator
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    const allocator = if (builtin.mode == .Debug) gpa.allocator() else std.heap.c_allocator;
+    var gpa_instance: std.heap.DebugAllocator(.{}) = .init;
+    const gpa = if (builtin.mode == .Debug) gpa_instance.allocator() else std.heap.c_allocator;
 
     defer if (builtin.mode == .Debug) {
-        if (gpa.detectLeaks()) std.posix.exit(1);
+        if (gpa_instance.detectLeaks()) std.posix.exit(1);
     };
 
     // arena for main-specific allocations
-    var main_arena = std.heap.ArenaAllocator.init(allocator);
-    defer main_arena.deinit();
+    var main_arena_instance = std.heap.ArenaAllocator.init(gpa);
+    const main_arena = main_arena_instance.allocator();
+    defer main_arena_instance.deinit();
 
-    run(allocator, main_arena.allocator()) catch |err| {
+    var sighandler = SigHandler{ .arena = main_arena };
+    try sighandler.install();
+
+    run(gpa, main_arena, &sighandler) catch |err| {
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
 }
 
-fn run(allocator: Allocator, main_arena: Allocator) !void {
+fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !void {
     const args = try parseArgs(main_arena);
 
     switch (args.mode) {
@@ -82,7 +84,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
     };
 
     // _app is global to handle graceful shutdown.
-    _app = try App.init(allocator, .{
+    var app = try App.init(allocator, .{
         .run_mode = args.mode,
         .http_proxy = args.httpProxy(),
         .proxy_bearer_token = args.proxyBearerToken(),
@@ -94,7 +96,6 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         .user_agent = user_agent,
     });
 
-    const app = _app.?;
     defer app.deinit();
     app.telemetry.record(.{ .run = {} });
 
@@ -107,9 +108,10 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             };
 
             // _server is global to handle graceful shutdown.
-            _server = try lp.Server.init(app, address);
-            const server = &_server.?;
+            var server = try lp.Server.init(app, address);
             defer server.deinit();
+
+            try sighandler.on(lp.Server.stop, .{&server});
 
             // max timeout of 1 week.
             const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(u32, opts.timeout) * 1000;
@@ -745,32 +747,4 @@ fn parseCommonArg(
     }
 
     return false;
-}
-
-// Handle app shutdown gracefuly on signals.
-fn shutdown() void {
-    const sigaction: std.posix.Sigaction = .{
-        .handler = .{
-            .handler = struct {
-                pub fn handler(_: c_int) callconv(.c) void {
-                    // Shutdown service gracefuly.
-                    if (_server) |server| {
-                        server.deinit();
-                    }
-                    if (_app) |app| {
-                        app.deinit();
-                    }
-                    std.posix.exit(0);
-                }
-            }.handler,
-        },
-        .mask = std.posix.empty_sigset,
-        .flags = 0,
-    };
-    // Exit the program on SIGINT signal. When running the browser in a Docker
-    // container, sending a CTRL-C (SIGINT) signal is catched but doesn't exit
-    // the program. Here we force exiting on SIGINT.
-    std.posix.sigaction(std.posix.SIG.INT, &sigaction, null);
-    std.posix.sigaction(std.posix.SIG.TERM, &sigaction, null);
-    std.posix.sigaction(std.posix.SIG.QUIT, &sigaction, null);
 }
