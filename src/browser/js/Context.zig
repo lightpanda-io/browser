@@ -86,8 +86,8 @@ identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 // we now simply persist every time persist() is called.
 js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
 
-// js_value_list tracks persisted js values.
-js_value_list: std.ArrayListUnmanaged(PersistentValue) = .empty,
+// tracks Global(v8.c.Value).
+global_values: std.ArrayList(js.Global(js.Value)) = .empty,
 
 // Various web APIs depend on having a persistent promise resolver. They
 // require for this PromiseResolver to be valid for a lifetime longer than
@@ -165,8 +165,8 @@ pub fn deinit(self: *Context) void {
         p.deinit();
     }
 
-    for (self.js_value_list.items) |*p| {
-        p.deinit();
+    for (self.global_values.items) |*global| {
+        global.deinit();
     }
 
     for (self.persisted_promise_resolvers.items) |*p| {
@@ -374,12 +374,10 @@ pub fn createException(self: *const Context, e: v8.Value) js.Exception {
     };
 }
 
-// Wrap a v8.Value, largely so that we can provide a convenient
-// toString function
 pub fn createValue(self: *Context, value: v8.Value) js.Value {
     return .{
-        .js_val = value,
-        .context = self,
+        .ctx = self,
+        .handle = value.handle,
     };
 }
 
@@ -499,7 +497,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             }
 
             if (T == js.Value) {
-                return value.js_val;
+                return .{ .handle = value.handle };
             }
 
             if (T == js.Promise) {
@@ -837,8 +835,8 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
         // Caller wants an opaque js.Object. Probably a parameter
         // that it needs to pass back into a callback.
         js.Value => js.Value{
-            .js_val = js_value,
-            .context = self,
+            .ctx = self,
+            .handle = js_value.handle,
         },
         // Caller wants an opaque js.Object. Probably a parameter
         // that it needs to pass back into a callback.

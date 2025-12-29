@@ -18,27 +18,31 @@
 
 const std = @import("std");
 const js = @import("js.zig");
+
 const v8 = js.v8;
 
-const Array = @This();
+pub fn Global(comptime T: type) type {
+    const H = @FieldType(T, "handle");
 
-ctx: *js.Context,
-handle: *const v8.c.Array,
+    return struct {
+        global: v8.c.Global,
 
-pub fn len(self: Array) usize {
-    return v8.c.v8__Array__Length(self.handle);
-}
+        const Self = @This();
 
-pub fn get(self: Array, index: u32) !js.Value {
-    const ctx = self.ctx;
+        pub fn init(isolate: *v8.c.Isolate, data: T) Self {
+            var global: v8.c.Global = undefined;
+            v8.c.v8__Global__New(isolate, data.handle, &global);
+            return .{
+                .global = global,
+            };
+        }
 
-    const idx = js.Integer.init(ctx.isolate.handle, index);
-    const handle = v8.c.v8__Object__Get(@ptrCast(self.handle), ctx.v8_context.handle, idx.handle) orelse {
-        return error.JsException;
-    };
+        pub fn deinit(self: *Self) void {
+            v8.c.v8__Global__Reset(&self.global);
+        }
 
-    return .{
-        .ctx = self.ctx,
-        .handle = handle,
+        pub fn local(self: *const Self) H {
+            return @ptrCast(@alignCast(@as(*const anyopaque, @ptrFromInt(self.global.data_ptr))));
+        }
     };
 }

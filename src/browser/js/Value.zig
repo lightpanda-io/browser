@@ -21,24 +21,25 @@ const js = @import("js.zig");
 
 const v8 = js.v8;
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Allocator = std.mem.Allocator;
 
-const PersistentValue = v8.Persistent(v8.Value);
-
 const Value = @This();
-js_val: v8.Value,
-context: *js.Context,
+
+ctx: *js.Context,
+handle: *const v8.c.Value,
 
 pub fn isObject(self: Value) bool {
-    return self.js_val.isObject();
+    return v8.c.v8__Value__IsObject(self.handle);
 }
 
 pub fn isString(self: Value) bool {
-    return self.js_val.isString();
+    return v8.c.v8__Value__IsString(self.handle);
 }
 
 pub fn isArray(self: Value) bool {
-    return self.js_val.isArray();
+    return v8.c.v8__Value__IsArray(self.handle);
 }
 
 pub fn isNull(self: Value) bool {
@@ -50,7 +51,7 @@ pub fn isUndefined(self: Value) bool {
 }
 
 pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-    return self.context.valueToString(self.js_val, .{ .allocator = allocator });
+    return self.ctx.valueToString(.{ .handle = self.handle }, .{ .allocator = allocator });
 }
 
 pub fn toBool(self: Value) bool {
@@ -60,17 +61,19 @@ pub fn toBool(self: Value) bool {
 pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
     const json_string = v8.String.initUtf8(ctx.isolate, json);
     const value = try v8.Json.parse(ctx.v8_context, json_string);
-    return Value{ .context = ctx, .js_val = value };
+    return .{ .ctx = ctx, .handle = value.handle };
 }
 
 pub fn persist(self: Value) !Value {
-    const js_val = self.js_val;
-    var context = self.context;
+    var ctx = self.ctx;
 
-    const persisted = PersistentValue.init(context.isolate, js_val);
-    try context.js_value_list.append(context.arena, persisted);
+    const global = js.Global(Value).init(ctx.isolate.handle, self);
+    try ctx.global_values.append(ctx.arena, global);
 
-    return Value{ .context = context, .js_val = persisted.toValue() };
+    return .{
+        .ctx = ctx,
+        .handle = global.local(),
+    };
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
@@ -78,15 +81,23 @@ pub fn toZig(self: Value, comptime T: type) !T {
 }
 
 pub fn toObject(self: Value) js.Object {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isObject());
+    }
+
     return .{
-        .context = self.context,
-        .js_obj = self.js_val.castTo(v8.Object),
+        .context = self.ctx,
+        .js_obj = .{ .handle = self.handle },
     };
 }
 
 pub fn toArray(self: Value) js.Array {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isArray());
+    }
+
     return .{
-        .context = self.context,
-        .js_arr = self.js_val.castTo(v8.Array),
+        .ctx = self.ctx,
+        .handle = self.handle,
     };
 }

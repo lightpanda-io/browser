@@ -37,6 +37,9 @@ pub const Object = @import("Object.zig");
 pub const TryCatch = @import("TryCatch.zig");
 pub const Function = @import("Function.zig");
 
+pub const Integer = @import("Integer.zig");
+pub const Global = @import("global.zig").Global;
+
 const Allocator = std.mem.Allocator;
 
 pub fn Bridge(comptime T: type) type {
