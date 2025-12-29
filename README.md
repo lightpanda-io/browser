@@ -169,41 +169,30 @@ Lightpanda is written with [Zig](https://ziglang.org/) `0.15.2`. You have to
 install it with the right version in order to build the project.
 
 Lightpanda also depends on
-[zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime/) (with v8) and
-[Libcurl](https://curl.se/libcurl/).
+[zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime/) (with v8),
+[Libcurl](https://curl.se/libcurl/) and [html5ever](https://github.com/servo/html5ever).
 
 To be able to build the v8 engine for zig-js-runtime, you have to install some libs:
 
-For Debian/Ubuntu based Linux:
+For **Debian/Ubuntu based Linux**:
 
 ```
-sudo apt install xz-utils \
-    python3 ca-certificates git \
-    pkg-config libglib2.0-dev \
-    gperf libexpat1-dev unzip rsync \
-    cmake clang
+sudo apt install xz-utils ca-certificates \
+    clang make curl git
 ```
+You also need to [install Rust](https://rust-lang.org/tools/install/).
 
-For systems with [Nix](https://nixos.org/download/), you can use the devShell:
+For systems with [**Nix**](https://nixos.org/download/), you can use the devShell:
 ```
 nix develop
 ```
 
-For MacOS, you only need cmake:
-
+For **MacOS**, you need cmake and [Rust](https://rust-lang.org/tools/install/).
 ```
 brew install cmake
 ```
 
-### Install and build dependencies
-
-#### All in one build
-
-You can run `make install` to install deps all in one (or `make install-dev` if you need the development versions).
-
-Be aware that the build task is very long and cpu consuming, as you will build from sources all dependencies, including the v8 Javascript engine.
-
-#### Step by step build dependency
+### Install Git submodules
 
 The project uses git submodules for dependencies.
 
@@ -213,15 +202,14 @@ To init or update the submodules in the `vendor/` directory:
 make install-submodule
 ```
 
-**html5ever**
+This is an alias for `git submodule init && git submodule update`.
 
-[html5ver](https://github.com/servo/html5ever) is high-performance browser-grade HTML5 parser.
+### Build and run
 
-```
-zig build html5ever
-```
+You an build the entire browser with `make build` or `make build-dev` for debug
+env.
 
-For a release build, use `zig build -Doptimize=ReleaseFast html5ever`.
+But you can directly use the zig command: `zig build run`.
 
 ## Test
 
