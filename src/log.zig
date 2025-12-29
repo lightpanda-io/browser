@@ -154,17 +154,22 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
     }
 }
 
-fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
+fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
     try logLogFmtPrefix(scope, level, msg, writer);
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
-        const key = " " ++ f.name ++ "=";
-        try writer.writeAll(key);
-        try writeValue(.logfmt, @field(data, f.name), writer);
+        const value = @field(data, f.name);
+        if (std.meta.hasMethod(@TypeOf(value), "logFmt")) {
+            try value.logFmt(f.name, LogFormatWriter{.writer = writer});
+        } else {
+            const key = " " ++ f.name ++ "=";
+            try writer.writeAll(key);
+            try writeValue(.logfmt, value, writer);
+        }
     }
     try writer.writeByte('\n');
 }
 
-fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: anytype) !void {
+fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: *std.Io.Writer) !void {
     try writer.writeAll("$time=");
     try writer.print("{d}", .{timestamp(.clock)});
 
@@ -185,7 +190,7 @@ fn logLogFmtPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
     try writer.writeAll(full_msg);
 }
 
-fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: anytype) !void {
+fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
     try logPrettyPrefix(scope, level, msg, writer);
     inline for (@typeInfo(@TypeOf(data)).@"struct".fields) |f| {
         const key = "      " ++ f.name ++ " = ";
@@ -196,7 +201,7 @@ fn logPretty(comptime scope: Scope, level: Level, comptime msg: []const u8, data
     try writer.writeByte('\n');
 }
 
-fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: anytype) !void {
+fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8, writer: *std.Io.Writer) !void {
     if (scope == .console and level == .fatal and comptime std.mem.eql(u8, msg, "lightpanda")) {
         try writer.writeAll("\x1b[0;104mWARN  ");
     } else {
@@ -228,7 +233,7 @@ fn logPrettyPrefix(comptime scope: Scope, level: Level, comptime msg: []const u8
     }
 }
 
-pub fn writeValue(comptime format: Format, value: anytype, writer: anytype) !void {
+pub fn writeValue(comptime format: Format, value: anytype, writer: *std.Io.Writer) !void {
     const T = @TypeOf(value);
     if (std.meta.hasMethod(T, "format")) {
         return writer.print("{f}", .{value});
@@ -271,7 +276,7 @@ pub fn writeValue(comptime format: Format, value: anytype, writer: anytype) !voi
     @compileError("cannot log a: " ++ @typeName(T));
 }
 
-fn writeString(comptime format: Format, value: []const u8, writer: anytype) !void {
+fn writeString(comptime format: Format, value: []const u8, writer: *std.Io.Writer) !void {
     if (format == .pretty) {
         return writer.writeAll(value);
     }
@@ -324,6 +329,16 @@ fn writeString(comptime format: Format, value: []const u8, writer: anytype) !voi
     }
     return writer.writeByte('"');
 }
+
+pub const LogFormatWriter = struct {
+    writer: *std.Io.Writer,
+
+    pub fn write(self: LogFormatWriter, key: []const u8, value: []const u8) !void {
+        const writer = self.writer;
+        try writer.print(" {s}=", .{key});
+        try writeString(.logfmt, value, writer);
+    }
+};
 
 var first_log: u64 = 0;
 fn elapsed() struct { time: f64, unit: []const u8 } {

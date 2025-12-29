@@ -52,6 +52,15 @@ const ValueWriter = struct {
             try writer.print("\n stack: {s}", .{self.page.js.stackTrace() catch |err| @errorName(err) orelse "???"});
         }
     }
+
+    pub fn logFmt(self: ValueWriter, _: []const u8, writer: anytype) !void {
+        var buf: [32]u8 = undefined;
+        for (self.values, 0..) |value, i| {
+            const name = try std.fmt.bufPrint(&buf, "param.{d}", .{i});
+            try writer.write(name, try value.toString());
+        }
+    }
+
     pub fn jsonStringify(self: ValueWriter, writer: *std.json.Stringify) !void {
         try writer.beginArray();
         for (self.values) |value| {
