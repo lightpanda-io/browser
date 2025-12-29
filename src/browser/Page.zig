@@ -2472,8 +2472,8 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return self.submitForm(element, button.getForm(self));
             }
         },
-        .select, .textarea => self.window._document._active_element = element,
-        else => {},
+        // by default set the focus on the clicked HTML element.
+        else => self.window._document._active_element = element,
     }
 }
 
