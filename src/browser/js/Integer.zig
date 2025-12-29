@@ -18,27 +18,18 @@
 
 const std = @import("std");
 const js = @import("js.zig");
+
 const v8 = js.v8;
 
-const Array = @This();
+const Integer = @This();
 
-ctx: *js.Context,
-handle: *const v8.c.Array,
+handle: *const v8.c.Integer,
 
-pub fn len(self: Array) usize {
-    return v8.c.v8__Array__Length(self.handle);
-}
-
-pub fn get(self: Array, index: u32) !js.Value {
-    const ctx = self.ctx;
-
-    const idx = js.Integer.init(ctx.isolate.handle, index);
-    const handle = v8.c.v8__Object__Get(@ptrCast(self.handle), ctx.v8_context.handle, idx.handle) orelse {
-        return error.JsException;
+pub fn init(isolate: *v8.c.Isolate, value: anytype) Integer {
+    const handle = switch (@TypeOf(value)) {
+        i8, i16, i32 => v8.c.v8__Integer__New(isolate, value).?,
+        u8, u16, u32 => v8.c.v8__Integer__NewFromUnsigned(isolate, value).?,
+        else => |T| @compileError("cannot create v8::Integer from: " ++ @typeName(T)),
     };
-
-    return .{
-        .ctx = self.ctx,
-        .handle = handle,
-    };
+    return .{ .handle = handle };
 }
