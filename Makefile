@@ -34,7 +34,7 @@ endif
 
 ## Display this help screen
 help:
-	@printf "\e[36m%-35s %s\e[0m\n" "Command" "Usage"
+	@printf "\033[36m%-35s %s\033[0m\n" "Command" "Usage"
 	@sed -n -e '/^## /{'\
 		-e 's/## //g;'\
 		-e 'h;'\
@@ -56,45 +56,45 @@ zig_version = $(shell grep 'recommended_zig_version = "' "vendor/zig-js-runtime/
 download-zig:
 	$(eval url = "https://ziglang.org/download/$(zig_version)/zig-$(OS)-$(ARCH)-$(zig_version).tar.xz")
 	$(eval dest = "/tmp/zig-$(OS)-$(ARCH)-$(zig_version).tar.xz")
-	@printf "\e[36mDownload zig version $(zig_version)...\e[0m\n"
-	@curl -o "$(dest)" -L "$(url)" || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
-	@printf "\e[33mDownloaded $(dest)\e[0m\n"
+	@printf "\033[36mDownload zig version $(zig_version)...\033[0m\n"
+	@curl -o "$(dest)" -L "$(url)" || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[33mDownloaded $(dest)\033[0m\n"
 
 ## Build in release-safe mode
 build:
-	@printf "\e[36mBuilding (release safe)...\e[0m\n"
-	$(ZIG) build -Doptimize=ReleaseSafe -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
-	@printf "\e[33mBuild OK\e[0m\n"
+	@printf "\033[36mBuilding (release safe)...\033[0m\n"
+	@$(ZIG) build -Doptimize=ReleaseSafe -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in debug mode
 build-dev:
-	@printf "\e[36mBuilding (debug)...\e[0m\n"
-	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
-	@printf "\e[33mBuild OK\e[0m\n"
+	@printf "\033[36mBuilding (debug)...\033[0m\n"
+	@$(ZIG) build -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Run the server in release mode
 run: build
-	@printf "\e[36mRunning...\e[0m\n"
-	@./zig-out/bin/lightpanda || (printf "\e[33mRun ERROR\e[0m\n"; exit 1;)
+	@printf "\033[36mRunning...\033[0m\n"
+	@./zig-out/bin/lightpanda || (printf "\033[33mRun ERROR\033[0m\n"; exit 1;)
 
 ## Run the server in debug mode
 run-debug: build-dev
-	@printf "\e[36mRunning...\e[0m\n"
-	@./zig-out/bin/lightpanda || (printf "\e[33mRun ERROR\e[0m\n"; exit 1;)
+	@printf "\033[36mRunning...\033[0m\n"
+	@./zig-out/bin/lightpanda || (printf "\033[33mRun ERROR\033[0m\n"; exit 1;)
 
 ## Run a JS shell in debug mode
 shell:
-	@printf "\e[36mBuilding shell...\e[0m\n"
-	@$(ZIG) build shell || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@printf "\033[36mBuilding shell...\033[0m\n"
+	@$(ZIG) build shell || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 
 ## Run WPT tests
 wpt:
-	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -- $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@printf "\033[36mBuilding wpt...\033[0m\n"
+	@$(ZIG) build wpt -- $(filter-out $@,$(MAKECMDGOALS)) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 
 wpt-summary:
-	@printf "\e[36mBuilding wpt...\e[0m\n"
-	@$(ZIG) build wpt -- --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\e[33mBuild ERROR\e[0m\n"; exit 1;)
+	@printf "\033[36mBuilding wpt...\033[0m\n"
+	@$(ZIG) build wpt -- --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 
 ## Test - `grep` is used to filter out the huge compile command on build
 ifeq ($(OS), macos)
