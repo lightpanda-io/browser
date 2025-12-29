@@ -38,7 +38,7 @@ const ScriptManager = @This();
 
 page: *Page,
 
-// used to prevent recursive evalutaion
+// used to prevent recursive evaluation
 is_evaluating: bool,
 
 // Only once this is true can deferred scripts be run
@@ -803,7 +803,13 @@ pub const Script = struct {
             log.debug(.browser, "executed script", .{ .src = url, .success = success, .on_load = script_element._on_load != null });
         }
 
-        defer page.tick();
+        defer {
+            // We should run microtasks even if script execution fails.
+            page.js.runMicrotasks();
+            _ = page.scheduler.run() catch |err| {
+                log.err(.page, "scheduler", .{ .err = err });
+            };
+        }
 
         if (success) {
             self.executeCallback("load", script_element._on_load, page);

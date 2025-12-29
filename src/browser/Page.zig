@@ -945,16 +945,6 @@ fn printWaitAnalysis(self: *Page) void {
     }
 }
 
-pub fn tick(self: *Page) void {
-    if (comptime IS_DEBUG) {
-        log.debug(.page, "tick", .{});
-    }
-    _ = self.scheduler.run() catch |err| {
-        log.err(.page, "tick", .{ .err = err });
-    };
-    self.js.runMicrotasks();
-}
-
 pub fn isGoingAway(self: *const Page) bool {
     return self._queued_navigation != null;
 }
