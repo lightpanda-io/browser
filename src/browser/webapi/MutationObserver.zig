@@ -34,6 +34,8 @@ const MutationObserver = @This();
 _callback: js.Function,
 _observing: std.ArrayList(Observing) = .{},
 _pending_records: std.ArrayList(*MutationRecord) = .{},
+/// Intrusively linked to next element (see Page.zig).
+node: std.DoublyLinkedList.Node = .{},
 
 const Observing = struct {
     target: *Node,
@@ -53,6 +55,7 @@ pub const ObserveOptions = struct {
 pub fn init(callback: js.Function, page: *Page) !*MutationObserver {
     return page._factory.create(MutationObserver{
         ._callback = callback,
+        .node = .{},
     });
 }
 
