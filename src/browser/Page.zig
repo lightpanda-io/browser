@@ -2599,13 +2599,13 @@ pub fn insertText(self: *Page, v: []const u8) !void {
         // Or append the value
         const current_value = input.getValue();
         const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, v });
-        try input.setValue(new_value, self);
+        return input.setValue(new_value, self);
     }
 
     if (html_element.is(Element.Html.TextArea)) |textarea| {
         const current_value = textarea.getValue();
         const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, v });
-        try textarea.setValue(new_value, self);
+        return textarea.setValue(new_value, self);
     }
 }
 
