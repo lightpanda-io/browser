@@ -99,7 +99,7 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "request header", .{
-            .source = "xhr",
+            .source = "fetch",
             .url = self._url,
             .status = header.status,
         });
