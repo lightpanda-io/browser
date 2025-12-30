@@ -424,6 +424,21 @@ pub fn getDocType(_: *const Document) ?*DocumentType {
     return null;
 }
 
+// document.write is complicated and works differently based on the state of
+// parsing. But, generally, it's supposed to be additive/streaming. Multiple
+// document.writes are parsed a single unit. Well, that causes issues with
+// html5ever if we're trying to parse 1 document which is really many. So we
+// try to detect "new" documents. (This is particularly problematic because we
+// don't have proper frame support, so document.write into a frame can get
+// sent to the main document (instead of the frame document)...and it's completely
+// reasonable for 2 frames to document.write("<html>...</html>") into their own
+// frame.
+fn looksLikeNewDocument(html: []const u8) bool {
+    const trimmed = std.mem.trimLeft(u8, html, &std.ascii.whitespace);
+    return std.ascii.startsWithIgnoreCase(trimmed, "<!DOCTYPE") or
+        std.ascii.startsWithIgnoreCase(trimmed, "<html");
+}
+
 pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     if (self._type == .xml) {
         return error.InvalidStateError;
@@ -438,12 +453,16 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     };
 
     if (self._current_script == null or page._load_state != .parsing) {
-        // Post-parsing (destructive behavior)
-        if (self._script_created_parser == null) {
+        if (self._script_created_parser == null or looksLikeNewDocument(html)) {
             _ = try self.open(page);
         }
+
         if (html.len > 0) {
-            self._script_created_parser.?.read(html);
+            self._script_created_parser.?.read(html) catch |err| {
+                log.warn(.dom, "document.write parser error", .{ .err = err });
+                // was alrady closed
+                self._script_created_parser = null;
+            };
         }
         return;
     }

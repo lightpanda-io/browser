@@ -94,7 +94,7 @@ pub extern "c" fn html5ever_streaming_parser_feed(
     parser: *anyopaque,
     html: [*c]const u8,
     len: usize,
-) void;
+) c_int;
 
 pub extern "c" fn html5ever_streaming_parser_finish(
     parser: *anyopaque,

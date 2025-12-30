@@ -161,12 +161,22 @@ pub const Streaming = struct {
         ) orelse return error.ParserCreationFailed;
     }
 
-    pub fn read(self: *Streaming, data: []const u8) void {
-        h5e.html5ever_streaming_parser_feed(
+    pub fn read(self: *Streaming, data: []const u8) !void {
+        const result = h5e.html5ever_streaming_parser_feed(
             self.handle.?,
             data.ptr,
             data.len,
         );
+
+        if (result != 0) {
+            // Parser panicked - clean up and return error
+            // Note: deinit will destroy the handle if it exists
+            if (self.handle) |handle| {
+                h5e.html5ever_streaming_parser_destroy(handle);
+                self.handle = null;
+            }
+            return error.ParserPanic;
+        }
     }
 
     pub fn done(self: *Streaming) void {

@@ -266,25 +266,32 @@ pub extern "C" fn html5ever_streaming_parser_feed(
     parser_ptr: *mut c_void,
     html: *const c_uchar,
     len: usize,
-) {
+) -> i32 {
     if parser_ptr.is_null() || html.is_null() || len == 0 {
-        return;
+        return 0;
     }
 
-    let streaming_parser = unsafe { &mut *(parser_ptr as *mut StreamingParser) };
-    let bytes = unsafe { std::slice::from_raw_parts(html, len) };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let streaming_parser = unsafe { &mut *(parser_ptr as *mut StreamingParser) };
+        let bytes = unsafe { std::slice::from_raw_parts(html, len) };
 
-    // Convert bytes to UTF-8 string
-    if let Ok(s) = std::str::from_utf8(bytes) {
-        let tendril = StrTendril::from(s);
+        // Convert bytes to UTF-8 string
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            let tendril = StrTendril::from(s);
 
-        // Feed the chunk to the parser
-        // The Parser implements TendrilSink, so we can call process() on it
-        let parser = streaming_parser.parser
-            .downcast_mut::<Parser<sink::Sink>>()
-            .expect("Invalid parser type");
+            // Feed the chunk to the parser
+            // The Parser implements TendrilSink, so we can call process() on it
+            let parser = streaming_parser.parser
+                .downcast_mut::<Parser<sink::Sink>>()
+                .expect("Invalid parser type");
 
-        parser.process(tendril);
+            parser.process(tendril);
+        }
+    }));
+
+    match result {
+        Ok(_) => 0,   // Success
+        Err(_) => -1, // Panic occurred
     }
 }
 
