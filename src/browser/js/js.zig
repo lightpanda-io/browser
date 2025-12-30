@@ -33,6 +33,7 @@ pub const Platform = @import("Platform.zig");
 pub const This = @import("This.zig");
 pub const Value = @import("Value.zig");
 pub const Array = @import("Array.zig");
+pub const String = @import("String.zig");
 pub const Object = @import("Object.zig");
 pub const TryCatch = @import("TryCatch.zig");
 pub const Function = @import("Function.zig");
@@ -156,15 +157,6 @@ pub const PersistentPromiseResolver = struct {
 };
 
 pub const Promise = v8.Promise;
-
-// When doing jsValueToZig, string ([]const u8) are managed by the
-// call_arena. That means that if the API wants to persist the string
-// (which is relatively common), it needs to dupe it again.
-// If the parameter is an Env.String rather than a []const u8, then
-// the page's arena will be used (rather than the call arena).
-pub const String = struct {
-    string: []const u8,
-};
 
 pub const Exception = struct {
     inner: v8.Value,

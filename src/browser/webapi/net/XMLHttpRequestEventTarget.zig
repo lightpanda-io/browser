@@ -77,7 +77,7 @@ pub fn getOnAbort(self: *const XMLHttpRequestEventTarget) ?js.Function {
 
 pub fn setOnAbort(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_abort = try cb.withThis(self);
+        self._on_abort = try cb.persistWithThis(self);
     } else {
         self._on_abort = null;
     }
@@ -89,7 +89,7 @@ pub fn getOnError(self: *const XMLHttpRequestEventTarget) ?js.Function {
 
 pub fn setOnError(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_error = try cb.withThis(self);
+        self._on_error = try cb.persistWithThis(self);
     } else {
         self._on_error = null;
     }
@@ -101,7 +101,7 @@ pub fn getOnLoad(self: *const XMLHttpRequestEventTarget) ?js.Function {
 
 pub fn setOnLoad(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_load = try cb.withThis(self);
+        self._on_load = try cb.persistWithThis(self);
     } else {
         self._on_load = null;
     }
@@ -113,7 +113,7 @@ pub fn getOnLoadEnd(self: *const XMLHttpRequestEventTarget) ?js.Function {
 
 pub fn setOnLoadEnd(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_load_end = try cb.withThis(self);
+        self._on_load_end = try cb.persistWithThis(self);
     } else {
         self._on_load_end = null;
     }
@@ -125,7 +125,7 @@ pub fn getOnLoadStart(self: *const XMLHttpRequestEventTarget) ?js.Function {
 
 pub fn setOnLoadStart(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_load_start = try cb.withThis(self);
+        self._on_load_start = try cb.persistWithThis(self);
     } else {
         self._on_load_start = null;
     }
@@ -137,7 +137,7 @@ pub fn getOnProgress(self: *const XMLHttpRequestEventTarget) ?js.Function {
 
 pub fn setOnProgress(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_progress = try cb.withThis(self);
+        self._on_progress = try cb.persistWithThis(self);
     } else {
         self._on_progress = null;
     }
@@ -149,7 +149,7 @@ pub fn getOnTimeout(self: *const XMLHttpRequestEventTarget) ?js.Function {
 
 pub fn setOnTimeout(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_timeout = try cb.withThis(self);
+        self._on_timeout = try cb.persistWithThis(self);
     } else {
         self._on_timeout = null;
     }

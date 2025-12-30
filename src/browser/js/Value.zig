@@ -50,8 +50,34 @@ pub fn isUndefined(self: Value) bool {
     return self.js_val.isUndefined();
 }
 
-pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-    return self.ctx.valueToString(.{ .handle = self.handle }, .{ .allocator = allocator });
+pub fn isSymbol(self: Value) bool {
+    return v8.c.v8__Value__IsSymbol(self.handle);
+}
+
+pub fn toString(self: Value, opts: js.String.ToZigOpts) ![]u8 {
+    return self._toString(false, opts);
+}
+pub fn toStringZ(self: Value, opts: js.String.ToZigOpts) ![:0]u8 {
+    return self._toString(true, opts);
+}
+
+fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
+    const ctx = self.ctx;
+
+    if (self.isSymbol()) {
+        const sym_handle = v8.c.v8__Symbol__Description(@ptrCast(self.handle), ctx.isolate.handle).?;
+        return _toString(.{ .handle = @ptrCast(sym_handle), .ctx = ctx }, null_terminate, opts);
+    }
+
+    const str_handle = v8.c.v8__Value__ToString(self.handle, ctx.v8_context.handle) orelse {
+        return error.JsException;
+    };
+
+    const str = js.String{ .ctx = ctx, .handle = str_handle };
+    if (comptime null_terminate) {
+        return js.String.toZigZ(str, opts);
+    }
+    return js.String.toZig(str, opts);
 }
 
 pub fn toBool(self: Value) bool {
@@ -67,7 +93,7 @@ pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
 pub fn persist(self: Value) !Value {
     var ctx = self.ctx;
 
-    const global = js.Global(Value).init(ctx.isolate.handle, self);
+    const global = js.Global(Value).init(ctx.isolate.handle, self.handle);
     try ctx.global_values.append(ctx.arena, global);
 
     return .{

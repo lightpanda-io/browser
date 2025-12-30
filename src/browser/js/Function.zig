@@ -20,24 +20,25 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const PersistentFunction = v8.Persistent(v8.Function);
-
 const Allocator = std.mem.Allocator;
 
 const Function = @This();
 
-id: usize,
-context: *js.Context,
+ctx: *js.Context,
 this: ?v8.Object = null,
-func: PersistentFunction,
+handle: *const v8.c.Function,
 
 pub const Result = struct {
     stack: ?[]const u8,
     exception: []const u8,
 };
 
+pub fn id(self: *const Function) u32 {
+    return @as(u32, @bitCast(v8.c.v8__Object__GetIdentityHash(@ptrCast(self.handle))));
+}
+
 pub fn getName(self: *const Function, allocator: Allocator) ![]const u8 {
-    const name = self.func.castToFunction().getName();
+    const name = v8.c.v8__Function__GetName(self.handle).?;
     return self.context.valueToString(name, .{ .allocator = allocator });
 }
 
@@ -50,28 +51,27 @@ pub fn withThis(self: *const Function, value: anytype) !Function {
     const this_obj = if (@TypeOf(value) == js.Object)
         value.js_obj
     else
-        (try self.context.zigValueToJs(value, .{})).castTo(v8.Object);
+        (try self.ctx.zigValueToJs(value, .{})).castTo(v8.Object);
 
     return .{
-        .id = self.id,
+        .ctx = self.ctx,
         .this = this_obj,
-        .func = self.func,
-        .context = self.context,
+        .handle = self.handle,
     };
 }
 
 pub fn newInstance(self: *const Function, result: *Result) !js.Object {
-    const context = self.context;
+    const ctx = self.ctx;
 
     var try_catch: js.TryCatch = undefined;
-    try_catch.init(context);
+    try_catch.init(ctx);
     defer try_catch.deinit();
 
     // This creates a new instance using this Function as a constructor.
-    // This returns a generic Object
-    const js_obj = self.func.castToFunction().initInstance(context.v8_context, &.{}) orelse {
+    // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
+    const handle = v8.c.v8__Function__NewInstance(self.handle, ctx.v8_context.handle, 0, null) orelse {
         if (try_catch.hasCaught()) {
-            const allocator = context.call_arena;
+            const allocator = ctx.call_arena;
             result.stack = try_catch.stack(allocator) catch null;
             result.exception = (try_catch.exception(allocator) catch "???") orelse "???";
         } else {
@@ -82,8 +82,8 @@ pub fn newInstance(self: *const Function, result: *Result) !js.Object {
     };
 
     return .{
-        .context = context,
-        .js_obj = js_obj,
+        .context = ctx,
+        .js_obj = .{ .handle = handle },
     };
 }
 
@@ -97,12 +97,13 @@ pub fn tryCall(self: *const Function, comptime T: type, args: anytype, result: *
 
 pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, result: *Result) !T {
     var try_catch: js.TryCatch = undefined;
-    try_catch.init(self.context);
+
+    try_catch.init(self.ctx);
     defer try_catch.deinit();
 
     return self.callWithThis(T, this, args) catch |err| {
         if (try_catch.hasCaught()) {
-            const allocator = self.context.call_arena;
+            const allocator = self.ctx.call_arena;
             result.stack = try_catch.stack(allocator) catch null;
             result.exception = (try_catch.exception(allocator) catch @errorName(err)) orelse @errorName(err);
         } else {
@@ -114,8 +115,9 @@ pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, a
 }
 
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
-    const context = self.context;
+    const ctx = self.ctx;
 
+<<<<<<< HEAD
     // When we're calling a function from within JavaScript itself, this isn't
     // necessary. We're within a Caller instantiation, which will already have
     // incremented the call_depth and it won't decrement it until the Caller is
@@ -147,33 +149,35 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
             const fields = s.fields;
             var js_args: [fields.len]v8.Value = undefined;
             inline for (fields, 0..) |f, i| {
-                js_args[i] = try context.zigValueToJs(@field(aargs, f.name), .{});
+                js_args[i] = try ctx.zigValueToJs(@field(aargs, f.name), .{});
             }
             const cargs: [fields.len]v8.Value = js_args;
             break :blk &cargs;
         },
         .pointer => blk: {
-            var values = try context.call_arena.alloc(v8.Value, args.len);
+            var values = try ctx.call_arena.alloc(v8.Value, args.len);
             for (args, 0..) |a, i| {
-                values[i] = try context.zigValueToJs(a, .{});
+                values[i] = try ctx.zigValueToJs(a, .{});
             }
             break :blk values;
         },
         else => @compileError("JS Function called with invalid paremter type"),
     };
 
-    const result = self.func.castToFunction().call(context.v8_context, js_this, js_args);
-    if (result == null) {
+    const c_args = @as(?[*]const ?*v8.c.Value, @ptrCast(js_args.ptr));
+    const handle = v8.c.v8__Function__Call(self.handle, ctx.v8_context.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
         // std.debug.print("CB ERR: {s}\n", .{self.src() catch "???"});
         return error.JSExecCallback;
-    }
+    };
 
-    if (@typeInfo(T) == .void) return {};
-    return context.jsValueToZig(T, result.?);
+    if (@typeInfo(T) == .void) {
+        return {};
+    }
+    return ctx.jsValueToZig(T, .{ .handle = handle });
 }
 
 fn getThis(self: *const Function) v8.Object {
-    return self.this orelse self.context.v8_context.getGlobal();
+    return self.this orelse self.ctx.v8_context.getGlobal();
 }
 
 pub fn src(self: *const Function) ![]const u8 {
@@ -182,8 +186,32 @@ pub fn src(self: *const Function) ![]const u8 {
 }
 
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
-    const func_obj = self.func.castToFunction().toObject();
-    const key = v8.String.initUtf8(self.context.isolate, name);
-    const value = func_obj.getValue(self.context.v8_context, key) catch return null;
-    return self.context.createValue(value);
+    const ctx = self.ctx;
+    const key = v8.String.initUtf8(ctx.isolate, name);
+    const handle = v8.c.v8__Object__Get(self.handle, ctx.v8_context.handle, key.handle) orelse {
+        return error.JsException;
+    };
+
+    return .{
+        .ctx = ctx,
+        .handle = handle,
+    };
+}
+
+pub fn persist(self: *const Function) !Function {
+    var ctx = self.ctx;
+
+    const global = js.Global(Function).init(ctx.isolate.handle, self.handle);
+    try ctx.global_functions.append(ctx.arena, global);
+
+    return .{
+        .ctx = ctx,
+        .this = self.this,
+        .handle = global.local(),
+    };
+}
+
+pub fn persistWithThis(self: *const Function, value: anytype) !Function {
+    var persisted = try self.persist();
+    return persisted.withThis(value);
 }

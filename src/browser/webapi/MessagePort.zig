@@ -94,7 +94,7 @@ pub fn getOnMessage(self: *const MessagePort) ?js.Function {
 
 pub fn setOnMessage(self: *MessagePort, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_message = cb;
+        self._on_message = try cb.persist();
     } else {
         self._on_message = null;
     }
@@ -106,7 +106,7 @@ pub fn getOnMessageError(self: *const MessagePort) ?js.Function {
 
 pub fn setOnMessageError(self: *MessagePort, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_message_error = cb;
+        self._on_message_error = try cb.persist();
     } else {
         self._on_message_error = null;
     }

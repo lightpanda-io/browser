@@ -150,7 +150,7 @@ pub fn getOnLoad(self: *const Window) ?js.Function {
 }
 
 pub fn setOnLoad(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_load = getFunctionFromSetter(setter);
+    self._on_load = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnPageShow(self: *const Window) ?js.Function {
@@ -158,7 +158,7 @@ pub fn getOnPageShow(self: *const Window) ?js.Function {
 }
 
 pub fn setOnPageShow(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_pageshow = getFunctionFromSetter(setter);
+    self._on_pageshow = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnPopState(self: *const Window) ?js.Function {
@@ -166,7 +166,7 @@ pub fn getOnPopState(self: *const Window) ?js.Function {
 }
 
 pub fn setOnPopState(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_popstate = getFunctionFromSetter(setter);
+    self._on_popstate = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnError(self: *const Window) ?js.Function {
@@ -174,7 +174,7 @@ pub fn getOnError(self: *const Window) ?js.Function {
 }
 
 pub fn setOnError(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_error = getFunctionFromSetter(setter);
+    self._on_error = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnUnhandledRejection(self: *const Window) ?js.Function {
@@ -182,7 +182,7 @@ pub fn getOnUnhandledRejection(self: *const Window) ?js.Function {
 }
 
 pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_unhandled_rejection = getFunctionFromSetter(setter);
+    self._on_unhandled_rejection = try getFunctionFromSetter(setter);
 }
 
 pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
@@ -497,7 +497,7 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
     errdefer _ = self._timers.remove(timer_id);
 
     const callback = try page._factory.create(ScheduleCallback{
-        .cb = cb,
+        .cb = try cb.persist(),
         .page = page,
         .mode = opts.mode,
         .name = opts.name,
@@ -622,10 +622,10 @@ const FunctionSetter = union(enum) {
 // window.onload = {}; doesn't fail, but it doesn't do anything.
 // seems like setting to null is ok (though, at least on Firefix, it preserves
 // the original value, which we could do, but why?)
-fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function {
+fn getFunctionFromSetter(setter_: ?FunctionSetter) !?js.Function {
     const setter = setter_ orelse return null;
     return switch (setter) {
-        .func => |func| func,
+        .func => |func| try func.persist(),
         .anything => null,
     };
 }
