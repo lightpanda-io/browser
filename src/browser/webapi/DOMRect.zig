@@ -18,16 +18,23 @@
 
 const DOMRect = @This();
 
+const std = @import("std");
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 _x: f64,
 _y: f64,
 _width: f64,
 _height: f64,
-_top: f64,
-_right: f64,
-_bottom: f64,
-_left: f64,
+
+pub fn init(x: f64, y: f64, width: f64, height: f64, page: *Page) !*DOMRect {
+    return page._factory.create(DOMRect{
+        ._x = x,
+        ._y = y,
+        ._width = width,
+        ._height = height,
+    });
+}
 
 pub fn getX(self: *DOMRect) f64 {
     return self._x;
@@ -46,19 +53,19 @@ pub fn getHeight(self: *DOMRect) f64 {
 }
 
 pub fn getTop(self: *DOMRect) f64 {
-    return self._top;
+    return @min(self._y, self._y + self._height);
 }
 
 pub fn getRight(self: *DOMRect) f64 {
-    return self._right;
+    return @max(self._x, self._x + self._width);
 }
 
 pub fn getBottom(self: *DOMRect) f64 {
-    return self._bottom;
+    return @max(self._y, self._y + self._height);
 }
 
 pub fn getLeft(self: *DOMRect) f64 {
-    return self._left;
+    return @min(self._x, self._x + self._width);
 }
 
 pub const JsApi = struct {
@@ -70,6 +77,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const constructor = bridge.constructor(DOMRect.init, .{});
     pub const x = bridge.accessor(DOMRect.getX, null, .{});
     pub const y = bridge.accessor(DOMRect.getY, null, .{});
     pub const width = bridge.accessor(DOMRect.getWidth, null, .{});

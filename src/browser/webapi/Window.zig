@@ -299,8 +299,19 @@ pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQuery
     });
 }
 
-pub fn getComputedStyle(_: *const Window, element: *Element, page: *Page) !*CSSStyleProperties {
+pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, page: *Page) !*CSSStyleProperties {
+    if (pseudo_element) |pe| {
+        log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pe });
+    }
     return CSSStyleProperties.init(element, true, page);
+}
+
+pub fn getIsSecureContext(_: *const Window) bool {
+    // Return false since we don't have secure-context-only APIs implemented
+    // (webcam, geolocation, clipboard, etc.)
+    // This is safer and could help avoid processing errors by hinting at
+    // sites not to try to access those features
+    return false;
 }
 
 pub fn postMessage(self: *Window, message: js.Object, target_origin: ?[]const u8, page: *Page) !void {
@@ -666,6 +677,7 @@ pub const JsApi = struct {
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
+    pub const isSecureContext = bridge.accessor(Window.getIsSecureContext, null, .{});
     pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
     pub const index = bridge.indexed(Window.getFrame, .{ .null_as_undefined = true });
     pub const length = bridge.accessor(Window.getFramesLength, null, .{ .cache = "length" });

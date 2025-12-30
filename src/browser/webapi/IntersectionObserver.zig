@@ -44,10 +44,6 @@ var zero_rect: DOMRect = .{
     ._y = 0.0,
     ._width = 0.0,
     ._height = 0.0,
-    ._top = 0.0,
-    ._right = 0.0,
-    ._bottom = 0.0,
-    ._left = 0.0,
 };
 
 pub const ObserverInit = struct {
@@ -152,10 +148,6 @@ fn calculateIntersection(
             ._y = 0.0,
             ._width = 1920.0,
             ._height = 1080.0,
-            ._top = 0.0,
-            ._right = 1920.0,
-            ._bottom = 1080.0,
-            ._left = 0.0,
         });
 
     // For a headless browser without real layout, we treat all elements as fully visible.

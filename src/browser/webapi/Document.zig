@@ -392,7 +392,7 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, page: *Page) !?*Element
         if (node.is(Element)) |element| {
             if (try element.checkVisibility(page)) {
                 const rect = try element.getBoundingClientRect(page);
-                if (x >= rect._left and x <= rect._right and y >= rect._top and y <= rect._bottom) {
+                if (x >= rect.getLeft() and x <= rect.getRight() and y >= rect.getTop() and y <= rect.getBottom()) {
                     topmost = element;
                 }
             }

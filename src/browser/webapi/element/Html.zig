@@ -258,10 +258,10 @@ pub fn setInnerText(self: *HtmlElement, text: []const u8, page: *Page) !void {
 pub fn insertAdjacentHTML(
     self: *HtmlElement,
     position: []const u8,
-    /// TODO: Add support for XML parsing.
-    html_or_xml: []const u8,
+    html: []const u8,
     page: *Page,
 ) !void {
+
     // Create a new HTMLDocument.
     const doc = try page._factory.document(@import("../HTMLDocument.zig"){
         ._proto = undefined,
@@ -270,9 +270,12 @@ pub fn insertAdjacentHTML(
 
     const Parser = @import("../../parser/Parser.zig");
     var parser = Parser.init(page.call_arena, doc_node, page);
-    parser.parse(html_or_xml);
+    parser.parse(html);
+
     // Check if there's parsing error.
-    if (parser.err) |_| return error.Invalid;
+    if (parser.err) |_| {
+        return error.Invalid;
+    }
 
     // We always get it wrapped like so:
     // <html><head></head><body>{ ... }</body></html>

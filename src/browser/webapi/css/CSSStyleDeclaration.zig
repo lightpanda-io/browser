@@ -219,6 +219,14 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []
         const element = self._element orelse return "";
         return getDefaultDisplay(element);
     }
+    if (std.mem.eql(u8, normalized_name, "color")) {
+        const element = self._element orelse return "";
+        return getDefaultColor(element);
+    }
+    if (std.mem.eql(u8, normalized_name, "background-color")) {
+        // transparent
+        return "rgba(0, 0, 0, 0)";
+    }
 
     return "";
 }
@@ -254,6 +262,18 @@ fn isInlineTag(tag_name: []const u8) bool {
         }
     }
     return false;
+}
+
+fn getDefaultColor(element: *const Element) []const u8 {
+    switch (element._type) {
+        .html => |html| {
+            return switch (html._type) {
+                .anchor => "rgb(0, 0, 238)", // blue
+                else => "rgb(0, 0, 0)",
+            };
+        },
+        .svg => return "rgb(0, 0, 0)",
+    }
 }
 
 pub const Property = struct {

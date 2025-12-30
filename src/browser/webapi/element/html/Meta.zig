@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -35,6 +36,38 @@ pub fn asNode(self: *Meta) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getName(self: *Meta) []const u8 {
+    return self.asElement().getAttributeSafe("name") orelse return "";
+}
+
+pub fn setName(self: *Meta, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("name", value, page);
+}
+
+pub fn getHttpEquiv(self: *Meta) []const u8 {
+    return self.asElement().getAttributeSafe("http-equiv") orelse return "";
+}
+
+pub fn setHttpEquiv(self: *Meta, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("http-equiv", value, page);
+}
+
+pub fn getContent(self: *Meta) []const u8 {
+    return self.asElement().getAttributeSafe("content") orelse return "";
+}
+
+pub fn setContent(self: *Meta, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("content", value, page);
+}
+
+pub fn getMedia(self: *Meta) []const u8 {
+    return self.asElement().getAttributeSafe("media") orelse return "";
+}
+
+pub fn setMedia(self: *Meta, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe("media", value, page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(MetaElement);
 
@@ -43,4 +76,9 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const name = bridge.accessor(MetaElement.getName, MetaElement.setName, .{});
+    pub const httpEquiv = bridge.accessor(MetaElement.getHttpEquiv, MetaElement.setHttpEquiv, .{});
+    pub const content = bridge.accessor(MetaElement.getContent, MetaElement.setContent, .{});
+    pub const media = bridge.accessor(MetaElement.getMedia, MetaElement.setMedia, .{});
 };

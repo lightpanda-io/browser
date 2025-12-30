@@ -821,10 +821,6 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
             ._y = 0.0,
             ._width = 0.0,
             ._height = 0.0,
-            ._top = 0.0,
-            ._right = 0.0,
-            ._bottom = 0.0,
-            ._left = 0.0,
         });
     }
 
@@ -833,20 +829,12 @@ pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
 
     // Use sibling position for x coordinate to ensure siblings have different x values
     const x = calculateSiblingPosition(self.asNode());
-    const top = y;
-    const left = x;
-    const right = x + dims.width;
-    const bottom = y + dims.height;
 
     return page._factory.create(DOMRect{
         ._x = x,
         ._y = y,
         ._width = dims.width,
         ._height = dims.height,
-        ._top = top,
-        ._right = right,
-        ._bottom = bottom,
-        ._left = left,
     });
 }
 

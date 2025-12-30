@@ -120,19 +120,19 @@ pub fn is(self: *Node, comptime T: type) ?*T {
 /// * `target_node` is `*Node` (where we actually insert),
 /// * `previous_node` is `?*Node`.
 pub fn findAdjacentNodes(self: *Node, position: []const u8) !struct { *Node, ?*Node } {
-    // Prefer case-sensitive match.
+    // Case-insensitive match per HTML spec.
     // "beforeend" was the most common case in my tests; we might adjust the order
     // depending on which ones websites prefer most.
-    if (std.mem.eql(u8, position, "beforeend")) {
+    if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
         return .{ self, null };
     }
 
-    if (std.mem.eql(u8, position, "afterbegin")) {
+    if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
         // Get the first child; null indicates there are no children.
         return .{ self, self.firstChild() };
     }
 
-    if (std.mem.eql(u8, position, "beforebegin")) {
+    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
         // The node must have a parent node in order to use this variant.
         const parent_node = self.parentNode() orelse return error.NoModificationAllowed;
         // Parent cannot be Document.
@@ -144,7 +144,7 @@ pub fn findAdjacentNodes(self: *Node, position: []const u8) !struct { *Node, ?*N
         return .{ parent_node, self };
     }
 
-    if (std.mem.eql(u8, position, "afterend")) {
+    if (std.ascii.eqlIgnoreCase(position, "afterend")) {
         // The node must have a parent node in order to use this variant.
         const parent_node = self.parentNode() orelse return error.NoModificationAllowed;
         // Parent cannot be Document.
