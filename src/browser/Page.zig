@@ -1025,11 +1025,11 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
     return null;
 }
 
-pub inline fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
+pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
     self._mutation_observers.append(&observer.node);
 }
 
-pub inline fn unregisterMutationObserver(self: *Page, observer: *MutationObserver) void {
+pub fn unregisterMutationObserver(self: *Page, observer: *MutationObserver) void {
     self._mutation_observers.remove(&observer.node);
 }
 

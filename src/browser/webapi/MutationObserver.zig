@@ -55,7 +55,6 @@ pub const ObserveOptions = struct {
 pub fn init(callback: js.Function, page: *Page) !*MutationObserver {
     return page._factory.create(MutationObserver{
         ._callback = callback,
-        .node = .{},
     });
 }
 
