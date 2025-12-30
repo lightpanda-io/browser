@@ -22,11 +22,13 @@ pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         enable,
         disable,
+        getFullAXTree,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
+        .getFullAXTree => return getFullAXTree(cmd),
     }
 }
 fn enable(cmd: anytype) !void {
@@ -35,4 +37,26 @@ fn enable(cmd: anytype) !void {
 
 fn disable(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
+}
+
+fn getFullAXTree(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        depth: ?i32 = null,
+        frameId: ?[]const u8 = null,
+    })) orelse return error.InvalidParams;
+
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    if (params.frameId) |frameId| {
+        const target_id = bc.target_id orelse return error.TargetNotLoaded;
+        if (std.mem.eql(u8, target_id, frameId) == false) {
+            return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
+        }
+    }
+
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const doc = page.window._document.asNode();
+    const node = try bc.node_registry.register(doc);
+
+    return cmd.sendResult(.{ .nodes = try bc.axnodeWriter(node, .{}) }, .{});
 }
