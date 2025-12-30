@@ -98,7 +98,7 @@ _element_assigned_slots: Element.AssignedSlotLookup = .{},
 _script_manager: ScriptManager,
 
 // List of active MutationObservers
-_mutation_observers: std.ArrayList(*MutationObserver) = .{},
+_mutation_observers: std.DoublyLinkedList = .{},
 _mutation_delivery_scheduled: bool = false,
 _mutation_delivery_depth: u32 = 0,
 
@@ -1026,16 +1026,11 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
-    try self._mutation_observers.append(self.arena, observer);
+    self._mutation_observers.append(&observer.node);
 }
 
 pub fn unregisterMutationObserver(self: *Page, observer: *MutationObserver) void {
-    for (self._mutation_observers.items, 0..) |obs, i| {
-        if (obs == observer) {
-            _ = self._mutation_observers.swapRemove(i);
-            return;
-        }
-    }
+    self._mutation_observers.remove(&observer.node);
 }
 
 pub fn registerIntersectionObserver(self: *Page, observer: *IntersectionObserver) !void {
@@ -1126,11 +1121,9 @@ pub fn deliverMutations(self: *Page) void {
         return;
     }
 
-    // Iterate backwards to handle observers that disconnect during their callback
-    var i = self._mutation_observers.items.len;
-    while (i > 0) {
-        i -= 1;
-        const observer = self._mutation_observers.items[i];
+    var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+    while (it) |node| : (it = node.next) {
+        const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.deliverRecords(self) catch |err| {
             log.err(.page, "page.deliverMutations", .{ .err = err });
         };
@@ -2276,7 +2269,9 @@ pub fn attributeChange(self: *Page, element: *Element, name: []const u8, value: 
 
     Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, value, self);
 
-    for (self._mutation_observers.items) |observer| {
+    var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+    while (it) |node| : (it = node.next) {
+        const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
             log.err(.page, "attributeChange.notifyObserver", .{ .err = err });
         };
@@ -2300,7 +2295,9 @@ pub fn attributeRemove(self: *Page, element: *Element, name: []const u8, old_val
 
     Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, null, self);
 
-    for (self._mutation_observers.items) |observer| {
+    var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+    while (it) |node| : (it = node.next) {
+        const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
             log.err(.page, "attributeRemove.notifyObserver", .{ .err = err });
         };
@@ -2390,7 +2387,7 @@ fn findMatchingSlot(node: *Node, slot_name: []const u8) ?*Element.Html.Slot {
 }
 
 pub fn hasMutationObservers(self: *const Page) bool {
-    return self._mutation_observers.items.len > 0;
+    return self._mutation_observers.first != null;
 }
 
 pub fn getCustomizedBuiltInDefinition(self: *Page, element: *Element) ?*CustomElementDefinition {
@@ -2406,8 +2403,9 @@ pub fn characterDataChange(
     target: *Node,
     old_value: []const u8,
 ) void {
-    // Notify mutation observers
-    for (self._mutation_observers.items) |observer| {
+    var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+    while (it) |node| : (it = node.next) {
+        const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyCharacterDataChange(target, old_value, self) catch |err| {
             log.err(.page, "cdataChange.notifyObserver", .{ .err = err });
         };
@@ -2432,8 +2430,9 @@ pub fn childListChange(
         }
     }
 
-    // Notify mutation observers
-    for (self._mutation_observers.items) |observer| {
+    var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
+    while (it) |node| : (it = node.next) {
+        const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyChildListChange(target, added_nodes, removed_nodes, previous_sibling, next_sibling, self) catch |err| {
             log.err(.page, "childListChange.notifyObserver", .{ .err = err });
         };
