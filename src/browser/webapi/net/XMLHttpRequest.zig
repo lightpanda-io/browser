@@ -104,7 +104,7 @@ pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function {
 
 pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_ready_state_change = try cb.withThis(self);
+        self._on_ready_state_change = try cb.persistWithThis(self);
     } else {
         self._on_ready_state_change = null;
     }

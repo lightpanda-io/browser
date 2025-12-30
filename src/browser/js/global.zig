@@ -29,9 +29,9 @@ pub fn Global(comptime T: type) type {
 
         const Self = @This();
 
-        pub fn init(isolate: *v8.c.Isolate, data: T) Self {
+        pub fn init(isolate: *v8.c.Isolate, handle: H) Self {
             var global: v8.c.Global = undefined;
-            v8.c.v8__Global__New(isolate, data.handle, &global);
+            v8.c.v8__Global__New(isolate, handle, &global);
             return .{
                 .global = global,
             };

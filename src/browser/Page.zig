@@ -1309,7 +1309,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Page, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(self), .err = err });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err });
         return err;
     };
     return self.nodeIsReady(true, node);
