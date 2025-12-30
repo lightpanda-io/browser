@@ -85,7 +85,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) 
         }
 
         if (src.pull) |pull| {
-            self._pull_fn = pull;
+            self._pull_fn = try pull.persist();
             try self.callPullIfNeeded();
         }
     }

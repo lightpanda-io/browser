@@ -65,10 +65,6 @@ call_arena: Allocator,
 // the call which is calling the callback.
 call_depth: usize = 0,
 
-// Callbacks are PesistendObjects. When the context ends, we need
-// to free every callback we created.
-callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .empty,
-
 // Serves two purposes. Like `callbacks` above, this is used to free
 // every PeristentObjet we've created during the lifetime of the context.
 // More importantly, it serves as an identity map - for a given Zig
@@ -86,8 +82,8 @@ identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 // we now simply persist every time persist() is called.
 js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
 
-// tracks Global(v8.c.Value).
 global_values: std.ArrayList(js.Global(js.Value)) = .empty,
+global_functions: std.ArrayList(js.Global(js.Function)) = .empty,
 
 // Various web APIs depend on having a persistent promise resolver. They
 // require for this PromiseResolver to be valid for a lifetime longer than
@@ -169,6 +165,10 @@ pub fn deinit(self: *Context) void {
         global.deinit();
     }
 
+    for (self.global_functions.items) |*global| {
+        global.deinit();
+    }
+
     for (self.persisted_promise_resolvers.items) |*p| {
         p.deinit();
     }
@@ -188,19 +188,12 @@ pub fn deinit(self: *Context) void {
         }
     }
 
-    for (self.callbacks.items) |*cb| {
-        cb.deinit();
-    }
     if (self.handle_scope) |*scope| {
         scope.deinit();
         self.v8_context.exit();
     }
     var presistent_context = v8.Persistent(v8.Context).recoverCast(self.v8_context);
     presistent_context.deinit();
-}
-
-fn trackCallback(self: *Context, pf: PersistentFunction) !void {
-    return self.callbacks.append(self.arena, pf);
 }
 
 // Given an anytype, turns it into a v8.Object. The anytype could be:
@@ -413,13 +406,9 @@ pub fn createFunction(self: *Context, js_value: v8.Value) !js.Function {
     // caller should have made sure this was a function
     std.debug.assert(js_value.isFunction());
 
-    const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
-    try self.trackCallback(func);
-
     return .{
-        .func = func,
-        .context = self,
-        .id = js_value.castTo(v8.Object).getIdentityHash(),
+        .ctx = self,
+        .handle = @ptrCast(js_value.handle),
     };
 }
 
@@ -509,7 +498,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
 
             if (T == js.Function) {
                 // we're returning a callback
-                return value.func.toValue();
+                return .{ .handle = @ptrCast(value.handle) };
             }
 
             if (T == js.Object) {
@@ -2052,7 +2041,7 @@ pub fn queueSlotchangeDelivery(self: *Context) !void {
 }
 
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
-    self.isolate.enqueueMicrotaskFunc(cb.func.castToFunction());
+    self.isolate.enqueueMicrotaskFunc(.{ .handle = cb.handle });
 }
 
 // == Misc ==

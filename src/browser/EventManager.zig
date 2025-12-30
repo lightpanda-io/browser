@@ -446,7 +446,7 @@ const Function = union(enum) {
 
     fn eqlFunction(self: Function, func: js.Function) bool {
         return switch (self) {
-            .value => |v| return v.id == func.id,
+            .value => |v| return v.id() == func.id(),
             else => false,
         };
     }

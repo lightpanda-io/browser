@@ -51,7 +51,7 @@ pub fn getOnAbort(self: *const AbortSignal) ?js.Function {
 
 pub fn setOnAbort(self: *AbortSignal, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_abort = try cb.withThis(self);
+        self._on_abort = try cb.persistWithThis(self);
     } else {
         self._on_abort = null;
     }
