@@ -21,6 +21,8 @@ const Page = @import("../../browser/Page.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
 const log = @import("../../log.zig");
+const js = @import("../../browser/js/js.zig");
+const v8 = js.v8;
 
 const Allocator = std.mem.Allocator;
 
@@ -194,7 +196,8 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
     bc.inspector.contextCreated(js_context, world.name, "", aux_data, false);
 
-    return cmd.sendResult(.{ .executionContextId = js_context.v8_context.debugContextId() }, .{});
+    const v8_context = v8.Context{ .handle = js_context.handle };
+    return cmd.sendResult(.{ .executionContextId = v8_context.debugContextId() }, .{});
 }
 
 fn navigate(cmd: anytype) !void {

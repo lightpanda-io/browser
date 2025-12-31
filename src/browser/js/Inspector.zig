@@ -149,7 +149,7 @@ pub fn contextCreated(
         auxData_ptr,
         auxData_len,
         CONTEST_GROUP_ID,
-        context.v8_context.handle,
+        context.handle,
     );
 }
 
@@ -170,7 +170,7 @@ pub fn getRemoteObject(
     const generate_preview = false;
     return self.session.wrapObject(
         context.isolate.handle,
-        context.v8_context.handle,
+        context.handle,
         js_value.handle,
         group,
         generate_preview,
