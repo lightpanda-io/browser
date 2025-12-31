@@ -481,7 +481,7 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.c.InspectorClientImpl,
     c_value: *const v8.C_Value,
 ) callconv(.c) [*c]const u8 {
-    const external_entry = Inspector.getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
     return if (external_entry.subtype) |st| @tagName(st) else null;
 }
 
@@ -498,8 +498,15 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
     // We _must_ include a non-null description in order for the subtype value
     // to be included. Besides that, I don't know if the value has any meaning
-    const external_entry = Inspector.getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
     return if (external_entry.subtype == null) null else "";
+}
+
+/// Enables C to allocate using the given Zig allocator
+pub export fn zigAlloc(self: *anyopaque, bytes: usize) callconv(.c) ?[*]u8 {
+    const allocator: *Allocator = @ptrCast(@alignCast(self));
+    const allocated_bytes = allocator.alloc(u8, bytes) catch return null;
+    return allocated_bytes.ptr;
 }
 
 test "TaggedAnyOpaque" {
