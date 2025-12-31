@@ -377,24 +377,6 @@ fn getArgs(self: *const Caller, comptime F: type, comptime offset: usize, info: 
             break :blk params[0 .. params.len - 1];
         }
 
-        // If the last parameter is a special JsThis, set it, and exclude it
-        // from our params slice, because we don't want to bind it to
-        // a JS argument
-        if (comptime params[params.len - 1].type.? == js.This) {
-            @field(args, tupleFieldName(params.len - 1 + offset)) = .{ .obj = .{
-                .context = context,
-                .js_obj = info.getThis(),
-            } };
-
-            // AND the 2nd last parameter is state
-            if (params.len > 1 and comptime isPage(params[params.len - 2].type.?)) {
-                @field(args, tupleFieldName(params.len - 2 + offset)) = self.context.page;
-                break :blk params[0 .. params.len - 2];
-            }
-
-            break :blk params[0 .. params.len - 1];
-        }
-
         // we have neither a Page nor a JsObject. All params must be
         // bound to a JavaScript value.
         break :blk params;
@@ -446,8 +428,6 @@ fn getArgs(self: *const Caller, comptime F: type, comptime offset: usize, info: 
 
         if (comptime isPage(param.type.?)) {
             @compileError("Page must be the last parameter (or 2nd last if there's a JsThis): " ++ @typeName(F));
-        } else if (comptime param.type.? == js.This) {
-            @compileError("JsThis must be the last parameter: " ++ @typeName(F));
         } else if (i >= js_parameter_count) {
             if (@typeInfo(param.type.?) != .optional) {
                 return error.InvalidArgument;
