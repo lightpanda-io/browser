@@ -64,7 +64,7 @@ pub fn deinit(self: *ExecutionWorld) void {
 }
 
 // Only the top Context in the Main ExecutionWorld should hold a handle_scope.
-// A v8.HandleScope is like an arena. Once created, any "Local" that
+// A js.HandleScope is like an arena. Once created, any "Local" that
 // v8 creates will be released (or at least, releasable by the v8 GC)
 // when the handle_scope is freed.
 // We also maintain our own "context_arena" which allows us to have
@@ -76,15 +76,16 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     const isolate = env.isolate;
 
     var v8_context: v8.Context = blk: {
-        var temp_scope: v8.HandleScope = undefined;
-        v8.HandleScope.init(&temp_scope, isolate);
+        const v8_isolate = v8.Isolate{ .handle = isolate.handle };
+        var temp_scope: js.HandleScope = undefined;
+        temp_scope.init(isolate);
         defer temp_scope.deinit();
 
         if (comptime IS_DEBUG) {
             // Getting this into the snapshot is tricky (anything involving the
             // global is tricky). Easier to do here, and in debug mode, we're
             // fine with paying the small perf hit.
-            const js_global = v8.FunctionTemplate.initDefault(isolate);
+            const js_global = v8.FunctionTemplate.initDefault(v8_isolate);
             const global_template = js_global.getInstanceTemplate();
 
             global_template.setNamedProperty(v8.NamedPropertyHandlerConfiguration{
@@ -93,18 +94,18 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
             }, null);
         }
 
-        const context_local = v8.Context.init(isolate, null, null);
-        const v8_context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
+        const context_local = v8.Context.init(v8_isolate, null, null);
+        const v8_context = v8.Persistent(v8.Context).init(v8_isolate, context_local).castToContext();
         break :blk v8_context;
     };
 
     // For a Page we only create one HandleScope, it is stored in the main World (enter==true). A page can have multple contexts, 1 for each World.
     // The main Context that enters and holds the HandleScope should therefore always be created first. Following other worlds for this page
     // like isolated Worlds, will thereby place their objects on the main page's HandleScope. Note: In the furure the number of context will multiply multiple frames support
-    var handle_scope: ?v8.HandleScope = null;
+    var handle_scope: ?js.HandleScope = null;
     if (enter) {
-        handle_scope = @as(v8.HandleScope, undefined);
-        v8.HandleScope.init(&handle_scope.?, isolate);
+        handle_scope = @as(js.HandleScope, undefined);
+        handle_scope.?.init(isolate);
         v8_context.enter();
     }
     errdefer if (enter) {
@@ -130,7 +131,8 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     var context = &self.context.?;
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
-    const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
+    const v8_isolate = v8.Isolate{ .handle = isolate.handle };
+    const data = v8_isolate.initBigIntU64(@intCast(@intFromPtr(context)));
     v8_context.setEmbedderData(1, data);
 
     try context.setupGlobal();
@@ -159,7 +161,9 @@ pub fn resumeExecution(self: *const ExecutionWorld) void {
 
 pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
     const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-    const context = Context.fromIsolate(info.getIsolate());
+    const v8_isolate = info.getIsolate();
+    const js_isolate = js.Isolate{ .handle = v8_isolate.handle };
+    const context = Context.fromIsolate(js_isolate);
 
     const property = context.valueToString(.{ .handle = c_name.? }, .{}) catch "???";
 
