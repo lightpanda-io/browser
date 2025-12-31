@@ -79,6 +79,13 @@ pub fn toString(self: Object) ![]const u8 {
     return self.ctx.valueToString(js_value, .{});
 }
 
+pub fn toValue(self: Object) js.Value {
+    return .{
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
+    };
+}
+
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
     if (comptime IS_DEBUG) {
         const js_value = v8.Value{ .handle = @ptrCast(self.handle) };
