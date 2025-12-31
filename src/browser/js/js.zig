@@ -29,8 +29,6 @@ pub const Inspector = @import("Inspector.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Platform = @import("Platform.zig");
 
-// TODO: Is "This" really necessary?
-pub const This = @import("This.zig");
 pub const Value = @import("Value.zig");
 pub const Array = @import("Array.zig");
 pub const String = @import("String.zig");
