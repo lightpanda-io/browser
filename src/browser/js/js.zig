@@ -37,6 +37,12 @@ pub const String = @import("String.zig");
 pub const Object = @import("Object.zig");
 pub const TryCatch = @import("TryCatch.zig");
 pub const Function = @import("Function.zig");
+pub const Promise = @import("Promise.zig");
+pub const PromiseResolver = @import("PromiseResolver.zig");
+pub const Module = @import("Module.zig");
+pub const BigInt = @import("BigInt.zig");
+pub const Name = @import("Name.zig");
+pub const Script = @import("Script.zig");
 
 pub const Integer = @import("Integer.zig");
 pub const Global = @import("global.zig").Global;
@@ -72,47 +78,6 @@ pub const ArrayBuffer = struct {
     }
 };
 
-pub const PromiseResolver = struct {
-    context: *Context,
-    resolver: v8.PromiseResolver,
-
-    pub fn promise(self: PromiseResolver) Promise {
-        return self.resolver.getPromise();
-    }
-
-    pub fn resolve(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._resolve(value) catch |err| {
-            log.err(.bug, "resolve", .{ .source = source, .err = err, .persistent = false });
-        };
-    }
-    fn _resolve(self: PromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value, .{});
-
-        const v8_context = v8.Context{ .handle = context.handle };
-        if (self.resolver.resolve(v8_context, js_value) == null) {
-            return error.FailedToResolvePromise;
-        }
-        self.context.runMicrotasks();
-    }
-
-    pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._reject(value) catch |err| {
-            log.err(.bug, "reject", .{ .source = source, .err = err, .persistent = false });
-        };
-    }
-    fn _reject(self: PromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value);
-
-        const v8_context = v8.Context{ .handle = context.handle };
-        if (self.resolver.reject(v8_context, js_value) == null) {
-            return error.FailedToRejectPromise;
-        }
-        self.context.runMicrotasks();
-    }
-};
-
 pub const PersistentPromiseResolver = struct {
     context: *Context,
     resolver: v8.Persistent(v8.PromiseResolver),
@@ -122,7 +87,8 @@ pub const PersistentPromiseResolver = struct {
     }
 
     pub fn promise(self: PersistentPromiseResolver) Promise {
-        return self.resolver.castToPromiseResolver().getPromise();
+        const v8_promise = self.resolver.castToPromiseResolver().getPromise();
+        return .{ .handle = v8_promise.handle };
     }
 
     pub fn resolve(self: PersistentPromiseResolver, comptime source: []const u8, value: anytype) void {
@@ -159,8 +125,6 @@ pub const PersistentPromiseResolver = struct {
         }
     }
 };
-
-pub const Promise = v8.Promise;
 
 pub const Exception = struct {
     inner: v8.Value,

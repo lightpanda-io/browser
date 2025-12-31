@@ -32,10 +32,8 @@ const ScriptManager = @import("../ScriptManager.zig");
 
 const Allocator = std.mem.Allocator;
 const PersistentObject = v8.Persistent(v8.Object);
-const PersistentValue = v8.Persistent(v8.Value);
 const PersistentModule = v8.Persistent(v8.Module);
 const PersistentPromise = v8.Persistent(v8.Promise);
-const PersistentFunction = v8.Persistent(v8.Function);
 const TaggedAnyOpaque = js.TaggedAnyOpaque;
 
 // Loosely maps to a Browser Page.
@@ -125,14 +123,14 @@ const ModuleEntry = struct {
 
 pub fn fromC(c_context: *const v8.C_Context) *Context {
     const data = v8.c.v8__Context__GetEmbedderData(c_context, 1).?;
-    const big_int = v8.BigInt{ .handle = @ptrCast(data) };
+    const big_int = js.BigInt{ .handle = @ptrCast(data) };
     return @ptrFromInt(big_int.getUint64());
 }
 
 pub fn fromIsolate(isolate: js.Isolate) *Context {
     const v8_context = v8.c.v8__Isolate__GetCurrentContext(isolate.handle).?;
     const data = v8.c.v8__Context__GetEmbedderData(v8_context, 1).?;
-    const big_int = v8.BigInt{ .handle = @ptrCast(data) };
+    const big_int = js.BigInt{ .handle = @ptrCast(data) };
     return @ptrFromInt(big_int.getUint64());
 }
 
@@ -212,7 +210,7 @@ pub fn exec(self: *Context, src: []const u8, name: ?[]const u8) !js.Value {
 
     const scr = try compileScript(v8_isolate, v8_context, src, name);
 
-    const value = scr.run(v8_context) catch {
+    const value = scr.run(v8_context.handle) catch {
         return error.ExecutionError;
     };
 
@@ -245,7 +243,8 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
             // compileModule is synchronous - nothing can modify the cache during compilation
             std.debug.assert(gop.value_ptr.module == null);
 
-            gop.value_ptr.module = PersistentModule.init(v8_isolate, m);
+            const v8_module = v8.Module{ .handle = m.handle };
+            gop.value_ptr.module = PersistentModule.init(v8_isolate, v8_module);
             if (!gop.found_existing) {
                 gop.key_ptr.* = owned_url;
             }
@@ -257,11 +256,11 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
     try self.postCompileModule(mod, owned_url);
 
     const v8_context = v8.Context{ .handle = self.handle };
-    if (try mod.instantiate(v8_context, resolveModuleCallback) == false) {
+    if (try mod.instantiate(v8_context.handle, resolveModuleCallback) == false) {
         return error.ModuleInstantiationError;
     }
 
-    const evaluated = mod.evaluate(v8_context) catch {
+    const evaluated = mod.evaluate(v8_context.handle) catch {
         std.debug.assert(mod.getStatus() == .kErrored);
 
         // Some module-loading errors aren't handled by TryCatch. We need to
@@ -319,7 +318,7 @@ pub fn stringToFunction(self: *Context, str: []const u8) !js.Function {
     const v8_context = v8.Context{ .handle = self.handle };
     const v8_isolate = v8.Isolate{ .handle = self.isolate.handle };
     const script = try compileScript(v8_isolate, v8_context, full, null);
-    const js_value = script.run(v8_context) catch {
+    const js_value = script.run(v8_context.handle) catch {
         return error.ExecutionError;
     };
     if (!js_value.isFunction()) {
@@ -331,7 +330,7 @@ pub fn stringToFunction(self: *Context, str: []const u8) !js.Function {
 // After we compile a module, whether it's a top-level one, or a nested one,
 // we always want to track its identity (so that, if this module imports other
 // modules, we can resolve the full URL), and preload any dependent modules.
-fn postCompileModule(self: *Context, mod: v8.Module, url: [:0]const u8) !void {
+fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8) !void {
     try self.module_identifier.putNoClobber(self.arena, mod.getIdentityHash(), url);
 
     const v8_context = v8.Context{ .handle = self.handle };
@@ -500,8 +499,8 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             }
 
             if (T == js.Promise) {
-                // we're returning a v8.Promise
-                return value.toObject().toValue();
+                // we're returning a js.Promise
+                return .{ .handle = @ptrCast(value.handle) };
             }
 
             if (T == js.Exception) {
@@ -1189,26 +1188,15 @@ pub fn stackTrace(self: *const Context) !?[]const u8 {
 
 // == Promise Helpers ==
 pub fn rejectPromise(self: *Context, value: anytype) !js.Promise {
-    const ctx = v8.Context{ .handle = self.handle };
-    var resolver = v8.PromiseResolver.init(ctx);
-    const js_value = try self.zigValueToJs(value, .{});
-    if (resolver.reject(ctx, js_value) == null) {
-        return error.FailedToResolvePromise;
-    }
-    self.runMicrotasks();
-    return resolver.getPromise();
+    var resolver = js.PromiseResolver.init(self);
+    resolver.reject("Context.rejectPromise", value);
+    return resolver.promise();
 }
 
 pub fn resolvePromise(self: *Context, value: anytype) !js.Promise {
-    const ctx = v8.Context{ .handle = self.handle };
-    const js_value = try self.zigValueToJs(value, .{});
-
-    var resolver = v8.PromiseResolver.init(ctx);
-    if (resolver.resolve(ctx, js_value) == null) {
-        return error.FailedToResolvePromise;
-    }
-    self.runMicrotasks();
-    return resolver.getPromise();
+    var resolver = js.PromiseResolver.init(self);
+    resolver.resolve("Context.resolvePromise", value);
+    return resolver.promise();
 }
 
 pub fn runMicrotasks(self: *Context) void {
@@ -1230,12 +1218,12 @@ fn PromiseResolverType(comptime lifetime: PromiseResolverLifetime) type {
     return error{OutOfMemory}!js.PersistentPromiseResolver;
 }
 pub fn createPromiseResolver(self: *Context, comptime lifetime: PromiseResolverLifetime) PromiseResolverType(lifetime) {
-    const v8_context = v8.Context{ .handle = self.handle };
-    const resolver = v8.PromiseResolver.init(v8_context);
     if (comptime lifetime == .none) {
-        return .{ .context = self, .resolver = resolver };
+        return js.PromiseResolver.init(self);
     }
 
+    const v8_context = v8.Context{ .handle = self.handle };
+    const resolver = v8.PromiseResolver.init(v8_context);
     const v8_isolate = v8.Isolate{ .handle = self.isolate.handle };
     const persisted = v8.Persistent(v8.PromiseResolver).init(v8_isolate, resolver);
 
@@ -1266,7 +1254,7 @@ fn resolveModuleCallback(
         log.err(.js, "resolve module", .{ .err = err });
         return null;
     };
-    const referrer = v8.Module{ .handle = c_referrer.? };
+    const referrer = js.Module{ .handle = c_referrer.? };
 
     return self._resolveModuleCallback(referrer, specifier) catch |err| {
         log.err(.js, "resolve module", .{
@@ -1319,7 +1307,7 @@ pub fn dynamicModuleCallback(
 
 pub fn metaObjectCallback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.c) void {
     const self = fromC(c_context.?);
-    const m = v8.Module{ .handle = c_module.? };
+    const m = js.Module{ .handle = c_module.? };
     const meta = v8.Object{ .handle = c_meta.? };
 
     const url = self.module_identifier.get(m.getIdentityHash()) orelse {
@@ -1338,7 +1326,7 @@ pub fn metaObjectCallback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_
     }
 }
 
-fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: [:0]const u8) !?*const v8.C_Module {
+fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]const u8) !?*const v8.C_Module {
     const referrer_path = self.module_identifier.get(referrer.getIdentityHash()) orelse {
         // Shouldn't be possible.
         return error.UnknownModuleReferrer;
@@ -1365,7 +1353,8 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: [:0]co
     const v8_isolate = v8.Isolate{ .handle = self.isolate.handle };
     const mod = try compileModule(v8_isolate, source.src(), normalized_specifier);
     try self.postCompileModule(mod, normalized_specifier);
-    entry.module = PersistentModule.init(v8_isolate, mod);
+    const v8_module = v8.Module{ .handle = mod.handle };
+    entry.module = PersistentModule.init(v8_isolate, v8_module);
     return entry.module.?.castToModule().handle;
 }
 
@@ -1381,7 +1370,7 @@ const DynamicModuleResolveState = struct {
     resolver: v8.Persistent(v8.PromiseResolver),
 };
 
-fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8) !v8.Promise {
+fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8) !js.Promise {
     const isolate = self.isolate;
     const v8_isolate = v8.Isolate{ .handle = isolate.handle };
     const gop = try self.module_cache.getOrPut(self.arena, specifier);
@@ -1389,7 +1378,8 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         // This is easy, there's already something responsible
         // for loading the module. Maybe it's still loading, maybe
         // it's complete. Whatever, we can just return that promise.
-        return gop.value_ptr.resolver_promise.?.castToPromise();
+        const v8_promise = gop.value_ptr.resolver_promise.?.castToPromise();
+        return .{ .handle = v8_promise.handle };
     }
 
     const v8_context = v8.Context{ .handle = self.handle };
@@ -1432,7 +1422,8 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         // For now, we're done. but this will be continued in
         // `dynamicModuleSourceCallback`, once the source for the
         // moduel is loaded.
-        return promise;
+        const v8_promise = promise;
+        return .{ .handle = v8_promise.handle };
     }
 
     // So we have a module, but no async resolver. This can only
@@ -1464,7 +1455,8 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                 std.debug.assert(status == .kErrored);
                 const error_msg = v8.String.initUtf8(v8_isolate, "Module evaluation failed");
                 _ = resolver.reject(v8_context, error_msg.toValue());
-                return promise;
+                const v8_promise = promise;
+                return .{ .handle = v8_promise.handle };
             };
             std.debug.assert(evaluated.isPromise());
             gop.value_ptr.module_promise = PersistentPromise.init(v8_isolate, .{ .handle = evaluated.handle });
@@ -1479,7 +1471,8 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // But we can skip direclty to `resolveDynamicModule` which is
     // what the above callback will eventually do.
     self.resolveDynamicModule(state, gop.value_ptr.*);
-    return promise;
+    const v8_promise = promise;
+    return .{ .handle = v8_promise.handle };
 }
 
 fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManager.ModuleSource) void {
@@ -1935,7 +1928,7 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
     return error.InvalidArgument;
 }
 
-fn compileScript(isolate: v8.Isolate, ctx: v8.Context, src: []const u8, name: ?[]const u8) !v8.Script {
+fn compileScript(isolate: v8.Isolate, ctx: v8.Context, src: []const u8, name: ?[]const u8) !js.Script {
     // compile
     const script_name = v8.String.initUtf8(isolate, name orelse "anonymous");
     const script_source = v8.String.initUtf8(isolate, src);
@@ -1946,15 +1939,16 @@ fn compileScript(isolate: v8.Isolate, ctx: v8.Context, src: []const u8, name: ?[
     v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
     defer script_comp_source.deinit();
 
-    return v8.ScriptCompiler.compile(
+    const v8_script = v8.ScriptCompiler.compile(
         ctx,
         &script_comp_source,
         .kNoCompileOptions,
         .kNoCacheNoReason,
     ) catch return error.CompilationError;
+    return .{ .handle = v8_script.handle };
 }
 
-fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !v8.Module {
+fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !js.Module {
     // compile
     const script_name = v8.String.initUtf8(isolate, name);
     const script_source = v8.String.initUtf8(isolate, src);
@@ -1976,12 +1970,13 @@ fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !v8.Mod
     v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
     defer script_comp_source.deinit();
 
-    return v8.ScriptCompiler.compileModule(
+    const v8_module = v8.ScriptCompiler.compileModule(
         isolate,
         &script_comp_source,
         .kNoCompileOptions,
         .kNoCacheNoReason,
     ) catch return error.CompilationError;
+    return .{ .handle = v8_module.handle };
 }
 
 fn zigJsonToJs(isolate: v8.Isolate, v8_context: v8.Context, value: std.json.Value) !v8.Value {
