@@ -28,6 +28,8 @@ pub const Context = @import("Context.zig");
 pub const Inspector = @import("Inspector.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Platform = @import("Platform.zig");
+pub const Isolate = @import("Isolate.zig");
+pub const HandleScope = @import("HandleScope.zig");
 
 pub const Value = @import("Value.zig");
 pub const Array = @import("Array.zig");

@@ -85,7 +85,8 @@ pub fn toBool(self: Value) bool {
 }
 
 pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
-    const json_string = v8.String.initUtf8(ctx.isolate, json);
+    const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
+    const json_string = v8.String.initUtf8(v8_isolate, json);
     const value = try v8.Json.parse(ctx.v8_context, json_string);
     return .{ .ctx = ctx, .handle = value.handle };
 }
