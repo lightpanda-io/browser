@@ -119,8 +119,10 @@ pub fn deinit(self: *Env) void {
     self.allocator.free(self.templates);
 }
 
-pub fn newInspector(self: *Env, arena: Allocator, ctx: anytype) !Inspector {
-    return Inspector.init(arena, self.isolate, ctx);
+pub fn newInspector(self: *Env, arena: Allocator, ctx: anytype) !*Inspector {
+    const inspector = try arena.create(Inspector);
+    try Inspector.init(inspector, self.isolate.handle, ctx);
+    return inspector;
 }
 
 pub fn runMicrotasks(self: *const Env) void {
@@ -128,11 +130,11 @@ pub fn runMicrotasks(self: *const Env) void {
 }
 
 pub fn pumpMessageLoop(self: *const Env) bool {
-    return self.platform.inner.pumpMessageLoop(self.isolate, false);
+    return v8.c.v8__Platform__PumpMessageLoop(self.platform.handle, self.isolate.handle, false);
 }
 
 pub fn runIdleTasks(self: *const Env) void {
-    return self.platform.inner.runIdleTasks(self.isolate, 1);
+    v8.c.v8__Platform__RunIdleTasks(self.platform.handle, self.isolate.handle, 1);
 }
 pub fn newExecutionWorld(self: *Env) !ExecutionWorld {
     return .{

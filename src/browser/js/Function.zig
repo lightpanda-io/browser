@@ -37,16 +37,6 @@ pub fn id(self: *const Function) u32 {
     return @as(u32, @bitCast(v8.c.v8__Object__GetIdentityHash(@ptrCast(self.handle))));
 }
 
-pub fn getName(self: *const Function, allocator: Allocator) ![]const u8 {
-    const name = v8.c.v8__Function__GetName(self.handle).?;
-    return self.context.valueToString(name, .{ .allocator = allocator });
-}
-
-pub fn setName(self: *const Function, name: []const u8) void {
-    const v8_name = v8.String.initUtf8(self.context.isolate, name);
-    self.func.castToFunction().setName(v8_name);
-}
-
 pub fn withThis(self: *const Function, value: anytype) !Function {
     const this_obj = if (@TypeOf(value) == js.Object)
         value.js_obj
@@ -181,8 +171,7 @@ fn getThis(self: *const Function) v8.Object {
 }
 
 pub fn src(self: *const Function) ![]const u8 {
-    const value = self.func.castToFunction().toValue();
-    return self.context.valueToString(value, .{});
+    return self.context.valueToString(.{ .handle = @ptrCast(self.handle) }, .{});
 }
 
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
