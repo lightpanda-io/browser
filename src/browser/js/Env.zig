@@ -46,7 +46,7 @@ allocator: Allocator,
 platform: *const Platform,
 
 // the global isolate
-isolate: v8.Isolate,
+isolate: js.Isolate,
 
 // just kept around because we need to free it on deinit
 isolate_params: *v8.CreateParams,
@@ -67,28 +67,30 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
 
     params.external_references = &snapshot.external_references;
 
-    var isolate = v8.Isolate.init(params);
-    errdefer isolate.deinit();
+    var v8_isolate = v8.Isolate.init(params);
+    errdefer v8_isolate.deinit();
 
     // This is the callback that runs whenever a module is dynamically imported.
-    isolate.setHostImportModuleDynamicallyCallback(Context.dynamicModuleCallback);
-    isolate.setPromiseRejectCallback(promiseRejectCallback);
-    isolate.setMicrotasksPolicy(v8.c.kExplicit);
+    v8_isolate.setHostImportModuleDynamicallyCallback(Context.dynamicModuleCallback);
+    v8_isolate.setPromiseRejectCallback(promiseRejectCallback);
+    v8_isolate.setMicrotasksPolicy(v8.c.kExplicit);
 
-    isolate.enter();
-    errdefer isolate.exit();
+    v8_isolate.enter();
+    errdefer v8_isolate.exit();
 
-    isolate.setHostInitializeImportMetaObjectCallback(Context.metaObjectCallback);
+    v8_isolate.setHostInitializeImportMetaObjectCallback(Context.metaObjectCallback);
+
+    const isolate = js.Isolate{ .handle = v8_isolate.handle };
 
     // Allocate templates array dynamically to avoid comptime dependency on JsApis.len
     const templates = try allocator.alloc(v8.FunctionTemplate, JsApis.len);
     errdefer allocator.free(templates);
 
     {
-        var temp_scope: v8.HandleScope = undefined;
-        v8.HandleScope.init(&temp_scope, isolate);
+        var temp_scope: js.HandleScope = undefined;
+        temp_scope.init(isolate);
         defer temp_scope.deinit();
-        const context = v8.Context.init(isolate, null, null);
+        const context = v8.Context.init(v8_isolate, null, null);
 
         context.enter();
         defer context.exit();
@@ -97,7 +99,7 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
             JsApi.Meta.class_id = i;
             const data = context.getDataFromSnapshotOnce(snapshot.data_start + i);
             const function = v8.FunctionTemplate{ .handle = @ptrCast(data) };
-            templates[i] = v8.Persistent(v8.FunctionTemplate).init(isolate, function).castToFunctionTemplate();
+            templates[i] = v8.Persistent(v8.FunctionTemplate).init(v8_isolate, function).castToFunctionTemplate();
         }
     }
 
@@ -149,8 +151,8 @@ pub fn newExecutionWorld(self: *Env) !ExecutionWorld {
 // `lowMemoryNotification` call on the isolate to encourage v8 to free
 // any contexts which have been freed.
 pub fn lowMemoryNotification(self: *Env) void {
-    var handle_scope: v8.HandleScope = undefined;
-    v8.HandleScope.init(&handle_scope, self.isolate);
+    var handle_scope: js.HandleScope = undefined;
+    handle_scope.init(self.isolate);
     defer handle_scope.deinit();
     self.isolate.lowMemoryNotification();
 }
@@ -178,8 +180,9 @@ pub fn dumpMemoryStats(self: *Env) void {
 
 fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
     const msg = v8.PromiseRejectMessage.initFromC(v8_msg);
-    const isolate = msg.getPromise().toObject().getIsolate();
-    const context = Context.fromIsolate(isolate);
+    const v8_isolate = msg.getPromise().toObject().getIsolate();
+    const js_isolate = js.Isolate{ .handle = v8_isolate.handle };
+    const context = Context.fromIsolate(js_isolate);
 
     const value =
         if (msg.getValue()) |v8_value|

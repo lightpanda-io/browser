@@ -39,15 +39,16 @@ const CALL_ARENA_RETAIN = 1024 * 16;
 const Caller = @This();
 context: *Context,
 v8_context: v8.Context,
-isolate: v8.Isolate,
+isolate: js.Isolate,
 call_arena: Allocator,
 
 // info is a v8.PropertyCallbackInfo or a v8.FunctionCallback
 // All we really want from it is the isolate.
 // executor = Isolate -> getCurrentContext -> getEmbedderData()
 pub fn init(info: anytype) Caller {
-    const isolate = info.getIsolate();
-    const v8_context = isolate.getCurrentContext();
+    const v8_isolate = info.getIsolate();
+    const isolate = js.Isolate{ .handle = v8_isolate.handle };
+    const v8_context = v8_isolate.getCurrentContext();
     const context: *Context = @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
 
     context.call_depth += 1;
@@ -133,7 +134,7 @@ pub fn method(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionC
 
 pub fn _method(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) !void {
     const F = @TypeOf(func);
-    var handle_scope: v8.HandleScope = undefined;
+    var handle_scope: js.HandleScope = undefined;
     handle_scope.init(self.isolate);
     defer handle_scope.deinit();
 
@@ -316,6 +317,7 @@ fn assertIsPageArg(comptime T: type, comptime F: type, index: comptime_int) void
 
 fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror, info: anytype, comptime opts: CallOpts) void {
     const isolate = self.isolate;
+    const v8_isolate = v8.Isolate{ .handle = isolate.handle };
 
     if (comptime @import("builtin").mode == .Debug and @hasDecl(@TypeOf(info), "length")) {
         if (log.enabled(.js, .warn)) {
@@ -324,21 +326,21 @@ fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror,
     }
 
     var js_err: ?v8.Value = switch (err) {
-        error.InvalidArgument => createTypeException(isolate, "invalid argument"),
-        error.OutOfMemory => js._createException(isolate, "out of memory"),
-        error.IllegalConstructor => js._createException(isolate, "Illegal Contructor"),
+        error.InvalidArgument => createTypeException(v8_isolate, "invalid argument"),
+        error.OutOfMemory => js._createException(v8_isolate, "out of memory"),
+        error.IllegalConstructor => js._createException(v8_isolate, "Illegal Contructor"),
         else => blk: {
             if (!comptime opts.dom_exception) {
                 break :blk null;
             }
             const DOMException = @import("../webapi/DOMException.zig");
             const ex = DOMException.fromError(err) orelse break :blk null;
-            break :blk self.context.zigValueToJs(ex, .{}) catch js._createException(isolate, "internal error");
+            break :blk self.context.zigValueToJs(ex, .{}) catch js._createException(v8_isolate, "internal error");
         },
     };
 
     if (js_err == null) {
-        js_err = js._createException(isolate, @errorName(err));
+        js_err = js._createException(v8_isolate, @errorName(err));
     }
     const js_exception = isolate.throwException(js_err.?);
     info.getReturnValue().setValueHandle(js_exception.handle);

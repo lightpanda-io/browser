@@ -180,7 +180,8 @@ pub fn src(self: *const Function) ![]const u8 {
 
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
     const ctx = self.ctx;
-    const key = v8.String.initUtf8(ctx.isolate, name);
+    const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
+    const key = v8.String.initUtf8(v8_isolate, name);
     const handle = v8.c.v8__Object__Get(self.handle, ctx.v8_context.handle, key.handle) orelse {
         return error.JsException;
     };
