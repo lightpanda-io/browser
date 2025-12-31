@@ -25,7 +25,7 @@ const Allocator = std.mem.Allocator;
 const Function = @This();
 
 ctx: *js.Context,
-this: ?v8.Object = null,
+this: ?*const v8.c.Object = null,
 handle: *const v8.c.Function,
 
 pub const Result = struct {
@@ -39,9 +39,9 @@ pub fn id(self: *const Function) u32 {
 
 pub fn withThis(self: *const Function, value: anytype) !Function {
     const this_obj = if (@TypeOf(value) == js.Object)
-        value.js_obj
+        value.handle
     else
-        (try self.ctx.zigValueToJs(value, .{})).castTo(v8.Object);
+        (try self.ctx.zigValueToJs(value, .{})).handle;
 
     return .{
         .ctx = self.ctx,
@@ -72,8 +72,8 @@ pub fn newInstance(self: *const Function, result: *Result) !js.Object {
     };
 
     return .{
-        .context = ctx,
-        .js_obj = .{ .handle = handle },
+        .ctx = ctx,
+        .handle = handle,
     };
 }
 
@@ -166,8 +166,12 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     return ctx.jsValueToZig(T, .{ .handle = handle });
 }
 
-fn getThis(self: *const Function) v8.Object {
-    return self.this orelse self.ctx.v8_context.getGlobal();
+fn getThis(self: *const Function) js.Object {
+    const handle = self.this orelse self.ctx.v8_context.getGlobal().handle;
+    return .{
+        .ctx = self.ctx,
+        .handle = handle,
+    };
 }
 
 pub fn src(self: *const Function) ![]const u8 {

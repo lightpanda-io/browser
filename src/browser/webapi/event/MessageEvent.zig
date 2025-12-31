@@ -25,12 +25,12 @@ const Window = @import("../Window.zig");
 const MessageEvent = @This();
 
 _proto: *Event,
-_data: ?js.Object = null,
+_data: ?js.Value = null,
 _origin: []const u8 = "",
 _source: ?*Window = null,
 
 const MessageEventOptions = struct {
-    data: ?js.Object = null,
+    data: ?js.Value = null,
     origin: ?[]const u8 = null,
     source: ?*Window = null,
 };
@@ -66,7 +66,7 @@ pub fn asEvent(self: *MessageEvent) *Event {
     return self._proto;
 }
 
-pub fn getData(self: *const MessageEvent) ?js.Object {
+pub fn getData(self: *const MessageEvent) ?js.Value {
     return self._data;
 }
 

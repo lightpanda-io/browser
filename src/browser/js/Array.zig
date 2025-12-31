@@ -42,3 +42,10 @@ pub fn get(self: Array, index: u32) !js.Value {
         .handle = handle,
     };
 }
+
+pub fn asObject(self: Array) js.Object {
+    return .{
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
+    };
+}

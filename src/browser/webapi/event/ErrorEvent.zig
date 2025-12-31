@@ -30,7 +30,7 @@ _message: []const u8 = "",
 _filename: []const u8 = "",
 _line_number: u32 = 0,
 _column_number: u32 = 0,
-_error: ?js.Object = null,
+_error: ?js.Value = null,
 _arena: Allocator,
 
 pub const ErrorEventOptions = struct {
@@ -38,7 +38,7 @@ pub const ErrorEventOptions = struct {
     filename: ?[]const u8 = null,
     lineno: u32 = 0,
     colno: u32 = 0,
-    @"error": ?js.Object = null,
+    @"error": ?js.Value = null,
 };
 
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
@@ -92,7 +92,7 @@ pub fn getColumnNumber(self: *const ErrorEvent) u32 {
     return self._column_number;
 }
 
-pub fn getError(self: *const ErrorEvent) ?js.Object {
+pub fn getError(self: *const ErrorEvent) ?js.Value {
     return self._error;
 }
 

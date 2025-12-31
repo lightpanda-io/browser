@@ -112,8 +112,8 @@ pub fn toObject(self: Value) js.Object {
     }
 
     return .{
-        .context = self.ctx,
-        .js_obj = .{ .handle = self.handle },
+        .ctx = self.ctx,
+        .handle = self.handle,
     };
 }
 
@@ -126,4 +126,12 @@ pub fn toArray(self: Value) js.Array {
         .ctx = self.ctx,
         .handle = self.handle,
     };
+}
+
+pub fn format(self: Value, writer: *std.Io.Writer) !void {
+    if (comptime IS_DEBUG) {
+        return self.ctx.debugValue(.{ .handle = self.handle }, writer);
+    }
+    const str = self.toString(.{}) catch return error.WriteFailed;
+    return writer.writeAll(str);
 }

@@ -820,7 +820,7 @@ pub fn getAnimations(_: *const Element) []*Animation {
     return &.{};
 }
 
-pub fn animate(_: *Element, _: js.Object, _: js.Object, page: *Page) !*Animation {
+pub fn animate(_: *Element, _: ?js.Object, _: ?js.Object, page: *Page) !*Animation {
     return Animation.init(page);
 }
 
