@@ -33,7 +33,7 @@ pub fn get(self: Array, index: u32) !js.Value {
     const ctx = self.ctx;
 
     const idx = js.Integer.init(ctx.isolate.handle, index);
-    const handle = v8.c.v8__Object__Get(@ptrCast(self.handle), ctx.v8_context.handle, idx.handle) orelse {
+    const handle = v8.c.v8__Object__Get(@ptrCast(self.handle), ctx.handle, idx.handle) orelse {
         return error.JsException;
     };
 

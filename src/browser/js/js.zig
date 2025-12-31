@@ -89,7 +89,8 @@ pub const PromiseResolver = struct {
         const context = self.context;
         const js_value = try context.zigValueToJs(value, .{});
 
-        if (self.resolver.resolve(context.v8_context, js_value) == null) {
+        const v8_context = v8.Context{ .handle = context.handle };
+        if (self.resolver.resolve(v8_context, js_value) == null) {
             return error.FailedToResolvePromise;
         }
         self.context.runMicrotasks();
@@ -104,7 +105,8 @@ pub const PromiseResolver = struct {
         const context = self.context;
         const js_value = try context.zigValueToJs(value);
 
-        if (self.resolver.reject(context.v8_context, js_value) == null) {
+        const v8_context = v8.Context{ .handle = context.handle };
+        if (self.resolver.reject(v8_context, js_value) == null) {
             return error.FailedToRejectPromise;
         }
         self.context.runMicrotasks();
@@ -133,7 +135,8 @@ pub const PersistentPromiseResolver = struct {
         const js_value = try context.zigValueToJs(value, .{});
         defer context.runMicrotasks();
 
-        if (self.resolver.castToPromiseResolver().resolve(context.v8_context, js_value) == null) {
+        const v8_context = v8.Context{ .handle = context.handle };
+        if (self.resolver.castToPromiseResolver().resolve(v8_context, js_value) == null) {
             return error.FailedToResolvePromise;
         }
     }
@@ -147,10 +150,11 @@ pub const PersistentPromiseResolver = struct {
     fn _reject(self: PersistentPromiseResolver, value: anytype) !void {
         const context = self.context;
         const js_value = try context.zigValueToJs(value, .{});
+        const v8_context = v8.Context{ .handle = context.handle };
         defer context.runMicrotasks();
 
         // resolver.reject will return null if the promise isn't pending
-        if (self.resolver.castToPromiseResolver().reject(context.v8_context, js_value) == null) {
+        if (self.resolver.castToPromiseResolver().reject(v8_context, js_value) == null) {
             return error.FailedToRejectPromise;
         }
     }

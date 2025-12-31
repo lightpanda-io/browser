@@ -117,7 +117,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         .page = page,
         .id = context_id,
         .isolate = isolate,
-        .v8_context = v8_context,
+        .handle = v8_context.handle,
         .templates = env.templates,
         .handle_scope = handle_scope,
         .script_manager = &page._script_manager,

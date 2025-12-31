@@ -69,7 +69,7 @@ fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOp
         return _toString(.{ .handle = @ptrCast(sym_handle), .ctx = ctx }, null_terminate, opts);
     }
 
-    const str_handle = v8.c.v8__Value__ToString(self.handle, ctx.v8_context.handle) orelse {
+    const str_handle = v8.c.v8__Value__ToString(self.handle, ctx.handle) orelse {
         return error.JsException;
     };
 
@@ -87,7 +87,8 @@ pub fn toBool(self: Value) bool {
 pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
     const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
     const json_string = v8.String.initUtf8(v8_isolate, json);
-    const value = try v8.Json.parse(ctx.v8_context, json_string);
+    const v8_context = v8.Context{ .handle = ctx.handle };
+    const value = try v8.Json.parse(v8_context, json_string);
     return .{ .ctx = ctx, .handle = value.handle };
 }
 

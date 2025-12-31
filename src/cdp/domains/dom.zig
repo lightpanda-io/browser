@@ -23,6 +23,8 @@ const DOMNode = @import("../../browser/webapi/Node.zig");
 const Selector = @import("../../browser/webapi/selector/Selector.zig");
 
 const dump = @import("../../browser/dump.zig");
+const js = @import("../../browser/js/js.zig");
+const v8 = js.v8;
 
 const Allocator = std.mem.Allocator;
 
@@ -273,10 +275,12 @@ fn resolveNode(cmd: anytype) !void {
 
     var js_context = page.js;
     if (params.executionContextId) |context_id| {
-        if (js_context.v8_context.debugContextId() != context_id) {
+        const v8_context = v8.Context{ .handle = js_context.handle };
+        if (v8_context.debugContextId() != context_id) {
             for (bc.isolated_worlds.items) |*isolated_world| {
                 js_context = &(isolated_world.executor.context orelse return error.ContextNotFound);
-                if (js_context.v8_context.debugContextId() == context_id) {
+                const isolated_v8_context = v8.Context{ .handle = js_context.handle };
+                if (isolated_v8_context.debugContextId() == context_id) {
                     break;
                 }
             } else return error.ContextNotFound;

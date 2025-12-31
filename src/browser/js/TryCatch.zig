@@ -46,7 +46,7 @@ pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
 // the caller needs to deinit the string returned
 pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const ctx = self.ctx;
-    const s_value = v8.c.v8__TryCatch__StackTrace(&self.handle, ctx.v8_context.handle) orelse return null;
+    const s_value = v8.c.v8__TryCatch__StackTrace(&self.handle, ctx.handle) orelse return null;
     const s = v8.Value{ .handle = s_value };
     return try ctx.valueToString(s, .{ .allocator = allocator });
 }
@@ -55,7 +55,7 @@ pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
 pub fn sourceLine(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const ctx = self.ctx;
     const msg = v8.c.v8__TryCatch__Message(&self.handle) orelse return null;
-    const sl = v8.c.v8__Message__GetSourceLine(msg, ctx.v8_context.handle) orelse return null;
+    const sl = v8.c.v8__Message__GetSourceLine(msg, ctx.handle) orelse return null;
     const sl_string = v8.String{ .handle = sl };
     return try ctx.jsStringToZig(sl_string, .{ .allocator = allocator });
 }
@@ -63,7 +63,7 @@ pub fn sourceLine(self: TryCatch, allocator: Allocator) !?[]const u8 {
 pub fn sourceLineNumber(self: TryCatch) ?u32 {
     const ctx = self.ctx;
     const msg = v8.c.v8__TryCatch__Message(&self.handle) orelse return null;
-    const line = v8.c.v8__Message__GetLineNumber(msg, ctx.v8_context.handle);
+    const line = v8.c.v8__Message__GetLineNumber(msg, ctx.handle);
     if (line < 0) {
         return null;
     }
