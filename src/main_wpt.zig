@@ -135,7 +135,7 @@ fn run(
         return err;
     };
 
-    return value.toString(arena);
+    return value.toString(.{ .allocator = arena });
 }
 
 const Writer = struct {
