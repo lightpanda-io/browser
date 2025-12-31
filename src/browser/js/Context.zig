@@ -80,9 +80,8 @@ identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 // the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
 // a reliable way to know if an object has already been persisted,
 // we now simply persist every time persist() is called.
-js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
-
 global_values: std.ArrayList(js.Global(js.Value)) = .empty,
+global_objects: std.ArrayList(js.Global(js.Object)) = .empty,
 global_functions: std.ArrayList(js.Global(js.Function)) = .empty,
 
 // Various web APIs depend on having a persistent promise resolver. They
@@ -157,11 +156,11 @@ pub fn deinit(self: *Context) void {
         }
     }
 
-    for (self.js_object_list.items) |*p| {
-        p.deinit();
+    for (self.global_values.items) |*global| {
+        global.deinit();
     }
 
-    for (self.global_values.items) |*global| {
+    for (self.global_objects.items) |*global| {
         global.deinit();
     }
 
@@ -352,11 +351,11 @@ fn postCompileModule(self: *Context, mod: v8.Module, url: [:0]const u8) !void {
 }
 
 // == Creators ==
-pub fn createArray(self: *Context, len: u32) js.Object {
-    const arr = v8.Array.init(self.isolate, len);
+pub fn createArray(self: *Context, len: u32) js.Array {
+    const handle = v8.c.v8__Array__New(self.isolate.handle, @intCast(len)).?;
     return .{
-        .context = self,
-        .js_obj = arr.castTo(v8.Object),
+        .ctx = self,
+        .handle = handle,
     };
 }
 
@@ -376,8 +375,8 @@ pub fn createValue(self: *Context, value: v8.Value) js.Value {
 
 pub fn createObject(self: *Context, js_value: v8.Value) js.Object {
     return .{
-        .js_obj = js_value.castTo(v8.Object),
-        .context = self,
+        .ctx = self,
+        .handle = @ptrCast(js_value.handle),
     };
 }
 
@@ -482,7 +481,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
 
             if (T == js.Object) {
                 // we're returning a v8.Object
-                return value.js_obj.toValue();
+                return .{ .handle = @ptrCast(value.handle) };
             }
 
             if (T == js.Value) {
@@ -658,15 +657,15 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
             // or whether no parameter was passed.
             if (comptime o.child == js.Value) {
                 return js.Value{
-                    .context = self,
-                    .js_val = js_value,
+                    .ctx = self,
+                    .handle = js_value.handle,
                 };
             }
 
             if (comptime o.child == js.Object) {
                 return js.Object{
-                    .context = self,
-                    .js_obj = js_value.castTo(v8.Object),
+                    .ctx = self,
+                    .handle = @ptrCast(js_value.handle),
                 };
             }
 
@@ -829,9 +828,14 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
         },
         // Caller wants an opaque js.Object. Probably a parameter
         // that it needs to pass back into a callback.
-        js.Object => js.Object{
-            .js_obj = js_value.castTo(v8.Object),
-            .context = self,
+        js.Object => {
+            if (!js_value.isObject()) {
+                return null;
+            }
+            return js.Object{
+                .ctx = self,
+                .handle = @ptrCast(js_value.handle),
+            };
         },
         else => {
             if (!js_value.isObject()) {

@@ -27,21 +27,21 @@ _pad: bool = false,
 
 pub const init: Console = .{};
 
-pub fn log(_: *const Console, values: []js.Object, page: *Page) void {
+pub fn log(_: *const Console, values: []js.Value, page: *Page) void {
     logger.info(.js, "console.log", .{ValueWriter{ .page = page, .values = values }});
 }
 
-pub fn warn(_: *const Console, values: []js.Object, page: *Page) void {
+pub fn warn(_: *const Console, values: []js.Value, page: *Page) void {
     logger.warn(.js, "console.warn", .{ValueWriter{ .page = page, .values = values }});
 }
 
-pub fn @"error"(_: *const Console, values: []js.Object, page: *Page) void {
+pub fn @"error"(_: *const Console, values: []js.Value, page: *Page) void {
     logger.warn(.js, "console.error", .{ValueWriter{ .page = page, .values = values, .include_stack = true }});
 }
 
 const ValueWriter = struct {
     page: *Page,
-    values: []js.Object,
+    values: []js.Value,
     include_stack: bool = false,
 
     pub fn format(self: ValueWriter, writer: *std.io.Writer) !void {
@@ -57,7 +57,7 @@ const ValueWriter = struct {
         var buf: [32]u8 = undefined;
         for (self.values, 0..) |value, i| {
             const name = try std.fmt.bufPrint(&buf, "param.{d}", .{i});
-            try writer.write(name, try value.toString());
+            try writer.write(name, try value.toString(.{}));
         }
     }
 

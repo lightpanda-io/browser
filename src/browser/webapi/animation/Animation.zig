@@ -66,16 +66,24 @@ pub fn getEffect(self: *const Animation) ?js.Object {
     return self._effect;
 }
 
-pub fn setEffect(self: *Animation, effect: js.Object) !void {
-    self._effect = try effect.persist();
+pub fn setEffect(self: *Animation, effect: ?js.Object) !void {
+    if (effect) |e| {
+        self._effect = try e.persist();
+    } else {
+        self._effect = null;
+    }
 }
 
 pub fn getTimeline(self: *const Animation) ?js.Object {
     return self._timeline;
 }
 
-pub fn setTimeline(self: *Animation, timeline: js.Object) !void {
-    self._timeline = try timeline.persist();
+pub fn setTimeline(self: *Animation, timeline: ?js.Object) !void {
+    if (timeline) |t| {
+        self._timeline = try t.persist();
+    } else {
+        self._timeline = null;
+    }
 }
 
 pub const JsApi = struct {
@@ -97,7 +105,7 @@ pub const JsApi = struct {
     pub const finished = bridge.accessor(Animation.getFinished, null, .{});
     pub const ready = bridge.accessor(Animation.getReady, null, .{});
     pub const effect = bridge.accessor(Animation.getEffect, Animation.setEffect, .{});
-    pub const timeline = bridge.accessor(Animation.getTimeline, Animation.getTimeline, .{});
+    pub const timeline = bridge.accessor(Animation.getTimeline, Animation.setTimeline, .{});
 };
 
 const testing = @import("../../../testing.zig");
