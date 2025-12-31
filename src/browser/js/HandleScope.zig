@@ -21,12 +21,12 @@ const v8 = js.v8;
 
 const HandleScope = @This();
 
-inner: v8.c.HandleScope,
+handle: v8.c.HandleScope,
 
 pub fn init(self: *HandleScope, isolate: js.Isolate) void {
-    v8.c.v8__HandleScope__CONSTRUCT(&self.inner, isolate.handle);
+    v8.c.v8__HandleScope__CONSTRUCT(&self.handle, isolate.handle);
 }
 
 pub fn deinit(self: *HandleScope) void {
-    v8.c.v8__HandleScope__DESTRUCT(&self.inner);
+    v8.c.v8__HandleScope__DESTRUCT(&self.handle);
 }

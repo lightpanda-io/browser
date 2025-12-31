@@ -59,7 +59,7 @@ pub fn newInstance(self: *const Function, result: *Result) !js.Object {
 
     // This creates a new instance using this Function as a constructor.
     // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
-    const handle = v8.c.v8__Function__NewInstance(self.handle, ctx.v8_context.handle, 0, null) orelse {
+    const handle = v8.c.v8__Function__NewInstance(self.handle, ctx.handle, 0, null) orelse {
         if (try_catch.hasCaught()) {
             const allocator = ctx.call_arena;
             result.stack = try_catch.stack(allocator) catch null;
@@ -155,7 +155,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     };
 
     const c_args = @as(?[*]const ?*v8.c.Value, @ptrCast(js_args.ptr));
-    const handle = v8.c.v8__Function__Call(self.handle, ctx.v8_context.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
+    const handle = v8.c.v8__Function__Call(self.handle, ctx.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
         // std.debug.print("CB ERR: {s}\n", .{self.src() catch "???"});
         return error.JSExecCallback;
     };
@@ -167,7 +167,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
 }
 
 fn getThis(self: *const Function) js.Object {
-    const handle = self.this orelse self.ctx.v8_context.getGlobal().handle;
+    const handle = if (self.this) |t| t else v8.c.v8__Context__Global(self.ctx.handle).?;
     return .{
         .ctx = self.ctx,
         .handle = handle,
@@ -182,7 +182,7 @@ pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
     const ctx = self.ctx;
     const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
     const key = v8.String.initUtf8(v8_isolate, name);
-    const handle = v8.c.v8__Object__Get(self.handle, ctx.v8_context.handle, key.handle) orelse {
+    const handle = v8.c.v8__Object__Get(self.handle, ctx.handle, key.handle) orelse {
         return error.JsException;
     };
 

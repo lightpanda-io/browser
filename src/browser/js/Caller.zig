@@ -38,7 +38,6 @@ const CALL_ARENA_RETAIN = 1024 * 16;
 // here does feel like it makes it cleaner.
 const Caller = @This();
 context: *Context,
-v8_context: v8.Context,
 isolate: js.Isolate,
 call_arena: Allocator,
 
@@ -55,7 +54,6 @@ pub fn init(info: anytype) Caller {
     return .{
         .context = context,
         .isolate = isolate,
-        .v8_context = v8_context,
         .call_arena = context.call_arena,
     };
 }
@@ -120,7 +118,8 @@ pub fn _constructor(self: *Caller, func: anytype, info: v8.FunctionCallbackInfo)
     // from new object. (this happens when we're upgrading an CustomElement)
     if (this.handle != new_this.handle) {
         const new_prototype = new_this.getPrototype();
-        _ = this.setPrototype(self.context.v8_context, new_prototype.castTo(v8.Object));
+        const v8_context = v8.Context{ .handle = self.context.handle };
+        _ = this.setPrototype(v8_context, new_prototype.castTo(v8.Object));
     }
 
     info.getReturnValue().set(this);
