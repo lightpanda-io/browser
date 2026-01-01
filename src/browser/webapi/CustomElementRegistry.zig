@@ -30,7 +30,7 @@ const CustomElementDefinition = @import("CustomElementDefinition.zig");
 const CustomElementRegistry = @This();
 
 _definitions: std.StringHashMapUnmanaged(*CustomElementDefinition) = .{},
-_when_defined: std.StringHashMapUnmanaged(js.PersistentPromiseResolver) = .{},
+_when_defined: std.StringHashMapUnmanaged(js.PromiseResolver) = .{},
 
 const DefineOptions = struct {
     extends: ?[]const u8 = null,
@@ -131,7 +131,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
     errdefer _ = self._when_defined.remove(name);
     const owned_name = try page.dupeString(name);
 
-    const resolver = try page.js.createPromiseResolver(.page);
+    const resolver = try page.js.createPromiseResolver().persist();
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = resolver;
 

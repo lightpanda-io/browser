@@ -265,8 +265,8 @@ pub fn navigateInner(
     //
     // These will only settle on same-origin navigation (mostly intended for SPAs).
     // It is fine (and expected) for these to not settle on cross-origin requests :)
-    const committed = try page.js.createPromiseResolver(.page);
-    const finished = try page.js.createPromiseResolver(.page);
+    const committed = try page.js.createPromiseResolver().persist();
+    const finished = try page.js.createPromiseResolver().persist();
 
     const new_url = try URL.resolve(arena, page.url, url, .{});
     const is_same_document = URL.eqlDocument(new_url, page.url);

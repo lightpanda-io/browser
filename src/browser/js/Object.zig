@@ -54,7 +54,7 @@ pub fn setIndex(self: Object, index: u32, value: anytype, opts: SetOpts) !void {
 pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) error{ FailedToSet, OutOfMemory }!void {
     const ctx = self.ctx;
 
-    const js_key = v8.c.v8__String__NewFromUtf8(ctx.isolate.handle, key.ptr, v8.c.kNormal, @intCast(key.len)).?;
+    const js_key = ctx.isolate.newStringHandle(key);
     const js_value = try ctx.zigValueToJs(value);
 
     var out: v8.c.MaybeBool = undefined;
@@ -68,7 +68,7 @@ pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) error{ 
 
 pub fn get(self: Object, key: []const u8) !js.Value {
     const ctx = self.ctx;
-    const js_key = v8.c.v8__String__NewFromUtf8(ctx.isolate.handle, key.ptr, v8.c.kNormal, @intCast(key.len)).?;
+    const js_key = ctx.isolate.newStringHandle(key);
     const js_val_handle = v8.c.v8__Object__Get(self.handle, ctx.handle, js_key) orelse return error.JsException;
     const js_val = v8.Value{ .handle = js_val_handle };
     return ctx.createValue(js_val);
@@ -119,7 +119,7 @@ pub fn getFunction(self: Object, name: []const u8) !?js.Function {
     }
     const ctx = self.ctx;
 
-    const js_name = v8.c.v8__String__NewFromUtf8(ctx.isolate.handle, name.ptr, v8.c.kNormal, @intCast(name.len)).?;
+    const js_name = ctx.isolate.newStringHandle(name);
     const js_val_handle = v8.c.v8__Object__Get(self.handle, ctx.handle, js_name) orelse return error.JsException;
     const js_value = v8.Value{ .handle = js_val_handle };
 

@@ -46,7 +46,7 @@ pub fn getPending(_: *const Animation) bool {
 
 pub fn getFinished(self: *Animation, page: *Page) !js.Promise {
     if (self._finished_resolver == null) {
-        const resolver = page.js.createPromiseResolver(.none);
+        const resolver = try page.js.createPromiseResolver().persist();
         resolver.resolve("Animation.getFinished", self);
         self._finished_resolver = resolver;
     }
@@ -56,7 +56,7 @@ pub fn getFinished(self: *Animation, page: *Page) !js.Promise {
 pub fn getReady(self: *Animation, page: *Page) !js.Promise {
     // never resolved, because we're always "finished"
     if (self._ready_resolver == null) {
-        const resolver = page.js.createPromiseResolver(.none);
+        const resolver = try page.js.createPromiseResolver().persist();
         self._ready_resolver = resolver;
     }
     return self._ready_resolver.?.promise();
