@@ -54,6 +54,10 @@ pub fn isSymbol(self: Value) bool {
     return v8.c.v8__Value__IsSymbol(self.handle);
 }
 
+pub fn isFunction(self: Value) bool {
+    return v8.c.v8__Value__IsFunction(self.handle);
+}
+
 pub fn toString(self: Value, opts: js.String.ToZigOpts) ![]u8 {
     return self._toString(false, opts);
 }

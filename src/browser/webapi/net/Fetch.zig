@@ -36,7 +36,7 @@ _page: *Page,
 _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
-_resolver: js.PersistentPromiseResolver,
+_resolver: js.PromiseResolver,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -49,7 +49,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         ._page = page,
         ._buf = .empty,
         ._url = try page.arena.dupe(u8, request._url),
-        ._resolver = try page.js.createPromiseResolver(.page),
+        ._resolver = try page.js.createPromiseResolver().persist(),
         ._response = try Response.init(null, .{ .status = 0 }, page),
     };
 

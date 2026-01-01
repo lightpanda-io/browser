@@ -42,7 +42,6 @@ pub const PromiseResolver = @import("PromiseResolver.zig");
 pub const Module = @import("Module.zig");
 pub const BigInt = @import("BigInt.zig");
 pub const Name = @import("Name.zig");
-pub const Script = @import("Script.zig");
 
 pub const Integer = @import("Integer.zig");
 pub const Global = @import("global.zig").Global;

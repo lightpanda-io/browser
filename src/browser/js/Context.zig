@@ -34,7 +34,10 @@ const Allocator = std.mem.Allocator;
 const PersistentObject = v8.Persistent(v8.Object);
 const PersistentModule = v8.Persistent(v8.Module);
 const PersistentPromise = v8.Persistent(v8.Promise);
+const PersistentPromiseResolver = v8.Persistent(v8.PromiseResolver);
 const TaggedAnyOpaque = js.TaggedAnyOpaque;
+
+const IS_DEBUG = builtin.mode == .Debug;
 
 // Loosely maps to a Browser Page.
 const Context = @This();
@@ -70,6 +73,8 @@ call_depth: usize = 0,
 // The key is the @intFromPtr of the Zig value
 identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 
+persisted_promise_resolvers: std.ArrayList(PersistentPromiseResolver) = .empty,
+
 // Some web APIs have to manage opaque values. Ideally, they use an
 // js.Object, but the js.Object has no lifetime guarantee beyond the
 // current call. They can call .persist() on their js.Object to get
@@ -81,11 +86,7 @@ identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
 global_values: std.ArrayList(js.Global(js.Value)) = .empty,
 global_objects: std.ArrayList(js.Global(js.Object)) = .empty,
 global_functions: std.ArrayList(js.Global(js.Function)) = .empty,
-
-// Various web APIs depend on having a persistent promise resolver. They
-// require for this PromiseResolver to be valid for a lifetime longer than
-// the function that resolves/rejects them.
-persisted_promise_resolvers: std.ArrayListUnmanaged(v8.Persistent(v8.PromiseResolver)) = .empty,
+global_promise_resolvers: std.ArrayList(js.Global(js.PromiseResolver)) = .empty,
 
 // Some Zig types have code to execute to cleanup
 destructor_callbacks: std.ArrayListUnmanaged(DestructorCallback) = .empty,
@@ -171,6 +172,10 @@ pub fn deinit(self: *Context) void {
         global.deinit();
     }
 
+    for (self.global_promise_resolvers.items) |*global| {
+        global.deinit();
+    }
+
     for (self.persisted_promise_resolvers.items) |*p| {
         p.deinit();
     }
@@ -205,16 +210,7 @@ pub fn eval(self: *Context, src: []const u8, name: ?[]const u8) !void {
 }
 
 pub fn exec(self: *Context, src: []const u8, name: ?[]const u8) !js.Value {
-    const v8_context = v8.Context{ .handle = self.handle };
-    const v8_isolate = v8.Isolate{ .handle = self.isolate.handle };
-
-    const scr = try compileScript(v8_isolate, v8_context, src, name);
-
-    const value = scr.run(v8_context.handle) catch {
-        return error.ExecutionError;
-    };
-
-    return self.createValue(value);
+    return self.compileAndRun(src, name);
 }
 
 pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
@@ -315,16 +311,11 @@ pub fn stringToFunction(self: *Context, str: []const u8) !js.Function {
     }
     const full = try std.fmt.allocPrintSentinel(self.call_arena, "(function(e) {{ {s}{s} }})", .{ normalized, extra }, 0);
 
-    const v8_context = v8.Context{ .handle = self.handle };
-    const v8_isolate = v8.Isolate{ .handle = self.isolate.handle };
-    const script = try compileScript(v8_isolate, v8_context, full, null);
-    const js_value = script.run(v8_context.handle) catch {
-        return error.ExecutionError;
-    };
+    const js_value = try self.compileAndRun(full, null);
     if (!js_value.isFunction()) {
         return error.StringFunctionError;
     }
-    return self.createFunction(js_value);
+    return self.createFunction(.{ .handle = js_value.handle });
 }
 
 // After we compile a module, whether it's a top-level one, or a nested one,
@@ -390,11 +381,20 @@ pub fn createObject(self: *Context, js_value: v8.Value) js.Object {
 
 pub fn createFunction(self: *Context, js_value: v8.Value) !js.Function {
     // caller should have made sure this was a function
-    std.debug.assert(js_value.isFunction());
+    if (comptime IS_DEBUG) {
+        std.debug.assert(js_value.isFunction());
+    }
 
     return .{
         .ctx = self,
         .handle = @ptrCast(js_value.handle),
+    };
+}
+
+pub fn newString(self: *Context, str: []const u8) js.String {
+    return .{
+        .ctx = self,
+        .handle = self.isolate.newStringHandle(str),
     };
 }
 
@@ -1203,38 +1203,8 @@ pub fn runMicrotasks(self: *Context) void {
     self.isolate.performMicrotasksCheckpoint();
 }
 
-// creates a PersistentPromiseResolver, taking in a lifetime parameter.
-// If the lifetime is page, the page will clean up the PersistentPromiseResolver.
-// If the lifetime is self, you will be expected to deinitalize the PersistentPromiseResolver.
-const PromiseResolverLifetime = enum {
-    none,
-    self, // it's a persisted promise, but it'll be managed by the caller
-    page, // it's a persisted promise, tied to the page lifetime
-};
-fn PromiseResolverType(comptime lifetime: PromiseResolverLifetime) type {
-    if (lifetime == .none) {
-        return js.PromiseResolver;
-    }
-    return error{OutOfMemory}!js.PersistentPromiseResolver;
-}
-pub fn createPromiseResolver(self: *Context, comptime lifetime: PromiseResolverLifetime) PromiseResolverType(lifetime) {
-    if (comptime lifetime == .none) {
-        return js.PromiseResolver.init(self);
-    }
-
-    const v8_context = v8.Context{ .handle = self.handle };
-    const resolver = v8.PromiseResolver.init(v8_context);
-    const v8_isolate = v8.Isolate{ .handle = self.isolate.handle };
-    const persisted = v8.Persistent(v8.PromiseResolver).init(v8_isolate, resolver);
-
-    if (comptime lifetime == .page) {
-        try self.persisted_promise_resolvers.append(self.arena, persisted);
-    }
-
-    return .{
-        .context = self,
-        .resolver = persisted,
-    };
+pub fn createPromiseResolver(self: *Context) js.PromiseResolver {
+    return js.PromiseResolver.init(self);
 }
 
 // == Callbacks ==
@@ -1928,24 +1898,30 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
     return error.InvalidArgument;
 }
 
-fn compileScript(isolate: v8.Isolate, ctx: v8.Context, src: []const u8, name: ?[]const u8) !js.Script {
-    // compile
-    const script_name = v8.String.initUtf8(isolate, name orelse "anonymous");
-    const script_source = v8.String.initUtf8(isolate, src);
+fn compileAndRun(self: *Context, src: []const u8, name: ?[]const u8) !js.Value {
+    const script_name = self.isolate.newStringHandle(name orelse "anonymous");
+    const script_source = self.isolate.newStringHandle(src);
 
-    const origin = v8.ScriptOrigin.initDefault(script_name.toValue());
+    // Create ScriptOrigin
+    var origin: v8.c.ScriptOrigin = undefined;
+    v8.c.v8__ScriptOrigin__CONSTRUCT(&origin, @ptrCast(script_name));
 
-    var script_comp_source: v8.ScriptCompilerSource = undefined;
-    v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
-    defer script_comp_source.deinit();
+    // Create ScriptCompilerSource
+    var script_comp_source: v8.c.ScriptCompilerSource = undefined;
+    v8.c.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, null, &script_comp_source);
+    defer v8.c.v8__ScriptCompiler__Source__DESTRUCT(&script_comp_source);
 
-    const v8_script = v8.ScriptCompiler.compile(
-        ctx,
+    // Compile the script
+    const v8_script = v8.c.v8__ScriptCompiler__Compile(
+        self.handle,
         &script_comp_source,
-        .kNoCompileOptions,
-        .kNoCacheNoReason,
-    ) catch return error.CompilationError;
-    return .{ .handle = v8_script.handle };
+        v8.c.kNoCompileOptions,
+        v8.c.kNoCacheNoReason,
+    ) orelse return error.CompilationError;
+
+    // Run the script
+    const result = v8.c.v8__Script__Run(v8_script, self.handle) orelse return error.ExecutionError;
+    return .{ .ctx = self, .handle = result };
 }
 
 fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !js.Module {
