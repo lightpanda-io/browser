@@ -134,20 +134,20 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
 
     const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
 
-    const js_args: []const v8.Value = switch (@typeInfo(@TypeOf(aargs))) {
+    const js_args: []const *const v8.c.Value = switch (@typeInfo(@TypeOf(aargs))) {
         .@"struct" => |s| blk: {
             const fields = s.fields;
-            var js_args: [fields.len]v8.Value = undefined;
+            var js_args: [fields.len]*const v8.c.Value = undefined;
             inline for (fields, 0..) |f, i| {
-                js_args[i] = try ctx.zigValueToJs(@field(aargs, f.name), .{});
+                js_args[i] = (try ctx.zigValueToJs(@field(aargs, f.name), .{})).handle;
             }
-            const cargs: [fields.len]v8.Value = js_args;
+            const cargs: [fields.len]*const v8.c.Value = js_args;
             break :blk &cargs;
         },
         .pointer => blk: {
-            var values = try ctx.call_arena.alloc(v8.Value, args.len);
+            var values = try ctx.call_arena.alloc(*const v8.c.Value, args.len);
             for (args, 0..) |a, i| {
-                values[i] = try ctx.zigValueToJs(a, .{});
+                values[i] = (try ctx.zigValueToJs(a, .{})).handle;
             }
             break :blk values;
         },
@@ -163,7 +163,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     if (@typeInfo(T) == .void) {
         return {};
     }
-    return ctx.jsValueToZig(T, .{ .handle = handle });
+    return ctx.jsValueToZig(T, .{ .ctx = ctx, .handle = handle });
 }
 
 fn getThis(self: *const Function) js.Object {

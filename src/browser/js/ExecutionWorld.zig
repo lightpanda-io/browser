@@ -76,24 +76,33 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     const isolate = env.isolate;
     const arena = self.context_arena.allocator();
 
-    var v8_context: v8.Context = blk: {
-        const v8_isolate = v8.Isolate{ .handle = isolate.handle };
+    const context_handle: *const v8.c.Context = blk: {
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
         defer temp_scope.deinit();
 
-        // Creates a global template that inherits from Window.
-        const global_template = @import("Snapshot.zig").createGlobalTemplate(isolate, env.templates);
-        // Add the named property handler
-        global_template.setNamedProperty(v8.NamedPropertyHandlerConfiguration{
+        // Getting this into the snapshot is tricky (anything involving the
+        // global is tricky). Easier to do here.
+        const func_tmpl_handle = isolate.createFunctionTemplateHandle();
+        const global_template = v8.c.v8__FunctionTemplate__InstanceTemplate(func_tmpl_handle).?;
+        var configuration: v8.c.NamedPropertyHandlerConfiguration = .{
             .getter = unknownPropertyCallback,
-            .flags = v8.PropertyHandlerFlags.NonMasking | v8.PropertyHandlerFlags.OnlyInterceptStrings,
-        }, null);
+            .setter = null,
+            .query = null,
+            .deleter = null,
+            .enumerator = null,
+            .definer = null,
+            .descriptor = null,
+            .data = null,
+            .flags = v8.c.kOnlyInterceptStrings | v8.c.kNonMasking,
+        };
+        v8.c.v8__ObjectTemplate__SetNamedHandler(global_template, &configuration);
 
-
-        const context_local = v8.Context.init(isolate, global_template, null);
-        const v8_context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
-        break :blk v8_context;
+        const context_local = isolate.createContextHandle(null, null);
+        // Make the context persistent so it survives beyond this handle scope
+        var persistent_handle: *v8.c.Data = undefined;
+        v8.c.v8__Persistent__New(isolate.handle, @ptrCast(context_local), @ptrCast(&persistent_handle));
+        break :blk @ptrCast(persistent_handle);
     };
 
     // For a Page we only create one HandleScope, it is stored in the main World (enter==true). A page can have multple contexts, 1 for each World.
@@ -103,10 +112,10 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     if (enter) {
         handle_scope = @as(js.HandleScope, undefined);
         handle_scope.?.init(isolate);
-        v8_context.enter();
+        v8.c.v8__Context__Enter(context_handle);
     }
     errdefer if (enter) {
-        v8_context.exit();
+        v8.c.v8__Context__Exit(context_handle);
         handle_scope.?.deinit();
     };
 
@@ -117,7 +126,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         .page = page,
         .id = context_id,
         .isolate = isolate,
-        .handle = v8_context.handle,
+        .handle = context_handle,
         .templates = env.templates,
         .handle_scope = handle_scope,
         .script_manager = &page._script_manager,
@@ -128,9 +137,8 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     var context = &self.context.?;
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
-    const v8_isolate = v8.Isolate{ .handle = isolate.handle };
-    const data = v8_isolate.initBigIntU64(@intCast(@intFromPtr(context)));
-    v8_context.setEmbedderData(1, data);
+    const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
+    v8.c.v8__Context__SetEmbedderData(context_handle, 1, @ptrCast(data.handle));
 
     try context.setupGlobal();
     return context;
@@ -157,10 +165,12 @@ pub fn resumeExecution(self: *const ExecutionWorld) void {
 }
 
 pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
-    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-    const context = Context.fromIsolate(info.getIsolate());
+    const isolate_handle = v8.c.v8__PropertyCallbackInfo__GetIsolate(raw_info).?;
+    const context = Context.fromIsolate(.{ .handle = isolate_handle });
 
-    const maybe_property: ?[]u8 = context.valueToString(.{ .handle = c_name.? }, .{}) catch null;
+    const property: ?[]u8 = context.valueToString(.{ .ctx = context, .handle = c_name.? }, .{}) catch {
+        return v8.Intercepted.No;
+    };
 
     const ignored = std.StaticStringMap(void).initComptime(.{
         .{ "process", {} },
@@ -184,27 +194,25 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C
         .{ "CLOSURE_FLAGS", {} },
     });
 
-    if (maybe_property) |prop| {
-        if (!ignored.has(prop)) {
-            const page = context.page;
-            const document = page.document;
+    if (!ignored.has(property)) {
+        const page = context.page;
+        const document = page.document;
 
-            if (document.getElementById(prop, page)) |el| {
-                const js_value = context.zigValueToJs(el, .{}) catch {
-                    return v8.Intercepted.No;
-                };
+        if (document.getElementById(property, page)) |el| {
+            const js_value = context.zigValueToJs(el, .{}) catch {
+                return v8.Intercepted.No;
+            };
 
-                info.getReturnValue().set(js_value);
-                return v8.Intercepted.Yes;
-            }
+            info.getReturnValue().set(js_value);
+            return v8.Intercepted.Yes;
+        }
 
-            if (comptime IS_DEBUG) {
-                log.debug(.unknown_prop, "unknown global property", .{
-                    .info = "but the property can exist in pure JS",
-                    .stack = context.stackTrace() catch "???",
-                    .property = prop,
-                });
-            }
+        if (comptime IS_DEBUG) {
+            log.debug(.unknown_prop, "unknown global property", .{
+                .info = "but the property can exist in pure JS",
+                .stack = context.stackTrace() catch "???",
+                .property = property,
+            });
         }
     }
 

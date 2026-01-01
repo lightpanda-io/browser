@@ -36,47 +36,32 @@ pub fn getId(self: Object) u32 {
     return @bitCast(v8.c.v8__Object__GetIdentityHash(self.handle));
 }
 
-pub const SetOpts = packed struct(u32) {
-    READ_ONLY: bool = false,
-    DONT_ENUM: bool = false,
-    DONT_DELETE: bool = false,
-    _: u29 = 0,
-};
-pub fn setIndex(self: Object, index: u32, value: anytype, opts: SetOpts) !void {
-    @setEvalBranchQuota(10000);
-    const key = switch (index) {
-        inline 0...20 => |i| std.fmt.comptimePrint("{d}", .{i}),
-        else => try std.fmt.allocPrint(self.context.arena, "{d}", .{index}),
+pub fn get(self: Object, key: []const u8) !js.Value {
+    const ctx = self.ctx;
+    const js_key = ctx.isolate.createStringHandle(key);
+    const js_val_handle = v8.c.v8__Object__Get(self.handle, ctx.handle, js_key) orelse return error.JsException;
+    return .{
+        .ctx = ctx,
+        .handle = js_val_handle,
     };
-    return self.set(key, value, opts);
 }
 
-pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) error{ FailedToSet, OutOfMemory }!void {
+pub fn defineOwnProperty(self: Object, name: []const u8, value: js.Value, attr: v8.c.PropertyAttribute) ?bool {
     const ctx = self.ctx;
 
-    const js_key = v8.c.v8__String__NewFromUtf8(ctx.isolate.handle, key.ptr, v8.c.kNormal, @intCast(key.len)).?;
-    const js_value = try ctx.zigValueToJs(value, .{});
+    const name_handle = ctx.isolate.createStringHandle(name);
 
     var out: v8.c.MaybeBool = undefined;
-    v8.c.v8__Object__DefineOwnProperty(self.handle, ctx.handle, @ptrCast(js_key), js_value.handle, @bitCast(opts), &out);
-
-    const res = if (out.has_value) out.value else false;
-    if (!res) {
-        return error.FailedToSet;
+    v8.c.v8__Object__DefineOwnProperty(self.handle, ctx.handle, @ptrCast(name_handle), value.handle, attr, &out);
+    if (out.has_value) {
+        return out.value;
+    } else {
+        return null;
     }
 }
 
-pub fn get(self: Object, key: []const u8) !js.Value {
-    const ctx = self.ctx;
-    const js_key = ctx.isolate.newStringHandle(key);
-    const js_val_handle = v8.c.v8__Object__Get(self.handle, ctx.handle, js_key) orelse return error.JsException;
-    const js_val = v8.Value{ .handle = js_val_handle };
-    return ctx.createValue(js_val);
-}
-
 pub fn toString(self: Object) ![]const u8 {
-    const js_value = v8.Value{ .handle = @ptrCast(self.handle) };
-    return self.ctx.valueToString(js_value, .{});
+    return self.ctx.valueToString(self.toValue(), .{});
 }
 
 pub fn toValue(self: Object) js.Value {
@@ -88,8 +73,7 @@ pub fn toValue(self: Object) js.Value {
 
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
     if (comptime IS_DEBUG) {
-        const js_value = v8.Value{ .handle = @ptrCast(self.handle) };
-        return self.ctx.debugValue(js_value, writer);
+        return self.ctx.debugValue(self.toValue(), writer);
     }
     const str = self.toString() catch return error.WriteFailed;
     return writer.writeAll(str);
@@ -119,9 +103,9 @@ pub fn getFunction(self: Object, name: []const u8) !?js.Function {
     }
     const ctx = self.ctx;
 
-    const js_name = ctx.isolate.newStringHandle(name);
+    const js_name = ctx.isolate.createStringHandle(name);
     const js_val_handle = v8.c.v8__Object__Get(self.handle, ctx.handle, js_name) orelse return error.JsException;
-    const js_value = v8.Value{ .handle = js_val_handle };
+    const js_value = js.Value{ .ctx = ctx, .handle = js_val_handle };
 
     if (!js_value.isFunction()) {
         return null;
@@ -152,7 +136,7 @@ pub fn nameIterator(self: Object) NameIterator {
 }
 
 pub fn toZig(self: Object, comptime T: type) !T {
-    const js_value = v8.Value{ .handle = @ptrCast(self.handle) };
+    const js_value = js.Value{ .ctx = self.ctx, .handle = @ptrCast(self.handle) };
     return self.ctx.jsValueToZig(T, js_value);
 }
 
@@ -170,7 +154,7 @@ pub const NameIterator = struct {
         self.idx += 1;
 
         const js_val_handle = v8.c.v8__Object__GetIndex(@ptrCast(self.handle), self.ctx.handle, idx) orelse return error.JsException;
-        const js_val = v8.Value{ .handle = js_val_handle };
+        const js_val = js.Value{ .ctx = self.ctx, .handle = js_val_handle };
         return try self.ctx.valueToString(js_val, .{});
     }
 };

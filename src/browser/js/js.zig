@@ -101,7 +101,7 @@ pub const PersistentPromiseResolver = struct {
         defer context.runMicrotasks();
 
         const v8_context = v8.Context{ .handle = context.handle };
-        if (self.resolver.castToPromiseResolver().resolve(v8_context, js_value) == null) {
+        if (self.resolver.castToPromiseResolver().resolve(v8_context, js_value.handle) == null) {
             return error.FailedToResolvePromise;
         }
     }
@@ -119,17 +119,16 @@ pub const PersistentPromiseResolver = struct {
         defer context.runMicrotasks();
 
         // resolver.reject will return null if the promise isn't pending
-        if (self.resolver.castToPromiseResolver().reject(v8_context, js_value) == null) {
+        if (self.resolver.castToPromiseResolver().reject(v8_context, js_value.handle) == null) {
             return error.FailedToRejectPromise;
         }
     }
 };
 
 pub const Exception = struct {
-    inner: v8.Value,
-    context: *const Context,
+    ctx: *const Context,
+    handle: *const v8.c.Value,
 
-    // the caller needs to deinit the string returned
     pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
         return self.context.valueToString(self.inner, .{ .allocator = allocator });
     }
@@ -216,30 +215,30 @@ pub fn isComplexAttributeType(ti: std.builtin.Type) bool {
 // These are simple types that we can convert to JS with only an isolate. This
 // is separated from the Caller's zigValueToJs to make it available when we
 // don't have a caller (i.e., when setting static attributes on types)
-pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) v8.Value else ?v8.Value {
+pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) *const v8.c.Value else ?*const v8.c.Value {
     switch (@typeInfo(@TypeOf(value))) {
-        .void => return v8.initUndefined(isolate).toValue(),
-        .null => if (comptime null_as_undefined) return v8.initUndefined(isolate).toValue() else return v8.initNull(isolate).toValue(),
-        .bool => return v8.getValue(if (value) v8.initTrue(isolate) else v8.initFalse(isolate)),
+        .void => return @ptrCast(v8.initUndefined(isolate).handle),
+        .null => if (comptime null_as_undefined) return @ptrCast(v8.initUndefined(isolate).handle) else return @ptrCast(v8.initNull(isolate).handle),
+        .bool => return if (value) v8.initTrue(isolate).handle else v8.initFalse(isolate).handle,
         .int => |n| switch (n.signedness) {
             .signed => {
                 if (value > 0 and value <= 4_294_967_295) {
-                    return v8.Integer.initU32(isolate, @intCast(value)).toValue();
+                    return @ptrCast(v8.Integer.initU32(isolate, @intCast(value)).handle);
                 }
                 if (value >= -2_147_483_648 and value <= 2_147_483_647) {
-                    return v8.Integer.initI32(isolate, @intCast(value)).toValue();
+                    return @ptrCast(v8.Integer.initI32(isolate, @intCast(value)).handle);
                 }
                 if (comptime n.bits <= 64) {
-                    return v8.getValue(v8.BigInt.initI64(isolate, @intCast(value)));
+                    return @ptrCast(v8.BigInt.initI64(isolate, @intCast(value)).handle);
                 }
                 @compileError(@typeName(value) ++ " is not supported");
             },
             .unsigned => {
                 if (value <= 4_294_967_295) {
-                    return v8.Integer.initU32(isolate, @intCast(value)).toValue();
+                    return @ptrCast(v8.Integer.initU32(isolate, @intCast(value)).handle);
                 }
                 if (comptime n.bits <= 64) {
-                    return v8.getValue(v8.BigInt.initU64(isolate, @intCast(value)));
+                    return @ptrCast(v8.BigInt.initU64(isolate, @intCast(value)).handle);
                 }
                 @compileError(@typeName(value) ++ " is not supported");
             },
@@ -247,29 +246,29 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
         .comptime_int => {
             if (value >= 0) {
                 if (value <= 4_294_967_295) {
-                    return v8.Integer.initU32(isolate, @intCast(value)).toValue();
+                    return @ptrCast(v8.Integer.initU32(isolate, @intCast(value)).handle);
                 }
-                return v8.BigInt.initU64(isolate, @intCast(value)).toValue();
+                return @ptrCast(v8.BigInt.initU64(isolate, @intCast(value)).handle);
             }
             if (value >= -2_147_483_648) {
-                return v8.Integer.initI32(isolate, @intCast(value)).toValue();
+                return @ptrCast(v8.Integer.initI32(isolate, @intCast(value)).handle);
             }
-            return v8.BigInt.initI64(isolate, @intCast(value)).toValue();
+            return @ptrCast(v8.BigInt.initI64(isolate, @intCast(value)).handle);
         },
-        .comptime_float => return v8.Number.init(isolate, value).toValue(),
+        .comptime_float => return @ptrCast(v8.Number.init(isolate, value).handle),
         .float => |f| switch (f.bits) {
-            64 => return v8.Number.init(isolate, value).toValue(),
-            32 => return v8.Number.init(isolate, @floatCast(value)).toValue(),
+            64 => return @ptrCast(v8.Number.init(isolate, value).handle),
+            32 => return @ptrCast(v8.Number.init(isolate, @floatCast(value)).handle),
             else => @compileError(@typeName(value) ++ " is not supported"),
         },
         .pointer => |ptr| {
             if (ptr.size == .slice and ptr.child == u8) {
-                return v8.String.initUtf8(isolate, value).toValue();
+                return @ptrCast(v8.String.initUtf8(isolate, value).handle);
             }
             if (ptr.size == .one) {
                 const one_info = @typeInfo(ptr.child);
                 if (one_info == .array and one_info.array.child == u8) {
-                    return v8.String.initUtf8(isolate, value).toValue();
+                    return @ptrCast(v8.String.initUtf8(isolate, value).handle);
                 }
             }
         },
@@ -279,9 +278,9 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                 return simpleZigValueToJs(isolate, v, fail, null_as_undefined);
             }
             if (comptime null_as_undefined) {
-                return v8.initUndefined(isolate).toValue();
+                return @ptrCast(v8.initUndefined(isolate).handle);
             }
-            return v8.initNull(isolate).toValue();
+            return @ptrCast(v8.initNull(isolate).handle);
         },
         .@"struct" => {
             switch (@TypeOf(value)) {
@@ -294,7 +293,7 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                     @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
                     array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
 
-                    return .{ .handle = array_buffer.handle };
+                    return @ptrCast(array_buffer.handle);
                 },
                 // zig fmt: off
                 TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
@@ -325,23 +324,23 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                     switch (@typeInfo(value_type)) {
                         .int => |n| switch (n.signedness) {
                             .unsigned => switch (n.bits) {
-                                8 => return v8.Uint8Array.init(array_buffer, 0, len).toValue(),
-                                16 => return v8.Uint16Array.init(array_buffer, 0, len).toValue(),
-                                32 => return v8.Uint32Array.init(array_buffer, 0, len).toValue(),
-                                64 => return v8.BigUint64Array.init(array_buffer, 0, len).toValue(),
+                                8 => return @ptrCast(v8.Uint8Array.init(array_buffer, 0, len).handle),
+                                16 => return @ptrCast(v8.Uint16Array.init(array_buffer, 0, len).handle),
+                                32 => return @ptrCast(v8.Uint32Array.init(array_buffer, 0, len).handle),
+                                64 => return @ptrCast(v8.BigUint64Array.init(array_buffer, 0, len).handle),
                                 else => {},
                             },
                             .signed => switch (n.bits) {
-                                8 => return v8.Int8Array.init(array_buffer, 0, len).toValue(),
-                                16 => return v8.Int16Array.init(array_buffer, 0, len).toValue(),
-                                32 => return v8.Int32Array.init(array_buffer, 0, len).toValue(),
-                                64 => return v8.BigInt64Array.init(array_buffer, 0, len).toValue(),
+                                8 => return @ptrCast(v8.Int8Array.init(array_buffer, 0, len).handle),
+                                16 => return @ptrCast(v8.Int16Array.init(array_buffer, 0, len).handle),
+                                32 => return @ptrCast(v8.Int32Array.init(array_buffer, 0, len).handle),
+                                64 => return @ptrCast(v8.BigInt64Array.init(array_buffer, 0, len).handle),
                                 else => {},
                             },
                         },
                         .float => |f| switch (f.bits) {
-                            32 => return v8.Float32Array.init(array_buffer, 0, len).toValue(),
-                            64 => return v8.Float64Array.init(array_buffer, 0, len).toValue(),
+                            32 => return @ptrCast(v8.Float32Array.init(array_buffer, 0, len).handle),
+                            64 => return @ptrCast(v8.Float64Array.init(array_buffer, 0, len).handle),
                             else => {},
                         },
                         else => {},
@@ -366,10 +365,6 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
         @compileError("Unsupported Zig type " ++ @typeName(@TypeOf(value)));
     }
     return null;
-}
-
-pub fn _createException(isolate: v8.Isolate, msg: []const u8) v8.Value {
-    return v8.Exception.initError(v8.String.initUtf8(isolate, msg));
 }
 
 pub fn classNameForStruct(comptime Struct: type) []const u8 {
