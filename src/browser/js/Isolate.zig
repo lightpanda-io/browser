@@ -23,8 +23,18 @@ const Isolate = @This();
 
 handle: *v8.c.Isolate,
 
+pub fn init(params: *v8.c.CreateParams) Isolate {
+    return .{
+        .handle = v8.c.v8__Isolate__New(params).?,
+    };
+}
+
 pub fn deinit(self: Isolate) void {
     v8.c.v8__Isolate__Dispose(self.handle);
+}
+
+pub fn enter(self: Isolate) void {
+    v8.c.v8__Isolate__Enter(self.handle);
 }
 
 pub fn exit(self: Isolate) void {
@@ -54,16 +64,50 @@ pub fn getHeapStatistics(self: Isolate) v8.c.HeapStatistics {
     return res;
 }
 
-pub fn throwException(self: Isolate, value: anytype) v8.Value {
-    const handle = switch (@TypeOf(value)) {
-        v8.Value => value.handle,
-        else => @compileError("Unsupported type for throwException"),
-    };
-    return .{
-        .handle = v8.c.v8__Isolate__ThrowException(self.handle, handle).?,
-    };
+pub fn throwException(self: Isolate, value: *const v8.c.Value) *const v8.c.Value {
+    return v8.c.v8__Isolate__ThrowException(self.handle, value).?;
 }
 
-pub fn newStringHandle(self: Isolate, str: []const u8) *const v8.c.String {
+pub fn createStringHandle(self: Isolate, str: []const u8) *const v8.c.String {
     return v8.c.v8__String__NewFromUtf8(self.handle, str.ptr, v8.c.kNormal, @as(c_int, @intCast(str.len))).?;
+}
+
+pub fn createError(self: Isolate, msg: []const u8) *const v8.c.Value {
+    const message = self.createStringHandle(msg);
+    return v8.c.v8__Exception__Error(message).?;
+}
+
+pub fn createTypeError(self: Isolate, msg: []const u8) *const v8.c.Value {
+    const message = self.createStringHandle(msg);
+    return v8.c.v8__Exception__TypeError(message).?;
+}
+
+pub fn initArray(self: Isolate, len: u32) v8.Array {
+    const handle = v8.c.v8__Array__New(self.handle, @intCast(len)).?;
+    return .{ .handle = handle };
+}
+
+pub fn initObject(self: Isolate) v8.Object {
+    const handle = v8.c.v8__Object__New(self.handle).?;
+    return .{ .handle = handle };
+}
+
+pub fn initString(self: Isolate, str: []const u8) v8.String {
+    return .{ .handle = self.createStringHandle(str) };
+}
+
+pub fn initNull(self: Isolate) *const v8.c.Value {
+    return v8.c.v8__Null(self.handle).?;
+}
+
+pub fn initBigIntU64(self: Isolate, val: u64) js.BigInt {
+    return js.BigInt.initU64(self.handle, val);
+}
+
+pub fn createContextHandle(self: Isolate, global_tmpl: ?*const v8.c.ObjectTemplate, global_obj: ?*const v8.c.Value) *const v8.c.Context {
+    return v8.c.v8__Context__New(self.handle, global_tmpl, global_obj).?;
+}
+
+pub fn createFunctionTemplateHandle(self: Isolate) *const v8.c.FunctionTemplate {
+    return v8.c.v8__FunctionTemplate__New__DEFAULT(self.handle).?;
 }

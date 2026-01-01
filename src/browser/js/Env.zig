@@ -49,15 +49,18 @@ platform: *const Platform,
 isolate: js.Isolate,
 
 // just kept around because we need to free it on deinit
-isolate_params: *v8.CreateParams,
+isolate_params: *v8.c.CreateParams,
 
 context_id: usize,
 
+// Global handles that need to be freed on deinit
+globals: []v8.c.Global,
+
 // Dynamic slice to avoid circular dependency on JsApis.len at comptime
-templates: []v8.FunctionTemplate,
+templates: []*const v8.c.FunctionTemplate,
 
 pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot) !Env {
-    var params = try allocator.create(v8.CreateParams);
+    var params = try allocator.create(v8.c.CreateParams);
     errdefer allocator.destroy(params);
     v8.c.v8__Isolate__CreateParams__CONSTRUCT(params);
     params.snapshot_blob = @ptrCast(&snapshot.startup_data);
@@ -67,39 +70,42 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
 
     params.external_references = &snapshot.external_references;
 
-    var v8_isolate = v8.Isolate.init(params);
-    errdefer v8_isolate.deinit();
+    var isolate = js.Isolate.init(params);
+    errdefer isolate.deinit();
 
-    // This is the callback that runs whenever a module is dynamically imported.
-    v8_isolate.setHostImportModuleDynamicallyCallback(Context.dynamicModuleCallback);
-    v8_isolate.setPromiseRejectCallback(promiseRejectCallback);
-    v8_isolate.setMicrotasksPolicy(v8.c.kExplicit);
+    v8.c.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate.handle, Context.dynamicModuleCallback);
+    v8.c.v8__Isolate__SetPromiseRejectCallback(isolate.handle, promiseRejectCallback);
+    v8.c.v8__Isolate__SetMicrotasksPolicy(isolate.handle, v8.c.kExplicit);
 
-    v8_isolate.enter();
-    errdefer v8_isolate.exit();
+    isolate.enter();
+    errdefer isolate.exit();
 
-    v8_isolate.setHostInitializeImportMetaObjectCallback(Context.metaObjectCallback);
+    v8.c.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate.handle, Context.metaObjectCallback);
 
-    const isolate = js.Isolate{ .handle = v8_isolate.handle };
+    // Allocate arrays dynamically to avoid comptime dependency on JsApis.len
+    const globals = try allocator.alloc(v8.c.Global, JsApis.len);
+    errdefer allocator.free(globals);
 
-    // Allocate templates array dynamically to avoid comptime dependency on JsApis.len
-    const templates = try allocator.alloc(v8.FunctionTemplate, JsApis.len);
+    const templates = try allocator.alloc(*const v8.c.FunctionTemplate, JsApis.len);
     errdefer allocator.free(templates);
 
     {
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
         defer temp_scope.deinit();
-        const context = v8.Context.init(v8_isolate, null, null);
+        const context_handle = isolate.createContextHandle(null, null);
 
-        context.enter();
-        defer context.exit();
+        v8.c.v8__Context__Enter(context_handle);
+        defer v8.c.v8__Context__Exit(context_handle);
 
         inline for (JsApis, 0..) |JsApi, i| {
             JsApi.Meta.class_id = i;
-            const data = context.getDataFromSnapshotOnce(snapshot.data_start + i);
-            const function = v8.FunctionTemplate{ .handle = @ptrCast(data) };
-            templates[i] = v8.Persistent(v8.FunctionTemplate).init(v8_isolate, function).castToFunctionTemplate();
+            const data = v8.c.v8__Context__GetDataFromSnapshotOnce(context_handle, snapshot.data_start + i);
+            const function_handle: *const v8.c.FunctionTemplate = @ptrCast(data);
+            // Make function template global/persistent
+            v8.c.v8__Global__New(isolate.handle, @ptrCast(function_handle), &globals[i]);
+            // Extract the local handle from the global for easy access
+            templates[i] = @ptrCast(@alignCast(@as(*const anyopaque, @ptrFromInt(globals[i].data_ptr))));
         }
     }
 
@@ -108,17 +114,24 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
         .isolate = isolate,
         .platform = platform,
         .allocator = allocator,
+        .globals = globals,
         .templates = templates,
         .isolate_params = params,
     };
 }
 
 pub fn deinit(self: *Env) void {
+    // Free global handles before destroying the isolate
+    for (self.globals) |*global| {
+        v8.c.v8__Global__Reset(global);
+    }
+    self.allocator.free(self.globals);
+    self.allocator.free(self.templates);
+
     self.isolate.exit();
     self.isolate.deinit();
     v8.destroyArrayBufferAllocator(self.isolate_params.array_buffer_allocator.?);
     self.allocator.destroy(self.isolate_params);
-    self.allocator.free(self.templates);
 }
 
 pub fn newInspector(self: *Env, arena: Allocator, ctx: anytype) !*Inspector {
@@ -180,13 +193,13 @@ pub fn dumpMemoryStats(self: *Env) void {
 
 fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
     const msg = v8.PromiseRejectMessage.initFromC(v8_msg);
-    const v8_isolate = msg.getPromise().toObject().getIsolate();
-    const js_isolate = js.Isolate{ .handle = v8_isolate.handle };
+    const isolate_handle = v8.c.v8__Object__GetIsolate(@ptrCast(msg.getPromise().handle)).?;
+    const js_isolate = js.Isolate{ .handle = isolate_handle };
     const context = Context.fromIsolate(js_isolate);
 
     const value =
         if (msg.getValue()) |v8_value|
-            context.valueToString(v8_value, .{}) catch |err| @errorName(err)
+            context.valueToString(js.Value{ .ctx = context, .handle = v8_value.handle }, .{}) catch |err| @errorName(err)
         else
             "no value";
 
