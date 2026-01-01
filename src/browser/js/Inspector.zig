@@ -195,9 +195,8 @@ pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []con
         return error.ObjectIdIsNotANode;
     }
     const Node = @import("../webapi/Node.zig");
-    // Wrap the C handle in a v8.Object for typeTaggedAnyOpaque
-    const js_obj = v8.Object{ .handle = js_val };
-    return Context.typeTaggedAnyOpaque(*Node, js_obj) catch {
+    // Cast to *const v8.c.Object for typeTaggedAnyOpaque
+    return Context.typeTaggedAnyOpaque(*Node, @ptrCast(js_val)) catch {
         return error.ObjectIdIsNotANode;
     };
 }

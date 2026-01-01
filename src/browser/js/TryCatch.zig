@@ -39,7 +39,7 @@ pub fn hasCaught(self: TryCatch) bool {
 // the caller needs to deinit the string returned
 pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const msg_value = v8.c.v8__TryCatch__Exception(&self.handle) orelse return null;
-    const msg = v8.Value{ .handle = msg_value };
+    const msg = js.Value{ .ctx = self.ctx, .handle = msg_value };
     return try self.ctx.valueToString(msg, .{ .allocator = allocator });
 }
 
@@ -47,7 +47,7 @@ pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
 pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const ctx = self.ctx;
     const s_value = v8.c.v8__TryCatch__StackTrace(&self.handle, ctx.handle) orelse return null;
-    const s = v8.Value{ .handle = s_value };
+    const s = js.Value{ .ctx = ctx, .handle = s_value };
     return try ctx.valueToString(s, .{ .allocator = allocator });
 }
 
