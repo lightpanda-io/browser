@@ -22,10 +22,10 @@ const log = @import("../../log.zig");
 
 const PromiseResolver = @This();
 
-ctx: *const js.Context,
+ctx: *js.Context,
 handle: *const v8.c.PromiseResolver,
 
-pub fn init(ctx: *const js.Context) PromiseResolver {
+pub fn init(ctx: *js.Context) PromiseResolver {
     return .{
         .ctx = ctx,
         .handle = v8.c.v8__Promise__Resolver__New(ctx.handle).?,
@@ -72,4 +72,16 @@ fn _reject(self: PromiseResolver, value: anytype) !void {
         return error.FailedToRejectPromise;
     }
     ctx.runMicrotasks();
+}
+
+pub fn persist(self: PromiseResolver) !PromiseResolver {
+    var ctx = self.ctx;
+
+    const global = js.Global(PromiseResolver).init(ctx.isolate.handle, self.handle);
+    try ctx.global_promise_resolvers.append(ctx.arena, global);
+
+    return .{
+        .ctx = ctx,
+        .handle = global.local(),
+    };
 }

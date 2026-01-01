@@ -42,7 +42,7 @@ _page: *Page,
 _stream: *ReadableStream,
 _arena: std.mem.Allocator,
 _queue: std.ArrayList(Chunk),
-_pending_reads: std.ArrayList(js.PersistentPromiseResolver),
+_pending_reads: std.ArrayList(js.PromiseResolver),
 _high_water_mark: u32,
 
 pub fn init(stream: *ReadableStream, high_water_mark: u32, page: *Page) !*ReadableStreamDefaultController {
@@ -57,7 +57,7 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, page: *Page) !*Readab
 }
 
 pub fn addPendingRead(self: *ReadableStreamDefaultController, page: *Page) !js.Promise {
-    const resolver = try page.js.createPromiseResolver(.page);
+    const resolver = try page.js.createPromiseResolver().persist();
     try self._pending_reads.append(self._arena, resolver);
     return resolver.promise();
 }

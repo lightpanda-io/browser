@@ -63,3 +63,7 @@ pub fn throwException(self: Isolate, value: anytype) v8.Value {
         .handle = v8.c.v8__Isolate__ThrowException(self.handle, handle).?,
     };
 }
+
+pub fn newStringHandle(self: Isolate, str: []const u8) *const v8.c.String {
+    return v8.c.v8__String__NewFromUtf8(self.handle, str.ptr, v8.c.kNormal, @as(c_int, @intCast(str.len))).?;
+}

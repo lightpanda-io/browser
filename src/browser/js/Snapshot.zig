@@ -526,8 +526,10 @@ fn protoIndexLookup(comptime JsApi: type) ?bridge.JsApiLookup.BackingInt {
 fn illegalConstructorCallback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
     const isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(raw_info);
     log.warn(.js, "Illegal constructor call", .{});
+
     const message = v8.c.v8__String__NewFromUtf8(isolate, "Illegal Constructor", v8.c.kNormal, 19);
     const js_exception = v8.c.v8__Exception__TypeError(message);
+
     _ = v8.c.v8__Isolate__ThrowException(isolate, js_exception);
     var return_value: v8.c.ReturnValue = undefined;
     v8.c.v8__FunctionCallbackInfo__GetReturnValue(raw_info, &return_value);
