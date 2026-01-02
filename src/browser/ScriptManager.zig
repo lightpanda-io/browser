@@ -75,7 +75,7 @@ script_pool: std.heap.MemoryPool(Script),
 // The type is confusing (too confusing? move to a union). Starts of as `null`
 // then transitions to either an error (from errorCalback) or the completed
 // buffer from doneCallback
-imported_modules: std.StringHashMapUnmanaged(?error{Failed}!std.ArrayList(u8)),
+imported_modules: std.StringHashMapUnmanaged(ImportedModule),
 
 // Mapping between module specifier and resolution.
 // see https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/script/type/importmap
@@ -114,17 +114,11 @@ pub fn deinit(self: *ScriptManager) void {
 }
 
 pub fn reset(self: *ScriptManager) void {
-    {
-        var it = self.imported_modules.valueIterator();
-        while (it.next()) |value_ptr| {
-            // might have not been loaded yet (null)
-            const result = value_ptr.* orelse continue;
-            // might have loaded an error, in which case there's nothing to free
-            var buf = result catch continue;
-            buf.deinit(self.allocator);
-        }
-        self.imported_modules.clearRetainingCapacity();
+    var it = self.imported_modules.valueIterator();
+    while (it.next()) |value_ptr| {
+        self.buffer_pool.release(value_ptr.buffer);
     }
+    self.imported_modules.clearRetainingCapacity();
 
     // Our allocator is the page arena, it's been reset. We cannot use
     // clearAndRetainCapacity, since that space is no longer ours
@@ -328,6 +322,7 @@ pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, base: [:0]const 
 pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {
     const gop = try self.imported_modules.getOrPut(self.allocator, url);
     if (gop.found_existing) {
+        gop.value_ptr.waiters += 1;
         return;
     }
     errdefer _ = self.imported_modules.remove(url);
@@ -346,7 +341,9 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .mode = .import,
     };
 
-    gop.value_ptr.* = null;
+    gop.value_ptr.* = ImportedModule{
+        .manager = self,
+    };
 
     var headers = try self.client.newHeaders();
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
@@ -393,20 +390,32 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
     defer self.is_evaluating = was_evaluating;
 
     var client = self.client;
-    while (entry.value_ptr.* == null) {
-        // rely on http's timeout settings to avoid an endless/long loop.
-        _ = try client.tick(200);
+    while (true) {
+        switch (entry.value_ptr.state) {
+            .loading => {
+                _ = try client.tick(200);
+                continue;
+            },
+            .done => {
+                var shared = false;
+                const buffer = entry.value_ptr.buffer;
+                const waiters = entry.value_ptr.waiters;
+
+                if (waiters == 0) {
+                    self.imported_modules.removeByPtr(entry.key_ptr);
+                } else {
+                    shared = true;
+                    entry.value_ptr.waiters = waiters - 1;
+                }
+                return .{
+                    .buffer = buffer,
+                    .shared = shared,
+                    .buffer_pool = &self.buffer_pool,
+                };
+            },
+            .err => return error.Failed,
+        }
     }
-
-    defer self.imported_modules.removeByPtr(entry.key_ptr);
-
-    // it's possible we stored an error in the map, if so, we'll return it now
-    const buf = try (entry.value_ptr.*.?);
-
-    return .{
-        .buffer = buf,
-        .buffer_pool = &self.buffer_pool,
-    };
 }
 
 pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
@@ -496,6 +505,7 @@ fn evaluate(self: *ScriptManager) void {
                     ia.callback(ia.data, error.FailedToLoad);
                 } else {
                     ia.callback(ia.data, .{
+                        .shared = false,
                         .buffer = script.source.remote,
                         .buffer_pool = &self.buffer_pool,
                     });
@@ -691,7 +701,8 @@ pub const Script = struct {
         } else if (self.mode == .import) {
             manager.async_scripts.remove(&self.node);
             const entry = manager.imported_modules.getPtr(self.url).?;
-            entry.* = self.source.remote;
+            entry.state = .done;
+            entry.buffer = self.source.remote;
             self.deinit(false);
         }
         manager.evaluate();
@@ -724,7 +735,7 @@ pub const Script = struct {
 
         if (self.mode == .import) {
             const entry = self.manager.imported_modules.getPtr(self.url).?;
-            entry.* = error.Failed;
+            entry.state = .err;
         }
         self.deinit(true);
         manager.evaluate();
@@ -938,16 +949,32 @@ const ImportAsync = struct {
 };
 
 pub const ModuleSource = struct {
+    shared: bool,
     buffer_pool: *BufferPool,
-    buffer: std.ArrayListUnmanaged(u8),
+    buffer: std.ArrayList(u8),
 
     pub fn deinit(self: *ModuleSource) void {
-        self.buffer_pool.release(self.buffer);
+        if (self.shared == false) {
+            self.buffer_pool.release(self.buffer);
+        }
     }
 
     pub fn src(self: *const ModuleSource) []const u8 {
         return self.buffer.items;
     }
+};
+
+const ImportedModule = struct {
+    manager: *ScriptManager,
+    state: State = .loading,
+    buffer: std.ArrayList(u8) = .{},
+    waiters: u16 = 1,
+
+    const State = enum {
+        err,
+        done,
+        loading,
+    };
 };
 
 // Parses data:[<media-type>][;base64],<data>
