@@ -27,7 +27,7 @@ const Allocator = std.mem.Allocator;
 
 const Value = @This();
 
-ctx: *const js.Context,
+ctx: *js.Context,
 handle: *const v8.c.Value,
 
 pub fn isObject(self: Value) bool {
@@ -150,6 +150,10 @@ pub fn isBigInt64Array(self: Value) bool {
     return v8.c.v8__Value__IsBigInt64Array(self.handle);
 }
 
+pub fn isPromise(self: Value) bool {
+    return v8.c.v8__Value__IsPromise(self.handle);
+}
+
 pub fn toBool(self: Value) bool {
     return v8.c.v8__Value__BooleanValue(self.handle, self.ctx.isolate.handle);
 }
@@ -190,6 +194,16 @@ pub fn toU32(self: Value) !u32 {
     return maybe.value;
 }
 
+pub fn toPromise(self: Value) js.Promise {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isPromise());
+    }
+    return .{
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
+    };
+}
+
 pub fn toString(self: Value, opts: js.String.ToZigOpts) ![]u8 {
     return self._toString(false, opts);
 }
@@ -216,14 +230,6 @@ fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOp
     return js.String.toZig(str, opts);
 }
 
-pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
-    const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
-    const json_string = v8.String.initUtf8(v8_isolate, json);
-    const v8_context = v8.Context{ .handle = ctx.handle };
-    const value = try v8.Json.parse(v8_context, json_string);
-    return .{ .ctx = ctx, .handle = value.handle };
-}
-
 pub fn persist(self: Value) !Value {
     var ctx: *js.Context = @constCast(self.ctx);
 
@@ -243,7 +249,7 @@ pub fn toObject(self: Value) js.Object {
 
     return .{
         .ctx = @constCast(self.ctx),
-        .handle = self.handle,
+        .handle = @ptrCast(self.handle),
     };
 }
 
@@ -254,11 +260,15 @@ pub fn toArray(self: Value) js.Array {
 
     return .{
         .ctx = @constCast(self.ctx),
-        .handle = self.handle,
+        .handle = @ptrCast(self.handle),
     };
 }
 
-pub fn castTo(self: Value, comptime T: type) T {
+pub fn toBigInt(self: Value) js.BigInt {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isBigInt());
+    }
+
     return .{
         .handle = @ptrCast(self.handle),
     };

@@ -21,29 +21,40 @@ const v8 = js.v8;
 
 const Promise = @This();
 
+ctx: *js.Context,
 handle: *const v8.c.Promise,
 
 pub fn toObject(self: Promise) js.Object {
     return .{
-        .ctx = undefined, // Will be set by caller if needed
+        .ctx = self.ctx,
         .handle = @ptrCast(self.handle),
     };
 }
 
 pub fn toValue(self: Promise) js.Value {
     return .{
-        .ctx = undefined, // Will be set by caller if needed
+        .ctx = self.ctx,
         .handle = @ptrCast(self.handle),
     };
 }
 
-pub fn thenAndCatch(self: Promise, ctx_handle: *const v8.c.Context, on_fulfilled: js.Function, on_rejected: js.Function) !Promise {
-    const v8_context = v8.Context{ .handle = ctx_handle };
-    const v8_on_fulfilled = v8.Function{ .handle = on_fulfilled.handle };
-    const v8_on_rejected = v8.Function{ .handle = on_rejected.handle };
-
-    if (v8.c.v8__Promise__Then2(self.handle, v8_context.handle, v8_on_fulfilled.handle, v8_on_rejected.handle)) |handle| {
-        return Promise{ .handle = handle };
+pub fn thenAndCatch(self: Promise, on_fulfilled: js.Function, on_rejected: js.Function) !Promise {
+    if (v8.c.v8__Promise__Then2(self.handle, self.ctx.handle, on_fulfilled.handle, on_rejected.handle)) |handle| {
+        return .{
+            .ctx = self.ctx,
+            .handle = handle,
+        };
     }
     return error.PromiseChainFailed;
+}
+pub fn persist(self: Promise) !Promise {
+    var ctx = self.ctx;
+
+    const global = js.Global(Promise).init(ctx.isolate.handle, self.handle);
+    try ctx.global_promises.append(ctx.arena, global);
+
+    return .{
+        .ctx = ctx,
+        .handle = global.local(),
+    };
 }

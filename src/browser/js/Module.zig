@@ -21,6 +21,9 @@ const v8 = js.v8;
 
 const Module = @This();
 
+ctx: *js.Context,
+handle: *const v8.c.Module,
+
 pub const Status = enum(u32) {
     kUninstantiated = v8.c.kUninstantiated,
     kInstantiating = v8.c.kInstantiating,
@@ -30,49 +33,54 @@ pub const Status = enum(u32) {
     kErrored = v8.c.kErrored,
 };
 
-handle: *const v8.c.Module,
-
 pub fn getStatus(self: Module) Status {
     return @enumFromInt(v8.c.v8__Module__GetStatus(self.handle));
 }
 
-pub fn getException(self: Module) v8.Value {
+pub fn getException(self: Module) js.Value {
     return .{
+        .ctx = self.ctx,
         .handle = v8.c.v8__Module__GetException(self.handle).?,
     };
 }
 
-pub fn getModuleRequests(self: Module) v8.FixedArray {
+pub fn getModuleRequests(self: Module) Requests {
     return .{
+        .ctx = self.ctx.handle,
         .handle = v8.c.v8__Module__GetModuleRequests(self.handle).?,
     };
 }
 
-pub fn instantiate(self: Module, ctx_handle: *const v8.c.Context, cb: v8.c.ResolveModuleCallback) !bool {
+pub fn instantiate(self: Module, cb: v8.c.ResolveModuleCallback) !bool {
     var out: v8.c.MaybeBool = undefined;
-    v8.c.v8__Module__InstantiateModule(self.handle, ctx_handle, cb, &out);
+    v8.c.v8__Module__InstantiateModule(self.handle, self.ctx.handle, cb, &out);
     if (out.has_value) {
         return out.value;
     }
     return error.JsException;
 }
 
-pub fn evaluate(self: Module, ctx_handle: *const v8.c.Context) !v8.Value {
-    const res = v8.c.v8__Module__Evaluate(self.handle, ctx_handle) orelse return error.JsException;
+pub fn evaluate(self: Module) !js.Value {
+    const ctx = self.ctx;
+    const res = v8.c.v8__Module__Evaluate(self.handle, ctx.handle) orelse return error.JsException;
 
     if (self.getStatus() == .kErrored) {
         return error.JsException;
     }
 
-    return .{ .handle = res };
+    return .{
+        .ctx = ctx,
+        .handle = res,
+    };
 }
 
 pub fn getIdentityHash(self: Module) u32 {
     return @bitCast(v8.c.v8__Module__GetIdentityHash(self.handle));
 }
 
-pub fn getModuleNamespace(self: Module) v8.Value {
+pub fn getModuleNamespace(self: Module) js.Value {
     return .{
+        .ctx = self.ctx,
         .handle = v8.c.v8__Module__GetModuleNamespace(self.handle).?,
     };
 }
@@ -80,3 +88,36 @@ pub fn getModuleNamespace(self: Module) v8.Value {
 pub fn getScriptId(self: Module) u32 {
     return @intCast(v8.c.v8__Module__ScriptId(self.handle));
 }
+
+pub fn persist(self: Module) !Module {
+    var ctx = self.ctx;
+
+    const global = js.Global(Module).init(ctx.isolate.handle, self.handle);
+    try ctx.global_modules.append(ctx.arena, global);
+
+    return .{
+        .ctx = ctx,
+        .handle = global.local(),
+    };
+}
+
+const Requests = struct {
+    ctx: *const v8.c.Context,
+    handle: *const v8.c.FixedArray,
+
+    pub fn len(self: Requests) usize {
+        return @intCast(v8.c.v8__FixedArray__Length(self.handle));
+    }
+
+    pub fn get(self: Requests, idx: usize) Request {
+        return .{ .handle = v8.c.v8__FixedArray__Get(self.handle, self.ctx, @intCast(idx)).? };
+    }
+};
+
+const Request = struct {
+    handle: *const v8.c.ModuleRequest,
+
+    pub fn specifier(self: Request) *const v8.c.String {
+        return v8.c.v8__ModuleRequest__GetSpecifier(self.handle).?;
+    }
+};

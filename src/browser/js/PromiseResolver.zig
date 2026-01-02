@@ -34,6 +34,7 @@ pub fn init(ctx: *js.Context) PromiseResolver {
 
 pub fn promise(self: PromiseResolver) js.Promise {
     return .{
+        .ctx = self.ctx,
         .handle = v8.c.v8__Promise__Resolver__GetPromise(self.handle).?,
     };
 }
@@ -63,11 +64,11 @@ pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype
 }
 
 fn _reject(self: PromiseResolver, value: anytype) !void {
-    const ctx: *js.Context = @constCast(self.ctx);
+    const ctx = self.ctx;
     const js_value = try ctx.zigValueToJs(value, .{});
 
     var out: v8.c.MaybeBool = undefined;
-    v8.c.v8__Promise__Resolver__Reject(self.handle, self.ctx.handle, js_value.handle, &out);
+    v8.c.v8__Promise__Resolver__Reject(self.handle, ctx.handle, js_value.handle, &out);
     if (!out.has_value or !out.value) {
         return error.FailedToRejectPromise;
     }

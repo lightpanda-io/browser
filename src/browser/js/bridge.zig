@@ -29,6 +29,7 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const CALL_ARENA_RETAIN = 1024 * 16;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // ============================================================================
 // Internal Callback Info Wrappers
@@ -185,21 +186,23 @@ pub const Caller = struct {
         };
 
         const new_this_handle = info.getThis();
-        const new_this = v8.Object{ .handle = new_this_handle };
-        var this = new_this;
+        var this = js.Object{ .ctx = self.context, .handle = new_this_handle };
         if (@typeInfo(ReturnType) == .error_union) {
             const non_error_res = res catch |err| return err;
-            this = (try self.context.mapZigInstanceToJs(new_this_handle, non_error_res)).castToObject();
+            this = try self.context.mapZigInstanceToJs(new_this_handle, non_error_res);
         } else {
-            this = (try self.context.mapZigInstanceToJs(new_this_handle, res)).castToObject();
+            this = try self.context.mapZigInstanceToJs(new_this_handle, res);
         }
 
         // If we got back a different object (existing wrapper), copy the prototype
         // from new object. (this happens when we're upgrading an CustomElement)
-        if (this.handle != new_this.handle) {
-            const new_prototype = new_this.getPrototype();
-            const v8_context = v8.Context{ .handle = self.context.handle };
-            _ = this.setPrototype(v8_context, new_prototype.castTo(v8.Object));
+        if (this.handle != new_this_handle) {
+            const prototype_handle = v8.c.v8__Object__GetPrototype(new_this_handle).?;
+            var out: v8.c.MaybeBool = undefined;
+            v8.c.v8__Object__SetPrototype(this.handle, self.context.handle, prototype_handle, &out);
+            if (comptime IS_DEBUG) {
+                std.debug.assert(out.has_value and out.value);
+            }
         }
 
         info.getReturnValue().set(this.handle);
