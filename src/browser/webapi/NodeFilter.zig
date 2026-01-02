@@ -36,10 +36,13 @@ pub const FilterOpts = union(enum) {
 pub fn init(opts_: ?FilterOpts) !NodeFilter {
     const opts = opts_ orelse return .{ ._func = null, ._original_filter = null };
     const func = switch (opts) {
-        .function => |func| func,
-        .object => |obj| obj.acceptNode,
+        .function => |func| try func.persist(),
+        .object => |obj| try obj.acceptNode.persist(),
     };
-    return .{ ._func = func, ._original_filter = opts_ };
+    return .{
+        ._func = func,
+        ._original_filter = opts_,
+    };
 }
 
 // Constants

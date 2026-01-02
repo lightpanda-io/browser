@@ -52,6 +52,7 @@ context_arena: ArenaAllocator,
 // does all the work, but having all page-specific data structures
 // grouped together helps keep things clean.
 context: ?Context = null,
+persisted_context: ?js.Global(Context) = null,
 
 // no init, must be initialized via env.newExecutionWorld()
 
@@ -59,12 +60,11 @@ pub fn deinit(self: *ExecutionWorld) void {
     if (self.context != null) {
         self.removeContext();
     }
-
     self.context_arena.deinit();
 }
 
 // Only the top Context in the Main ExecutionWorld should hold a handle_scope.
-// A v8.HandleScope is like an arena. Once created, any "Local" that
+// A js.HandleScope is like an arena. Once created, any "Local" that
 // v8 creates will be released (or at least, releasable by the v8 GC)
 // when the handle_scope is freed.
 // We also maintain our own "context_arena" which allows us to have
@@ -75,40 +75,47 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     const env = self.env;
     const isolate = env.isolate;
 
-    var v8_context: v8.Context = blk: {
-        var temp_scope: v8.HandleScope = undefined;
-        v8.HandleScope.init(&temp_scope, isolate);
+    const persisted_context: js.Global(Context) = blk: {
+        var temp_scope: js.HandleScope = undefined;
+        temp_scope.init(isolate);
         defer temp_scope.deinit();
 
         if (comptime IS_DEBUG) {
             // Getting this into the snapshot is tricky (anything involving the
             // global is tricky). Easier to do here, and in debug mode, we're
             // fine with paying the small perf hit.
-            const js_global = v8.FunctionTemplate.initDefault(isolate);
-            const global_template = js_global.getInstanceTemplate();
-
-            global_template.setNamedProperty(v8.NamedPropertyHandlerConfiguration{
+            const func_tmpl_handle = isolate.createFunctionTemplateHandle();
+            const global_template = v8.v8__FunctionTemplate__InstanceTemplate(func_tmpl_handle).?;
+            var configuration: v8.NamedPropertyHandlerConfiguration = .{
                 .getter = unknownPropertyCallback,
-                .flags = v8.PropertyHandlerFlags.NonMasking | v8.PropertyHandlerFlags.OnlyInterceptStrings,
-            }, null);
+                .setter = null,
+                .query = null,
+                .deleter = null,
+                .enumerator = null,
+                .definer = null,
+                .descriptor = null,
+                .data = null,
+                .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
+            };
+            v8.v8__ObjectTemplate__SetNamedHandler(global_template, &configuration);
         }
 
-        const context_local = v8.Context.init(isolate, null, null);
-        const v8_context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
-        break :blk v8_context;
+        const context_handle = isolate.createContextHandle(null, null);
+        break :blk js.Global(Context).init(isolate.handle, context_handle);
     };
 
     // For a Page we only create one HandleScope, it is stored in the main World (enter==true). A page can have multple contexts, 1 for each World.
     // The main Context that enters and holds the HandleScope should therefore always be created first. Following other worlds for this page
     // like isolated Worlds, will thereby place their objects on the main page's HandleScope. Note: In the furure the number of context will multiply multiple frames support
-    var handle_scope: ?v8.HandleScope = null;
+    const v8_context = persisted_context.local();
+    var handle_scope: ?js.HandleScope = null;
     if (enter) {
-        handle_scope = @as(v8.HandleScope, undefined);
-        v8.HandleScope.init(&handle_scope.?, isolate);
-        v8_context.enter();
+        handle_scope = @as(js.HandleScope, undefined);
+        handle_scope.?.init(isolate);
+        v8.v8__Context__Enter(v8_context);
     }
     errdefer if (enter) {
-        v8_context.exit();
+        v8.v8__Context__Exit(v8_context);
         handle_scope.?.deinit();
     };
 
@@ -119,19 +126,20 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         .page = page,
         .id = context_id,
         .isolate = isolate,
-        .v8_context = v8_context,
+        .handle = v8_context,
         .templates = env.templates,
         .handle_scope = handle_scope,
         .script_manager = &page._script_manager,
         .call_arena = page.call_arena,
         .arena = self.context_arena.allocator(),
     };
+    self.persisted_context = persisted_context;
 
     var context = &self.context.?;
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
-    const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
-    v8_context.setEmbedderData(1, data);
+    const data = isolate.initBigInt(@intFromPtr(context));
+    v8.v8__Context__SetEmbedderData(context.handle, 1, @ptrCast(data.handle));
 
     try context.setupGlobal();
     return context;
@@ -144,8 +152,13 @@ pub fn removeContext(self: *ExecutionWorld) void {
     // the queue. Running them later could lead to invalid memory accesses.
     self.env.runMicrotasks();
 
-    self.context.?.deinit();
+    var context = &(self.context orelse return);
+    context.deinit();
     self.context = null;
+
+    self.persisted_context.?.deinit();
+    self.persisted_context = null;
+
     _ = self.context_arena.reset(.{ .retain_with_limit = CONTEXT_ARENA_RETAIN });
 }
 
@@ -157,11 +170,12 @@ pub fn resumeExecution(self: *const ExecutionWorld) void {
     self.env.isolate.cancelTerminateExecution();
 }
 
-pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
-    const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-    const context = Context.fromIsolate(info.getIsolate());
+pub fn unknownPropertyCallback(c_name: ?*const v8.Name, raw_info: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+    const isolate_handle = v8.v8__PropertyCallbackInfo__GetIsolate(raw_info).?;
+    const js_isolate = js.Isolate{ .handle = isolate_handle };
+    const context = Context.fromIsolate(js_isolate);
 
-    const property = context.valueToString(.{ .handle = c_name.? }, .{}) catch "???";
+    const property = context.valueToString(.{ .ctx = context, .handle = c_name.? }, .{}) catch "???";
 
     const ignored = std.StaticStringMap(void).initComptime(.{
         .{ "process", {} },
@@ -193,5 +207,6 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C
         });
     }
 
-    return v8.Intercepted.No;
+    // not intercepted
+    return 0;
 }

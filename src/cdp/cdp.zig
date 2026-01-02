@@ -331,7 +331,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        inspector: js.Inspector,
+        inspector: *js.Inspector,
         isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
 
         http_proxy_changed: bool = false,

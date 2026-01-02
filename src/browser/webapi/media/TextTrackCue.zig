@@ -79,7 +79,7 @@ pub fn getOnEnter(self: *const TextTrackCue) ?js.Function {
 
 pub fn setOnEnter(self: *TextTrackCue, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_enter = try cb.withThis(self);
+        self._on_enter = try cb.persistWithThis(self);
     } else {
         self._on_enter = null;
     }
@@ -91,7 +91,7 @@ pub fn getOnExit(self: *const TextTrackCue) ?js.Function {
 
 pub fn setOnExit(self: *TextTrackCue, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_exit = try cb.withThis(self);
+        self._on_exit = try cb.persistWithThis(self);
     } else {
         self._on_exit = null;
     }

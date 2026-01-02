@@ -120,11 +120,10 @@ pub fn getText(self: *const Response, page: *Page) !js.Promise {
 
 pub fn getJson(self: *Response, page: *Page) !js.Promise {
     const body = self._body orelse "";
-    const value = js.Value.fromJson(page.js, body) catch |err| {
+    const value = page.js.parseJSON(body) catch |err| {
         return page.js.rejectPromise(.{@errorName(err)});
     };
-    const pvalue = try value.persist();
-    return page.js.resolvePromise(pvalue);
+    return page.js.resolvePromise(try value.persist());
 }
 
 pub const JsApi = struct {
