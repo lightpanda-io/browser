@@ -30,17 +30,17 @@ const CLIENT_TRUST_LEVEL = 1;
 
 const Inspector = @This();
 
-handle: *v8.c.Inspector,
-isolate: *v8.c.Isolate,
+handle: *v8.Inspector,
+isolate: *v8.Isolate,
 client: Client,
 channel: Channel,
 session: Session,
 rnd: RndGen = RndGen.init(0),
-default_context: ?*const v8.c.Context = null,
+default_context: ?*const v8.Context = null,
 
 // We expect allocator to be an arena
 // Note: This initializes the pre-allocated inspector in-place
-pub fn init(self: *Inspector, isolate: *v8.c.Isolate, ctx: anytype) !void {
+pub fn init(self: *Inspector, isolate: *v8.Isolate, ctx: anytype) !void {
     const ContextT = @TypeOf(ctx);
 
     const Container = switch (@typeInfo(ContextT)) {
@@ -70,7 +70,7 @@ pub fn init(self: *Inspector, isolate: *v8.c.Isolate, ctx: anytype) !void {
     client.setInspector(self);
 
     // Now create the inspector - generateUniqueId will work because data is set
-    const handle = v8.c.v8_inspector__Inspector__Create(isolate, client.handle).?;
+    const handle = v8.v8_inspector__Inspector__Create(isolate, client.handle).?;
     self.handle = handle;
 
     // Create the channel
@@ -86,7 +86,7 @@ pub fn init(self: *Inspector, isolate: *v8.c.Isolate, ctx: anytype) !void {
     channel.setInspector(self);
 
     // Create the session
-    const session_handle = v8.c.v8_inspector__Inspector__Connect(
+    const session_handle = v8.v8_inspector__Inspector__Connect(
         handle,
         CONTEXT_GROUP_ID,
         channel.handle,
@@ -103,7 +103,7 @@ pub fn deinit(self: *const Inspector) void {
     self.session.deinit();
     self.client.deinit();
     self.channel.deinit();
-    v8.c.v8_inspector__Inspector__DELETE(self.handle);
+    v8.v8_inspector__Inspector__DELETE(self.handle);
 }
 
 pub fn send(self: *const Inspector, msg: []const u8) void {
@@ -111,9 +111,9 @@ pub fn send(self: *const Inspector, msg: []const u8) void {
     // available when doing this. Pages (and thus the HandleScope)
     // comes and goes, but CDP can keep sending messages.
     const isolate = self.isolate;
-    var temp_scope: v8.c.HandleScope = undefined;
-    v8.c.v8__HandleScope__CONSTRUCT(&temp_scope, isolate);
-    defer v8.c.v8__HandleScope__DESTRUCT(&temp_scope);
+    var temp_scope: v8.HandleScope = undefined;
+    v8.v8__HandleScope__CONSTRUCT(&temp_scope, isolate);
+    defer v8.v8__HandleScope__DESTRUCT(&temp_scope);
 
     self.session.dispatchProtocolMessage(isolate, msg);
 }
@@ -134,7 +134,7 @@ pub fn contextCreated(
     aux_data: []const u8,
     is_default_context: bool,
 ) void {
-    v8.c.v8_inspector__Inspector__ContextCreated(
+    v8.v8_inspector__Inspector__ContextCreated(
         self.handle,
         name.ptr,
         name.len,
@@ -185,71 +185,71 @@ pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []con
     const unwrapped = try self.session.unwrapObject(allocator, object_id);
     // The values context and groupId are not used here
     const js_val = unwrapped.value;
-    if (!v8.c.v8__Value__IsObject(js_val)) {
+    if (!v8.v8__Value__IsObject(js_val)) {
         return error.ObjectIdIsNotANode;
     }
     const Node = @import("../webapi/Node.zig");
-    // Cast to *const v8.c.Object for typeTaggedAnyOpaque
+    // Cast to *const v8.Object for typeTaggedAnyOpaque
     return Context.typeTaggedAnyOpaque(*Node, @ptrCast(js_val)) catch {
         return error.ObjectIdIsNotANode;
     };
 }
 
 pub const RemoteObject = struct {
-    handle: *v8.c.RemoteObject,
+    handle: *v8.RemoteObject,
 
     pub fn deinit(self: RemoteObject) void {
-        v8.c.v8_inspector__RemoteObject__DELETE(self.handle);
+        v8.v8_inspector__RemoteObject__DELETE(self.handle);
     }
 
     pub fn getType(self: RemoteObject, allocator: Allocator) ![]const u8 {
-        var ctype_: v8.c.CZigString = .{ .ptr = null, .len = 0 };
-        if (!v8.c.v8_inspector__RemoteObject__getType(self.handle, &allocator, &ctype_)) return error.V8AllocFailed;
+        var ctype_: v8.CZigString = .{ .ptr = null, .len = 0 };
+        if (!v8.v8_inspector__RemoteObject__getType(self.handle, &allocator, &ctype_)) return error.V8AllocFailed;
         return cZigStringToString(ctype_) orelse return error.InvalidType;
     }
 
     pub fn getSubtype(self: RemoteObject, allocator: Allocator) !?[]const u8 {
-        if (!v8.c.v8_inspector__RemoteObject__hasSubtype(self.handle)) return null;
+        if (!v8.v8_inspector__RemoteObject__hasSubtype(self.handle)) return null;
 
-        var csubtype: v8.c.CZigString = .{ .ptr = null, .len = 0 };
-        if (!v8.c.v8_inspector__RemoteObject__getSubtype(self.handle, &allocator, &csubtype)) return error.V8AllocFailed;
+        var csubtype: v8.CZigString = .{ .ptr = null, .len = 0 };
+        if (!v8.v8_inspector__RemoteObject__getSubtype(self.handle, &allocator, &csubtype)) return error.V8AllocFailed;
         return cZigStringToString(csubtype);
     }
 
     pub fn getClassName(self: RemoteObject, allocator: Allocator) !?[]const u8 {
-        if (!v8.c.v8_inspector__RemoteObject__hasClassName(self.handle)) return null;
+        if (!v8.v8_inspector__RemoteObject__hasClassName(self.handle)) return null;
 
-        var cclass_name: v8.c.CZigString = .{ .ptr = null, .len = 0 };
-        if (!v8.c.v8_inspector__RemoteObject__getClassName(self.handle, &allocator, &cclass_name)) return error.V8AllocFailed;
+        var cclass_name: v8.CZigString = .{ .ptr = null, .len = 0 };
+        if (!v8.v8_inspector__RemoteObject__getClassName(self.handle, &allocator, &cclass_name)) return error.V8AllocFailed;
         return cZigStringToString(cclass_name);
     }
 
     pub fn getDescription(self: RemoteObject, allocator: Allocator) !?[]const u8 {
-        if (!v8.c.v8_inspector__RemoteObject__hasDescription(self.handle)) return null;
+        if (!v8.v8_inspector__RemoteObject__hasDescription(self.handle)) return null;
 
-        var description: v8.c.CZigString = .{ .ptr = null, .len = 0 };
-        if (!v8.c.v8_inspector__RemoteObject__getDescription(self.handle, &allocator, &description)) return error.V8AllocFailed;
+        var description: v8.CZigString = .{ .ptr = null, .len = 0 };
+        if (!v8.v8_inspector__RemoteObject__getDescription(self.handle, &allocator, &description)) return error.V8AllocFailed;
         return cZigStringToString(description);
     }
 
     pub fn getObjectId(self: RemoteObject, allocator: Allocator) !?[]const u8 {
-        if (!v8.c.v8_inspector__RemoteObject__hasObjectId(self.handle)) return null;
+        if (!v8.v8_inspector__RemoteObject__hasObjectId(self.handle)) return null;
 
-        var cobject_id: v8.c.CZigString = .{ .ptr = null, .len = 0 };
-        if (!v8.c.v8_inspector__RemoteObject__getObjectId(self.handle, &allocator, &cobject_id)) return error.V8AllocFailed;
+        var cobject_id: v8.CZigString = .{ .ptr = null, .len = 0 };
+        if (!v8.v8_inspector__RemoteObject__getObjectId(self.handle, &allocator, &cobject_id)) return error.V8AllocFailed;
         return cZigStringToString(cobject_id);
     }
 };
 
 const Session = struct {
-    handle: *v8.c.InspectorSession,
+    handle: *v8.InspectorSession,
 
     fn deinit(self: Session) void {
-        v8.c.v8_inspector__Session__DELETE(self.handle);
+        v8.v8_inspector__Session__DELETE(self.handle);
     }
 
-    fn dispatchProtocolMessage(self: Session, isolate: *v8.c.Isolate, msg: []const u8) void {
-        v8.c.v8_inspector__Session__dispatchProtocolMessage(
+    fn dispatchProtocolMessage(self: Session, isolate: *v8.Isolate, msg: []const u8) void {
+        v8.v8_inspector__Session__dispatchProtocolMessage(
             self.handle,
             isolate,
             msg.ptr,
@@ -259,13 +259,13 @@ const Session = struct {
 
     fn wrapObject(
         self: Session,
-        isolate: *v8.c.Isolate,
-        ctx: *const v8.c.Context,
-        val: *const v8.c.Value,
+        isolate: *v8.Isolate,
+        ctx: *const v8.Context,
+        val: *const v8.Value,
         grpname: []const u8,
         generatepreview: bool,
     ) !RemoteObject {
-        const remote_object = v8.c.v8_inspector__Session__wrapObject(
+        const remote_object = v8.v8_inspector__Session__wrapObject(
             self.handle,
             isolate,
             ctx,
@@ -282,16 +282,16 @@ const Session = struct {
         allocator: Allocator,
         object_id: []const u8,
     ) !UnwrappedObject {
-        const in_object_id = v8.c.CZigString{
+        const in_object_id = v8.CZigString{
             .ptr = object_id.ptr,
             .len = object_id.len,
         };
-        var out_error: v8.c.CZigString = .{ .ptr = null, .len = 0 };
-        var out_value_handle: ?*v8.c.Value = null;
-        var out_context_handle: ?*v8.c.Context = null;
-        var out_object_group: v8.c.CZigString = .{ .ptr = null, .len = 0 };
+        var out_error: v8.CZigString = .{ .ptr = null, .len = 0 };
+        var out_value_handle: ?*v8.Value = null;
+        var out_context_handle: ?*v8.Context = null;
+        var out_object_group: v8.CZigString = .{ .ptr = null, .len = 0 };
 
-        const result = v8.c.v8_inspector__Session__unwrapObject(
+        const result = v8.v8_inspector__Session__unwrapObject(
             self.handle,
             &allocator,
             &out_error,
@@ -316,13 +316,13 @@ const Session = struct {
 };
 
 const UnwrappedObject = struct {
-    value: *const v8.c.Value,
-    context: *const v8.c.Context,
+    value: *const v8.Value,
+    context: *const v8.Context,
     object_group: ?[]const u8,
 };
 
 const Channel = struct {
-    handle: *v8.c.InspectorChannelImpl,
+    handle: *v8.InspectorChannelImpl,
 
     // callbacks
     ctx: *anyopaque,
@@ -342,9 +342,9 @@ const Channel = struct {
         onNotif: onNotifFn,
         onRunMessageLoopOnPause: onRunMessageLoopOnPauseFn,
         onQuitMessageLoopOnPause: onQuitMessageLoopOnPauseFn,
-        isolate: *v8.c.Isolate,
+        isolate: *v8.Isolate,
     ) Channel {
-        const handle = v8.c.v8_inspector__Channel__IMPL__CREATE(isolate);
+        const handle = v8.v8_inspector__Channel__IMPL__CREATE(isolate);
         return .{
             .handle = handle,
             .ctx = ctx,
@@ -356,11 +356,11 @@ const Channel = struct {
     }
 
     fn deinit(self: Channel) void {
-        v8.c.v8_inspector__Channel__IMPL__DELETE(self.handle);
+        v8.v8_inspector__Channel__IMPL__DELETE(self.handle);
     }
 
     fn setInspector(self: Channel, inspector: *anyopaque) void {
-        v8.c.v8_inspector__Channel__IMPL__SET_DATA(self.handle, inspector);
+        v8.v8_inspector__Channel__IMPL__SET_DATA(self.handle, inspector);
     }
 
     fn resp(self: Channel, call_id: u32, msg: []const u8) void {
@@ -373,18 +373,18 @@ const Channel = struct {
 };
 
 const Client = struct {
-    handle: *v8.c.InspectorClientImpl,
+    handle: *v8.InspectorClientImpl,
 
     fn init() Client {
-        return .{ .handle = v8.c.v8_inspector__Client__IMPL__CREATE() };
+        return .{ .handle = v8.v8_inspector__Client__IMPL__CREATE() };
     }
 
     fn deinit(self: Client) void {
-        v8.c.v8_inspector__Client__IMPL__DELETE(self.handle);
+        v8.v8_inspector__Client__IMPL__DELETE(self.handle);
     }
 
     fn setInspector(self: Client, inspector: *anyopaque) void {
-        v8.c.v8_inspector__Client__IMPL__SET_DATA(self.handle, inspector);
+        v8.v8_inspector__Client__IMPL__SET_DATA(self.handle, inspector);
     }
 };
 
@@ -399,28 +399,28 @@ fn fromData(data: *anyopaque) *Inspector {
     return @ptrCast(@alignCast(data));
 }
 
-pub fn getTaggedAnyOpaque(value: *const v8.c.Value) ?*js.TaggedAnyOpaque {
-    if (!v8.c.v8__Value__IsObject(value)) {
+pub fn getTaggedAnyOpaque(value: *const v8.Value) ?*js.TaggedAnyOpaque {
+    if (!v8.v8__Value__IsObject(value)) {
         return null;
     }
-    const internal_field_count = v8.c.v8__Object__InternalFieldCount(value);
+    const internal_field_count = v8.v8__Object__InternalFieldCount(value);
     if (internal_field_count == 0) {
         return null;
     }
 
-    const external_value = v8.c.v8__Object__GetInternalField(value, 0).?;
-    const external_data = v8.c.v8__External__Value(external_value).?;
+    const external_value = v8.v8__Object__GetInternalField(value, 0).?;
+    const external_data = v8.v8__External__Value(external_value).?;
     return @ptrCast(@alignCast(external_data));
 }
 
-fn cZigStringToString(s: v8.c.CZigString) ?[]const u8 {
+fn cZigStringToString(s: v8.CZigString) ?[]const u8 {
     if (s.ptr == null) return null;
     return s.ptr[0..s.len];
 }
 
 // C export functions for Inspector callbacks
 pub export fn v8_inspector__Client__IMPL__generateUniqueId(
-    _: *v8.c.InspectorClientImpl,
+    _: *v8.InspectorClientImpl,
     data: *anyopaque,
 ) callconv(.c) i64 {
     const inspector: *Inspector = @ptrCast(@alignCast(data));
@@ -428,7 +428,7 @@ pub export fn v8_inspector__Client__IMPL__generateUniqueId(
 }
 
 pub export fn v8_inspector__Client__IMPL__runMessageLoopOnPause(
-    _: *v8.c.InspectorClientImpl,
+    _: *v8.InspectorClientImpl,
     data: *anyopaque,
     ctx_group_id: c_int,
 ) callconv(.c) void {
@@ -437,7 +437,7 @@ pub export fn v8_inspector__Client__IMPL__runMessageLoopOnPause(
 }
 
 pub export fn v8_inspector__Client__IMPL__quitMessageLoopOnPause(
-    _: *v8.c.InspectorClientImpl,
+    _: *v8.InspectorClientImpl,
     data: *anyopaque,
 ) callconv(.c) void {
     const inspector: *Inspector = @ptrCast(@alignCast(data));
@@ -445,7 +445,7 @@ pub export fn v8_inspector__Client__IMPL__quitMessageLoopOnPause(
 }
 
 pub export fn v8_inspector__Client__IMPL__runIfWaitingForDebugger(
-    _: *v8.c.InspectorClientImpl,
+    _: *v8.InspectorClientImpl,
     _: *anyopaque,
     _: c_int,
 ) callconv(.c) void {
@@ -453,27 +453,27 @@ pub export fn v8_inspector__Client__IMPL__runIfWaitingForDebugger(
 }
 
 pub export fn v8_inspector__Client__IMPL__consoleAPIMessage(
-    _: *v8.c.InspectorClientImpl,
+    _: *v8.InspectorClientImpl,
     _: *anyopaque,
     _: c_int,
-    _: v8.c.MessageErrorLevel,
-    _: *v8.c.StringView,
-    _: *v8.c.StringView,
+    _: v8.MessageErrorLevel,
+    _: *v8.StringView,
+    _: *v8.StringView,
     _: c_uint,
     _: c_uint,
-    _: *v8.c.StackTrace,
+    _: *v8.StackTrace,
 ) callconv(.c) void {}
 
 pub export fn v8_inspector__Client__IMPL__ensureDefaultContextInGroup(
-    _: *v8.c.InspectorClientImpl,
+    _: *v8.InspectorClientImpl,
     data: *anyopaque,
-) callconv(.c) ?*const v8.c.Context {
+) callconv(.c) ?*const v8.Context {
     const inspector: *Inspector = @ptrCast(@alignCast(data));
     return inspector.default_context;
 }
 
 pub export fn v8_inspector__Channel__IMPL__sendResponse(
-    _: *v8.c.InspectorChannelImpl,
+    _: *v8.InspectorChannelImpl,
     data: *anyopaque,
     call_id: c_int,
     msg: [*c]u8,
@@ -484,7 +484,7 @@ pub export fn v8_inspector__Channel__IMPL__sendResponse(
 }
 
 pub export fn v8_inspector__Channel__IMPL__sendNotification(
-    _: *v8.c.InspectorChannelImpl,
+    _: *v8.InspectorChannelImpl,
     data: *anyopaque,
     msg: [*c]u8,
     length: usize,
@@ -494,7 +494,7 @@ pub export fn v8_inspector__Channel__IMPL__sendNotification(
 }
 
 pub export fn v8_inspector__Channel__IMPL__flushProtocolNotifications(
-    _: *v8.c.InspectorChannelImpl,
+    _: *v8.InspectorChannelImpl,
     _: *anyopaque,
 ) callconv(.c) void {
     // TODO

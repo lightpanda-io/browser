@@ -28,18 +28,18 @@ const Allocator = std.mem.Allocator;
 const Value = @This();
 
 ctx: *js.Context,
-handle: *const v8.c.Value,
+handle: *const v8.Value,
 
 pub fn isObject(self: Value) bool {
-    return v8.c.v8__Value__IsObject(self.handle);
+    return v8.v8__Value__IsObject(self.handle);
 }
 
 pub fn isString(self: Value) bool {
-    return v8.c.v8__Value__IsString(self.handle);
+    return v8.v8__Value__IsString(self.handle);
 }
 
 pub fn isArray(self: Value) bool {
-    return v8.c.v8__Value__IsArray(self.handle);
+    return v8.v8__Value__IsArray(self.handle);
 }
 
 pub fn isNull(self: Value) bool {
@@ -51,123 +51,123 @@ pub fn isUndefined(self: Value) bool {
 }
 
 pub fn isSymbol(self: Value) bool {
-    return v8.c.v8__Value__IsSymbol(self.handle);
+    return v8.v8__Value__IsSymbol(self.handle);
 }
 
 pub fn isFunction(self: Value) bool {
-    return v8.c.v8__Value__IsFunction(self.handle);
+    return v8.v8__Value__IsFunction(self.handle);
 }
 
 pub fn isNull(self: Value) bool {
-    return v8.c.v8__Value__IsNull(self.handle);
+    return v8.v8__Value__IsNull(self.handle);
 }
 
 pub fn isUndefined(self: Value) bool {
-    return v8.c.v8__Value__IsUndefined(self.handle);
+    return v8.v8__Value__IsUndefined(self.handle);
 }
 
 pub fn isNullOrUndefined(self: Value) bool {
-    return v8.c.v8__Value__IsNullOrUndefined(self.handle);
+    return v8.v8__Value__IsNullOrUndefined(self.handle);
 }
 
 pub fn isNumber(self: Value) bool {
-    return v8.c.v8__Value__IsNumber(self.handle);
+    return v8.v8__Value__IsNumber(self.handle);
 }
 
 pub fn isNumberObject(self: Value) bool {
-    return v8.c.v8__Value__IsNumberObject(self.handle);
+    return v8.v8__Value__IsNumberObject(self.handle);
 }
 
 pub fn isInt32(self: Value) bool {
-    return v8.c.v8__Value__IsInt32(self.handle);
+    return v8.v8__Value__IsInt32(self.handle);
 }
 
 pub fn isUint32(self: Value) bool {
-    return v8.c.v8__Value__IsUint32(self.handle);
+    return v8.v8__Value__IsUint32(self.handle);
 }
 
 pub fn isBigInt(self: Value) bool {
-    return v8.c.v8__Value__IsBigInt(self.handle);
+    return v8.v8__Value__IsBigInt(self.handle);
 }
 
 pub fn isBigIntObject(self: Value) bool {
-    return v8.c.v8__Value__IsBigIntObject(self.handle);
+    return v8.v8__Value__IsBigIntObject(self.handle);
 }
 
 pub fn isBoolean(self: Value) bool {
-    return v8.c.v8__Value__IsBoolean(self.handle);
+    return v8.v8__Value__IsBoolean(self.handle);
 }
 
 pub fn isBooleanObject(self: Value) bool {
-    return v8.c.v8__Value__IsBooleanObject(self.handle);
+    return v8.v8__Value__IsBooleanObject(self.handle);
 }
 
 pub fn isTrue(self: Value) bool {
-    return v8.c.v8__Value__IsTrue(self.handle);
+    return v8.v8__Value__IsTrue(self.handle);
 }
 
 pub fn isFalse(self: Value) bool {
-    return v8.c.v8__Value__IsFalse(self.handle);
+    return v8.v8__Value__IsFalse(self.handle);
 }
 
 pub fn isTypedArray(self: Value) bool {
-    return v8.c.v8__Value__IsTypedArray(self.handle);
+    return v8.v8__Value__IsTypedArray(self.handle);
 }
 
 pub fn isArrayBufferView(self: Value) bool {
-    return v8.c.v8__Value__IsArrayBufferView(self.handle);
+    return v8.v8__Value__IsArrayBufferView(self.handle);
 }
 
 pub fn isArrayBuffer(self: Value) bool {
-    return v8.c.v8__Value__IsArrayBuffer(self.handle);
+    return v8.v8__Value__IsArrayBuffer(self.handle);
 }
 
 pub fn isUint8Array(self: Value) bool {
-    return v8.c.v8__Value__IsUint8Array(self.handle);
+    return v8.v8__Value__IsUint8Array(self.handle);
 }
 
 pub fn isUint8ClampedArray(self: Value) bool {
-    return v8.c.v8__Value__IsUint8ClampedArray(self.handle);
+    return v8.v8__Value__IsUint8ClampedArray(self.handle);
 }
 
 pub fn isInt8Array(self: Value) bool {
-    return v8.c.v8__Value__IsInt8Array(self.handle);
+    return v8.v8__Value__IsInt8Array(self.handle);
 }
 
 pub fn isUint16Array(self: Value) bool {
-    return v8.c.v8__Value__IsUint16Array(self.handle);
+    return v8.v8__Value__IsUint16Array(self.handle);
 }
 
 pub fn isInt16Array(self: Value) bool {
-    return v8.c.v8__Value__IsInt16Array(self.handle);
+    return v8.v8__Value__IsInt16Array(self.handle);
 }
 
 pub fn isUint32Array(self: Value) bool {
-    return v8.c.v8__Value__IsUint32Array(self.handle);
+    return v8.v8__Value__IsUint32Array(self.handle);
 }
 
 pub fn isInt32Array(self: Value) bool {
-    return v8.c.v8__Value__IsInt32Array(self.handle);
+    return v8.v8__Value__IsInt32Array(self.handle);
 }
 
 pub fn isBigUint64Array(self: Value) bool {
-    return v8.c.v8__Value__IsBigUint64Array(self.handle);
+    return v8.v8__Value__IsBigUint64Array(self.handle);
 }
 
 pub fn isBigInt64Array(self: Value) bool {
-    return v8.c.v8__Value__IsBigInt64Array(self.handle);
+    return v8.v8__Value__IsBigInt64Array(self.handle);
 }
 
 pub fn isPromise(self: Value) bool {
-    return v8.c.v8__Value__IsPromise(self.handle);
+    return v8.v8__Value__IsPromise(self.handle);
 }
 
 pub fn toBool(self: Value) bool {
-    return v8.c.v8__Value__BooleanValue(self.handle, self.ctx.isolate.handle);
+    return v8.v8__Value__BooleanValue(self.handle, self.ctx.isolate.handle);
 }
 
 pub fn typeOf(self: Value) js.String {
-    const str_handle = v8.c.v8__Value__TypeOf(self.handle, self.ctx.isolate.handle).?;
+    const str_handle = v8.v8__Value__TypeOf(self.handle, self.ctx.isolate.handle).?;
     return js.String{ .ctx = @constCast(self.ctx), .handle = str_handle };
 }
 
@@ -176,8 +176,8 @@ pub fn toF32(self: Value) !f32 {
 }
 
 pub fn toF64(self: Value) !f64 {
-    var maybe: v8.c.MaybeF64 = undefined;
-    v8.c.v8__Value__NumberValue(self.handle, self.ctx.handle, &maybe);
+    var maybe: v8.MaybeF64 = undefined;
+    v8.v8__Value__NumberValue(self.handle, self.ctx.handle, &maybe);
     if (!maybe.has_value) {
         return error.JsException;
     }
@@ -185,8 +185,8 @@ pub fn toF64(self: Value) !f64 {
 }
 
 pub fn toI32(self: Value) !i32 {
-    var maybe: v8.c.MaybeI32 = undefined;
-    v8.c.v8__Value__Int32Value(self.handle, self.ctx.handle, &maybe);
+    var maybe: v8.MaybeI32 = undefined;
+    v8.v8__Value__Int32Value(self.handle, self.ctx.handle, &maybe);
     if (!maybe.has_value) {
         return error.JsException;
     }
@@ -194,8 +194,8 @@ pub fn toI32(self: Value) !i32 {
 }
 
 pub fn toU32(self: Value) !u32 {
-    var maybe: v8.c.MaybeU32 = undefined;
-    v8.c.v8__Value__Uint32Value(self.handle, self.ctx.handle, &maybe);
+    var maybe: v8.MaybeU32 = undefined;
+    v8.v8__Value__Uint32Value(self.handle, self.ctx.handle, &maybe);
     if (!maybe.has_value) {
         return error.JsException;
     }
@@ -223,11 +223,11 @@ fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOp
     const ctx: *js.Context = @constCast(self.ctx);
 
     if (self.isSymbol()) {
-        const sym_handle = v8.c.v8__Symbol__Description(@ptrCast(self.handle), ctx.isolate.handle).?;
+        const sym_handle = v8.v8__Symbol__Description(@ptrCast(self.handle), ctx.isolate.handle).?;
         return _toString(.{ .handle = @ptrCast(sym_handle), .ctx = ctx }, null_terminate, opts);
     }
 
-    const str_handle = v8.c.v8__Value__ToString(self.handle, ctx.handle) orelse {
+    const str_handle = v8.v8__Value__ToString(self.handle, ctx.handle) orelse {
         return error.JsException;
     };
 

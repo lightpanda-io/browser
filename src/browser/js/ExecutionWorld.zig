@@ -81,11 +81,12 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         temp_scope.init(isolate);
         defer temp_scope.deinit();
 
+
         // Getting this into the snapshot is tricky (anything involving the
-        // global is tricky). Easier to do here.
+        // global is tricky). Easier to do here
         const func_tmpl_handle = isolate.createFunctionTemplateHandle();
-        const global_template = v8.c.v8__FunctionTemplate__InstanceTemplate(func_tmpl_handle).?;
-        var configuration: v8.c.NamedPropertyHandlerConfiguration = .{
+        const global_template = v8.v8__FunctionTemplate__InstanceTemplate(func_tmpl_handle).?;
+        var configuration: v8.NamedPropertyHandlerConfiguration = .{
             .getter = unknownPropertyCallback,
             .setter = null,
             .query = null,
@@ -94,9 +95,9 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
             .definer = null,
             .descriptor = null,
             .data = null,
-            .flags = v8.c.kOnlyInterceptStrings | v8.c.kNonMasking,
+            .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         };
-        v8.c.v8__ObjectTemplate__SetNamedHandler(global_template, &configuration);
+        v8.v8__ObjectTemplate__SetNamedHandler(global_template, &configuration);
 
         const context_handle = isolate.createContextHandle(null, null);
         break :blk js.Global(Context).init(isolate.handle, context_handle);
@@ -110,10 +111,10 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     if (enter) {
         handle_scope = @as(js.HandleScope, undefined);
         handle_scope.?.init(isolate);
-        v8.c.v8__Context__Enter(v8_context);
+        v8.v8__Context__Enter(v8_context);
     }
     errdefer if (enter) {
-        v8.c.v8__Context__Exit(v8_context);
+        v8.v8__Context__Exit(v8_context);
         handle_scope.?.deinit();
     };
 
@@ -137,7 +138,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
     const data = isolate.initBigInt(@intFromPtr(context));
-    v8.c.v8__Context__SetEmbedderData(context.handle, 1, @ptrCast(data.handle));
+    v8.v8__Context__SetEmbedderData(context.handle, 1, @ptrCast(data.handle));
 
     try context.setupGlobal();
     return context;
@@ -168,8 +169,9 @@ pub fn resumeExecution(self: *const ExecutionWorld) void {
     self.env.isolate.cancelTerminateExecution();
 }
 
-pub fn unknownPropertyCallback(c_name: ?*const v8.c.Name, raw_info: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8 {
-    const isolate_handle = v8.c.v8__PropertyCallbackInfo__GetIsolate(raw_info).?;
+
+pub fn unknownPropertyCallback(c_name: ?*const v8.Name, raw_info: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+    const isolate_handle = v8.v8__PropertyCallbackInfo__GetIsolate(raw_info).?;
     const context = Context.fromIsolate(.{ .handle = isolate_handle });
 
     const property: ?[]u8 = context.valueToString(.{ .ctx = context, .handle = c_name.? }, .{}) catch {

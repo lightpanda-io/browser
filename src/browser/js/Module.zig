@@ -22,38 +22,38 @@ const v8 = js.v8;
 const Module = @This();
 
 ctx: *js.Context,
-handle: *const v8.c.Module,
+handle: *const v8.Module,
 
 pub const Status = enum(u32) {
-    kUninstantiated = v8.c.kUninstantiated,
-    kInstantiating = v8.c.kInstantiating,
-    kInstantiated = v8.c.kInstantiated,
-    kEvaluating = v8.c.kEvaluating,
-    kEvaluated = v8.c.kEvaluated,
-    kErrored = v8.c.kErrored,
+    kUninstantiated = v8.kUninstantiated,
+    kInstantiating = v8.kInstantiating,
+    kInstantiated = v8.kInstantiated,
+    kEvaluating = v8.kEvaluating,
+    kEvaluated = v8.kEvaluated,
+    kErrored = v8.kErrored,
 };
 
 pub fn getStatus(self: Module) Status {
-    return @enumFromInt(v8.c.v8__Module__GetStatus(self.handle));
+    return @enumFromInt(v8.v8__Module__GetStatus(self.handle));
 }
 
 pub fn getException(self: Module) js.Value {
     return .{
         .ctx = self.ctx,
-        .handle = v8.c.v8__Module__GetException(self.handle).?,
+        .handle = v8.v8__Module__GetException(self.handle).?,
     };
 }
 
 pub fn getModuleRequests(self: Module) Requests {
     return .{
         .ctx = self.ctx.handle,
-        .handle = v8.c.v8__Module__GetModuleRequests(self.handle).?,
+        .handle = v8.v8__Module__GetModuleRequests(self.handle).?,
     };
 }
 
-pub fn instantiate(self: Module, cb: v8.c.ResolveModuleCallback) !bool {
-    var out: v8.c.MaybeBool = undefined;
-    v8.c.v8__Module__InstantiateModule(self.handle, self.ctx.handle, cb, &out);
+pub fn instantiate(self: Module, cb: v8.ResolveModuleCallback) !bool {
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Module__InstantiateModule(self.handle, self.ctx.handle, cb, &out);
     if (out.has_value) {
         return out.value;
     }
@@ -62,7 +62,7 @@ pub fn instantiate(self: Module, cb: v8.c.ResolveModuleCallback) !bool {
 
 pub fn evaluate(self: Module) !js.Value {
     const ctx = self.ctx;
-    const res = v8.c.v8__Module__Evaluate(self.handle, ctx.handle) orelse return error.JsException;
+    const res = v8.v8__Module__Evaluate(self.handle, ctx.handle) orelse return error.JsException;
 
     if (self.getStatus() == .kErrored) {
         return error.JsException;
@@ -75,18 +75,18 @@ pub fn evaluate(self: Module) !js.Value {
 }
 
 pub fn getIdentityHash(self: Module) u32 {
-    return @bitCast(v8.c.v8__Module__GetIdentityHash(self.handle));
+    return @bitCast(v8.v8__Module__GetIdentityHash(self.handle));
 }
 
 pub fn getModuleNamespace(self: Module) js.Value {
     return .{
         .ctx = self.ctx,
-        .handle = v8.c.v8__Module__GetModuleNamespace(self.handle).?,
+        .handle = v8.v8__Module__GetModuleNamespace(self.handle).?,
     };
 }
 
 pub fn getScriptId(self: Module) u32 {
-    return @intCast(v8.c.v8__Module__ScriptId(self.handle));
+    return @intCast(v8.v8__Module__ScriptId(self.handle));
 }
 
 pub fn persist(self: Module) !Module {
@@ -102,22 +102,22 @@ pub fn persist(self: Module) !Module {
 }
 
 const Requests = struct {
-    ctx: *const v8.c.Context,
-    handle: *const v8.c.FixedArray,
+    ctx: *const v8.Context,
+    handle: *const v8.FixedArray,
 
     pub fn len(self: Requests) usize {
-        return @intCast(v8.c.v8__FixedArray__Length(self.handle));
+        return @intCast(v8.v8__FixedArray__Length(self.handle));
     }
 
     pub fn get(self: Requests, idx: usize) Request {
-        return .{ .handle = v8.c.v8__FixedArray__Get(self.handle, self.ctx, @intCast(idx)).? };
+        return .{ .handle = v8.v8__FixedArray__Get(self.handle, self.ctx, @intCast(idx)).? };
     }
 };
 
 const Request = struct {
-    handle: *const v8.c.ModuleRequest,
+    handle: *const v8.ModuleRequest,
 
-    pub fn specifier(self: Request) *const v8.c.String {
-        return v8.c.v8__ModuleRequest__GetSpecifier(self.handle).?;
+    pub fn specifier(self: Request) *const v8.String {
+        return v8.v8__ModuleRequest__GetSpecifier(self.handle).?;
     }
 };

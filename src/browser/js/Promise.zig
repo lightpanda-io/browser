@@ -22,7 +22,7 @@ const v8 = js.v8;
 const Promise = @This();
 
 ctx: *js.Context,
-handle: *const v8.c.Promise,
+handle: *const v8.Promise,
 
 pub fn toObject(self: Promise) js.Object {
     return .{
@@ -39,7 +39,7 @@ pub fn toValue(self: Promise) js.Value {
 }
 
 pub fn thenAndCatch(self: Promise, on_fulfilled: js.Function, on_rejected: js.Function) !Promise {
-    if (v8.c.v8__Promise__Then2(self.handle, self.ctx.handle, on_fulfilled.handle, on_rejected.handle)) |handle| {
+    if (v8.v8__Promise__Then2(self.handle, self.ctx.handle, on_fulfilled.handle, on_rejected.handle)) |handle| {
         return .{
             .ctx = self.ctx,
             .handle = handle,

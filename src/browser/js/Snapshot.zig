@@ -41,8 +41,8 @@ const embedded_snapshot_blob = if (@import("build_config").snapshot_path) |path|
 // sequence
 data_start: usize,
 
-// The snapshot data (v8.c.StartupData is a ptr to the data and len).
-startup_data: v8.c.StartupData,
+// The snapshot data (v8.StartupData is a ptr to the data and len).
+startup_data: v8.StartupData,
 
 // V8 doesn't know how to serialize external references, and pretty much any hook
 // into Zig is an external reference (e.g. every accessor and function callback).
@@ -74,8 +74,8 @@ fn loadEmbedded() ?Snapshot {
     const data_start = std.mem.readInt(usize, embedded_snapshot_blob[0..@sizeOf(usize)], .little);
     const blob = embedded_snapshot_blob[@sizeOf(usize)..];
 
-    const startup_data = v8.c.StartupData{ .data = blob.ptr, .raw_size = @intCast(blob.len) };
-    if (!v8.c.v8__StartupData__IsValid(startup_data)) {
+    const startup_data = v8.StartupData{ .data = blob.ptr, .raw_size = @intCast(blob.len) };
+    if (!v8.v8__StartupData__IsValid(startup_data)) {
         return null;
     }
 
@@ -110,7 +110,7 @@ pub fn fromEmbedded(self: Snapshot) bool {
 }
 
 fn isValid(self: Snapshot) bool {
-    return v8.c.v8__StartupData__IsValid(self.startup_data);
+    return v8.v8__StartupData__IsValid(self.startup_data);
 }
 
 pub fn createGlobalTemplate(isolate: v8.Isolate, templates: []const v8.FunctionTemplate) v8.ObjectTemplate {
@@ -130,28 +130,28 @@ pub fn createGlobalTemplate(isolate: v8.Isolate, templates: []const v8.FunctionT
 pub fn create(allocator: Allocator) !Snapshot {
     var external_references = collectExternalReferences();
 
-    var params: v8.c.CreateParams = undefined;
-    v8.c.v8__Isolate__CreateParams__CONSTRUCT(&params);
-    params.array_buffer_allocator = v8.c.v8__ArrayBuffer__Allocator__NewDefaultAllocator();
-    defer v8.c.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
+    var params: v8.CreateParams = undefined;
+    v8.v8__Isolate__CreateParams__CONSTRUCT(&params);
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator();
+    defer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
     params.external_references = @ptrCast(&external_references);
 
-    const snapshot_creator = v8.c.v8__SnapshotCreator__CREATE(&params);
-    defer v8.c.v8__SnapshotCreator__DESTRUCT(snapshot_creator);
+    const snapshot_creator = v8.v8__SnapshotCreator__CREATE(&params);
+    defer v8.v8__SnapshotCreator__DESTRUCT(snapshot_creator);
 
     var data_start: usize = 0;
-    const isolate = v8.c.v8__SnapshotCreator__getIsolate(snapshot_creator).?;
+    const isolate = v8.v8__SnapshotCreator__getIsolate(snapshot_creator).?;
 
     {
         // CreateBlob, which we'll call once everything is setup, MUST NOT
         // be called from an active HandleScope. Hence we have this scope to
         // clean it up before we call CreateBlob
-        var handle_scope: v8.c.HandleScope = undefined;
-        v8.c.v8__HandleScope__CONSTRUCT(&handle_scope, isolate);
-        defer v8.c.v8__HandleScope__DESTRUCT(&handle_scope);
+        var handle_scope: v8.HandleScope = undefined;
+        v8.v8__HandleScope__CONSTRUCT(&handle_scope, isolate);
+        defer v8.v8__HandleScope__DESTRUCT(&handle_scope);
 
         // Create templates (constructors only) FIRST
-        var templates: [JsApis.len]*v8.c.FunctionTemplate = undefined;
+        var templates: [JsApis.len]*v8.FunctionTemplate = undefined;
         inline for (JsApis, 0..) |JsApi, i| {
             @setEvalBranchQuota(10_000);
             templates[i] = generateConstructor(JsApi, isolate);
@@ -162,23 +162,22 @@ pub fn create(allocator: Allocator) !Snapshot {
         // This must come before attachClass so inheritance is set up first
         inline for (JsApis, 0..) |JsApi, i| {
             if (comptime protoIndexLookup(JsApi)) |proto_index| {
-                v8.c.v8__FunctionTemplate__Inherit(templates[i], templates[proto_index]);
+                v8.v8__FunctionTemplate__Inherit(templates[i], templates[proto_index]);
             }
         }
 
         // Set up the global template to inherit from Window's template
         // This way the global object gets all Window properties through inheritance
-
         const global_template = createGlobalTemplate(isolate, templates[0..]);
-        const context = v8.c.v8__Context__New(isolate, global_template, null);
-        v8.c.v8__Context__Enter(context);
-        defer v8.c.v8__Context__Exit(context);
+        const context = v8.v8__Context__New(isolate, global_template, null);
+        v8.v8__Context__Enter(context);
+        defer v8.v8__Context__Exit(context);
 
         // Add templates to context snapshot
         var last_data_index: usize = 0;
         inline for (JsApis, 0..) |_, i| {
             @setEvalBranchQuota(10_000);
-            const data_index = v8.c.v8__SnapshotCreator__AddData2(snapshot_creator, context, @ptrCast(templates[i]));
+            const data_index = v8.v8__SnapshotCreator__AddData2(snapshot_creator, context, @ptrCast(templates[i]));
             if (i == 0) {
                 data_start = data_index;
                 last_data_index = data_index;
@@ -196,18 +195,18 @@ pub fn create(allocator: Allocator) !Snapshot {
         }
 
         // Realize all templates by getting their functions and attaching to global
-        const global_obj = v8.c.v8__Context__Global(context);
+        const global_obj = v8.v8__Context__Global(context);
 
         inline for (JsApis, 0..) |JsApi, i| {
-            const func = v8.c.v8__FunctionTemplate__GetFunction(templates[i], context);
+            const func = v8.v8__FunctionTemplate__GetFunction(templates[i], context);
 
             // Attach to global if it has a name
             if (@hasDecl(JsApi.Meta, "name")) {
                 if (@hasDecl(JsApi.Meta, "constructor_alias")) {
                     const alias = JsApi.Meta.constructor_alias;
-                    const v8_class_name = v8.c.v8__String__NewFromUtf8(isolate, alias.ptr, v8.c.kNormal, @intCast(alias.len));
-                    var maybe_result: v8.c.MaybeBool = undefined;
-                    v8.c.v8__Object__Set(global_obj, context, v8_class_name, func, &maybe_result);
+                    const v8_class_name = v8.v8__String__NewFromUtf8(isolate, alias.ptr, v8.kNormal, @intCast(alias.len));
+                    var maybe_result: v8.MaybeBool = undefined;
+                    v8.v8__Object__Set(global_obj, context, v8_class_name, func, &maybe_result);
 
                     // @TODO: This is wrong. This name should be registered with the
                     // illegalConstructorCallback. I.e. new Image() is OK, but
@@ -216,14 +215,14 @@ pub fn create(allocator: Allocator) !Snapshot {
                     // has to be registered so, for now, instead of creating another
                     // template, we just hook it into the constructor.
                     const name = JsApi.Meta.name;
-                    const illegal_class_name = v8.c.v8__String__NewFromUtf8(isolate, name.ptr, v8.c.kNormal, @intCast(name.len));
-                    var maybe_result2: v8.c.MaybeBool = undefined;
-                    v8.c.v8__Object__Set(global_obj, context, illegal_class_name, func, &maybe_result2);
+                    const illegal_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                    var maybe_result2: v8.MaybeBool = undefined;
+                    v8.v8__Object__Set(global_obj, context, illegal_class_name, func, &maybe_result2);
                 } else {
                     const name = JsApi.Meta.name;
-                    const v8_class_name = v8.c.v8__String__NewFromUtf8(isolate, name.ptr, v8.c.kNormal, @intCast(name.len));
-                    var maybe_result: v8.c.MaybeBool = undefined;
-                    v8.c.v8__Object__Set(global_obj, context, v8_class_name, func, &maybe_result);
+                    const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                    var maybe_result: v8.MaybeBool = undefined;
+                    v8.v8__Object__Set(global_obj, context, v8_class_name, func, &maybe_result);
                 }
             }
         }
@@ -231,9 +230,9 @@ pub fn create(allocator: Allocator) !Snapshot {
         {
             // If we want to overwrite the built-in console, we have to
             // delete the built-in one.
-            const console_key = v8.c.v8__String__NewFromUtf8(isolate, "console", v8.c.kNormal, 7);
-            var maybe_deleted: v8.c.MaybeBool = undefined;
-            v8.c.v8__Object__Delete(global_obj, context, console_key, &maybe_deleted);
+            const console_key = v8.v8__String__NewFromUtf8(isolate, "console", v8.kNormal, 7);
+            var maybe_deleted: v8.MaybeBool = undefined;
+            v8.v8__Object__Delete(global_obj, context, console_key, &maybe_deleted);
             if (maybe_deleted.value == false) {
                 return error.ConsoleDeleteError;
             }
@@ -244,14 +243,14 @@ pub fn create(allocator: Allocator) !Snapshot {
         // TODO: see if newer V8 engines have a way around this.
         inline for (JsApis, 0..) |JsApi, i| {
             if (comptime protoIndexLookup(JsApi)) |proto_index| {
-                const proto_func = v8.c.v8__FunctionTemplate__GetFunction(templates[proto_index], context);
-                const proto_obj: *const v8.c.Object = @ptrCast(proto_func);
+                const proto_func = v8.v8__FunctionTemplate__GetFunction(templates[proto_index], context);
+                const proto_obj: *const v8.Object = @ptrCast(proto_func);
 
-                const self_func = v8.c.v8__FunctionTemplate__GetFunction(templates[i], context);
-                const self_obj: *const v8.c.Object = @ptrCast(self_func);
+                const self_func = v8.v8__FunctionTemplate__GetFunction(templates[i], context);
+                const self_obj: *const v8.Object = @ptrCast(self_func);
 
-                var maybe_result: v8.c.MaybeBool = undefined;
-                v8.c.v8__Object__SetPrototype(self_obj, context, proto_obj, &maybe_result);
+                var maybe_result: v8.MaybeBool = undefined;
+                v8.v8__Object__SetPrototype(self_obj, context, proto_obj, &maybe_result);
             }
         }
 
@@ -259,15 +258,15 @@ pub fn create(allocator: Allocator) !Snapshot {
             // Custom exception
             // TODO: this is an horrible hack, I can't figure out how to do this cleanly.
             const code_str = "DOMException.prototype.__proto__ = Error.prototype";
-            const code = v8.c.v8__String__NewFromUtf8(isolate, code_str.ptr, v8.c.kNormal, @intCast(code_str.len));
-            const script = v8.c.v8__Script__Compile(context, code, null) orelse return error.ScriptCompileFailed;
-            _ = v8.c.v8__Script__Run(script, context) orelse return error.ScriptRunFailed;
+            const code = v8.v8__String__NewFromUtf8(isolate, code_str.ptr, v8.kNormal, @intCast(code_str.len));
+            const script = v8.v8__Script__Compile(context, code, null) orelse return error.ScriptCompileFailed;
+            _ = v8.v8__Script__Run(script, context) orelse return error.ScriptRunFailed;
         }
 
-        v8.c.v8__SnapshotCreator__setDefaultContext(snapshot_creator, context);
+        v8.v8__SnapshotCreator__setDefaultContext(snapshot_creator, context);
     }
 
-    const blob = v8.c.v8__SnapshotCreator__createBlob(snapshot_creator, v8.c.kKeep);
+    const blob = v8.v8__SnapshotCreator__createBlob(snapshot_creator, v8.kKeep);
     const owned = try allocator.dupe(u8, blob.data[0..@intCast(blob.raw_size)]);
 
     return .{
@@ -383,7 +382,7 @@ fn collectExternalReferences() [countExternalReferences()]isize {
 // via `new ClassName()` - but they could, for example, be created in
 // Zig and returned from a function call, which is why we need the
 // FunctionTemplate.
-fn generateConstructor(comptime JsApi: type, isolate: *v8.c.Isolate) *v8.c.FunctionTemplate {
+fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *v8.FunctionTemplate {
     const callback = blk: {
         if (@hasDecl(JsApi, "constructor")) {
             break :blk JsApi.constructor.func;
@@ -393,24 +392,23 @@ fn generateConstructor(comptime JsApi: type, isolate: *v8.c.Isolate) *v8.c.Funct
         break :blk illegalConstructorCallback;
     };
 
-    const template = @constCast(v8.c.v8__FunctionTemplate__New__DEFAULT2(isolate, callback).?);
+    const template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, callback).?);
     if (!@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
-        const instance_template = v8.c.v8__FunctionTemplate__InstanceTemplate(template);
-        v8.c.v8__ObjectTemplate__SetInternalFieldCount(instance_template, 1);
+        const instance_template = v8.v8__FunctionTemplate__InstanceTemplate(template);
+        v8.v8__ObjectTemplate__SetInternalFieldCount(instance_template, 1);
     }
     const name_str = if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi);
-    const class_name = v8.c.v8__String__NewFromUtf8(isolate, name_str.ptr, v8.c.kNormal, @intCast(name_str.len));
-    v8.c.v8__FunctionTemplate__SetClassName(template, class_name);
+    const class_name = v8.v8__String__NewFromUtf8(isolate, name_str.ptr, v8.kNormal, @intCast(name_str.len));
+    v8.v8__FunctionTemplate__SetClassName(template, class_name);
     return template;
 }
 
 // Attaches JsApi members to the prototype template (normal case)
-
 fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.FunctionTemplate) void {
     const target = v8.c.v8__FunctionTemplate__PrototypeTemplate(template);
     const instance = v8.c.v8__FunctionTemplate__InstanceTemplate(template);
-
     const declarations = @typeInfo(JsApi).@"struct".decls;
+
     inline for (declarations) |d| {
         const name: [:0]const u8 = d.name;
         const value = @field(JsApi, name);
@@ -418,31 +416,31 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
 
         switch (definition) {
             bridge.Accessor => {
-                const js_name = v8.c.v8__String__NewFromUtf8(isolate, name.ptr, v8.c.kNormal, @intCast(name.len));
-                const getter_callback = @constCast(v8.c.v8__FunctionTemplate__New__DEFAULT2(isolate, value.getter).?);
+                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+                const getter_callback = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.getter).?);
                 if (value.setter == null) {
                     if (value.static) {
-                        v8.c.v8__Template__SetAccessorProperty__DEFAULT(@ptrCast(template), js_name, getter_callback);
+                        v8.v8__Template__SetAccessorProperty__DEFAULT(@ptrCast(template), js_name, getter_callback);
                     } else {
-                        v8.c.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(target, js_name, getter_callback);
+                        v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(target, js_name, getter_callback);
                     }
                 } else {
                     std.debug.assert(value.static == false);
-                    const setter_callback = @constCast(v8.c.v8__FunctionTemplate__New__DEFAULT2(isolate, value.setter.?).?);
-                    v8.c.v8__ObjectTemplate__SetAccessorProperty__DEFAULT2(target, js_name, getter_callback, setter_callback);
+                    const setter_callback = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.setter.?).?);
+                    v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT2(target, js_name, getter_callback, setter_callback);
                 }
             },
             bridge.Function => {
-                const function_template = @constCast(v8.c.v8__FunctionTemplate__New__DEFAULT2(isolate, value.func).?);
-                const js_name = v8.c.v8__String__NewFromUtf8(isolate, name.ptr, v8.c.kNormal, @intCast(name.len));
+                const function_template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.func).?);
+                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 if (value.static) {
-                    v8.c.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.c.None);
+                    v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
-                    v8.c.v8__Template__Set(@ptrCast(target), js_name, @ptrCast(function_template), v8.c.None);
+                    v8.v8__Template__Set(@ptrCast(target), js_name, @ptrCast(function_template), v8.None);
                 }
             },
             bridge.Indexed => {
-                var configuration: v8.c.IndexedPropertyHandlerConfiguration = .{
+                var configuration: v8.IndexedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
                     .setter = null,
                     .query = null,
@@ -453,11 +451,10 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     .data = null,
                     .flags = 0,
                 };
-                instance.setIndexedProperty(configuration, null);
+                v8.v8__ObjectTemplate__SetIndexedHandler(instance, &configuration);
             },
             bridge.NamedIndexed => {
-                const instance_template = v8.c.v8__FunctionTemplate__InstanceTemplate(template);
-                var configuration: v8.c.NamedPropertyHandlerConfiguration = .{
+                var configuration: v8.NamedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
                     .setter = value.setter,
                     .query = null,
@@ -466,17 +463,17 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     .definer = null,
                     .descriptor = null,
                     .data = null,
-                    .flags = v8.c.kOnlyInterceptStrings | v8.c.kNonMasking,
+                    .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
                 };
-                v8.c.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
+                v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
             },
             bridge.Iterator => {
-                const function_template = @constCast(v8.c.v8__FunctionTemplate__New__DEFAULT2(isolate, value.func).?);
+                const function_template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.func).?);
                 const js_name = if (value.async)
-                    v8.c.v8__Symbol__GetAsyncIterator(isolate)
+                    v8.v8__Symbol__GetAsyncIterator(isolate)
                 else
-                    v8.c.v8__Symbol__GetIterator(isolate);
-                v8.c.v8__Template__Set(@ptrCast(target), js_name, @ptrCast(function_template), v8.c.None);
+                    v8.v8__Symbol__GetIterator(isolate);
+                v8.v8__Template__Set(@ptrCast(target), js_name, @ptrCast(function_template), v8.None);
             },
             bridge.Property => {
                 // simpleZigValueToJs now returns raw handle directly
@@ -484,12 +481,12 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     .int => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
                 };
 
-                const js_name = v8.c.v8__String__NewFromUtf8(isolate, name.ptr, v8.c.kNormal, @intCast(name.len));
+                const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 // apply it both to the type itself
-                v8.c.v8__Template__Set(@ptrCast(template), js_name, js_value, v8.c.ReadOnly + v8.c.DontDelete);
+                v8.v8__Template__Set(@ptrCast(template), js_name, js_value, v8.ReadOnly + v8.DontDelete);
 
                 // and to instances of the type
-                v8.c.v8__Template__Set(@ptrCast(target), js_name, js_value, v8.c.ReadOnly + v8.c.DontDelete);
+                v8.v8__Template__Set(@ptrCast(target), js_name, js_value, v8.ReadOnly + v8.DontDelete);
             },
             bridge.Constructor => {}, // already handled in generateConstructor
             else => {},
@@ -521,15 +518,15 @@ fn protoIndexLookup(comptime JsApi: type) ?bridge.JsApiLookup.BackingInt {
 }
 
 // Shared illegal constructor callback for types without explicit constructors
-fn illegalConstructorCallback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-    const isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(raw_info);
+fn illegalConstructorCallback(raw_info: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+    const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(raw_info);
     log.warn(.js, "Illegal constructor call", .{});
 
-    const message = v8.c.v8__String__NewFromUtf8(isolate, "Illegal Constructor", v8.c.kNormal, 19);
-    const js_exception = v8.c.v8__Exception__TypeError(message);
+    const message = v8.v8__String__NewFromUtf8(isolate, "Illegal Constructor", v8.kNormal, 19);
+    const js_exception = v8.v8__Exception__TypeError(message);
 
-    _ = v8.c.v8__Isolate__ThrowException(isolate, js_exception);
-    var return_value: v8.c.ReturnValue = undefined;
-    v8.c.v8__FunctionCallbackInfo__GetReturnValue(raw_info, &return_value);
-    v8.c.v8__ReturnValue__Set(return_value, js_exception);
+    _ = v8.v8__Isolate__ThrowException(isolate, js_exception);
+    var return_value: v8.ReturnValue = undefined;
+    v8.v8__FunctionCallbackInfo__GetReturnValue(raw_info, &return_value);
+    v8.v8__ReturnValue__Set(return_value, js_exception);
 }
