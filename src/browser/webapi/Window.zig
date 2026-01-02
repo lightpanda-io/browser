@@ -301,7 +301,9 @@ pub fn matchMedia(_: *const Window, query: []const u8, page: *Page) !*MediaQuery
 
 pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]const u8, page: *Page) !*CSSStyleProperties {
     if (pseudo_element) |pe| {
-        log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pe });
+        if (pe.len != 0) {
+            log.warn(.not_implemented, "window.GetComputedStyle", .{ .pseudo_element = pe });
+        }
     }
     return CSSStyleProperties.init(element, true, page);
 }
