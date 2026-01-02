@@ -34,7 +34,7 @@ pub fn getLength(_: *const History, page: *Page) u32 {
 
 pub fn getState(_: *const History, page: *Page) !?js.Value {
     if (page._session.navigation.getCurrentEntry()._state.value) |state| {
-        const value = try js.Value.fromJson(page.js, state);
+        const value = try page.js.parseJSON(state);
         return value;
     } else return null;
 }

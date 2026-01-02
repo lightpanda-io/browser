@@ -16,33 +16,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("js.zig");
+
 const v8 = js.v8;
 
-const BigInt = @This();
+const Number = @This();
 
-handle: *const v8.c.Integer,
+handle: *const v8.c.Number,
 
-pub fn init(isolate: *v8.c.Isolate, val: anytype) BigInt {
-    const handle = switch (@TypeOf(val)) {
-        i8, i16, i32, i64, isize => v8.c.v8__BigInt__New(isolate, val).?,
-        u8, u16, u32, u64, usize => v8.c.v8__BigInt__NewFromUnsigned(isolate, val).?,
-        else => |T| @compileError("cannot create v8::BigInt from: " ++ @typeName(T)),
-    };
+pub fn init(isolate: *v8.c.Isolate, value: anytype) Number {
+    const handle = v8.c.v8__Number__New(isolate, value).?;
     return .{ .handle = handle };
-}
-
-pub fn getInt64(self: BigInt) i64 {
-    return v8.c.v8__BigInt__Int64Value(self.handle, null);
-}
-
-pub fn getUint64(self: BigInt) u64 {
-    return v8.c.v8__BigInt__Uint64Value(self.handle, null);
-}
-
-pub fn toValue(self: BigInt) js.Value {
-    return .{
-        .ctx = undefined, // Will be set by caller if needed
-        .handle = @ptrCast(self.handle),
-    };
 }

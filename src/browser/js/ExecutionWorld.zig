@@ -137,7 +137,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     var context = &self.context.?;
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
-    const data = isolate.initBigIntU64(@intCast(@intFromPtr(context)));
+    const data = isolate.initBigInt(@intFromPtr(context));
     v8.c.v8__Context__SetEmbedderData(context_handle, 1, @ptrCast(data.handle));
 
     try context.setupGlobal();

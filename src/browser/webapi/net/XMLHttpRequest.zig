@@ -254,9 +254,8 @@ pub fn getResponse(self: *XMLHttpRequest, page: *Page) !?Response {
     const res: Response = switch (self._response_type) {
         .text => .{ .text = data },
         .json => blk: {
-            const value = try js.Value.fromJson(page.js, data);
-            const pvalue = try value.persist();
-            break :blk .{ .json = pvalue };
+            const value = try page.js.parseJSON(data);
+            break :blk .{ .json = try value.persist() };
         },
         .document => blk: {
             const document = try page._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });

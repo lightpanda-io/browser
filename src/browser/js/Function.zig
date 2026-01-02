@@ -107,7 +107,6 @@ pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, a
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
     const ctx = self.ctx;
 
-<<<<<<< HEAD
     // When we're calling a function from within JavaScript itself, this isn't
     // necessary. We're within a Caller instantiation, which will already have
     // incremented the call_depth and it won't decrement it until the Caller is
@@ -122,10 +121,6 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     defer context.call_depth = call_depth;
 
     const js_this = blk: {
-        if (@TypeOf(this) == v8.Object) {
-            break :blk this;
-        }
-
         if (@TypeOf(this) == js.Object) {
             break :blk this.js_obj;
         }
@@ -180,9 +175,8 @@ pub fn src(self: *const Function) ![]const u8 {
 
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
     const ctx = self.ctx;
-    const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
-    const key = v8.String.initUtf8(v8_isolate, name);
-    const handle = v8.c.v8__Object__Get(self.handle, ctx.handle, key.handle) orelse {
+    const key = ctx.isolate.initStringHandle(name);
+    const handle = v8.c.v8__Object__Get(self.handle, ctx.handle, key) orelse {
         return error.JsException;
     };
 

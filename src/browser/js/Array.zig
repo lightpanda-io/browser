@@ -43,7 +43,24 @@ pub fn get(self: Array, index: u32) !js.Value {
     };
 }
 
-pub fn asObject(self: Array) js.Object {
+pub fn set(self: Array, index: u32, value: anytype, comptime opts: js.bridge.Caller.CallOpts) !bool {
+    const ctx = self.ctx;
+
+    const js_value = try ctx.zigValueToJs(value, opts);
+
+    var out: v8.c.MaybeBool = undefined;
+    v8.c.v8__Object__SetAtIndex(@ptrCast(self.handle), ctx.handle, index, js_value.handle, &out);
+    return out.has_value;
+}
+
+pub fn toObject(self: Array) js.Object {
+    return .{
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
+    };
+}
+
+pub fn toValue(self: Array) js.Value {
     return .{
         .ctx = self.ctx,
         .handle = @ptrCast(self.handle),

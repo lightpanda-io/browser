@@ -31,6 +31,7 @@ pub const Platform = @import("Platform.zig");
 pub const Isolate = @import("Isolate.zig");
 pub const HandleScope = @import("HandleScope.zig");
 
+pub const Name = @import("Name.zig");
 pub const Value = @import("Value.zig");
 pub const Array = @import("Array.zig");
 pub const String = @import("String.zig");
@@ -38,13 +39,12 @@ pub const Object = @import("Object.zig");
 pub const TryCatch = @import("TryCatch.zig");
 pub const Function = @import("Function.zig");
 pub const Promise = @import("Promise.zig");
-pub const PromiseResolver = @import("PromiseResolver.zig");
 pub const Module = @import("Module.zig");
 pub const BigInt = @import("BigInt.zig");
-pub const Name = @import("Name.zig");
-
+pub const Number = @import("Number.zig");
 pub const Integer = @import("Integer.zig");
 pub const Global = @import("global.zig").Global;
+pub const PromiseResolver = @import("PromiseResolver.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -74,54 +74,6 @@ pub const ArrayBuffer = struct {
 
     pub fn dupe(self: ArrayBuffer, allocator: Allocator) !ArrayBuffer {
         return .{ .values = try allocator.dupe(u8, self.values) };
-    }
-};
-
-pub const PersistentPromiseResolver = struct {
-    context: *Context,
-    resolver: v8.Persistent(v8.PromiseResolver),
-
-    pub fn deinit(self: *PersistentPromiseResolver) void {
-        self.resolver.deinit();
-    }
-
-    pub fn promise(self: PersistentPromiseResolver) Promise {
-        const v8_promise = self.resolver.castToPromiseResolver().getPromise();
-        return .{ .handle = v8_promise.handle };
-    }
-
-    pub fn resolve(self: PersistentPromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._resolve(value) catch |err| {
-            log.err(.bug, "resolve", .{ .source = source, .err = err, .persistent = true });
-        };
-    }
-    fn _resolve(self: PersistentPromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value, .{});
-        defer context.runMicrotasks();
-
-        const v8_context = v8.Context{ .handle = context.handle };
-        if (self.resolver.castToPromiseResolver().resolve(v8_context, js_value.handle) == null) {
-            return error.FailedToResolvePromise;
-        }
-    }
-
-    pub fn reject(self: PersistentPromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._reject(value) catch |err| {
-            log.err(.bug, "reject", .{ .source = source, .err = err, .persistent = true });
-        };
-    }
-
-    fn _reject(self: PersistentPromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value, .{});
-        const v8_context = v8.Context{ .handle = context.handle };
-        defer context.runMicrotasks();
-
-        // resolver.reject will return null if the promise isn't pending
-        if (self.resolver.castToPromiseResolver().reject(v8_context, js_value.handle) == null) {
-            return error.FailedToRejectPromise;
-        }
     }
 };
 
@@ -215,60 +167,35 @@ pub fn isComplexAttributeType(ti: std.builtin.Type) bool {
 // These are simple types that we can convert to JS with only an isolate. This
 // is separated from the Caller's zigValueToJs to make it available when we
 // don't have a caller (i.e., when setting static attributes on types)
-pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) *const v8.c.Value else ?*const v8.c.Value {
+pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) *const v8.c.Value else ?*const v8.c.Value {
     switch (@typeInfo(@TypeOf(value))) {
-        .void => return @ptrCast(v8.initUndefined(isolate).handle),
-        .null => if (comptime null_as_undefined) return @ptrCast(v8.initUndefined(isolate).handle) else return @ptrCast(v8.initNull(isolate).handle),
-        .bool => return if (value) v8.initTrue(isolate).handle else v8.initFalse(isolate).handle,
-        .int => |n| switch (n.signedness) {
-            .signed => {
-                if (value > 0 and value <= 4_294_967_295) {
-                    return @ptrCast(v8.Integer.initU32(isolate, @intCast(value)).handle);
-                }
-                if (value >= -2_147_483_648 and value <= 2_147_483_647) {
-                    return @ptrCast(v8.Integer.initI32(isolate, @intCast(value)).handle);
-                }
-                if (comptime n.bits <= 64) {
-                    return @ptrCast(v8.BigInt.initI64(isolate, @intCast(value)).handle);
-                }
-                @compileError(@typeName(value) ++ " is not supported");
-            },
-            .unsigned => {
-                if (value <= 4_294_967_295) {
-                    return @ptrCast(v8.Integer.initU32(isolate, @intCast(value)).handle);
-                }
-                if (comptime n.bits <= 64) {
-                    return @ptrCast(v8.BigInt.initU64(isolate, @intCast(value)).handle);
-                }
-                @compileError(@typeName(value) ++ " is not supported");
-            },
+        .void => return isolate.initUndefined(),
+        .null => if (comptime null_as_undefined) return isolate.initUndefined() else return isolate.initNull(),
+        .bool => return if (value) isolate.initTrue() else isolate.initFalse(),
+        .int => |n| {
+            if (comptime n.bits <= 32) {
+                return @ptrCast(isolate.initInteger(value).handle);
+            }
+            if (value >= 0 and value <= 4_294_967_295) {
+                return @ptrCast(isolate.initInteger(@as(u32, @intCast(value))).handle);
+            }
+            return @ptrCast(isolate.initBigInt(value).handle);
         },
         .comptime_int => {
-            if (value >= 0) {
-                if (value <= 4_294_967_295) {
-                    return @ptrCast(v8.Integer.initU32(isolate, @intCast(value)).handle);
-                }
-                return @ptrCast(v8.BigInt.initU64(isolate, @intCast(value)).handle);
+            if (value > -2_147_483_648 and value <= 4_294_967_295) {
+                return @ptrCast(isolate.initInteger(value).handle);
             }
-            if (value >= -2_147_483_648) {
-                return @ptrCast(v8.Integer.initI32(isolate, @intCast(value)).handle);
-            }
-            return @ptrCast(v8.BigInt.initI64(isolate, @intCast(value)).handle);
+            return @ptrCast(isolate.initBigInt(value).handle);
         },
-        .comptime_float => return @ptrCast(v8.Number.init(isolate, value).handle),
-        .float => |f| switch (f.bits) {
-            64 => return @ptrCast(v8.Number.init(isolate, value).handle),
-            32 => return @ptrCast(v8.Number.init(isolate, @floatCast(value)).handle),
-            else => @compileError(@typeName(value) ++ " is not supported"),
-        },
+        .float, .comptime_float => return @ptrCast(isolate.initNumber(value).handle),
         .pointer => |ptr| {
             if (ptr.size == .slice and ptr.child == u8) {
-                return @ptrCast(v8.String.initUtf8(isolate, value).handle);
+                return @ptrCast(isolate.initStringHandle(value));
             }
             if (ptr.size == .one) {
                 const one_info = @typeInfo(ptr.child);
                 if (one_info == .array and one_info.array.child == u8) {
-                    return @ptrCast(v8.String.initUtf8(isolate, value).handle);
+                    return @ptrCast(isolate.initStringHandle(value));
                 }
             }
         },
@@ -278,22 +205,20 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                 return simpleZigValueToJs(isolate, v, fail, null_as_undefined);
             }
             if (comptime null_as_undefined) {
-                return @ptrCast(v8.initUndefined(isolate).handle);
+                return isolate.initUndefined();
             }
-            return @ptrCast(v8.initNull(isolate).handle);
+            return isolate.initNull();
         },
         .@"struct" => {
             switch (@TypeOf(value)) {
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;
-                    var array_buffer: v8.ArrayBuffer = undefined;
-                    const backing_store = v8.BackingStore.init(isolate, len);
-                    const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
+                    const backing_store = v8.c.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                    const data: [*]u8 = @ptrCast(@alignCast(v8.c.v8__BackingStore__Data(backing_store)));
                     @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
-                    array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
-
-                    return @ptrCast(array_buffer.handle);
+                    const backing_store_ptr = v8.c.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                    return @ptrCast(v8.c.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
                 },
                 // zig fmt: off
                 TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
@@ -310,37 +235,38 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                         else => @compileError("Invalid TypeArray type: " ++ @typeName(value_type)),
                     };
 
-                    var array_buffer: v8.ArrayBuffer = undefined;
+                    var array_buffer: *const v8.c.ArrayBuffer = undefined;
                     if (len == 0) {
-                        array_buffer = v8.ArrayBuffer.init(isolate, 0);
+                        array_buffer = v8.c.v8__ArrayBuffer__New(isolate.handle, 0).?;
                     } else {
                         const buffer_len = len * bits / 8;
-                        const backing_store = v8.BackingStore.init(isolate, buffer_len);
-                        const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
+                        const backing_store = v8.c.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
+                        const data: [*]u8 = @ptrCast(@alignCast(v8.c.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
-                        array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
+                        const backing_store_ptr = v8.c.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                        array_buffer = v8.c.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
                     }
 
                     switch (@typeInfo(value_type)) {
                         .int => |n| switch (n.signedness) {
                             .unsigned => switch (n.bits) {
-                                8 => return @ptrCast(v8.Uint8Array.init(array_buffer, 0, len).handle),
-                                16 => return @ptrCast(v8.Uint16Array.init(array_buffer, 0, len).handle),
-                                32 => return @ptrCast(v8.Uint32Array.init(array_buffer, 0, len).handle),
-                                64 => return @ptrCast(v8.BigUint64Array.init(array_buffer, 0, len).handle),
+                                8 => return @ptrCast(v8.c.v8__Uint8Array__New(array_buffer, 0, len).?),
+                                16 => return @ptrCast(v8.c.v8__Uint16Array__New(array_buffer, 0, len).?),
+                                32 => return @ptrCast(v8.c.v8__Uint32Array__New(array_buffer, 0, len).?),
+                                64 => return @ptrCast(v8.c.v8__BigUint64Array__New(array_buffer, 0, len).?),
                                 else => {},
                             },
                             .signed => switch (n.bits) {
-                                8 => return @ptrCast(v8.Int8Array.init(array_buffer, 0, len).handle),
-                                16 => return @ptrCast(v8.Int16Array.init(array_buffer, 0, len).handle),
-                                32 => return @ptrCast(v8.Int32Array.init(array_buffer, 0, len).handle),
-                                64 => return @ptrCast(v8.BigInt64Array.init(array_buffer, 0, len).handle),
+                                8 => return @ptrCast(v8.c.v8__Int8Array__New(array_buffer, 0, len).?),
+                                16 => return @ptrCast(v8.c.v8__Int16Array__New(array_buffer, 0, len).?),
+                                32 => return @ptrCast(v8.c.v8__Int32Array__New(array_buffer, 0, len).?),
+                                64 => return @ptrCast(v8.c.v8__BigInt64Array__New(array_buffer, 0, len).?),
                                 else => {},
                             },
                         },
                         .float => |f| switch (f.bits) {
-                            32 => return @ptrCast(v8.Float32Array.init(array_buffer, 0, len).handle),
-                            64 => return @ptrCast(v8.Float64Array.init(array_buffer, 0, len).handle),
+                            32 => return @ptrCast(v8.c.v8__Float32Array__New(array_buffer, 0, len).?),
+                            64 => return @ptrCast(v8.c.v8__Float64Array__New(array_buffer, 0, len).?),
                             else => {},
                         },
                         else => {},
@@ -349,6 +275,7 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                     // but this can never be valid.
                     @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
                 },
+                inline String, BigInt, Integer, Number, Value, Object => return value.handle,
                 else => {},
             }
         },
@@ -422,8 +349,8 @@ pub const TaggedAnyOpaque = struct {
 
     // When we're asked to describe an object via the Inspector, we _must_ include
     // the proper subtype (and description) fields in the returned JSON.
-    // V8 will give us a Value and ask us for the subtype. From the v8.Value we
-    // can get a v8.Object, and from the v8.Object, we can get out TaggedAnyOpaque
+    // V8 will give us a Value and ask us for the subtype. From the js.Value we
+    // can get a js.Object, and from the js.Object, we can get out TaggedAnyOpaque
     // which is where we store the subtype.
     subtype: ?bridge.SubType,
 };

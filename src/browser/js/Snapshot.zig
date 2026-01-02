@@ -480,9 +480,8 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
             },
             bridge.Property => {
                 // simpleZigValueToJs now returns raw handle directly
-                const iso_wrapper = v8.Isolate{ .handle = isolate };
                 const js_value = switch (value) {
-                    .int => |v| js.simpleZigValueToJs(iso_wrapper, v, true, false),
+                    .int => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
                 };
 
                 const js_name = v8.c.v8__String__NewFromUtf8(isolate, name.ptr, v8.c.kNormal, @intCast(name.len));

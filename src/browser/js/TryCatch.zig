@@ -24,12 +24,12 @@ const Allocator = std.mem.Allocator;
 
 const TryCatch = @This();
 
+ctx: *js.Context,
 handle: v8.c.TryCatch,
-ctx: *const js.Context,
 
-pub fn init(self: *TryCatch, context: *const js.Context) void {
-    self.ctx = context;
-    v8.c.v8__TryCatch__CONSTRUCT(&self.handle, context.isolate.handle);
+pub fn init(self: *TryCatch, ctx: *js.Context) void {
+    self.ctx = ctx;
+    v8.c.v8__TryCatch__CONSTRUCT(&self.handle, ctx.isolate.handle);
 }
 
 pub fn hasCaught(self: TryCatch) bool {
@@ -55,9 +55,8 @@ pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
 pub fn sourceLine(self: TryCatch, allocator: Allocator) !?[]const u8 {
     const ctx = self.ctx;
     const msg = v8.c.v8__TryCatch__Message(&self.handle) orelse return null;
-    const sl = v8.c.v8__Message__GetSourceLine(msg, ctx.handle) orelse return null;
-    const sl_string = v8.String{ .handle = sl };
-    return try ctx.jsStringToZig(sl_string, .{ .allocator = allocator });
+    const source_line_handle = v8.c.v8__Message__GetSourceLine(msg, ctx.handle) orelse return null;
+    return try ctx.jsStringToZig(source_line_handle, .{ .allocator = allocator });
 }
 
 pub fn sourceLineNumber(self: TryCatch) ?u32 {
