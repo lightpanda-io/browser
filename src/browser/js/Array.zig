@@ -23,17 +23,17 @@ const v8 = js.v8;
 const Array = @This();
 
 ctx: *js.Context,
-handle: *const v8.c.Array,
+handle: *const v8.Array,
 
 pub fn len(self: Array) usize {
-    return v8.c.v8__Array__Length(self.handle);
+    return v8.v8__Array__Length(self.handle);
 }
 
 pub fn get(self: Array, index: u32) !js.Value {
     const ctx = self.ctx;
 
     const idx = js.Integer.init(ctx.isolate.handle, index);
-    const handle = v8.c.v8__Object__Get(@ptrCast(self.handle), ctx.handle, idx.handle) orelse {
+    const handle = v8.v8__Object__Get(@ptrCast(self.handle), ctx.handle, idx.handle) orelse {
         return error.JsException;
     };
 
@@ -48,8 +48,8 @@ pub fn set(self: Array, index: u32, value: anytype, comptime opts: js.bridge.Cal
 
     const js_value = try ctx.zigValueToJs(value, opts);
 
-    var out: v8.c.MaybeBool = undefined;
-    v8.c.v8__Object__SetAtIndex(@ptrCast(self.handle), ctx.handle, index, js_value.handle, &out);
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Object__SetAtIndex(@ptrCast(self.handle), ctx.handle, index, js_value.handle, &out);
     return out.has_value;
 }
 

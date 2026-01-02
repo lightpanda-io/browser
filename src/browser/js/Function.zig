@@ -25,8 +25,8 @@ const Allocator = std.mem.Allocator;
 const Function = @This();
 
 ctx: *js.Context,
-this: ?*const v8.c.Object = null,
-handle: *const v8.c.Function,
+this: ?*const v8.Object = null,
+handle: *const v8.Function,
 
 pub const Result = struct {
     stack: ?[]const u8,
@@ -34,7 +34,7 @@ pub const Result = struct {
 };
 
 pub fn id(self: *const Function) u32 {
-    return @as(u32, @bitCast(v8.c.v8__Object__GetIdentityHash(@ptrCast(self.handle))));
+    return @as(u32, @bitCast(v8.v8__Object__GetIdentityHash(@ptrCast(self.handle))));
 }
 
 pub fn withThis(self: *const Function, value: anytype) !Function {
@@ -59,7 +59,7 @@ pub fn newInstance(self: *const Function, result: *Result) !js.Object {
 
     // This creates a new instance using this Function as a constructor.
     // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
-    const handle = v8.c.v8__Function__NewInstance(self.handle, ctx.handle, 0, null) orelse {
+    const handle = v8.v8__Function__NewInstance(self.handle, ctx.handle, 0, null) orelse {
         if (try_catch.hasCaught()) {
             const allocator = ctx.call_arena;
             result.stack = try_catch.stack(allocator) catch null;
@@ -129,18 +129,18 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
 
     const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
 
-    const js_args: []const *const v8.c.Value = switch (@typeInfo(@TypeOf(aargs))) {
+    const js_args: []const *const v8.Value = switch (@typeInfo(@TypeOf(aargs))) {
         .@"struct" => |s| blk: {
             const fields = s.fields;
-            var js_args: [fields.len]*const v8.c.Value = undefined;
+            var js_args: [fields.len]*const v8.Value = undefined;
             inline for (fields, 0..) |f, i| {
                 js_args[i] = (try ctx.zigValueToJs(@field(aargs, f.name), .{})).handle;
             }
-            const cargs: [fields.len]*const v8.c.Value = js_args;
+            const cargs: [fields.len]*const v8.Value = js_args;
             break :blk &cargs;
         },
         .pointer => blk: {
-            var values = try ctx.call_arena.alloc(*const v8.c.Value, args.len);
+            var values = try ctx.call_arena.alloc(*const v8.Value, args.len);
             for (args, 0..) |a, i| {
                 values[i] = (try ctx.zigValueToJs(a, .{})).handle;
             }
@@ -149,8 +149,8 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
         else => @compileError("JS Function called with invalid paremter type"),
     };
 
-    const c_args = @as(?[*]const ?*v8.c.Value, @ptrCast(js_args.ptr));
-    const handle = v8.c.v8__Function__Call(self.handle, ctx.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
+    const c_args = @as(?[*]const ?*v8.Value, @ptrCast(js_args.ptr));
+    const handle = v8.v8__Function__Call(self.handle, ctx.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
         // std.debug.print("CB ERR: {s}\n", .{self.src() catch "???"});
         return error.JSExecCallback;
     };
@@ -162,7 +162,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
 }
 
 fn getThis(self: *const Function) js.Object {
-    const handle = if (self.this) |t| t else v8.c.v8__Context__Global(self.ctx.handle).?;
+    const handle = if (self.this) |t| t else v8.v8__Context__Global(self.ctx.handle).?;
     return .{
         .ctx = self.ctx,
         .handle = handle,
@@ -176,7 +176,7 @@ pub fn src(self: *const Function) ![]const u8 {
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
     const ctx = self.ctx;
     const key = ctx.isolate.initStringHandle(name);
-    const handle = v8.c.v8__Object__Get(self.handle, ctx.handle, key) orelse {
+    const handle = v8.v8__Object__Get(self.handle, ctx.handle, key) orelse {
         return error.JsException;
     };
 

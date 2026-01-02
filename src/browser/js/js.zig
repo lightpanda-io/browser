@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-pub const v8 = @import("v8");
+pub const v8 = @import("v8").c;
 
 const log = @import("../../log.zig");
 
@@ -79,7 +79,7 @@ pub const ArrayBuffer = struct {
 
 pub const Exception = struct {
     ctx: *const Context,
-    handle: *const v8.c.Value,
+    handle: *const v8.Value,
 
     pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
         return self.context.valueToString(self.inner, .{ .allocator = allocator });
@@ -167,7 +167,7 @@ pub fn isComplexAttributeType(ti: std.builtin.Type) bool {
 // These are simple types that we can convert to JS with only an isolate. This
 // is separated from the Caller's zigValueToJs to make it available when we
 // don't have a caller (i.e., when setting static attributes on types)
-pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) *const v8.c.Value else ?*const v8.c.Value {
+pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) *const v8.Value else ?*const v8.Value {
     switch (@typeInfo(@TypeOf(value))) {
         .void => return isolate.initUndefined(),
         .null => if (comptime null_as_undefined) return isolate.initUndefined() else return isolate.initNull(),
@@ -214,11 +214,11 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;
-                    const backing_store = v8.c.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
-                    const data: [*]u8 = @ptrCast(@alignCast(v8.c.v8__BackingStore__Data(backing_store)));
+                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                    const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                     @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
-                    const backing_store_ptr = v8.c.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                    return @ptrCast(v8.c.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
+                    const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                    return @ptrCast(v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
                 },
                 // zig fmt: off
                 TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
@@ -235,38 +235,38 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                         else => @compileError("Invalid TypeArray type: " ++ @typeName(value_type)),
                     };
 
-                    var array_buffer: *const v8.c.ArrayBuffer = undefined;
+                    var array_buffer: *const v8.ArrayBuffer = undefined;
                     if (len == 0) {
-                        array_buffer = v8.c.v8__ArrayBuffer__New(isolate.handle, 0).?;
+                        array_buffer = v8.v8__ArrayBuffer__New(isolate.handle, 0).?;
                     } else {
                         const buffer_len = len * bits / 8;
-                        const backing_store = v8.c.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
-                        const data: [*]u8 = @ptrCast(@alignCast(v8.c.v8__BackingStore__Data(backing_store)));
+                        const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
+                        const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
-                        const backing_store_ptr = v8.c.v8__BackingStore__TO_SHARED_PTR(backing_store);
-                        array_buffer = v8.c.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
                     }
 
                     switch (@typeInfo(value_type)) {
                         .int => |n| switch (n.signedness) {
                             .unsigned => switch (n.bits) {
-                                8 => return @ptrCast(v8.c.v8__Uint8Array__New(array_buffer, 0, len).?),
-                                16 => return @ptrCast(v8.c.v8__Uint16Array__New(array_buffer, 0, len).?),
-                                32 => return @ptrCast(v8.c.v8__Uint32Array__New(array_buffer, 0, len).?),
-                                64 => return @ptrCast(v8.c.v8__BigUint64Array__New(array_buffer, 0, len).?),
+                                8 => return @ptrCast(v8.v8__Uint8Array__New(array_buffer, 0, len).?),
+                                16 => return @ptrCast(v8.v8__Uint16Array__New(array_buffer, 0, len).?),
+                                32 => return @ptrCast(v8.v8__Uint32Array__New(array_buffer, 0, len).?),
+                                64 => return @ptrCast(v8.v8__BigUint64Array__New(array_buffer, 0, len).?),
                                 else => {},
                             },
                             .signed => switch (n.bits) {
-                                8 => return @ptrCast(v8.c.v8__Int8Array__New(array_buffer, 0, len).?),
-                                16 => return @ptrCast(v8.c.v8__Int16Array__New(array_buffer, 0, len).?),
-                                32 => return @ptrCast(v8.c.v8__Int32Array__New(array_buffer, 0, len).?),
-                                64 => return @ptrCast(v8.c.v8__BigInt64Array__New(array_buffer, 0, len).?),
+                                8 => return @ptrCast(v8.v8__Int8Array__New(array_buffer, 0, len).?),
+                                16 => return @ptrCast(v8.v8__Int16Array__New(array_buffer, 0, len).?),
+                                32 => return @ptrCast(v8.v8__Int32Array__New(array_buffer, 0, len).?),
+                                64 => return @ptrCast(v8.v8__BigInt64Array__New(array_buffer, 0, len).?),
                                 else => {},
                             },
                         },
                         .float => |f| switch (f.bits) {
-                            32 => return @ptrCast(v8.c.v8__Float32Array__New(array_buffer, 0, len).?),
-                            64 => return @ptrCast(v8.c.v8__Float64Array__New(array_buffer, 0, len).?),
+                            32 => return @ptrCast(v8.v8__Float32Array__New(array_buffer, 0, len).?),
+                            64 => return @ptrCast(v8.v8__Float64Array__New(array_buffer, 0, len).?),
                             else => {},
                         },
                         else => {},
@@ -367,8 +367,8 @@ pub const PrototypeChainEntry = struct {
 // it'll call this function to gets its [optional] subtype - which, from V8's
 // point of view, is an arbitrary string.
 pub export fn v8_inspector__Client__IMPL__valueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    c_value: *const v8.c.Value,
+    _: *v8.InspectorClientImpl,
+    c_value: *const v8.Value,
 ) callconv(.c) [*c]const u8 {
     const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
     return if (external_entry.subtype) |st| @tagName(st) else null;
@@ -379,9 +379,9 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
 // present, even if it's empty. So if we have a subType for the value, we'll
 // put an empty description.
 pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    v8_context: *const v8.c.Context,
-    c_value: *const v8.c.Value,
+    _: *v8.InspectorClientImpl,
+    v8_context: *const v8.Context,
+    c_value: *const v8.Value,
 ) callconv(.c) [*c]const u8 {
     _ = v8_context;
 

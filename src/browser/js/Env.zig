@@ -49,44 +49,44 @@ platform: *const Platform,
 isolate: js.Isolate,
 
 // just kept around because we need to free it on deinit
-isolate_params: *v8.c.CreateParams,
+isolate_params: *v8.CreateParams,
 
 context_id: usize,
 
 // Global handles that need to be freed on deinit
-globals: []v8.c.Global,
+globals: []v8.Global,
 
 // Dynamic slice to avoid circular dependency on JsApis.len at comptime
-templates: []*const v8.c.FunctionTemplate,
+templates: []*const v8.FunctionTemplate,
 
 pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot) !Env {
-    var params = try allocator.create(v8.c.CreateParams);
+    var params = try allocator.create(v8.CreateParams);
     errdefer allocator.destroy(params);
-    v8.c.v8__Isolate__CreateParams__CONSTRUCT(params);
+    v8.v8__Isolate__CreateParams__CONSTRUCT(params);
     params.snapshot_blob = @ptrCast(&snapshot.startup_data);
 
-    params.array_buffer_allocator = v8.c.v8__ArrayBuffer__Allocator__NewDefaultAllocator().?;
-    errdefer v8.c.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
+    params.array_buffer_allocator = v8.v8__ArrayBuffer__Allocator__NewDefaultAllocator().?;
+    errdefer v8.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
     params.external_references = &snapshot.external_references;
 
     var isolate = js.Isolate.init(params);
     errdefer isolate.deinit();
 
-    v8.c.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate.handle, Context.dynamicModuleCallback);
-    v8.c.v8__Isolate__SetPromiseRejectCallback(isolate.handle, promiseRejectCallback);
-    v8.c.v8__Isolate__SetMicrotasksPolicy(isolate.handle, v8.c.kExplicit);
+    v8.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate.handle, Context.dynamicModuleCallback);
+    v8.v8__Isolate__SetPromiseRejectCallback(isolate.handle, promiseRejectCallback);
+    v8.v8__Isolate__SetMicrotasksPolicy(isolate.handle, v8.kExplicit);
 
     isolate.enter();
     errdefer isolate.exit();
 
-    v8.c.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate.handle, Context.metaObjectCallback);
+    v8.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate.handle, Context.metaObjectCallback);
 
     // Allocate arrays dynamically to avoid comptime dependency on JsApis.len
-    const globals = try allocator.alloc(v8.c.Global, JsApis.len);
+    const globals = try allocator.alloc(v8.Global, JsApis.len);
     errdefer allocator.free(globals);
 
-    const templates = try allocator.alloc(*const v8.c.FunctionTemplate, JsApis.len);
+    const templates = try allocator.alloc(*const v8.FunctionTemplate, JsApis.len);
     errdefer allocator.free(templates);
 
     {
@@ -95,15 +95,15 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
         defer temp_scope.deinit();
         const context_handle = isolate.createContextHandle(null, null);
 
-        v8.c.v8__Context__Enter(context_handle);
-        defer v8.c.v8__Context__Exit(context_handle);
+        v8.v8__Context__Enter(context_handle);
+        defer v8.v8__Context__Exit(context_handle);
 
         inline for (JsApis, 0..) |JsApi, i| {
             JsApi.Meta.class_id = i;
-            const data = v8.c.v8__Context__GetDataFromSnapshotOnce(context_handle, snapshot.data_start + i);
-            const function_handle: *const v8.c.FunctionTemplate = @ptrCast(data);
+            const data = v8.v8__Context__GetDataFromSnapshotOnce(context_handle, snapshot.data_start + i);
+            const function_handle: *const v8.FunctionTemplate = @ptrCast(data);
             // Make function template global/persistent
-            v8.c.v8__Global__New(isolate.handle, @ptrCast(function_handle), &globals[i]);
+            v8.v8__Global__New(isolate.handle, @ptrCast(function_handle), &globals[i]);
             // Extract the local handle from the global for easy access
             templates[i] = @ptrCast(@alignCast(@as(*const anyopaque, @ptrFromInt(globals[i].data_ptr))));
         }
@@ -123,14 +123,14 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
 pub fn deinit(self: *Env) void {
     // Free global handles before destroying the isolate
     for (self.globals) |*global| {
-        v8.c.v8__Global__Reset(global);
+        v8.v8__Global__Reset(global);
     }
     self.allocator.free(self.globals);
     self.allocator.free(self.templates);
 
     self.isolate.exit();
     self.isolate.deinit();
-    v8.c.v8__ArrayBuffer__Allocator__DELETE(self.isolate_params.array_buffer_allocator.?);
+    v8.v8__ArrayBuffer__Allocator__DELETE(self.isolate_params.array_buffer_allocator.?);
     self.allocator.destroy(self.isolate_params);
 }
 
@@ -145,11 +145,11 @@ pub fn runMicrotasks(self: *const Env) void {
 }
 
 pub fn pumpMessageLoop(self: *const Env) bool {
-    return v8.c.v8__Platform__PumpMessageLoop(self.platform.handle, self.isolate.handle, false);
+    return v8.v8__Platform__PumpMessageLoop(self.platform.handle, self.isolate.handle, false);
 }
 
 pub fn runIdleTasks(self: *const Env) void {
-    v8.c.v8__Platform__RunIdleTasks(self.platform.handle, self.isolate.handle, 1);
+    v8.v8__Platform__RunIdleTasks(self.platform.handle, self.isolate.handle, 1);
 }
 pub fn newExecutionWorld(self: *Env) !ExecutionWorld {
     return .{
@@ -191,14 +191,14 @@ pub fn dumpMemoryStats(self: *Env) void {
     , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
 }
 
-fn promiseRejectCallback(message_handle: v8.c.PromiseRejectMessage) callconv(.c) void {
-    const promise_handle = v8.c.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
-    const isolate_handle = v8.c.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
+fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
+    const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
+    const isolate_handle = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
     const js_isolate = js.Isolate{ .handle = isolate_handle };
     const context = Context.fromIsolate(js_isolate);
 
     const value =
-        if (v8.c.v8__PromiseRejectMessage__GetValue(&message_handle)) |v8_value|
+        if (v8.v8__PromiseRejectMessage__GetValue(&message_handle)) |v8_value|
             context.valueToString(.{ .ctx = context, .handle = v8_value }, .{}) catch |err| @errorName(err)
         else
             "no value";

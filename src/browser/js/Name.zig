@@ -21,7 +21,7 @@ const v8 = js.v8;
 
 const Name = @This();
 
-handle: *const v8.c.Name,
+handle: *const v8.Name,
 
 pub fn toValue(self: Name) js.Value {
     return .{

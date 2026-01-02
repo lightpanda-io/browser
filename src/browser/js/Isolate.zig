@@ -21,80 +21,80 @@ const v8 = js.v8;
 
 const Isolate = @This();
 
-handle: *v8.c.Isolate,
+handle: *v8.Isolate,
 
-pub fn init(params: *v8.c.CreateParams) Isolate {
+pub fn init(params: *v8.CreateParams) Isolate {
     return .{
-        .handle = v8.c.v8__Isolate__New(params).?,
+        .handle = v8.v8__Isolate__New(params).?,
     };
 }
 
 pub fn deinit(self: Isolate) void {
-    v8.c.v8__Isolate__Dispose(self.handle);
+    v8.v8__Isolate__Dispose(self.handle);
 }
 
 pub fn enter(self: Isolate) void {
-    v8.c.v8__Isolate__Enter(self.handle);
+    v8.v8__Isolate__Enter(self.handle);
 }
 
 pub fn exit(self: Isolate) void {
-    v8.c.v8__Isolate__Exit(self.handle);
+    v8.v8__Isolate__Exit(self.handle);
 }
 
 pub fn performMicrotasksCheckpoint(self: Isolate) void {
-    v8.c.v8__Isolate__PerformMicrotaskCheckpoint(self.handle);
+    v8.v8__Isolate__PerformMicrotaskCheckpoint(self.handle);
 }
 
 pub fn enqueueMicrotask(self: Isolate, callback: anytype, data: anytype) void {
-    v8.c.v8__Isolate__EnqueueMicrotask(self.handle, callback, data);
+    v8.v8__Isolate__EnqueueMicrotask(self.handle, callback, data);
 }
 
 pub fn enqueueMicrotaskFunc(self: Isolate, function: js.Function) void {
-    v8.c.v8__Isolate__EnqueueMicrotaskFunc(self.handle, function.handle);
+    v8.v8__Isolate__EnqueueMicrotaskFunc(self.handle, function.handle);
 }
 
 pub fn lowMemoryNotification(self: Isolate) void {
-    v8.c.v8__Isolate__LowMemoryNotification(self.handle);
+    v8.v8__Isolate__LowMemoryNotification(self.handle);
 }
 
-pub fn getHeapStatistics(self: Isolate) v8.c.HeapStatistics {
-    var res: v8.c.HeapStatistics = undefined;
-    v8.c.v8__Isolate__GetHeapStatistics(self.handle, &res);
+pub fn getHeapStatistics(self: Isolate) v8.HeapStatistics {
+    var res: v8.HeapStatistics = undefined;
+    v8.v8__Isolate__GetHeapStatistics(self.handle, &res);
     return res;
 }
 
-pub fn throwException(self: Isolate, value: *const v8.c.Value) *const v8.c.Value {
-    return v8.c.v8__Isolate__ThrowException(self.handle, value).?;
+pub fn throwException(self: Isolate, value: *const v8.Value) *const v8.Value {
+    return v8.v8__Isolate__ThrowException(self.handle, value).?;
 }
 
-pub fn initStringHandle(self: Isolate, str: []const u8) *const v8.c.String {
-    return v8.c.v8__String__NewFromUtf8(self.handle, str.ptr, v8.c.kNormal, @as(c_int, @intCast(str.len))).?;
+pub fn initStringHandle(self: Isolate, str: []const u8) *const v8.String {
+    return v8.v8__String__NewFromUtf8(self.handle, str.ptr, v8.kNormal, @as(c_int, @intCast(str.len))).?;
 }
 
-pub fn createError(self: Isolate, msg: []const u8) *const v8.c.Value {
+pub fn createError(self: Isolate, msg: []const u8) *const v8.Value {
     const message = self.initStringHandle(msg);
-    return v8.c.v8__Exception__Error(message).?;
+    return v8.v8__Exception__Error(message).?;
 }
 
-pub fn createTypeError(self: Isolate, msg: []const u8) *const v8.c.Value {
+pub fn createTypeError(self: Isolate, msg: []const u8) *const v8.Value {
     const message = self.initStringHandle(msg);
-    return v8.c.v8__Exception__TypeError(message).?;
+    return v8.v8__Exception__TypeError(message).?;
 }
 
-pub fn initNull(self: Isolate) *const v8.c.Value {
-    return v8.c.v8__Null(self.handle).?;
+pub fn initNull(self: Isolate) *const v8.Value {
+    return v8.v8__Null(self.handle).?;
 }
 
-pub fn initUndefined(self: Isolate) *const v8.c.Value {
-    return v8.c.v8__Undefined(self.handle).?;
+pub fn initUndefined(self: Isolate) *const v8.Value {
+    return v8.v8__Undefined(self.handle).?;
 }
 
-pub fn initFalse(self: Isolate) *const v8.c.Value {
-    return v8.c.v8__False(self.handle).?;
+pub fn initFalse(self: Isolate) *const v8.Value {
+    return v8.v8__False(self.handle).?;
 }
 
-pub fn initTrue(self: Isolate) *const v8.c.Value {
-    return v8.c.v8__True(self.handle).?;
+pub fn initTrue(self: Isolate) *const v8.Value {
+    return v8.v8__True(self.handle).?;
 }
 
 pub fn initInteger(self: Isolate, val: anytype) js.Integer {
@@ -109,14 +109,14 @@ pub fn initNumber(self: Isolate, val: anytype) js.Number {
     return js.Number.init(self.handle, val);
 }
 
-pub fn createContextHandle(self: Isolate, global_tmpl: ?*const v8.c.ObjectTemplate, global_obj: ?*const v8.c.Value) *const v8.c.Context {
-    return v8.c.v8__Context__New(self.handle, global_tmpl, global_obj).?;
+pub fn createContextHandle(self: Isolate, global_tmpl: ?*const v8.ObjectTemplate, global_obj: ?*const v8.Value) *const v8.Context {
+    return v8.v8__Context__New(self.handle, global_tmpl, global_obj).?;
 }
 
-pub fn createFunctionTemplateHandle(self: Isolate) *const v8.c.FunctionTemplate {
-    return v8.c.v8__FunctionTemplate__New__DEFAULT(self.handle).?;
+pub fn createFunctionTemplateHandle(self: Isolate) *const v8.FunctionTemplate {
+    return v8.v8__FunctionTemplate__New__DEFAULT(self.handle).?;
 }
 
-pub fn createExternal(self: Isolate, val: *anyopaque) *const v8.c.External {
-    return v8.c.v8__External__New(self.handle, val).?;
+pub fn createExternal(self: Isolate, val: *anyopaque) *const v8.External {
+    return v8.v8__External__New(self.handle, val).?;
 }

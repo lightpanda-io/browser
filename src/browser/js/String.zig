@@ -26,7 +26,7 @@ const v8 = js.v8;
 const String = @This();
 
 ctx: *js.Context,
-handle: *const v8.c.String,
+handle: *const v8.String,
 
 pub const ToZigOpts = struct {
     allocator: ?Allocator = null,
@@ -43,11 +43,11 @@ pub fn toZigZ(self: String, opts: ToZigOpts) ![:0]u8 {
 fn _toZig(self: String, comptime null_terminate: bool, opts: ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
     const isolate = self.ctx.isolate.handle;
     const allocator = opts.allocator orelse self.ctx.call_arena;
-    const len: u32 = @intCast(v8.c.v8__String__Utf8Length(self.handle, isolate));
+    const len: u32 = @intCast(v8.v8__String__Utf8Length(self.handle, isolate));
     const buf = if (null_terminate) try allocator.allocSentinel(u8, len, 0) else try allocator.alloc(u8, len);
 
-    const options = v8.c.NO_NULL_TERMINATION | v8.c.REPLACE_INVALID_UTF8;
-    const n = v8.c.v8__String__WriteUtf8(self.handle, isolate, buf.ptr, buf.len, options);
+    const options = v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8;
+    const n = v8.v8__String__WriteUtf8(self.handle, isolate, buf.ptr, buf.len, options);
     std.debug.assert(n == len);
     return buf;
 }

@@ -38,71 +38,71 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 // They are not exported - internal to this module only.
 
 const Value = struct {
-    handle: *const v8.c.Value,
+    handle: *const v8.Value,
 
     fn isArray(self: Value) bool {
-        return v8.c.v8__Value__IsArray(self.handle);
+        return v8.v8__Value__IsArray(self.handle);
     }
 
     fn isTypedArray(self: Value) bool {
-        return v8.c.v8__Value__IsTypedArray(self.handle);
+        return v8.v8__Value__IsTypedArray(self.handle);
     }
 
     fn isFunction(self: Value) bool {
-        return v8.c.v8__Value__IsFunction(self.handle);
+        return v8.v8__Value__IsFunction(self.handle);
     }
 };
 
 const Name = struct {
-    handle: *const v8.c.Name,
+    handle: *const v8.Name,
 };
 
 const FunctionCallbackInfo = struct {
-    handle: *const v8.c.FunctionCallbackInfo,
+    handle: *const v8.FunctionCallbackInfo,
 
     fn length(self: FunctionCallbackInfo) u32 {
-        return @intCast(v8.c.v8__FunctionCallbackInfo__Length(self.handle));
+        return @intCast(v8.v8__FunctionCallbackInfo__Length(self.handle));
     }
 
     fn getArg(self: FunctionCallbackInfo, index: u32) Value {
-        return .{ .handle = v8.c.v8__FunctionCallbackInfo__INDEX(self.handle, @intCast(index)).? };
+        return .{ .handle = v8.v8__FunctionCallbackInfo__INDEX(self.handle, @intCast(index)).? };
     }
 
-    fn getThis(self: FunctionCallbackInfo) *const v8.c.Object {
-        return v8.c.v8__FunctionCallbackInfo__This(self.handle).?;
+    fn getThis(self: FunctionCallbackInfo) *const v8.Object {
+        return v8.v8__FunctionCallbackInfo__This(self.handle).?;
     }
 
     fn getReturnValue(self: FunctionCallbackInfo) ReturnValue {
-        var rv: v8.c.ReturnValue = undefined;
-        v8.c.v8__FunctionCallbackInfo__GetReturnValue(self.handle, &rv);
+        var rv: v8.ReturnValue = undefined;
+        v8.v8__FunctionCallbackInfo__GetReturnValue(self.handle, &rv);
         return .{ .handle = rv };
     }
 };
 
 const PropertyCallbackInfo = struct {
-    handle: *const v8.c.PropertyCallbackInfo,
+    handle: *const v8.PropertyCallbackInfo,
 
-    fn getThis(self: PropertyCallbackInfo) *const v8.c.Object {
-        return v8.c.v8__PropertyCallbackInfo__This(self.handle).?;
+    fn getThis(self: PropertyCallbackInfo) *const v8.Object {
+        return v8.v8__PropertyCallbackInfo__This(self.handle).?;
     }
 
     fn getReturnValue(self: PropertyCallbackInfo) ReturnValue {
-        var rv: v8.c.ReturnValue = undefined;
-        v8.c.v8__PropertyCallbackInfo__GetReturnValue(self.handle, &rv);
+        var rv: v8.ReturnValue = undefined;
+        v8.v8__PropertyCallbackInfo__GetReturnValue(self.handle, &rv);
         return .{ .handle = rv };
     }
 };
 
 const ReturnValue = struct {
-    handle: v8.c.ReturnValue,
+    handle: v8.ReturnValue,
 
     fn set(self: ReturnValue, value: anytype) void {
         const T = @TypeOf(value);
         if (T == Value) {
             self.setValueHandle(value.handle);
-        } else if (T == *const v8.c.Object) {
+        } else if (T == *const v8.Object) {
             self.setValueHandle(@ptrCast(value));
-        } else if (T == *const v8.c.Value) {
+        } else if (T == *const v8.Value) {
             self.setValueHandle(value);
         } else if (T == js.Value) {
             self.setValueHandle(value.handle);
@@ -111,8 +111,8 @@ const ReturnValue = struct {
         }
     }
 
-    fn setValueHandle(self: ReturnValue, handle: *const v8.c.Value) void {
-        v8.c.v8__ReturnValue__Set(self.handle, handle);
+    fn setValueHandle(self: ReturnValue, handle: *const v8.Value) void {
+        v8.v8__ReturnValue__Set(self.handle, handle);
     }
 };
 
@@ -126,12 +126,12 @@ pub const Caller = struct {
     call_arena: Allocator,
 
     // Takes the raw v8 isolate and extracts the context from it.
-    pub fn init(v8_isolate: *v8.c.Isolate) Caller {
+    pub fn init(v8_isolate: *v8.Isolate) Caller {
         const isolate = js.Isolate{ .handle = v8_isolate };
-        const v8_context_handle = v8.c.v8__Isolate__GetCurrentContext(v8_isolate);
-        const embedder_data = v8.c.v8__Context__GetEmbedderData(v8_context_handle, 1);
+        const v8_context_handle = v8.v8__Isolate__GetCurrentContext(v8_isolate);
+        const embedder_data = v8.v8__Context__GetEmbedderData(v8_context_handle, 1);
         var lossless: bool = undefined;
-        const context: *Context = @ptrFromInt(v8.c.v8__BigInt__Uint64Value(embedder_data, &lossless));
+        const context: *Context = @ptrFromInt(v8.v8__BigInt__Uint64Value(embedder_data, &lossless));
 
         context.call_depth += 1;
         return .{
@@ -197,9 +197,9 @@ pub const Caller = struct {
         // If we got back a different object (existing wrapper), copy the prototype
         // from new object. (this happens when we're upgrading an CustomElement)
         if (this.handle != new_this_handle) {
-            const prototype_handle = v8.c.v8__Object__GetPrototype(new_this_handle).?;
-            var out: v8.c.MaybeBool = undefined;
-            v8.c.v8__Object__SetPrototype(this.handle, self.context.handle, prototype_handle, &out);
+            const prototype_handle = v8.v8__Object__GetPrototype(new_this_handle).?;
+            var out: v8.MaybeBool = undefined;
+            v8.v8__Object__SetPrototype(this.handle, self.context.handle, prototype_handle, &out);
             if (comptime IS_DEBUG) {
                 std.debug.assert(out.has_value and out.value);
             }
@@ -364,7 +364,7 @@ pub const Caller = struct {
             }
         }
 
-        const js_err: *const v8.c.Value = switch (err) {
+        const js_err: *const v8.Value = switch (err) {
             error.InvalidArgument => isolate.createTypeError("invalid argument"),
             error.OutOfMemory => isolate.createError("out of memory"),
             error.IllegalConstructor => isolate.createError("Illegal Contructor"),
@@ -624,7 +624,7 @@ pub fn Builder(comptime T: type) type {
 }
 
 pub const Constructor = struct {
-    func: *const fn (?*const v8.c.FunctionCallbackInfo) callconv(.c) void,
+    func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
         dom_exception: bool = false,
@@ -632,8 +632,8 @@ pub const Constructor = struct {
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Constructor {
         return .{ .func = struct {
-            fn wrap(handle: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                const v8_isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+            fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
                 var caller = Caller.init(v8_isolate);
                 defer caller.deinit();
 
@@ -648,7 +648,7 @@ pub const Constructor = struct {
 
 pub const Function = struct {
     static: bool,
-    func: *const fn (?*const v8.c.FunctionCallbackInfo) callconv(.c) void,
+    func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
         static: bool = false,
@@ -661,8 +661,8 @@ pub const Function = struct {
         return .{
             .static = opts.static,
             .func = struct {
-                fn wrap(handle: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
                     var caller = Caller.init(v8_isolate);
                     defer caller.deinit();
 
@@ -688,8 +688,8 @@ pub const Function = struct {
 
 pub const Accessor = struct {
     static: bool = false,
-    getter: ?*const fn (?*const v8.c.FunctionCallbackInfo) callconv(.c) void = null,
-    setter: ?*const fn (?*const v8.c.FunctionCallbackInfo) callconv(.c) void = null,
+    getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
+    setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
 
     const Opts = struct {
         static: bool = false,
@@ -705,8 +705,8 @@ pub const Accessor = struct {
 
         if (@typeInfo(@TypeOf(getter)) != .null) {
             accessor.getter = struct {
-                fn wrap(handle: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
                     var caller = Caller.init(v8_isolate);
                     defer caller.deinit();
 
@@ -721,8 +721,8 @@ pub const Accessor = struct {
 
         if (@typeInfo(@TypeOf(setter)) != .null) {
             accessor.setter = struct {
-                fn wrap(handle: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
                     var caller = Caller.init(v8_isolate);
                     defer caller.deinit();
 
@@ -742,7 +742,7 @@ pub const Accessor = struct {
 };
 
 pub const Indexed = struct {
-    getter: *const fn (idx: u32, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8,
+    getter: *const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8,
 
     const Opts = struct {
         as_typed_array: bool = false,
@@ -751,8 +751,8 @@ pub const Indexed = struct {
 
     fn init(comptime T: type, comptime getter: anytype, comptime opts: Opts) Indexed {
         return .{ .getter = struct {
-            fn wrap(idx: u32, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8 {
-                const v8_isolate = v8.c.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+            fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller = Caller.init(v8_isolate);
                 defer caller.deinit();
 
@@ -767,9 +767,9 @@ pub const Indexed = struct {
 };
 
 pub const NamedIndexed = struct {
-    getter: *const fn (c_name: ?*const v8.c.Name, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8,
-    setter: ?*const fn (c_name: ?*const v8.c.Name, c_value: ?*const v8.c.Value, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8 = null,
-    deleter: ?*const fn (c_name: ?*const v8.c.Name, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8 = null,
+    getter: *const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8,
+    setter: ?*const fn (c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 = null,
+    deleter: ?*const fn (c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 = null,
 
     const Opts = struct {
         as_typed_array: bool = false,
@@ -778,8 +778,8 @@ pub const NamedIndexed = struct {
 
     fn init(comptime T: type, comptime getter: anytype, setter: anytype, deleter: anytype, comptime opts: Opts) NamedIndexed {
         const getter_fn = struct {
-            fn wrap(c_name: ?*const v8.c.Name, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8 {
-                const v8_isolate = v8.c.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller = Caller.init(v8_isolate);
                 defer caller.deinit();
 
@@ -792,8 +792,8 @@ pub const NamedIndexed = struct {
         }.wrap;
 
         const setter_fn = if (@typeInfo(@TypeOf(setter)) == .null) null else struct {
-            fn wrap(c_name: ?*const v8.c.Name, c_value: ?*const v8.c.Value, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8 {
-                const v8_isolate = v8.c.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+            fn wrap(c_name: ?*const v8.Name, c_value: ?*const v8.Value, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller = Caller.init(v8_isolate);
                 defer caller.deinit();
 
@@ -806,8 +806,8 @@ pub const NamedIndexed = struct {
         }.wrap;
 
         const deleter_fn = if (@typeInfo(@TypeOf(deleter)) == .null) null else struct {
-            fn wrap(c_name: ?*const v8.c.Name, handle: ?*const v8.c.PropertyCallbackInfo) callconv(.c) u8 {
-                const v8_isolate = v8.c.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+            fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
                 var caller = Caller.init(v8_isolate);
                 defer caller.deinit();
 
@@ -828,7 +828,7 @@ pub const NamedIndexed = struct {
 };
 
 pub const Iterator = struct {
-    func: *const fn (?*const v8.c.FunctionCallbackInfo) callconv(.c) void,
+    func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
     async: bool,
 
     const Opts = struct {
@@ -841,7 +841,7 @@ pub const Iterator = struct {
             return .{
                 .async = opts.async,
                 .func = struct {
-                    fn wrap(handle: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
+                    fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                         const info = FunctionCallbackInfo{ .handle = handle.? };
                         info.getReturnValue().set(info.getThis());
                     }
@@ -852,8 +852,8 @@ pub const Iterator = struct {
         return .{
             .async = opts.async,
             .func = struct {
-                fn wrap(handle: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+                fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
                     var caller = Caller.init(v8_isolate);
                     defer caller.deinit();
 
@@ -866,7 +866,7 @@ pub const Iterator = struct {
 };
 
 pub const Callable = struct {
-    func: *const fn (?*const v8.c.FunctionCallbackInfo) callconv(.c) void,
+    func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
         null_as_undefined: bool = false,
@@ -874,8 +874,8 @@ pub const Callable = struct {
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Callable {
         return .{ .func = struct {
-            fn wrap(handle: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-                const v8_isolate = v8.c.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+            fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+                const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
                 var caller = Caller.init(v8_isolate);
                 defer caller.deinit();
 

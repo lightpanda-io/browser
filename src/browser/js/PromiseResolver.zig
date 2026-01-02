@@ -23,19 +23,19 @@ const log = @import("../../log.zig");
 const PromiseResolver = @This();
 
 ctx: *js.Context,
-handle: *const v8.c.PromiseResolver,
+handle: *const v8.PromiseResolver,
 
 pub fn init(ctx: *js.Context) PromiseResolver {
     return .{
         .ctx = ctx,
-        .handle = v8.c.v8__Promise__Resolver__New(ctx.handle).?,
+        .handle = v8.v8__Promise__Resolver__New(ctx.handle).?,
     };
 }
 
 pub fn promise(self: PromiseResolver) js.Promise {
     return .{
         .ctx = self.ctx,
-        .handle = v8.c.v8__Promise__Resolver__GetPromise(self.handle).?,
+        .handle = v8.v8__Promise__Resolver__GetPromise(self.handle).?,
     };
 }
 
@@ -49,8 +49,8 @@ fn _resolve(self: PromiseResolver, value: anytype) !void {
     const ctx: *js.Context = @constCast(self.ctx);
     const js_value = try ctx.zigValueToJs(value, .{});
 
-    var out: v8.c.MaybeBool = undefined;
-    v8.c.v8__Promise__Resolver__Resolve(self.handle, self.ctx.handle, js_value.handle, &out);
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Resolve(self.handle, self.ctx.handle, js_value.handle, &out);
     if (!out.has_value or !out.value) {
         return error.FailedToResolvePromise;
     }
@@ -67,8 +67,8 @@ fn _reject(self: PromiseResolver, value: anytype) !void {
     const ctx = self.ctx;
     const js_value = try ctx.zigValueToJs(value, .{});
 
-    var out: v8.c.MaybeBool = undefined;
-    v8.c.v8__Promise__Resolver__Reject(self.handle, ctx.handle, js_value.handle, &out);
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Promise__Resolver__Reject(self.handle, ctx.handle, js_value.handle, &out);
     if (!out.has_value or !out.value) {
         return error.FailedToRejectPromise;
     }
