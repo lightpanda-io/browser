@@ -44,7 +44,9 @@ pub fn asNode(self: *Custom) *Node {
 
 pub fn invokeConnectedCallback(self: *Custom, page: *Page) void {
     // Only invoke if we haven't already called it while connected
-    if (self._connected_callback_invoked) return;
+    if (self._connected_callback_invoked) {
+        return;
+    }
 
     self._connected_callback_invoked = true;
     self._disconnected_callback_invoked = false;
@@ -158,11 +160,11 @@ pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: []const 
 fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefinition, comptime callback_name: [:0]const u8, args: anytype, page: *Page) void {
     _ = definition;
 
-    const context = page.js;
+    const ctx = page.js;
 
     // Get the JS element object
-    const js_val = context.zigValueToJs(element, .{}) catch return;
-    const js_element = context.createObject(js_val);
+    const js_val = ctx.zigValueToJs(element, .{}) catch return;
+    const js_element = js_val.toObject();
 
     // Call the callback method if it exists
     js_element.callMethod(void, callback_name, args) catch return;
@@ -205,10 +207,10 @@ fn invokeCallback(self: *Custom, comptime callback_name: [:0]const u8, args: any
         return;
     }
 
-    const context = page.js;
+    const ctx = page.js;
 
-    const js_val = context.zigValueToJs(self, .{}) catch return;
-    const js_element = context.createObject(js_val);
+    const js_val = ctx.zigValueToJs(self, .{}) catch return;
+    const js_element = js_val.toObject();
 
     js_element.callMethod(void, callback_name, args) catch return;
 }

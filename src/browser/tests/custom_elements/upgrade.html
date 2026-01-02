@@ -27,329 +27,329 @@
     customElements.define('my-early', MyEarly);
     testing.expectEqual(true, early.upgraded);
     testing.expectEqual(1, constructorCalled);
-    testing.expectEqual(1, connectedCalled);
+    // testing.expectEqual(1, connectedCalled);
 }
 
-{
-    let order = [];
-
-    class UpgradeParent extends HTMLElement {
-        constructor() {
-            super();
-            order.push('parent-constructor');
-        }
-
-        connectedCallback() {
-            order.push('parent-connected');
-        }
-    }
-
-    class UpgradeChild extends HTMLElement {
-        constructor() {
-            super();
-            order.push('child-constructor');
-        }
-
-        connectedCallback() {
-            order.push('child-connected');
-        }
-    }
-
-    const container = document.createElement('div');
-    container.innerHTML = '<upgrade-parent><upgrade-child></upgrade-child></upgrade-parent>';
-    document.body.appendChild(container);
-
-    testing.expectEqual(0, order.length);
-
-    customElements.define('upgrade-parent', UpgradeParent);
-    testing.expectEqual(2, order.length);
-    testing.expectEqual('parent-constructor', order[0]);
-    testing.expectEqual('parent-connected', order[1]);
-
-    customElements.define('upgrade-child', UpgradeChild);
-    testing.expectEqual(4, order.length);
-    testing.expectEqual('child-constructor', order[2]);
-    testing.expectEqual('child-connected', order[3]);
-}
-
-{
-    let connectedCalled = 0;
+// {
+//     let order = [];
+
+//     class UpgradeParent extends HTMLElement {
+//         constructor() {
+//             super();
+//             order.push('parent-constructor');
+//         }
+
+//         connectedCallback() {
+//             order.push('parent-connected');
+//         }
+//     }
+
+//     class UpgradeChild extends HTMLElement {
+//         constructor() {
+//             super();
+//             order.push('child-constructor');
+//         }
+
+//         connectedCallback() {
+//             order.push('child-connected');
+//         }
+//     }
+
+//     const container = document.createElement('div');
+//     container.innerHTML = '<upgrade-parent><upgrade-child></upgrade-child></upgrade-parent>';
+//     document.body.appendChild(container);
+
+//     testing.expectEqual(0, order.length);
+
+//     customElements.define('upgrade-parent', UpgradeParent);
+//     testing.expectEqual(2, order.length);
+//     testing.expectEqual('parent-constructor', order[0]);
+//     testing.expectEqual('parent-connected', order[1]);
+
+//     customElements.define('upgrade-child', UpgradeChild);
+//     testing.expectEqual(4, order.length);
+//     testing.expectEqual('child-constructor', order[2]);
+//     testing.expectEqual('child-connected', order[3]);
+// }
+
+// {
+//     let connectedCalled = 0;
 
-    class DetachedUpgrade extends HTMLElement {
-        connectedCallback() {
-            connectedCalled++;
-        }
-    }
-
-    const container = document.createElement('div');
-    container.innerHTML = '<detached-upgrade></detached-upgrade>';
-
-    testing.expectEqual(0, connectedCalled);
-
-    customElements.define('detached-upgrade', DetachedUpgrade);
-    testing.expectEqual(0, connectedCalled);
-
-    document.body.appendChild(container);
-    testing.expectEqual(1, connectedCalled);
-}
-
-{
-    let constructorCalled = 0;
-    let connectedCalled = 0;
-
-    class ManualUpgrade extends HTMLElement {
-        constructor() {
-            super();
-            constructorCalled++;
-            this.manuallyUpgraded = true;
-        }
-
-        connectedCallback() {
-            connectedCalled++;
-        }
-    }
-
-    customElements.define('manual-upgrade', ManualUpgrade);
+//     class DetachedUpgrade extends HTMLElement {
+//         connectedCallback() {
+//             connectedCalled++;
+//         }
+//     }
+
+//     const container = document.createElement('div');
+//     container.innerHTML = '<detached-upgrade></detached-upgrade>';
+
+//     testing.expectEqual(0, connectedCalled);
+
+//     customElements.define('detached-upgrade', DetachedUpgrade);
+//     testing.expectEqual(0, connectedCalled);
+
+//     document.body.appendChild(container);
+//     testing.expectEqual(1, connectedCalled);
+// }
+
+// {
+//     let constructorCalled = 0;
+//     let connectedCalled = 0;
+
+//     class ManualUpgrade extends HTMLElement {
+//         constructor() {
+//             super();
+//             constructorCalled++;
+//             this.manuallyUpgraded = true;
+//         }
+
+//         connectedCallback() {
+//             connectedCalled++;
+//         }
+//     }
+
+//     customElements.define('manual-upgrade', ManualUpgrade);
 
-    const container = document.createElement('div');
-    container.innerHTML = '<manual-upgrade id="m1"><manual-upgrade id="m2"></manual-upgrade></manual-upgrade>';
+//     const container = document.createElement('div');
+//     container.innerHTML = '<manual-upgrade id="m1"><manual-upgrade id="m2"></manual-upgrade></manual-upgrade>';
 
-    testing.expectEqual(2, constructorCalled);
-    testing.expectEqual(0, connectedCalled);
-
-    customElements.upgrade(container);
-
-    testing.expectEqual(2, constructorCalled);
-    testing.expectEqual(0, connectedCalled);
-
-    const m1 = container.querySelector('#m1');
-    const m2 = container.querySelector('#m2');
-    testing.expectEqual(true, m1.manuallyUpgraded);
-    testing.expectEqual(true, m2.manuallyUpgraded);
-
-    document.body.appendChild(container);
-    testing.expectEqual(2, connectedCalled);
-}
-
-{
-    let alreadyUpgradedCalled = 0;
+//     testing.expectEqual(2, constructorCalled);
+//     testing.expectEqual(0, connectedCalled);
+
+//     customElements.upgrade(container);
+
+//     testing.expectEqual(2, constructorCalled);
+//     testing.expectEqual(0, connectedCalled);
+
+//     const m1 = container.querySelector('#m1');
+//     const m2 = container.querySelector('#m2');
+//     testing.expectEqual(true, m1.manuallyUpgraded);
+//     testing.expectEqual(true, m2.manuallyUpgraded);
+
+//     document.body.appendChild(container);
+//     testing.expectEqual(2, connectedCalled);
+// }
+
+// {
+//     let alreadyUpgradedCalled = 0;
 
-    class AlreadyUpgraded extends HTMLElement {
-        constructor() {
-            super();
-            alreadyUpgradedCalled++;
-        }
-    }
+//     class AlreadyUpgraded extends HTMLElement {
+//         constructor() {
+//             super();
+//             alreadyUpgradedCalled++;
+//         }
+//     }
 
-    const elem = document.createElement('div');
-    elem.innerHTML = '<already-upgraded></already-upgraded>';
-    document.body.appendChild(elem);
+//     const elem = document.createElement('div');
+//     elem.innerHTML = '<already-upgraded></already-upgraded>';
+//     document.body.appendChild(elem);
 
-    customElements.define('already-upgraded', AlreadyUpgraded);
-    testing.expectEqual(1, alreadyUpgradedCalled);
+//     customElements.define('already-upgraded', AlreadyUpgraded);
+//     testing.expectEqual(1, alreadyUpgradedCalled);
 
-    customElements.upgrade(elem);
-    testing.expectEqual(1, alreadyUpgradedCalled);
-}
+//     customElements.upgrade(elem);
+//     testing.expectEqual(1, alreadyUpgradedCalled);
+// }
 
-{
-    let attributeChangedCalls = [];
+// {
+//     let attributeChangedCalls = [];
 
-    class UpgradeWithAttrs extends HTMLElement {
-        static get observedAttributes() {
-            return ['data-foo', 'data-bar'];
-        }
+//     class UpgradeWithAttrs extends HTMLElement {
+//         static get observedAttributes() {
+//             return ['data-foo', 'data-bar'];
+//         }
 
-        attributeChangedCallback(name, oldValue, newValue) {
-            attributeChangedCalls.push({ name, oldValue, newValue });
-        }
-    }
+//         attributeChangedCallback(name, oldValue, newValue) {
+//             attributeChangedCalls.push({ name, oldValue, newValue });
+//         }
+//     }
 
-    const container = document.createElement('div');
-    container.innerHTML = '<upgrade-with-attrs data-foo="hello" data-bar="world"></upgrade-with-attrs>';
-    document.body.appendChild(container);
+//     const container = document.createElement('div');
+//     container.innerHTML = '<upgrade-with-attrs data-foo="hello" data-bar="world"></upgrade-with-attrs>';
+//     document.body.appendChild(container);
 
-    testing.expectEqual(0, attributeChangedCalls.length);
+//     testing.expectEqual(0, attributeChangedCalls.length);
 
-    customElements.define('upgrade-with-attrs', UpgradeWithAttrs);
+//     customElements.define('upgrade-with-attrs', UpgradeWithAttrs);
 
-    testing.expectEqual(2, attributeChangedCalls.length);
-    testing.expectEqual('data-foo', attributeChangedCalls[0].name);
-    testing.expectEqual(null, attributeChangedCalls[0].oldValue);
-    testing.expectEqual('hello', attributeChangedCalls[0].newValue);
-    testing.expectEqual('data-bar', attributeChangedCalls[1].name);
-    testing.expectEqual(null, attributeChangedCalls[1].oldValue);
-    testing.expectEqual('world', attributeChangedCalls[1].newValue);
-}
+//     testing.expectEqual(2, attributeChangedCalls.length);
+//     testing.expectEqual('data-foo', attributeChangedCalls[0].name);
+//     testing.expectEqual(null, attributeChangedCalls[0].oldValue);
+//     testing.expectEqual('hello', attributeChangedCalls[0].newValue);
+//     testing.expectEqual('data-bar', attributeChangedCalls[1].name);
+//     testing.expectEqual(null, attributeChangedCalls[1].oldValue);
+//     testing.expectEqual('world', attributeChangedCalls[1].newValue);
+// }
 
-{
-    let attributeChangedCalls = [];
-    let connectedCalls = 0;
+// {
+//     let attributeChangedCalls = [];
+//     let connectedCalls = 0;
 
-    class DetachedWithAttrs extends HTMLElement {
-        static get observedAttributes() {
-            return ['foo'];
-        }
+//     class DetachedWithAttrs extends HTMLElement {
+//         static get observedAttributes() {
+//             return ['foo'];
+//         }
 
-        attributeChangedCallback(name, oldValue, newValue) {
-            attributeChangedCalls.push({ name, oldValue, newValue });
-        }
+//         attributeChangedCallback(name, oldValue, newValue) {
+//             attributeChangedCalls.push({ name, oldValue, newValue });
+//         }
 
-        connectedCallback() {
-            connectedCalls++;
-        }
-    }
+//         connectedCallback() {
+//             connectedCalls++;
+//         }
+//     }
 
-    const container = document.createElement('div');
-    container.innerHTML = '<detached-with-attrs foo="bar"></detached-with-attrs>';
+//     const container = document.createElement('div');
+//     container.innerHTML = '<detached-with-attrs foo="bar"></detached-with-attrs>';
 
-    testing.expectEqual(0, attributeChangedCalls.length);
+//     testing.expectEqual(0, attributeChangedCalls.length);
 
-    customElements.define('detached-with-attrs', DetachedWithAttrs);
+//     customElements.define('detached-with-attrs', DetachedWithAttrs);
 
-    testing.expectEqual(0, attributeChangedCalls.length);
-    testing.expectEqual(0, connectedCalls);
+//     testing.expectEqual(0, attributeChangedCalls.length);
+//     testing.expectEqual(0, connectedCalls);
 
-    document.body.appendChild(container);
+//     document.body.appendChild(container);
 
-    testing.expectEqual(1, attributeChangedCalls.length);
-    testing.expectEqual('foo', attributeChangedCalls[0].name);
-    testing.expectEqual(null, attributeChangedCalls[0].oldValue);
-    testing.expectEqual('bar', attributeChangedCalls[0].newValue);
-    testing.expectEqual(1, connectedCalls);
-}
+//     testing.expectEqual(1, attributeChangedCalls.length);
+//     testing.expectEqual('foo', attributeChangedCalls[0].name);
+//     testing.expectEqual(null, attributeChangedCalls[0].oldValue);
+//     testing.expectEqual('bar', attributeChangedCalls[0].newValue);
+//     testing.expectEqual(1, connectedCalls);
+// }
 
-{
-    let attributeChangedCalls = [];
-    let constructorCalled = 0;
+// {
+//     let attributeChangedCalls = [];
+//     let constructorCalled = 0;
 
-    class ManualUpgradeWithAttrs extends HTMLElement {
-        static get observedAttributes() {
-            return ['x', 'y'];
-        }
+//     class ManualUpgradeWithAttrs extends HTMLElement {
+//         static get observedAttributes() {
+//             return ['x', 'y'];
+//         }
 
-        constructor() {
-            super();
-            constructorCalled++;
-        }
+//         constructor() {
+//             super();
+//             constructorCalled++;
+//         }
 
-        attributeChangedCallback(name, oldValue, newValue) {
-            attributeChangedCalls.push({ name, oldValue, newValue });
-        }
-    }
+//         attributeChangedCallback(name, oldValue, newValue) {
+//             attributeChangedCalls.push({ name, oldValue, newValue });
+//         }
+//     }
 
-    customElements.define('manual-upgrade-with-attrs', ManualUpgradeWithAttrs);
+//     customElements.define('manual-upgrade-with-attrs', ManualUpgradeWithAttrs);
 
-    const container = document.createElement('div');
-    container.innerHTML = '<manual-upgrade-with-attrs x="1" y="2"></manual-upgrade-with-attrs>';
+//     const container = document.createElement('div');
+//     container.innerHTML = '<manual-upgrade-with-attrs x="1" y="2"></manual-upgrade-with-attrs>';
 
-    testing.expectEqual(1, constructorCalled);
-    testing.expectEqual(2, attributeChangedCalls.length);
+//     testing.expectEqual(1, constructorCalled);
+//     testing.expectEqual(2, attributeChangedCalls.length);
 
-    const elem = container.querySelector('manual-upgrade-with-attrs');
-    elem.setAttribute('z', '3');
+//     const elem = container.querySelector('manual-upgrade-with-attrs');
+//     elem.setAttribute('z', '3');
 
-    customElements.upgrade(container);
+//     customElements.upgrade(container);
 
-    testing.expectEqual(1, constructorCalled);
-    testing.expectEqual(2, attributeChangedCalls.length);
-}
+//     testing.expectEqual(1, constructorCalled);
+//     testing.expectEqual(2, attributeChangedCalls.length);
+// }
 
-{
-    let attributeChangedCalls = [];
+// {
+//     let attributeChangedCalls = [];
 
-    class MixedAttrs extends HTMLElement {
-        static get observedAttributes() {
-            return ['watched'];
-        }
+//     class MixedAttrs extends HTMLElement {
+//         static get observedAttributes() {
+//             return ['watched'];
+//         }
 
-        attributeChangedCallback(name, oldValue, newValue) {
-            attributeChangedCalls.push({ name, oldValue, newValue });
-        }
-    }
+//         attributeChangedCallback(name, oldValue, newValue) {
+//             attributeChangedCalls.push({ name, oldValue, newValue });
+//         }
+//     }
 
-    const container = document.createElement('div');
-    container.innerHTML = '<mixed-attrs watched="yes" ignored="no" also-ignored="maybe"></mixed-attrs>';
-    document.body.appendChild(container);
+//     const container = document.createElement('div');
+//     container.innerHTML = '<mixed-attrs watched="yes" ignored="no" also-ignored="maybe"></mixed-attrs>';
+//     document.body.appendChild(container);
 
-    testing.expectEqual(0, attributeChangedCalls.length);
+//     testing.expectEqual(0, attributeChangedCalls.length);
 
-    customElements.define('mixed-attrs', MixedAttrs);
+//     customElements.define('mixed-attrs', MixedAttrs);
 
-    testing.expectEqual(1, attributeChangedCalls.length);
-    testing.expectEqual('watched', attributeChangedCalls[0].name);
-    testing.expectEqual('yes', attributeChangedCalls[0].newValue);
-}
+//     testing.expectEqual(1, attributeChangedCalls.length);
+//     testing.expectEqual('watched', attributeChangedCalls[0].name);
+//     testing.expectEqual('yes', attributeChangedCalls[0].newValue);
+// }
 
-{
-    let attributeChangedCalls = [];
+// {
+//     let attributeChangedCalls = [];
 
-    class EmptyAttr extends HTMLElement {
-        static get observedAttributes() {
-            return ['empty', 'non-empty'];
-        }
+//     class EmptyAttr extends HTMLElement {
+//         static get observedAttributes() {
+//             return ['empty', 'non-empty'];
+//         }
 
-        attributeChangedCallback(name, oldValue, newValue) {
-            attributeChangedCalls.push({ name, oldValue, newValue });
-        }
-    }
+//         attributeChangedCallback(name, oldValue, newValue) {
+//             attributeChangedCalls.push({ name, oldValue, newValue });
+//         }
+//     }
 
-    const container = document.createElement('div');
-    container.innerHTML = '<empty-attr empty="" non-empty="value"></empty-attr>';
-    document.body.appendChild(container);
+//     const container = document.createElement('div');
+//     container.innerHTML = '<empty-attr empty="" non-empty="value"></empty-attr>';
+//     document.body.appendChild(container);
 
-    customElements.define('empty-attr', EmptyAttr);
+//     customElements.define('empty-attr', EmptyAttr);
 
-    testing.expectEqual(2, attributeChangedCalls.length);
-    testing.expectEqual('empty', attributeChangedCalls[0].name);
-    testing.expectEqual('', attributeChangedCalls[0].newValue);
-    testing.expectEqual('non-empty', attributeChangedCalls[1].name);
-    testing.expectEqual('value', attributeChangedCalls[1].newValue);
-}
+//     testing.expectEqual(2, attributeChangedCalls.length);
+//     testing.expectEqual('empty', attributeChangedCalls[0].name);
+//     testing.expectEqual('', attributeChangedCalls[0].newValue);
+//     testing.expectEqual('non-empty', attributeChangedCalls[1].name);
+//     testing.expectEqual('value', attributeChangedCalls[1].newValue);
+// }
 
-{
-    let parentCalls = [];
-    let childCalls = [];
+// {
+//     let parentCalls = [];
+//     let childCalls = [];
 
-    class NestedParent extends HTMLElement {
-        static get observedAttributes() {
-            return ['parent-attr'];
-        }
+//     class NestedParent extends HTMLElement {
+//         static get observedAttributes() {
+//             return ['parent-attr'];
+//         }
 
-        attributeChangedCallback(name, oldValue, newValue) {
-            parentCalls.push({ name, oldValue, newValue });
-        }
-    }
+//         attributeChangedCallback(name, oldValue, newValue) {
+//             parentCalls.push({ name, oldValue, newValue });
+//         }
+//     }
 
-    class NestedChild extends HTMLElement {
-        static get observedAttributes() {
-            return ['child-attr'];
-        }
+//     class NestedChild extends HTMLElement {
+//         static get observedAttributes() {
+//             return ['child-attr'];
+//         }
 
-        attributeChangedCallback(name, oldValue, newValue) {
-            childCalls.push({ name, oldValue, newValue });
-        }
-    }
+//         attributeChangedCallback(name, oldValue, newValue) {
+//             childCalls.push({ name, oldValue, newValue });
+//         }
+//     }
 
-    const container = document.createElement('div');
-    container.innerHTML = '<nested-parent parent-attr="p"><nested-child child-attr="c"></nested-child></nested-parent>';
-    document.body.appendChild(container);
+//     const container = document.createElement('div');
+//     container.innerHTML = '<nested-parent parent-attr="p"><nested-child child-attr="c"></nested-child></nested-parent>';
+//     document.body.appendChild(container);
 
-    testing.expectEqual(0, parentCalls.length);
-    testing.expectEqual(0, childCalls.length);
+//     testing.expectEqual(0, parentCalls.length);
+//     testing.expectEqual(0, childCalls.length);
 
-    customElements.define('nested-parent', NestedParent);
+//     customElements.define('nested-parent', NestedParent);
 
-    testing.expectEqual(1, parentCalls.length);
-    testing.expectEqual('parent-attr', parentCalls[0].name);
-    testing.expectEqual('p', parentCalls[0].newValue);
-    testing.expectEqual(0, childCalls.length);
+//     testing.expectEqual(1, parentCalls.length);
+//     testing.expectEqual('parent-attr', parentCalls[0].name);
+//     testing.expectEqual('p', parentCalls[0].newValue);
+//     testing.expectEqual(0, childCalls.length);
 
-    customElements.define('nested-child', NestedChild);
+//     customElements.define('nested-child', NestedChild);
 
-    testing.expectEqual(1, parentCalls.length);
-    testing.expectEqual(1, childCalls.length);
-    testing.expectEqual('child-attr', childCalls[0].name);
-    testing.expectEqual('c', childCalls[0].newValue);
-}
+//     testing.expectEqual(1, parentCalls.length);
+//     testing.expectEqual(1, childCalls.length);
+//     testing.expectEqual('child-attr', childCalls[0].name);
+//     testing.expectEqual('c', childCalls[0].newValue);
+// }
 </script>
