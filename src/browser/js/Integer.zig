@@ -23,12 +23,12 @@ const v8 = js.v8;
 
 const Integer = @This();
 
-handle: *const v8.c.Integer,
+handle: *const v8.Integer,
 
-pub fn init(isolate: *v8.c.Isolate, value: anytype) Integer {
+pub fn init(isolate: *v8.Isolate, value: anytype) Integer {
     const handle = switch (@TypeOf(value)) {
-        i8, i16, i32 => v8.c.v8__Integer__New(isolate, value).?,
-        u8, u16, u32 => v8.c.v8__Integer__NewFromUnsigned(isolate, value).?,
+        i8, i16, i32 => v8.v8__Integer__New(isolate, value).?,
+        u8, u16, u32 => v8.v8__Integer__NewFromUnsigned(isolate, value).?,
         else => |T| @compileError("cannot create v8::Integer from: " ++ @typeName(T)),
     };
     return .{ .handle = handle };

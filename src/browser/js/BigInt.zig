@@ -21,23 +21,23 @@ const v8 = js.v8;
 
 const BigInt = @This();
 
-handle: *const v8.c.Integer,
+handle: *const v8.Integer,
 
-pub fn init(isolate: *v8.c.Isolate, val: anytype) BigInt {
+pub fn init(isolate: *v8.Isolate, val: anytype) BigInt {
     const handle = switch (@TypeOf(val)) {
-        i8, i16, i32, i64, isize => v8.c.v8__BigInt__New(isolate, val).?,
-        u8, u16, u32, u64, usize => v8.c.v8__BigInt__NewFromUnsigned(isolate, val).?,
+        i8, i16, i32, i64, isize => v8.v8__BigInt__New(isolate, val).?,
+        u8, u16, u32, u64, usize => v8.v8__BigInt__NewFromUnsigned(isolate, val).?,
         else => |T| @compileError("cannot create v8::BigInt from: " ++ @typeName(T)),
     };
     return .{ .handle = handle };
 }
 
 pub fn getInt64(self: BigInt) i64 {
-    return v8.c.v8__BigInt__Int64Value(self.handle, null);
+    return v8.v8__BigInt__Int64Value(self.handle, null);
 }
 
 pub fn getUint64(self: BigInt) u64 {
-    return v8.c.v8__BigInt__Uint64Value(self.handle, null);
+    return v8.v8__BigInt__Uint64Value(self.handle, null);
 }
 
 pub fn toValue(self: BigInt) js.Value {

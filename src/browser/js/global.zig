@@ -25,20 +25,20 @@ pub fn Global(comptime T: type) type {
     const H = @FieldType(T, "handle");
 
     return struct {
-        global: v8.c.Global,
+        global: v8.Global,
 
         const Self = @This();
 
-        pub fn init(isolate: *v8.c.Isolate, handle: H) Self {
-            var global: v8.c.Global = undefined;
-            v8.c.v8__Global__New(isolate, handle, &global);
+        pub fn init(isolate: *v8.Isolate, handle: H) Self {
+            var global: v8.Global = undefined;
+            v8.v8__Global__New(isolate, handle, &global);
             return .{
                 .global = global,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            v8.c.v8__Global__Reset(&self.global);
+            v8.v8__Global__Reset(&self.global);
         }
 
         pub fn local(self: *const Self) H {

@@ -23,9 +23,9 @@ const v8 = js.v8;
 
 const Number = @This();
 
-handle: *const v8.c.Number,
+handle: *const v8.Number,
 
-pub fn init(isolate: *v8.c.Isolate, value: anytype) Number {
-    const handle = v8.c.v8__Number__New(isolate, value).?;
+pub fn init(isolate: *v8.Isolate, value: anytype) Number {
+    const handle = v8.v8__Number__New(isolate, value).?;
     return .{ .handle = handle };
 }
