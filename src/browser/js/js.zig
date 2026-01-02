@@ -368,7 +368,7 @@ pub const PrototypeChainEntry = struct {
 // point of view, is an arbitrary string.
 pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.c.InspectorClientImpl,
-    c_value: *const v8.C_Value,
+    c_value: *const v8.c.Value,
 ) callconv(.c) [*c]const u8 {
     const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
     return if (external_entry.subtype) |st| @tagName(st) else null;
@@ -380,8 +380,8 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
 // put an empty description.
 pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     _: *v8.c.InspectorClientImpl,
-    v8_context: *const v8.C_Context,
-    c_value: *const v8.C_Value,
+    v8_context: *const v8.c.Context,
+    c_value: *const v8.c.Value,
 ) callconv(.c) [*c]const u8 {
     _ = v8_context;
 

@@ -196,8 +196,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
     bc.inspector.contextCreated(js_context, world.name, "", aux_data, false);
 
-    const v8_context = v8.Context{ .handle = js_context.handle };
-    return cmd.sendResult(.{ .executionContextId = v8_context.debugContextId() }, .{});
+    return cmd.sendResult(.{ .executionContextId = js_context.debugContextId() }, .{});
 }
 
 fn navigate(cmd: anytype) !void {

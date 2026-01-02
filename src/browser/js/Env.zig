@@ -65,8 +65,8 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
     v8.c.v8__Isolate__CreateParams__CONSTRUCT(params);
     params.snapshot_blob = @ptrCast(&snapshot.startup_data);
 
-    params.array_buffer_allocator = v8.createDefaultArrayBufferAllocator();
-    errdefer v8.destroyArrayBufferAllocator(params.array_buffer_allocator.?);
+    params.array_buffer_allocator = v8.c.v8__ArrayBuffer__Allocator__NewDefaultAllocator().?;
+    errdefer v8.c.v8__ArrayBuffer__Allocator__DELETE(params.array_buffer_allocator.?);
 
     params.external_references = &snapshot.external_references;
 
@@ -130,7 +130,7 @@ pub fn deinit(self: *Env) void {
 
     self.isolate.exit();
     self.isolate.deinit();
-    v8.destroyArrayBufferAllocator(self.isolate_params.array_buffer_allocator.?);
+    v8.c.v8__ArrayBuffer__Allocator__DELETE(self.isolate_params.array_buffer_allocator.?);
     self.allocator.destroy(self.isolate_params);
 }
 
@@ -191,15 +191,15 @@ pub fn dumpMemoryStats(self: *Env) void {
     , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
 }
 
-fn promiseRejectCallback(v8_msg: v8.C_PromiseRejectMessage) callconv(.c) void {
-    const msg = v8.PromiseRejectMessage.initFromC(v8_msg);
-    const isolate_handle = v8.c.v8__Object__GetIsolate(@ptrCast(msg.getPromise().handle)).?;
+fn promiseRejectCallback(message_handle: v8.c.PromiseRejectMessage) callconv(.c) void {
+    const promise_handle = v8.c.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
+    const isolate_handle = v8.c.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
     const js_isolate = js.Isolate{ .handle = isolate_handle };
     const context = Context.fromIsolate(js_isolate);
 
     const value =
-        if (msg.getValue()) |v8_value|
-            context.valueToString(js.Value{ .ctx = context, .handle = v8_value.handle }, .{}) catch |err| @errorName(err)
+        if (v8.c.v8__PromiseRejectMessage__GetValue(&message_handle)) |v8_value|
+            context.valueToString(.{ .ctx = context, .handle = v8_value }, .{}) catch |err| @errorName(err)
         else
             "no value";
 
