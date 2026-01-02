@@ -25,7 +25,7 @@ const Context = @import("Context.zig");
 const Allocator = std.mem.Allocator;
 const RndGen = std.Random.DefaultPrng;
 
-const CONTEST_GROUP_ID = 1;
+const CONTEXT_GROUP_ID = 1;
 const CLIENT_TRUST_LEVEL = 1;
 
 const Inspector = @This();
@@ -36,7 +36,7 @@ client: Client,
 channel: Channel,
 session: Session,
 rnd: RndGen = RndGen.init(0),
-ctx_handle: ?*const v8.c.Context = null,
+default_context: ?*const v8.c.Context = null,
 
 // We expect allocator to be an arena
 // Note: This initializes the pre-allocated inspector in-place
@@ -59,7 +59,7 @@ pub fn init(self: *Inspector, isolate: *v8.c.Isolate, ctx: anytype) !void {
         .client = undefined,
         .channel = undefined,
         .rnd = RndGen.init(0),
-        .ctx_handle = null,
+        .default_context = null,
         .session = undefined,
     };
 
@@ -88,7 +88,7 @@ pub fn init(self: *Inspector, isolate: *v8.c.Isolate, ctx: anytype) !void {
     // Create the session
     const session_handle = v8.c.v8_inspector__Inspector__Connect(
         handle,
-        CONTEST_GROUP_ID,
+        CONTEXT_GROUP_ID,
         channel.handle,
         CLIENT_TRUST_LEVEL,
     ).?;
@@ -127,34 +127,28 @@ pub fn send(self: *const Inspector, msg: []const u8) void {
 // {isDefault: boolean, type: 'default'|'isolated'|'worker', frameId: string}
 // - is_default_context: Whether the execution context is default, should match the auxData
 pub fn contextCreated(
-    self: *const Inspector,
+    self: *Inspector,
     context: *const Context,
     name: []const u8,
     origin: []const u8,
-    aux_data: ?[]const u8,
+    aux_data: []const u8,
     is_default_context: bool,
 ) void {
-    _ = is_default_context; // TODO: Should this be passed to the C API?
-    var auxData_ptr: [*c]const u8 = undefined;
-    var auxData_len: usize = undefined;
-    if (aux_data) |data| {
-        auxData_ptr = data.ptr;
-        auxData_len = data.len;
-    } else {
-        auxData_ptr = null;
-        auxData_len = 0;
-    }
     v8.c.v8_inspector__Inspector__ContextCreated(
         self.handle,
         name.ptr,
         name.len,
         origin.ptr,
         origin.len,
-        auxData_ptr,
-        auxData_len,
-        CONTEST_GROUP_ID,
+        aux_data.ptr,
+        aux_data.len,
+        CONTEXT_GROUP_ID,
         context.handle,
     );
+
+    if (is_default_context) {
+        self.default_context = context.handle;
+    }
 }
 
 // Retrieves the RemoteObject for a given value.
@@ -475,7 +469,7 @@ pub export fn v8_inspector__Client__IMPL__ensureDefaultContextInGroup(
     data: *anyopaque,
 ) callconv(.c) ?*const v8.c.Context {
     const inspector: *Inspector = @ptrCast(@alignCast(data));
-    return inspector.ctx_handle;
+    return inspector.default_context;
 }
 
 pub export fn v8_inspector__Channel__IMPL__sendResponse(

@@ -42,9 +42,10 @@ page: *Page,
 isolate: js.Isolate,
 // This context is a persistent object. The persistent needs to be recovered and reset.
 handle: *const v8.c.Context,
+
 handle_scope: ?js.HandleScope,
 
-cpu_profiler: ?v8.CpuProfiler = null,
+cpu_profiler: ?*v8.c.CpuProfiler = null,
 
 // references Env.templates
 templates: []*const v8.c.FunctionTemplate,
@@ -114,7 +115,7 @@ const ModuleEntry = struct {
     resolver_promise: ?js.Promise = null,
 };
 
-pub fn fromC(c_context: *const v8.C_Context) *Context {
+pub fn fromC(c_context: *const v8.c.Context) *Context {
     const data = v8.c.v8__Context__GetEmbedderData(c_context, 1).?;
     const big_int = js.BigInt{ .handle = @ptrCast(data) };
     return @ptrFromInt(big_int.getUint64());
@@ -168,9 +169,6 @@ pub fn deinit(self: *Context) void {
         scope.deinit();
         v8.c.v8__Context__Exit(self.handle);
     }
-    const v8_context = v8.Context{ .handle = self.handle };
-    var presistent_context = v8.Persistent(v8.Context).recoverCast(v8_context);
-    presistent_context.deinit();
 }
 
 // == Executors ==
@@ -370,6 +368,10 @@ pub fn throw(self: *Context, err: []const u8) js.Exception {
         .ctx = self,
         .handle = handle,
     };
+}
+
+pub fn debugContextId(self: *const Context) i32 {
+    return v8.c.v8__Context__DebugContextId(self.handle);
 }
 
 pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOpts) !js.Value {
@@ -611,7 +613,6 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_handle: ?*const v8.c.Object, va
 }
 
 pub fn jsValueToZig(self: *Context, comptime T: type, js_value: js.Value) !T {
-    const v8_context = v8.Context{ .handle = self.handle };
     switch (@typeInfo(T)) {
         .optional => |o| {
             // If type type is a ?js.Value or a ?js.Object, then we want to pass
@@ -757,7 +758,7 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: js.Value) !T {
                 return std.meta.stringToEnum(T, try self.valueToString(js_value, .{})) orelse return error.InvalidArgument;
             }
             switch (@typeInfo(e.tag_type)) {
-                .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value, v8_context)),
+                .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value)),
                 else => @compileError("unsupported enum parameter type: " ++ @typeName(T)),
             }
         },
@@ -1151,11 +1152,11 @@ pub fn createPromiseResolver(self: *Context) js.PromiseResolver {
 // Callback from V8, asking us to load a module. The "specifier" is
 // the src of the module to load.
 fn resolveModuleCallback(
-    c_context: ?*const v8.C_Context,
-    c_specifier: ?*const v8.C_String,
-    import_attributes: ?*const v8.C_FixedArray,
-    c_referrer: ?*const v8.C_Module,
-) callconv(.c) ?*const v8.C_Module {
+    c_context: ?*const v8.c.Context,
+    c_specifier: ?*const v8.c.String,
+    import_attributes: ?*const v8.c.FixedArray,
+    c_referrer: ?*const v8.c.Module,
+) callconv(.c) ?*const v8.c.Module {
     _ = import_attributes;
 
     const self = fromC(c_context.?);
@@ -1215,7 +1216,7 @@ pub fn dynamicModuleCallback(
     return @constCast(promise.handle);
 }
 
-pub fn metaObjectCallback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.c) void {
+pub fn metaObjectCallback(c_context: ?*v8.c.Context, c_module: ?*v8.c.Module, c_meta: ?*v8.c.Value) callconv(.c) void {
     const self = fromC(c_context.?);
     const m = js.Module{ .ctx = self, .handle = c_module.? };
     const meta = js.Object{ .ctx = self, .handle = @ptrCast(c_meta.?) };
@@ -1236,7 +1237,7 @@ pub fn metaObjectCallback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_
     }
 }
 
-fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]const u8) !?*const v8.C_Module {
+fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]const u8) !?*const v8.c.Module {
     const referrer_path = self.module_identifier.get(referrer.getIdentityHash()) orelse {
         // Shouldn't be possible.
         return error.UnknownModuleReferrer;
@@ -1997,16 +1998,17 @@ pub fn startCpuProfiler(self: *Context) void {
     }
 
     std.debug.assert(self.cpu_profiler == null);
-    v8.CpuProfiler.useDetailedSourcePositionsForProfiling(self.isolate);
-    const cpu_profiler = v8.CpuProfiler.init(self.isolate);
-    const title = self.isolate.initStringUtf8("v8_cpu_profile");
-    cpu_profiler.startProfiling(title);
+    v8.c.v8__CpuProfiler__UseDetailedSourcePositionsForProfiling(self.isolate.handle);
+
+    const cpu_profiler = v8.c.v8__CpuProfiler__Get(self.isolate.handle).?;
+    const title = self.isolate.initStringHandle("v8_cpu_profile");
+    v8.c.v8__CpuProfiler__StartProfiling(cpu_profiler, title);
     self.cpu_profiler = cpu_profiler;
 }
 
 pub fn stopCpuProfiler(self: *Context) ![]const u8 {
-    const title = self.isolate.initStringUtf8("v8_cpu_profile");
-    const profile = self.cpu_profiler.?.stopProfiling(title) orelse unreachable;
-    const serialized = profile.serialize(self.isolate).?;
-    return self.jsStringToZig(serialized, .{});
+    const title = self.isolate.initStringHandle("v8_cpu_profile");
+    const handle = v8.c.v8__CpuProfiler__StopProfiling(self.cpu_profiler.?, title) orelse return error.NoProfiles;
+    const string_handle = v8.c.v8__CpuProfile__Serialize(handle, self.isolate.handle) orelse return error.NoProfile;
+    return self.jsStringToZig(string_handle, .{});
 }
