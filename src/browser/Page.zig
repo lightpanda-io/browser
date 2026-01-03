@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const JS = @import("js/js.zig");
+const Object = @import("js/Object.zig");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
@@ -1855,6 +1856,17 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
             return err;
         };
     }
+
+    // If the element has an id, we add it as a window property.
+    if (element.getAttributeSafe("id")) |id| {
+        const global = Object{ .js_obj = self.js.v8_context.getGlobal(), .context = self.js };
+        if (!global.has(id)) {
+            self.addWindowNamedProperty(id, element) catch |err| {
+                log.err(.page, "addWindowNamedProperty", .{ .err = err });
+            };
+        }
+    }
+
     return node;
 }
 
@@ -2077,6 +2089,9 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe("id")) |id| {
+            self.removeWindowNamedProperty(id) catch |err| {
+                log.err(.page, "removeWindowNamedProperty", .{ .err = err });
+            };
             _ = id_map.?.remove(id);
         }
 
@@ -2850,6 +2865,16 @@ fn asUint(comptime string: anytype) std.meta.Int(
     }
 
     return @bitCast(@as(*const [byteLength]u8, string).*);
+}
+
+fn addWindowNamedProperty(self: *Page, id: []const u8, element: *Element) !void {
+    const global = Object{ .js_obj = self.js.v8_context.getGlobal(), .context = self.js };
+    try global.set(id, element, .{});
+}
+
+fn removeWindowNamedProperty(self: *Page, id: []const u8) !void {
+    const global = Object{ .js_obj = self.js.v8_context.getGlobal(), .context = self.js };
+    try global.unset(id);
 }
 
 const testing = @import("../testing.zig");
