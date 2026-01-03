@@ -54,11 +54,22 @@ pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) error{ 
     const context = self.context;
 
     const js_key = v8.String.initUtf8(context.isolate, key);
-    const js_value = try context.zigValueToJs(value);
+    const js_value = try context.zigValueToJs(value, .{});
 
     const res = self.js_obj.defineOwnProperty(context.v8_context, js_key.toName(), js_value, @bitCast(opts)) orelse false;
     if (!res) {
         return error.FailedToSet;
+    }
+}
+
+pub fn unset(self: Object, key: []const u8) error{ FailedToUnset, OutOfMemory }!void {
+    const context = self.context;
+
+    const js_key = v8.String.initUtf8(context.isolate, key);
+
+    const res = self.js_obj.deleteValue(context.v8_context, js_key);
+    if (!res) {
+        return error.FailedToUnset;
     }
 }
 
@@ -67,6 +78,12 @@ pub fn get(self: Object, key: []const u8) !js.Value {
     const js_key = v8.String.initUtf8(context.isolate, key);
     const js_val = try self.js_obj.getValue(context.v8_context, js_key);
     return context.createValue(js_val);
+}
+
+pub fn has(self: Object, key: []const u8) bool {
+    const context = self.context;
+    const js_key = v8.String.initUtf8(context.isolate, key);
+    return self.js_obj.has(context.v8_context, js_key.toValue());
 }
 
 pub fn isTruthy(self: Object) bool {
