@@ -303,6 +303,10 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
                 return;
             }
         },
+        inline .anchor => |a| {
+            const href = try a.getHref(page);
+            try page.scheduleNavigation(href, .{ .kind = .{ .push = null } }, .anchor);
+        },
         else => {},
     }
 
