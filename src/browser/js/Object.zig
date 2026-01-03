@@ -54,7 +54,7 @@ pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) error{ 
     const context = self.context;
 
     const js_key = v8.String.initUtf8(context.isolate, key);
-    const js_value = try context.zigValueToJs(value);
+    const js_value = try context.zigValueToJs(value, .{});
 
     const res = self.js_obj.defineOwnProperty(context.v8_context, js_key.toName(), js_value, @bitCast(opts)) orelse false;
     if (!res) {
