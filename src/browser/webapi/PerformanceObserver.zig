@@ -22,6 +22,10 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Performance = @import("Performance.zig");
 
+pub fn registerTypes() []const type {
+    return &.{ PerformanceObserver, EntryList };
+}
+
 /// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceObserver
 const PerformanceObserver = @This();
 
@@ -109,8 +113,12 @@ pub fn observe(
     self._interests = interests;
 }
 
-pub fn disconnect(self: *PerformanceObserver) void {
-    _ = self;
+pub fn disconnect(self: *PerformanceObserver, page: *Page) void {
+    page.unregisterPerformanceObserver(self);
+    // Reset observer.
+    self._duration_threshold = DefaultDurationThreshold;
+    self._interests = 0;
+    self._entries.clearRetainingCapacity();
 }
 
 /// Returns the current list of PerformanceEntry objects
@@ -141,7 +149,7 @@ pub inline fn hasRecords(self: *const PerformanceObserver) bool {
 /// Runs the PerformanceObserver's callback with records; emptying it out.
 pub fn dispatch(self: *PerformanceObserver, page: *Page) !void {
     const records = try self.takeRecords(page);
-    _ = try self._callback.call(void, .{records});
+    _ = try self._callback.call(void, .{ EntryList{ ._entries = records }, self });
 }
 
 pub const JsApi = struct {
@@ -175,11 +183,16 @@ pub const EntryList = struct {
         pub const bridge = js.Bridge(EntryList);
 
         pub const Meta = struct {
-            pub const name = "PerformanceEntryList";
+            pub const name = "PerformanceObserverEntryList";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
-
-            pub const getEntries = bridge.function(EntryList.getEntries, .{});
         };
+
+        pub const getEntries = bridge.function(EntryList.getEntries, .{});
     };
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: PerformanceObserver" {
+    try testing.htmlRunner("performance_observer", .{});
+}

@@ -49,7 +49,6 @@ const Document = @import("webapi/Document.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
-const HtmlScript = @import("webapi/Element.zig").Html.Script;
 const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
@@ -1067,28 +1066,32 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
         }
     }
 
-    if (self._performance_delivery_scheduled == false) {
-        self._performance_delivery_scheduled = true;
-        try self.scheduler.add(
-            self,
-            struct {
-                fn run(_page: *anyopaque) anyerror!?u32 {
-                    const page: *Page = @ptrCast(@alignCast(_page));
-                    page._performance_delivery_scheduled = true;
-                    // Dispatch performance observer events.
-                    for (page._performance_observers.items) |observer| {
-                        if (observer.hasRecords()) {
-                            try observer.dispatch(page);
-                        }
-                    }
-
-                    return null;
-                }
-            }.run,
-            0,
-            .{ .low_priority = true },
-        );
+    // Already scheduled.
+    if (self._performance_delivery_scheduled) {
+        return;
     }
+    self._performance_delivery_scheduled = true;
+
+    return self.scheduler.add(
+        self,
+        struct {
+            fn run(_page: *anyopaque) anyerror!?u32 {
+                const page: *Page = @ptrCast(@alignCast(_page));
+                page._performance_delivery_scheduled = false;
+
+                // Dispatch performance observer events.
+                for (page._performance_observers.items) |observer| {
+                    if (observer.hasRecords()) {
+                        try observer.dispatch(page);
+                    }
+                }
+
+                return null;
+            }
+        }.run,
+        0,
+        .{ .low_priority = true },
+    );
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
