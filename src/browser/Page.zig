@@ -49,6 +49,7 @@ const Document = @import("webapi/Document.zig");
 const ShadowRoot = @import("webapi/ShadowRoot.zig");
 const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
+const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -110,6 +111,11 @@ _intersection_delivery_scheduled: bool = false,
 // Slots that need slotchange events to be fired
 _slots_pending_slotchange: std.AutoHashMapUnmanaged(*Element.Html.Slot, void) = .{},
 _slotchange_delivery_scheduled: bool = false,
+
+/// List of active PerformanceObservers.
+/// Contrary to MutationObserver and IntersectionObserver, these are regular tasks.
+_performance_observers: std.ArrayList(*PerformanceObserver) = .{},
+_performance_delivery_scheduled: bool = false,
 
 // Lookup for customized built-in elements. Maps element pointer to definition.
 _customized_builtin_definitions: std.AutoHashMapUnmanaged(*Element, *CustomElementDefinition) = .{},
@@ -262,6 +268,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
 
+    self._performance_observers = .{};
     self._mutation_observers = .{};
     self._mutation_delivery_scheduled = false;
     self._mutation_delivery_depth = 0;
@@ -945,6 +952,16 @@ fn printWaitAnalysis(self: *Page) void {
     }
 }
 
+pub fn tick(self: *Page) void {
+    if (comptime IS_DEBUG) {
+        log.debug(.page, "tick", .{});
+    }
+    _ = self.scheduler.run() catch |err| {
+        log.err(.page, "tick", .{ .err = err });
+    };
+    self.js.runMicrotasks();
+}
+
 pub fn isGoingAway(self: *const Page) bool {
     return self._queued_navigation != null;
 }
@@ -1023,6 +1040,58 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
         }
     }
     return null;
+}
+
+pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
+    return self._performance_observers.append(self.arena, observer);
+}
+
+pub fn unregisterPerformanceObserver(self: *Page, observer: *PerformanceObserver) void {
+    for (self._performance_observers.items, 0..) |perf_observer, i| {
+        if (perf_observer == observer) {
+            _ = self._performance_observers.swapRemove(i);
+            return;
+        }
+    }
+}
+
+/// Updates performance observers with the new entry.
+/// This doesn't emit callbacks but rather fills the queues of observers.
+pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void {
+    for (self._performance_observers.items) |observer| {
+        if (observer.interested(entry)) {
+            observer._entries.append(self.arena, entry) catch |err| {
+                log.err(.page, "notifyPerformanceObservers", .{ .err = err });
+            };
+        }
+    }
+
+    // Already scheduled.
+    if (self._performance_delivery_scheduled) {
+        return;
+    }
+    self._performance_delivery_scheduled = true;
+
+    return self.scheduler.add(
+        self,
+        struct {
+            fn run(_page: *anyopaque) anyerror!?u32 {
+                const page: *Page = @ptrCast(@alignCast(_page));
+                page._performance_delivery_scheduled = false;
+
+                // Dispatch performance observer events.
+                for (page._performance_observers.items) |observer| {
+                    if (observer.hasRecords()) {
+                        try observer.dispatch(page);
+                    }
+                }
+
+                return null;
+            }
+        }.run,
+        0,
+        .{ .low_priority = true },
+    );
 }
 
 pub fn registerMutationObserver(self: *Page, observer: *MutationObserver) !void {
