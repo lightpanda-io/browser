@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="observe_performance_mark">
+{
+  const observer = new PerformanceObserver((list, observer) => {
+    testing.expectEqual(true, list instanceof PerformanceObserverEntryList);
+    testing.expectEqual(true, observer instanceof PerformanceObserver);
+
+    const entries = list.getEntries();
+    testing.expectEqual(true, entries instanceof Array);
+    testing.expectEqual(2, entries.length);
+
+    {
+      const { name, startTime, duration, entryType } = entries[0];
+      testing.expectEqual("operationStart", name);
+      testing.expectEqual(20, startTime);
+      testing.expectEqual(0, duration);
+      testing.expectEqual("mark", entryType);
+    }
+
+    {
+      const { name, startTime, duration, entryType } = entries[1];
+      testing.expectEqual("operationEnd", name);
+      testing.expectEqual(34.0, startTime);
+      testing.expectEqual(0, duration);
+      testing.expectEqual("mark", entryType);
+    }
+
+    observer.disconnect();
+  });
+
+  // Look for performance marks.
+  observer.observe({ type: "mark" });
+  performance.mark("operationStart", { startTime: 20.0 });
+  performance.mark("operationEnd", { startTime: 34.0 });
+}
+</script>
