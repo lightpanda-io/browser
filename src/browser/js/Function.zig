@@ -115,6 +115,8 @@ pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, a
 
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
     const context = self.context;
+    context.call_depth += 1;
+    defer context.call_depth -= 1;
 
     const js_this = try context.valueToExistingObject(this);
 
