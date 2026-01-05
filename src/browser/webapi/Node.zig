@@ -500,6 +500,21 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, page: *Page
 
     try validateNodeInsertion(self, new_child);
 
+    // special case: we replace a node by itself
+    if (new_child == old_child) {
+        page.domChanged();
+
+        if (page.hasMutationObservers()) {
+            const parent = new_child._parent.?;
+            const previous_sibling = new_child.previousSibling();
+            const next_sibling = new_child.nextSibling();
+            const replaced = [_]*Node{new_child};
+            page.childListChange(parent, &replaced, &replaced, previous_sibling, next_sibling);
+        }
+
+        return old_child;
+    }
+
     _ = try self.insertBefore(new_child, old_child, page);
     page.removeNode(self, old_child, .{ .will_be_reconnected = false });
     return old_child;

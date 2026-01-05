@@ -37,4 +37,7 @@
   testing.expectEqual(null, c2.parentNode);
   assertChildren([c3, c4], d1)
   assertChildren([], d2)
+
+  testing.expectEqual(c3, d1.replaceChild(c3, c3));
+  assertChildren([c3, c4], d1)
 </script>
