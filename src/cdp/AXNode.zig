@@ -177,13 +177,15 @@ pub const Writer = struct {
                 .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 5 } } }, w),
                 .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 6 } } }, w),
                 .img => {
-                    const uri = el.getAttributeSafe("src") orelse return;
-                    // TODO make uri absolute
+                    const img = el.as(DOMNode.Element.Html.Image);
+                    const uri = try img.getSrc(self.page);
+                    if (uri.len == 0) return;
                     try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = .{ .string = uri } } }, w);
                 },
                 .anchor => {
-                    const uri = el.getAttributeSafe("href") orelse return;
-                    // TODO make uri absolute
+                    const a = el.as(DOMNode.Element.Html.Anchor);
+                    const uri = try a.getHref(self.page);
+                    if (uri.len == 0) return;
                     try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = .{ .string = uri } } }, w);
                     try self.writeAXProperty(.{ .name = .focusable, .value = .{ .type = .booleanOrUndefined, .value = .{ .boolean = true } } }, w);
                 },
