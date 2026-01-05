@@ -2723,11 +2723,6 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
-            if (std.mem.startsWith(u8, href, "#")) {
-                // Hash-only links (#foo) should be handled as same-document navigation
-                return;
-            }
-
             if (std.mem.startsWith(u8, href, "javascript:")) {
                 return;
             }
