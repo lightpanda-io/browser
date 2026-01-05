@@ -117,7 +117,6 @@ pub fn build(b: *Build) !void {
     }
 
     {
-        // ZIGDOM
         // browser
         const exe = b.addExecutable(.{
             .name = "legacy_test",

@@ -22,10 +22,3 @@ const v8 = js.v8;
 const Name = @This();
 
 handle: *const v8.Name,
-
-pub fn toValue(self: Name) js.Value {
-    return .{
-        .ctx = undefined, // Will be set by caller if needed
-        .handle = @ptrCast(self.handle),
-    };
-}

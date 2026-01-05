@@ -53,7 +53,7 @@ startup_data: v8.StartupData,
 external_references: [countExternalReferences()]isize,
 
 // Track whether this snapshot owns its data (was created in-process)
-// If false, the data points into embedded_snapshot_blob and should not be freed
+// If false, the data points into embedded_snapshot_blob and will not be freed
 owns_data: bool = false,
 
 pub fn load() !Snapshot {
@@ -106,7 +106,7 @@ pub fn write(self: Snapshot, writer: *std.Io.Writer) !void {
 
 pub fn fromEmbedded(self: Snapshot) bool {
     // if the snapshot comes from the embedFile, then it'll be flagged as not
-    // owneing (aka, not needing to free) the data.
+    // owning (aka, not needing to free) the data.
     return self.owns_data == false;
 }
 

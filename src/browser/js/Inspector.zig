@@ -154,7 +154,7 @@ pub fn contextCreated(
 // Retrieves the RemoteObject for a given value.
 // The value is loaded through the ExecutionWorld's mapZigInstanceToJs function,
 // just like a method return value. Therefore, if we've mapped this
-// value before, we'll get the existing JS PersistedObject and if not
+// value before, we'll get the existing js.Global(js.Object) and if not
 // we'll create it and track it for cleanup when the context ends.
 pub fn getRemoteObject(
     self: *const Inspector,

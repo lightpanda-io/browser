@@ -72,7 +72,7 @@ identity_map: std.AutoHashMapUnmanaged(usize, js.Global(js.Object)) = .empty,
 // Some web APIs have to manage opaque values. Ideally, they use an
 // js.Object, but the js.Object has no lifetime guarantee beyond the
 // current call. They can call .persist() on their js.Object to get
-// a `*PersistentObject()`. We need to track these to free them.
+// a `Global(Object)`. We need to track these to free them.
 // This used to be a map and acted like identity_map; the key was
 // the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
 // a reliable way to know if an object has already been persisted,
@@ -526,15 +526,15 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
 }
 
 // To turn a Zig instance into a v8 object, we need to do a number of things.
-// First, if it's a struct, we need to put it on the heap
+// First, if it's a struct, we need to put it on the heap.
 // Second, if we've already returned this instance, we should return
 // the same object. Hence, our executor maintains a map of Zig objects
-// to v8.PersistentObject (the "identity_map").
+// to v8.Global(js.Object) (the "identity_map").
 // Finally, if this is the first time we've seen this instance, we need to:
 //  1 - get the FunctionTemplate (from our templates slice)
 //  2 - Create the TaggedAnyOpaque so that, if needed, we can do the reverse
 //      (i.e. js -> zig)
-//  3 - Create a v8.PersistentObject (because Zig owns this object, not v8)
+//  3 - Create a v8.Global(js.Object) (because Zig owns this object, not v8)
 //  4 - Store our TaggedAnyOpaque into the persistent object
 //  5 - Update our identity_map (so that, if we return this same instance again,
 //      we can just grab it from the identity_map)
