@@ -39,10 +39,3 @@ pub fn getInt64(self: BigInt) i64 {
 pub fn getUint64(self: BigInt) u64 {
     return v8.v8__BigInt__Uint64Value(self.handle, null);
 }
-
-pub fn toValue(self: BigInt) js.Value {
-    return .{
-        .ctx = undefined, // Will be set by caller if needed
-        .handle = @ptrCast(self.handle),
-    };
-}

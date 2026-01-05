@@ -23,6 +23,10 @@ const HandleScope = @This();
 
 handle: v8.HandleScope,
 
+// V8 takes an address of the value that's passed in, so it needs to be stable.
+// We can't create the v8.HandleScope here, pass it to v8 and then return the
+// value, as v8 will then have taken the address of the function-scopped (and no
+// longer valid) local.
 pub fn init(self: *HandleScope, isolate: js.Isolate) void {
     v8.v8__HandleScope__CONSTRUCT(&self.handle, isolate.handle);
 }

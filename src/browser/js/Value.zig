@@ -168,7 +168,7 @@ pub fn toBool(self: Value) bool {
 
 pub fn typeOf(self: Value) js.String {
     const str_handle = v8.v8__Value__TypeOf(self.handle, self.ctx.isolate.handle).?;
-    return js.String{ .ctx = @constCast(self.ctx), .handle = str_handle };
+    return js.String{ .ctx = self.ctx) .handle = str_handle };
 }
 
 pub fn toF32(self: Value) !f32 {
@@ -225,7 +225,7 @@ pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
 }
 
 fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
-    const ctx: *js.Context = @constCast(self.ctx);
+    const ctx = self.ctx;
 
     if (self.isSymbol()) {
         const sym_handle = v8.v8__Symbol__Description(@ptrCast(self.handle), ctx.isolate.handle).?;
@@ -244,7 +244,7 @@ fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOp
 }
 
 pub fn persist(self: Value) !Value {
-    var ctx: *js.Context = @constCast(self.ctx);
+    var ctx = self.ctx;
 
     const global = js.Global(Value).init(ctx.isolate.handle, self.handle);
     try ctx.global_values.append(ctx.arena, global);
@@ -265,7 +265,7 @@ pub fn toObject(self: Value) js.Object {
     }
 
     return .{
-        .ctx = @constCast(self.ctx),
+        .ctx = self.ctx,
         .handle = @ptrCast(self.handle),
     };
 }
@@ -276,7 +276,7 @@ pub fn toArray(self: Value) js.Array {
     }
 
     return .{
-        .ctx = @constCast(self.ctx),
+        .ctx = self.ctx,
         .handle = @ptrCast(self.handle),
     };
 }
@@ -297,4 +297,16 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
     }
     const str = self.toString(.{}) catch return error.WriteFailed;
     return writer.writeAll(str);
+}
+
+pub fn persist(self: Value) !Value {
+    var ctx = self.ctx;
+
+    const global = js.Global(Value).init(ctx.isolate.handle, self.handle);
+    try ctx.global_values.append(ctx.arena, global);
+
+    return .{
+        .ctx = ctx,
+        .handle = global.local(),
+    };
 }

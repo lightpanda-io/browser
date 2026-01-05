@@ -23,7 +23,6 @@ const v8 = js.v8;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Context = @import("Context.zig");
-const PersistentObject = v8.Persistent(v8.Object);
 
 const Allocator = std.mem.Allocator;
 
@@ -68,16 +67,6 @@ pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.bridge.
 
     var out: v8.MaybeBool = undefined;
     v8.v8__Object__Set(self.handle, ctx.handle, key_handle, js_value.handle, &out);
-    return out.has_value;
-}
-
-pub fn setIndex(self: Object, key: u32, value: anytype, comptime opts: js.bridge.Caller.CallOpts) !bool {
-    const ctx = self.ctx;
-
-    const js_value = try ctx.zigValueToJs(value, opts);
-
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Object__SetAtIndex(self.handle, ctx.handle, key, js_value.handle, &out);
     return out.has_value;
 }
 

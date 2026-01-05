@@ -86,84 +86,6 @@ pub const Exception = struct {
     }
 };
 
-pub fn UndefinedOr(comptime T: type) type {
-    return union(enum) {
-        undefined: void,
-        value: T,
-    };
-}
-
-// An interface for types that want to have their jsScopeEnd function be
-// called when the call context ends
-const CallScopeEndCallback = struct {
-    ptr: *anyopaque,
-    callScopeEndFn: *const fn (ptr: *anyopaque) void,
-
-    fn init(ptr: anytype) CallScopeEndCallback {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn callScopeEnd(pointer: *anyopaque) void {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.pointer.child.jsCallScopeEnd(self);
-            }
-        };
-
-        return .{
-            .ptr = ptr,
-            .callScopeEndFn = gen.callScopeEnd,
-        };
-    }
-
-    pub fn callScopeEnd(self: CallScopeEndCallback) void {
-        self.callScopeEndFn(self.ptr);
-    }
-};
-
-// Callback called on global's property missing.
-// Return true to intercept the execution or false to let the call
-// continue the chain.
-pub const GlobalMissingCallback = struct {
-    ptr: *anyopaque,
-    missingFn: *const fn (ptr: *anyopaque, name: []const u8, ctx: *Context) bool,
-
-    pub fn init(ptr: anytype) GlobalMissingCallback {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn missing(pointer: *anyopaque, name: []const u8, ctx: *Context) bool {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.pointer.child.missing(self, name, ctx);
-            }
-        };
-
-        return .{
-            .ptr = ptr,
-            .missingFn = gen.missing,
-        };
-    }
-
-    pub fn missing(self: GlobalMissingCallback, name: []const u8, ctx: *Context) bool {
-        return self.missingFn(self.ptr, name, ctx);
-    }
-};
-
-// Attributes that return a primitive type are setup directly on the
-// FunctionTemplate when the Env is setup. More complex types need a v8.Context
-// and cannot be set directly on the FunctionTemplate.
-// We default to saying types are primitives because that's mostly what
-// we have. If we add a new complex type that isn't explictly handled here,
-// we'll get a compiler error in simpleZigValueToJs, and can then explicitly
-// add the type here.
-pub fn isComplexAttributeType(ti: std.builtin.Type) bool {
-    return switch (ti) {
-        .array => true,
-        else => false,
-    };
-}
-
 // These are simple types that we can convert to JS with only an isolate. This
 // is separated from the Caller's zigValueToJs to make it available when we
 // don't have a caller (i.e., when setting static attributes on types)
@@ -293,17 +215,6 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
     }
     return null;
 }
-
-pub fn classNameForStruct(comptime Struct: type) []const u8 {
-    if (@hasDecl(Struct, "js_name")) {
-        return Struct.js_name;
-    }
-    @setEvalBranchQuota(10_000);
-    const full_name = @typeName(Struct);
-    const last = std.mem.lastIndexOfScalar(u8, full_name, '.') orelse return full_name;
-    return full_name[last + 1 ..];
-}
-
 // When we return a Zig object to V8, we put it on the heap and pass it into
 // v8 as an *anyopaque (i.e. void *). When V8 gives us back the value, say, as a
 // function parameter, we know what type it _should_ be.
