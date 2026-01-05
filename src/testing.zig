@@ -405,7 +405,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     try page.navigate(url, .{});
     _ = test_session.wait(2000);
 
-    page._session.browser.runMicrotasks();
+    test_browser.runMicrotasks();
 
     js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
         const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";

@@ -827,13 +827,6 @@ pub const Script = struct {
             return;
         }
 
-        // @ZIGDOM
-        // if (page.delayed_navigation) {
-        //     // If we're navigating to another page, an error is expected
-        //     // since we probably terminated the script forcefully.
-        //     return;
-        // }
-
         const msg = try_catch.err(page.arena) catch |err| @errorName(err) orelse "unknown";
         log.warn(.js, "eval script", .{
             .url = url,

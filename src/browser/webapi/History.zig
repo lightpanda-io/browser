@@ -123,3 +123,8 @@ pub const JsApi = struct {
     pub const forward = bridge.function(History.forward, .{});
     pub const go = bridge.function(History.go, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: History" {
+    try testing.htmlRunner("history.html", .{});
+}

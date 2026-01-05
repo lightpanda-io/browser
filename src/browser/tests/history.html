@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=history>
+  testing.expectEqual('auto', history.scrollRestoration);
+
+  history.scrollRestoration = 'manual';
+  testing.expectEqual('manual', history.scrollRestoration);
+
+  history.scrollRestoration = 'auto';
+  testing.expectEqual('auto', history.scrollRestoration);
+  testing.expectEqual(null, history.state)
+
+  history.pushState({ testInProgress: true }, null, 'http://127.0.0.1:9582/src/browser/tests/history_after_nav.skip.html');
+  testing.expectEqual({ testInProgress: true }, history.state);
+
+  history.pushState({ testInProgress: false }, null, 'http://127.0.0.1:9582/xhr/json');
+  history.replaceState({ "new": "field", testComplete: true }, null);
+
+  let state = { "new": "field", testComplete: true };
+  testing.expectEqual(state, history.state);
+
+  let popstateEventFired = false;
+  let popstateEventState = null;
+
+  window.addEventListener('popstate', (event) => {
+      popstateEventFired = true;
+      popstateEventState = event.state;
+  });
+
+  testing.eventually(() => {
+    testing.expectEqual(true, popstateEventFired);
+    testing.expectEqual(state, popstateEventState);
+  })
+
+  history.back();
+</script>
