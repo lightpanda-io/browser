@@ -57,6 +57,10 @@ pub fn lowMemoryNotification(self: Isolate) void {
     v8.v8__Isolate__LowMemoryNotification(self.handle);
 }
 
+pub fn notifyContextDisposed(self: Isolate) void {
+    _ = v8.v8__Isolate__ContextDisposedNotification(self.handle);
+}
+
 pub fn getHeapStatistics(self: Isolate) v8.HeapStatistics {
     var res: v8.HeapStatistics = undefined;
     v8.v8__Isolate__GetHeapStatistics(self.handle, &res);

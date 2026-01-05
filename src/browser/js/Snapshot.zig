@@ -179,7 +179,7 @@ pub fn create() !Snapshot {
         var last_data_index: usize = 0;
         inline for (JsApis, 0..) |_, i| {
             @setEvalBranchQuota(10_000);
-            const data_index = v8.v8__SnapshotCreator__AddData2(snapshot_creator, context, @ptrCast(templates[i]));
+            const data_index = v8.v8__SnapshotCreator__AddData(snapshot_creator, @ptrCast(templates[i]));
             if (i == 0) {
                 data_start = data_index;
                 last_data_index = data_index;

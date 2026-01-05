@@ -158,6 +158,7 @@ pub fn removeContext(self: *ExecutionWorld) void {
     self.persisted_context.?.deinit();
     self.persisted_context = null;
 
+    self.env.isolate.notifyContextDisposed();
     _ = self.context_arena.reset(.{ .retain_with_limit = CONTEXT_ARENA_RETAIN });
 }
 

@@ -93,14 +93,10 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
         defer temp_scope.deinit();
-        const context_handle = isolate.createContextHandle(null, null);
-
-        v8.v8__Context__Enter(context_handle);
-        defer v8.v8__Context__Exit(context_handle);
 
         inline for (JsApis, 0..) |JsApi, i| {
             JsApi.Meta.class_id = i;
-            const data = v8.v8__Context__GetDataFromSnapshotOnce(context_handle, snapshot.data_start + i);
+            const data = v8.v8__Isolate__GetDataFromSnapshotOnce(isolate.handle, snapshot.data_start + i);
             const function_handle: *const v8.FunctionTemplate = @ptrCast(data);
             // Make function template global/persistent
             v8.v8__Global__New(isolate.handle, @ptrCast(function_handle), &globals[i]);
