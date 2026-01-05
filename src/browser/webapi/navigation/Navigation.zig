@@ -247,8 +247,8 @@ pub fn replaceEntry(
 }
 
 const NavigateOptions = struct {
-    state: ?js.Object = null,
-    info: ?js.Object = null,
+    state: ?js.Value = null,
+    info: ?js.Value = null,
     history: ?[]const u8 = null,
 };
 
@@ -346,8 +346,8 @@ pub fn navigate(self: *Navigation, _url: [:0]const u8, _opts: ?NavigateOptions, 
 }
 
 pub const ReloadOptions = struct {
-    state: ?js.Object = null,
-    info: ?js.Object = null,
+    state: ?js.Value = null,
+    info: ?js.Value = null,
 };
 
 pub fn reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !NavigationReturn {
@@ -371,7 +371,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !Navigation
 }
 
 pub const TraverseToOptions = struct {
-    info: ?js.Object = null,
+    info: ?js.Value = null,
 };
 
 pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions, page: *Page) !NavigationReturn {
@@ -389,7 +389,7 @@ pub fn traverseTo(self: *Navigation, key: []const u8, _opts: ?TraverseToOptions,
 }
 
 pub const UpdateCurrentEntryOptions = struct {
-    state: js.Object,
+    state: js.Value,
 };
 
 pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions, page: *Page) !void {
