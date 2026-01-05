@@ -86,8 +86,8 @@ pub fn init(allocator: Allocator, config: Config) !*App {
     app.platform = try Platform.init();
     errdefer app.platform.deinit();
 
-    app.snapshot = try Snapshot.load(allocator);
-    errdefer app.snapshot.deinit(allocator);
+    app.snapshot = try Snapshot.load();
+    errdefer app.snapshot.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
@@ -112,7 +112,7 @@ pub fn deinit(self: *App) void {
     self.telemetry.deinit();
     self.notification.deinit();
     self.http.deinit();
-    self.snapshot.deinit(allocator);
+    self.snapshot.deinit();
     self.platform.deinit();
 
     allocator.destroy(self);

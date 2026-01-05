@@ -56,11 +56,11 @@ external_references: [countExternalReferences()]isize,
 // If false, the data points into embedded_snapshot_blob and should not be freed
 owns_data: bool = false,
 
-pub fn load(allocator: Allocator) !Snapshot {
+pub fn load() !Snapshot {
     if (loadEmbedded()) |snapshot| {
         return snapshot;
     }
-    return create(allocator);
+    return create();
 }
 
 fn loadEmbedded() ?Snapshot {
@@ -87,10 +87,11 @@ fn loadEmbedded() ?Snapshot {
     };
 }
 
-pub fn deinit(self: Snapshot, allocator: Allocator) void {
+pub fn deinit(self: Snapshot) void {
     // Only free if we own the data (was created in-process)
     if (self.owns_data) {
-        allocator.free(self.startup_data.data[0..@intCast(self.startup_data.raw_size)]);
+        // V8 allocated this with `new char[]`, so we need to use the C++ delete[] operator
+        v8.v8__StartupData__DELETE(self.startup_data.data);
     }
 }
 
@@ -113,6 +114,7 @@ fn isValid(self: Snapshot) bool {
     return v8.v8__StartupData__IsValid(self.startup_data);
 }
 
+<<<<<<< HEAD
 pub fn createGlobalTemplate(isolate: v8.Isolate, templates: []const v8.FunctionTemplate) v8.ObjectTemplate {
     // Set up the global template to inherit from Window's template
     // This way the global object gets all Window properties through inheritance
@@ -127,7 +129,7 @@ pub fn createGlobalTemplate(isolate: v8.Isolate, templates: []const v8.FunctionT
     return v8.c.v8__FunctionTemplate__InstanceTemplate(js_global);
 }
 
-pub fn create(allocator: Allocator) !Snapshot {
+pub fn create() !Snapshot {
     var external_references = collectExternalReferences();
 
     var params: v8.CreateParams = undefined;
@@ -267,13 +269,12 @@ pub fn create(allocator: Allocator) !Snapshot {
     }
 
     const blob = v8.v8__SnapshotCreator__createBlob(snapshot_creator, v8.kKeep);
-    const owned = try allocator.dupe(u8, blob.data[0..@intCast(blob.raw_size)]);
 
     return .{
         .owns_data = true,
         .data_start = data_start,
         .external_references = external_references,
-        .startup_data = .{ .data = owned.ptr, .raw_size = @intCast(owned.len) },
+        .startup_data = blob,
     };
 }
 
