@@ -267,6 +267,7 @@ pub const Writer = struct {
 
         // Children
         const skip_children = axn.ignoreChildren();
+        const skip_text = ignoreText(axn.dom);
 
         try w.objectField("childIds");
         try w.beginArray();
@@ -275,7 +276,7 @@ pub const Writer = struct {
             var it = n.childrenIterator();
             while (it.next()) |child| {
                 // ignore non-elements or text.
-                if (child.is(DOMNode.Element.Html) == null and child.is(DOMNode.CData.Text) == null) {
+                if (child.is(DOMNode.Element.Html) == null and (child.is(DOMNode.CData.Text) == null or skip_text)) {
                     continue;
                 }
 
@@ -619,13 +620,41 @@ fn isHidden(elt: *DOMNode.Element) bool {
 
 fn ignoreText(node: *DOMNode) bool {
     if (node.is(DOMNode.Element.Html) == null) {
-        return false;
+        return true;
     }
 
     const elt = node.as(DOMNode.Element);
+    // Only ignore text for structural/container elements that typically
+    // don't have meaningful direct text content
     return switch (elt.getTag()) {
-        .p => false,
-        else => true,
+        // Structural containers
+        .html,
+        .body,
+        .head,
+        // Lists (text is in li elements, not in ul/ol)
+        .ul,
+        .ol,
+        .menu,
+        // Tables (text is in cells, not in table/tbody/thead/tfoot/tr)
+        .table,
+        .thead,
+        .tbody,
+        .tfoot,
+        .tr,
+        // Form containers
+        .form,
+        .fieldset,
+        .datalist,
+        // Grouping elements
+        .details,
+        .figure,
+        // Other containers
+        .select,
+        .optgroup,
+        .colgroup,
+        => true,
+        // All other elements should include their text content
+        else => false,
     };
 }
 
@@ -792,7 +821,7 @@ test "AXNode: writer" {
     var registry = Node.Registry.init(testing.allocator);
     defer registry.deinit();
 
-    var page = try testing.pageTest("cdp/dom1.html");
+    var page = try testing.pageTest("cdp/dom3.html");
     defer page._session.removePage();
     var doc = page.window._document;
 
@@ -803,4 +832,33 @@ test "AXNode: writer" {
         .page = page,
     }, .{});
     defer testing.allocator.free(json);
+
+    // Check that the document node is present with proper structure
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    const nodes = parsed.value.array.items;
+    try testing.expect(nodes.len > 0);
+
+    // First node should be the document
+    const doc_node = nodes[0].object;
+    try testing.expectEqual(1, doc_node.get("nodeId").?.integer);
+    try testing.expectEqual(1, doc_node.get("backendDOMNodeId").?.integer);
+    try testing.expectEqual(false, doc_node.get("ignored").?.bool);
+
+    const role = doc_node.get("role").?.object;
+    try testing.expectEqual("role", role.get("type").?.string);
+    try testing.expectEqual("RootWebArea", role.get("value").?.string);
+
+    const name = doc_node.get("name").?.object;
+    try testing.expectEqual("computedString", name.get("type").?.string);
+    try testing.expectEqual("Test Page", name.get("value").?.string);
+
+    // Check properties array exists
+    const properties = doc_node.get("properties").?.array.items;
+    try testing.expect(properties.len >= 1);
+
+    // Check childIds array exists
+    const child_ids = doc_node.get("childIds").?.array.items;
+    try testing.expect(child_ids.len > 0);
 }
