@@ -19,3 +19,8 @@
   testing.expectEqual('mySpan', window.mySpan.id);
   testing.expectEqual('paragraph', window.paragraph.id);
 </script>
+
+<script id=named_access_shadowing>
+  const i = 100;
+  testing.expectEqual(100, i);
+</script>
