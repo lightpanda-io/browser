@@ -126,7 +126,7 @@ pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
 }
 
 pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObserverEntry {
-    const entries = try page.call_arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
+    const entries = try page.arena.dupe(*IntersectionObserverEntry, self._pending_entries.items);
     self._pending_entries.clearRetainingCapacity();
     return entries;
 }
