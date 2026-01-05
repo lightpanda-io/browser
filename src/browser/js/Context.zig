@@ -166,8 +166,8 @@ pub fn deinit(self: *Context) void {
     }
 
     if (self.handle_scope) |*scope| {
-        scope.deinit();
         v8.v8__Context__Exit(self.handle);
+        scope.deinit();
     }
 }
 
