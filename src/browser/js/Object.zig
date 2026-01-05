@@ -114,11 +114,6 @@ pub fn format(self: Object, writer: *std.Io.Writer) !void {
     return writer.writeAll(str);
 }
 
-pub fn toJson(self: Object, allocator: Allocator) ![]u8 {
-    const json_str_handle = v8.v8__JSON__Stringify(self.ctx.handle, @ptrCast(self.handle), null) orelse return error.JsException;
-    return self.ctx.jsStringToZig(json_str_handle, .{ .allocator = allocator });
-}
-
 pub fn persist(self: Object) !Object {
     var ctx = self.ctx;
 

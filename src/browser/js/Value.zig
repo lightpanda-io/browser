@@ -219,6 +219,11 @@ pub fn toStringZ(self: Value, opts: js.String.ToZigOpts) ![:0]u8 {
     return self._toString(true, opts);
 }
 
+pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
+    const json_str_handle = v8.v8__JSON__Stringify(self.ctx.handle, self.handle, null) orelse return error.JsException;
+    return self.ctx.jsStringToZig(json_str_handle, .{ .allocator = allocator });
+}
+
 fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
     const ctx: *js.Context = @constCast(self.ctx);
 
