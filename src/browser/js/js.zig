@@ -391,13 +391,6 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
     return if (external_entry.subtype == null) null else "";
 }
 
-/// Enables C to allocate using the given Zig allocator
-pub export fn zigAlloc(self: *anyopaque, bytes: usize) callconv(.c) ?[*]u8 {
-    const allocator: *Allocator = @ptrCast(@alignCast(self));
-    const allocated_bytes = allocator.alloc(u8, bytes) catch return null;
-    return allocated_bytes.ptr;
-}
-
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
     try std.testing.expectEqual(24, @sizeOf(TaggedAnyOpaque));

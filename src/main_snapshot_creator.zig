@@ -25,8 +25,8 @@ pub fn main() !void {
     var platform = try lp.js.Platform.init();
     defer platform.deinit();
 
-    const snapshot = try lp.js.Snapshot.create(allocator);
-    defer snapshot.deinit(allocator);
+    const snapshot = try lp.js.Snapshot.create();
+    defer snapshot.deinit();
 
     var is_stdout = true;
     var file = std.fs.File.stdout();
