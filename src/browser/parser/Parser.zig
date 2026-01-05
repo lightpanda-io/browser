@@ -98,6 +98,29 @@ pub fn parse(self: *Parser, html: []const u8) void {
     );
 }
 
+pub fn parseXML(self: *Parser, xml: []const u8) void {
+    h5e.xml5ever_parse_document(
+        xml.ptr,
+        xml.len,
+        &self.container,
+        self,
+        createElementCallback,
+        getDataCallback,
+        appendCallback,
+        parseErrorCallback,
+        popCallback,
+        createCommentCallback,
+        createProcessingInstruction,
+        appendDoctypeToDocument,
+        addAttrsIfMissingCallback,
+        getTemplateContentsCallback,
+        removeFromParentCallback,
+        reparentChildrenCallback,
+        appendBeforeSiblingCallback,
+        appendBasedOnParentNodeCallback,
+    );
+}
+
 pub fn parseFragment(self: *Parser, html: []const u8) void {
     h5e.html5ever_parse_fragment(
         html.ptr,

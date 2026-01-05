@@ -16,20 +16,20 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-mod types;
 mod sink;
+mod types;
 
 #[cfg(debug_assertions)]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use types::*;
 use std::cell::Cell;
 use std::os::raw::{c_uchar, c_void};
+use types::*;
 
-use html5ever::{parse_document, parse_fragment, QualName, LocalName, ns, ParseOpts, Parser};
-use html5ever::tendril::{TendrilSink, StrTendril};
 use html5ever::interface::tree_builder::QuirksMode;
+use html5ever::tendril::{StrTendril, TendrilSink};
+use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, Parser, QualName};
 
 #[no_mangle]
 pub extern "C" fn html5ever_parse_document(
@@ -135,13 +135,14 @@ pub extern "C" fn html5ever_parse_fragment(
 
     let bytes = unsafe { std::slice::from_raw_parts(html, len) };
     parse_fragment(
-        sink, Default::default(),
+        sink,
+        Default::default(),
         QualName::new(None, ns!(html), LocalName::from("body")),
-        vec![],     // attributes
-        false,      // context_element_allows_scripting
+        vec![], // attributes
+        false,  // context_element_allows_scripting
     )
-        .from_utf8()
-        .one(bytes);
+    .from_utf8()
+    .one(bytes);
 }
 
 #[no_mangle]
@@ -182,15 +183,15 @@ pub struct Memory {
 #[cfg(debug_assertions)]
 #[no_mangle]
 pub extern "C" fn html5ever_get_memory_usage() -> Memory {
-    use tikv_jemalloc_ctl::{stats, epoch};
+    use tikv_jemalloc_ctl::{epoch, stats};
 
     // many statistics are cached and only updated when the epoch is advanced.
     epoch::advance().unwrap();
 
-    return Memory{
+    return Memory {
         resident: stats::resident::read().unwrap(),
         allocated: stats::allocated::read().unwrap(),
-    }
+    };
 }
 
 // Streaming parser API
@@ -225,9 +226,8 @@ pub extern "C" fn html5ever_streaming_parser_create(
     // SAFETY: We're creating a self-referential structure here.
     // The arena is stored in the StreamingParser and lives as long as the parser.
     // The sink contains a reference to the arena that's valid for the parser's lifetime.
-    let arena_ref: &'static typed_arena::Arena<sink::ElementData> = unsafe {
-        std::mem::transmute(arena.as_ref())
-    };
+    let arena_ref: &'static typed_arena::Arena<sink::ElementData> =
+        unsafe { std::mem::transmute(arena.as_ref()) };
 
     let sink = sink::Sink {
         ctx: ctx,
@@ -281,7 +281,8 @@ pub extern "C" fn html5ever_streaming_parser_feed(
 
             // Feed the chunk to the parser
             // The Parser implements TendrilSink, so we can call process() on it
-            let parser = streaming_parser.parser
+            let parser = streaming_parser
+                .parser
                 .downcast_mut::<Parser<sink::Sink>>()
                 .expect("Invalid parser type");
 
@@ -304,7 +305,8 @@ pub extern "C" fn html5ever_streaming_parser_finish(parser_ptr: *mut c_void) {
     let streaming_parser = unsafe { Box::from_raw(parser_ptr as *mut StreamingParser) };
 
     // Extract and finish the parser
-    let parser = streaming_parser.parser
+    let parser = streaming_parser
+        .parser
         .downcast::<Parser<sink::Sink>>()
         .expect("Invalid parser type");
 
@@ -325,4 +327,58 @@ pub extern "C" fn html5ever_streaming_parser_destroy(parser_ptr: *mut c_void) {
     unsafe {
         let _ = Box::from_raw(parser_ptr as *mut StreamingParser);
     }
+}
+
+#[no_mangle]
+pub extern "C" fn xml5ever_parse_document(
+    xml: *mut c_uchar,
+    len: usize,
+    document: Ref,
+    ctx: Ref,
+    create_element_callback: CreateElementCallback,
+    get_data_callback: GetDataCallback,
+    append_callback: AppendCallback,
+    parse_error_callback: ParseErrorCallback,
+    pop_callback: PopCallback,
+    create_comment_callback: CreateCommentCallback,
+    create_processing_instruction: CreateProcessingInstruction,
+    append_doctype_to_document: AppendDoctypeToDocumentCallback,
+    add_attrs_if_missing_callback: AddAttrsIfMissingCallback,
+    get_template_contents_callback: GetTemplateContentsCallback,
+    remove_from_parent_callback: RemoveFromParentCallback,
+    reparent_children_callback: ReparentChildrenCallback,
+    append_before_sibling_callback: AppendBeforeSiblingCallback,
+    append_based_on_parent_node_callback: AppendBasedOnParentNodeCallback,
+) -> () {
+    if xml.is_null() || len == 0 {
+        return ();
+    }
+
+    let arena = typed_arena::Arena::new();
+
+    let sink = sink::Sink {
+        ctx: ctx,
+        arena: &arena,
+        document: document,
+        quirks_mode: Cell::new(QuirksMode::NoQuirks),
+        pop_callback: pop_callback,
+        append_callback: append_callback,
+        get_data_callback: get_data_callback,
+        parse_error_callback: parse_error_callback,
+        create_element_callback: create_element_callback,
+        create_comment_callback: create_comment_callback,
+        create_processing_instruction: create_processing_instruction,
+        append_doctype_to_document: append_doctype_to_document,
+        add_attrs_if_missing_callback: add_attrs_if_missing_callback,
+        get_template_contents_callback: get_template_contents_callback,
+        remove_from_parent_callback: remove_from_parent_callback,
+        reparent_children_callback: reparent_children_callback,
+        append_before_sibling_callback: append_before_sibling_callback,
+        append_based_on_parent_node_callback: append_based_on_parent_node_callback,
+    };
+
+    let bytes = unsafe { std::slice::from_raw_parts(xml, len) };
+    xml5ever::driver::parse_document(sink, xml5ever::driver::XmlParseOpts::default())
+        .from_utf8()
+        .one(bytes);
 }

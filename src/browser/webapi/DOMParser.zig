@@ -21,6 +21,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const HTMLDocument = @import("HTMLDocument.zig");
+const XMLDocument = @import("XMLDocument.zig");
 
 const DOMParser = @This();
 
@@ -28,34 +29,59 @@ pub fn init() DOMParser {
     return .{};
 }
 
-pub fn parseFromString(self: *const DOMParser, html: []const u8, mime_type: []const u8, page: *Page) !*HTMLDocument {
-    _ = self;
+pub const HTMLDocumentOrXMLDocument = union(enum) {
+    html_document: *HTMLDocument,
+    xml_document: *XMLDocument,
+};
 
-    // For now, only support text/html
-    if (!std.mem.eql(u8, mime_type, "text/html")) {
-        return error.NotSupported;
+pub fn parseFromString(
+    _: *const DOMParser,
+    html: []const u8,
+    mime_type: []const u8,
+    page: *Page,
+) !HTMLDocumentOrXMLDocument {
+    if (std.mem.eql(u8, mime_type, "text/html")) {
+        // Create a new HTMLDocument
+        const doc = try page._factory.document(HTMLDocument{
+            ._proto = undefined,
+        });
+
+        var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
+        if (normalized.len == 0) {
+            normalized = "<html></html>";
+        }
+
+        // Parse HTML into the document
+        const Parser = @import("../parser/Parser.zig");
+        var parser = Parser.init(page.arena, doc.asNode(), page);
+        parser.parse(normalized);
+
+        if (parser.err) |pe| {
+            return pe.err;
+        }
+
+        return .{ .html_document = doc };
     }
 
-    // Create a new HTMLDocument
-    const doc = try page._factory.document(HTMLDocument{
-        ._proto = undefined,
-    });
+    if (std.mem.eql(u8, mime_type, "text/xml")) {
+        // Create a new XMLDocument.
+        const doc = try page._factory.document(XMLDocument{
+            ._proto = undefined,
+        });
 
-    var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
-    if (normalized.len == 0) {
-        normalized = "<html></html>";
+        // Parse XML into XMLDocument.
+        const Parser = @import("../parser/Parser.zig");
+        var parser = Parser.init(page.arena, doc.asNode(), page);
+        parser.parseXML(html);
+
+        if (parser.err) |pe| {
+            return pe.err;
+        }
+
+        return .{ .xml_document = doc };
     }
 
-    // Parse HTML into the document
-    const Parser = @import("../parser/Parser.zig");
-    var parser = Parser.init(page.arena, doc.asNode(), page);
-    parser.parse(normalized);
-
-    if (parser.err) |pe| {
-        return pe.err;
-    }
-
-    return doc;
+    return error.NotSupported;
 }
 
 pub const JsApi = struct {
