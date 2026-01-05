@@ -728,17 +728,17 @@ pub const Script = struct {
 
         const manager = self.manager;
         manager.scriptList(self).remove(&self.node);
-        if (manager.shutdown) {
-            self.deinit(true);
-            return;
-        }
 
         if (self.mode == .import) {
             const entry = self.manager.imported_modules.getPtr(self.url).?;
             entry.state = .err;
         }
-        self.deinit(true);
-        manager.evaluate();
+
+        self.complete = true;
+
+        if (!manager.shutdown) {
+            manager.evaluate();
+        }
     }
 
     fn eval(self: *Script, page: *Page) void {
