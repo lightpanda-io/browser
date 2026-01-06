@@ -457,6 +457,21 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
         return self.appendChild(new_node, page);
     };
 
+    // special case: if nodes are the same, ignore the change.
+    if (new_node == ref_node_) {
+        page.domChanged();
+
+        if (page.hasMutationObservers()) {
+            const parent = new_node._parent.?;
+            const previous_sibling = new_node.previousSibling();
+            const next_sibling = new_node.nextSibling();
+            const replaced = [_]*Node{new_node};
+            page.childListChange(parent, &replaced, &replaced, previous_sibling, next_sibling);
+        }
+
+        return new_node;
+    }
+
     if (ref_node._parent == null or ref_node._parent.? != self) {
         return error.NotFound;
     }
@@ -500,23 +515,14 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, page: *Page
 
     try validateNodeInsertion(self, new_child);
 
-    // special case: we replace a node by itself
-    if (new_child == old_child) {
-        page.domChanged();
+    _ = try self.insertBefore(new_child, old_child, page);
 
-        if (page.hasMutationObservers()) {
-            const parent = new_child._parent.?;
-            const previous_sibling = new_child.previousSibling();
-            const next_sibling = new_child.nextSibling();
-            const replaced = [_]*Node{new_child};
-            page.childListChange(parent, &replaced, &replaced, previous_sibling, next_sibling);
-        }
-
-        return old_child;
+    // Special case: if we replace a node by itself, we don't remove it.
+    // insertBefore is an noop in this case.
+    if (new_child != old_child) {
+        page.removeNode(self, old_child, .{ .will_be_reconnected = false });
     }
 
-    _ = try self.insertBefore(new_child, old_child, page);
-    page.removeNode(self, old_child, .{ .will_be_reconnected = false });
     return old_child;
 }
 
