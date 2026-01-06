@@ -239,8 +239,17 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     };
 
     const is_blocking = script.mode == .normal;
+    if (is_blocking == false) {
+        self.scriptList(script).append(&script.node);
+    }
+
     if (remote_url) |url| {
-        errdefer script.deinit(true);
+        errdefer {
+            if (is_blocking == false) {
+                self.scriptList(script).remove(&script.node);
+            }
+            script.deinit(true);
+        }
 
         var headers = try self.client.newHeaders();
         try page.requestCookie(.{}).headersForRequest(page.arena, url, &headers);
@@ -271,8 +280,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     }
 
     if (is_blocking == false) {
-        const list = self.scriptList(script);
-        list.append(&script.node);
         return;
     }
 
