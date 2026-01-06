@@ -156,6 +156,12 @@ pub fn replaceChildren(self: *DocumentFragment, nodes: []const Node.NodeOrText, 
     const parent_is_connected = parent.isConnected();
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(page);
+
+        // If the new children has already a parent, remove from it.
+        if (child._parent) |p| {
+            page.removeNode(p, child, .{ .will_be_reconnected = true });
+        }
+
         try page.appendNode(parent, child, .{ .child_already_connected = parent_is_connected });
     }
 }
