@@ -2188,10 +2188,6 @@ pub fn insertAllChildrenBefore(self: *Page, fragment: *Node, target: *Node, ref_
     }
 }
 
-fn _appendNode(self: *Page, comptime from_parser: bool, parent: *Node, child: *Node, opts: InsertNodeOpts) !void {
-    self._insertNodeRelative(from_parser, parent, child, .append, opts);
-}
-
 const InsertNodeRelative = union(enum) {
     append,
     after: *Node,
