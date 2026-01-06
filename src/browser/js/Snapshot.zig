@@ -113,6 +113,17 @@ fn isValid(self: Snapshot) bool {
     return v8.SnapshotCreator.startupDataIsValid(self.startup_data);
 }
 
+pub fn createGlobalTemplate(isolate: v8.Isolate, templates: []const v8.FunctionTemplate) v8.ObjectTemplate {
+    // Set up the global template to inherit from Window's template
+    // This way the global object gets all Window properties through inheritance
+    const js_global = v8.FunctionTemplate.initDefault(isolate);
+    js_global.setClassName(v8.String.initUtf8(isolate, "Window"));
+    // Find Window in JsApis by name (avoids circular import)
+    const window_index = comptime bridge.JsApiLookup.getId(Window.JsApi);
+    js_global.inherit(templates[window_index]);
+    return js_global.getInstanceTemplate();
+}
+
 pub fn create(allocator: Allocator) !Snapshot {
     var external_references = collectExternalReferences();
 
@@ -154,14 +165,7 @@ pub fn create(allocator: Allocator) !Snapshot {
 
         // Set up the global template to inherit from Window's template
         // This way the global object gets all Window properties through inheritance
-        const js_global = v8.FunctionTemplate.initDefault(isolate);
-        js_global.setClassName(v8.String.initUtf8(isolate, "Window"));
-
-        // Find Window in JsApis by name (avoids circular import)
-        const window_index = comptime bridge.JsApiLookup.getId(Window.JsApi);
-        js_global.inherit(templates[window_index]);
-
-        const global_template = js_global.getInstanceTemplate();
+        const global_template = createGlobalTemplate(isolate, templates[0..]);
 
         const context = v8.Context.init(isolate, global_template, null);
         context.enter();

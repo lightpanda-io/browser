@@ -116,6 +116,19 @@ pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, a
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
     const context = self.context;
 
+    // When we're calling a function from within JavaScript itself, this isn't
+    // necessary. We're within a Caller instantiation, which will already have
+    // incremented the call_depth and it won't decrement it until the Caller is
+    // done.
+    // But some JS functions are initiated from Zig code, and not v8. For
+    // example, Observers, some event and window callbacks. In those cases, we
+    // need to increase the call_depth so that the call_arena remains valid for
+    // the duration of the function call. If we don't do this, the call_arena
+    // will be reset after each statement of the function which executes Zig code.
+    const call_depth = context.call_depth;
+    context.call_depth = call_depth + 1;
+    defer context.call_depth = call_depth;
+
     const js_this = try context.valueToExistingObject(this);
 
     const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;

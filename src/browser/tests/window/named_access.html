@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id=i></div>
+<div id=testDiv></div>
+<span id=mySpan></span>
+<p id=paragraph></p>
+
+<script id=named_access_global>
+  testing.expectEqual('i', i.id);
+  testing.expectEqual('testDiv',testDiv.id);
+  testing.expectEqual('mySpan', mySpan.id);
+  testing.expectEqual('paragraph', paragraph.id);
+</script>
+
+<script id=named_access_window>
+  testing.expectEqual('i', window.i.id);
+  testing.expectEqual('testDiv', window.testDiv.id);
+  testing.expectEqual('mySpan', window.mySpan.id);
+  testing.expectEqual('paragraph', window.paragraph.id);
+</script>
+
+<script id=named_access_shadowing>
+  const i = 100;
+  testing.expectEqual(100, i);
+</script>

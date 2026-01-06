@@ -74,26 +74,23 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
 
     const env = self.env;
     const isolate = env.isolate;
+    const arena = self.context_arena.allocator();
 
     var v8_context: v8.Context = blk: {
         var temp_scope: v8.HandleScope = undefined;
         v8.HandleScope.init(&temp_scope, isolate);
         defer temp_scope.deinit();
 
-        if (comptime IS_DEBUG) {
-            // Getting this into the snapshot is tricky (anything involving the
-            // global is tricky). Easier to do here, and in debug mode, we're
-            // fine with paying the small perf hit.
-            const js_global = v8.FunctionTemplate.initDefault(isolate);
-            const global_template = js_global.getInstanceTemplate();
+        // Creates a global template that inherits from Window.
+        const global_template = @import("Snapshot.zig").createGlobalTemplate(isolate, env.templates);
 
-            global_template.setNamedProperty(v8.NamedPropertyHandlerConfiguration{
-                .getter = unknownPropertyCallback,
-                .flags = v8.PropertyHandlerFlags.NonMasking | v8.PropertyHandlerFlags.OnlyInterceptStrings,
-            }, null);
-        }
+        // Add the named property handler
+        global_template.setNamedProperty(v8.NamedPropertyHandlerConfiguration{
+            .getter = unknownPropertyCallback,
+            .flags = v8.PropertyHandlerFlags.NonMasking | v8.PropertyHandlerFlags.OnlyInterceptStrings,
+        }, null);
 
-        const context_local = v8.Context.init(isolate, null, null);
+        const context_local = v8.Context.init(isolate, global_template, null);
         const v8_context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
         break :blk v8_context;
     };
@@ -124,7 +121,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         .handle_scope = handle_scope,
         .script_manager = &page._script_manager,
         .call_arena = page.call_arena,
-        .arena = self.context_arena.allocator(),
+        .arena = arena,
     };
 
     var context = &self.context.?;
@@ -159,9 +156,9 @@ pub fn resumeExecution(self: *const ExecutionWorld) void {
 
 pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
     const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
-    const context = Context.fromIsolate(info.getIsolate());
 
-    const property = context.valueToString(.{ .handle = c_name.? }, .{}) catch "???";
+    const context = Context.fromIsolate(info.getIsolate());
+    const maybe_property: ?[]u8 = context.valueToString(.{ .handle = c_name.? }, .{}) catch null;
 
     const ignored = std.StaticStringMap(void).initComptime(.{
         .{ "process", {} },
@@ -185,12 +182,25 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C
         .{ "CLOSURE_FLAGS", {} },
     });
 
-    if (!ignored.has(property)) {
-        log.debug(.unknown_prop, "unkown global property", .{
-            .info = "but the property can exist in pure JS",
-            .stack = context.stackTrace() catch "???",
-            .property = property,
-        });
+    if (maybe_property) |prop| {
+        if (!ignored.has(prop)) {
+            const document = context.page.document;
+
+            if (document.getElementById(prop)) |el| {
+                const js_value = context.zigValueToJs(el, .{}) catch {
+                    return v8.Intercepted.No;
+                };
+
+                info.getReturnValue().set(js_value);
+                return v8.Intercepted.Yes;
+            }
+
+            log.debug(.unknown_prop, "unknown global property", .{
+                .info = "but the property can exist in pure JS",
+                .stack = context.stackTrace() catch "???",
+                .property = prop,
+            });
+        }
     }
 
     return v8.Intercepted.No;
