@@ -46,14 +46,16 @@ pub const Type = enum {
     range,
     date,
     time,
-    datetime_local,
+    @"datetime-local",
     month,
     week,
     color,
 
     pub fn fromString(str: []const u8) Type {
         // Longest type name is "datetime-local" at 14 chars
-        if (str.len > 32) return .text;
+        if (str.len > 32) {
+            return .text;
+        }
 
         var buf: [32]u8 = undefined;
         const lower = std.ascii.lowerString(&buf, str);
@@ -61,10 +63,7 @@ pub const Type = enum {
     }
 
     pub fn toString(self: Type) []const u8 {
-        return switch (self) {
-            .datetime_local => "datetime-local",
-            else => @tagName(self),
-        };
+        return @tagName(self);
     }
 };
 
