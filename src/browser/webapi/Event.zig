@@ -40,7 +40,7 @@ _prevent_default: bool = false,
 _stop_propagation: bool = false,
 _stop_immediate_propagation: bool = false,
 _event_phase: EventPhase = .none,
-_time_stamp: u64 = 0,
+_time_stamp: u64,
 _needs_retargeting: bool = false,
 _isTrusted: bool = false,
 

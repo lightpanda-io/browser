@@ -168,6 +168,18 @@ pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     return chain.get(1);
 }
 
+fn eventInit(typ: []const u8, value: anytype, page: *Page) !Event {
+    // Round to 2ms for privacy (browsers do this)
+    const raw_timestamp = @import("../datetime.zig").milliTimestamp(.monotonic);
+    const time_stamp = (raw_timestamp / 2) * 2;
+
+    return .{
+        ._type = unionInit(Event.Type, value),
+        ._type_string = try String.init(page.arena, typ, .{}),
+        ._time_stamp = time_stamp,
+    };
+}
+
 // this is a root object
 pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
     const allocator = self._slab.allocator();
@@ -178,10 +190,7 @@ pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = .{
-        ._type = unionInit(Event.Type, chain.get(1)),
-        ._type_string = try String.init(self._page.arena, typ, .{}),
-    };
+    event_ptr.* = try eventInit(typ, chain.get(1), self._page);
     chain.setLeaf(1, child);
 
     return chain.get(1);
@@ -196,10 +205,7 @@ pub fn uiEvent(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child)
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = .{
-        ._type = unionInit(Event.Type, chain.get(1)),
-        ._type_string = try String.init(self._page.arena, typ, .{}),
-    };
+    event_ptr.* = try eventInit(typ, chain.get(1), self._page);
     chain.setMiddle(1, UIEvent.Type);
     chain.setLeaf(2, child);
 
