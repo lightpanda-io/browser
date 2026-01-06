@@ -76,6 +76,7 @@ _checked: bool = false,
 _checked_dirty: bool = false,
 _input_type: Type = .text,
 _selected: bool = false,
+_indeterminate: bool = false,
 
 pub fn asElement(self: *Input) *Element {
     return self._proto._proto;
@@ -127,6 +128,14 @@ pub fn setChecked(self: *Input, checked: bool, page: *Page) !void {
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
     self._checked_dirty = true;
+}
+
+pub fn getIndeterminate(self: *const Input) bool {
+    return self._indeterminate;
+}
+
+pub fn setIndeterminate(self: *Input, value: bool) !void {
+    self._indeterminate = value;
 }
 
 pub fn getDefaultChecked(self: *const Input) bool {
@@ -342,6 +351,7 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
+    pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
     pub const select = bridge.function(Input.select, .{});
 };
 
@@ -414,6 +424,7 @@ pub const Build = struct {
         clone._checked = source._checked;
         clone._checked_dirty = source._checked_dirty;
         clone._selected = source._selected;
+        clone._indeterminate = source._indeterminate;
     }
 };
 
