@@ -88,7 +88,7 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         global_template.setNamedProperty(v8.NamedPropertyHandlerConfiguration{
             .getter = unknownPropertyCallback,
             .flags = v8.PropertyHandlerFlags.NonMasking | v8.PropertyHandlerFlags.OnlyInterceptStrings,
-        }, v8.External.init(isolate, page));
+        }, null);
 
         const context_local = v8.Context.init(isolate, global_template, null);
         const v8_context = v8.Persistent(v8.Context).init(isolate, context_local).castToContext();
@@ -157,10 +157,6 @@ pub fn resumeExecution(self: *const ExecutionWorld) void {
 pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C_PropertyCallbackInfo) callconv(.c) u8 {
     const info = v8.PropertyCallbackInfo.initFromV8(raw_info);
 
-    const data_value = info.getData();
-    const external = data_value.castTo(v8.External);
-    const page: *Page = @ptrCast(@alignCast(external.get()));
-
     const context = Context.fromIsolate(info.getIsolate());
     const maybe_property: ?[]u8 = context.valueToString(.{ .handle = c_name.? }, .{}) catch null;
 
@@ -188,7 +184,7 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C
 
     if (maybe_property) |prop| {
         if (!ignored.has(prop)) {
-            const document = page.document;
+            const document = context.page.document;
 
             if (document.getElementById(prop)) |el| {
                 const js_value = context.zigValueToJs(el, .{}) catch {
