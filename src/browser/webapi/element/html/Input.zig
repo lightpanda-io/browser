@@ -404,6 +404,17 @@ pub const Build = struct {
             },
         }
     }
+
+    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Page) !void {
+        const source = source_element.as(Input);
+        const clone = cloned_element.as(Input);
+
+        // Copy runtime state from source to clone
+        clone._value = source._value;
+        clone._checked = source._checked;
+        clone._checked_dirty = source._checked_dirty;
+        clone._selected = source._selected;
+    }
 };
 
 const testing = @import("../../../../testing.zig");
