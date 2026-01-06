@@ -452,7 +452,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             var js_arr = v8.Array.init(isolate, value.len);
             var js_obj = js_arr.castTo(v8.Object);
             for (value, 0..) |v, i| {
-                const js_val = try self.zigValueToJs(v, .{});
+                const js_val = try self.zigValueToJs(v, opts);
                 if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
                     return error.FailedToCreateArray;
                 }
@@ -577,7 +577,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
         },
         .optional => {
             if (value) |v| {
-                return self.zigValueToJs(v, .{});
+                return self.zigValueToJs(v, opts);
             }
             // would be handled by simpleZigValueToJs
             unreachable;
