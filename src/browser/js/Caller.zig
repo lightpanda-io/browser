@@ -89,6 +89,10 @@ pub const CallOpts = struct {
 };
 
 pub fn constructor(self: *Caller, comptime T: type, func: anytype, info: v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    if (!info.isConstructCall()) {
+        self.handleError(T, @TypeOf(func), error.InvalidArgument, info, opts);
+        return;
+    }
     self._constructor(func, info) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
     };
