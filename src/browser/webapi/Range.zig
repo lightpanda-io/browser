@@ -37,22 +37,35 @@ pub fn init(page: *Page) !*Range {
 }
 
 pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
+    if (offset > node.getLength()) {
+        return error.IndexSizeError;
+    }
+
     self._proto._start_container = node;
     self._proto._start_offset = offset;
 
-    // If start is now after end, collapse to start
-    if (self._proto.isStartAfterEnd()) {
+    // If start is now after end, or nodes are in different trees, collapse to start
+    const end_root = self._proto._end_container.getRootNode(null);
+    const start_root = node.getRootNode(null);
+    if (end_root != start_root or self._proto.isStartAfterEnd()) {
         self._proto._end_container = self._proto._start_container;
         self._proto._end_offset = self._proto._start_offset;
     }
 }
 
 pub fn setEnd(self: *Range, node: *Node, offset: u32) !void {
+    // Validate offset
+    if (offset > node.getLength()) {
+        return error.IndexSizeError;
+    }
+
     self._proto._end_container = node;
     self._proto._end_offset = offset;
 
-    // If end is now before start, collapse to end
-    if (self._proto.isStartAfterEnd()) {
+    // If end is now before start, or nodes are in different trees, collapse to end
+    const start_root = self._proto._start_container.getRootNode(null);
+    const end_root = node.getRootNode(null);
+    if (start_root != end_root or self._proto.isStartAfterEnd()) {
         self._proto._start_container = self._proto._end_container;
         self._proto._start_offset = self._proto._end_offset;
     }
@@ -103,6 +116,181 @@ pub fn collapse(self: *Range, to_start: ?bool) void {
         self._proto._start_container = self._proto._end_container;
         self._proto._start_offset = self._proto._end_offset;
     }
+}
+
+pub fn detach(_: *Range) void {
+    // Legacy no-op method kept for backwards compatibility
+    // Modern spec: "The detach() method must do nothing."
+}
+
+pub fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *const Range) !i16 {
+    // Convert how parameter per WebIDL unsigned short conversion
+    // This handles negative numbers and out-of-range values
+    const how_mod = @mod(how_raw, 65536);
+    const how: u16 = if (how_mod < 0) @intCast(@as(i32, how_mod) + 65536) else @intCast(how_mod);
+
+    // If how is not one of 0, 1, 2, or 3, throw NotSupportedError
+    if (how > 3) {
+        return error.NotSupported;
+    }
+
+    // If the two ranges' root is different, throw WrongDocumentError
+    const this_root = self._proto._start_container.getRootNode(null);
+    const source_root = source_range._proto._start_container.getRootNode(null);
+    if (this_root != source_root) {
+        return error.WrongDocument;
+    }
+
+    // Determine which boundary points to compare based on how parameter
+    const result = switch (how) {
+        0 => AbstractRange.compareBoundaryPoints( // START_TO_START
+            self._proto._start_container,
+            self._proto._start_offset,
+            source_range._proto._start_container,
+            source_range._proto._start_offset,
+        ),
+        1 => AbstractRange.compareBoundaryPoints( // START_TO_END
+            self._proto._start_container,
+            self._proto._start_offset,
+            source_range._proto._end_container,
+            source_range._proto._end_offset,
+        ),
+        2 => AbstractRange.compareBoundaryPoints( // END_TO_END
+            self._proto._end_container,
+            self._proto._end_offset,
+            source_range._proto._end_container,
+            source_range._proto._end_offset,
+        ),
+        3 => AbstractRange.compareBoundaryPoints( // END_TO_START
+            self._proto._end_container,
+            self._proto._end_offset,
+            source_range._proto._start_container,
+            source_range._proto._start_offset,
+        ),
+        else => unreachable,
+    };
+
+    return switch (result) {
+        .before => -1,
+        .equal => 0,
+        .after => 1,
+    };
+}
+
+pub fn comparePoint(self: *const Range, node: *Node, offset: u32) !i16 {
+    if (offset > node.getLength()) {
+        return error.IndexSizeError;
+    }
+
+    // Check if node is in a different tree than the range
+    const node_root = node.getRootNode(null);
+    const start_root = self._proto._start_container.getRootNode(null);
+    if (node_root != start_root) {
+        return error.WrongDocument;
+    }
+
+    // Compare point with start boundary
+    const cmp_start = AbstractRange.compareBoundaryPoints(
+        node,
+        offset,
+        self._proto._start_container,
+        self._proto._start_offset,
+    );
+
+    if (cmp_start == .before) {
+        return -1;
+    }
+
+    const cmp_end = AbstractRange.compareBoundaryPoints(
+        node,
+        offset,
+        self._proto._end_container,
+        self._proto._end_offset,
+    );
+
+    return if (cmp_end == .after) 1 else 0;
+}
+
+pub fn isPointInRange(self: *const Range, node: *Node, offset: u32) !bool {
+    // If node's root is different from the context object's root, return false
+    const node_root = node.getRootNode(null);
+    const start_root = self._proto._start_container.getRootNode(null);
+    if (node_root != start_root) {
+        return false;
+    }
+
+    if (node._type == .document_type) {
+        return error.InvalidNodeType;
+    }
+
+    // If offset is greater than node's length, throw IndexSizeError
+    if (offset > node.getLength()) {
+        return error.IndexSizeError;
+    }
+
+    // If (node, offset) is before start or after end, return false
+    const cmp_start = AbstractRange.compareBoundaryPoints(
+        node,
+        offset,
+        self._proto._start_container,
+        self._proto._start_offset,
+    );
+
+    if (cmp_start == .before) {
+        return false;
+    }
+
+    const cmp_end = AbstractRange.compareBoundaryPoints(
+        node,
+        offset,
+        self._proto._end_container,
+        self._proto._end_offset,
+    );
+
+    return cmp_end != .after;
+}
+
+pub fn intersectsNode(self: *const Range, node: *Node) bool {
+    // If node's root is different from the context object's root, return false
+    const node_root = node.getRootNode(null);
+    const start_root = self._proto._start_container.getRootNode(null);
+    if (node_root != start_root) {
+        return false;
+    }
+
+    // Let parent be node's parent
+    const parent = node.parentNode() orelse {
+        // If parent is null, return true
+        return true;
+    };
+
+    // Let offset be node's index
+    const offset = parent.getChildIndex(node) orelse {
+        // Should not happen if node has a parent
+        return false;
+    };
+
+    // If (parent, offset) is before end and (parent, offset + 1) is after start, return true
+    const before_end = AbstractRange.compareBoundaryPoints(
+        parent,
+        offset,
+        self._proto._end_container,
+        self._proto._end_offset,
+    );
+
+    const after_start = AbstractRange.compareBoundaryPoints(
+        parent,
+        offset + 1,
+        self._proto._start_container,
+        self._proto._start_offset,
+    );
+
+    if (before_end == .before and after_start == .after) {
+        return true;
+    }
+
+    // Return false
+    return false;
 }
 
 pub fn cloneRange(self: *const Range, page: *Page) !*Range {
@@ -308,24 +496,35 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    // Constants for compareBoundaryPoints
+    pub const START_TO_START = bridge.property(0);
+    pub const START_TO_END = bridge.property(1);
+    pub const END_TO_END = bridge.property(2);
+    pub const END_TO_START = bridge.property(3);
+
     pub const constructor = bridge.constructor(Range.init, .{});
-    pub const setStart = bridge.function(Range.setStart, .{});
-    pub const setEnd = bridge.function(Range.setEnd, .{});
-    pub const setStartBefore = bridge.function(Range.setStartBefore, .{});
-    pub const setStartAfter = bridge.function(Range.setStartAfter, .{});
-    pub const setEndBefore = bridge.function(Range.setEndBefore, .{});
-    pub const setEndAfter = bridge.function(Range.setEndAfter, .{});
-    pub const selectNode = bridge.function(Range.selectNode, .{});
+    pub const setStart = bridge.function(Range.setStart, .{ .dom_exception = true });
+    pub const setEnd = bridge.function(Range.setEnd, .{ .dom_exception = true });
+    pub const setStartBefore = bridge.function(Range.setStartBefore, .{ .dom_exception = true });
+    pub const setStartAfter = bridge.function(Range.setStartAfter, .{ .dom_exception = true });
+    pub const setEndBefore = bridge.function(Range.setEndBefore, .{ .dom_exception = true });
+    pub const setEndAfter = bridge.function(Range.setEndAfter, .{ .dom_exception = true });
+    pub const selectNode = bridge.function(Range.selectNode, .{ .dom_exception = true });
     pub const selectNodeContents = bridge.function(Range.selectNodeContents, .{});
-    pub const collapse = bridge.function(Range.collapse, .{});
-    pub const cloneRange = bridge.function(Range.cloneRange, .{});
-    pub const insertNode = bridge.function(Range.insertNode, .{});
-    pub const deleteContents = bridge.function(Range.deleteContents, .{});
-    pub const cloneContents = bridge.function(Range.cloneContents, .{});
-    pub const extractContents = bridge.function(Range.extractContents, .{});
-    pub const surroundContents = bridge.function(Range.surroundContents, .{});
-    pub const createContextualFragment = bridge.function(Range.createContextualFragment, .{});
-    pub const toString = bridge.function(Range.toString, .{});
+    pub const collapse = bridge.function(Range.collapse, .{ .dom_exception = true });
+    pub const detach = bridge.function(Range.detach, .{});
+    pub const compareBoundaryPoints = bridge.function(Range.compareBoundaryPoints, .{ .dom_exception = true });
+    pub const comparePoint = bridge.function(Range.comparePoint, .{ .dom_exception = true });
+    pub const isPointInRange = bridge.function(Range.isPointInRange, .{ .dom_exception = true });
+    pub const intersectsNode = bridge.function(Range.intersectsNode, .{});
+    pub const cloneRange = bridge.function(Range.cloneRange, .{ .dom_exception = true });
+    pub const insertNode = bridge.function(Range.insertNode, .{ .dom_exception = true });
+    pub const deleteContents = bridge.function(Range.deleteContents, .{ .dom_exception = true });
+    pub const cloneContents = bridge.function(Range.cloneContents, .{ .dom_exception = true });
+    pub const extractContents = bridge.function(Range.extractContents, .{ .dom_exception = true });
+    pub const surroundContents = bridge.function(Range.surroundContents, .{ .dom_exception = true });
+    pub const createContextualFragment = bridge.function(Range.createContextualFragment, .{ .dom_exception = true });
+    pub const toString = bridge.function(Range.toString, .{ .dom_exception = true });
 };
 
 const testing = @import("../../testing.zig");

@@ -376,3 +376,447 @@
   testing.expectEqual('Bold', fragment.childNodes[0].textContent);
 }
 </script>
+
+<script id=offset_validation_setStart>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+
+  // Test setStart with offset beyond node length
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.setStart(p1, 999);
+  });
+
+  // Test with negative offset (wraps to large u32)
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.setStart(p1.firstChild, -1);
+  });
+}
+</script>
+
+<script id=offset_validation_setEnd>
+{
+  const range = document.createRange();
+  const p1 = $('#p1');
+
+  // Test setEnd with offset beyond node length
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.setEnd(p1, 999);
+  });
+
+  // Test with text node
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.setEnd(p1.firstChild, 9999);
+  });
+}
+</script>
+
+<script id=comparePoint_basic>
+{
+  // Create fresh elements to avoid DOM pollution from other tests
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  p1.textContent = 'First paragraph text';
+  p2.textContent = 'Second paragraph text';
+  div.appendChild(p1);
+  div.appendChild(p2);
+
+  const range = document.createRange();
+  range.setStart(p1.firstChild, 0);
+  range.setEnd(p2.firstChild, 5);
+
+  // Point before range
+  testing.expectEqual(-1, range.comparePoint(div, 0));
+
+  // Point at start boundary
+  testing.expectEqual(0, range.comparePoint(p1.firstChild, 0));
+
+  // Point inside range (in p1)
+  testing.expectEqual(0, range.comparePoint(p1.firstChild, 3));
+
+  // Point inside range (in p2)
+  testing.expectEqual(0, range.comparePoint(p2.firstChild, 2));
+
+  // Point at end boundary
+  testing.expectEqual(0, range.comparePoint(p2.firstChild, 5));
+
+  // Point after range
+  testing.expectEqual(1, range.comparePoint(p2.firstChild, 10));
+}
+</script>
+
+<script id=comparePoint_validation>
+{
+  // Create fresh element
+  const p1 = document.createElement('p');
+  p1.textContent = 'Test content';
+
+  const range = document.createRange();
+  range.setStart(p1, 0);
+  range.setEnd(p1, 1);
+
+  // Test comparePoint with invalid offset
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.comparePoint(p1, 20);
+  });
+
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.comparePoint(p1.firstChild, -1);
+  });
+}
+</script>
+
+<script id=different_document_collapse>
+{
+  // Create fresh element in current document
+  const p1 = document.createElement('p');
+  p1.textContent = 'Local content';
+
+  const range = document.createRange();
+
+  // Create a foreign document
+  const foreignDoc = document.implementation.createHTMLDocument('');
+  const foreignP = foreignDoc.createElement('p');
+  foreignP.textContent = 'Foreign';
+  foreignDoc.body.appendChild(foreignP);
+
+  // Set up range in current document
+  range.setStart(p1, 0);
+  range.setEnd(p1, 1);
+  testing.expectEqual(false, range.collapsed);
+
+  // Setting start to foreign document should collapse to that point
+  range.setStart(foreignP, 0);
+  testing.expectEqual(true, range.collapsed);
+  testing.expectEqual(foreignP, range.startContainer);
+  testing.expectEqual(foreignP, range.endContainer);
+}
+</script>
+
+<script id=detached_node_collapse>
+{
+  // Create fresh element
+  const p1 = document.createElement('p');
+  p1.textContent = 'Attached content';
+
+  const range = document.createRange();
+
+  // Create a detached element
+  const detached = document.createElement('div');
+  detached.textContent = 'Detached';
+
+  // Set up range in document
+  range.setStart(p1, 0);
+  range.setEnd(p1, 1);
+  testing.expectEqual(false, range.collapsed);
+
+  // Setting end to detached node should collapse
+  range.setEnd(detached.firstChild, 0);
+  testing.expectEqual(true, range.collapsed);
+  testing.expectEqual(detached.firstChild, range.startContainer);
+  testing.expectEqual(detached.firstChild, range.endContainer);
+}
+</script>
+
+<script id=isPointInRange_basic>
+{
+  // Create fresh elements
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  p1.textContent = 'First paragraph';
+  p2.textContent = 'Second paragraph';
+  div.appendChild(p1);
+  div.appendChild(p2);
+
+  const range = document.createRange();
+  range.setStart(p1.firstChild, 5);
+  range.setEnd(p2.firstChild, 6);
+
+  // Point before range
+  testing.expectEqual(false, range.isPointInRange(p1.firstChild, 0));
+
+  // Point at start boundary
+  testing.expectEqual(true, range.isPointInRange(p1.firstChild, 5));
+
+  // Point inside range
+  testing.expectEqual(true, range.isPointInRange(p1.firstChild, 7));
+  testing.expectEqual(true, range.isPointInRange(p2.firstChild, 3));
+
+  // Point at end boundary
+  testing.expectEqual(true, range.isPointInRange(p2.firstChild, 6));
+
+  // Point after range
+  testing.expectEqual(false, range.isPointInRange(p2.firstChild, 10));
+}
+</script>
+
+<script id=isPointInRange_different_root>
+{
+  // Create element in current document
+  const p1 = document.createElement('p');
+  p1.textContent = 'Local content';
+
+  const range = document.createRange();
+  range.setStart(p1, 0);
+  range.setEnd(p1, 1);
+
+  // Create element in different document
+  const foreignDoc = document.implementation.createHTMLDocument('');
+  const foreignP = foreignDoc.createElement('p');
+  foreignP.textContent = 'Foreign';
+
+  // Point in different root should return false (not throw)
+  testing.expectEqual(false, range.isPointInRange(foreignP, 0));
+}
+</script>
+
+<script id=isPointInRange_validation>
+{
+  const p1 = document.createElement('p');
+  p1.textContent = 'Test content';
+
+  const range = document.createRange();
+  range.setStart(p1, 0);
+  range.setEnd(p1, 1);
+
+  // Invalid offset should throw IndexSizeError
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.isPointInRange(p1, 999);
+  });
+
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => {
+    range.isPointInRange(p1.firstChild, 9999);
+  });
+}
+</script>
+
+<script id=intersectsNode_basic>
+{
+  // Create fresh elements
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  const p3 = document.createElement('p');
+  p1.textContent = 'First';
+  p2.textContent = 'Second';
+  p3.textContent = 'Third';
+  div.appendChild(p1);
+  div.appendChild(p2);
+  div.appendChild(p3);
+
+  const range = document.createRange();
+  range.setStart(p1.firstChild, 2);
+  range.setEnd(p2.firstChild, 3);
+
+  // Node that intersects (p1 contains the start)
+  testing.expectEqual(true, range.intersectsNode(p1));
+
+  // Node that intersects (p2 contains the end)
+  testing.expectEqual(true, range.intersectsNode(p2));
+
+  // Node that doesn't intersect (p3 is after the range)
+  testing.expectEqual(false, range.intersectsNode(p3));
+
+  // Container intersects
+  testing.expectEqual(true, range.intersectsNode(div));
+}
+</script>
+
+<script id=intersectsNode_detached>
+{
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  p1.textContent = 'Content';
+  div.appendChild(p1);
+
+  const range = document.createRange();
+  range.setStart(p1, 0);
+  range.setEnd(p1, 1);
+
+  // The root node (div) should return true when it has no parent
+  // (Note: div is detached, so it's in the same tree as the range)
+  testing.expectEqual(true, range.intersectsNode(div));
+}
+</script>
+
+<script id=intersectsNode_different_root>
+{
+  const p1 = document.createElement('p');
+  p1.textContent = 'Local';
+
+  const range = document.createRange();
+  range.setStart(p1, 0);
+  range.setEnd(p1, 1);
+
+  // Node in different document should return false
+  const foreignDoc = document.implementation.createHTMLDocument('');
+  const foreignP = foreignDoc.createElement('p');
+  testing.expectEqual(false, range.intersectsNode(foreignP));
+}
+</script>
+
+<script id=commonAncestorContainer_same_node>
+{
+  const p = document.createElement('p');
+  p.textContent = 'Content';
+
+  const range = document.createRange();
+  range.setStart(p.firstChild, 0);
+  range.setEnd(p.firstChild, 3);
+
+  // Both boundaries in same text node, so that's the common ancestor
+  testing.expectEqual(p.firstChild, range.commonAncestorContainer);
+}
+</script>
+
+<script id=commonAncestorContainer_siblings>
+{
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  p1.textContent = 'First';
+  p2.textContent = 'Second';
+  div.appendChild(p1);
+  div.appendChild(p2);
+
+  const range = document.createRange();
+  range.setStart(p1.firstChild, 0);
+  range.setEnd(p2.firstChild, 3);
+
+  // Start and end in different siblings, common ancestor is the parent div
+  testing.expectEqual(div, range.commonAncestorContainer);
+}
+</script>
+
+<script id=commonAncestorContainer_nested>
+{
+  const div = document.createElement('div');
+  const section = document.createElement('section');
+  const p = document.createElement('p');
+  const span = document.createElement('span');
+  p.textContent = 'Text';
+  span.textContent = 'Span';
+
+  div.appendChild(section);
+  section.appendChild(p);
+  div.appendChild(span);
+
+  const range = document.createRange();
+  range.setStart(p.firstChild, 0);
+  range.setEnd(span.firstChild, 2);
+
+  // Common ancestor of deeply nested p and sibling span is div
+  testing.expectEqual(div, range.commonAncestorContainer);
+}
+</script>
+
+<script id=compareBoundaryPoints_constants>
+{
+  // Test that the constants are defined
+  testing.expectEqual(0, Range.START_TO_START);
+  testing.expectEqual(1, Range.START_TO_END);
+  testing.expectEqual(2, Range.END_TO_END);
+  testing.expectEqual(3, Range.END_TO_START);
+}
+</script>
+
+<script id=compareBoundaryPoints_basic>
+{
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  p1.textContent = 'First paragraph';
+  p2.textContent = 'Second paragraph';
+  div.appendChild(p1);
+  div.appendChild(p2);
+
+  const range1 = document.createRange();
+  range1.setStart(p1.firstChild, 0);
+  range1.setEnd(p1.firstChild, 5);
+
+  const range2 = document.createRange();
+  range2.setStart(p1.firstChild, 3);
+  range2.setEnd(p2.firstChild, 5);
+
+  // range1 start is before range2 start
+  testing.expectEqual(-1, range1.compareBoundaryPoints(Range.START_TO_START, range2));
+
+  // range1 start is before range2 end
+  testing.expectEqual(-1, range1.compareBoundaryPoints(Range.START_TO_END, range2));
+
+  // range1 end is after range2 start
+  testing.expectEqual(1, range1.compareBoundaryPoints(Range.END_TO_START, range2));
+
+  // range1 end is before range2 end
+  testing.expectEqual(-1, range1.compareBoundaryPoints(Range.END_TO_END, range2));
+}
+</script>
+
+<script id=compareBoundaryPoints_same_range>
+{
+  const p = document.createElement('p');
+  p.textContent = 'Content';
+
+  const range = document.createRange();
+  range.setStart(p.firstChild, 2);
+  range.setEnd(p.firstChild, 5);
+
+  // Comparing a range to itself should return 0
+  testing.expectEqual(0, range.compareBoundaryPoints(Range.START_TO_START, range));
+  testing.expectEqual(0, range.compareBoundaryPoints(Range.END_TO_END, range));
+
+  // Start is before end
+  testing.expectEqual(-1, range.compareBoundaryPoints(Range.START_TO_END, range));
+
+  // End is after start
+  testing.expectEqual(1, range.compareBoundaryPoints(Range.END_TO_START, range));
+}
+</script>
+
+<script id=compareBoundaryPoints_invalid_how>
+{
+  const p = document.createElement('p');
+  p.textContent = 'Test';
+
+  const range1 = document.createRange();
+  const range2 = document.createRange();
+  range1.setStart(p, 0);
+  range2.setStart(p, 0);
+
+  // Invalid how parameter should throw NotSupportedError
+  testing.expectError('NotSupportedError: Not Supported', () => {
+    range1.compareBoundaryPoints(4, range2);
+  });
+
+  testing.expectError('NotSupportedError: Not Supported', () => {
+    range1.compareBoundaryPoints(99, range2);
+  });
+}
+</script>
+
+<script id=compareBoundaryPoints_different_root>
+{
+  const p1 = document.createElement('p');
+  p1.textContent = 'Local';
+
+  const range1 = document.createRange();
+  range1.setStart(p1, 0);
+  range1.setEnd(p1, 1);
+
+  // Create range in different document
+  const foreignDoc = document.implementation.createHTMLDocument('');
+  const foreignP = foreignDoc.createElement('p');
+  foreignP.textContent = 'Foreign';
+
+  const range2 = foreignDoc.createRange();
+  range2.setStart(foreignP, 0);
+  range2.setEnd(foreignP, 1);
+
+  // Comparing ranges in different documents should throw WrongDocumentError
+  testing.expectError('WrongDocumentError: wrong_document_error', () => {
+    range1.compareBoundaryPoints(Range.START_TO_START, range2);
+  });
+}
+</script>

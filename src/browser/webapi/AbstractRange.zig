@@ -69,6 +69,19 @@ pub fn getCollapsed(self: *const AbstractRange) bool {
         self._start_offset == self._end_offset;
 }
 
+pub fn getCommonAncestorContainer(self: *const AbstractRange) *Node {
+    // Let container be start container
+    var container = self._start_container;
+
+    // While container is not an inclusive ancestor of end container
+    while (!isInclusiveAncestorOf(container, self._end_container)) {
+        // Let container be container's parent
+        container = container.parentNode() orelse break;
+    }
+
+    return container;
+}
+
 pub fn isStartAfterEnd(self: *const AbstractRange) bool {
     return compareBoundaryPoints(
         self._start_container,
@@ -84,7 +97,7 @@ const BoundaryComparison = enum {
     after,
 };
 
-fn compareBoundaryPoints(
+pub fn compareBoundaryPoints(
     node_a: *Node,
     offset_a: u32,
     node_b: *Node,
@@ -195,6 +208,13 @@ fn isAncestorOf(potential_ancestor: *Node, node: *Node) bool {
     return false;
 }
 
+fn isInclusiveAncestorOf(potential_ancestor: *Node, node: *Node) bool {
+    if (potential_ancestor == node) {
+        return true;
+    }
+    return isAncestorOf(potential_ancestor, node);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(AbstractRange);
 
@@ -209,4 +229,5 @@ pub const JsApi = struct {
     pub const endContainer = bridge.accessor(AbstractRange.getEndContainer, null, .{});
     pub const endOffset = bridge.accessor(AbstractRange.getEndOffset, null, .{});
     pub const collapsed = bridge.accessor(AbstractRange.getCollapsed, null, .{});
+    pub const commonAncestorContainer = bridge.accessor(AbstractRange.getCommonAncestorContainer, null, .{});
 };
