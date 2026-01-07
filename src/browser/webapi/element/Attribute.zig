@@ -477,9 +477,17 @@ pub const NamedNodeMap = struct {
         return self._list.getAttribute(name, self._element, page);
     }
 
-    pub fn setByName(self: *const NamedNodeMap, attribute: *Attribute, page: *Page) !?*Attribute {
+    pub fn set(self: *const NamedNodeMap, attribute: *Attribute, page: *Page) !?*Attribute {
         attribute._element = null; // just a requirement of list.putAttribute, it'll re-set it.
         return self._list.putAttribute(attribute, self._element, page);
+    }
+
+    pub fn removeByName(self: *const NamedNodeMap, name: []const u8, page: *Page) !?*Attribute {
+        // this 2-step process (get then delete) isn't efficient. But we don't
+        // expect this to be called often, and this lets us keep delete straightforward.
+        const attr = (try self.getByName(name, page)) orelse return null;
+        try self._list.delete(name, self._element, page);
+        return attr;
     }
 
     pub fn iterator(self: *const NamedNodeMap, page: *Page) !*Iterator {
@@ -510,7 +518,8 @@ pub const NamedNodeMap = struct {
         pub const @"[int]" = bridge.indexed(NamedNodeMap.getAtIndex, .{ .null_as_undefined = true });
         pub const @"[str]" = bridge.namedIndexed(NamedNodeMap.getByName, null, null, .{ .null_as_undefined = true });
         pub const getNamedItem = bridge.function(NamedNodeMap.getByName, .{});
-        pub const setNamedItem = bridge.function(NamedNodeMap.setByName, .{});
+        pub const setNamedItem = bridge.function(NamedNodeMap.set, .{});
+        pub const removeNamedItem = bridge.function(NamedNodeMap.removeByName, .{});
         pub const item = bridge.function(_item, .{});
         fn _item(self: *const NamedNodeMap, index: i32, page: *Page) !?*Attribute {
             // the bridge.indexed handles this, so if we want
