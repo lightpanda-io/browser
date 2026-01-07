@@ -211,6 +211,23 @@ env.
 
 But you can directly use the zig command: `zig build run`.
 
+#### Embed v8 snapshot
+
+Lighpanda uses v8 snapshot. By default, it is created on startup but you can
+embed it by using the following commands:
+
+Generate the snapshot.
+```
+zig build snapshot_creator -- src/snapshot.bin
+```
+
+Build using the snapshot binary.
+```
+zig build -Dsnapshot_path=../../snapshot.bin
+```
+
+See [#1279](https://github.com/lightpanda-io/browser/pull/1279) for more details.
+
 ## Test
 
 ### Unit Tests
