@@ -79,25 +79,81 @@ pub fn parentNode(self: *DOMTreeWalker) !?*Node {
 
 pub fn firstChild(self: *DOMTreeWalker) !?*Node {
     var node = self._current.firstChild();
+
     while (node) |n| {
-        if (try self.acceptNode(n) == NodeFilter.FILTER_ACCEPT) {
+        const filter_result = try self.acceptNode(n);
+
+        if (filter_result == NodeFilter.FILTER_ACCEPT) {
             self._current = n;
             return n;
         }
-        node = self.nextSiblingOrNull(n);
+
+        if (filter_result == NodeFilter.FILTER_SKIP) {
+            // Descend into children of this skipped node
+            if (n.firstChild()) |child| {
+                node = child;
+                continue;
+            }
+        }
+
+        // REJECT or SKIP with no children - find next sibling, walking up if necessary
+        var current_node = n;
+        while (true) {
+            if (current_node.nextSibling()) |sibling| {
+                node = sibling;
+                break;
+            }
+
+            // No sibling, go up to parent
+            const parent = current_node._parent orelse return null;
+            if (parent == self._current) {
+                // We've exhausted all children of self._current
+                return null;
+            }
+            current_node = parent;
+        }
     }
+
     return null;
 }
 
 pub fn lastChild(self: *DOMTreeWalker) !?*Node {
     var node = self._current.lastChild();
+
     while (node) |n| {
-        if (try self.acceptNode(n) == NodeFilter.FILTER_ACCEPT) {
+        const filter_result = try self.acceptNode(n);
+
+        if (filter_result == NodeFilter.FILTER_ACCEPT) {
             self._current = n;
             return n;
         }
-        node = self.previousSiblingOrNull(n);
+
+        if (filter_result == NodeFilter.FILTER_SKIP) {
+            // Descend into children of this skipped node
+            if (n.lastChild()) |child| {
+                node = child;
+                continue;
+            }
+        }
+
+        // REJECT or SKIP with no children - find previous sibling, walking up if necessary
+        var current_node = n;
+        while (true) {
+            if (current_node.previousSibling()) |sibling| {
+                node = sibling;
+                break;
+            }
+
+            // No sibling, go up to parent
+            const parent = current_node._parent orelse return null;
+            if (parent == self._current) {
+                // We've exhausted all children of self._current
+                return null;
+            }
+            current_node = parent;
+        }
     }
+
     return null;
 }
 
@@ -131,15 +187,39 @@ pub fn previousNode(self: *DOMTreeWalker) !?*Node {
         var sibling = self.previousSiblingOrNull(node);
         while (sibling) |sib| {
             node = sib;
-            var child = self.lastChildOrNull(node);
-            while (child) |c| {
-                if (self.isInSubtree(c)) {
-                    node = c;
-                    child = self.lastChildOrNull(node);
-                } else {
-                    break;
-                }
+
+            // Check if this sibling is rejected before descending into it
+            const sib_result = try self.acceptNode(node);
+            if (sib_result == NodeFilter.FILTER_REJECT) {
+                // Skip this sibling and its descendants entirely
+                sibling = self.previousSiblingOrNull(node);
+                continue;
             }
+
+            // Descend to the deepest last child, but respect FILTER_REJECT
+            while (true) {
+                var child = self.lastChildOrNull(node);
+
+                // Find the rightmost non-rejected child
+                while (child) |c| {
+                    if (!self.isInSubtree(c)) break;
+
+                    const filter_result = try self.acceptNode(c);
+                    if (filter_result == NodeFilter.FILTER_REJECT) {
+                        // Skip this child and try its previous sibling
+                        child = self.previousSiblingOrNull(c);
+                    } else {
+                        // ACCEPT or SKIP - use this child
+                        break;
+                    }
+                }
+
+                if (child == null) break; // No acceptable children
+
+                // Descend into this child
+                node = child.?;
+            }
+
             if (try self.acceptNode(node) == NodeFilter.FILTER_ACCEPT) {
                 self._current = node;
                 return node;

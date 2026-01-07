@@ -301,14 +301,26 @@ pub fn createEvent(_: *const Document, event_type: []const u8, page: *Page) !*@i
     return error.NotSupported;
 }
 
-pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?u32, filter: ?DOMTreeWalker.FilterOpts, page: *Page) !*DOMTreeWalker {
-    const show = what_to_show orelse NodeFilter.SHOW_ALL;
-    return DOMTreeWalker.init(root, show, filter, page);
+pub fn createTreeWalker(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMTreeWalker.FilterOpts, page: *Page) !*DOMTreeWalker {
+    return DOMTreeWalker.init(root, try whatToShow(what_to_show), filter, page);
 }
 
-pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?u32, filter: ?DOMNodeIterator.FilterOpts, page: *Page) !*DOMNodeIterator {
-    const show = what_to_show orelse NodeFilter.SHOW_ALL;
-    return DOMNodeIterator.init(root, show, filter, page);
+pub fn createNodeIterator(_: *const Document, root: *Node, what_to_show: ?js.Value, filter: ?DOMNodeIterator.FilterOpts, page: *Page) !*DOMNodeIterator {
+    return DOMNodeIterator.init(root, try whatToShow(what_to_show), filter, page);
+}
+
+fn whatToShow(value_: ?js.Value) !u32 {
+    const value = value_ orelse return 4294967295; // show all when undefined
+    if (value.isUndefined()) {
+        // undefined explicitly passed
+        return 4294967295;
+    }
+
+    if (value.isNull()) {
+        return 0;
+    }
+
+    return value.toZig(u32);
 }
 
 pub fn getReadyState(self: *const Document) []const u8 {

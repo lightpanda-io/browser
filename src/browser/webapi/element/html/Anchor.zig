@@ -220,7 +220,18 @@ pub const JsApi = struct {
     pub const hash = bridge.accessor(Anchor.getHash, Anchor.setHash, .{});
     pub const @"type" = bridge.accessor(Anchor.getType, Anchor.setType, .{});
     pub const text = bridge.accessor(Anchor.getText, Anchor.setText, .{});
+    pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
     pub const toString = bridge.function(Anchor.getHref, .{});
+
+    fn _getRelList(self: *Anchor, page: *Page) !?*@import("../../collections.zig").DOMTokenList {
+        const element = self.asElement();
+        // relList is only valid for HTML and SVG <a> elements
+        const namespace = element._namespace;
+        if (namespace != .html and namespace != .svg) {
+            return null;
+        }
+        return element.getRelList(page);
+    }
 };
 
 const testing = @import("../../../../testing.zig");
