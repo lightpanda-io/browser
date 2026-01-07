@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<div id=d1>hello <em>world</em></div>
+
+<script id=outerHTML>
+  const d1 = $('#d1');
+  testing.expectEqual('<div id=\"d1\">hello <em>world</em></div>', d1.outerHTML);
+  d1.outerHTML = '<p id=p1>spice</p>';
+  // setting outerHTML doesn't update what d1 points to
+  testing.expectEqual('<div id="d1">hello <em>world</em></div>', d1.outerHTML);
+
+  // but it does update the document
+  testing.expectEqual(null, document.getElementById('d1'));
+  testing.expectEqual(true, document.getElementById('p1') != null);
+  testing.expectEqual('<p id="p1">spice</p>', document.getElementById('p1').outerHTML);
+  // testing.expectEqual(true, document.body.outerHTML.replaceAll(/\n/g, '').startsWith('<body><p id="p1">spice</p><script id="outerHTML">'));
+
+  // document.getElementById('p1').outerHTML = '';
+  // testing.expectEqual(null, document.getElementById('p1'));
+  // testing.expectEqual(true, document.body.outerHTML.replaceAll(/\n/g, '').startsWith('<body><script id="outerHTML">'));
+</script>
