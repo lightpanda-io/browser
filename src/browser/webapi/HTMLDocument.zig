@@ -74,30 +74,76 @@ pub fn getBody(self: *HTMLDocument) ?*Element.Html.Body {
 }
 
 pub fn getTitle(self: *HTMLDocument, page: *Page) ![]const u8 {
-    const head = self.getHead() orelse return "";
-    var it = head.asNode().childrenIterator();
-    while (it.next()) |node| {
-        if (node.is(Element.Html.Title)) |title| {
-            var buf = std.Io.Writer.Allocating.init(page.call_arena);
-            try title.asElement().getInnerText(&buf.writer);
-            return buf.written();
+    // Search the entire document for the first <title> element
+    const root = self._proto.getDocumentElement() orelse return "";
+    const title_element = blk: {
+        var walker = @import("TreeWalker.zig").Full.init(root.asNode(), .{});
+        while (walker.next()) |node| {
+            if (node.is(Element.Html.Title)) |title| {
+                break :blk title;
+            }
+        }
+        return "";
+    };
+
+    var buf = std.Io.Writer.Allocating.init(page.call_arena);
+    try title_element.asNode().getTextContent(&buf.writer);
+    const text = buf.written();
+
+    if (text.len == 0) {
+        return "";
+    }
+
+    var started = false;
+    var in_whitespace = false;
+    var result: std.ArrayList(u8) = .empty;
+    try result.ensureTotalCapacity(page.call_arena, text.len);
+
+    for (text) |c| {
+        const is_ascii_ws = c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == '\x0C';
+
+        if (is_ascii_ws) {
+            if (started) {
+                in_whitespace = true;
+            }
+        } else {
+            if (in_whitespace) {
+                result.appendAssumeCapacity(' ');
+                in_whitespace = false;
+            }
+            result.appendAssumeCapacity(c);
+            started = true;
         }
     }
-    return "";
+
+    return result.items;
 }
 
 pub fn setTitle(self: *HTMLDocument, title: []const u8, page: *Page) !void {
     const head = self.getHead() orelse return;
+
+    // Find existing title element in head
     var it = head.asNode().childrenIterator();
     while (it.next()) |node| {
         if (node.is(Element.Html.Title)) |title_element| {
-            return title_element.asElement().replaceChildren(&.{.{ .text = title }}, page);
+            // Replace children, but don't create text node for empty string
+            if (title.len == 0) {
+                return title_element.asElement().replaceChildren(&.{}, page);
+            } else {
+                return title_element.asElement().replaceChildren(&.{.{ .text = title }}, page);
+            }
         }
     }
 
+    // No title element found, create one
     const title_node = try page.createElement(null, "title", null);
     const title_element = title_node.as(Element);
-    try title_element.replaceChildren(&.{.{ .text = title }}, page);
+
+    // Only add text if non-empty
+    if (title.len > 0) {
+        try title_element.replaceChildren(&.{.{ .text = title }}, page);
+    }
+
     _ = try head.asNode().appendChild(title_node, page);
 }
 
