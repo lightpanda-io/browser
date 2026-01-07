@@ -18,6 +18,8 @@
 
 const std = @import("std");
 
+const RAND_bytes = @import("boringssl.zig").RAND_bytes;
+
 // Generates incrementing prefixed integers, i.e. CTX-1, CTX-2, CTX-3.
 // Wraps to 0 on overflow.
 // Many caveats for using this:
@@ -88,7 +90,7 @@ pub fn uuidv4(hex: []u8) void {
     std.debug.assert(hex.len == 36);
 
     var bin: [16]u8 = undefined;
-    std.crypto.random.bytes(&bin);
+    _ = RAND_bytes(&bin, bin.len);
     bin[6] = (bin[6] & 0x0f) | 0x40;
     bin[8] = (bin[8] & 0x3f) | 0x80;
 
