@@ -163,8 +163,8 @@ pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: []cons
     });
 }
 
-pub fn getElementById(self: *const Document, id_: ?[]const u8) ?*Element {
-    const id = id_ orelse return null;
+pub fn getElementById(self: *const Document, id: []const u8) ?*Element {
+    if (id.len == 0) return null;
     return self._elements_by_id.get(id);
 }
 
