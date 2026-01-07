@@ -966,7 +966,7 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Pag
     var class_names: std.ArrayList([]const u8) = .empty;
     var it = std.mem.tokenizeAny(u8, class_name, &std.ascii.whitespace);
     while (it.next()) |name| {
-        try class_names.append(arena, name);
+        try class_names.append(arena, try page.dupeString(name));
     }
 
     return collections.NodeLive(.class_name).init(self.asNode(), class_names.items, page);
