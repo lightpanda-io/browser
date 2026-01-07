@@ -105,9 +105,14 @@ pub fn initEvent(
     cancelable: ?bool,
     page: *Page,
 ) !void {
+    if (self._event_phase != .none) {
+        return;
+    }
+
     self._type_string = try String.init(page.arena, event_string, .{});
     self._bubbles = bubbles orelse false;
     self._cancelable = cancelable orelse false;
+    self._stop_propagation = false;
 }
 
 pub fn as(self: *Event, comptime T: type) *T {
@@ -174,6 +179,22 @@ pub fn stopImmediatePropagation(self: *Event) void {
 
 pub fn getDefaultPrevented(self: *const Event) bool {
     return self._prevent_default;
+}
+
+pub fn getReturnValue(self: *const Event) bool {
+    return !self._prevent_default;
+}
+
+pub fn setReturnValue(self: *Event, v: bool) void {
+    self._prevent_default = !v;
+}
+
+pub fn getCancelBubble(self: *const Event) bool {
+    return self._stop_propagation;
+}
+
+pub fn setCancelBubble(self: *Event) void {
+    self.stopPropagation();
 }
 
 pub fn getEventPhase(self: *const Event) u8 {
@@ -372,6 +393,7 @@ pub const JsApi = struct {
     pub const cancelable = bridge.accessor(Event.getCancelable, null, .{});
     pub const composed = bridge.accessor(Event.getComposed, null, .{});
     pub const target = bridge.accessor(Event.getTarget, null, .{});
+    pub const srcElement = bridge.accessor(Event.getTarget, null, .{});
     pub const currentTarget = bridge.accessor(Event.getCurrentTarget, null, .{});
     pub const eventPhase = bridge.accessor(Event.getEventPhase, null, .{});
     pub const defaultPrevented = bridge.accessor(Event.getDefaultPrevented, null, .{});
@@ -382,6 +404,10 @@ pub const JsApi = struct {
     pub const stopImmediatePropagation = bridge.function(Event.stopImmediatePropagation, .{});
     pub const composedPath = bridge.function(Event.composedPath, .{});
     pub const initEvent = bridge.function(Event.initEvent, .{});
+    // deprecated
+    pub const returnValue = bridge.accessor(Event.getReturnValue, Event.setReturnValue, .{});
+    // deprecated
+    pub const cancelBubble = bridge.accessor(Event.getCancelBubble, Event.setCancelBubble, .{});
 
     // Event phase constants
     pub const NONE = bridge.property(@intFromEnum(EventPhase.none));
