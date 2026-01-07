@@ -39,7 +39,7 @@ jobs:
           mode: 'release'
 
       - name: zig build
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseSafe -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -78,7 +78,7 @@ jobs:
           mode: 'release'
 
       - name: zig build
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseSafe -Dcpu=generic -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -119,7 +119,7 @@ jobs:
           mode: 'release'
 
       - name: zig build
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}
@@ -158,7 +158,7 @@ jobs:
           mode: 'release'
 
       - name: zig build
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseSafe -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: Rename binary
         run: mv zig-out/bin/lightpanda lightpanda-${{ env.ARCH }}-${{ env.OS }}

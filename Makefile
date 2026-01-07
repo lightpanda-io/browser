@@ -49,10 +49,10 @@ help:
 # ------------
 .PHONY: build build-dev run run-release shell test bench wpt data end2end
 
-## Build in release-safe mode
+## Build in release-fast mode
 build:
 	@printf "\033[36mBuilding (release safe)...\033[0m\n"
-	@$(ZIG) build -Doptimize=ReleaseSafe -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
+	@$(ZIG) build -Doptimize=ReleaseFast -Dgit_commit=$$(git rev-parse --short HEAD) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 	@printf "\033[33mBuild OK\033[0m\n"
 
 ## Build in debug mode
