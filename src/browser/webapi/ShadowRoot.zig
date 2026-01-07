@@ -39,6 +39,7 @@ _proto: *DocumentFragment,
 _mode: Mode,
 _host: *Element,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .{},
+_removed_ids: std.StringHashMapUnmanaged(void) = .{},
 
 pub fn init(host: *Element, mode: Mode, page: *Page) !*ShadowRoot {
     return page._factory.documentFragment(ShadowRoot{
@@ -72,9 +73,34 @@ pub fn getHost(self: *const ShadowRoot) *Element {
     return self._host;
 }
 
-pub fn getElementById(self: *ShadowRoot, id_: ?[]const u8) ?*Element {
-    const id = id_ orelse return null;
-    return self._elements_by_id.get(id);
+pub fn getElementById(self: *ShadowRoot, id: []const u8, page: *Page) ?*Element {
+    if (id.len == 0) {
+        return null;
+    }
+
+    // Fast path: ID is in the map
+    if (self._elements_by_id.get(id)) |element| {
+        return element;
+    }
+
+    // Slow path: ID was removed but might have duplicates
+    if (self._removed_ids.remove(id)) {
+        // Do a tree walk to find another element with this ID
+        var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
+        while (tw.next()) |el| {
+            const element_id = el.getAttributeSafe("id") orelse continue;
+            if (std.mem.eql(u8, element_id, id)) {
+                // we ignore this error to keep getElementById easy to call
+                // if it really failed, then we're out of memory and nothing's
+                // going to work like it should anyways.
+                const owned_id = page.dupeString(id) catch return null;
+                self._elements_by_id.put(page.arena, owned_id, el) catch return null;
+                return el;
+            }
+        }
+    }
+
+    return null;
 }
 
 pub const JsApi = struct {
@@ -88,7 +114,17 @@ pub const JsApi = struct {
 
     pub const mode = bridge.accessor(ShadowRoot.getMode, null, .{});
     pub const host = bridge.accessor(ShadowRoot.getHost, null, .{});
-    pub const getElementById = bridge.function(ShadowRoot.getElementById, .{});
+    pub const getElementById = bridge.function(_getElementById, .{});
+    fn _getElementById(self: *ShadowRoot, value_: ?js.Value, page: *Page) !?*Element {
+        const value = value_ orelse return null;
+        if (value.isNull()) {
+            return self.getElementById("null", page);
+        }
+        if (value.isUndefined()) {
+            return self.getElementById("undefined", page);
+        }
+        return self.getElementById(try value.toZig([]const u8), page);
+    }
 };
 
 const testing = @import("../../testing.zig");

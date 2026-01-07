@@ -91,7 +91,7 @@ pub fn getForm(self: *Button, page: *Page) ?*Form {
 
     // If form attribute exists, ONLY use that (even if it references nothing)
     if (element.getAttributeSafe("form")) |form_id| {
-        if (page.document.getElementById(form_id)) |form_element| {
+        if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }
         // form attribute present but invalid - no form owner

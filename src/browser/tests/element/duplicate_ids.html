@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="test">first</div>
+<div id="test">second</div>
+
+<script id=duplicateIds>
+  const first = document.getElementById('test');
+  testing.expectEqual('first', first.textContent);
+
+  first.remove();
+
+  const second = document.getElementById('test');
+  testing.expectEqual('second', second.textContent);
+
+  // second.remove();
+
+  // testing.expectEqual(null, document.getElementById('test'));
+</script>
