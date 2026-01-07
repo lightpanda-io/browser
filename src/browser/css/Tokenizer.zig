@@ -644,8 +644,10 @@ fn consumeNumeric(self: *Tokenizer) Token {
 fn consumeUnquotedUrl(self: *Tokenizer) ?Token {
     // TODO: true url parser
     if (self.nextByte()) |it| {
-        self.consumeString(it == '\'');
+        return self.consumeString(it == '\'');
     }
+
+    return null;
 }
 
 fn consumeIdentLike(self: *Tokenizer) Token {

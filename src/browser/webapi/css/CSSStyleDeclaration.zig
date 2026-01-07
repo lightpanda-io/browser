@@ -20,6 +20,8 @@ const std = @import("std");
 const log = @import("../../../log.zig");
 const String = @import("../../../string.zig").String;
 
+const CssParser = @import("../../css/Parser.zig");
+
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
@@ -149,30 +151,10 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !vo
     }
 
     // Parse and set new properties
-    // This is a simple parser - a full implementation would use a proper CSS parser
-    var it = std.mem.splitScalar(u8, text, ';');
+    var it = CssParser.parseDeclarationsList(text);
     while (it.next()) |declaration| {
-        const trimmed = std.mem.trim(u8, declaration, &std.ascii.whitespace);
-        if (trimmed.len == 0) continue;
-
-        if (std.mem.indexOfScalar(u8, trimmed, ':')) |colon_pos| {
-            const name = std.mem.trim(u8, trimmed[0..colon_pos], &std.ascii.whitespace);
-            const value_part = std.mem.trim(u8, trimmed[colon_pos + 1 ..], &std.ascii.whitespace);
-
-            var value = value_part;
-            var priority: ?[]const u8 = null;
-
-            // Check for !important
-            if (std.mem.lastIndexOfScalar(u8, value_part, '!')) |bang_pos| {
-                const after_bang = std.mem.trim(u8, value_part[bang_pos + 1 ..], &std.ascii.whitespace);
-                if (std.mem.eql(u8, after_bang, "important")) {
-                    value = std.mem.trimRight(u8, value_part[0..bang_pos], &std.ascii.whitespace);
-                    priority = "important";
-                }
-            }
-
-            try self.setProperty(name, value, priority, page);
-        }
+        const priority: ?[]const u8 = if (declaration.important) "important" else null;
+        try self.setProperty(declaration.name, declaration.value, priority, page);
     }
 }
 
