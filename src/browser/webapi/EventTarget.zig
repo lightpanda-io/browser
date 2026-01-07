@@ -167,7 +167,6 @@ pub const JsApi = struct {
     pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{});
     pub const addEventListener = bridge.function(EventTarget.addEventListener, .{});
     pub const removeEventListener = bridge.function(EventTarget.removeEventListener, .{});
-    pub const toString = bridge.function(EventTarget.toString, .{});
 };
 
 const testing = @import("../../testing.zig");

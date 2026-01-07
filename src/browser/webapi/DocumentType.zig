@@ -70,9 +70,4 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(DocumentType.getName, null, .{});
     pub const publicId = bridge.accessor(DocumentType.getPublicId, null, .{});
     pub const systemId = bridge.accessor(DocumentType.getSystemId, null, .{});
-
-    pub const toString = bridge.function(_toString, .{});
-    fn _toString(self: *const DocumentType) []const u8 {
-        return self.className();
-    }
 };

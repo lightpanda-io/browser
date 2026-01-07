@@ -120,11 +120,6 @@ pub const JsApi = struct {
     pub const createDocument = bridge.function(DOMImplementation.createDocument, .{});
     pub const createHTMLDocument = bridge.function(DOMImplementation.createHTMLDocument, .{});
     pub const hasFeature = bridge.function(DOMImplementation.hasFeature, .{});
-
-    pub const toString = bridge.function(_toString, .{});
-    fn _toString(_: *const DOMImplementation) []const u8 {
-        return "[object DOMImplementation]";
-    }
 };
 
 const testing = @import("../../testing.zig");

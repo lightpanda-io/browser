@@ -201,6 +201,11 @@ fn validateNodeInsertion(parent: *Node, node: *Node) !void {
     if (node.contains(parent)) {
         return error.HierarchyError;
     }
+
+    if (node._type == .attribute) {
+        return error.HierarchyError;
+    }
+
 }
 
 pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
@@ -847,11 +852,14 @@ pub const JsApi = struct {
     pub const ATTRIBUTE_NODE = bridge.property(2);
     pub const TEXT_NODE = bridge.property(3);
     pub const CDATA_SECTION_NODE = bridge.property(4);
+    pub const ENTITY_REFERENCE_NODE = bridge.property(5);
+    pub const ENTITY_NODE = bridge.property(6);
     pub const PROCESSING_INSTRUCTION_NODE = bridge.property(7);
     pub const COMMENT_NODE = bridge.property(8);
     pub const DOCUMENT_NODE = bridge.property(9);
     pub const DOCUMENT_TYPE_NODE = bridge.property(10);
     pub const DOCUMENT_FRAGMENT_NODE = bridge.property(11);
+    pub const NOTATION_NODE = bridge.property(12);
 
     pub const DOCUMENT_POSITION_DISCONNECTED = bridge.property(0x01);
     pub const DOCUMENT_POSITION_PRECEDING = bridge.property(0x02);
@@ -906,11 +914,6 @@ pub const JsApi = struct {
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
     pub const getRootNode = bridge.function(Node.getRootNode, .{});
     pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
-
-    pub const toString = bridge.function(_toString, .{});
-    fn _toString(self: *const Node) []const u8 {
-        return self.className();
-    }
 
     fn _baseURI(_: *Node, page: *const Page) []const u8 {
         return page.base();
