@@ -320,12 +320,14 @@ pub fn NodeLive(comptime mode: Mode) type {
         }
 
         const HTMLCollection = @import("HTMLCollection.zig");
-        pub fn runtimeGenericWrap(self: Self, page: *Page) !*HTMLCollection {
+        const NodeList = @import("NodeList.zig");
+
+        pub fn runtimeGenericWrap(self: Self, page: *Page) !if (mode == .name) *NodeList else *HTMLCollection {
             const collection = switch (mode) {
+                .name => return page._factory.create(NodeList{ .data = .{ .name = self } }),
                 .tag => HTMLCollection{ ._data = .{ .tag = self } },
                 .tag_name => HTMLCollection{ ._data = .{ .tag_name = self } },
                 .class_name => HTMLCollection{ ._data = .{ .class_name = self } },
-                .name => HTMLCollection{ ._data = .{ .name = self } },
                 .all_elements => HTMLCollection{ ._data = .{ .all_elements = self } },
                 .child_elements => HTMLCollection{ ._data = .{ .child_elements = self } },
                 .child_tag => HTMLCollection{ ._data = .{ .child_tag = self } },
