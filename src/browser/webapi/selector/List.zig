@@ -468,7 +468,7 @@ fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
         },
         .word => |expected| {
             // Space-separated word match (like class names)
-            var it = std.mem.tokenizeScalar(u8, value, ' ');
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
             while (it.next()) |word| {
                 const same = if (attr.case_insensitive)
                     std.ascii.eqlIgnoreCase(word, expected)
