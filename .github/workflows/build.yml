@@ -5,8 +5,12 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_BUILD_AWS_SECRET_ACCESS_KEY }}
   AWS_BUCKET: ${{ vars.NIGHTLY_BUILD_AWS_BUCKET }}
   AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
+  RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
 
 on:
+  push:
+    tags:
+      - '*'
   schedule:
     - cron: "2 2 * * *"
 
@@ -57,7 +61,7 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{ env.RELEASE }}
 
   build-linux-aarch64:
     env:
@@ -99,7 +103,7 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{ env.RELEASE }}
 
   build-macos-aarch64:
     env:
@@ -143,7 +147,7 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{ env.RELEASE }}
 
   build-macos-x86_64:
     env:
@@ -185,4 +189,4 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{ env.RELEASE }}
