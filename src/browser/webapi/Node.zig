@@ -46,6 +46,9 @@ _parent: ?*Node = null,
 _children: ?*Children = null,
 _child_link: LinkedList.Node = .{},
 
+// Lookup for nodes that have a different owner document than page.document
+pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
+
 pub const Type = union(enum) {
     cdata: *CData,
     element: *Element,
@@ -205,7 +208,6 @@ fn validateNodeInsertion(parent: *Node, node: *Node) !void {
     if (node._type == .attribute) {
         return error.HierarchyError;
     }
-
 }
 
 pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
@@ -222,15 +224,21 @@ pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
     // then we can remove + add a bit more efficiently (we don't have to fully
     // disconnect then reconnect)
     const child_connected = child.isConnected();
+
     // Check if we're adopting the node to a different document
-    const child_root = child.getRootNode(null);
-    const parent_root = self.getRootNode(null);
-    const adopting_to_new_document = child_connected and child_root != parent_root;
+    const child_owner = child.ownerDocument(page);
+    const parent_owner = self.ownerDocument(page) orelse self.as(Document);
+    const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
     if (child._parent) |parent| {
         // we can signal removeNode that the child will remain connected
         // (when it's appended to self) so that it can be a bit more efficient.
         page.removeNode(parent, child, .{ .will_be_reconnected = self.isConnected() });
+    }
+
+    // Adopt the node tree if moving between documents
+    if (adopting_to_new_document) {
+        try page.adoptNodeTree(child, parent_owner);
     }
 
     try page.appendNode(self, child, .{
@@ -432,8 +440,13 @@ pub fn ownerDocument(self: *const Node, page: *const Page) ?*Document {
         return current._type.document;
     }
 
-    // Otherwise, this is a detached node. The owner is the document that
-    // created it. For now, we only have one document.
+    // Otherwise, this is a detached node. Check if it has a specific owner
+    // document registered (for nodes created via non-main documents).
+    if (page._node_owner_documents.get(@constCast(self))) |owner| {
+        return owner;
+    }
+
+    // Default to the main document for detached nodes without a specific owner.
     return page.document;
 }
 
@@ -489,15 +502,21 @@ pub fn insertBefore(self: *Node, new_node: *Node, ref_node_: ?*Node, page: *Page
     try validateNodeInsertion(self, new_node);
 
     const child_already_connected = new_node.isConnected();
+
     // Check if we're adopting the node to a different document
-    const child_root = new_node.getRootNode(null);
-    const parent_root = self.getRootNode(null);
-    const adopting_to_new_document = child_already_connected and child_root != parent_root;
+    const child_owner = new_node.ownerDocument(page);
+    const parent_owner = self.ownerDocument(page) orelse self.as(Document);
+    const adopting_to_new_document = child_owner != null and child_owner.? != parent_owner;
 
     page.domChanged();
     const will_be_reconnected = self.isConnected();
     if (new_node._parent) |parent| {
         page.removeNode(parent, new_node, .{ .will_be_reconnected = will_be_reconnected });
+    }
+
+    // Adopt the node tree if moving between documents
+    if (adopting_to_new_document) {
+        try page.adoptNodeTree(new_node, parent_owner);
     }
 
     try page.insertNodeRelative(

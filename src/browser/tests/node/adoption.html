@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+<script id="adoptNode">
+const old = document.implementation.createHTMLDocument("");
+const div = old.createElement("div");
+div.appendChild(old.createTextNode("text"));
+
+testing.expectEqual(old, div.ownerDocument);
+testing.expectEqual(old, div.firstChild.ownerDocument);
+
+document.body.appendChild(div);
+
+testing.expectEqual(document, div.ownerDocument);
+testing.expectEqual(document, div.firstChild.ownerDocument);
+</script>

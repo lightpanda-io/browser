@@ -95,6 +95,7 @@ _element_datasets: Element.DatasetLookup = .{},
 _element_class_lists: Element.ClassListLookup = .{},
 _element_rel_lists: Element.RelListLookup = .{},
 _element_shadow_roots: Element.ShadowRootLookup = .{},
+_node_owner_documents: Node.OwnerDocumentLookup = .{},
 _element_assigned_slots: Element.AssignedSlotLookup = .{},
 
 _script_manager: ScriptManager,
@@ -266,6 +267,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_class_lists = .{};
     self._element_rel_lists = .{};
     self._element_shadow_roots = .{};
+    self._node_owner_documents = .{};
     self._element_assigned_slots = .{};
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
@@ -1287,6 +1289,26 @@ pub fn nodeComplete(self: *Page, node: *Node) !void {
         return err;
     };
     return self.nodeIsReady(true, node);
+}
+
+// Sets the owner document for a node. Only stores entries for nodes whose owner
+// is NOT page.document to minimize memory overhead.
+pub fn setNodeOwnerDocument(self: *Page, node: *Node, owner: *Document) !void {
+    if (owner == self.document) {
+        // No need to store if it's the main document - remove if present
+        _ = self._node_owner_documents.remove(node);
+    } else {
+        try self._node_owner_documents.put(self.arena, node, owner);
+    }
+}
+
+// Recursively sets the owner document for a node and all its descendants
+pub fn adoptNodeTree(self: *Page, node: *Node, new_owner: *Document) !void {
+    try self.setNodeOwnerDocument(node, new_owner);
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        try self.adoptNodeTree(child, new_owner);
+    }
 }
 
 pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_iterator: anytype) !*Node {

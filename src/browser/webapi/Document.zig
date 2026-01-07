@@ -121,9 +121,14 @@ const CreateElementOptions = struct {
     is: ?[]const u8 = null,
 };
 
-pub fn createElement(_: *const Document, name: []const u8, options_: ?CreateElementOptions, page: *Page) !*Element {
+pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElementOptions, page: *Page) !*Element {
     const node = try page.createElement(null, name, null);
     const element = node.as(Element);
+
+    // Track owner document if it's not the main document
+    if (self != page.document) {
+        try page.setNodeOwnerDocument(node, self);
+    }
 
     const options = options_ orelse return element;
     if (options.is) |is_value| {
@@ -134,8 +139,13 @@ pub fn createElement(_: *const Document, name: []const u8, options_: ?CreateElem
     return element;
 }
 
-pub fn createElementNS(_: *const Document, namespace: ?[]const u8, name: []const u8, page: *Page) !*Element {
+pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8, page: *Page) !*Element {
     const node = try page.createElement(namespace, name, null);
+
+    // Track owner document if it's not the main document
+    if (self != page.document) {
+        try page.setNodeOwnerDocument(node, self);
+    }
     return node.as(Element);
 }
 
@@ -254,28 +264,53 @@ pub fn getImplementation(_: *const Document) DOMImplementation {
     return .{};
 }
 
-pub fn createDocumentFragment(_: *const Document, page: *Page) !*Node.DocumentFragment {
-    return Node.DocumentFragment.init(page);
-}
-
-pub fn createComment(_: *const Document, data: []const u8, page: *Page) !*Node {
-    return page.createComment(data);
-}
-
-pub fn createTextNode(_: *const Document, data: []const u8, page: *Page) !*Node {
-    return page.createTextNode(data);
-}
-
-pub fn createCDATASection(self: *const Document, data: []const u8, page: *Page) !*Node {
-    switch (self._type) {
-        .html => return error.NotSupported, // cannot create a CDataSection in an HTMLDocument
-        .xml => return page.createCDATASection(data),
-        .generic => return page.createCDATASection(data),
+pub fn createDocumentFragment(self: *Document, page: *Page) !*Node.DocumentFragment {
+    const frag = try Node.DocumentFragment.init(page);
+    // Track owner document if it's not the main document
+    if (self != page.document) {
+        try page.setNodeOwnerDocument(frag.asNode(), self);
     }
+    return frag;
 }
 
-pub fn createProcessingInstruction(_: *const Document, target: []const u8, data: []const u8, page: *Page) !*Node {
-    return page.createProcessingInstruction(target, data);
+pub fn createComment(self: *Document, data: []const u8, page: *Page) !*Node {
+    const node = try page.createComment(data);
+    // Track owner document if it's not the main document
+    if (self != page.document) {
+        try page.setNodeOwnerDocument(node, self);
+    }
+    return node;
+}
+
+pub fn createTextNode(self: *Document, data: []const u8, page: *Page) !*Node {
+    const node = try page.createTextNode(data);
+    // Track owner document if it's not the main document
+    if (self != page.document) {
+        try page.setNodeOwnerDocument(node, self);
+    }
+    return node;
+}
+
+pub fn createCDATASection(self: *Document, data: []const u8, page: *Page) !*Node {
+    const node = switch (self._type) {
+        .html => return error.NotSupported, // cannot create a CDataSection in an HTMLDocument
+        .xml => try page.createCDATASection(data),
+        .generic => try page.createCDATASection(data),
+    };
+    // Track owner document if it's not the main document
+    if (self != page.document) {
+        try page.setNodeOwnerDocument(node, self);
+    }
+    return node;
+}
+
+pub fn createProcessingInstruction(self: *Document, target: []const u8, data: []const u8, page: *Page) !*Node {
+    const node = try page.createProcessingInstruction(target, data);
+    // Track owner document if it's not the main document
+    if (self != page.document) {
+        try page.setNodeOwnerDocument(node, self);
+    }
+    return node;
 }
 
 const Range = @import("Range.zig");
