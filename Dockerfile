@@ -48,8 +48,16 @@ RUN case $TARGETPLATFORM in \
     mkdir -p v8/ && \
     mv libc_v8.a v8/libc_v8.a
 
+# build v8 snapshot
+RUN zig build -Doptimize=ReleaseFast \
+    -Dprebuilt_v8_path=v8/libc_v8.a \
+    snapshot_creator -- src/snapshot.bin
+
 # build release
-RUN zig build -Doptimize=ReleaseFast -Dprebuilt_v8_path=v8/libc_v8.a -Dgit_commit=$(git rev-parse --short HEAD)
+RUN zig build -Doptimize=ReleaseFast \
+    -Dsnapshot_path=../../snapshot.bin \
+    -Dprebuilt_v8_path=v8/libc_v8.a \
+    -Dgit_commit=$(git rev-parse --short HEAD)
 
 FROM debian:stable-slim
 
