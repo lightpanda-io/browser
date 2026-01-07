@@ -203,27 +203,6 @@ fn trackCallback(self: *Context, pf: PersistentFunction) !void {
     return self.callbacks.append(self.arena, pf);
 }
 
-// Given an anytype, turns it into a v8.Object. The anytype could be:
-// 1 - A V8.object already
-// 2 - Our js.Object wrapper around a V8.Object
-// 3 - A zig instance that has previously been given to V8
-//     (i.e., the value has to be known to the executor)
-pub fn valueToExistingObject(self: *const Context, value: anytype) !v8.Object {
-    if (@TypeOf(value) == v8.Object) {
-        return value;
-    }
-
-    if (@TypeOf(value) == js.Object) {
-        return value.js_obj;
-    }
-
-    const persistent_object = self.identity_map.get(@intFromPtr(value)) orelse {
-        return error.InvalidThisForCallback;
-    };
-
-    return persistent_object.castToObject();
-}
-
 // == Executors ==
 pub fn eval(self: *Context, src: []const u8, name: ?[]const u8) !void {
     _ = try self.exec(src, name);

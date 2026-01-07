@@ -186,7 +186,7 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
 
     if (function_) |func| {
         event._current_target = target;
-        if (func.call(void, .{event})) {
+        if (func.callWithThis(void, target, .{event})) {
             was_dispatched = true;
         } else |err| {
             // a non-JS error
@@ -349,7 +349,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         }
 
         switch (listener.function) {
-            .value => |value| try value.call(void, .{event}),
+            .value => |value| try value.callWithThis(void, current_target, .{event}),
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
                 try self.page.js.eval(str, null);

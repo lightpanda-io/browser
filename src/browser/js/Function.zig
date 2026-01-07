@@ -129,7 +129,16 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     context.call_depth = call_depth + 1;
     defer context.call_depth = call_depth;
 
-    const js_this = try context.valueToExistingObject(this);
+    const js_this = blk: {
+        if (@TypeOf(this) == v8.Object) {
+            break :blk this;
+        }
+
+        if (@TypeOf(this) == js.Object) {
+            break :blk this.js_obj;
+        }
+        break :blk try context.zigValueToJs(this, .{});
+    };
 
     const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
 
