@@ -7,6 +7,9 @@ env:
   AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
 
 on:
+  push:
+    tags:
+      - '*'
   schedule:
     - cron: "2 2 * * *"
 
@@ -52,7 +55,7 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{  github.event.push.tags && github.ref_type == 'tag' && '' || 'nightly' }}
 
   build-linux-aarch64:
     env:
@@ -90,7 +93,7 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{  github.event.push.tags && github.ref_type == 'tag' && '' || 'nightly' }}
 
   build-macos-aarch64:
     env:
@@ -130,7 +133,7 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{  github.event.push.tags && github.ref_type == 'tag' && '' || 'nightly' }}
 
   build-macos-x86_64:
     env:
@@ -168,4 +171,4 @@ jobs:
         with:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
-          tag: nightly
+          tag: ${{  github.event.push.tags && github.ref_type == 'tag' && '' || 'nightly' }}
