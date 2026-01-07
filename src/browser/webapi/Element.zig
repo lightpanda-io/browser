@@ -990,6 +990,11 @@ pub fn cloneElement(self: *Element, deep: bool, page: *Page) !*Node {
 
     const node = try page.createElement(namespace_uri, tag_name, self._attributes);
 
+    // Allow element-specific types to copy their runtime state
+    _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), page }) catch |err| {
+        log.err(.dom, "element.clone.failed", .{ .err = err });
+    };
+
     if (deep) {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {

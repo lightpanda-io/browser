@@ -46,14 +46,16 @@ pub const Type = enum {
     range,
     date,
     time,
-    datetime_local,
+    @"datetime-local",
     month,
     week,
     color,
 
     pub fn fromString(str: []const u8) Type {
         // Longest type name is "datetime-local" at 14 chars
-        if (str.len > 32) return .text;
+        if (str.len > 32) {
+            return .text;
+        }
 
         var buf: [32]u8 = undefined;
         const lower = std.ascii.lowerString(&buf, str);
@@ -61,10 +63,7 @@ pub const Type = enum {
     }
 
     pub fn toString(self: Type) []const u8 {
-        return switch (self) {
-            .datetime_local => "datetime-local",
-            else => @tagName(self),
-        };
+        return @tagName(self);
     }
 };
 
@@ -76,6 +75,7 @@ _checked: bool = false,
 _checked_dirty: bool = false,
 _input_type: Type = .text,
 _selected: bool = false,
+_indeterminate: bool = false,
 
 pub fn asElement(self: *Input) *Element {
     return self._proto._proto;
@@ -127,6 +127,14 @@ pub fn setChecked(self: *Input, checked: bool, page: *Page) !void {
     // This should _not_ call setAttribute. It updates the current state only
     self._checked = checked;
     self._checked_dirty = true;
+}
+
+pub fn getIndeterminate(self: *const Input) bool {
+    return self._indeterminate;
+}
+
+pub fn setIndeterminate(self: *Input, value: bool) !void {
+    self._indeterminate = value;
 }
 
 pub fn getDefaultChecked(self: *const Input) bool {
@@ -342,6 +350,7 @@ pub const JsApi = struct {
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
+    pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
     pub const select = bridge.function(Input.select, .{});
 };
 
@@ -403,6 +412,18 @@ pub const Build = struct {
                 }
             },
         }
+    }
+
+    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Page) !void {
+        const source = source_element.as(Input);
+        const clone = cloned_element.as(Input);
+
+        // Copy runtime state from source to clone
+        clone._value = source._value;
+        clone._checked = source._checked;
+        clone._checked_dirty = source._checked_dirty;
+        clone._selected = source._selected;
+        clone._indeterminate = source._indeterminate;
     }
 };
 
