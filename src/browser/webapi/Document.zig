@@ -163,8 +163,10 @@ pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: []cons
     });
 }
 
-pub fn getElementById(self: *const Document, id_: ?[]const u8) ?*Element {
-    const id = id_ orelse return null;
+pub fn getElementById(self: *const Document, id: []const u8) ?*Element {
+    if (id.len == 0) {
+        return null;
+    }
     return self._elements_by_id.get(id);
 }
 
@@ -685,7 +687,17 @@ pub const JsApi = struct {
     pub const createEvent = bridge.function(Document.createEvent, .{ .dom_exception = true });
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});
     pub const createNodeIterator = bridge.function(Document.createNodeIterator, .{});
-    pub const getElementById = bridge.function(Document.getElementById, .{});
+    pub const getElementById = bridge.function(_getElementById, .{});
+    fn _getElementById(self: *const Document, value_: ?js.Value) !?*Element {
+        const value = value_ orelse return null;
+        if (value.isNull()) {
+            return self.getElementById("null");
+        }
+        if (value.isUndefined()) {
+            return self.getElementById("undefined");
+        }
+        return self.getElementById(try value.toZig([]const u8));
+    }
     pub const querySelector = bridge.function(Document.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});

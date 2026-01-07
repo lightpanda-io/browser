@@ -317,6 +317,20 @@ pub fn getOuterHTML(self: *Element, writer: *std.Io.Writer, page: *Page) !void {
     return dump.deep(self.asNode(), .{ .shadow = .skip }, writer, page);
 }
 
+pub fn setOuterHTML(self: *Element, html: []const u8, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node._parent orelse return;
+
+    page.domChanged();
+    if (html.len > 0) {
+        const fragment = (try Node.DocumentFragment.init(page)).asNode();
+        try page.parseHtmlAsChildren(fragment, html);
+        try page.insertAllChildrenBefore(fragment, parent, node);
+    }
+
+    page.removeNode(parent, node, .{ .will_be_reconnected = false });
+}
+
 pub fn getInnerHTML(self: *Element, writer: *std.Io.Writer, page: *Page) !void {
     const dump = @import("../dump.zig");
     return dump.children(self.asNode(), .{ .shadow = .skip }, writer, page);
@@ -1225,7 +1239,7 @@ pub const JsApi = struct {
         return buf.written();
     }
 
-    pub const outerHTML = bridge.accessor(_outerHTML, null, .{});
+    pub const outerHTML = bridge.accessor(_outerHTML, Element.setOuterHTML, .{});
     fn _outerHTML(self: *Element, page: *Page) ![]const u8 {
         var buf = std.Io.Writer.Allocating.init(page.call_arena);
         try self.getOuterHTML(&buf.writer, page);

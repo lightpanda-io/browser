@@ -2172,9 +2172,9 @@ pub fn appendAllChildren(self: *Page, parent: *Node, target: *Node) !void {
     }
 }
 
-pub fn insertAllChildrenBefore(self: *Page, fragment: *Node, target: *Node, ref_node: *Node) !void {
+pub fn insertAllChildrenBefore(self: *Page, fragment: *Node, parent: *Node, ref_node: *Node) !void {
     self.domChanged();
-    const dest_connected = target.isConnected();
+    const dest_connected = parent.isConnected();
 
     var it = fragment.childrenIterator();
     while (it.next()) |child| {
@@ -2182,7 +2182,7 @@ pub fn insertAllChildrenBefore(self: *Page, fragment: *Node, target: *Node, ref_
         const child_was_connected = child.isConnected();
         self.removeNode(fragment, child, .{ .will_be_reconnected = dest_connected });
         try self.insertNodeRelative(
-            target,
+            parent,
             child,
             .{ .before = ref_node },
             .{ .child_already_connected = child_was_connected },
