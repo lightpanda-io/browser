@@ -147,7 +147,7 @@ pub fn format(self: *const CData, writer: *std.io.Writer) !void {
 }
 
 pub fn getLength(self: *const CData) usize {
-    return self._data.len;
+    return std.unicode.utf8CountCodepoints(self._data) catch self._data.len;
 }
 
 pub fn isEqualNode(self: *const CData, other: *const CData) bool {
