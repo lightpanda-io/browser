@@ -71,8 +71,10 @@ pub fn className(_: *const DocumentFragment) []const u8 {
     return "[object DocumentFragment]";
 }
 
-pub fn getElementById(self: *DocumentFragment, id_: ?[]const u8) ?*Element {
-    const id = id_ orelse return null;
+pub fn getElementById(self: *DocumentFragment, id: []const u8) ?*Element {
+    if (id.len == 0) {
+        return null;
+    }
 
     var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
     while (tw.next()) |el| {
@@ -239,7 +241,18 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(DocumentFragment.init, .{});
 
-    pub const getElementById = bridge.function(DocumentFragment.getElementById, .{});
+    pub const getElementById = bridge.function(_getElementById, .{});
+    fn _getElementById(self: *DocumentFragment, value_: ?js.Value) !?*Element {
+        const value = value_ orelse return null;
+        if (value.isNull()) {
+            return self.getElementById("null");
+        }
+        if (value.isUndefined()) {
+            return self.getElementById("undefined");
+        }
+        return self.getElementById(try value.toZig([]const u8));
+    }
+
     pub const querySelector = bridge.function(DocumentFragment.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(DocumentFragment.querySelectorAll, .{ .dom_exception = true });
     pub const children = bridge.accessor(DocumentFragment.getChildren, null, .{});

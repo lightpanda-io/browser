@@ -48,6 +48,8 @@ _location: ?*Location = null,
 _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
+// Track IDs that were removed from the map - they might have duplicates in the tree
+_removed_ids: std.StringHashMapUnmanaged(void) = .empty,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _write_insertion_point: ?*Node = null,
@@ -173,11 +175,32 @@ pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: []cons
     });
 }
 
-pub fn getElementById(self: *const Document, id: []const u8) ?*Element {
+pub fn getElementById(self: *Document, id: []const u8, page: *Page) ?*Element {
     if (id.len == 0) {
         return null;
     }
-    return self._elements_by_id.get(id);
+
+    if (self._elements_by_id.get(id)) |element| {
+        return element;
+    }
+
+    //ID was removed but might have duplicates
+    if (self._removed_ids.remove(id)) {
+        var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
+        while (tw.next()) |el| {
+            const element_id = el.getAttributeSafe("id") orelse continue;
+            if (std.mem.eql(u8, element_id, id)) {
+                // we ignore this error to keep getElementById easy to call
+                // if it really failed, then we're out of memory and nothing's
+                // going to work like it should anyways.
+                const owned_id = page.dupeString(id) catch return null;
+                self._elements_by_id.put(page.arena, owned_id, el) catch return null;
+                return el;
+            }
+        }
+    }
+
+    return null;
 }
 
 const GetElementsByTagNameResult = union(enum) {
@@ -723,15 +746,15 @@ pub const JsApi = struct {
     pub const createTreeWalker = bridge.function(Document.createTreeWalker, .{});
     pub const createNodeIterator = bridge.function(Document.createNodeIterator, .{});
     pub const getElementById = bridge.function(_getElementById, .{});
-    fn _getElementById(self: *const Document, value_: ?js.Value) !?*Element {
+    fn _getElementById(self: *Document, value_: ?js.Value, page: *Page) !?*Element {
         const value = value_ orelse return null;
         if (value.isNull()) {
-            return self.getElementById("null");
+            return self.getElementById("null", page);
         }
         if (value.isUndefined()) {
-            return self.getElementById("undefined");
+            return self.getElementById("undefined", page);
         }
-        return self.getElementById(try value.toZig([]const u8));
+        return self.getElementById(try value.toZig([]const u8), page);
     }
     pub const querySelector = bridge.function(Document.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });

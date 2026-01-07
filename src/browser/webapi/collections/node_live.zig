@@ -171,7 +171,7 @@ pub fn NodeLive(comptime mode: Mode) type {
         }
 
         pub fn getByName(self: *Self, name: []const u8, page: *Page) ?*Element {
-            if (page.document.getElementById(name)) |element| {
+            if (page.document.getElementById(name, page)) |element| {
                 const node = element.asNode();
                 if (self._tw.contains(node) and self.matches(node)) {
                     return element;

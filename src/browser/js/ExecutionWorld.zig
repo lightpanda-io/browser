@@ -184,9 +184,10 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.C_Name, raw_info: ?*const v8.C
 
     if (maybe_property) |prop| {
         if (!ignored.has(prop)) {
-            const document = context.page.document;
+            const page = context.page;
+            const document = page.document;
 
-            if (document.getElementById(prop)) |el| {
+            if (document.getElementById(prop, page)) |el| {
                 const js_value = context.zigValueToJs(el, .{}) catch {
                     return v8.Intercepted.No;
                 };

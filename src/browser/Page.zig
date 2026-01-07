@@ -997,21 +997,32 @@ pub fn domChanged(self: *Page) void {
     };
 }
 
-fn getElementIdMap(page: *Page, node: *Node) *std.StringHashMapUnmanaged(*Element) {
+const ElementIdMaps = struct { lookup: *std.StringHashMapUnmanaged(*Element), removed_ids: *std.StringHashMapUnmanaged(void) };
+
+fn getElementIdMap(page: *Page, node: *Node) ElementIdMaps {
     // Walk up the tree checking for ShadowRoot and tracking the root
     var current = node;
     while (true) {
         if (current.is(ShadowRoot)) |shadow_root| {
-            return &shadow_root._elements_by_id;
+            return .{
+                .lookup = &shadow_root._elements_by_id,
+                .removed_ids = &shadow_root._removed_ids,
+            };
         }
 
         const parent = current._parent orelse {
             if (current._type == .document) {
-                return &current._type.document._elements_by_id;
+                return .{
+                    .lookup = &current._type.document._elements_by_id,
+                    .removed_ids = &current._type.document._removed_ids,
+                };
             }
             // Detached nodes should not have IDs registered
             std.debug.assert(false);
-            return &page.document._elements_by_id;
+            return .{
+                .lookup = &page.document._elements_by_id,
+                .removed_ids = &page.document._removed_ids,
+            };
         };
 
         current = parent;
@@ -1019,22 +1030,35 @@ fn getElementIdMap(page: *Page, node: *Node) *std.StringHashMapUnmanaged(*Elemen
 }
 
 pub fn addElementId(self: *Page, parent: *Node, element: *Element, id: []const u8) !void {
-    var id_map = self.getElementIdMap(parent);
-    const gop = try id_map.getOrPut(self.arena, id);
+    var id_maps = self.getElementIdMap(parent);
+    const gop = try id_maps.lookup.getOrPut(self.arena, id);
     if (!gop.found_existing) {
         gop.value_ptr.* = element;
+        return;
+    }
+
+    const existing = gop.value_ptr.*.asNode();
+    switch (element.asNode().compareDocumentPosition(existing)) {
+        0x04 => gop.value_ptr.* = element,
+        else => {},
     }
 }
 
 pub fn removeElementId(self: *Page, element: *Element, id: []const u8) void {
-    var id_map = self.getElementIdMap(element.asNode());
-    _ = id_map.remove(id);
+    const node = element.asNode();
+    self.removeElementIdWithMaps(self.getElementIdMap(node), id);
+}
+
+pub fn removeElementIdWithMaps(self: *Page, id_maps: ElementIdMaps, id: []const u8) void {
+    if (id_maps.lookup.remove(id)) {
+        id_maps.removed_ids.put(self.arena, id, {}) catch {};
+    }
 }
 
 pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Element {
     if (node.isConnected() or node.isInShadowTree()) {
-        const id_map = self.getElementIdMap(node);
-        return id_map.get(id);
+        const lookup = self.getElementIdMap(node).lookup;
+        return lookup.get(id);
     }
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
     while (tw.next()) |el| {
@@ -2119,7 +2143,7 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     // grab this before we null the parent
     const was_connected = child.isConnected();
     // Capture the ID map before disconnecting, so we can remove IDs from the correct document
-    const id_map = if (was_connected) self.getElementIdMap(child) else null;
+    const id_maps = if (was_connected) self.getElementIdMap(child) else null;
 
     child._parent = null;
     child._child_link = .{};
@@ -2170,7 +2194,7 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
         if (el.getAttributeSafe("id")) |id| {
-            _ = id_map.?.remove(id);
+            self.removeElementIdWithMaps(id_maps.?, id);
         }
 
         Element.Html.Custom.invokeDisconnectedCallbackOnElement(el, self);
