@@ -26,11 +26,13 @@ const Node = @import("../Node.zig");
 const ChildNodes = @import("ChildNodes.zig");
 const RadioNodeList = @import("RadioNodeList.zig");
 const SelectorList = @import("../selector/List.zig");
+const NodeLive = @import("node_live.zig").NodeLive;
 
 const Mode = enum {
     child_nodes,
     selector_list,
     radio_node_list,
+    name,
 };
 
 const NodeList = @This();
@@ -39,6 +41,7 @@ data: union(Mode) {
     child_nodes: *ChildNodes,
     selector_list: *SelectorList,
     radio_node_list: *RadioNodeList,
+    name: NodeLive(.name),
 },
 
 pub fn length(self: *NodeList, page: *Page) !u32 {
@@ -46,6 +49,7 @@ pub fn length(self: *NodeList, page: *Page) !u32 {
         .child_nodes => |impl| impl.length(page),
         .selector_list => |impl| @intCast(impl.getLength()),
         .radio_node_list => |impl| impl.getLength(),
+        .name => |*impl| impl.length(page),
     };
 }
 
@@ -54,6 +58,7 @@ pub fn getAtIndex(self: *NodeList, index: usize, page: *Page) !?*Node {
         .child_nodes => |impl| impl.getAtIndex(index, page),
         .selector_list => |impl| impl.getAtIndex(index),
         .radio_node_list => |impl| impl.getAtIndex(index, page),
+        .name => |*impl| if (impl.getAtIndex(index, page)) |el| el.asNode() else null,
     };
 }
 

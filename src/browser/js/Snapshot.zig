@@ -411,7 +411,7 @@ fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.FunctionT
             },
             bridge.Function => {
                 const function_template = v8.FunctionTemplate.initCallback(isolate, value.func);
-                const js_name: v8.Name = v8.String.initUtf8(isolate, name).toName();
+                const js_name = v8.String.initUtf8(isolate, name).toName();
                 if (value.static) {
                     template.set(js_name, function_template, v8.PropertyAttribute.None);
                 } else {
@@ -459,6 +459,12 @@ fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.FunctionT
         const instance_template = template.getInstanceTemplate();
         instance_template.markAsUndetectable();
         instance_template.setCallAsFunctionHandler(JsApi.Meta.callable.func);
+    }
+
+    if (@hasDecl(JsApi.Meta, "name")) {
+        const js_name = v8.Symbol.getToStringTag(isolate).toName();
+        const instance_template = template.getInstanceTemplate();
+        instance_template.set(js_name, v8.String.initUtf8(isolate, JsApi.Meta.name), v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
     }
 }
 
