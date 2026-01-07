@@ -44,6 +44,7 @@ const Element = @This();
 pub const DatasetLookup = std.AutoHashMapUnmanaged(*Element, *DOMStringMap);
 pub const StyleLookup = std.AutoHashMapUnmanaged(*Element, *CSSStyleProperties);
 pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
+pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
 
@@ -545,6 +546,17 @@ pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
         gop.value_ptr.* = try page._factory.create(collections.DOMTokenList{
             ._element = self,
             ._attribute_name = "class",
+        });
+    }
+    return gop.value_ptr.*;
+}
+
+pub fn getRelList(self: *Element, page: *Page) !*collections.DOMTokenList {
+    const gop = try page._element_rel_lists.getOrPut(page.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = try page._factory.create(collections.DOMTokenList{
+            ._element = self,
+            ._attribute_name = "rel",
         });
     }
     return gop.value_ptr.*;

@@ -68,6 +68,16 @@ pub const JsApi = struct {
 
     pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{});
     pub const href = bridge.accessor(Link.getHref, Link.setHref, .{});
+    pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
+
+    fn _getRelList(self: *Link, page: *Page) !?*@import("../../collections.zig").DOMTokenList {
+        const element = self.asElement();
+        // relList is only valid for HTML <link> elements, not SVG or MathML
+        if (element._namespace != .html) {
+            return null;
+        }
+        return element.getRelList(page);
+    }
 };
 
 const testing = @import("../../../../testing.zig");

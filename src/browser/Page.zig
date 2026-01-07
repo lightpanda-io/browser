@@ -93,6 +93,7 @@ _attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attri
 _element_styles: Element.StyleLookup = .{},
 _element_datasets: Element.DatasetLookup = .{},
 _element_class_lists: Element.ClassListLookup = .{},
+_element_rel_lists: Element.RelListLookup = .{},
 _element_shadow_roots: Element.ShadowRootLookup = .{},
 _element_assigned_slots: Element.AssignedSlotLookup = .{},
 
@@ -263,6 +264,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_styles = .{};
     self._element_datasets = .{};
     self._element_class_lists = .{};
+    self._element_rel_lists = .{};
     self._element_shadow_roots = .{};
     self._element_assigned_slots = .{};
     self._notified_network_idle = .init;

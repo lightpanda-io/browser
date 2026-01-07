@@ -41,6 +41,14 @@ pub fn isArray(self: Value) bool {
     return self.js_val.isArray();
 }
 
+pub fn isNull(self: Value) bool {
+    return self.js_val.isNull();
+}
+
+pub fn isUndefined(self: Value) bool {
+    return self.js_val.isUndefined();
+}
+
 pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
     return self.context.valueToString(self.js_val, .{ .allocator = allocator });
 }
@@ -59,6 +67,10 @@ pub fn persist(self: Value) !Value {
     try context.js_value_list.append(context.arena, persisted);
 
     return Value{ .context = context, .js_val = persisted.toValue() };
+}
+
+pub fn toZig(self: Value, comptime T: type) !T {
+    return self.context.jsValueToZig(T, self.js_val);
 }
 
 pub fn toObject(self: Value) js.Object {
