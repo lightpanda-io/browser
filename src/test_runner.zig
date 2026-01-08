@@ -25,7 +25,8 @@ const BORDER = "=" ** 80;
 
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
-pub var ran_webapi_test = false;
+pub var v8_peak_memory: usize = 0;
+pub var tracking_allocator: Allocator = undefined;
 
 var RUNNER: *Runner = undefined;
 
@@ -37,12 +38,14 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
+    var ta = TrackingAllocator.init(gpa.allocator());
+    tracking_allocator = ta.allocator();
+
     const allocator = fba.allocator();
 
     const env = Env.init(allocator);
-    defer env.deinit(allocator);
 
-    var runner = Runner.init(allocator, arena.allocator(), env);
+    var runner = Runner.init(allocator, arena.allocator(), &ta, env);
     RUNNER = &runner;
     try runner.run();
 }
@@ -50,13 +53,15 @@ pub fn main() !void {
 const Runner = struct {
     env: Env,
     allocator: Allocator,
+    ta: *TrackingAllocator,
 
     // per-test arena, used for collecting substests
     arena: Allocator,
     subtests: std.ArrayListUnmanaged([]const u8),
 
-    fn init(allocator: Allocator, arena: Allocator, env: Env) Runner {
+    fn init(allocator: Allocator, arena: Allocator, ta: *TrackingAllocator, env: Env) Runner {
         return .{
+            .ta = ta,
             .env = env,
             .arena = arena,
             .subtests = .empty,
@@ -72,6 +77,8 @@ const Runner = struct {
         var fail: usize = 0;
         var skip: usize = 0;
         var leak: usize = 0;
+        // track all tests duration, excluding setup and teardown.
+        var ns_duration: u64 = 0;
 
         Printer.fmt("\r\x1b[0K", .{}); // beginning of line and clear to end of line
 
@@ -138,6 +145,7 @@ const Runner = struct {
             }
 
             const ns_taken = slowest.endTiming(friendly_name, is_unnamed_test);
+            ns_duration += ns_taken;
 
             if (std.testing.allocator_instance.deinit() == .leak) {
                 leak += 1;
@@ -204,6 +212,28 @@ const Runner = struct {
         Printer.fmt("\n", .{});
         try slowest.display();
         Printer.fmt("\n", .{});
+
+        // stats
+        if (self.env.metrics) {
+            var stdout = std.fs.File.stdout();
+            var writer = stdout.writer(&.{});
+            const stats = self.ta.stats();
+            try std.json.Stringify.value(&.{
+                .{ .name = "browser", .bench = .{
+                    .duration = ns_duration,
+                    .alloc_nb = stats.allocation_count,
+                    .realloc_nb = stats.reallocation_count,
+                    .alloc_size = stats.allocated_bytes,
+                } },
+                .{ .name = "v8", .bench = .{
+                    .duration = ns_duration,
+                    .alloc_nb = 0,
+                    .realloc_nb = 0,
+                    .alloc_size = v8_peak_memory,
+                } },
+            }, .{ .whitespace = .indent_2 }, &writer.interface);
+        }
+
         std.posix.exit(if (fail == 0) 0 else 1);
     }
 };
@@ -323,6 +353,7 @@ const Env = struct {
     fail_first: bool,
     filter: ?[]const u8,
     subfilter: ?[]const u8,
+    metrics: bool,
 
     fn init(allocator: Allocator) Env {
         const full_filter = readEnv(allocator, "TEST_FILTER");
@@ -332,6 +363,7 @@ const Env = struct {
             .fail_first = readEnvBool(allocator, "TEST_FAIL_FIRST", false),
             .filter = filter,
             .subfilter = subfilter,
+            .metrics = readEnvBool(allocator, "METRICS", false),
         };
     }
 
@@ -403,3 +435,90 @@ fn isSetup(t: std.builtin.TestFn) bool {
 fn isTeardown(t: std.builtin.TestFn) bool {
     return std.mem.endsWith(u8, t.name, "tests:afterAll");
 }
+
+pub const TrackingAllocator = struct {
+    parent_allocator: Allocator,
+    free_count: usize = 0,
+    allocated_bytes: usize = 0,
+    allocation_count: usize = 0,
+    reallocation_count: usize = 0,
+
+    const Stats = struct {
+        allocated_bytes: usize,
+        allocation_count: usize,
+        reallocation_count: usize,
+    };
+
+    fn init(parent_allocator: Allocator) TrackingAllocator {
+        return .{
+            .parent_allocator = parent_allocator,
+        };
+    }
+
+    pub fn stats(self: *const TrackingAllocator) Stats {
+        return .{
+            .allocated_bytes = self.allocated_bytes,
+            .allocation_count = self.allocation_count,
+            .reallocation_count = self.reallocation_count,
+        };
+    }
+
+    pub fn allocator(self: *TrackingAllocator) Allocator {
+        return .{ .ptr = self, .vtable = &.{
+            .alloc = alloc,
+            .resize = resize,
+            .free = free,
+            .remap = remap,
+        } };
+    }
+
+    fn alloc(
+        ctx: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawAlloc(len, alignment, return_address);
+        self.allocation_count += 1;
+        self.allocated_bytes += len;
+        return result;
+    }
+
+    fn resize(
+        ctx: *anyopaque,
+        old_mem: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ra: usize,
+    ) bool {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawResize(old_mem, alignment, new_len, ra);
+        self.reallocation_count += 1; // TODO: only if result is not null?
+        return result;
+    }
+
+    fn free(
+        ctx: *anyopaque,
+        old_mem: []u8,
+        alignment: std.mem.Alignment,
+        ra: usize,
+    ) void {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        self.parent_allocator.rawFree(old_mem, alignment, ra);
+        self.free_count += 1;
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        const result = self.parent_allocator.rawRemap(memory, alignment, new_len, ret_addr);
+        self.reallocation_count += 1; // TODO: only if result is not null?
+        return result;
+    }
+};
