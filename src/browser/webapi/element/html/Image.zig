@@ -10,7 +10,7 @@ const Image = @This();
 _proto: *HtmlElement,
 
 pub fn constructor(w_: ?u32, h_: ?u32, page: *Page) !*Image {
-    const node = try page.createElement(null, "img", null);
+    const node = try page.createElementNS(.html, "img", null);
     const el = node.as(Element);
 
     if (w_) |w| blk: {

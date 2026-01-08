@@ -124,7 +124,14 @@ const CreateElementOptions = struct {
 };
 
 pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElementOptions, page: *Page) !*Element {
-    const node = try page.createElement(null, name, null);
+    const namespace: Element.Namespace = blk: {
+        if (self._type == .xml) {
+            @branchHint(.unlikely);
+            break :blk .xml;
+        }
+        break :blk .html;
+    };
+    const node = try page.createElementNS(namespace, name, null);
     const element = node.as(Element);
 
     // Track owner document if it's not the main document
@@ -142,7 +149,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
 }
 
 pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8, page: *Page) !*Element {
-    const node = try page.createElement(namespace, name, null);
+    const node = try page.createElementNS(Element.Namespace.parse(namespace), name, null);
 
     // Track owner document if it's not the main document
     if (self != page.document) {

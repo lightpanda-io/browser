@@ -443,9 +443,9 @@ pub fn createContextualFragment(self: *const Range, html: []const u8, page: *Pag
     // Create a temporary element of the same type as the context for parsing
     // This preserves the parsing context without modifying the original node
     const temp_node = if (context_node.is(Node.Element)) |el|
-        try page.createElement(el._namespace.toUri(), el.getTagNameLower(), null)
+        try page.createElementNS(el._namespace, el.getTagNameLower(), null)
     else
-        try page.createElement(null, "div", null);
+        try page.createElementNS(.html, "div", null);
 
     try page.parseHtmlAsChildren(temp_node, html);
 

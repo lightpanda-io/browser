@@ -53,14 +53,40 @@ pub const Namespace = enum(u8) {
     svg,
     mathml,
     xml,
+    // We should keep the original value, but don't.  If this becomes important
+    // consider storing it in a page lookup, like `_element_class_lists`, rather
+    // that adding a slice directly here (directly in every element).
+    unknown,
+    null,
 
-    pub fn toUri(self: Namespace) []const u8 {
+    pub fn toUri(self: Namespace) ?[]const u8 {
         return switch (self) {
             .html => "http://www.w3.org/1999/xhtml",
             .svg => "http://www.w3.org/2000/svg",
             .mathml => "http://www.w3.org/1998/Math/MathML",
             .xml => "http://www.w3.org/XML/1998/namespace",
+            .unknown => "http://lightpanda.io/unsupported/namespace",
+            .null => null,
         };
+    }
+
+    pub fn parse(namespace_: ?[]const u8) Namespace {
+        const namespace = namespace_ orelse return .null;
+        if (namespace.len == "http://www.w3.org/1999/xhtml".len) {
+            // Common case, avoid the string comparion. Recklessly
+            @branchHint(.likely);
+            return .html;
+        }
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/XML/1998/namespace")) {
+            return .xml;
+        }
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/2000/svg")) {
+            return .svg;
+        }
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/1998/Math/MathML")) {
+            return .mathml;
+        }
+        return .unknown;
     }
 };
 
@@ -211,60 +237,54 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
 }
 
 pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
-    switch (self._type) {
+    return switch (self._type) {
         .html => |he| switch (he._type) {
-            .custom => |e| {
-                @branchHint(.unlikely);
-                return upperTagName(&e._tag_name, buf);
+            .anchor => "A",
+            .body => "BODY",
+            .br => "BR",
+            .button => "BUTTON",
+            .canvas => "CANVAS",
+            .custom => |e| upperTagName(&e._tag_name, buf),
+            .data => "DATA",
+            .dialog => "DIALOG",
+            .div => "DIV",
+            .embed => "EMBED",
+            .form => "FORM",
+            .generic => |e| upperTagName(&e._tag_name, buf),
+            .heading => |e| upperTagName(&e._tag_name, buf),
+            .head => "HEAD",
+            .html => "HTML",
+            .hr => "HR",
+            .iframe => "IFRAME",
+            .img => "IMG",
+            .input => "INPUT",
+            .li => "LI",
+            .link => "LINK",
+            .meta => "META",
+            .media => |m| switch (m._type) {
+                .audio => "AUDIO",
+                .video => "VIDEO",
+                .generic => "MEDIA",
             },
-            else => return switch (he._type) {
-                .anchor => "A",
-                .body => "BODY",
-                .br => "BR",
-                .button => "BUTTON",
-                .canvas => "CANVAS",
-                .custom => |e| upperTagName(&e._tag_name, buf),
-                .data => "DATA",
-                .dialog => "DIALOG",
-                .div => "DIV",
-                .embed => "EMBED",
-                .form => "FORM",
-                .generic => |e| upperTagName(&e._tag_name, buf),
-                .heading => |e| upperTagName(&e._tag_name, buf),
-                .head => "HEAD",
-                .html => "HTML",
-                .hr => "HR",
-                .iframe => "IFRAME",
-                .img => "IMG",
-                .input => "INPUT",
-                .li => "LI",
-                .link => "LINK",
-                .meta => "META",
-                .media => |m| switch (m._type) {
-                    .audio => "AUDIO",
-                    .video => "VIDEO",
-                    .generic => "MEDIA",
-                },
-                .ol => "OL",
-                .option => "OPTION",
-                .p => "P",
-                .script => "SCRIPT",
-                .select => "SELECT",
-                .slot => "SLOT",
-                .span => "SPAN",
-                .style => "STYLE",
-                .template => "TEMPLATE",
-                .textarea => "TEXTAREA",
-                .title => "TITLE",
-                .ul => "UL",
-                .unknown => |e| switch (self._namespace) {
-                    .html => upperTagName(&e._tag_name, buf),
-                    .svg, .xml, .mathml => return e._tag_name.str(),
-                },
+            .ol => "OL",
+            .option => "OPTION",
+            .p => "P",
+            .script => "SCRIPT",
+            .select => "SELECT",
+            .slot => "SLOT",
+            .span => "SPAN",
+            .style => "STYLE",
+            .template => "TEMPLATE",
+            .textarea => "TEXTAREA",
+            .title => "TITLE",
+            .ul => "UL",
+            .unknown => |e| switch (self._namespace) {
+                .html => upperTagName(&e._tag_name, buf),
+                .svg, .xml, .mathml, .unknown, .null => e._tag_name.str(),
             },
         },
-        .svg => |svg| return svg._tag_name.str(),
-    }
+        .svg => |svg| svg._tag_name.str(),
+    };
 }
 
 pub fn getTagNameDump(self: *const Element) []const u8 {
@@ -274,7 +294,7 @@ pub fn getTagNameDump(self: *const Element) []const u8 {
     }
 }
 
-pub fn getNamespaceURI(self: *const Element) []const u8 {
+pub fn getNamespaceURI(self: *const Element) ?[]const u8 {
     return self._namespace.toUri();
 }
 
@@ -996,9 +1016,7 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Pag
 
 pub fn cloneElement(self: *Element, deep: bool, page: *Page) !*Node {
     const tag_name = self.getTagNameDump();
-    const namespace_uri = self.getNamespaceURI();
-
-    const node = try page.createElement(namespace_uri, tag_name, self._attributes);
+    const node = try page.createElementNS(self._namespace, tag_name, self._attributes);
 
     // Allow element-specific types to copy their runtime state
     _ = Element.Build.call(node.as(Element), "cloned", .{ self, node.as(Element), page }) catch |err| {

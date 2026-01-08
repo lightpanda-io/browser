@@ -132,7 +132,7 @@ pub fn setTitle(self: *HTMLDocument, title: []const u8, page: *Page) !void {
     }
 
     // No title element found, create one
-    const title_node = try page.createElement(null, "title", null);
+    const title_node = try page.createElementNS(.html, "title", null);
     const title_element = title_node.as(Element);
 
     // Only add text if non-empty

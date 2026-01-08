@@ -19,12 +19,13 @@
   testing.expectEqual('http://www.w3.org/XML/1998/namespace', xmlElement.namespaceURI);
 
   const nullNsElement = document.createElementNS(null, 'span');
-  testing.expectEqual('SPAN', nullNsElement.tagName);
-  testing.expectEqual('http://www.w3.org/1999/xhtml', nullNsElement.namespaceURI);
+  testing.expectEqual('span', nullNsElement.tagName);
+  testing.expectEqual(null, nullNsElement.namespaceURI);
 
   const unknownNsElement = document.createElementNS('http://example.com/unknown', 'custom');
-  testing.expectEqual('CUSTOM', unknownNsElement.tagName);
-  testing.expectEqual('http://www.w3.org/1999/xhtml', unknownNsElement.namespaceURI);
+  testing.expectEqual('custom', unknownNsElement.tagName);
+  // Should be http://example.com/unknown
+  testing.expectEqual('http://lightpanda.io/unsupported/namespace', unknownNsElement.namespaceURI);
 
   const regularDiv = document.createElement('div');
   testing.expectEqual('DIV', regularDiv.tagName);
@@ -36,5 +37,5 @@
   testing.expectEqual('te:ST', custom.tagName);
   testing.expectEqual('te', custom.prefix);
   testing.expectEqual('ST', custom.localName);
-  testing.expectEqual('http://www.w3.org/1999/xhtml', custom.namespaceURI); // Should be test
+  testing.expectEqual('http://lightpanda.io/unsupported/namespace', custom.namespaceURI); // Should be test
 </script>

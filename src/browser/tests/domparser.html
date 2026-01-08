@@ -364,14 +364,14 @@
   ];
 
   for (const mime of mimes) {
-    const doc = parser.parseFromString(sampleXML, "text/xml");
+    const doc = parser.parseFromString(sampleXML, mime);
     const { firstChild: { childNodes, children: collection, tagName }, children } = doc;
     // doc.
     testing.expectEqual(true, doc instanceof XMLDocument);
     testing.expectEqual(1, children.length);
     // firstChild.
     // TODO: Modern browsers expect this in lowercase.
-    testing.expectEqual("CATALOG", tagName);
+    testing.expectEqual("catalog", tagName);
     testing.expectEqual(25, childNodes.length);
     testing.expectEqual(12, collection.length);
     // Check children of first child.
@@ -379,12 +379,12 @@
       const {children: elements, id} = collection.item(i);
       testing.expectEqual("bk" + (100 + i + 1), id);
       // TODO: Modern browsers expect these in lowercase.
-      testing.expectEqual("AUTHOR", elements.item(0).tagName);
-      testing.expectEqual("TITLE", elements.item(1).tagName);
-      testing.expectEqual("GENRE", elements.item(2).tagName);
-      testing.expectEqual("PRICE", elements.item(3).tagName);
-      testing.expectEqual("PUBLISH_DATE", elements.item(4).tagName);
-      testing.expectEqual("DESCRIPTION", elements.item(5).tagName);
+      testing.expectEqual("author", elements.item(0).tagName);
+      testing.expectEqual("title", elements.item(1).tagName);
+      testing.expectEqual("genre", elements.item(2).tagName);
+      testing.expectEqual("price", elements.item(3).tagName);
+      testing.expectEqual("publish_date", elements.item(4).tagName);
+      testing.expectEqual("description", elements.item(5).tagName);
     }
   }
 }
