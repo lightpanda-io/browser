@@ -25,6 +25,7 @@ const Parser = @import("../parser/Parser.zig");
 
 const HTMLDocument = @import("HTMLDocument.zig");
 const XMLDocument = @import("XMLDocument.zig");
+const Document = @import("Document.zig");
 const ProcessingInstruction = @import("../webapi/cdata/ProcessingInstruction.zig");
 
 const DOMParser = @This();
@@ -33,26 +34,21 @@ pub fn init() DOMParser {
     return .{};
 }
 
-pub const HTMLDocumentOrXMLDocument = union(enum) {
-    html_document: *HTMLDocument,
-    xml_document: *XMLDocument,
-};
-
 pub fn parseFromString(
     _: *const DOMParser,
     html: []const u8,
     mime_type: []const u8,
     page: *Page,
-) !HTMLDocumentOrXMLDocument {
-    const maybe_target_mime = std.meta.stringToEnum(enum {
+) !*Document {
+    const target_mime = std.meta.stringToEnum(enum {
         @"text/html",
         @"text/xml",
         @"application/xml",
         @"application/xhtml+xml",
         @"image/svg+xml",
-    }, mime_type);
+    }, mime_type) orelse return error.NotSupported;
 
-    if (maybe_target_mime) |target_mime| switch (target_mime) {
+    return switch (target_mime) {
         .@"text/html" => {
             // Create a new HTMLDocument
             const doc = try page._factory.document(HTMLDocument{
@@ -72,7 +68,7 @@ pub fn parseFromString(
                 return pe.err;
             }
 
-            return .{ .html_document = doc };
+            return doc.asDocument();
         },
         else => {
             // Create a new XMLDocument.
@@ -100,11 +96,9 @@ pub fn parseFromString(
                 _ = doc_node.removeChild(first_child, page) catch unreachable;
             }
 
-            return .{ .xml_document = doc };
+            return doc.asDocument();
         },
     };
-
-    return error.NotSupported;
 }
 
 pub const JsApi = struct {
