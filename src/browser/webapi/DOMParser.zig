@@ -19,8 +19,13 @@
 const std = @import("std");
 
 const js = @import("../js/js.zig");
+
 const Page = @import("../Page.zig");
+const Parser = @import("../parser/Parser.zig");
+
 const HTMLDocument = @import("HTMLDocument.zig");
+const XMLDocument = @import("XMLDocument.zig");
+const ProcessingInstruction = @import("../webapi/cdata/ProcessingInstruction.zig");
 
 const DOMParser = @This();
 
@@ -28,34 +33,78 @@ pub fn init() DOMParser {
     return .{};
 }
 
-pub fn parseFromString(self: *const DOMParser, html: []const u8, mime_type: []const u8, page: *Page) !*HTMLDocument {
-    _ = self;
+pub const HTMLDocumentOrXMLDocument = union(enum) {
+    html_document: *HTMLDocument,
+    xml_document: *XMLDocument,
+};
 
-    // For now, only support text/html
-    if (!std.mem.eql(u8, mime_type, "text/html")) {
-        return error.NotSupported;
-    }
+pub fn parseFromString(
+    _: *const DOMParser,
+    html: []const u8,
+    mime_type: []const u8,
+    page: *Page,
+) !HTMLDocumentOrXMLDocument {
+    const maybe_target_mime = std.meta.stringToEnum(enum {
+        @"text/html",
+        @"text/xml",
+        @"application/xml",
+        @"application/xhtml+xml",
+        @"image/svg+xml",
+    }, mime_type);
 
-    // Create a new HTMLDocument
-    const doc = try page._factory.document(HTMLDocument{
-        ._proto = undefined,
-    });
+    if (maybe_target_mime) |target_mime| switch (target_mime) {
+        .@"text/html" => {
+            // Create a new HTMLDocument
+            const doc = try page._factory.document(HTMLDocument{
+                ._proto = undefined,
+            });
 
-    var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
-    if (normalized.len == 0) {
-        normalized = "<html></html>";
-    }
+            var normalized = std.mem.trim(u8, html, &std.ascii.whitespace);
+            if (normalized.len == 0) {
+                normalized = "<html></html>";
+            }
 
-    // Parse HTML into the document
-    const Parser = @import("../parser/Parser.zig");
-    var parser = Parser.init(page.arena, doc.asNode(), page);
-    parser.parse(normalized);
+            // Parse HTML into the document
+            var parser = Parser.init(page.arena, doc.asNode(), page);
+            parser.parse(normalized);
 
-    if (parser.err) |pe| {
-        return pe.err;
-    }
+            if (parser.err) |pe| {
+                return pe.err;
+            }
 
-    return doc;
+            return .{ .html_document = doc };
+        },
+        else => {
+            // Create a new XMLDocument.
+            const doc = try page._factory.document(XMLDocument{
+                ._proto = undefined,
+            });
+
+            // Parse XML into XMLDocument.
+            const doc_node = doc.asNode();
+            var parser = Parser.init(page.arena, doc_node, page);
+            parser.parseXML(html);
+
+            if (parser.err) |pe| {
+                return pe.err;
+            }
+
+            // If first node is a `ProcessingInstruction`, skip it.
+            const first_child = doc_node.firstChild() orelse {
+                // Parsing should fail if there aren't any nodes.
+                unreachable;
+            };
+
+            if (first_child.getNodeType() == 7) {
+                // We're sure that firstChild exist, this cannot fail.
+                _ = doc_node.removeChild(first_child, page) catch unreachable;
+            }
+
+            return .{ .xml_document = doc };
+        },
+    };
+
+    return error.NotSupported;
 }
 
 pub const JsApi = struct {
