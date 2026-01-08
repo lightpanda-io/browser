@@ -61,10 +61,6 @@ pub fn asEventTarget(self: *ShadowRoot) *@import("EventTarget.zig") {
     return self.asNode().asEventTarget();
 }
 
-pub fn className(_: *const ShadowRoot) []const u8 {
-    return "[object ShadowRoot]";
-}
-
 pub fn getMode(self: *const ShadowRoot) []const u8 {
     return @tagName(self._mode);
 }

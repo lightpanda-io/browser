@@ -659,12 +659,6 @@ pub fn setData(self: *Node, data: []const u8) void {
     }
 }
 
-pub fn className(self: *const Node) []const u8 {
-    switch (self._type) {
-        inline else => |c| return c.className(),
-    }
-}
-
 pub fn normalize(self: *Node, page: *Page) !void {
     var buffer: std.ArrayListUnmanaged(u8) = .empty;
     return self._normalize(page.call_arena, &buffer, page);

@@ -67,10 +67,6 @@ pub fn asEventTarget(self: *DocumentFragment) *@import("EventTarget.zig") {
     return self._proto.asEventTarget();
 }
 
-pub fn className(_: *const DocumentFragment) []const u8 {
-    return "[object DocumentFragment]";
-}
-
 pub fn getElementById(self: *DocumentFragment, id: []const u8) ?*Element {
     if (id.len == 0) {
         return null;

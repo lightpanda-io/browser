@@ -31,10 +31,6 @@ pub fn asNode(self: *Rect) *Node {
     return self.asElement().asNode();
 }
 
-pub fn className(_: *const Rect) []const u8 {
-    return "SVGRectElement";
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Rect);
 

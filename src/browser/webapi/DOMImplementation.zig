@@ -102,10 +102,6 @@ pub fn hasFeature(_: *const DOMImplementation, _: ?[]const u8, _: ?[]const u8) b
     return true;
 }
 
-pub fn className(_: *const DOMImplementation) []const u8 {
-    return "[object DOMImplementation]";
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DOMImplementation);
 

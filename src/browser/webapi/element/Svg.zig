@@ -56,13 +56,6 @@ pub fn asNode(self: *Svg) *Node {
     return self.asElement().asNode();
 }
 
-pub fn className(self: *const Svg) []const u8 {
-    return switch (self._type) {
-        .svg => "SVGElement",
-        inline else => |svg| svg.className(),
-    };
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Svg);
 

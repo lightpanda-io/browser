@@ -32,10 +32,6 @@ pub fn asNode(self: *Generic) *Node {
     return self.asElement().asNode();
 }
 
-pub fn className(_: *const Generic) []const u8 {
-    return "SVGGenericElement";
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Generic);
 

@@ -55,15 +55,6 @@ pub fn is(self: *CData, comptime T: type) ?*T {
     return null;
 }
 
-pub fn className(self: *const CData) []const u8 {
-    return switch (self._type) {
-        .text => "[object Text]",
-        .comment => "[object Comment]",
-        .cdata_section => "[object CDATASection]",
-        .processing_instruction => "[object ProcessingInstruction]",
-    };
-}
-
 pub fn getData(self: *const CData) []const u8 {
     return self._data;
 }

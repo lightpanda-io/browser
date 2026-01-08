@@ -37,10 +37,6 @@ pub fn asEventTarget(self: *XMLDocument) *@import("EventTarget.zig") {
     return self._proto.asEventTarget();
 }
 
-pub fn className(_: *const XMLDocument) []const u8 {
-    return "[object XMLDocument]";
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(XMLDocument);
 
