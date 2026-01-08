@@ -40,7 +40,8 @@ arena: Allocator,
 listener_pool: std.heap.MemoryPool(Listener),
 list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
 lookup: std.AutoHashMapUnmanaged(usize, *std.DoublyLinkedList),
-dispatch_depth: u32 = 0,
+dispatch_depth: usize,
+deferred_removals: std.ArrayList(struct { list: *std.DoublyLinkedList, listener: *Listener }),
 
 pub fn init(page: *Page) EventManager {
     return .{
@@ -50,6 +51,7 @@ pub fn init(page: *Page) EventManager {
         .list_pool = std.heap.MemoryPool(std.DoublyLinkedList).init(page.arena),
         .listener_pool = std.heap.MemoryPool(Listener).init(page.arena),
         .dispatch_depth = 0,
+        .deferred_removals = .{},
     };
 }
 
@@ -119,9 +121,6 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
 }
 
 pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
-    if (comptime IS_DEBUG) {
-        log.debug(.event, "eventManager.remove", .{ .type = typ, .capture = use_capture, .target = target });
-    }
     const list = self.lookup.get(@intFromPtr(target)) orelse return;
     if (findListener(list, typ, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
@@ -299,36 +298,51 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
     const page = self.page;
     const typ = event._type_string;
 
-    // Track that we're dispatching to prevent immediate removal
+    // Track dispatch depth for deferred removal
     self.dispatch_depth += 1;
     defer {
-        self.dispatch_depth -= 1;
-        // Clean up any marked listeners in this target's list after this phase
-        // We do this regardless of depth to handle cross-target removals correctly
-        self.cleanupMarkedListeners(list);
+        const dispatch_depth = self.dispatch_depth;
+        // Only destroy deferred listeners when we exit the outermost dispatch
+        if (dispatch_depth == 1) {
+            for (self.deferred_removals.items) |removal| {
+                removal.list.remove(&removal.listener.node);
+                self.listener_pool.destroy(removal.listener);
+            }
+            self.deferred_removals.clearRetainingCapacity();
+        } else {
+            self.dispatch_depth = dispatch_depth - 1;
+        }
     }
 
+    // Use the last listener in the list as sentinel - listeners added during dispatch will be after it
+    const last_node = list.last orelse return;
+    const last_listener: *Listener = @alignCast(@fieldParentPtr("node", last_node));
+
+    // Iterate through the list, stopping after we've encountered the last_listener
     var node = list.first;
+    var is_done = false;
     while (node) |n| {
-        // do this now, in case we need to remove n (once: true or aborted signal)
-        node = n.next;
-
-        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-
-        // Skip listeners that were marked for removal
-        if (listener.marked_for_removal) {
-            continue;
+        if (is_done) {
+            break;
         }
 
+        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+        is_done = (listener == last_listener);
+        node = n.next;
+
+        // Skip non-matching listeners
         if (!listener.typ.eql(typ)) {
             continue;
         }
-
-        // Can be null when dispatching to the target itself
         if (comptime capture_only) |capture| {
             if (listener.capture != capture) {
                 continue;
             }
+        }
+
+        // Skip removed listeners
+        if (listener.removed) {
+            continue;
         }
 
         // If the listener has an aborted signal, remove it and skip
@@ -337,6 +351,11 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
                 self.removeListener(list, listener);
                 continue;
             }
+        }
+
+        // Remove "once" listeners BEFORE calling them so nested dispatches don't see them
+        if (listener.once) {
+            self.removeListener(list, listener);
         }
 
         was_handled.* = true;
@@ -366,10 +385,6 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             event._target = original_target;
         }
 
-        if (listener.once) {
-            self.removeListener(list, listener);
-        }
-
         if (event._stop_immediate_propagation) {
             return;
         }
@@ -382,26 +397,14 @@ fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target:
 }
 
 fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *Listener) void {
+    // If we're in a dispatch, defer removal to avoid invalidating iteration
     if (self.dispatch_depth > 0) {
-        // We're in the middle of dispatching, just mark for removal
-        // This prevents invalidating the linked list during iteration
-        listener.marked_for_removal = true;
+        listener.removed = true;
+        self.deferred_removals.append(self.arena, .{ .list = list, .listener = listener }) catch unreachable;
     } else {
-        // Safe to remove immediately
+        // Outside dispatch, remove immediately
         list.remove(&listener.node);
         self.listener_pool.destroy(listener);
-    }
-}
-
-fn cleanupMarkedListeners(self: *EventManager, list: *std.DoublyLinkedList) void {
-    var node = list.first;
-    while (node) |n| {
-        node = n.next;
-        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-        if (listener.marked_for_removal) {
-            list.remove(&listener.node);
-            self.listener_pool.destroy(listener);
-        }
     }
 }
 
@@ -436,7 +439,7 @@ const Listener = struct {
     function: Function,
     signal: ?*@import("webapi/AbortSignal.zig") = null,
     node: std.DoublyLinkedList.Node,
-    marked_for_removal: bool = false,
+    removed: bool = false,
 };
 
 const Function = union(enum) {

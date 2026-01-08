@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id="removeListenerDuringDispatch">
+const target = document.createElement("div");
+
+let listener1Called = 0;
+let listener2Called = 0;
+let listener3Called = 0;
+
+function listener1() {
+    listener1Called++;
+    console.warn("listener1 called, removing listener2 and adding listener3");
+    target.removeEventListener("foo", listener2);
+    target.addEventListener("foo", listener3);
+}
+
+function listener2() {
+    listener2Called++;
+    console.warn("listener2 called (SHOULD NOT HAPPEN)");
+}
+
+function listener3() {
+    listener3Called++;
+    console.warn("listener3 called (SHOULD NOT HAPPEN IN FIRST DISPATCH)");
+}
+
+target.addEventListener("foo", listener1);
+target.addEventListener("foo", listener2);
+
+console.warn("Dispatching first event");
+target.dispatchEvent(new Event("foo"));
+
+console.warn("After first dispatch:");
+console.warn("  listener1Called:", listener1Called);
+console.warn("  listener2Called:", listener2Called);
+console.warn("  listener3Called:", listener3Called);
+
+testing.expectEqual(1, listener1Called);
+testing.expectEqual(0, listener2Called);
+testing.expectEqual(0, listener3Called);
+
+console.warn("Dispatching second event");
+target.dispatchEvent(new Event("foo"));
+
+console.warn("After second dispatch:");
+console.warn("  listener1Called:", listener1Called);
+console.warn("  listener2Called:", listener2Called);
+console.warn("  listener3Called:", listener3Called);
+
+testing.expectEqual(2, listener1Called);
+testing.expectEqual(0, listener2Called);
+testing.expectEqual(1, listener3Called);
+</script>
