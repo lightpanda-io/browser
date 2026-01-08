@@ -44,10 +44,6 @@ pub fn asEventTarget(self: *HTMLDocument) *@import("EventTarget.zig") {
     return self._proto.asEventTarget();
 }
 
-pub fn className(_: *const HTMLDocument) []const u8 {
-    return "[object HTMLDocument]";
-}
-
 // HTML-specific accessors
 pub fn getHead(self: *HTMLDocument) ?*Element.Html.Head {
     const doc_el = self._proto.getDocumentElement() orelse return null;

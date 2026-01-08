@@ -113,12 +113,6 @@ pub fn asConstNode(self: *const Element) *const Node {
     return self._proto;
 }
 
-pub fn className(self: *const Element) []const u8 {
-    return switch (self._type) {
-        inline else => |c| return c.className(),
-    };
-}
-
 pub fn attributesEql(self: *const Element, other: *Element) bool {
     if (self._attributes) |attr_list| {
         const other_list = other._attributes orelse return false;

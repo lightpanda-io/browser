@@ -125,51 +125,6 @@ pub fn is(self: *HtmlElement, comptime T: type) ?*T {
     return null;
 }
 
-pub fn className(self: *const HtmlElement) []const u8 {
-    return switch (self._type) {
-        .anchor => "[object HTMLAnchorElement]",
-        .body => "[object HTMLBodyElement]",
-        .br => "[object HTMLBRElement]",
-        .button => "[object HTMLButtonElement]",
-        .canvas => "[object HTMLCanvasElement]",
-        .custom => "[object CUSTOM-TODO]",
-        .data => "[object HTMLDataElement]",
-        .dialog => "[object HTMLDialogElement]",
-        .div => "[object HTMLDivElement]",
-        .embed => "[object HTMLEmbedElement]",
-        .form => "[object HTMLFormElement]",
-        .generic => "[object HTMLElement]",
-        .head => "[object HTMLHeadElement]",
-        .heading => "[object HTMLHeadingElement]",
-        .hr => "[object HTMLHRElement]",
-        .html => "[object HTMLHtmlElement]",
-        .iframe => "[object HTMLIFrameElement]",
-        .img => "[object HTMLImageElement]",
-        .input => "[object HTMLInputElement]",
-        .li => "[object HTMLLIElement]",
-        .link => "[object HTMLLinkElement]",
-        .meta => "[object HTMLMetaElement]",
-        .media => |m| switch (m._type) {
-            .audio => "[object HTMLAudioElement]",
-            .video => "[object HTMLVideoElement]",
-            .generic => "[object HTMLMediaElement]",
-        },
-        .ol => "[object HTMLOLElement]",
-        .option => "[object HTMLOptionElement]",
-        .p => "[object HTMLParagraphElement]",
-        .script => "[object HTMLScriptElement]",
-        .select => "[object HTMLSelectElement]",
-        .slot => "[object HTMLSlotElement]",
-        .span => "[object HTMLSpanElement]",
-        .style => "[object HTMLSyleElement]",
-        .template => "[object HTMLTemplateElement]",
-        .textarea => "[object HTMLTextAreaElement]",
-        .title => "[object HTMLTitleElement]",
-        .ul => "[object HTMLULElement]",
-        .unknown => "[object HTMLUnknownElement]",
-    };
-}
-
 pub fn asElement(self: *HtmlElement) *Element {
     return self._proto;
 }

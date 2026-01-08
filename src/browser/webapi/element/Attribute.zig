@@ -45,10 +45,6 @@ pub fn format(self: *const Attribute, writer: *std.Io.Writer) !void {
     return formatAttribute(self._name, self._value, writer);
 }
 
-pub fn className(_: *const Attribute) []const u8 {
-    return "[object Attr]";
-}
-
 pub fn getName(self: *const Attribute) []const u8 {
     return self._name;
 }

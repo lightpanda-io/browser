@@ -127,10 +127,6 @@ pub fn toString(self: *const DOMException, page: *Page) ![]const u8 {
     return std.fmt.bufPrint(&page.buf, "{s}: {s}", .{ self.getName(), msg }) catch return msg;
 }
 
-pub fn className(_: *const DOMException) []const u8 {
-    return "[object DOMException]";
-}
-
 const Code = enum(u8) {
     none = 0,
     index_size_error = 1,
