@@ -217,7 +217,7 @@ fn getDefaultDisplay(element: *const Element) []const u8 {
     switch (element._type) {
         .html => |html| {
             return switch (html._type) {
-                .anchor, .br => "inline",
+                .anchor, .br, .span => "inline",
                 .body, .div, .p, .heading, .form, .button, .canvas, .dialog, .embed, .head, .html, .hr, .iframe, .img, .input, .li, .link, .meta, .ol, .option, .script, .select, .slot, .style, .template, .textarea, .title, .ul, .media => "block",
                 .generic, .custom, .unknown, .data => blk: {
                     const tag = element.getTagNameLower();
