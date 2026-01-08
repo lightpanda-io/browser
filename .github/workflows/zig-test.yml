@@ -103,7 +103,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build test
-        run: zig build  -Dprebuilt_v8_path=v8/libc_v8.a test -- --json > bench.json
+        run: METRICS=true zig build -Dprebuilt_v8_path=v8/libc_v8.a test > bench.json
 
       - name: write commit
         run: |

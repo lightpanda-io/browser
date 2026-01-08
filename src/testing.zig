@@ -326,7 +326,6 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
     }
 }
 
-var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
 pub var test_app: *App = undefined;
 pub var test_browser: Browser = undefined;
 pub var test_session: *Session = undefined;
@@ -446,7 +445,7 @@ test "tests:beforeAll" {
     log.opts.level = .warn;
     log.opts.format = .pretty;
 
-    test_app = try App.init(gpa.allocator(), .{
+    test_app = try App.init(@import("root").tracking_allocator, .{
         .run_mode = .serve,
         .tls_verify_host = false,
         .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
@@ -484,6 +483,8 @@ test "tests:afterAll" {
     if (test_http_server) |*server| {
         server.deinit();
     }
+
+    @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
     test_browser.deinit();
     test_app.deinit();
