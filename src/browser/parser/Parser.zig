@@ -104,7 +104,7 @@ pub fn parseXML(self: *Parser, xml: []const u8) void {
         xml.len,
         &self.container,
         self,
-        createElementCallback,
+        createXMLElementCallback,
         getDataCallback,
         appendCallback,
         parseErrorCallback,
@@ -225,17 +225,26 @@ fn _popCallback(self: *Parser, node: *Node) !void {
 }
 
 fn createElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
+    return _createElementCallbackWithDefaultnamespace(ctx, data, qname, attributes, .unknown);
+}
+
+fn createXMLElementCallback(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) callconv(.c) ?*anyopaque {
+    return _createElementCallbackWithDefaultnamespace(ctx, data, qname, attributes, .xml);
+}
+
+fn _createElementCallbackWithDefaultnamespace(ctx: *anyopaque, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) ?*anyopaque {
     const self: *Parser = @ptrCast(@alignCast(ctx));
-    return self._createElementCallback(data, qname, attributes) catch |err| {
+    return self._createElementCallback(data, qname, attributes, default_namespace) catch |err| {
         self.err = .{ .err = err, .source = .create_element };
         return null;
     };
 }
-fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator) !*anyopaque {
+fn _createElementCallback(self: *Parser, data: *anyopaque, qname: h5e.QualName, attributes: h5e.AttributeIterator, default_namespace: Element.Namespace) !*anyopaque {
     const page = self.page;
     const name = qname.local.slice();
-    const namespace = qname.ns.slice();
-    const node = try page.createElement(namespace, name, attributes);
+    const namespace_string = qname.ns.slice();
+    const namespace = if (namespace_string.len == 0) default_namespace else Element.Namespace.parse(namespace_string);
+    const node = try page.createElementNS(namespace, name, attributes);
 
     const pn = try self.arena.create(ParsedNode);
     pn.* = .{

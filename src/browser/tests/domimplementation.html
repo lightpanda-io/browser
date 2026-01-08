@@ -168,7 +168,7 @@
     const root = doc.documentElement;
     testing.expectEqual(true, root !== null);
     // TODO: XML documents should preserve case, but we currently uppercase
-    testing.expectEqual('ROOT', root.tagName);
+    testing.expectEqual('root', root.tagName);
   }
 </script>
 
@@ -206,10 +206,9 @@
     const doc = impl.createDocument('http://example.com', 'prefix:localName', null);
 
     const root = doc.documentElement;
-    // TODO: XML documents should preserve case, but we currently uppercase
-    testing.expectEqual('prefix:LOCALNAME', root.tagName);
-    // TODO: Custom namespaces are being overridden to XHTML namespace
-    testing.expectEqual('http://www.w3.org/1999/xhtml', root.namespaceURI);
+    testing.expectEqual('prefix:localName', root.tagName);
+    // TODO: Custom namespaces are being replaced with an empty value
+    testing.expectEqual('http://lightpanda.io/unsupported/namespace', root.namespaceURI);
   }
 </script>
 
@@ -224,8 +223,7 @@
     doc.documentElement.appendChild(child);
 
     testing.expectEqual(1, doc.documentElement.childNodes.length);
-    // TODO: XML documents should preserve case, but we currently uppercase
-    testing.expectEqual('CHILD', doc.documentElement.firstChild.tagName);
+    testing.expectEqual('child', doc.documentElement.firstChild.tagName);
     testing.expectEqual('Test', doc.documentElement.firstChild.textContent);
   }
 </script>

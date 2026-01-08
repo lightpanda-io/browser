@@ -57,26 +57,26 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page:
         _ = try document.asNode().appendChild(doctype.asNode(), page);
     }
 
-    const html_node = try page.createElement(null, "html", null);
+    const html_node = try page.createElementNS(.html, "html", null);
     _ = try document.asNode().appendChild(html_node, page);
 
-    const head_node = try page.createElement(null, "head", null);
+    const head_node = try page.createElementNS(.html, "head", null);
     _ = try html_node.appendChild(head_node, page);
 
     if (title) |t| {
-        const title_node = try page.createElement(null, "title", null);
+        const title_node = try page.createElementNS(.html, "title", null);
         _ = try head_node.appendChild(title_node, page);
         const text_node = try page.createTextNode(t);
         _ = try title_node.appendChild(text_node, page);
     }
 
-    const body_node = try page.createElement(null, "body", null);
+    const body_node = try page.createElementNS(.html, "body", null);
     _ = try html_node.appendChild(body_node, page);
 
     return document;
 }
 
-pub fn createDocument(_: *const DOMImplementation, namespace: ?[]const u8, qualified_name: ?[]const u8, doctype: ?*DocumentType, page: *Page) !*Document {
+pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qualified_name: ?[]const u8, doctype: ?*DocumentType, page: *Page) !*Document {
     // Create XML Document
     const document = (try page._factory.document(Node.Document.XMLDocument{ ._proto = undefined })).asDocument();
 
@@ -88,7 +88,8 @@ pub fn createDocument(_: *const DOMImplementation, namespace: ?[]const u8, quali
     // Create and append root element if qualified_name provided
     if (qualified_name) |qname| {
         if (qname.len > 0) {
-            const root = try page.createElement(namespace, qname, null);
+            const namespace = if (namespace_) |ns| Node.Element.Namespace.parse(ns) else .xml;
+            const root = try page.createElementNS(namespace, qname, null);
             _ = try document.asNode().appendChild(root, page);
         }
     }
