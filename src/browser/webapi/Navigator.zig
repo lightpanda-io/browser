@@ -18,14 +18,15 @@
 
 const builtin = @import("builtin");
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
 
 const Navigator = @This();
 _pad: bool = false,
 
 pub const init: Navigator = .{};
 
-pub fn getUserAgent(_: *const Navigator) []const u8 {
-    return "Lightpanda/1.0";
+pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
+    return page._session.browser.app.config.user_agent;
 }
 
 pub fn getAppName(_: *const Navigator) []const u8 {
