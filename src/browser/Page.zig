@@ -1542,10 +1542,10 @@ pub fn createElement(self: *Page, ns_: ?[]const u8, name: []const u8, attribute_
         },
         4 => switch (@as(u32, @bitCast(name[0..4].*))) {
             asUint("span") => return self.createHtmlElementT(
-                Element.Html.Generic,
+                Element.Html.Span,
                 namespace,
                 attribute_iterator,
-                .{ ._proto = undefined, ._tag_name = String.init(undefined, "span", .{}) catch unreachable, ._tag = .span },
+                .{ ._proto = undefined },
             ),
             asUint("meta") => return self.createHtmlElementT(
                 Element.Html.Meta,
