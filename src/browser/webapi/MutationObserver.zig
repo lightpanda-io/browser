@@ -69,6 +69,10 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
         copied_options.attributeFilter = filter_copy;
     }
 
+    if (options.characterDataOldValue) {
+        copied_options.characterData = true;
+    }
+
     // Check if already observing this target
     for (self._observing.items) |*obs| {
         if (obs.target == target) {
