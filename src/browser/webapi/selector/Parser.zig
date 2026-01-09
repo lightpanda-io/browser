@@ -657,198 +657,126 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
 }
 
 pub fn id(self: *Parser, arena: Allocator) ![]const u8 {
-    // Must be called when we're at a '#'
     std.debug.assert(self.peek() == '#');
-
-    // trim the leading #
-    var input = self.input[1..];
-
-    if (input.len == 0) {
-        @branchHint(.cold);
-        return error.InvalidIDSelector;
-    }
-
-    // First pass: find the end of the id and check if there are escape sequences
-    var i: usize = 0;
-    var has_escape = false;
-    var first_char_validated = false;
-
-    while (i < input.len) {
-        const b = input[i];
-
-        if (b == '\\') {
-            // Escape sequence
-            if (i + 1 >= input.len) {
-                @branchHint(.cold);
-                return error.InvalidIDSelector;
-            }
-            has_escape = true;
-            i += 2; // Skip backslash and escaped char
-            first_char_validated = true;
-            continue;
-        }
-
-        // Validate first character if not yet validated
-        if (!first_char_validated) {
-            if (b == '-') {
-                if (i + 1 >= input.len) {
-                    @branchHint(.cold);
-                    return error.InvalidIDSelector;
-                }
-                const second = input[i + 1];
-                if (second == '-' or std.ascii.isDigit(second)) {
-                    @branchHint(.cold);
-                    return error.InvalidIDSelector;
-                }
-            } else if (!std.ascii.isAlphabetic(b) and b != '_' and b < 0x80) {
-                @branchHint(.cold);
-                return error.InvalidIDSelector;
-            }
-            first_char_validated = true;
-        }
-
-        // Check if this is a valid id character
-        switch (b) {
-            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
-            0x80...0xFF => {}, // non-ASCII characters
-            ' ', '\t', '\n', '\r' => break,
-            // Stop at selector delimiters
-            '.', '#', '>', '+', '~', '[', ':', ')', ']' => break,
-            else => {
-                @branchHint(.cold);
-                return error.InvalidIDSelector;
-            },
-        }
-        i += 1;
-    }
-
-    if (i == 0) {
-        @branchHint(.cold);
-        return error.InvalidIDSelector;
-    }
-
-    const raw = input[0..i];
-    self.input = input[i..];
-
-    // If no escape sequences, return the slice as-is
-    if (!has_escape) {
-        return raw;
-    }
-
-    // Build unescaped string
-    var result = try std.ArrayList(u8).initCapacity(arena, raw.len);
-    var j: usize = 0;
-    while (j < raw.len) {
-        if (raw[j] == '\\') {
-            j += 1; // Skip backslash
-            if (j < raw.len) {
-                try result.append(arena, raw[j]); // Add escaped char
-                j += 1;
-            }
-        } else {
-            try result.append(arena, raw[j]);
-            j += 1;
-        }
-    }
-
-    return result.items;
+    self.input = self.input[1..]; // Skip '#'
+    return self.parseIdentifier(arena, error.InvalidIDSelector);
 }
 
 fn class(self: *Parser, arena: Allocator) ![]const u8 {
-    // Must be called when we're at a '.'
     std.debug.assert(self.peek() == '.');
+    self.input = self.input[1..]; // Skip '.'
+    return self.parseIdentifier(arena, error.InvalidClassSelector);
+}
 
-    // trim the leading .
-    var input = self.input[1..];
+// Parse a CSS identifier (used by id and class selectors)
+fn parseIdentifier(self: *Parser, arena: Allocator, err: ParseError) ParseError![]const u8 {
+    const input = self.input;
 
     if (input.len == 0) {
         @branchHint(.cold);
-        return error.InvalidClassSelector;
+        return err;
     }
 
-    // First pass: find the end of the class name and check if there are escape sequences
     var i: usize = 0;
-    var has_escape = false;
-    var first_char_validated = false;
+    const first = input[0];
 
+    if (first == '\\' or first == 0) {
+        // First char needs special processing - go straight to slow path
+    } else if (first >= 0x80 or std.ascii.isAlphabetic(first) or first == '_') {
+        // Valid first char
+        i = 1;
+    } else if (first == '-') {
+        // Dash must be followed by dash, letter, underscore, escape, or non-ASCII
+        if (input.len < 2) {
+            @branchHint(.cold);
+            return err;
+        }
+        const second = input[1];
+        if (second == '-' or second == '\\' or std.ascii.isAlphabetic(second) or second == '_' or second >= 0x80) {
+            i = 1; // First char validated, start scanning from position 1
+        } else {
+            @branchHint(.cold);
+            return err;
+        }
+    } else {
+        @branchHint(.cold);
+        return err;
+    }
+
+    // Fast scan remaining characters (no escapes/nulls)
     while (i < input.len) {
         const b = input[i];
 
-        if (b == '\\') {
-            // Escape sequence
-            if (i + 1 >= input.len) {
-                @branchHint(.cold);
-                return error.InvalidClassSelector;
-            }
-            has_escape = true;
-            i += 2; // Skip backslash and escaped char
-            first_char_validated = true;
-            continue;
+        if (b == '\\' or b == 0) {
+            // Stop at escape or null - need slow path
+            break;
         }
 
-        // Validate first character if not yet validated
-        if (!first_char_validated) {
-            if (b == '-') {
-                if (i + 1 >= input.len) {
-                    @branchHint(.cold);
-                    return error.InvalidClassSelector;
-                }
-                const second = input[i + 1];
-                if (second == '-' or std.ascii.isDigit(second)) {
-                    @branchHint(.cold);
-                    return error.InvalidClassSelector;
-                }
-            } else if (!std.ascii.isAlphabetic(b) and b != '_' and b < 0x80) {
-                @branchHint(.cold);
-                return error.InvalidClassSelector;
-            }
-            first_char_validated = true;
-        }
-
-        // Check if this is a valid class name character
+        // Check if valid identifier character
         switch (b) {
             'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => {},
-            0x80...0xFF => {}, // non-ASCII characters
-            ' ', '\t', '\n', '\r' => break,
-            // Stop at selector delimiters
-            '.', '#', '>', '+', '~', '[', ':', ')', ']' => break,
+            0x80...0xFF => {},
+            ' ', '\t', '\n', '\r', '.', '#', '>', '+', '~', '[', ':', ')', ']' => break,
             else => {
                 @branchHint(.cold);
-                return error.InvalidClassSelector;
+                return err;
             },
         }
         i += 1;
     }
 
-    if (i == 0) {
-        @branchHint(.cold);
-        return error.InvalidClassSelector;
-    }
-
-    const raw = input[0..i];
-    self.input = input[i..];
-
-    // If no escape sequences, return the slice as-is
-    if (!has_escape) {
-        return raw;
-    }
-
-    // Build unescaped string
-    var result = try std.ArrayList(u8).initCapacity(arena, raw.len);
-    var j: usize = 0;
-    while (j < raw.len) {
-        if (raw[j] == '\\') {
-            j += 1; // Skip backslash
-            if (j < raw.len) {
-                try result.append(arena, raw[j]); // Add escaped char
-                j += 1;
-            }
-        } else {
-            try result.append(arena, raw[j]);
-            j += 1;
+    // Fast path: no escapes/nulls found
+    if (i == input.len or (i > 0 and input[i] != '\\' and input[i] != 0)) {
+        if (i == 0) {
+            @branchHint(.cold);
+            return err;
         }
+        self.input = input[i..];
+        return input[0..i];
     }
 
+    // Slow path: has escapes or nulls
+    var result = try std.ArrayList(u8).initCapacity(arena, input.len);
+
+    try result.appendSlice(arena, input[0..i]);
+
+    var j = i;
+    while (j < input.len) {
+        const b = input[j];
+
+        if (b == '\\') {
+            j += 1;
+            const escape_result = try parseEscape(input[j..], arena);
+            try result.appendSlice(arena, escape_result.bytes);
+            j += escape_result.consumed;
+            continue;
+        }
+
+        if (b == 0) {
+            try result.appendSlice(arena, "\u{FFFD}");
+            j += 1;
+            continue;
+        }
+
+        const is_ident_char = switch (b) {
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_' => true,
+            0x80...0xFF => true,
+            else => false,
+        };
+
+        if (!is_ident_char) {
+            break;
+        }
+        try result.append(arena, b);
+        j += 1;
+    }
+
+    if (result.items.len == 0) {
+        @branchHint(.cold);
+        return err;
+    }
+
+    self.input = input[j..];
     return result.items;
 }
 
@@ -1036,6 +964,74 @@ fn fastEql(a: []const u8, comptime b: []const u8) bool {
     return true;
 }
 
+const EscapeResult = struct {
+    bytes: []const u8,
+    consumed: usize, // how many bytes from input were consumed
+};
+
+// Parse CSS escape sequence starting after the backslash
+// Input should point to the character after '\'
+// Returns the UTF-8 bytes for the escaped character and how many input bytes were consumed
+fn parseEscape(input: []const u8, arena: Allocator) !EscapeResult {
+    if (input.len == 0) {
+        // EOF after backslash -> replacement character
+        return .{ .bytes = "\u{FFFD}", .consumed = 0 };
+    }
+
+    const first = input[0];
+
+    // Check if it's a hex escape (1-6 hex digits)
+    if (std.ascii.isHex(first)) {
+        var hex_value: u32 = 0;
+        var i: usize = 0;
+
+        // Parse up to 6 hex digits
+        while (i < 6 and i < input.len) : (i += 1) {
+            const c = input[i];
+            if (!std.ascii.isHex(c)) break;
+
+            const digit = if (c >= '0' and c <= '9')
+                c - '0'
+            else if (c >= 'a' and c <= 'f')
+                c - 'a' + 10
+            else if (c >= 'A' and c <= 'F')
+                c - 'A' + 10
+            else
+                unreachable;
+
+            hex_value = hex_value * 16 + digit;
+        }
+
+        var consumed = i;
+
+        // Consume one optional whitespace character (space, tab, CR, LF, FF)
+        if (i < input.len) {
+            const next = input[i];
+            if (next == ' ' or next == '\t' or next == '\r' or next == '\n' or next == '\x0C') {
+                consumed += 1;
+            }
+        }
+
+        // Validate the code point and convert to UTF-8
+        // Invalid: 0, > 0x10FFFF, or surrogate range 0xD800-0xDFFF
+        if (hex_value == 0 or hex_value > 0x10FFFF or (hex_value >= 0xD800 and hex_value <= 0xDFFF)) {
+            return .{ .bytes = "\u{FFFD}", .consumed = consumed };
+        }
+
+        // Encode as UTF-8
+        var buf = try arena.alloc(u8, 4);
+        const len = std.unicode.utf8Encode(@intCast(hex_value), buf) catch {
+            return .{ .bytes = "\u{FFFD}", .consumed = consumed };
+        };
+        return .{ .bytes = buf[0..len], .consumed = consumed };
+    }
+
+    // Simple escape - just the character itself
+    var buf = try arena.alloc(u8, 1);
+    buf[0] = first;
+    return .{ .bytes = buf, .consumed = 1 };
+}
+
 const testing = @import("../../../testing.zig");
 test "Selector: Parser.ID" {
     const arena = testing.allocator;
@@ -1072,12 +1068,14 @@ test "Selector: Parser.ID" {
 
     {
         var parser = Parser{ .input = "#--" };
-        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
+        try testing.expectEqual("--", try parser.id(arena));
+        try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = "#--test" };
-        try testing.expectError(error.InvalidIDSelector, parser.id(arena));
+        try testing.expectEqual("--test", try parser.id(arena));
+        try testing.expectEqual("", parser.input);
     }
 
     {
@@ -1187,12 +1185,14 @@ test "Selector: Parser.class" {
 
     {
         var parser = Parser{ .input = ".--" };
-        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
+        try testing.expectEqual("--", try parser.class(arena));
+        try testing.expectEqual("", parser.input);
     }
 
     {
         var parser = Parser{ .input = ".--test" };
-        try testing.expectError(error.InvalidClassSelector, parser.class(arena));
+        try testing.expectEqual("--test", try parser.class(arena));
+        try testing.expectEqual("", parser.input);
     }
 
     {
