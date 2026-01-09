@@ -28,19 +28,7 @@ const DOMImplementation = @This();
 _pad: bool = false,
 
 pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, page: *Page) !*DocumentType {
-    const name = try page.dupeString(qualified_name);
-    // Firefox converts null to the string "null", not empty string
-    const pub_id = if (public_id) |p| try page.dupeString(p) else "null";
-    const sys_id = if (system_id) |s| try page.dupeString(s) else "null";
-
-    const doctype = try page._factory.node(DocumentType{
-        ._proto = undefined,
-        ._name = name,
-        ._public_id = pub_id,
-        ._system_id = sys_id,
-    });
-
-    return doctype;
+    return DocumentType.init(qualified_name, public_id, system_id, page);
 }
 
 pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page: *Page) !*Document {

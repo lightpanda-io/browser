@@ -78,6 +78,15 @@ pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
     return std.mem.eql(u8, self.getName(), other.getName()) and std.mem.eql(u8, self.getValue(), other.getValue());
 }
 
+pub fn clone(self: *const Attribute, page: *Page) !*Attribute {
+    return page._factory.node(Attribute{
+        ._proto = undefined,
+        ._element = self._element,
+        ._name = self._name,
+        ._value = self._value,
+    });
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Attribute);
 

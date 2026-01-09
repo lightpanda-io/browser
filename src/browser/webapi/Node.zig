@@ -664,7 +664,7 @@ pub fn normalize(self: *Node, page: *Page) !void {
     return self._normalize(page.call_arena, &buffer, page);
 }
 
-pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, StringTooLarge, NotSupported, NotImplemented, InvalidCharacterError }!*Node {
+pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, StringTooLarge, NotSupported, NotImplemented, InvalidCharacterError, CloneError }!*Node {
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => |cd| {
@@ -676,11 +676,17 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, Str
                 .processing_instruction => |pi| page.createProcessingInstruction(pi._target, data),
             };
         },
-        .element => |el| return el.cloneElement(deep, page),
+        .element => |el| return el.clone(deep, page),
         .document => return error.NotSupported,
-        .document_type => return error.NotSupported,
+        .document_type => |dt| {
+            const cloned = dt.clone(page) catch return error.CloneError;
+            return cloned.asNode();
+        },
         .document_fragment => |frag| return frag.cloneFragment(deep, page),
-        .attribute => return error.NotSupported,
+        .attribute => |attr| {
+            const cloned = attr.clone(page) catch return error.CloneError;
+            return cloned._proto;
+        },
     }
 }
 

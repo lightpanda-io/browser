@@ -19,6 +19,8 @@
 const std = @import("std");
 
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+
 const Node = @import("Node.zig");
 
 const DocumentType = @This();
@@ -27,6 +29,20 @@ _proto: *Node,
 _name: []const u8,
 _public_id: []const u8,
 _system_id: []const u8,
+
+pub fn init(qualified_name: []const u8, public_id: ?[]const u8, system_id: ?[]const u8, page: *Page) !*DocumentType {
+    const name = try page.dupeString(qualified_name);
+    // Firefox converts null to the string "null", not empty string
+    const pub_id = if (public_id) |p| try page.dupeString(p) else "null";
+    const sys_id = if (system_id) |s| try page.dupeString(s) else "null";
+
+    return page._factory.node(DocumentType{
+        ._proto = undefined,
+        ._name = name,
+        ._public_id = pub_id,
+        ._system_id = sys_id,
+    });
+}
 
 pub fn asNode(self: *DocumentType) *Node {
     return self._proto;
@@ -52,6 +68,10 @@ pub fn isEqualNode(self: *const DocumentType, other: *const DocumentType) bool {
     return std.mem.eql(u8, self._name, other._name) and
         std.mem.eql(u8, self._public_id, other._public_id) and
         std.mem.eql(u8, self._system_id, other._system_id);
+}
+
+pub fn clone(self: *const DocumentType, page: *Page) !*DocumentType {
+    return .init(self._name, self._public_id, self._system_id, page);
 }
 
 pub const JsApi = struct {
