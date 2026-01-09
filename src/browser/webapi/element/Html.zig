@@ -25,15 +25,21 @@ const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
 
 pub const Anchor = @import("html/Anchor.zig");
+pub const Area = @import("html/Area.zig");
+pub const Base = @import("html/Base.zig");
 pub const Body = @import("html/Body.zig");
 pub const BR = @import("html/BR.zig");
 pub const Button = @import("html/Button.zig");
 pub const Canvas = @import("html/Canvas.zig");
 pub const Custom = @import("html/Custom.zig");
 pub const Data = @import("html/Data.zig");
+pub const DataList = @import("html/DataList.zig");
 pub const Dialog = @import("html/Dialog.zig");
+pub const Directory = @import("html/Directory.zig");
 pub const Div = @import("html/Div.zig");
 pub const Embed = @import("html/Embed.zig");
+pub const FieldSet = @import("html/FieldSet.zig");
+pub const Font = @import("html/Font.zig");
 pub const Form = @import("html/Form.zig");
 pub const Generic = @import("html/Generic.zig");
 pub const Head = @import("html/Head.zig");
@@ -43,21 +49,42 @@ pub const Html = @import("html/Html.zig");
 pub const IFrame = @import("html/IFrame.zig");
 pub const Image = @import("html/Image.zig");
 pub const Input = @import("html/Input.zig");
+pub const Label = @import("html/Label.zig");
+pub const Legend = @import("html/Legend.zig");
 pub const LI = @import("html/LI.zig");
 pub const Link = @import("html/Link.zig");
+pub const Map = @import("html/Map.zig");
 pub const Media = @import("html/Media.zig");
 pub const Meta = @import("html/Meta.zig");
+pub const Meter = @import("html/Meter.zig");
+pub const Mod = @import("html/Mod.zig");
+pub const Object = @import("html/Object.zig");
 pub const OL = @import("html/OL.zig");
+pub const OptGroup = @import("html/OptGroup.zig");
 pub const Option = @import("html/Option.zig");
+pub const Output = @import("html/Output.zig");
 pub const Paragraph = @import("html/Paragraph.zig");
+pub const Param = @import("html/Param.zig");
+pub const Pre = @import("html/Pre.zig");
+pub const Progress = @import("html/Progress.zig");
+pub const Quote = @import("html/Quote.zig");
 pub const Script = @import("html/Script.zig");
 pub const Select = @import("html/Select.zig");
 pub const Slot = @import("html/Slot.zig");
+pub const Source = @import("html/Source.zig");
 pub const Span = @import("html/Span.zig");
 pub const Style = @import("html/Style.zig");
+pub const Table = @import("html/Table.zig");
+pub const TableCaption = @import("html/TableCaption.zig");
+pub const TableCell = @import("html/TableCell.zig");
+pub const TableCol = @import("html/TableCol.zig");
+pub const TableRow = @import("html/TableRow.zig");
+pub const TableSection = @import("html/TableSection.zig");
 pub const Template = @import("html/Template.zig");
 pub const TextArea = @import("html/TextArea.zig");
+pub const Time = @import("html/Time.zig");
 pub const Title = @import("html/Title.zig");
+pub const Track = @import("html/Track.zig");
 pub const UL = @import("html/UL.zig");
 pub const Unknown = @import("html/Unknown.zig");
 
@@ -74,15 +101,21 @@ pub fn construct(page: *Page) !*Element {
 
 pub const Type = union(enum) {
     anchor: *Anchor,
+    area: *Area,
+    base: *Base,
     body: *Body,
     br: *BR,
     button: *Button,
     canvas: *Canvas,
     custom: *Custom,
     data: *Data,
+    datalist: *DataList,
     dialog: *Dialog,
+    directory: *Directory,
     div: *Div,
     embed: *Embed,
+    fieldset: *FieldSet,
+    font: *Font,
     form: *Form,
     generic: *Generic,
     heading: *Heading,
@@ -92,21 +125,42 @@ pub const Type = union(enum) {
     img: *Image,
     iframe: *IFrame,
     input: *Input,
+    label: *Label,
+    legend: *Legend,
     li: *LI,
     link: *Link,
+    map: *Map,
     media: *Media,
     meta: *Meta,
+    meter: *Meter,
+    mod: *Mod,
+    object: *Object,
     ol: *OL,
+    optgroup: *OptGroup,
     option: *Option,
+    output: *Output,
     p: *Paragraph,
+    param: *Param,
+    pre: *Pre,
+    progress: *Progress,
+    quote: *Quote,
     script: *Script,
     select: *Select,
     slot: *Slot,
+    source: *Source,
     span: *Span,
     style: *Style,
+    table: *Table,
+    table_caption: *TableCaption,
+    table_cell: *TableCell,
+    table_col: *TableCol,
+    table_row: *TableRow,
+    table_section: *TableSection,
     template: *Template,
     textarea: *TextArea,
+    time: *Time,
     title: *Title,
+    track: *Track,
     ul: *UL,
     unknown: *Unknown,
 };
