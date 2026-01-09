@@ -62,6 +62,7 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
+          makeLatest: true
 
   build-linux-aarch64:
     env:
@@ -104,6 +105,7 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
+          makeLatest: true
 
   build-macos-aarch64:
     env:
@@ -148,6 +150,7 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
+          makeLatest: true
 
   build-macos-x86_64:
     env:
@@ -190,3 +193,4 @@ jobs:
           allowUpdates: true
           artifacts: lightpanda-${{ env.ARCH }}-${{ env.OS }}
           tag: ${{ env.RELEASE }}
+          makeLatest: true
