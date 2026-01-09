@@ -1014,7 +1014,7 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Pag
     return collections.NodeLive(.class_name).init(self.asNode(), class_names.items, page);
 }
 
-pub fn cloneElement(self: *Element, deep: bool, page: *Page) !*Node {
+pub fn clone(self: *Element, deep: bool, page: *Page) !*Node {
     const tag_name = self.getTagNameDump();
     const node = try page.createElementNS(self._namespace, tag_name, self._attributes);
 
