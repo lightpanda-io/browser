@@ -63,6 +63,10 @@ pub fn init(allocator: Allocator, isolate: v8.Isolate, ctx: anytype) !Inspector 
 }
 
 pub fn deinit(self: *const Inspector) void {
+    var temp_scope: v8.HandleScope = undefined;
+    v8.HandleScope.init(&temp_scope, self.isolate);
+    defer temp_scope.deinit();
+
     self.session.deinit();
     self.inner.deinit();
 }
