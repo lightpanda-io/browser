@@ -51,6 +51,10 @@ pub fn init(page: *Page) !*EventTarget {
 }
 
 pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
+    if (event._event_phase != .none) {
+        return error.InvalidStateError;
+    }
+    event._isTrusted = false;
     try page._event_manager.dispatch(self, event);
     return !event._cancelable or !event._prevent_default;
 }
@@ -158,7 +162,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(EventTarget.init, .{});
-    pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{});
+    pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{ .dom_exception = true });
     pub const addEventListener = bridge.function(EventTarget.addEventListener, .{});
     pub const removeEventListener = bridge.function(EventTarget.removeEventListener, .{});
 };
