@@ -116,15 +116,15 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     // need to increase the call_depth so that the call_arena remains valid for
     // the duration of the function call. If we don't do this, the call_arena
     // will be reset after each statement of the function which executes Zig code.
-    const call_depth = context.call_depth;
-    context.call_depth = call_depth + 1;
-    defer context.call_depth = call_depth;
+    const call_depth = ctx.call_depth;
+    ctx.call_depth = call_depth + 1;
+    defer ctx.call_depth = call_depth;
 
     const js_this = blk: {
         if (@TypeOf(this) == js.Object) {
-            break :blk this.js_obj;
+            break :blk this;
         }
-        break :blk try context.zigValueToJs(this, .{});
+        break :blk try ctx.zigValueToJs(this, .{});
     };
 
     const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;

@@ -892,6 +892,62 @@ pub const Property = union(enum) {
     int: i64,
 };
 
+pub fn unknownPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+    const isolate_handle = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+    const context = Context.fromIsolate(.{ .handle = isolate_handle });
+
+    const property: []const u8 = context.valueToString(.{ .ctx = context, .handle = c_name.? }, .{}) catch {
+        return 0;
+    };
+
+    const ignored = std.StaticStringMap(void).initComptime(.{
+        .{ "process", {} },
+        .{ "ShadyDOM", {} },
+        .{ "ShadyCSS", {} },
+
+        .{ "litNonce", {} },
+        .{ "litHtmlVersions", {} },
+        .{ "litElementVersions", {} },
+        .{ "litHtmlPolyfillSupport", {} },
+        .{ "litElementHydrateSupport", {} },
+        .{ "litElementPolyfillSupport", {} },
+        .{ "reactiveElementVersions", {} },
+
+        .{ "recaptcha", {} },
+        .{ "grecaptcha", {} },
+        .{ "___grecaptcha_cfg", {} },
+        .{ "__recaptcha_api", {} },
+        .{ "__google_recaptcha_client", {} },
+
+        .{ "CLOSURE_FLAGS", {} },
+    });
+
+    if (!ignored.has(property)) {
+        const page = context.page;
+        const document = page.document;
+
+        if (document.getElementById(property, page)) |el| {
+            const js_value = context.zigValueToJs(el, .{}) catch {
+                return 0;
+            };
+            var pc = PropertyCallbackInfo{ .handle = handle.? };
+            pc.getReturnValue().set(js_value);
+            return 1;
+        }
+
+        if (comptime IS_DEBUG) {
+            log.debug(.unknown_prop, "unknown global property", .{
+                .info = "but the property can exist in pure JS",
+                .stack = context.stackTrace() catch "???",
+                .property = property,
+            });
+        }
+    }
+
+    // not intercepted
+    return 0;
+}
+
 // Given a Type, returns the length of the prototype chain, including self
 fn prototypeChainLength(comptime T: type) usize {
     var l: usize = 1;

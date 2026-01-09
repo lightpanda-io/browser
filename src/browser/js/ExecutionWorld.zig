@@ -25,6 +25,7 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const Env = @import("Env.zig");
+const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 
 const Page = @import("../Page.zig");
@@ -81,13 +82,11 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         temp_scope.init(isolate);
         defer temp_scope.deinit();
 
-
         // Getting this into the snapshot is tricky (anything involving the
         // global is tricky). Easier to do here
-        const func_tmpl_handle = isolate.createFunctionTemplateHandle();
-        const global_template = v8.v8__FunctionTemplate__InstanceTemplate(func_tmpl_handle).?;
-        var configuration: v8.NamedPropertyHandlerConfiguration = .{
-            .getter = unknownPropertyCallback,
+        const global_template = @import("Snapshot.zig").createGlobalTemplate(isolate.handle, env.templates);
+        v8.v8__ObjectTemplate__SetNamedHandler(global_template, &.{
+            .getter = bridge.unknownPropertyCallback,
             .setter = null,
             .query = null,
             .deleter = null,
@@ -96,10 +95,9 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
             .descriptor = null,
             .data = null,
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
-        };
-        v8.v8__ObjectTemplate__SetNamedHandler(global_template, &configuration);
+        });
 
-        const context_handle = isolate.createContextHandle(null, null);
+        const context_handle = v8.v8__Context__New(isolate.handle, global_template, null).?;
         break :blk js.Global(Context).init(isolate.handle, context_handle);
     };
 
@@ -168,61 +166,4 @@ pub fn terminateExecution(self: *const ExecutionWorld) void {
 
 pub fn resumeExecution(self: *const ExecutionWorld) void {
     self.env.isolate.cancelTerminateExecution();
-}
-
-
-pub fn unknownPropertyCallback(c_name: ?*const v8.Name, raw_info: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
-    const isolate_handle = v8.v8__PropertyCallbackInfo__GetIsolate(raw_info).?;
-    const context = Context.fromIsolate(.{ .handle = isolate_handle });
-
-    const property: ?[]u8 = context.valueToString(.{ .ctx = context, .handle = c_name.? }, .{}) catch {
-        return v8.Intercepted.No;
-    };
-
-    const ignored = std.StaticStringMap(void).initComptime(.{
-        .{ "process", {} },
-        .{ "ShadyDOM", {} },
-        .{ "ShadyCSS", {} },
-
-        .{ "litNonce", {} },
-        .{ "litHtmlVersions", {} },
-        .{ "litElementVersions", {} },
-        .{ "litHtmlPolyfillSupport", {} },
-        .{ "litElementHydrateSupport", {} },
-        .{ "litElementPolyfillSupport", {} },
-        .{ "reactiveElementVersions", {} },
-
-        .{ "recaptcha", {} },
-        .{ "grecaptcha", {} },
-        .{ "___grecaptcha_cfg", {} },
-        .{ "__recaptcha_api", {} },
-        .{ "__google_recaptcha_client", {} },
-
-        .{ "CLOSURE_FLAGS", {} },
-    });
-
-    if (!ignored.has(property)) {
-        const page = context.page;
-        const document = page.document;
-
-        if (document.getElementById(property, page)) |el| {
-            const js_value = context.zigValueToJs(el, .{}) catch {
-                return v8.Intercepted.No;
-            };
-
-            info.getReturnValue().set(js_value);
-            return v8.Intercepted.Yes;
-        }
-
-        if (comptime IS_DEBUG) {
-            log.debug(.unknown_prop, "unknown global property", .{
-                .info = "but the property can exist in pure JS",
-                .stack = context.stackTrace() catch "???",
-                .property = property,
-            });
-        }
-    }
-
-    // not intercepted
-    return 0;
 }

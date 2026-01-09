@@ -42,14 +42,6 @@ pub fn isArray(self: Value) bool {
     return v8.v8__Value__IsArray(self.handle);
 }
 
-pub fn isNull(self: Value) bool {
-    return self.js_val.isNull();
-}
-
-pub fn isUndefined(self: Value) bool {
-    return self.js_val.isUndefined();
-}
-
 pub fn isSymbol(self: Value) bool {
     return v8.v8__Value__IsSymbol(self.handle);
 }
@@ -168,7 +160,7 @@ pub fn toBool(self: Value) bool {
 
 pub fn typeOf(self: Value) js.String {
     const str_handle = v8.v8__Value__TypeOf(self.handle, self.ctx.isolate.handle).?;
-    return js.String{ .ctx = self.ctx) .handle = str_handle };
+    return js.String{ .ctx = self.ctx, .handle = str_handle };
 }
 
 pub fn toF32(self: Value) !f32 {
@@ -265,7 +257,7 @@ pub fn persist(self: Value) !Value {
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
-    return self.context.jsValueToZig(T, self.js_val);
+    return self.ctx.jsValueToZig(T, self);
 }
 
 pub fn toObject(self: Value) js.Object {
@@ -306,16 +298,4 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
     }
     const str = self.toString(.{}) catch return error.WriteFailed;
     return writer.writeAll(str);
-}
-
-pub fn persist(self: Value) !Value {
-    var ctx = self.ctx;
-
-    const global = js.Global(Value).init(ctx.isolate.handle, self.handle);
-    try ctx.global_values.append(ctx.arena, global);
-
-    return .{
-        .ctx = ctx,
-        .handle = global.local(),
-    };
 }

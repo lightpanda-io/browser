@@ -114,19 +114,18 @@ fn isValid(self: Snapshot) bool {
     return v8.v8__StartupData__IsValid(self.startup_data);
 }
 
-<<<<<<< HEAD
-pub fn createGlobalTemplate(isolate: v8.Isolate, templates: []const v8.FunctionTemplate) v8.ObjectTemplate {
+pub fn createGlobalTemplate(isolate: *v8.Isolate, templates: anytype) *const v8.ObjectTemplate {
     // Set up the global template to inherit from Window's template
     // This way the global object gets all Window properties through inheritance
-    const js_global = v8.c.v8__FunctionTemplate__New__DEFAULT(isolate);
-    const window_name = v8.c.v8__String__NewFromUtf8(isolate, "Window", v8.c.kNormal, 6);
-    v8.c.v8__FunctionTemplate__SetClassName(js_global, window_name);
+    const js_global = v8.v8__FunctionTemplate__New__DEFAULT(isolate);
+    const window_name = v8.v8__String__NewFromUtf8(isolate, "Window", v8.kNormal, 6);
+    v8.v8__FunctionTemplate__SetClassName(js_global, window_name);
 
     // Find Window in JsApis by name (avoids circular import)
     const window_index = comptime bridge.JsApiLookup.getId(Window.JsApi);
-    v8.c.v8__FunctionTemplate__Inherit(js_global, templates[window_index]);
+    v8.v8__FunctionTemplate__Inherit(js_global, templates[window_index]);
 
-    return v8.c.v8__FunctionTemplate__InstanceTemplate(js_global);
+    return v8.v8__FunctionTemplate__InstanceTemplate(js_global).?;
 }
 
 pub fn create() !Snapshot {
@@ -406,8 +405,9 @@ fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *v8.FunctionT
 
 // Attaches JsApi members to the prototype template (normal case)
 fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.FunctionTemplate) void {
-    const target = v8.c.v8__FunctionTemplate__PrototypeTemplate(template);
-    const instance = v8.c.v8__FunctionTemplate__InstanceTemplate(template);
+    const target = v8.v8__FunctionTemplate__PrototypeTemplate(template);
+    const instance = v8.v8__FunctionTemplate__InstanceTemplate(template);
+
     const declarations = @typeInfo(JsApi).@"struct".decls;
 
     inline for (declarations) |d| {
@@ -495,13 +495,14 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
     }
 
     if (@hasDecl(JsApi.Meta, "htmldda")) {
-        v8.c.v8__ObjectTemplate__MarkAsUndetectable(instance);
-        v8.c.v8__ObjectTemplate__SetCallAsFunctionHandler(instance, JsApi.Meta.callable.func);
+        v8.v8__ObjectTemplate__MarkAsUndetectable(instance);
+        v8.v8__ObjectTemplate__SetCallAsFunctionHandler(instance, JsApi.Meta.callable.func);
     }
 
     if (@hasDecl(JsApi.Meta, "name")) {
-        const js_name = v8.Symbol.getToStringTag(isolate).toName();
-        instance.set(js_name, v8.String.initUtf8(isolate, JsApi.Meta.name), v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
+        const js_name = v8.v8__Symbol__GetToStringTag(isolate);
+        const js_value = v8.v8__String__NewFromUtf8(isolate, JsApi.Meta.name.ptr, v8.kNormal, @intCast(JsApi.Meta.name.len));
+        v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontDelete);
     }
 }
 
