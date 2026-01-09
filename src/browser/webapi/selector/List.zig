@@ -436,38 +436,64 @@ fn matchesPart(el: *Node.Element, part: Part, scope: *Node, page: *Page) bool {
 }
 
 fn matchesAttribute(el: *Node.Element, attr: Selector.Attribute) bool {
-    // attr.name is already normalized to lowercase during parsing, so we can use the fast path
     const value = el.getAttributeSafe(attr.name) orelse {
         return false;
     };
 
     switch (attr.matcher) {
         .presence => return true,
-        .exact => |expected| return std.mem.eql(u8, value, expected),
-        .word => |needle| {
-            var it = std.mem.splitAny(u8, value, &std.ascii.whitespace);
-            while (it.next()) |world| {
-                if (std.mem.eql(u8, world, needle)) {
-                    return true;
+        .exact => |expected| {
+            return if (attr.case_insensitive)
+                std.ascii.eqlIgnoreCase(value, expected)
+            else
+                std.mem.eql(u8, value, expected);
+        },
+        .substring => |expected| {
+            return if (attr.case_insensitive)
+                std.ascii.indexOfIgnoreCase(value, expected) != null
+            else
+                std.mem.indexOf(u8, value, expected) != null;
+        },
+        .starts_with => |expected| {
+            return if (attr.case_insensitive)
+                std.ascii.startsWithIgnoreCase(value, expected)
+            else
+                std.mem.startsWith(u8, value, expected);
+        },
+        .ends_with => |expected| {
+            return if (attr.case_insensitive)
+                std.ascii.endsWithIgnoreCase(value, expected)
+            else
+                std.mem.endsWith(u8, value, expected);
+        },
+        .word => |expected| {
+            // Space-separated word match (like class names)
+            var it = std.mem.tokenizeAny(u8, value, &std.ascii.whitespace);
+            while (it.next()) |word| {
+                const same = if (attr.case_insensitive)
+                    std.ascii.eqlIgnoreCase(word, expected)
+                else
+                    std.mem.eql(u8, word, expected);
+
+                if (same) return true;
+            }
+            return false;
+        },
+        .prefix_dash => |expected| {
+            // Matches value or value- prefix (for language codes like en, en-US)
+            if (attr.case_insensitive) {
+                if (std.ascii.eqlIgnoreCase(value, expected)) return true;
+                if (value.len > expected.len and value[expected.len] == '-') {
+                    return std.ascii.eqlIgnoreCase(value[0..expected.len], expected);
+                }
+            } else {
+                if (std.mem.eql(u8, value, expected)) return true;
+                if (value.len > expected.len and value[expected.len] == '-') {
+                    return std.mem.eql(u8, value[0..expected.len], expected);
                 }
             }
             return false;
         },
-        .prefix_dash => |prefix| {
-            if (std.mem.startsWith(u8, value, prefix) == false) {
-                return false;
-            }
-            if (value.len == prefix.len) {
-                return true;
-            }
-            if (value[prefix.len] == '-') {
-                return true;
-            }
-            return false;
-        },
-        .starts_with => |prefix| return std.mem.startsWith(u8, value, prefix),
-        .ends_with => |suffix| return std.mem.endsWith(u8, value, suffix),
-        .substring => |substr| return std.mem.indexOf(u8, value, substr) != null,
     }
 }
 

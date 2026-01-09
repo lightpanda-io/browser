@@ -832,11 +832,12 @@ fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
     const normalized = try Attribute.normalizeNameForLookup(attr_name, page);
     const name = try arena.dupe(u8, normalized);
+    var case_insensitive = false;
     _ = self.skipSpaces();
 
     if (self.peek() == ']') {
         self.input = self.input[1..];
-        return .{ .name = name, .matcher = .presence };
+        return .{ .name = name, .matcher = .presence, .case_insensitive = case_insensitive };
     }
 
     const matcher_type = try self.attributeMatcher();
@@ -845,6 +846,18 @@ fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
     const value_raw = try self.attributeValue();
     const value = try arena.dupe(u8, value_raw);
     _ = self.skipSpaces();
+
+    // Parse optional case-sensitivity flag
+    if (std.ascii.toLower(self.peek()) == 'i') {
+        self.input = self.input[1..];
+        case_insensitive = true;
+        _ = self.skipSpaces();
+    } else if (std.ascii.toLower(self.peek()) == 's') {
+        // 's' flag means case-sensitive (explicit)
+        self.input = self.input[1..];
+        case_insensitive = false;
+        _ = self.skipSpaces();
+    }
 
     if (self.peek() != ']') {
         return error.InvalidAttributeSelector;
@@ -861,7 +874,7 @@ fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
         .presence => unreachable,
     };
 
-    return .{ .name = name, .matcher = matcher };
+    return .{ .name = name, .matcher = matcher, .case_insensitive = case_insensitive };
 }
 
 fn attributeName(self: *Parser) ![]const u8 {

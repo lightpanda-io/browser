@@ -119,6 +119,7 @@ pub const Part = union(enum) {
 pub const Attribute = struct {
     name: []const u8,
     matcher: AttributeMatcher,
+    case_insensitive: bool,
 };
 
 pub const AttributeMatcher = union(enum) {
