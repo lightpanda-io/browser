@@ -820,3 +820,137 @@
   });
 }
 </script>
+
+<script id=deleteContents_crossNode>
+{
+  // Test deleteContents across multiple sibling text nodes
+  const p = document.createElement('p');
+  p.appendChild(document.createTextNode('AAAA'));
+  p.appendChild(document.createTextNode('BBBB'));
+  p.appendChild(document.createTextNode('CCCC'));
+
+  testing.expectEqual(3, p.childNodes.length);
+  testing.expectEqual('AAAABBBBCCCC', p.textContent);
+
+  const range = document.createRange();
+  // Start at position 2 in first text node ("AA|AA")
+  range.setStart(p.childNodes[0], 2);
+  // End at position 2 in third text node ("CC|CC")
+  range.setEnd(p.childNodes[2], 2);
+
+  range.deleteContents();
+
+  // Should have truncated first node to "AA" and third node to "CC"
+  // Middle node should be removed
+  testing.expectEqual(2, p.childNodes.length);
+  testing.expectEqual('AA', p.childNodes[0].textContent);
+  testing.expectEqual('CC', p.childNodes[1].textContent);
+  testing.expectEqual('AACC', p.textContent);
+}
+</script>
+
+<script id=deleteContents_crossNode_partial>
+{
+  // Test deleteContents where start node is completely preserved
+  const p = document.createElement('p');
+  p.appendChild(document.createTextNode('KEEP'));
+  p.appendChild(document.createTextNode('DELETE'));
+  p.appendChild(document.createTextNode('PARTIAL'));
+
+  const range = document.createRange();
+  // Start at end of first text node
+  range.setStart(p.childNodes[0], 4);
+  // End in middle of third text node
+  range.setEnd(p.childNodes[2], 4);
+
+  range.deleteContents();
+
+  testing.expectEqual(2, p.childNodes.length);
+  testing.expectEqual('KEEP', p.childNodes[0].textContent);
+  testing.expectEqual('IAL', p.childNodes[1].textContent);
+  testing.expectEqual('KEEPIAL', p.textContent);
+}
+</script>
+
+<script id=extractContents_crossNode>
+{
+  // Test extractContents across multiple sibling text nodes
+  const p = document.createElement('p');
+  p.appendChild(document.createTextNode('AAAA'));
+  p.appendChild(document.createTextNode('BBBB'));
+  p.appendChild(document.createTextNode('CCCC'));
+
+  const range = document.createRange();
+  range.setStart(p.childNodes[0], 2);
+  range.setEnd(p.childNodes[2], 2);
+
+  const fragment = range.extractContents();
+
+  // Original should be truncated
+  testing.expectEqual(2, p.childNodes.length);
+  testing.expectEqual('AA', p.childNodes[0].textContent);
+  testing.expectEqual('CC', p.childNodes[1].textContent);
+
+  // Fragment should contain extracted content
+  testing.expectEqual(3, fragment.childNodes.length);
+  testing.expectEqual('AA', fragment.childNodes[0].textContent);
+  testing.expectEqual('BBBB', fragment.childNodes[1].textContent);
+  testing.expectEqual('CC', fragment.childNodes[2].textContent);
+}
+</script>
+
+<script id=cloneContents_crossNode>
+{
+  // Test cloneContents across multiple sibling text nodes
+  const p = document.createElement('p');
+  p.appendChild(document.createTextNode('AAAA'));
+  p.appendChild(document.createTextNode('BBBB'));
+  p.appendChild(document.createTextNode('CCCC'));
+
+  const range = document.createRange();
+  range.setStart(p.childNodes[0], 2);
+  range.setEnd(p.childNodes[2], 2);
+
+  const fragment = range.cloneContents();
+
+  // Original should be unchanged
+  testing.expectEqual(3, p.childNodes.length);
+  testing.expectEqual('AAAA', p.childNodes[0].textContent);
+  testing.expectEqual('BBBB', p.childNodes[1].textContent);
+  testing.expectEqual('CCCC', p.childNodes[2].textContent);
+
+  // Fragment should contain cloned content
+  testing.expectEqual(3, fragment.childNodes.length);
+  testing.expectEqual('AA', fragment.childNodes[0].textContent);
+  testing.expectEqual('BBBB', fragment.childNodes[1].textContent);
+  testing.expectEqual('CC', fragment.childNodes[2].textContent);
+}
+</script>
+
+<script id=deleteContents_crossNode_withElements>
+{
+  // Test deleteContents with mixed text and element nodes
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode('Start'));
+  const span = document.createElement('span');
+  span.textContent = 'Middle';
+  div.appendChild(span);
+  div.appendChild(document.createTextNode('End'));
+
+  testing.expectEqual(3, div.childNodes.length);
+
+  const range = document.createRange();
+  // Start in middle of first text node
+  range.setStart(div.childNodes[0], 2);
+  // End in middle of last text node
+  range.setEnd(div.childNodes[2], 1);
+
+  range.deleteContents();
+
+  // Should keep "St" from start, remove span, keep "nd" from end
+  testing.expectEqual(2, div.childNodes.length);
+  testing.expectEqual('St', div.childNodes[0].textContent);
+  testing.expectEqual('nd', div.childNodes[1].textContent);
+  testing.expectEqual('Stnd', div.textContent);
+}
+</script>

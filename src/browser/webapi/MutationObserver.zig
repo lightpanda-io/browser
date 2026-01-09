@@ -69,6 +69,10 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
         copied_options.attributeFilter = filter_copy;
     }
 
+    if (options.characterDataOldValue) {
+        copied_options.characterData = true;
+    }
+
     // Check if already observing this target
     for (self._observing.items) |*obs| {
         if (obs.target == target) {
@@ -274,6 +278,13 @@ pub const MutationRecord = struct {
         return self._target;
     }
 
+    pub fn getAttributeNamespace(self: *const MutationRecord) ?[]const u8 {
+        if (self._attribute_name != null) {
+            return "http://www.w3.org/1999/xhtml";
+        }
+        return null;
+    }
+
     pub fn getAttributeName(self: *const MutationRecord) ?[]const u8 {
         return self._attribute_name;
     }
@@ -310,6 +321,7 @@ pub const MutationRecord = struct {
         pub const @"type" = bridge.accessor(MutationRecord.getType, null, .{});
         pub const target = bridge.accessor(MutationRecord.getTarget, null, .{});
         pub const attributeName = bridge.accessor(MutationRecord.getAttributeName, null, .{});
+        pub const attributeNamespace = bridge.accessor(MutationRecord.getAttributeNamespace, null, .{});
         pub const oldValue = bridge.accessor(MutationRecord.getOldValue, null, .{});
         pub const addedNodes = bridge.accessor(MutationRecord.getAddedNodes, null, .{});
         pub const removedNodes = bridge.accessor(MutationRecord.getRemovedNodes, null, .{});

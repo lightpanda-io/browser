@@ -652,9 +652,9 @@ pub fn getData(self: *const Node) []const u8 {
     };
 }
 
-pub fn setData(self: *Node, data: []const u8) void {
+pub fn setData(self: *Node, data: []const u8, page: *Page) !void {
     switch (self._type) {
-        .cdata => |c| c._data = data,
+        .cdata => |c| try c.setData(data, page),
         else => {},
     }
 }
