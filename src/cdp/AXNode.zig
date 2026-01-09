@@ -141,9 +141,7 @@ pub const Writer = struct {
         if (value.value) |v| {
             try w.objectField("value");
             switch (v) {
-                .uint => try w.write(v.uint),
-                .string => try w.write(v.string),
-                .boolean => try w.write(v.boolean),
+                inline else => |vv| try w.write(vv),
             }
         }
 
