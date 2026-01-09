@@ -387,6 +387,8 @@ fn generateConstructor(comptime JsApi: type, isolate: v8.Isolate) v8.FunctionTem
 // Attaches JsApi members to the prototype template (normal case)
 fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.FunctionTemplate) void {
     const target = template.getPrototypeTemplate();
+    const instance = template.getInstanceTemplate();
+
     const declarations = @typeInfo(JsApi).@"struct".decls;
     inline for (declarations) |d| {
         const name: [:0]const u8 = d.name;
@@ -422,9 +424,9 @@ fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.FunctionT
                 const configuration = v8.IndexedPropertyHandlerConfiguration{
                     .getter = value.getter,
                 };
-                target.setIndexedProperty(configuration, null);
+                instance.setIndexedProperty(configuration, null);
             },
-            bridge.NamedIndexed => template.getInstanceTemplate().setNamedProperty(.{
+            bridge.NamedIndexed => instance.setNamedProperty(.{
                 .getter = value.getter,
                 .setter = value.setter,
                 .deleter = value.deleter,
@@ -456,15 +458,13 @@ fn attachClass(comptime JsApi: type, isolate: v8.Isolate, template: v8.FunctionT
     }
 
     if (@hasDecl(JsApi.Meta, "htmldda")) {
-        const instance_template = template.getInstanceTemplate();
-        instance_template.markAsUndetectable();
-        instance_template.setCallAsFunctionHandler(JsApi.Meta.callable.func);
+        instance.markAsUndetectable();
+        instance.setCallAsFunctionHandler(JsApi.Meta.callable.func);
     }
 
     if (@hasDecl(JsApi.Meta, "name")) {
         const js_name = v8.Symbol.getToStringTag(isolate).toName();
-        const instance_template = template.getInstanceTemplate();
-        instance_template.set(js_name, v8.String.initUtf8(isolate, JsApi.Meta.name), v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
+        instance.set(js_name, v8.String.initUtf8(isolate, JsApi.Meta.name), v8.PropertyAttribute.ReadOnly + v8.PropertyAttribute.DontDelete);
     }
 }
 
