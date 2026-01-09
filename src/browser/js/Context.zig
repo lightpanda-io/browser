@@ -17,7 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 const log = @import("../../log.zig");
 
@@ -25,33 +24,31 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const bridge = @import("bridge.zig");
-const Caller = @import("Caller.zig");
+const Caller = bridge.Caller;
 
 const Page = @import("../Page.zig");
 const ScriptManager = @import("../ScriptManager.zig");
 
 const Allocator = std.mem.Allocator;
-const PersistentObject = v8.Persistent(v8.Object);
-const PersistentValue = v8.Persistent(v8.Value);
-const PersistentModule = v8.Persistent(v8.Module);
-const PersistentPromise = v8.Persistent(v8.Promise);
-const PersistentFunction = v8.Persistent(v8.Function);
 const TaggedAnyOpaque = js.TaggedAnyOpaque;
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Loosely maps to a Browser Page.
 const Context = @This();
 
 id: usize,
 page: *Page,
-isolate: v8.Isolate,
+isolate: js.Isolate,
 // This context is a persistent object. The persistent needs to be recovered and reset.
-v8_context: v8.Context,
-handle_scope: ?v8.HandleScope,
+handle: *const v8.Context,
 
-cpu_profiler: ?v8.CpuProfiler = null,
+handle_scope: ?js.HandleScope,
+
+cpu_profiler: ?*v8.CpuProfiler = null,
 
 // references Env.templates
-templates: []v8.FunctionTemplate,
+templates: []*const v8.FunctionTemplate,
 
 // Arena for the lifetime of the context
 arena: Allocator,
@@ -65,37 +62,27 @@ call_arena: Allocator,
 // the call which is calling the callback.
 call_depth: usize = 0,
 
-// Callbacks are PesistendObjects. When the context ends, we need
-// to free every callback we created.
-callbacks: std.ArrayListUnmanaged(v8.Persistent(v8.Function)) = .empty,
-
-// Serves two purposes. Like `callbacks` above, this is used to free
-// every PeristentObjet we've created during the lifetime of the context.
+// Serves two purposes. Like `global_objects`, this is used to free
+// every Global(Object) we've created during the lifetime of the context.
 // More importantly, it serves as an identity map - for a given Zig
-// instance, we map it to the same PersistentObject.
+// instance, we map it to the same Global(Object).
 // The key is the @intFromPtr of the Zig value
-identity_map: std.AutoHashMapUnmanaged(usize, PersistentObject) = .empty,
+identity_map: std.AutoHashMapUnmanaged(usize, js.Global(js.Object)) = .empty,
 
 // Some web APIs have to manage opaque values. Ideally, they use an
 // js.Object, but the js.Object has no lifetime guarantee beyond the
 // current call. They can call .persist() on their js.Object to get
-// a `*PersistentObject()`. We need to track these to free them.
+// a `Global(Object)`. We need to track these to free them.
 // This used to be a map and acted like identity_map; the key was
 // the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
 // a reliable way to know if an object has already been persisted,
 // we now simply persist every time persist() is called.
-js_object_list: std.ArrayListUnmanaged(PersistentObject) = .empty,
-
-// js_value_list tracks persisted js values.
-js_value_list: std.ArrayListUnmanaged(PersistentValue) = .empty,
-
-// Various web APIs depend on having a persistent promise resolver. They
-// require for this PromiseResolver to be valid for a lifetime longer than
-// the function that resolves/rejects them.
-persisted_promise_resolvers: std.ArrayListUnmanaged(v8.Persistent(v8.PromiseResolver)) = .empty,
-
-// Some Zig types have code to execute to cleanup
-destructor_callbacks: std.ArrayListUnmanaged(DestructorCallback) = .empty,
+global_values: std.ArrayList(js.Global(js.Value)) = .empty,
+global_objects: std.ArrayList(js.Global(js.Object)) = .empty,
+global_modules: std.ArrayList(js.Global(js.Module)) = .empty,
+global_promises: std.ArrayList(js.Global(js.Promise)) = .empty,
+global_functions: std.ArrayList(js.Global(js.Function)) = .empty,
+global_promise_resolvers: std.ArrayList(js.Global(js.PromiseResolver)) = .empty,
 
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
@@ -113,47 +100,40 @@ script_manager: ?*ScriptManager,
 const ModuleEntry = struct {
     // Can be null if we're asynchrously loading the module, in
     // which case resolver_promise cannot be null.
-    module: ?PersistentModule = null,
+    module: ?js.Module = null,
 
     // The promise of the evaluating module. The resolved value is
     // meaningless to us, but the resolver promise needs to chain
     // to this, since we need to know when it's complete.
-    module_promise: ?PersistentPromise = null,
+    module_promise: ?js.Promise = null,
 
     // The promise for the resolver which is loading the module.
     // (AKA, the first time we try to load it). This resolver will
     // chain to the module_promise  and, when it's done evaluating
     // will resolve its namespace. Any other attempt to load the
     // module willchain to this.
-    resolver_promise: ?PersistentPromise = null,
+    resolver_promise: ?js.Promise = null,
 };
 
-pub fn fromC(c_context: *const v8.C_Context) *Context {
-    const v8_context = v8.Context{ .handle = c_context };
-    return @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+pub fn fromC(c_context: *const v8.Context) *Context {
+    const data = v8.v8__Context__GetEmbedderData(c_context, 1).?;
+    const big_int = js.BigInt{ .handle = @ptrCast(data) };
+    return @ptrFromInt(big_int.getUint64());
 }
 
-pub fn fromIsolate(isolate: v8.Isolate) *Context {
-    const v8_context = isolate.getCurrentContext();
-    return @ptrFromInt(v8_context.getEmbedderData(1).castTo(v8.BigInt).getUint64());
+pub fn fromIsolate(isolate: js.Isolate) *Context {
+    const v8_context = v8.v8__Isolate__GetCurrentContext(isolate.handle).?;
+    const data = v8.v8__Context__GetEmbedderData(v8_context, 1).?;
+    const big_int = js.BigInt{ .handle = @ptrCast(data) };
+    return @ptrFromInt(big_int.getUint64());
 }
 
 pub fn setupGlobal(self: *Context) !void {
-    _ = try self.mapZigInstanceToJs(self.v8_context.getGlobal(), self.page.window);
+    const global = v8.v8__Context__Global(self.handle).?;
+    _ = try self.mapZigInstanceToJs(global, self.page.window);
 }
 
 pub fn deinit(self: *Context) void {
-    {
-        // reverse order, as this has more chance of respecting any
-        // dependencies objects might have with each other.
-        const items = self.destructor_callbacks.items;
-        var i = items.len;
-        while (i > 0) {
-            i -= 1;
-            items[i].destructor();
-        }
-    }
-
     {
         var it = self.identity_map.valueIterator();
         while (it.next()) |p| {
@@ -161,46 +141,34 @@ pub fn deinit(self: *Context) void {
         }
     }
 
-    for (self.js_object_list.items) |*p| {
-        p.deinit();
+    for (self.global_values.items) |*global| {
+        global.deinit();
     }
 
-    for (self.js_value_list.items) |*p| {
-        p.deinit();
+    for (self.global_objects.items) |*global| {
+        global.deinit();
     }
 
-    for (self.persisted_promise_resolvers.items) |*p| {
-        p.deinit();
+    for (self.global_modules.items) |*global| {
+        global.deinit();
     }
 
-    {
-        var it = self.module_cache.valueIterator();
-        while (it.next()) |entry| {
-            if (entry.module) |*mod| {
-                mod.deinit();
-            }
-            if (entry.module_promise) |*p| {
-                p.deinit();
-            }
-            if (entry.resolver_promise) |*p| {
-                p.deinit();
-            }
-        }
+    for (self.global_functions.items) |*global| {
+        global.deinit();
     }
 
-    for (self.callbacks.items) |*cb| {
-        cb.deinit();
+    for (self.global_promises.items) |*global| {
+        global.deinit();
     }
+
+    for (self.global_promise_resolvers.items) |*global| {
+        global.deinit();
+    }
+
     if (self.handle_scope) |*scope| {
+        v8.v8__Context__Exit(self.handle);
         scope.deinit();
-        self.v8_context.exit();
     }
-    var presistent_context = v8.Persistent(v8.Context).recoverCast(self.v8_context);
-    presistent_context.deinit();
-}
-
-fn trackCallback(self: *Context, pf: PersistentFunction) !void {
-    return self.callbacks.append(self.arena, pf);
 }
 
 // == Executors ==
@@ -209,15 +177,7 @@ pub fn eval(self: *Context, src: []const u8, name: ?[]const u8) !void {
 }
 
 pub fn exec(self: *Context, src: []const u8, name: ?[]const u8) !js.Value {
-    const v8_context = self.v8_context;
-
-    const scr = try compileScript(self.isolate, v8_context, src, name);
-
-    const value = scr.run(v8_context) catch {
-        return error.ExecutionError;
-    };
-
-    return self.createValue(value);
+    return self.compileAndRun(src, name);
 }
 
 pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
@@ -239,13 +199,12 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
         }
 
         const owned_url = try arena.dupeZ(u8, url);
-        const m = try compileModule(self.isolate, src, owned_url);
+        const m = try self.compileModule(src, owned_url);
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
             std.debug.assert(gop.value_ptr.module == null);
-
-            gop.value_ptr.module = PersistentModule.init(self.isolate, m);
+            gop.value_ptr.module = try m.persist();
             if (!gop.found_existing) {
                 gop.key_ptr.* = owned_url;
             }
@@ -256,19 +215,18 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
 
     try self.postCompileModule(mod, owned_url);
 
-    const v8_context = self.v8_context;
-    if (try mod.instantiate(v8_context, resolveModuleCallback) == false) {
+    if (try mod.instantiate(resolveModuleCallback) == false) {
         return error.ModuleInstantiationError;
     }
 
-    const evaluated = mod.evaluate(v8_context) catch {
+    const evaluated = mod.evaluate() catch {
         std.debug.assert(mod.getStatus() == .kErrored);
 
         // Some module-loading errors aren't handled by TryCatch. We need to
         // get the error from the module itself.
         log.warn(.js, "evaluate module", .{
             .specifier = owned_url,
-            .message = self.valueToString(mod.getException(), .{}) catch "???",
+            .message = mod.getException().toString(.{}) catch "???",
         });
         return error.EvaluationError;
     };
@@ -298,7 +256,7 @@ pub fn module(self: *Context, comptime want_result: bool, src: []const u8, url: 
     std.debug.assert(entry.module != null);
     std.debug.assert(entry.module_promise == null);
 
-    entry.module_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+    entry.module_promise = try evaluated.toPromise().persist();
     return if (comptime want_result) entry.* else {};
 }
 
@@ -316,33 +274,27 @@ pub fn stringToFunction(self: *Context, str: []const u8) !js.Function {
     }
     const full = try std.fmt.allocPrintSentinel(self.call_arena, "(function(e) {{ {s}{s} }})", .{ normalized, extra }, 0);
 
-    const v8_context = self.v8_context;
-    const script = try compileScript(self.isolate, v8_context, full, null);
-    const js_value = script.run(v8_context) catch {
-        return error.ExecutionError;
-    };
+    const js_value = try self.compileAndRun(full, null);
     if (!js_value.isFunction()) {
         return error.StringFunctionError;
     }
-    return self.createFunction(js_value);
+    return self.newFunction(js_value);
 }
 
 // After we compile a module, whether it's a top-level one, or a nested one,
 // we always want to track its identity (so that, if this module imports other
 // modules, we can resolve the full URL), and preload any dependent modules.
-fn postCompileModule(self: *Context, mod: v8.Module, url: [:0]const u8) !void {
+fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8) !void {
     try self.module_identifier.putNoClobber(self.arena, mod.getIdentityHash(), url);
-
-    const v8_context = self.v8_context;
 
     // Non-async modules are blocking. We can download them in parallel, but
     // they need to be processed serially. So we want to get the list of
     // dependent modules this module has and start downloading them asap.
     const requests = mod.getModuleRequests();
+    const request_len = requests.len();
     const script_manager = self.script_manager.?;
-    for (0..requests.length()) |i| {
-        const req = requests.get(v8_context, @intCast(i)).castTo(v8.ModuleRequest);
-        const specifier = try self.jsStringToZigZ(req.getSpecifier(), .{});
+    for (0..request_len) |i| {
+        const specifier = try self.jsStringToZigZ(requests.get(i).specifier(), .{});
         const normalized_specifier = try script_manager.resolveSpecifier(
             self.call_arena,
             url,
@@ -359,67 +311,79 @@ fn postCompileModule(self: *Context, mod: v8.Module, url: [:0]const u8) !void {
 }
 
 // == Creators ==
-pub fn createArray(self: *Context, len: u32) js.Object {
-    const arr = v8.Array.init(self.isolate, len);
-    return .{
-        .context = self,
-        .js_obj = arr.castTo(v8.Object),
-    };
-}
-
-pub fn createException(self: *const Context, e: v8.Value) js.Exception {
-    return .{
-        .inner = e,
-        .context = self,
-    };
-}
-
-// Wrap a v8.Value, largely so that we can provide a convenient
-// toString function
-pub fn createValue(self: *Context, value: v8.Value) js.Value {
-    return .{
-        .js_val = value,
-        .context = self,
-    };
-}
-
-pub fn createObject(self: *Context, js_value: v8.Value) js.Object {
-    return .{
-        .js_obj = js_value.castTo(v8.Object),
-        .context = self,
-    };
-}
-
-pub fn createFunction(self: *Context, js_value: v8.Value) !js.Function {
+pub fn newFunction(self: *Context, js_value: js.Value) !js.Function {
     // caller should have made sure this was a function
-    std.debug.assert(js_value.isFunction());
-
-    const func = v8.Persistent(v8.Function).init(self.isolate, js_value.castTo(v8.Function));
-    try self.trackCallback(func);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(js_value.isFunction());
+    }
 
     return .{
-        .func = func,
-        .context = self,
-        .id = js_value.castTo(v8.Object).getIdentityHash(),
+        .ctx = self,
+        .handle = @ptrCast(js_value.handle),
+    };
+}
+
+pub fn newString(self: *Context, str: []const u8) js.String {
+    return .{
+        .ctx = self,
+        .handle = self.isolate.initStringHandle(str),
+    };
+}
+
+pub fn newObject(self: *Context) js.Object {
+    return .{
+        .ctx = self,
+        .handle = v8.v8__Object__New(self.isolate.handle).?,
+    };
+}
+
+pub fn newArray(self: *Context, len: u32) js.Array {
+    return .{
+        .ctx = self,
+        .handle = v8.v8__Array__New(self.isolate.handle, @intCast(len)).?,
+    };
+}
+
+fn newFunctionWithData(self: *Context, comptime callback: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void, data: *anyopaque) js.Function {
+    const external = self.isolate.createExternal(data);
+    const handle = v8.v8__Function__New__DEFAULT2(self.handle, callback, @ptrCast(external)).?;
+    return .{
+        .ctx = self,
+        .handle = handle,
+    };
+}
+
+pub fn parseJSON(self: *Context, json: []const u8) !js.Value {
+    const string_handle = self.isolate.initStringHandle(json);
+    const value_handle = v8.v8__JSON__Parse(self.handle, string_handle) orelse return error.JsException;
+    return .{
+        .ctx = self,
+        .handle = value_handle,
     };
 }
 
 pub fn throw(self: *Context, err: []const u8) js.Exception {
-    const js_value = js._createException(self.isolate, err);
-    return self.createException(js_value);
+    const handle = self.isolate.createError(err);
+    return .{
+        .ctx = self,
+        .handle = handle,
+    };
 }
 
-pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOpts) !v8.Value {
+pub fn debugContextId(self: *const Context) i32 {
+    return v8.v8__Context__DebugContextId(self.handle);
+}
+
+pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOpts) !js.Value {
     const isolate = self.isolate;
 
     // Check if it's a "simple" type. This is extracted so that it can be
     // reused by other parts of the code. "simple" types only require an
     // isolate to create (specifically, they don't our templates array)
-    if (js.simpleZigValueToJs(isolate, value, false, opts.null_as_undefined)) |js_value| {
-        return js_value;
+    if (js.simpleZigValueToJs(isolate, value, false, opts.null_as_undefined)) |js_value_handle| {
+        return .{ .ctx = self, .handle = js_value_handle };
     }
 
-    const v8_context = self.v8_context;
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .void, .bool, .int, .comptime_int, .float, .comptime_float, .@"enum", .null => {
@@ -428,15 +392,13 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             unreachable;
         },
         .array => {
-            var js_arr = v8.Array.init(isolate, value.len);
-            var js_obj = js_arr.castTo(v8.Object);
+            var js_arr = self.newArray(value.len);
             for (value, 0..) |v, i| {
-                const js_val = try self.zigValueToJs(v, opts);
-                if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
+                if (try js_arr.set(@intCast(i), v, opts) == false) {
                     return error.FailedToCreateArray;
                 }
             }
-            return js_obj.toValue();
+            return js_arr.toValue();
         },
         .pointer => |ptr| switch (ptr.size) {
             .one => {
@@ -467,16 +429,13 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
                     // have handled it
                     unreachable;
                 }
-                var js_arr = v8.Array.init(isolate, @intCast(value.len));
-                var js_obj = js_arr.castTo(v8.Object);
-
+                var js_arr = self.newArray(@intCast(value.len));
                 for (value, 0..) |v, i| {
-                    const js_val = try self.zigValueToJs(v, opts);
-                    if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
+                    if (try js_arr.set(@intCast(i), v, opts) == false) {
                         return error.FailedToCreateArray;
                     }
                 }
-                return js_obj.toValue();
+                return js_arr.toValue();
             },
             else => {},
         },
@@ -490,25 +449,28 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
 
             if (T == js.Function) {
                 // we're returning a callback
-                return value.func.toValue();
+                return .{ .ctx = self, .handle = @ptrCast(value.handle) };
             }
 
             if (T == js.Object) {
                 // we're returning a v8.Object
-                return value.js_obj.toValue();
+                return .{ .ctx = self, .handle = @ptrCast(value.handle) };
             }
 
             if (T == js.Value) {
-                return value.js_val;
+                return value;
             }
 
             if (T == js.Promise) {
-                // we're returning a v8.Promise
-                return value.toObject().toValue();
+                return .{ .ctx = self, .handle = @ptrCast(value.handle) };
             }
 
             if (T == js.Exception) {
-                return isolate.throwException(value.inner);
+                return .{ .ctx = self, .handle = isolate.throwException(value.handle) };
+            }
+
+            if (T == js.String) {
+                return .{ .ctx = self, .handle = @ptrCast(value.handle) };
             }
 
             if (@hasDecl(T, "runtimeGenericWrap")) {
@@ -518,23 +480,18 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
 
             if (s.is_tuple) {
                 // return the tuple struct as an array
-                var js_arr = v8.Array.init(isolate, @intCast(s.fields.len));
-                var js_obj = js_arr.castTo(v8.Object);
+                var js_arr = self.newArray(@intCast(s.fields.len));
                 inline for (s.fields, 0..) |f, i| {
-                    const js_val = try self.zigValueToJs(@field(value, f.name), opts);
-                    if (js_obj.setValueAtIndex(v8_context, @intCast(i), js_val) == false) {
+                    if (try js_arr.set(@intCast(i), @field(value, f.name), opts) == false) {
                         return error.FailedToCreateArray;
                     }
                 }
-                return js_obj.toValue();
+                return js_arr.toValue();
             }
 
-            // return the struct as a JS object
-            const js_obj = v8.Object.init(isolate);
+            const js_obj = self.newObject();
             inline for (s.fields) |f| {
-                const js_val = try self.zigValueToJs(@field(value, f.name), opts);
-                const key = v8.String.initUtf8(isolate, f.name);
-                if (!js_obj.setValue(v8_context, key, js_val)) {
+                if (try js_obj.set(f.name, @field(value, f.name), opts) == false) {
                     return error.CreateObjectFailure;
                 }
             }
@@ -542,7 +499,7 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
         },
         .@"union" => |un| {
             if (T == std.json.Value) {
-                return zigJsonToJs(isolate, v8_context, value);
+                return zigJsonToJs(self, value);
             }
             if (un.tag_type) |UnionTagType| {
                 inline for (un.fields) |field| {
@@ -569,20 +526,19 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
 }
 
 // To turn a Zig instance into a v8 object, we need to do a number of things.
-// First, if it's a struct, we need to put it on the heap
+// First, if it's a struct, we need to put it on the heap.
 // Second, if we've already returned this instance, we should return
 // the same object. Hence, our executor maintains a map of Zig objects
-// to v8.PersistentObject (the "identity_map").
+// to v8.Global(js.Object) (the "identity_map").
 // Finally, if this is the first time we've seen this instance, we need to:
 //  1 - get the FunctionTemplate (from our templates slice)
 //  2 - Create the TaggedAnyOpaque so that, if needed, we can do the reverse
 //      (i.e. js -> zig)
-//  3 - Create a v8.PersistentObject (because Zig owns this object, not v8)
+//  3 - Create a v8.Global(js.Object) (because Zig owns this object, not v8)
 //  4 - Store our TaggedAnyOpaque into the persistent object
 //  5 - Update our identity_map (so that, if we return this same instance again,
 //      we can just grab it from the identity_map)
-pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !PersistentObject {
-    const v8_context = self.v8_context;
+pub fn mapZigInstanceToJs(self: *Context, js_obj_handle: ?*const v8.Object, value: anytype) !js.Object {
     const arena = self.arena;
 
     const T = @TypeOf(value);
@@ -591,31 +547,34 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
             // Struct, has to be placed on the heap
             const heap = try arena.create(T);
             heap.* = value;
-            return self.mapZigInstanceToJs(js_obj_, heap);
+            return self.mapZigInstanceToJs(js_obj_handle, heap);
         },
         .pointer => |ptr| {
             const resolved = resolveValue(value);
 
             const gop = try self.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
             if (gop.found_existing) {
-                // we've seen this instance before, return the same
-                // PersistentObject.
-                return gop.value_ptr.*;
+                // we've seen this instance before, return the same object
+                return .{ .ctx = self, .handle = gop.value_ptr.*.local() };
             }
 
             const isolate = self.isolate;
             const JsApi = bridge.Struct(ptr.child).JsApi;
 
-            // Sometimes we're creating a new v8.Object, like when
+            // Sometimes we're creating a new Object, like when
             // we're returning a value from a function. In those cases
             // we have to get the object template, and we can get an object
             // by calling initInstance its InstanceTemplate.
-            // Sometimes though we already have the v8.Objct to bind to
+            // Sometimes though we already have the Object to bind to
             // for example, when we're executing a constructor, v8 has
             // already created the "this" object.
-            const js_obj = js_obj_ orelse blk: {
-                const template = self.templates[resolved.class_id];
-                break :blk template.getInstanceTemplate().initInstance(v8_context);
+            const js_obj = js.Object{
+                .ctx = self,
+                .handle = js_obj_handle orelse blk: {
+                    const function_template_handle = self.templates[resolved.class_id];
+                    const object_template_handle = v8.v8__FunctionTemplate__InstanceTemplate(function_template_handle).?;
+                    break :blk v8.v8__ObjectTemplate__NewInstance(object_template_handle, self.handle).?;
+                },
             };
 
             if (!@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
@@ -633,7 +592,7 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
                 // Skip setting internal field for the global object (Window)
                 // Window accessors get the instance from context.page.window instead
                 if (resolved.class_id != @import("../webapi/Window.zig").JsApi.Meta.class_id) {
-                    js_obj.setInternalField(0, v8.External.init(isolate, tao));
+                    v8.v8__Object__SetInternalField(js_obj.handle, 0, isolate.createExternal(tao));
                 }
             } else {
                 // If the struct is empty, we don't need to do all
@@ -643,15 +602,17 @@ pub fn mapZigInstanceToJs(self: *Context, js_obj_: ?v8.Object, value: anytype) !
                 // the type is empty and can create an empty instance.
             }
 
-            const js_persistent = PersistentObject.init(isolate, js_obj);
-            gop.value_ptr.* = js_persistent;
-            return js_persistent;
+            // dont' use js_obj.persist(), because we don't want to track this in
+            // context.global_objects, we want to track it in context.identity_map.
+            const global = js.Global(js.Object).init(isolate.handle, js_obj.handle);
+            gop.value_ptr.* = global;
+            return .{ .ctx = self, .handle = global.local() };
         },
         else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),
     }
 }
 
-pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
+pub fn jsValueToZig(self: *Context, comptime T: type, js_value: js.Value) !T {
     switch (@typeInfo(T)) {
         .optional => |o| {
             // If type type is a ?js.Value or a ?js.Object, then we want to pass
@@ -671,15 +632,15 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
             // or whether no parameter was passed.
             if (comptime o.child == js.Value) {
                 return js.Value{
-                    .context = self,
-                    .js_val = js_value,
+                    .ctx = self,
+                    .handle = js_value.handle,
                 };
             }
 
             if (comptime o.child == js.Object) {
                 return js.Object{
-                    .context = self,
-                    .js_obj = js_value.castTo(v8.Object),
+                    .ctx = self,
+                    .handle = @ptrCast(js_value.handle),
                 };
             }
 
@@ -689,12 +650,12 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
             return try self.jsValueToZig(o.child, js_value);
         },
         .float => |f| switch (f.bits) {
-            0...32 => return js_value.toF32(self.v8_context),
-            33...64 => return js_value.toF64(self.v8_context),
+            0...32 => return js_value.toF32(),
+            33...64 => return js_value.toF64(),
             else => {},
         },
-        .int => return jsIntToZig(T, js_value, self.v8_context),
-        .bool => return js_value.toBool(self.isolate),
+        .int => return jsIntToZig(T, js_value),
+        .bool => return js_value.toBool(),
         .pointer => |ptr| switch (ptr.size) {
             .one => {
                 if (!js_value.isObject()) {
@@ -702,8 +663,7 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
                 }
                 if (@hasDecl(ptr.child, "JsApi")) {
                     std.debug.assert(bridge.JsApiLookup.has(ptr.child.JsApi));
-                    const js_obj = js_value.castTo(v8.Object);
-                    return typeTaggedAnyOpaque(*ptr.child, js_obj);
+                    return typeTaggedAnyOpaque(*ptr.child, js_value.handle);
                 }
             },
             .slice => {
@@ -726,16 +686,11 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
                 if (!js_value.isArray()) {
                     return error.InvalidArgument;
                 }
-
-                const v8_context = self.v8_context;
-                const js_arr = js_value.castTo(v8.Array);
-                const js_obj = js_arr.castTo(v8.Object);
-
-                // Newer version of V8 appear to have an optimized way
-                // to do this (V8::Array has an iterate method on it)
-                const arr = try self.call_arena.alloc(ptr.child, js_arr.length());
+                const js_arr = js_value.toArray();
+                const arr = try self.call_arena.alloc(ptr.child, js_arr.len());
                 for (arr, 0..) |*a, i| {
-                    a.* = try self.jsValueToZig(ptr.child, try js_obj.getAtIndex(v8_context, @intCast(i)));
+                    const item_value = try js_arr.get(@intCast(i));
+                    a.* = try self.jsValueToZig(ptr.child, item_value);
                 }
                 return arr;
             },
@@ -803,7 +758,7 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
                 return std.meta.stringToEnum(T, try self.valueToString(js_value, .{})) orelse return error.InvalidArgument;
             }
             switch (@typeInfo(e.tag_type)) {
-                .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value, self.v8_context)),
+                .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_value)),
                 else => @compileError("unsupported enum parameter type: " ++ @typeName(T)),
             }
         },
@@ -815,13 +770,13 @@ pub fn jsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !T {
 
 // Extracted so that it can be used in both jsValueToZig and in
 // probeJsValueToZig. Avoids having to duplicate this logic when probing.
-fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
+fn jsValueToStruct(self: *Context, comptime T: type, js_value: js.Value) !?T {
     return switch (T) {
         js.Function => {
             if (!js_value.isFunction()) {
                 return null;
             }
-            return try self.createFunction(js_value);
+            return try self.newFunction(js_value);
         },
         // zig fmt: off
         js.TypedArray(u8), js.TypedArray(u16), js.TypedArray(u32), js.TypedArray(u64),
@@ -837,30 +792,34 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
         // Caller wants an opaque js.Object. Probably a parameter
         // that it needs to pass back into a callback.
         js.Value => js.Value{
-            .js_val = js_value,
-            .context = self,
+            .ctx = self,
+            .handle = js_value.handle,
         },
         // Caller wants an opaque js.Object. Probably a parameter
         // that it needs to pass back into a callback.
-        js.Object => js.Object{
-            .js_obj = js_value.castTo(v8.Object),
-            .context = self,
+        js.Object => {
+            if (!js_value.isObject()) {
+                return null;
+            }
+            return js.Object{
+                .ctx = self,
+                .handle = @ptrCast(js_value.handle),
+            };
         },
         else => {
             if (!js_value.isObject()) {
                 return null;
             }
 
-            const js_obj = js_value.castTo(v8.Object);
-            const v8_context = self.v8_context;
             const isolate = self.isolate;
+            const js_obj = js_value.toObject();
 
             var value: T = undefined;
             inline for (@typeInfo(T).@"struct".fields) |field| {
                 const name = field.name;
-                const key = v8.String.initUtf8(isolate, name);
-                if (js_obj.has(v8_context, key.toValue())) {
-                    @field(value, name) = try self.jsValueToZig(field.type, try js_obj.getValue(v8_context, key));
+                const key = isolate.initStringHandle(name);
+                if (js_obj.has(key)) {
+                    @field(value, name) = try self.jsValueToZig(field.type, try js_obj.get(key));
                 } else if (@typeInfo(field.type) == .optional) {
                     @field(value, name) = null;
                 } else {
@@ -874,34 +833,33 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: v8.Value) !?T {
     };
 }
 
-fn jsValueToTypedArray(_: *Context, comptime T: type, js_value: v8.Value) !?[]T {
+fn jsValueToTypedArray(_: *Context, comptime T: type, js_value: js.Value) !?[]T {
     var force_u8 = false;
-    var array_buffer: ?v8.ArrayBuffer = null;
+    var array_buffer: ?*const v8.ArrayBuffer = null;
     var byte_len: usize = undefined;
     var byte_offset: usize = undefined;
 
     if (js_value.isTypedArray()) {
-        const buffer_view = js_value.castTo(v8.ArrayBufferView);
-        byte_len = buffer_view.getByteLength();
-        byte_offset = buffer_view.getByteOffset();
-        array_buffer = buffer_view.getBuffer();
+        const buffer_handle: *const v8.ArrayBufferView = @ptrCast(js_value.handle);
+        byte_len = v8.v8__ArrayBufferView__ByteLength(buffer_handle);
+        byte_offset = v8.v8__ArrayBufferView__ByteOffset(buffer_handle);
+        array_buffer = v8.v8__ArrayBufferView__Buffer(buffer_handle).?;
     } else if (js_value.isArrayBufferView()) {
         force_u8 = true;
-        const buffer_view = js_value.castTo(v8.ArrayBufferView);
-        byte_len = buffer_view.getByteLength();
-        byte_offset = buffer_view.getByteOffset();
-        array_buffer = buffer_view.getBuffer();
+        const buffer_handle: *const v8.ArrayBufferView = @ptrCast(js_value.handle);
+        byte_len = v8.v8__ArrayBufferView__ByteLength(buffer_handle);
+        byte_offset = v8.v8__ArrayBufferView__ByteOffset(buffer_handle);
+        array_buffer = v8.v8__ArrayBufferView__Buffer(buffer_handle).?;
     } else if (js_value.isArrayBuffer()) {
         force_u8 = true;
-        array_buffer = js_value.castTo(v8.ArrayBuffer);
-        byte_len = array_buffer.?.getByteLength();
+        array_buffer = @ptrCast(js_value.handle);
+        byte_len = v8.v8__ArrayBuffer__ByteLength(array_buffer);
         byte_offset = 0;
     }
 
-    const buffer = array_buffer orelse return null;
-
-    const backing_store = v8.BackingStore.sharedPtrGet(&buffer.getBackingStore());
-    const data = backing_store.getData();
+    const backing_store_ptr = v8.v8__ArrayBuffer__GetBackingStore(array_buffer orelse return null);
+    const backing_store_handle = v8.std__shared_ptr__v8__BackingStore__get(&backing_store_ptr).?;
+    const data = v8.v8__BackingStore__Data(backing_store_handle);
 
     switch (T) {
         u8 => {
@@ -1011,58 +969,54 @@ fn resolveT(comptime T: type, value: *anyopaque) Resolved {
 }
 
 // == Stringifiers ==
-const valueToStringOpts = struct {
-    allocator: ?Allocator = null,
-};
-pub fn valueToString(self: *const Context, js_val: v8.Value, opts: valueToStringOpts) ![]u8 {
-    const allocator = opts.allocator orelse self.call_arena;
-    if (js_val.isSymbol()) {
-        const js_sym = v8.Symbol{ .handle = js_val.handle };
-        const js_sym_desc = js_sym.getDescription(self.isolate);
-        return self.valueToString(js_sym_desc, .{});
-    }
-    const str = try js_val.toString(self.v8_context);
-    return self.jsStringToZig(str, .{ .allocator = allocator });
+pub fn valueToString(self: *Context, js_val: js.Value, opts: ToStringOpts) ![]u8 {
+    return self._valueToString(false, js_val, opts);
 }
 
-pub fn valueToStringZ(self: *const Context, js_val: v8.Value, opts: valueToStringOpts) ![:0]u8 {
-    const allocator = opts.allocator orelse self.call_arena;
-    if (js_val.isSymbol()) {
-        const js_sym = v8.Symbol{ .handle = js_val.handle };
-        const js_sym_desc = js_sym.getDescription(self.isolate);
-        return self.valueToStringZ(js_sym_desc, .{});
-    }
-    const str = try js_val.toString(self.v8_context);
-    return self.jsStringToZigZ(str, .{ .allocator = allocator });
+pub fn valueToStringZ(self: *Context, js_val: js.Value, opts: ToStringOpts) ![:0]u8 {
+    return self._valueToString(true, js_val, opts);
 }
 
-const JsStringToZigOpts = struct {
+fn _valueToString(self: *Context, comptime null_terminate: bool, js_val: js.Value, opts: ToStringOpts) !(if (null_terminate) [:0]u8 else []u8) {
+    if (js_val.isSymbol()) {
+        const symbol_handle = v8.v8__Symbol__Description(@ptrCast(js_val.handle), self.isolate.handle).?;
+        return self._valueToString(null_terminate, .{ .ctx = self, .handle = symbol_handle }, opts);
+    }
+
+    const string_handle = v8.v8__Value__ToString(js_val.handle, self.handle) orelse {
+        return error.JsException;
+    };
+
+    return self._jsStringToZig(null_terminate, string_handle, opts);
+}
+
+const ToStringOpts = struct {
     allocator: ?Allocator = null,
 };
-pub fn jsStringToZig(self: *const Context, str: v8.String, opts: JsStringToZigOpts) ![]u8 {
+pub fn jsStringToZig(self: *const Context, str: anytype, opts: ToStringOpts) ![]u8 {
+    return self._jsStringToZig(false, str, opts);
+}
+pub fn jsStringToZigZ(self: *const Context, str: anytype, opts: ToStringOpts) ![:0]u8 {
+    return self._jsStringToZig(true, str, opts);
+}
+fn _jsStringToZig(self: *const Context, comptime null_terminate: bool, str: anytype, opts: ToStringOpts) !(if (null_terminate) [:0]u8 else []u8) {
+    const handle = if (@TypeOf(str) == js.String) str.handle else str;
+
+    const len = v8.v8__String__Utf8Length(handle, self.isolate.handle);
     const allocator = opts.allocator orelse self.call_arena;
-    const len = str.lenUtf8(self.isolate);
-    const buf = try allocator.alloc(u8, len);
-    const n = str.writeUtf8(self.isolate, buf);
+    const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(len), 0) else allocator.alloc(u8, @intCast(len)));
+    const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
     std.debug.assert(n == len);
+
     return buf;
 }
 
-pub fn jsStringToZigZ(self: *const Context, str: v8.String, opts: JsStringToZigOpts) ![:0]u8 {
-    const allocator = opts.allocator orelse self.call_arena;
-    const len = str.lenUtf8(self.isolate);
-    const buf = try allocator.allocSentinel(u8, len, 0);
-    const n = str.writeUtf8(self.isolate, buf);
-    std.debug.assert(n == len);
-    return buf;
-}
-
-pub fn debugValue(self: *const Context, js_val: v8.Value, writer: *std.Io.Writer) !void {
+pub fn debugValue(self: *Context, js_val: js.Value, writer: *std.Io.Writer) !void {
     var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
     return _debugValue(self, js_val, &seen, 0, writer) catch error.WriteFailed;
 }
 
-fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnmanaged(u32, void), depth: usize, writer: *std.Io.Writer) !void {
+fn _debugValue(self: *Context, js_val: js.Value, seen: *std.AutoHashMapUnmanaged(u32, void), depth: usize, writer: *std.Io.Writer) !void {
     if (js_val.isNull()) {
         // I think null can sometimes appear as an object, so check this and
         // handle it first.
@@ -1083,12 +1037,11 @@ fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnm
         }
 
         if (js_val.isSymbol()) {
-            const js_sym = v8.Symbol{ .handle = js_val.handle };
-            const js_sym_desc = js_sym.getDescription(self.isolate);
-            const js_sym_str = try self.valueToString(js_sym_desc, .{});
+            const symbol_handle = v8.v8__Symbol__Description(@ptrCast(js_val.handle), self.isolate.handle).?;
+            const js_sym_str = try self.valueToString(.{ .ctx = self, .handle = symbol_handle }, .{});
             return writer.print("{s} (symbol)", .{js_sym_str});
         }
-        const js_type = try self.jsStringToZig(try js_val.typeOf(self.isolate), .{});
+        const js_type = try self.jsStringToZig(js_val.typeOf(), .{});
         const js_val_str = try self.valueToString(js_val, .{});
         if (js_val_str.len > 2000) {
             try writer.writeAll(js_val_str[0..2000]);
@@ -1099,25 +1052,23 @@ fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnm
         return writer.print(" ({s})", .{js_type});
     }
 
-    const js_obj = js_val.castTo(v8.Object);
+    const js_obj = js_val.toObject();
     {
         // explicit scope because gop will become invalid in recursive call
-        const gop = try seen.getOrPut(self.call_arena, js_obj.getIdentityHash());
+        const gop = try seen.getOrPut(self.call_arena, js_obj.getId());
         if (gop.found_existing) {
             return writer.writeAll("<circular>\n");
         }
         gop.value_ptr.* = {};
     }
 
-    const v8_context = self.v8_context;
-    const names_arr = js_obj.getOwnPropertyNames(v8_context);
-    const names_obj = names_arr.castTo(v8.Object);
-    const len = names_arr.length();
+    const names_arr = js_obj.getOwnPropertyNames();
+    const len = names_arr.len();
 
     if (depth > 20) {
         return writer.writeAll("...deeply nested object...");
     }
-    const own_len = js_obj.getOwnPropertyNames(v8_context).length();
+    const own_len = js_obj.getOwnPropertyNames().len();
     if (own_len == 0) {
         const js_val_str = try self.valueToString(js_val, .{});
         if (js_val_str.len > 2000) {
@@ -1127,18 +1078,19 @@ fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnm
         return writer.writeAll(js_val_str);
     }
 
-    const all_len = js_obj.getPropertyNames(v8_context).length();
+    const all_len = js_obj.getPropertyNames().len();
     try writer.print("({d}/{d})", .{ own_len, all_len });
     for (0..len) |i| {
         if (i == 0) {
             try writer.writeByte('\n');
         }
-        const field_name = try names_obj.getAtIndex(v8_context, @intCast(i));
+        const field_name = try names_arr.get(@intCast(i));
         const name = try self.valueToString(field_name, .{});
         try writer.splatByteAll(' ', depth);
         try writer.writeAll(name);
         try writer.writeAll(": ");
-        try self._debugValue(try js_obj.getValue(v8_context, field_name), seen, depth + 1, writer);
+        const field_val = try js_obj.get(name);
+        try self._debugValue(field_val, seen, depth + 1, writer);
         if (i != len - 1) {
             try writer.writeByte('\n');
         }
@@ -1146,30 +1098,30 @@ fn _debugValue(self: *const Context, js_val: v8.Value, seen: *std.AutoHashMapUnm
 }
 
 pub fn stackTrace(self: *const Context) !?[]const u8 {
-    if (comptime @import("builtin").mode != .Debug) {
+    if (comptime !IS_DEBUG) {
         return "not available";
     }
 
     const isolate = self.isolate;
     const separator = log.separator();
 
-    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    var buf: std.ArrayList(u8) = .empty;
     var writer = buf.writer(self.call_arena);
 
-    const stack_trace = v8.StackTrace.getCurrentStackTrace(isolate, 30);
-    const frame_count = stack_trace.getFrameCount();
+    const stack_trace_handle = v8.v8__StackTrace__CurrentStackTrace__STATIC(isolate.handle, 30).?;
+    const frame_count = v8.v8__StackTrace__GetFrameCount(stack_trace_handle);
 
-    if (v8.StackTrace.getCurrentScriptNameOrSourceUrl(isolate)) |script| {
+    if (v8.v8__StackTrace__CurrentScriptNameOrSourceURL__STATIC(isolate.handle)) |script| {
         try writer.print("{s}<{s}>", .{ separator, try self.jsStringToZig(script, .{}) });
     }
 
-    for (0..frame_count) |i| {
-        const frame = stack_trace.getFrame(isolate, @intCast(i));
-        if (frame.getScriptName()) |name| {
+    for (0..@intCast(frame_count)) |i| {
+        const frame_handle = v8.v8__StackTrace__GetFrame(stack_trace_handle, isolate.handle, @intCast(i)).?;
+        if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |name| {
             const script = try self.jsStringToZig(name, .{});
-            try writer.print("{s}{s}:{d}", .{ separator, script, frame.getLineNumber() });
+            try writer.print("{s}{s}:{d}", .{ separator, script, v8.v8__StackFrame__GetLineNumber(frame_handle) });
         } else {
-            try writer.print("{s}<anonymous>:{d}", .{ separator, frame.getLineNumber() });
+            try writer.print("{s}<anonymous>:{d}", .{ separator, v8.v8__StackFrame__GetLineNumber(frame_handle) });
         }
     }
     return buf.items;
@@ -1177,82 +1129,43 @@ pub fn stackTrace(self: *const Context) !?[]const u8 {
 
 // == Promise Helpers ==
 pub fn rejectPromise(self: *Context, value: anytype) !js.Promise {
-    const ctx = self.v8_context;
-    var resolver = v8.PromiseResolver.init(ctx);
-    const js_value = try self.zigValueToJs(value, .{});
-    if (resolver.reject(ctx, js_value) == null) {
-        return error.FailedToResolvePromise;
-    }
-    self.runMicrotasks();
-    return resolver.getPromise();
+    var resolver = js.PromiseResolver.init(self);
+    resolver.reject("Context.rejectPromise", value);
+    return resolver.promise();
 }
 
 pub fn resolvePromise(self: *Context, value: anytype) !js.Promise {
-    const ctx = self.v8_context;
-    const js_value = try self.zigValueToJs(value, .{});
-
-    var resolver = v8.PromiseResolver.init(ctx);
-    if (resolver.resolve(ctx, js_value) == null) {
-        return error.FailedToResolvePromise;
-    }
-    self.runMicrotasks();
-    return resolver.getPromise();
+    var resolver = js.PromiseResolver.init(self);
+    resolver.resolve("Context.resolvePromise", value);
+    return resolver.promise();
 }
 
 pub fn runMicrotasks(self: *Context) void {
     self.isolate.performMicrotasksCheckpoint();
 }
 
-// creates a PersistentPromiseResolver, taking in a lifetime parameter.
-// If the lifetime is page, the page will clean up the PersistentPromiseResolver.
-// If the lifetime is self, you will be expected to deinitalize the PersistentPromiseResolver.
-const PromiseResolverLifetime = enum {
-    none,
-    self, // it's a persisted promise, but it'll be managed by the caller
-    page, // it's a persisted promise, tied to the page lifetime
-};
-fn PromiseResolverType(comptime lifetime: PromiseResolverLifetime) type {
-    if (lifetime == .none) {
-        return js.PromiseResolver;
-    }
-    return error{OutOfMemory}!js.PersistentPromiseResolver;
-}
-pub fn createPromiseResolver(self: *Context, comptime lifetime: PromiseResolverLifetime) PromiseResolverType(lifetime) {
-    const resolver = v8.PromiseResolver.init(self.v8_context);
-    if (comptime lifetime == .none) {
-        return .{ .context = self, .resolver = resolver };
-    }
-
-    const persisted = v8.Persistent(v8.PromiseResolver).init(self.isolate, resolver);
-
-    if (comptime lifetime == .page) {
-        try self.persisted_promise_resolvers.append(self.arena, persisted);
-    }
-
-    return .{
-        .context = self,
-        .resolver = persisted,
-    };
+pub fn createPromiseResolver(self: *Context) js.PromiseResolver {
+    return js.PromiseResolver.init(self);
 }
 
 // == Callbacks ==
 // Callback from V8, asking us to load a module. The "specifier" is
 // the src of the module to load.
 fn resolveModuleCallback(
-    c_context: ?*const v8.C_Context,
-    c_specifier: ?*const v8.C_String,
-    import_attributes: ?*const v8.C_FixedArray,
-    c_referrer: ?*const v8.C_Module,
-) callconv(.c) ?*const v8.C_Module {
+    c_context: ?*const v8.Context,
+    c_specifier: ?*const v8.String,
+    import_attributes: ?*const v8.FixedArray,
+    c_referrer: ?*const v8.Module,
+) callconv(.c) ?*const v8.Module {
     _ = import_attributes;
 
     const self = fromC(c_context.?);
 
-    const specifier = self.jsStringToZigZ(.{ .handle = c_specifier.? }, .{}) catch |err| {
+    const specifier = self.jsStringToZigZ(c_specifier.?, .{}) catch |err| {
         log.err(.js, "resolve module", .{ .err = err });
         return null;
     };
-    const referrer = v8.Module{ .handle = c_referrer.? };
+    const referrer = js.Module{ .ctx = self, .handle = c_referrer.? };
 
     return self._resolveModuleCallback(referrer, specifier) catch |err| {
         log.err(.js, "resolve module", .{
@@ -1264,23 +1177,23 @@ fn resolveModuleCallback(
 }
 
 pub fn dynamicModuleCallback(
-    c_context: ?*const v8.c.Context,
-    host_defined_options: ?*const v8.c.Data,
-    resource_name: ?*const v8.c.Value,
-    v8_specifier: ?*const v8.c.String,
-    import_attrs: ?*const v8.c.FixedArray,
-) callconv(.c) ?*v8.c.Promise {
+    c_context: ?*const v8.Context,
+    host_defined_options: ?*const v8.Data,
+    resource_name: ?*const v8.Value,
+    v8_specifier: ?*const v8.String,
+    import_attrs: ?*const v8.FixedArray,
+) callconv(.c) ?*v8.Promise {
     _ = host_defined_options;
     _ = import_attrs;
 
     const self = fromC(c_context.?);
 
-    const resource = self.jsStringToZigZ(.{ .handle = resource_name.? }, .{}) catch |err| {
+    const resource = self.jsStringToZigZ(resource_name.?, .{}) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
         return @constCast((self.rejectPromise("Out of memory") catch return null).handle);
     };
 
-    const specifier = self.jsStringToZigZ(.{ .handle = v8_specifier.? }, .{}) catch |err| {
+    const specifier = self.jsStringToZigZ(v8_specifier.?, .{}) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback2" });
         return @constCast((self.rejectPromise("Out of memory") catch return null).handle);
     };
@@ -1303,10 +1216,10 @@ pub fn dynamicModuleCallback(
     return @constCast(promise.handle);
 }
 
-pub fn metaObjectCallback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_meta: ?*v8.C_Value) callconv(.c) void {
+pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta: ?*v8.Value) callconv(.c) void {
     const self = fromC(c_context.?);
-    const m = v8.Module{ .handle = c_module.? };
-    const meta = v8.Object{ .handle = c_meta.? };
+    const m = js.Module{ .ctx = self, .handle = c_module.? };
+    const meta = js.Object{ .ctx = self, .handle = @ptrCast(c_meta.?) };
 
     const url = self.module_identifier.get(m.getIdentityHash()) orelse {
         // Shouldn't be possible.
@@ -1314,15 +1227,17 @@ pub fn metaObjectCallback(c_context: ?*v8.C_Context, c_module: ?*v8.C_Module, c_
         return;
     };
 
-    const js_key = v8.String.initUtf8(self.isolate, "url");
-    const js_value = try self.zigValueToJs(url, .{});
-    const res = meta.defineOwnProperty(self.v8_context, js_key.toName(), js_value, 0) orelse false;
+    const js_value = self.zigValueToJs(url, .{}) catch {
+        log.err(.js, "import meta", .{ .err = error.FailedToConvertUrl });
+        return;
+    };
+    const res = meta.defineOwnProperty("url", js_value, 0) orelse false;
     if (!res) {
         log.err(.js, "import meta", .{ .err = error.FailedToSet });
     }
 }
 
-fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: [:0]const u8) !?*const v8.C_Module {
+fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]const u8) !?*const v8.Module {
     const referrer_path = self.module_identifier.get(referrer.getIdentityHash()) orelse {
         // Shouldn't be possible.
         return error.UnknownModuleReferrer;
@@ -1336,7 +1251,7 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: [:0]co
 
     const entry = self.module_cache.getPtr(normalized_specifier).?;
     if (entry.module) |m| {
-        return m.castToModule().handle;
+        return m.handle;
     }
 
     var source = try self.script_manager.?.waitForImport(normalized_specifier);
@@ -1346,10 +1261,10 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: [:0]co
     try_catch.init(self);
     defer try_catch.deinit();
 
-    const mod = try compileModule(self.isolate, source.src(), normalized_specifier);
+    const mod = try self.compileModule(source.src(), normalized_specifier);
     try self.postCompileModule(mod, normalized_specifier);
-    entry.module = PersistentModule.init(self.isolate, mod);
-    return entry.module.?.castToModule().handle;
+    entry.module = try mod.persist();
+    return entry.module.?.handle;
 }
 
 // Will get passed to ScriptManager and then passed back to us when
@@ -1357,27 +1272,23 @@ fn _resolveModuleCallback(self: *Context, referrer: v8.Module, specifier: [:0]co
 const DynamicModuleResolveState = struct {
     // The module that we're resolving (we'll actually resolve its
     // namespace)
-    module: ?v8.Module,
+    module: ?js.Module,
     context_id: usize,
     context: *Context,
     specifier: [:0]const u8,
-    resolver: v8.Persistent(v8.PromiseResolver),
+    resolver: js.PromiseResolver,
 };
 
-fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8) !v8.Promise {
-    const isolate = self.isolate;
+fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8) !js.Promise {
     const gop = try self.module_cache.getOrPut(self.arena, specifier);
     if (gop.found_existing and gop.value_ptr.resolver_promise != null) {
         // This is easy, there's already something responsible
         // for loading the module. Maybe it's still loading, maybe
         // it's complete. Whatever, we can just return that promise.
-        return gop.value_ptr.resolver_promise.?.castToPromise();
+        return gop.value_ptr.resolver_promise.?;
     }
 
-    const persistent_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
-    try self.persisted_promise_resolvers.append(self.arena, persistent_resolver);
-    var resolver = persistent_resolver.castToPromiseResolver();
-
+    const resolver = try self.createPromiseResolver().persist();
     const state = try self.arena.create(DynamicModuleResolveState);
 
     state.* = .{
@@ -1385,11 +1296,10 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         .context = self,
         .specifier = specifier,
         .context_id = self.id,
-        .resolver = persistent_resolver,
+        .resolver = resolver,
     };
 
-    const persisted_promise = PersistentPromise.init(self.isolate, resolver.getPromise());
-    const promise = persisted_promise.castToPromise();
+    const promise = try resolver.promise().persist();
 
     if (!gop.found_existing) {
         // this module hasn't been seen before. This is the most
@@ -1401,13 +1311,13 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         gop.value_ptr.* = ModuleEntry{
             .module = null,
             .module_promise = null,
-            .resolver_promise = persisted_promise,
+            .resolver_promise = promise,
         };
 
         // Next, we need to actually load it.
         self.script_manager.?.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
-            const error_msg = v8.String.initUtf8(isolate, @errorName(err));
-            _ = resolver.reject(self.v8_context, error_msg.toValue());
+            const error_msg = self.newString(@errorName(err));
+            _ = resolver.reject("dynamic module get async", error_msg);
         };
 
         // For now, we're done. but this will be continued in
@@ -1429,33 +1339,30 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // If the module hasn't been evaluated yet (it was only instantiated
     // as a static import dependency), we need to evaluate it now.
     if (gop.value_ptr.module_promise == null) {
-        const mod = gop.value_ptr.module.?.castToModule();
+        const mod = gop.value_ptr.module.?;
         const status = mod.getStatus();
         if (status == .kEvaluated or status == .kEvaluating) {
             // Module was already evaluated (shouldn't normally happen, but handle it).
             // Create a pre-resolved promise with the module namespace.
-            const persisted_module_resolver = v8.Persistent(v8.PromiseResolver).init(isolate, v8.PromiseResolver.init(self.v8_context));
-            try self.persisted_promise_resolvers.append(self.arena, persisted_module_resolver);
-            var module_resolver = persisted_module_resolver.castToPromiseResolver();
-            _ = module_resolver.resolve(self.v8_context, mod.getModuleNamespace());
-            gop.value_ptr.module_promise = PersistentPromise.init(self.isolate, module_resolver.getPromise());
+            const module_resolver = try self.createPromiseResolver().persist();
+            _ = module_resolver.resolve("resolve module", mod.getModuleNamespace());
+            gop.value_ptr.module_promise = try module_resolver.promise().persist();
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
-            const evaluated = mod.evaluate(self.v8_context) catch {
+            const evaluated = mod.evaluate() catch {
                 std.debug.assert(status == .kErrored);
-                const error_msg = v8.String.initUtf8(isolate, "Module evaluation failed");
-                _ = resolver.reject(self.v8_context, error_msg.toValue());
+                _ = resolver.reject("module evaluation", self.newString("Module evaluation failed"));
                 return promise;
             };
             std.debug.assert(evaluated.isPromise());
-            gop.value_ptr.module_promise = PersistentPromise.init(self.isolate, .{ .handle = evaluated.handle });
+            gop.value_ptr.module_promise = try evaluated.toPromise().persist();
         }
     }
 
     // like before, we want to set this up so that if anything else
     // tries to load this module, it can just return our promise
     // since we're going to be doing all the work.
-    gop.value_ptr.resolver_promise = persisted_promise;
+    gop.value_ptr.resolver_promise = promise;
 
     // But we can skip direclty to `resolveDynamicModule` which is
     // what the above callback will eventually do.
@@ -1468,8 +1375,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
     var self = state.context;
 
     var ms = module_source_ catch |err| {
-        const error_msg = v8.String.initUtf8(self.isolate, @errorName(err));
-        _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
+        _ = state.resolver.reject("dynamic module source", self.newString(@errorName(err)));
         return;
     };
 
@@ -1488,8 +1394,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
                 .stack = try_catch.stack(self.call_arena) catch null,
                 .line = try_catch.sourceLineNumber() orelse 0,
             });
-            const error_msg = v8.String.initUtf8(self.isolate, ex);
-            _ = state.resolver.castToPromiseResolver().reject(self.v8_context, error_msg.toValue());
+            _ = state.resolver.reject("dynamic compilation failure", self.newString(ex));
             return;
         };
     };
@@ -1499,16 +1404,13 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
 
 fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, module_entry: ModuleEntry) void {
     defer self.runMicrotasks();
-    const ctx = self.v8_context;
-    const isolate = self.isolate;
-    const external = v8.External.init(self.isolate, @ptrCast(state));
 
     // we can only be here if the module has been evaluated and if
     // we have a resolve loading this asynchronously.
     std.debug.assert(module_entry.module_promise != null);
     std.debug.assert(module_entry.resolver_promise != null);
     std.debug.assert(self.module_cache.contains(state.specifier));
-    state.module = module_entry.module.?.castToModule();
+    state.module = module_entry.module.?;
 
     // We've gotten the source for the module and are evaluating it.
     // You might think we're done, but the module evaluation is
@@ -1517,13 +1419,14 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
     // last value of the module. But, for module loading, we need to
     // resolve to the module's namespace.
 
-    const then_callback = v8.Function.initWithData(ctx, struct {
-        pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-            var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-            var caller = Caller.init(info);
+    const then_callback = self.newFunctionWithData(struct {
+        pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+            const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
+            var caller = Caller.init(isolate);
             defer caller.deinit();
 
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
+            const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
 
             if (s.context_id != caller.context.id) {
                 // The microtask is tied to the isolate, not the context
@@ -1536,32 +1439,38 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 
             defer caller.context.runMicrotasks();
             const namespace = s.module.?.getModuleNamespace();
-            _ = s.resolver.castToPromiseResolver().resolve(caller.context.v8_context, namespace);
+            _ = s.resolver.resolve("resolve namespace", namespace);
         }
-    }.callback, external);
+    }.callback, @ptrCast(state));
 
-    const catch_callback = v8.Function.initWithData(ctx, struct {
-        pub fn callback(raw_info: ?*const v8.c.FunctionCallbackInfo) callconv(.c) void {
-            var info = v8.FunctionCallbackInfo.initFromV8(raw_info);
-            var caller = Caller.init(info);
+    const catch_callback = self.newFunctionWithData(struct {
+        pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+            const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
+            var caller = Caller.init(isolate);
             defer caller.deinit();
 
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getExternalValue()));
-            if (s.context_id != caller.context.id) {
+            const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
+
+            const ctx = caller.context;
+            if (s.context_id != ctx.id) {
                 return;
             }
-            defer caller.context.runMicrotasks();
-            _ = s.resolver.castToPromiseResolver().reject(caller.context.v8_context, info.getData());
-        }
-    }.callback, external);
 
-    _ = module_entry.module_promise.?.castToPromise().thenAndCatch(ctx, then_callback, catch_callback) catch |err| {
+            defer ctx.runMicrotasks();
+            _ = s.resolver.reject("catch callback", js.Value{
+                .ctx = ctx,
+                .handle = v8.v8__FunctionCallbackInfo__Data(callback_handle).?,
+            });
+        }
+    }.callback, @ptrCast(state));
+
+    _ = module_entry.module_promise.?.thenAndCatch(then_callback, catch_callback) catch |err| {
         log.err(.js, "module evaluation is promise", .{
             .err = err,
             .specifier = state.specifier,
         });
-        const error_msg = v8.String.initUtf8(isolate, "Failed to evaluate promise");
-        _ = state.resolver.castToPromiseResolver().reject(ctx, error_msg.toValue());
+        _ = state.resolver.reject("module promise", self.newString("Failed to evaluate promise"));
     };
 }
 
@@ -1569,7 +1478,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 
 // Reverses the mapZigInstanceToJs, making sure that our TaggedAnyOpaque
 // contains a ptr to the correct type.
-pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
+pub fn typeTaggedAnyOpaque(comptime R: type, js_obj_handle: *const v8.Object) !R {
     const ti = @typeInfo(R);
     if (ti != .pointer) {
         @compileError("non-pointer Zig parameter type: " ++ @typeName(R));
@@ -1585,14 +1494,15 @@ pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
         return @constCast(@as(*const T, &.{}));
     }
 
+    const internal_field_count = v8.v8__Object__InternalFieldCount(js_obj_handle);
     // Special case for Window: the global object doesn't have internal fields
     // Window instance is stored in context.page.window instead
-    if (js_obj.internalFieldCount() == 0) {
+    if (internal_field_count == 0) {
         // Normally, this would be an error. All JsObject that map to a Zig type
         // are either `empty_with_no_proto` (handled above) or have an
         // interalFieldCount. The only exception to that is the Window...
-        const isolate = js_obj.getIsolate();
-        const context = fromIsolate(isolate);
+        const isolate = v8.v8__Object__GetIsolate(js_obj_handle).?;
+        const context = fromIsolate(.{ .handle = isolate });
 
         const Window = @import("../webapi/Window.zig");
         if (T == Window) {
@@ -1615,7 +1525,7 @@ pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
     // if it isn't an empty struct, then the v8.Object should have an
     // InternalFieldCount > 0, since our toa pointer should be embedded
     // at index 0 of the internal field count.
-    if (js_obj.internalFieldCount() == 0) {
+    if (internal_field_count == 0) {
         return error.InvalidArgument;
     }
 
@@ -1623,8 +1533,8 @@ pub fn typeTaggedAnyOpaque(comptime R: type, js_obj: v8.Object) !R {
         @compileError("unknown Zig type: " ++ @typeName(R));
     }
 
-    const op = js_obj.getInternalField(0).castTo(v8.External).get();
-    const tao: *TaggedAnyOpaque = @ptrCast(@alignCast(op));
+    const internal_field_handle = v8.v8__Object__GetInternalField(js_obj_handle, 0).?;
+    const tao: *TaggedAnyOpaque = @ptrCast(@alignCast(v8.v8__External__Value(internal_field_handle)));
     const expected_type_index = bridge.JsApiLookup.getId(JsApi);
 
     const prototype_chain = tao.prototype_chain[0..tao.prototype_len];
@@ -1681,7 +1591,7 @@ fn ProbeResult(comptime T: type) type {
         invalid: void,
     };
 }
-fn probeJsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !ProbeResult(T) {
+fn probeJsValueToZig(self: *Context, comptime T: type, js_value: js.Value) !ProbeResult(T) {
     switch (@typeInfo(T)) {
         .optional => |o| {
             if (js_value.isNullOrUndefined()) {
@@ -1725,12 +1635,11 @@ fn probeJsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !Prob
                     return .{ .invalid = {} };
                 }
                 if (bridge.JsApiLookup.has(ptr.child.JsApi)) {
-                    const js_obj = js_value.castTo(v8.Object);
                     // There's a bit of overhead in doing this, so instead
                     // of having a version of typeTaggedAnyOpaque which
                     // returns a boolean or an optional, we rely on the
                     // main implementation and just handle the error.
-                    const attempt = typeTaggedAnyOpaque(*ptr.child, js_obj);
+                    const attempt = typeTaggedAnyOpaque(*ptr.child, @ptrCast(js_value.handle));
                     if (attempt) |value| {
                         return .{ .value = value };
                     } else |_| {
@@ -1787,18 +1696,17 @@ fn probeJsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !Prob
                 }
 
                 // This can get tricky.
-                const js_arr = js_value.castTo(v8.Array);
+                const js_arr = js_value.toArray();
 
-                if (js_arr.length() == 0) {
+                if (js_arr.len() == 0) {
                     // not so tricky in this case.
                     return .{ .value = &.{} };
                 }
 
                 // We settle for just probing the first value. Ok, actually
                 // not tricky in this case either.
-                const v8_context = self.v8_context;
-                const js_obj = js_arr.castTo(v8.Object);
-                switch (try self.probeJsValueToZig(ptr.child, try js_obj.getAtIndex(v8_context, 0))) {
+                const first_val = try js_arr.get(0);
+                switch (try self.probeJsValueToZig(ptr.child, first_val)) {
                     .value, .ok => return .{ .ok = {} },
                     .compatible => return .{ .compatible = {} },
                     .coerce => return .{ .coerce = {} },
@@ -1820,12 +1728,12 @@ fn probeJsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !Prob
                 .ok => {
                     // Exact length match, we could allow smaller arrays as .compatible, but we would not be able to communicate how many were written
                     if (js_value.isArray()) {
-                        const js_arr = js_value.castTo(v8.Array);
-                        if (js_arr.length() == arr.len) {
+                        const js_arr = js_value.toArray();
+                        if (js_arr.len() == arr.len) {
                             return .{ .ok = {} };
                         }
                     } else if (js_value.isString() and arr.child == u8) {
-                        const str = try js_value.toString(self.v8_context);
+                        const str = try js_value.toString(self.handle);
                         if (str.lenUtf8(self.isolate) == arr.len) {
                             return .{ .ok = {} };
                         }
@@ -1851,42 +1759,42 @@ fn probeJsValueToZig(self: *Context, comptime T: type, js_value: v8.Value) !Prob
     return .{ .invalid = {} };
 }
 
-fn jsIntToZig(comptime T: type, js_value: v8.Value, v8_context: v8.Context) !T {
+fn jsIntToZig(comptime T: type, js_value: js.Value) !T {
     const n = @typeInfo(T).int;
     switch (n.signedness) {
         .signed => switch (n.bits) {
-            8 => return jsSignedIntToZig(i8, -128, 127, try js_value.toI32(v8_context)),
-            16 => return jsSignedIntToZig(i16, -32_768, 32_767, try js_value.toI32(v8_context)),
-            32 => return jsSignedIntToZig(i32, -2_147_483_648, 2_147_483_647, try js_value.toI32(v8_context)),
+            8 => return jsSignedIntToZig(i8, -128, 127, try js_value.toI32()),
+            16 => return jsSignedIntToZig(i16, -32_768, 32_767, try js_value.toI32()),
+            32 => return jsSignedIntToZig(i32, -2_147_483_648, 2_147_483_647, try js_value.toI32()),
             64 => {
                 if (js_value.isBigInt()) {
-                    const v = js_value.castTo(v8.BigInt);
+                    const v = js_value.toBigInt();
                     return v.getInt64();
                 }
-                return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32(v8_context));
+                return jsSignedIntToZig(i64, -2_147_483_648, 2_147_483_647, try js_value.toI32());
             },
             else => {},
         },
         .unsigned => switch (n.bits) {
-            8 => return jsUnsignedIntToZig(u8, 255, try js_value.toU32(v8_context)),
-            16 => return jsUnsignedIntToZig(u16, 65_535, try js_value.toU32(v8_context)),
+            8 => return jsUnsignedIntToZig(u8, 255, try js_value.toU32()),
+            16 => return jsUnsignedIntToZig(u16, 65_535, try js_value.toU32()),
             32 => {
                 if (js_value.isBigInt()) {
-                    const v = js_value.castTo(v8.BigInt);
+                    const v = js_value.toBigInt();
                     const large = v.getUint64();
                     if (large <= 4_294_967_295) {
                         return @intCast(large);
                     }
                     return error.InvalidArgument;
                 }
-                return jsUnsignedIntToZig(u32, 4_294_967_295, try js_value.toU32(v8_context));
+                return jsUnsignedIntToZig(u32, 4_294_967_295, try js_value.toU32());
             },
             64 => {
                 if (js_value.isBigInt()) {
-                    const v = js_value.castTo(v8.BigInt);
+                    const v = js_value.toBigInt();
                     return v.getUint64();
                 }
-                return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32(v8_context));
+                return jsUnsignedIntToZig(u64, 4_294_967_295, try js_value.toU32());
             },
             else => {},
         },
@@ -1908,32 +1816,37 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
     return error.InvalidArgument;
 }
 
-fn compileScript(isolate: v8.Isolate, ctx: v8.Context, src: []const u8, name: ?[]const u8) !v8.Script {
-    // compile
-    const script_name = v8.String.initUtf8(isolate, name orelse "anonymous");
-    const script_source = v8.String.initUtf8(isolate, src);
+fn compileAndRun(self: *Context, src: []const u8, name: ?[]const u8) !js.Value {
+    const script_name = self.isolate.initStringHandle(name orelse "anonymous");
+    const script_source = self.isolate.initStringHandle(src);
 
-    const origin = v8.ScriptOrigin.initDefault(script_name.toValue());
+    // Create ScriptOrigin
+    var origin: v8.ScriptOrigin = undefined;
+    v8.v8__ScriptOrigin__CONSTRUCT(&origin, @ptrCast(script_name));
 
+    // Create ScriptCompilerSource
     var script_comp_source: v8.ScriptCompilerSource = undefined;
-    v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
-    defer script_comp_source.deinit();
+    v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, null, &script_comp_source);
+    defer v8.v8__ScriptCompiler__Source__DESTRUCT(&script_comp_source);
 
-    return v8.ScriptCompiler.compile(
-        ctx,
+    // Compile the script
+    const v8_script = v8.v8__ScriptCompiler__Compile(
+        self.handle,
         &script_comp_source,
-        .kNoCompileOptions,
-        .kNoCacheNoReason,
-    ) catch return error.CompilationError;
+        v8.kNoCompileOptions,
+        v8.kNoCacheNoReason,
+    ) orelse return error.CompilationError;
+
+    // Run the script
+    const result = v8.v8__Script__Run(v8_script, self.handle) orelse return error.ExecutionError;
+    return .{ .ctx = self, .handle = result };
 }
 
-fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !v8.Module {
-    // compile
-    const script_name = v8.String.initUtf8(isolate, name);
-    const script_source = v8.String.initUtf8(isolate, src);
-
-    const origin = v8.ScriptOrigin.init(
-        script_name.toValue(),
+fn compileModule(self: *Context, src: []const u8, name: []const u8) !js.Module {
+    var origin_handle: v8.ScriptOrigin = undefined;
+    v8.v8__ScriptOrigin__CONSTRUCT2(
+        &origin_handle,
+        self.isolate.initStringHandle(name),
         0, // resource_line_offset
         0, // resource_column_offset
         false, // resource_is_shared_cross_origin
@@ -1945,52 +1858,63 @@ fn compileModule(isolate: v8.Isolate, src: []const u8, name: []const u8) !v8.Mod
         null, // host_defined_options
     );
 
-    var script_comp_source: v8.ScriptCompilerSource = undefined;
-    v8.ScriptCompilerSource.init(&script_comp_source, script_source, origin, null);
-    defer script_comp_source.deinit();
+    var source_handle: v8.ScriptCompilerSource = undefined;
+    v8.v8__ScriptCompiler__Source__CONSTRUCT2(
+        self.isolate.initStringHandle(src),
+        &origin_handle,
+        null, // cached data
+        &source_handle,
+    );
 
-    return v8.ScriptCompiler.compileModule(
-        isolate,
-        &script_comp_source,
-        .kNoCompileOptions,
-        .kNoCacheNoReason,
-    ) catch return error.CompilationError;
+    defer v8.v8__ScriptCompiler__Source__DESTRUCT(&source_handle);
+
+    const module_handle = v8.v8__ScriptCompiler__CompileModule(
+        self.isolate.handle,
+        &source_handle,
+        v8.kNoCompileOptions,
+        v8.kNoCacheNoReason,
+    ) orelse {
+        return error.JsException;
+    };
+
+    return .{
+        .ctx = self,
+        .handle = module_handle,
+    };
 }
 
-fn zigJsonToJs(isolate: v8.Isolate, v8_context: v8.Context, value: std.json.Value) !v8.Value {
+fn zigJsonToJs(self: *Context, value: std.json.Value) !js.Value {
+    const isolate = self.isolate;
+
     switch (value) {
-        .bool => |v| return js.simpleZigValueToJs(isolate, v, true, false),
-        .float => |v| return js.simpleZigValueToJs(isolate, v, true, false),
-        .integer => |v| return js.simpleZigValueToJs(isolate, v, true, false),
-        .string => |v| return js.simpleZigValueToJs(isolate, v, true, false),
-        .null => return isolate.initNull().toValue(),
+        .bool => |v| return .{ .ctx = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
+        .float => |v| return .{ .ctx = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
+        .integer => |v| return .{ .ctx = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
+        .string => |v| return .{ .ctx = self, .handle = js.simpleZigValueToJs(isolate, v, true, false) },
+        .null => return .{ .ctx = self, .handle = isolate.initNull() },
 
         // TODO handle number_string.
         // It is used to represent too big numbers.
         .number_string => return error.TODO,
 
         .array => |v| {
-            const a = v8.Array.init(isolate, @intCast(v.items.len));
-            const obj = a.castTo(v8.Object);
+            const js_arr = self.newArray(@intCast(v.items.len));
             for (v.items, 0..) |array_value, i| {
-                const js_val = try zigJsonToJs(isolate, v8_context, array_value);
-                if (!obj.setValueAtIndex(v8_context, @intCast(i), js_val)) {
+                if (try js_arr.set(@intCast(i), array_value, .{}) == false) {
                     return error.JSObjectSetValue;
                 }
             }
-            return obj.toValue();
+            return js_arr.toArray();
         },
         .object => |v| {
-            var obj = v8.Object.init(isolate);
+            var js_obj = self.newObject();
             var it = v.iterator();
             while (it.next()) |kv| {
-                const js_key = v8.String.initUtf8(isolate, kv.key_ptr.*);
-                const js_val = try zigJsonToJs(isolate, v8_context, kv.value_ptr.*);
-                if (!obj.setValue(v8_context, js_key, js_val)) {
+                if (try js_obj.set(kv.key_ptr.*, kv.value_ptr.*, .{}) == false) {
                     return error.JSObjectSetValue;
                 }
             }
-            return obj.toValue();
+            return .{ .ctx = self, .handle = @ptrCast(js_obj.handle) };
         },
     }
 }
@@ -2033,7 +1957,7 @@ pub fn queueSlotchangeDelivery(self: *Context) !void {
 }
 
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
-    self.isolate.enqueueMicrotaskFunc(cb.func.castToFunction());
+    self.isolate.enqueueMicrotaskFunc(cb);
 }
 
 // == Misc ==
@@ -2067,23 +1991,24 @@ const DestructorCallback = struct {
 
 // == Profiler ==
 pub fn startCpuProfiler(self: *Context) void {
-    if (builtin.mode != .Debug) {
+    if (comptime !IS_DEBUG) {
         // Still testing this out, don't have it properly exposed, so add this
         // guard for the time being to prevent any accidental/weird prod issues.
         @compileError("CPU Profiling is only available in debug builds");
     }
 
     std.debug.assert(self.cpu_profiler == null);
-    v8.CpuProfiler.useDetailedSourcePositionsForProfiling(self.isolate);
-    const cpu_profiler = v8.CpuProfiler.init(self.isolate);
-    const title = self.isolate.initStringUtf8("v8_cpu_profile");
-    cpu_profiler.startProfiling(title);
+    v8.v8__CpuProfiler__UseDetailedSourcePositionsForProfiling(self.isolate.handle);
+
+    const cpu_profiler = v8.v8__CpuProfiler__Get(self.isolate.handle).?;
+    const title = self.isolate.initStringHandle("v8_cpu_profile");
+    v8.v8__CpuProfiler__StartProfiling(cpu_profiler, title);
     self.cpu_profiler = cpu_profiler;
 }
 
 pub fn stopCpuProfiler(self: *Context) ![]const u8 {
-    const title = self.isolate.initStringUtf8("v8_cpu_profile");
-    const profile = self.cpu_profiler.?.stopProfiling(title) orelse unreachable;
-    const serialized = profile.serialize(self.isolate).?;
-    return self.jsStringToZig(serialized, .{});
+    const title = self.isolate.initStringHandle("v8_cpu_profile");
+    const handle = v8.v8__CpuProfiler__StopProfiling(self.cpu_profiler.?, title) orelse return error.NoProfiles;
+    const string_handle = v8.v8__CpuProfile__Serialize(handle, self.isolate.handle) orelse return error.NoProfile;
+    return self.jsStringToZig(string_handle, .{});
 }

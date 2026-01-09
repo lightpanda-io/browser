@@ -34,7 +34,7 @@ pub fn getLength(_: *const History, page: *Page) u32 {
 
 pub fn getState(_: *const History, page: *Page) !?js.Value {
     if (page._session.navigation.getCurrentEntry()._state.value) |state| {
-        const value = try js.Value.fromJson(page.js, state);
+        const value = try page.js.parseJSON(state);
         return value;
     } else return null;
 }
@@ -49,7 +49,7 @@ pub fn setScrollRestoration(self: *History, str: []const u8) void {
     }
 }
 
-pub fn pushState(_: *History, state: js.Object, _: []const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn pushState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page._session.arena;
     const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
 
@@ -57,7 +57,7 @@ pub fn pushState(_: *History, state: js.Object, _: []const u8, _url: ?[]const u8
     _ = try page._session.navigation.pushEntry(url, .{ .source = .history, .value = json }, page, true);
 }
 
-pub fn replaceState(_: *History, state: js.Object, _: []const u8, _url: ?[]const u8, page: *Page) !void {
+pub fn replaceState(_: *History, state: js.Value, _: ?[]const u8, _url: ?[]const u8, page: *Page) !void {
     const arena = page._session.arena;
     const url = if (_url) |u| try arena.dupeZ(u8, u) else try arena.dupeZ(u8, page.url);
 

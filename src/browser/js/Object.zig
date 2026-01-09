@@ -23,86 +23,95 @@ const v8 = js.v8;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Context = @import("Context.zig");
-const PersistentObject = v8.Persistent(v8.Object);
 
 const Allocator = std.mem.Allocator;
 
 const Object = @This();
-js_obj: v8.Object,
-context: *js.Context,
+
+ctx: *js.Context,
+handle: *const v8.Object,
 
 pub fn getId(self: Object) u32 {
-    return self.js_obj.getIdentityHash();
+    return @bitCast(v8.v8__Object__GetIdentityHash(self.handle));
 }
 
-pub const SetOpts = packed struct(u32) {
-    READ_ONLY: bool = false,
-    DONT_ENUM: bool = false,
-    DONT_DELETE: bool = false,
-    _: u29 = 0,
-};
-pub fn setIndex(self: Object, index: u32, value: anytype, opts: SetOpts) !void {
-    @setEvalBranchQuota(10000);
-    const key = switch (index) {
-        inline 0...20 => |i| std.fmt.comptimePrint("{d}", .{i}),
-        else => try std.fmt.allocPrint(self.context.arena, "{d}", .{index}),
+pub fn has(self: Object, key: anytype) bool {
+    const ctx = self.ctx;
+    const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
+
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Object__Has(self.handle, self.ctx.handle, key_handle, &out);
+    if (out.has_value) {
+        return out.value;
+    }
+    return false;
+}
+
+pub fn get(self: Object, key: anytype) !js.Value {
+    const ctx = self.ctx;
+
+    const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
+    const js_val_handle = v8.v8__Object__Get(self.handle, ctx.handle, key_handle) orelse return error.JsException;
+
+    return .{
+        .ctx = ctx,
+        .handle = js_val_handle,
     };
-    return self.set(key, value, opts);
 }
 
-pub fn set(self: Object, key: []const u8, value: anytype, opts: SetOpts) error{ FailedToSet, OutOfMemory }!void {
-    const context = self.context;
+pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.bridge.Caller.CallOpts) !bool {
+    const ctx = self.ctx;
 
-    const js_key = v8.String.initUtf8(context.isolate, key);
-    const js_value = try context.zigValueToJs(value, .{});
+    const js_value = try ctx.zigValueToJs(value, opts);
+    const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
 
-    const res = self.js_obj.defineOwnProperty(context.v8_context, js_key.toName(), js_value, @bitCast(opts)) orelse false;
-    if (!res) {
-        return error.FailedToSet;
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Object__Set(self.handle, ctx.handle, key_handle, js_value.handle, &out);
+    return out.has_value;
+}
+
+pub fn defineOwnProperty(self: Object, name: []const u8, value: js.Value, attr: v8.PropertyAttribute) ?bool {
+    const ctx = self.ctx;
+    const name_handle = ctx.isolate.initStringHandle(name);
+
+    var out: v8.MaybeBool = undefined;
+    v8.v8__Object__DefineOwnProperty(self.handle, ctx.handle, @ptrCast(name_handle), value.handle, attr, &out);
+
+    if (out.has_value) {
+        return out.value;
+    } else {
+        return null;
     }
 }
 
-pub fn get(self: Object, key: []const u8) !js.Value {
-    const context = self.context;
-    const js_key = v8.String.initUtf8(context.isolate, key);
-    const js_val = try self.js_obj.getValue(context.v8_context, js_key);
-    return context.createValue(js_val);
-}
-
-pub fn isTruthy(self: Object) bool {
-    const js_value = self.js_obj.toValue();
-    return js_value.toBool(self.context.isolate);
-}
-
 pub fn toString(self: Object) ![]const u8 {
-    const js_value = self.js_obj.toValue();
-    return self.context.valueToString(js_value, .{});
+    return self.ctx.valueToString(self.toValue(), .{});
+}
+
+pub fn toValue(self: Object) js.Value {
+    return .{
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
+    };
 }
 
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
     if (comptime IS_DEBUG) {
-        return self.context.debugValue(self.js_obj.toValue(), writer);
+        return self.ctx.debugValue(self.toValue(), writer);
     }
     const str = self.toString() catch return error.WriteFailed;
     return writer.writeAll(str);
 }
 
-pub fn toJson(self: Object, allocator: Allocator) ![]u8 {
-    const json_string = try v8.Json.stringify(self.context.v8_context, self.js_obj.toValue(), null);
-    const str = try self.context.jsStringToZig(json_string, .{ .allocator = allocator });
-    return str;
-}
-
 pub fn persist(self: Object) !Object {
-    var context = self.context;
-    const js_obj = self.js_obj;
+    var ctx = self.ctx;
 
-    const persisted = PersistentObject.init(context.isolate, js_obj);
-    try context.js_object_list.append(context.arena, persisted);
+    const global = js.Global(Object).init(ctx.isolate.handle, self.handle);
+    try ctx.global_objects.append(ctx.arena, global);
 
     return .{
-        .context = context,
-        .js_obj = persisted.castToObject(),
+        .ctx = ctx,
+        .handle = global.local(),
     };
 }
 
@@ -110,15 +119,18 @@ pub fn getFunction(self: Object, name: []const u8) !?js.Function {
     if (self.isNullOrUndefined()) {
         return null;
     }
-    const context = self.context;
+    const ctx = self.ctx;
 
-    const js_name = v8.String.initUtf8(context.isolate, name);
+    const js_name = ctx.isolate.initStringHandle(name);
+    const js_val_handle = v8.v8__Object__Get(self.handle, ctx.handle, js_name) orelse return error.JsException;
 
-    const js_value = try self.js_obj.getValue(context.v8_context, js_name.toName());
-    if (!js_value.isFunction()) {
+    if (v8.v8__Value__IsFunction(js_val_handle) == false) {
         return null;
     }
-    return try context.createFunction(js_value);
+    return .{
+        .ctx = ctx,
+        .handle = @ptrCast(js_val_handle),
+    };
 }
 
 pub fn callMethod(self: Object, comptime T: type, method_name: []const u8, args: anytype) !T {
@@ -126,41 +138,49 @@ pub fn callMethod(self: Object, comptime T: type, method_name: []const u8, args:
     return func.callWithThis(T, self, args);
 }
 
-pub fn isNull(self: Object) bool {
-    return self.js_obj.toValue().isNull();
-}
-
-pub fn isUndefined(self: Object) bool {
-    return self.js_obj.toValue().isUndefined();
-}
-
 pub fn isNullOrUndefined(self: Object) bool {
-    return self.js_obj.toValue().isNullOrUndefined();
+    return v8.v8__Value__IsNullOrUndefined(@ptrCast(self.handle));
+}
+
+pub fn getOwnPropertyNames(self: Object) js.Array {
+    const handle = v8.v8__Object__GetOwnPropertyNames(self.handle, self.ctx.handle).?;
+    return .{
+        .ctx = self.ctx,
+        .handle = handle,
+    };
+}
+
+pub fn getPropertyNames(self: Object) js.Array {
+    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.ctx.handle).?;
+    return .{
+        .ctx = self.ctx,
+        .handle = handle,
+    };
 }
 
 pub fn nameIterator(self: Object) NameIterator {
-    const context = self.context;
-    const js_obj = self.js_obj;
+    const ctx = self.ctx;
 
-    const array = js_obj.getPropertyNames(context.v8_context);
-    const count = array.length();
+    const handle = v8.v8__Object__GetPropertyNames(self.handle, ctx.handle).?;
+    const count = v8.v8__Array__Length(handle);
 
     return .{
+        .ctx = ctx,
+        .handle = handle,
         .count = count,
-        .context = context,
-        .js_obj = array.castTo(v8.Object),
     };
 }
 
 pub fn toZig(self: Object, comptime T: type) !T {
-    return self.context.jsValueToZig(T, self.js_obj.toValue());
+    const js_value = js.Value{ .ctx = self.ctx, .handle = @ptrCast(self.handle) };
+    return self.ctx.jsValueToZig(T, js_value);
 }
 
 pub const NameIterator = struct {
     count: u32,
     idx: u32 = 0,
-    js_obj: v8.Object,
-    context: *const Context,
+    ctx: *Context,
+    handle: *const v8.Array,
 
     pub fn next(self: *NameIterator) !?[]const u8 {
         const idx = self.idx;
@@ -169,8 +189,8 @@ pub const NameIterator = struct {
         }
         self.idx += 1;
 
-        const context = self.context;
-        const js_val = try self.js_obj.getAtIndex(context.v8_context, idx);
-        return try context.valueToString(js_val, .{});
+        const js_val_handle = v8.v8__Object__GetIndex(@ptrCast(self.handle), self.ctx.handle, idx) orelse return error.JsException;
+        const js_val = js.Value{ .ctx = self.ctx, .handle = js_val_handle };
+        return try self.ctx.valueToString(js_val, .{});
     }
 };

@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-pub const v8 = @import("v8");
+pub const v8 = @import("v8").c;
 
 const log = @import("../../log.zig");
 
@@ -28,14 +28,23 @@ pub const Context = @import("Context.zig");
 pub const Inspector = @import("Inspector.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Platform = @import("Platform.zig");
+pub const Isolate = @import("Isolate.zig");
+pub const HandleScope = @import("HandleScope.zig");
 
-// TODO: Is "This" really necessary?
-pub const This = @import("This.zig");
+pub const Name = @import("Name.zig");
 pub const Value = @import("Value.zig");
 pub const Array = @import("Array.zig");
+pub const String = @import("String.zig");
 pub const Object = @import("Object.zig");
 pub const TryCatch = @import("TryCatch.zig");
 pub const Function = @import("Function.zig");
+pub const Promise = @import("Promise.zig");
+pub const Module = @import("Module.zig");
+pub const BigInt = @import("BigInt.zig");
+pub const Number = @import("Number.zig");
+pub const Integer = @import("Integer.zig");
+pub const Global = @import("global.zig").Global;
+pub const PromiseResolver = @import("PromiseResolver.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -68,246 +77,47 @@ pub const ArrayBuffer = struct {
     }
 };
 
-pub const PromiseResolver = struct {
-    context: *Context,
-    resolver: v8.PromiseResolver,
-
-    pub fn promise(self: PromiseResolver) Promise {
-        return self.resolver.getPromise();
-    }
-
-    pub fn resolve(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._resolve(value) catch |err| {
-            log.err(.bug, "resolve", .{ .source = source, .err = err, .persistent = false });
-        };
-    }
-    fn _resolve(self: PromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value, .{});
-
-        if (self.resolver.resolve(context.v8_context, js_value) == null) {
-            return error.FailedToResolvePromise;
-        }
-        self.context.runMicrotasks();
-    }
-
-    pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._reject(value) catch |err| {
-            log.err(.bug, "reject", .{ .source = source, .err = err, .persistent = false });
-        };
-    }
-    fn _reject(self: PromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value);
-
-        if (self.resolver.reject(context.v8_context, js_value) == null) {
-            return error.FailedToRejectPromise;
-        }
-        self.context.runMicrotasks();
-    }
-};
-
-pub const PersistentPromiseResolver = struct {
-    context: *Context,
-    resolver: v8.Persistent(v8.PromiseResolver),
-
-    pub fn deinit(self: *PersistentPromiseResolver) void {
-        self.resolver.deinit();
-    }
-
-    pub fn promise(self: PersistentPromiseResolver) Promise {
-        return self.resolver.castToPromiseResolver().getPromise();
-    }
-
-    pub fn resolve(self: PersistentPromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._resolve(value) catch |err| {
-            log.err(.bug, "resolve", .{ .source = source, .err = err, .persistent = true });
-        };
-    }
-    fn _resolve(self: PersistentPromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value, .{});
-        defer context.runMicrotasks();
-
-        if (self.resolver.castToPromiseResolver().resolve(context.v8_context, js_value) == null) {
-            return error.FailedToResolvePromise;
-        }
-    }
-
-    pub fn reject(self: PersistentPromiseResolver, comptime source: []const u8, value: anytype) void {
-        self._reject(value) catch |err| {
-            log.err(.bug, "reject", .{ .source = source, .err = err, .persistent = true });
-        };
-    }
-
-    fn _reject(self: PersistentPromiseResolver, value: anytype) !void {
-        const context = self.context;
-        const js_value = try context.zigValueToJs(value, .{});
-        defer context.runMicrotasks();
-
-        // resolver.reject will return null if the promise isn't pending
-        if (self.resolver.castToPromiseResolver().reject(context.v8_context, js_value) == null) {
-            return error.FailedToRejectPromise;
-        }
-    }
-};
-
-pub const Promise = v8.Promise;
-
-// When doing jsValueToZig, string ([]const u8) are managed by the
-// call_arena. That means that if the API wants to persist the string
-// (which is relatively common), it needs to dupe it again.
-// If the parameter is an Env.String rather than a []const u8, then
-// the page's arena will be used (rather than the call arena).
-pub const String = struct {
-    string: []const u8,
-};
-
 pub const Exception = struct {
-    inner: v8.Value,
-    context: *const Context,
+    ctx: *const Context,
+    handle: *const v8.Value,
 
-    // the caller needs to deinit the string returned
     pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
         return self.context.valueToString(self.inner, .{ .allocator = allocator });
     }
 };
 
-pub fn UndefinedOr(comptime T: type) type {
-    return union(enum) {
-        undefined: void,
-        value: T,
-    };
-}
-
-// An interface for types that want to have their jsScopeEnd function be
-// called when the call context ends
-const CallScopeEndCallback = struct {
-    ptr: *anyopaque,
-    callScopeEndFn: *const fn (ptr: *anyopaque) void,
-
-    fn init(ptr: anytype) CallScopeEndCallback {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn callScopeEnd(pointer: *anyopaque) void {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.pointer.child.jsCallScopeEnd(self);
-            }
-        };
-
-        return .{
-            .ptr = ptr,
-            .callScopeEndFn = gen.callScopeEnd,
-        };
-    }
-
-    pub fn callScopeEnd(self: CallScopeEndCallback) void {
-        self.callScopeEndFn(self.ptr);
-    }
-};
-
-// Callback called on global's property missing.
-// Return true to intercept the execution or false to let the call
-// continue the chain.
-pub const GlobalMissingCallback = struct {
-    ptr: *anyopaque,
-    missingFn: *const fn (ptr: *anyopaque, name: []const u8, ctx: *Context) bool,
-
-    pub fn init(ptr: anytype) GlobalMissingCallback {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn missing(pointer: *anyopaque, name: []const u8, ctx: *Context) bool {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.pointer.child.missing(self, name, ctx);
-            }
-        };
-
-        return .{
-            .ptr = ptr,
-            .missingFn = gen.missing,
-        };
-    }
-
-    pub fn missing(self: GlobalMissingCallback, name: []const u8, ctx: *Context) bool {
-        return self.missingFn(self.ptr, name, ctx);
-    }
-};
-
-// Attributes that return a primitive type are setup directly on the
-// FunctionTemplate when the Env is setup. More complex types need a v8.Context
-// and cannot be set directly on the FunctionTemplate.
-// We default to saying types are primitives because that's mostly what
-// we have. If we add a new complex type that isn't explictly handled here,
-// we'll get a compiler error in simpleZigValueToJs, and can then explicitly
-// add the type here.
-pub fn isComplexAttributeType(ti: std.builtin.Type) bool {
-    return switch (ti) {
-        .array => true,
-        else => false,
-    };
-}
-
 // These are simple types that we can convert to JS with only an isolate. This
 // is separated from the Caller's zigValueToJs to make it available when we
 // don't have a caller (i.e., when setting static attributes on types)
-pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) v8.Value else ?v8.Value {
+pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool, comptime null_as_undefined: bool) if (fail) *const v8.Value else ?*const v8.Value {
     switch (@typeInfo(@TypeOf(value))) {
-        .void => return v8.initUndefined(isolate).toValue(),
-        .null => if (comptime null_as_undefined) return v8.initUndefined(isolate).toValue() else return v8.initNull(isolate).toValue(),
-        .bool => return v8.getValue(if (value) v8.initTrue(isolate) else v8.initFalse(isolate)),
-        .int => |n| switch (n.signedness) {
-            .signed => {
-                if (value > 0 and value <= 4_294_967_295) {
-                    return v8.Integer.initU32(isolate, @intCast(value)).toValue();
-                }
-                if (value >= -2_147_483_648 and value <= 2_147_483_647) {
-                    return v8.Integer.initI32(isolate, @intCast(value)).toValue();
-                }
-                if (comptime n.bits <= 64) {
-                    return v8.getValue(v8.BigInt.initI64(isolate, @intCast(value)));
-                }
-                @compileError(@typeName(value) ++ " is not supported");
-            },
-            .unsigned => {
-                if (value <= 4_294_967_295) {
-                    return v8.Integer.initU32(isolate, @intCast(value)).toValue();
-                }
-                if (comptime n.bits <= 64) {
-                    return v8.getValue(v8.BigInt.initU64(isolate, @intCast(value)));
-                }
-                @compileError(@typeName(value) ++ " is not supported");
-            },
+        .void => return isolate.initUndefined(),
+        .null => if (comptime null_as_undefined) return isolate.initUndefined() else return isolate.initNull(),
+        .bool => return if (value) isolate.initTrue() else isolate.initFalse(),
+        .int => |n| {
+            if (comptime n.bits <= 32) {
+                return @ptrCast(isolate.initInteger(value).handle);
+            }
+            if (value >= 0 and value <= 4_294_967_295) {
+                return @ptrCast(isolate.initInteger(@as(u32, @intCast(value))).handle);
+            }
+            return @ptrCast(isolate.initBigInt(value).handle);
         },
         .comptime_int => {
-            if (value >= 0) {
-                if (value <= 4_294_967_295) {
-                    return v8.Integer.initU32(isolate, @intCast(value)).toValue();
-                }
-                return v8.BigInt.initU64(isolate, @intCast(value)).toValue();
+            if (value > -2_147_483_648 and value <= 4_294_967_295) {
+                return @ptrCast(isolate.initInteger(value).handle);
             }
-            if (value >= -2_147_483_648) {
-                return v8.Integer.initI32(isolate, @intCast(value)).toValue();
-            }
-            return v8.BigInt.initI64(isolate, @intCast(value)).toValue();
+            return @ptrCast(isolate.initBigInt(value).handle);
         },
-        .comptime_float => return v8.Number.init(isolate, value).toValue(),
-        .float => |f| switch (f.bits) {
-            64 => return v8.Number.init(isolate, value).toValue(),
-            32 => return v8.Number.init(isolate, @floatCast(value)).toValue(),
-            else => @compileError(@typeName(value) ++ " is not supported"),
-        },
+        .float, .comptime_float => return @ptrCast(isolate.initNumber(value).handle),
         .pointer => |ptr| {
             if (ptr.size == .slice and ptr.child == u8) {
-                return v8.String.initUtf8(isolate, value).toValue();
+                return @ptrCast(isolate.initStringHandle(value));
             }
             if (ptr.size == .one) {
                 const one_info = @typeInfo(ptr.child);
                 if (one_info == .array and one_info.array.child == u8) {
-                    return v8.String.initUtf8(isolate, value).toValue();
+                    return @ptrCast(isolate.initStringHandle(value));
                 }
             }
         },
@@ -317,22 +127,20 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                 return simpleZigValueToJs(isolate, v, fail, null_as_undefined);
             }
             if (comptime null_as_undefined) {
-                return v8.initUndefined(isolate).toValue();
+                return isolate.initUndefined();
             }
-            return v8.initNull(isolate).toValue();
+            return isolate.initNull();
         },
         .@"struct" => {
             switch (@TypeOf(value)) {
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;
-                    var array_buffer: v8.ArrayBuffer = undefined;
-                    const backing_store = v8.BackingStore.init(isolate, len);
-                    const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
+                    const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                    const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                     @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
-                    array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
-
-                    return .{ .handle = array_buffer.handle };
+                    const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                    return @ptrCast(v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
                 },
                 // zig fmt: off
                 TypedArray(u8), TypedArray(u16), TypedArray(u32), TypedArray(u64),
@@ -349,37 +157,38 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                         else => @compileError("Invalid TypeArray type: " ++ @typeName(value_type)),
                     };
 
-                    var array_buffer: v8.ArrayBuffer = undefined;
+                    var array_buffer: *const v8.ArrayBuffer = undefined;
                     if (len == 0) {
-                        array_buffer = v8.ArrayBuffer.init(isolate, 0);
+                        array_buffer = v8.v8__ArrayBuffer__New(isolate.handle, 0).?;
                     } else {
                         const buffer_len = len * bits / 8;
-                        const backing_store = v8.BackingStore.init(isolate, buffer_len);
-                        const data: [*]u8 = @ptrCast(@alignCast(backing_store.getData()));
+                        const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, buffer_len).?;
+                        const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
                         @memcpy(data[0..buffer_len], @as([]const u8, @ptrCast(values))[0..buffer_len]);
-                        array_buffer = v8.ArrayBuffer.initWithBackingStore(isolate, &backing_store.toSharedPtr());
+                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
                     }
 
                     switch (@typeInfo(value_type)) {
                         .int => |n| switch (n.signedness) {
                             .unsigned => switch (n.bits) {
-                                8 => return v8.Uint8Array.init(array_buffer, 0, len).toValue(),
-                                16 => return v8.Uint16Array.init(array_buffer, 0, len).toValue(),
-                                32 => return v8.Uint32Array.init(array_buffer, 0, len).toValue(),
-                                64 => return v8.BigUint64Array.init(array_buffer, 0, len).toValue(),
+                                8 => return @ptrCast(v8.v8__Uint8Array__New(array_buffer, 0, len).?),
+                                16 => return @ptrCast(v8.v8__Uint16Array__New(array_buffer, 0, len).?),
+                                32 => return @ptrCast(v8.v8__Uint32Array__New(array_buffer, 0, len).?),
+                                64 => return @ptrCast(v8.v8__BigUint64Array__New(array_buffer, 0, len).?),
                                 else => {},
                             },
                             .signed => switch (n.bits) {
-                                8 => return v8.Int8Array.init(array_buffer, 0, len).toValue(),
-                                16 => return v8.Int16Array.init(array_buffer, 0, len).toValue(),
-                                32 => return v8.Int32Array.init(array_buffer, 0, len).toValue(),
-                                64 => return v8.BigInt64Array.init(array_buffer, 0, len).toValue(),
+                                8 => return @ptrCast(v8.v8__Int8Array__New(array_buffer, 0, len).?),
+                                16 => return @ptrCast(v8.v8__Int16Array__New(array_buffer, 0, len).?),
+                                32 => return @ptrCast(v8.v8__Int32Array__New(array_buffer, 0, len).?),
+                                64 => return @ptrCast(v8.v8__BigInt64Array__New(array_buffer, 0, len).?),
                                 else => {},
                             },
                         },
                         .float => |f| switch (f.bits) {
-                            32 => return v8.Float32Array.init(array_buffer, 0, len).toValue(),
-                            64 => return v8.Float64Array.init(array_buffer, 0, len).toValue(),
+                            32 => return @ptrCast(v8.v8__Float32Array__New(array_buffer, 0, len).?),
+                            64 => return @ptrCast(v8.v8__Float64Array__New(array_buffer, 0, len).?),
                             else => {},
                         },
                         else => {},
@@ -388,6 +197,7 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
                     // but this can never be valid.
                     @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
                 },
+                inline String, BigInt, Integer, Number, Value, Object => return value.handle,
                 else => {},
             }
         },
@@ -405,21 +215,6 @@ pub fn simpleZigValueToJs(isolate: v8.Isolate, value: anytype, comptime fail: bo
     }
     return null;
 }
-
-pub fn _createException(isolate: v8.Isolate, msg: []const u8) v8.Value {
-    return v8.Exception.initError(v8.String.initUtf8(isolate, msg));
-}
-
-pub fn classNameForStruct(comptime Struct: type) []const u8 {
-    if (@hasDecl(Struct, "js_name")) {
-        return Struct.js_name;
-    }
-    @setEvalBranchQuota(10_000);
-    const full_name = @typeName(Struct);
-    const last = std.mem.lastIndexOfScalar(u8, full_name, '.') orelse return full_name;
-    return full_name[last + 1 ..];
-}
-
 // When we return a Zig object to V8, we put it on the heap and pass it into
 // v8 as an *anyopaque (i.e. void *). When V8 gives us back the value, say, as a
 // function parameter, we know what type it _should_ be.
@@ -465,8 +260,8 @@ pub const TaggedAnyOpaque = struct {
 
     // When we're asked to describe an object via the Inspector, we _must_ include
     // the proper subtype (and description) fields in the returned JSON.
-    // V8 will give us a Value and ask us for the subtype. From the v8.Value we
-    // can get a v8.Object, and from the v8.Object, we can get out TaggedAnyOpaque
+    // V8 will give us a Value and ask us for the subtype. From the js.Value we
+    // can get a js.Object, and from the js.Object, we can get out TaggedAnyOpaque
     // which is where we store the subtype.
     subtype: ?bridge.SubType,
 };
@@ -483,10 +278,10 @@ pub const PrototypeChainEntry = struct {
 // it'll call this function to gets its [optional] subtype - which, from V8's
 // point of view, is an arbitrary string.
 pub export fn v8_inspector__Client__IMPL__valueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    c_value: *const v8.C_Value,
+    _: *v8.InspectorClientImpl,
+    c_value: *const v8.Value,
 ) callconv(.c) [*c]const u8 {
-    const external_entry = Inspector.getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
     return if (external_entry.subtype) |st| @tagName(st) else null;
 }
 
@@ -495,15 +290,15 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
 // present, even if it's empty. So if we have a subType for the value, we'll
 // put an empty description.
 pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
-    _: *v8.c.InspectorClientImpl,
-    v8_context: *const v8.C_Context,
-    c_value: *const v8.C_Value,
+    _: *v8.InspectorClientImpl,
+    v8_context: *const v8.Context,
+    c_value: *const v8.Value,
 ) callconv(.c) [*c]const u8 {
     _ = v8_context;
 
     // We _must_ include a non-null description in order for the subtype value
     // to be included. Besides that, I don't know if the value has any meaning
-    const external_entry = Inspector.getTaggedAnyOpaque(.{ .handle = c_value }) orelse return null;
+    const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
     return if (external_entry.subtype == null) null else "";
 }
 

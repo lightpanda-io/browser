@@ -19,23 +19,18 @@
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const Platform = @This();
-handle: *v8.Platform,
+const HandleScope = @This();
 
-pub fn init() !Platform {
-    if (v8.v8__V8__InitializeICU() == false) {
-        return error.FailedToInitializeICU;
-    }
-    // 0 - threadpool size, 0 == let v8 decide
-    // 1 - idle_task_support, 1 == enabled
-    const handle = v8.v8__Platform__NewDefaultPlatform(0, 1).?;
-    v8.v8__V8__InitializePlatform(handle);
-    v8.v8__V8__Initialize();
-    return .{ .handle = handle };
+handle: v8.HandleScope,
+
+// V8 takes an address of the value that's passed in, so it needs to be stable.
+// We can't create the v8.HandleScope here, pass it to v8 and then return the
+// value, as v8 will then have taken the address of the function-scopped (and no
+// longer valid) local.
+pub fn init(self: *HandleScope, isolate: js.Isolate) void {
+    v8.v8__HandleScope__CONSTRUCT(&self.handle, isolate.handle);
 }
 
-pub fn deinit(self: Platform) void {
-    _ = v8.v8__V8__Dispose();
-    v8.v8__V8__DisposePlatform();
-    v8.v8__Platform__DELETE(self.handle);
+pub fn deinit(self: *HandleScope) void {
+    v8.v8__HandleScope__DESTRUCT(&self.handle);
 }

@@ -16,26 +16,33 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("js.zig");
+
 const v8 = js.v8;
 
-const Platform = @This();
-handle: *v8.Platform,
+pub fn Global(comptime T: type) type {
+    const H = @FieldType(T, "handle");
 
-pub fn init() !Platform {
-    if (v8.v8__V8__InitializeICU() == false) {
-        return error.FailedToInitializeICU;
-    }
-    // 0 - threadpool size, 0 == let v8 decide
-    // 1 - idle_task_support, 1 == enabled
-    const handle = v8.v8__Platform__NewDefaultPlatform(0, 1).?;
-    v8.v8__V8__InitializePlatform(handle);
-    v8.v8__V8__Initialize();
-    return .{ .handle = handle };
-}
+    return struct {
+        global: v8.Global,
 
-pub fn deinit(self: Platform) void {
-    _ = v8.v8__V8__Dispose();
-    v8.v8__V8__DisposePlatform();
-    v8.v8__Platform__DELETE(self.handle);
+        const Self = @This();
+
+        pub fn init(isolate: *v8.Isolate, handle: H) Self {
+            var global: v8.Global = undefined;
+            v8.v8__Global__New(isolate, handle, &global);
+            return .{
+                .global = global,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            v8.v8__Global__Reset(&self.global);
+        }
+
+        pub fn local(self: *const Self) H {
+            return @ptrCast(@alignCast(@as(*const anyopaque, @ptrFromInt(self.global.data_ptr))));
+        }
+    };
 }

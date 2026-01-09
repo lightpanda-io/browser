@@ -19,23 +19,23 @@
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const Platform = @This();
-handle: *v8.Platform,
+const BigInt = @This();
 
-pub fn init() !Platform {
-    if (v8.v8__V8__InitializeICU() == false) {
-        return error.FailedToInitializeICU;
-    }
-    // 0 - threadpool size, 0 == let v8 decide
-    // 1 - idle_task_support, 1 == enabled
-    const handle = v8.v8__Platform__NewDefaultPlatform(0, 1).?;
-    v8.v8__V8__InitializePlatform(handle);
-    v8.v8__V8__Initialize();
+handle: *const v8.Integer,
+
+pub fn init(isolate: *v8.Isolate, val: anytype) BigInt {
+    const handle = switch (@TypeOf(val)) {
+        i8, i16, i32, i64, isize => v8.v8__BigInt__New(isolate, val).?,
+        u8, u16, u32, u64, usize => v8.v8__BigInt__NewFromUnsigned(isolate, val).?,
+        else => |T| @compileError("cannot create v8::BigInt from: " ++ @typeName(T)),
+    };
     return .{ .handle = handle };
 }
 
-pub fn deinit(self: Platform) void {
-    _ = v8.v8__V8__Dispose();
-    v8.v8__V8__DisposePlatform();
-    v8.v8__Platform__DELETE(self.handle);
+pub fn getInt64(self: BigInt) i64 {
+    return v8.v8__BigInt__Int64Value(self.handle, null);
+}
+
+pub fn getUint64(self: BigInt) u64 {
+    return v8.v8__BigInt__Uint64Value(self.handle, null);
 }

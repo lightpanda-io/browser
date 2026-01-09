@@ -16,26 +16,20 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("js.zig");
+
 const v8 = js.v8;
 
-const Platform = @This();
-handle: *v8.Platform,
+const Integer = @This();
 
-pub fn init() !Platform {
-    if (v8.v8__V8__InitializeICU() == false) {
-        return error.FailedToInitializeICU;
-    }
-    // 0 - threadpool size, 0 == let v8 decide
-    // 1 - idle_task_support, 1 == enabled
-    const handle = v8.v8__Platform__NewDefaultPlatform(0, 1).?;
-    v8.v8__V8__InitializePlatform(handle);
-    v8.v8__V8__Initialize();
+handle: *const v8.Integer,
+
+pub fn init(isolate: *v8.Isolate, value: anytype) Integer {
+    const handle = switch (@TypeOf(value)) {
+        i8, i16, i32 => v8.v8__Integer__New(isolate, value).?,
+        u8, u16, u32 => v8.v8__Integer__NewFromUnsigned(isolate, value).?,
+        else => |T| @compileError("cannot create v8::Integer from: " ++ @typeName(T)),
+    };
     return .{ .handle = handle };
-}
-
-pub fn deinit(self: Platform) void {
-    _ = v8.v8__V8__Dispose();
-    v8.v8__V8__DisposePlatform();
-    v8.v8__Platform__DELETE(self.handle);
 }
