@@ -51,6 +51,10 @@ pub fn init(page: *Page) !*EventTarget {
 }
 
 pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
+    if (event._event_phase != .none) {
+        return error.InvalidStateError;
+    }
+    event._isTrusted = false;
     try page._event_manager.dispatch(self, event);
     return !event._cancelable or !event._prevent_default;
 }
@@ -66,12 +70,6 @@ pub const EventListenerCallback = union(enum) {
 };
 pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, page: *Page) !void {
     const callback = callback_ orelse return;
-
-    if (callback == .object) {
-        if (try callback.object.getFunction("handleEvent") == null) {
-            return;
-        }
-    }
 
     const em_callback = switch (callback) {
         .function => |func| EventManager.Callback{ .function = func },
@@ -164,7 +162,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(EventTarget.init, .{});
-    pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{});
+    pub const dispatchEvent = bridge.function(EventTarget.dispatchEvent, .{ .dom_exception = true });
     pub const addEventListener = bridge.function(EventTarget.addEventListener, .{});
     pub const removeEventListener = bridge.function(EventTarget.removeEventListener, .{});
 };
