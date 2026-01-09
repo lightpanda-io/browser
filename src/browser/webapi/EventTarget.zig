@@ -67,12 +67,6 @@ pub const EventListenerCallback = union(enum) {
 pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventListenerCallback, opts_: ?AddEventListenerOptions, page: *Page) !void {
     const callback = callback_ orelse return;
 
-    if (callback == .object) {
-        if (try callback.object.getFunction("handleEvent") == null) {
-            return;
-        }
-    }
-
     const em_callback = switch (callback) {
         .function => |func| EventManager.Callback{ .function = func },
         .object => |obj| EventManager.Callback{ .object = try obj.persist() },
