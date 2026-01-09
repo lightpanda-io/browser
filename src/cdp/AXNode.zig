@@ -36,8 +36,6 @@ pub const Writer = struct {
     registry: *Node.Registry,
     page: *Page,
 
-    const AXValuesType = enum(u8) { boolean, tristate, booleanOrUndefined, idref, idrefList, integer, node, nodeList, number, string, computedString, token, tokenList, domRelation, role, internalRole, valueUndefined };
-
     pub const Opts = struct {};
 
     pub fn jsonStringify(self: *const Writer, w: anytype) error{WriteFailed}!void {
@@ -84,15 +82,16 @@ pub const Writer = struct {
         }
     }
 
-    const AXValue = struct {
-        type: enum(u8) { boolean, tristate, booleanOrUndefined, idref, idrefList, integer, node, nodeList, number, string, computedString, token, tokenList, domRelation, role, internalRole, valueUndefined },
-        value: ?union(enum) {
-            string: []const u8,
-            uint: usize,
-            boolean: bool,
-        } = null,
-        // TODO relatedNodes
-        source: ?AXSource = null,
+    const AXValue = union(enum) {
+        role: []const u8,
+        string: []const u8,
+        computedString: []const u8,
+        integer: usize,
+        boolean: bool,
+        booleanOrUndefined: bool,
+        // TODO not implemented:
+        // tristate, idrefList, node, nodeList, number, token, tokenList,
+        // domRelation, internalRole, valueUndefined,
     };
 
     fn writeAXSource(_: *const Writer, source: AXSource, w: anytype) !void {
@@ -128,21 +127,16 @@ pub const Writer = struct {
         try w.endArray();
     }
 
-    fn writeAXValue(self: *const Writer, value: AXValue, w: anytype) !void {
+    fn writeAXValue(_: *const Writer, value: AXValue, w: anytype) !void {
         try w.beginObject();
         try w.objectField("type");
-        try w.write(@tagName(value.type));
+        try w.write(@tagName(std.meta.activeTag(value)));
 
-        if (value.value) |v| {
-            try w.objectField("value");
-            switch (v) {
-                inline else => |vv| try w.write(vv),
-            }
+        try w.objectField("value");
+        switch (value) {
+            inline else => |v| try w.write(v),
         }
 
-        if (value.source) |source| {
-            try self.writeAXSource(source, w);
-        }
         try w.endObject();
     }
 
@@ -157,30 +151,30 @@ pub const Writer = struct {
         switch (dom_node._type) {
             .document => |document| {
                 const uri = document.getURL(page);
-                try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = .{ .string = uri } } }, w);
-                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .type = .booleanOrUndefined, .value = .{ .boolean = true } } }, w);
+                try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
+                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                 return;
             },
             .cdata => return,
             .element => |el| switch (el.getTag()) {
-                .h1 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 1 } } }, w),
-                .h2 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 2 } } }, w),
-                .h3 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 3 } } }, w),
-                .h4 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 4 } } }, w),
-                .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 5 } } }, w),
-                .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .type = .integer, .value = .{ .uint = 6 } } }, w),
+                .h1 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 1 } }, w),
+                .h2 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 2 } }, w),
+                .h3 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 3 } }, w),
+                .h4 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 4 } }, w),
+                .h5 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 5 } }, w),
+                .h6 => try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = 6 } }, w),
                 .img => {
                     const img = el.as(DOMNode.Element.Html.Image);
                     const uri = try img.getSrc(self.page);
                     if (uri.len == 0) return;
-                    try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = .{ .string = uri } } }, w);
+                    try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                 },
                 .anchor => {
                     const a = el.as(DOMNode.Element.Html.Anchor);
                     const uri = try a.getHref(self.page);
                     if (uri.len == 0) return;
-                    try self.writeAXProperty(.{ .name = .url, .value = .{ .type = .string, .value = .{ .string = uri } } }, w);
-                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .type = .booleanOrUndefined, .value = .{ .boolean = true } } }, w);
+                    try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
+                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                 },
                 else => {},
             },
@@ -212,7 +206,7 @@ pub const Writer = struct {
         try w.write(id);
 
         try w.objectField("role");
-        try self.writeAXValue(.{ .type = .role, .value = .{ .string = try axn.getRole() } }, w);
+        try self.writeAXValue(.{ .role = try axn.getRole() }, w);
 
         const ignore = axn.isIgnore(self.page);
         try w.objectField("ignored");
@@ -226,7 +220,7 @@ pub const Writer = struct {
             try w.objectField("name");
             try w.write("uninteresting");
             try w.objectField("value");
-            try self.writeAXValue(.{ .type = .boolean, .value = .{ .boolean = true } }, w);
+            try self.writeAXValue(.{ .boolean = true }, w);
             try w.endObject();
             try w.endArray();
         } else {
