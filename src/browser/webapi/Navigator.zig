@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const builtin = @import("builtin");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -64,8 +65,7 @@ pub fn getOnLine(_: *const Navigator) bool {
 }
 
 pub fn getCookieEnabled(_: *const Navigator) bool {
-    // TODO: Implement cookie support
-    return false;
+    return true;
 }
 
 pub fn getHardwareConcurrency(_: *const Navigator) u32 {
@@ -96,6 +96,74 @@ pub fn getWebdriver(_: *const Navigator) bool {
     return false;
 }
 
+pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
+    try validateProtocolHandlerScheme(scheme);
+    try validateProtocolHandlerURL(url, page);
+}
+pub fn unregisterProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
+    try validateProtocolHandlerScheme(scheme);
+    try validateProtocolHandlerURL(url, page);
+}
+
+fn validateProtocolHandlerScheme(scheme: []const u8) !void {
+    const allowed = std.StaticStringMap(void).initComptime(.{
+        .{ "bitcoin", {} },
+        .{ "cabal", {} },
+        .{ "dat", {} },
+        .{ "did", {} },
+        .{ "dweb", {} },
+        .{ "ethereum", .{} },
+        .{ "ftp", {} },
+        .{ "ftps", {} },
+        .{ "geo", {} },
+        .{ "im", {} },
+        .{ "ipfs", {} },
+        .{ "ipns", .{} },
+        .{ "irc", {} },
+        .{ "ircs", {} },
+        .{ "hyper", {} },
+        .{ "magnet", {} },
+        .{ "mailto", {} },
+        .{ "matrix", {} },
+        .{ "mms", {} },
+        .{ "news", {} },
+        .{ "nntp", {} },
+        .{ "openpgp4fpr", {} },
+        .{ "sftp", {} },
+        .{ "sip", {} },
+        .{ "sms", {} },
+        .{ "smsto", {} },
+        .{ "ssb", {} },
+        .{ "ssh", {} },
+        .{ "tel", {} },
+        .{ "urn", {} },
+        .{ "webcal", {} },
+        .{ "wtai", {} },
+        .{ "xmpp", {} },
+    });
+    if (allowed.has(scheme)) {
+        return;
+    }
+
+    if (scheme.len < 5 or !std.mem.startsWith(u8, scheme, "web+")) {
+        return error.SecurityError;
+    }
+    for (scheme[4..]) |b| {
+        if (std.ascii.isLower(b) == false) {
+            return error.SecurityError;
+        }
+    }
+}
+
+fn validateProtocolHandlerURL(url: [:0]const u8, page: *const Page) !void {
+    if (std.mem.indexOf(u8, url, "%s") == null) {
+        return error.SyntaxError;
+    }
+    if (try page.isSameOrigin(url) == false) {
+        return error.SyntaxError;
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Navigator);
 
@@ -121,6 +189,8 @@ pub const JsApi = struct {
     pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
+    pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true });
+    pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true });
 
     // Methods
     pub const javaEnabled = bridge.function(Navigator.javaEnabled, .{});
