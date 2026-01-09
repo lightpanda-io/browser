@@ -1364,6 +1364,12 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "i", .{}) catch unreachable, ._tag = .i },
                     ),
+                    'q' => return self.createHtmlElementT(
+                        Element.Html.Quote,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "q", .{}) catch unreachable, ._tag = .unknown },
+                    ),
                     's' => return self.createHtmlElementT(
                         Element.Html.Generic,
                         namespace,
@@ -1464,22 +1470,22 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "dt", .{}) catch unreachable, ._tag = .dt },
                     ),
                     asUint("td") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.TableCell,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "td", .{}) catch unreachable, ._tag = .td },
                     ),
                     asUint("th") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.TableCell,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "th", .{}) catch unreachable, ._tag = .th },
                     ),
                     asUint("tr") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.TableRow,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "tr", .{}) catch unreachable, ._tag = .tr },
+                        .{ ._proto = undefined },
                     ),
                     else => {},
                 },
@@ -1503,16 +1509,40 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "nav", .{}) catch unreachable, ._tag = .nav },
                     ),
                     asUint("del") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Mod,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "del", .{}) catch unreachable, ._tag = .del },
                     ),
                     asUint("ins") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Mod,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "ins", .{}) catch unreachable, ._tag = .ins },
+                    ),
+                    asUint("col") => return self.createHtmlElementT(
+                        Element.Html.TableCol,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "col", .{}) catch unreachable, ._tag = .unknown },
+                    ),
+                    asUint("dir") => return self.createHtmlElementT(
+                        Element.Html.Directory,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("map") => return self.createHtmlElementT(
+                        Element.Html.Map,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("pre") => return self.createHtmlElementT(
+                        Element.Html.Pre,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
                     ),
                     asUint("sub") => return self.createHtmlElementT(
                         Element.Html.Generic,
@@ -1536,10 +1566,10 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                 },
                 4 => switch (@as(u32, @bitCast(name[0..4].*))) {
                     asUint("span") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Span,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "span", .{}) catch unreachable, ._tag = .span },
+                        .{ ._proto = undefined },
                     ),
                     asUint("meta") => return self.createHtmlElementT(
                         Element.Html.Meta,
@@ -1597,10 +1627,10 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                     ),
                     asUint("base") => {
                         const n = try self.createHtmlElementT(
-                            Element.Html.Generic,
+                            Element.Html.Base,
                             namespace,
                             attribute_iterator,
-                            .{ ._proto = undefined, ._tag_name = String.init(undefined, "base", .{}) catch unreachable, ._tag = .base },
+                            .{ ._proto = undefined },
                         );
 
                         // If page's base url is not already set, fill it with the base
@@ -1620,10 +1650,16 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "menu", .{}) catch unreachable, ._tag = .menu },
                     ),
                     asUint("area") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Area,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "area", .{}) catch unreachable, ._tag = .area },
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("font") => return self.createHtmlElementT(
+                        Element.Html.Font,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
                     ),
                     asUint("code") => return self.createHtmlElementT(
                         Element.Html.Generic,
@@ -1632,10 +1668,10 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "code", .{}) catch unreachable, ._tag = .code },
                     ),
                     asUint("time") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Time,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "time", .{}) catch unreachable, ._tag = .time },
+                        .{ ._proto = undefined },
                     ),
                     else => {},
                 },
@@ -1680,35 +1716,53 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "aside", .{}) catch unreachable, ._tag = .aside },
                     ),
-                    asUint("meter") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                    asUint("label") => return self.createHtmlElementT(
+                        Element.Html.Label,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "meter", .{}) catch unreachable, ._tag = .meter },
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("meter") => return self.createHtmlElementT(
+                        Element.Html.Meter,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("param") => return self.createHtmlElementT(
+                        Element.Html.Param,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
                     ),
                     asUint("table") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Table,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "table", .{}) catch unreachable, ._tag = .table },
+                        .{ ._proto = undefined },
                     ),
                     asUint("thead") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.TableSection,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "thead", .{}) catch unreachable, ._tag = .thead },
                     ),
                     asUint("tbody") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.TableSection,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "tbody", .{}) catch unreachable, ._tag = .tbody },
                     ),
                     asUint("tfoot") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.TableSection,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "tfoot", .{}) catch unreachable, ._tag = .tfoot },
+                    ),
+                    asUint("track") => return self.createHtmlElementT(
+                        Element.Html.Track,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
                     ),
                     else => {},
                 },
@@ -1733,6 +1787,30 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                     ),
                     asUint("dialog") => return self.createHtmlElementT(
                         Element.Html.Dialog,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("legend") => return self.createHtmlElementT(
+                        Element.Html.Legend,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("object") => return self.createHtmlElementT(
+                        Element.Html.Object,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("output") => return self.createHtmlElementT(
+                        Element.Html.Output,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
+                    asUint("source") => return self.createHtmlElementT(
+                        Element.Html.Source,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined },
@@ -1813,10 +1891,10 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "summary", .{}) catch unreachable, ._tag = .summary },
                     ),
                     asUint("caption") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.TableCaption,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "caption", .{}) catch unreachable, ._tag = .caption },
+                        .{ ._proto = undefined },
                     ),
                     asUint("marquee") => return self.createHtmlElementT(
                         Element.Html.Generic,
@@ -1845,35 +1923,41 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         attribute_iterator,
                         .{ ._proto = undefined, ._content = undefined },
                     ),
-                    asUint("fieldset") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                    asUint("colgroup") => return self.createHtmlElementT(
+                        Element.Html.TableCol,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "fieldset", .{}) catch unreachable, ._tag = .fieldset },
+                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "colgroup", .{}) catch unreachable, ._tag = .unknown },
+                    ),
+                    asUint("fieldset") => return self.createHtmlElementT(
+                        Element.Html.FieldSet,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
                     ),
                     asUint("optgroup") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.OptGroup,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "optgroup", .{}) catch unreachable, ._tag = .optgroup },
+                        .{ ._proto = undefined },
                     ),
                     asUint("progress") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Progress,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "progress", .{}) catch unreachable, ._tag = .progress },
+                        .{ ._proto = undefined },
                     ),
                     asUint("datalist") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.DataList,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "datalist", .{}) catch unreachable, ._tag = .datalist },
+                        .{ ._proto = undefined },
                     ),
                     else => {},
                 },
                 10 => switch (@as(u80, @bitCast(name[0..10].*))) {
                     asUint("blockquote") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Quote,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "blockquote", .{}) catch unreachable, ._tag = .blockquote },
