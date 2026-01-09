@@ -29,6 +29,8 @@ pub const Transfer = Client.Transfer;
 const log = @import("../log.zig");
 const errors = @import("errors.zig");
 
+const Config = @import("../Config.zig");
+
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
@@ -39,12 +41,13 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 // once for all http connections is a win.
 const Http = @This();
 
-opts: Opts,
+opts: *const Config,
+arena: ArenaAllocator,
 client: *Client,
 ca_blob: ?c.curl_blob,
-arena: ArenaAllocator,
+proxy_bearer_token: ?[:0]const u8 = null,
 
-pub fn init(allocator: Allocator, opts: Opts) !Http {
+pub fn init(allocator: Allocator, opts: *const Config) !Http {
     try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
     errdefer c.curl_global_cleanup();
 
@@ -55,24 +58,25 @@ pub fn init(allocator: Allocator, opts: Opts) !Http {
     var arena = ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    var adjusted_opts = opts;
-    if (opts.proxy_bearer_token) |bt| {
-        adjusted_opts.proxy_bearer_token = try std.fmt.allocPrintSentinel(arena.allocator(), "Proxy-Authorization: Bearer {s}", .{bt}, 0);
-    }
-
     var ca_blob: ?c.curl_blob = null;
     if (opts.tls_verify_host) {
         ca_blob = try loadCerts(allocator, arena.allocator());
     }
 
-    var client = try Client.init(allocator, ca_blob, adjusted_opts);
+    const proxy_bearer_token = if (opts.proxy_bearer_token) |bt|
+        try std.fmt.allocPrintSentinel(arena.allocator(), "Proxy-Authorization: Bearer {s}", .{bt}, 0)
+    else
+        null;
+
+    var client = try Client.init(allocator, ca_blob, proxy_bearer_token, opts);
     errdefer client.deinit();
 
     return .{
         .arena = arena,
         .client = client,
         .ca_blob = ca_blob,
-        .opts = adjusted_opts,
+        .opts = opts,
+        .proxy_bearer_token = proxy_bearer_token,
     };
 }
 
@@ -108,24 +112,21 @@ pub fn newHeaders(self: *const Http) Headers {
 
 pub const Connection = struct {
     easy: *c.CURL,
-    opts: Connection.Opts,
 
-    const Opts = struct {
-        proxy_bearer_token: ?[:0]const u8,
-        user_agent: [:0]const u8,
-    };
+    user_agent: [:0]const u8,
+    proxy_bearer_token: ?[:0]const u8,
 
     // pointer to opts is not stable, don't hold a reference to it!
-    pub fn init(ca_blob_: ?c.curl_blob, opts: *const Http.Opts) !Connection {
+    pub fn init(ca_blob_: ?c.curl_blob, proxy_bearer_token: ?[:0]const u8, opts: *const Config) !Connection {
         const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
         errdefer _ = c.curl_easy_cleanup(easy);
 
         // timeouts
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.connect_timeout_ms))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.http_timeout_ms))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.http_connect_timeout_ms))));
 
         // redirect behavior
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(opts.max_redirects))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(opts.http_max_redirects))));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
 
@@ -179,10 +180,8 @@ pub const Connection = struct {
 
         return .{
             .easy = easy,
-            .opts = .{
-                .user_agent = opts.user_agent,
-                .proxy_bearer_token = opts.proxy_bearer_token,
-            },
+            .user_agent = opts.user_agent,
+            .proxy_bearer_token = proxy_bearer_token,
         };
     }
 
@@ -236,7 +235,7 @@ pub const Connection = struct {
 
     // These are headers that may not be send to the users for inteception.
     pub fn secretHeaders(self: *const Connection, headers: *Headers) !void {
-        if (self.opts.proxy_bearer_token) |hdr| {
+        if (self.proxy_bearer_token) |hdr| {
             try headers.add(hdr);
         }
     }
@@ -244,7 +243,7 @@ pub const Connection = struct {
     pub fn request(self: *const Connection) !u16 {
         const easy = self.easy;
 
-        var header_list = try Headers.init(self.opts.user_agent);
+        var header_list = try Headers.init(self.user_agent);
         defer header_list.deinit();
         try self.secretHeaders(&header_list);
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
@@ -341,18 +340,6 @@ pub fn errorMCheck(code: c.CURLMcode) errors.Multi!void {
     }
     return errors.fromMCode(code);
 }
-
-pub const Opts = struct {
-    timeout_ms: u31,
-    max_host_open: u8,
-    max_concurrent: u8,
-    connect_timeout_ms: u31,
-    max_redirects: u8 = 10,
-    tls_verify_host: bool = true,
-    http_proxy: ?[:0]const u8 = null,
-    proxy_bearer_token: ?[:0]const u8 = null,
-    user_agent: [:0]const u8,
-};
 
 pub const Method = enum(u8) {
     GET = 0,

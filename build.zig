@@ -105,10 +105,13 @@ pub fn build(b: *Build) !void {
     }
 
     {
+        const filters = b.option([]const []const u8, "test_filter", "Filter tests by substring") orelse &.{};
+
         // test
         const tests = b.addTest(.{
             .root_module = lightpanda_module,
             .use_llvm = true,
+            .filters = filters,
             .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
         });
         const run_tests = b.addRunArtifact(tests);
