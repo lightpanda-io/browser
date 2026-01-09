@@ -19,12 +19,15 @@
 const std = @import("std");
 
 const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
 
 pub fn registerTypes() []const type {
     return &.{
         WebGLRenderingContext,
-        //Extension.Type.WEBGL_debug_renderer_info,
-        //Extension.Type.WEBGL_lose_context,
+        // Extension types should be runtime generated. We might want
+        // to revisit this.
+        Extension.Type.WEBGL_debug_renderer_info,
+        Extension.Type.WEBGL_lose_context,
     };
 }
 
@@ -66,11 +69,11 @@ pub const Extension = union(enum) {
     WEBGL_compressed_texture_pvrtc: void,
     WEBGL_compressed_texture_s3tc: void,
     WEBGL_compressed_texture_s3tc_srgb: void,
-    WEBGL_debug_renderer_info: Type.WEBGL_debug_renderer_info,
+    WEBGL_debug_renderer_info: *Type.WEBGL_debug_renderer_info,
     WEBGL_debug_shaders: void,
     WEBGL_depth_texture: void,
     WEBGL_draw_buffers: void,
-    WEBGL_lose_context: Type.WEBGL_lose_context,
+    WEBGL_lose_context: *Type.WEBGL_lose_context,
     WEBGL_multi_draw: void,
     WEBGL_polygon_mode: void,
 
@@ -115,35 +118,76 @@ pub const Extension = union(enum) {
     /// Extension types.
     pub const Type = struct {
         pub const WEBGL_debug_renderer_info = struct {
+            _: u8 = 0,
             pub const UNMASKED_VENDOR_WEBGL: u64 = 0x9245;
             pub const UNMASKED_RENDERER_WEBGL: u64 = 0x9246;
 
-            pub fn get_UNMASKED_VENDOR_WEBGL() u64 {
+            pub fn getUnmaskedVendorWebGL(_: *const WEBGL_debug_renderer_info) u64 {
                 return UNMASKED_VENDOR_WEBGL;
             }
 
-            pub fn get_UNMASKED_RENDERER_WEBGL() u64 {
+            pub fn getUnmaskedRendererWebGL(_: *const WEBGL_debug_renderer_info) u64 {
                 return UNMASKED_RENDERER_WEBGL;
             }
+
+            pub const JsApi = struct {
+                pub const bridge = js.Bridge(WEBGL_debug_renderer_info);
+
+                pub const Meta = struct {
+                    pub const name = "WEBGL_debug_renderer_info";
+
+                    pub const prototype_chain = bridge.prototypeChain();
+                    pub var class_id: bridge.ClassId = undefined;
+                };
+
+                pub const UNMASKED_VENDOR_WEBGL = bridge.accessor(WEBGL_debug_renderer_info.getUnmaskedVendorWebGL, null, .{});
+                pub const UNMASKED_RENDERER_WEBGL = bridge.accessor(WEBGL_debug_renderer_info.getUnmaskedRendererWebGL, null, .{});
+            };
         };
 
         pub const WEBGL_lose_context = struct {
             _: u8 = 0,
-            pub fn _loseContext(_: *const WEBGL_lose_context) void {}
-            pub fn _restoreContext(_: *const WEBGL_lose_context) void {}
+            pub fn loseContext(_: *const WEBGL_lose_context) void {}
+            pub fn restoreContext(_: *const WEBGL_lose_context) void {}
+
+            pub const JsApi = struct {
+                pub const bridge = js.Bridge(WEBGL_lose_context);
+
+                pub const Meta = struct {
+                    pub const name = "WEBGL_lose_context";
+
+                    pub const prototype_chain = bridge.prototypeChain();
+                    pub var class_id: bridge.ClassId = undefined;
+                };
+
+                pub const loseContext = bridge.function(WEBGL_lose_context.loseContext, .{});
+                pub const restoreContext = bridge.function(WEBGL_lose_context.restoreContext, .{});
+            };
         };
     };
 };
 
-/// Enables a WebGL extension.
-pub fn getExtension(self: *const WebGLRenderingContext, name: []const u8) ?Extension {
-    _ = self;
+/// This actually takes "GLenum" which, in fact, is a fancy way to say number.
+/// Return value also depends on what's being passed as `pname`; we don't really
+/// support any though.
+pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
+    _ = pname;
+    return "";
+}
 
+/// Enables a WebGL extension.
+pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, page: *Page) !?Extension {
     const tag = Extension.find(name) orelse return null;
 
     return switch (tag) {
-        .WEBGL_debug_renderer_info => @unionInit(Extension, "WEBGL_debug_renderer_info", .{}),
-        .WEBGL_lose_context => @unionInit(Extension, "WEBGL_lose_context", .{}),
+        .WEBGL_debug_renderer_info => {
+            const info = try page._factory.create(Extension.Type.WEBGL_debug_renderer_info{});
+            return .{ .WEBGL_debug_renderer_info = info };
+        },
+        .WEBGL_lose_context => {
+            const ctx = try page._factory.create(Extension.Type.WEBGL_lose_context{});
+            return .{ .WEBGL_lose_context = ctx };
+        },
         inline else => |comptime_enum| @unionInit(Extension, @tagName(comptime_enum), {}),
     };
 }
@@ -163,6 +207,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const getParameter = bridge.function(WebGLRenderingContext.getParameter, .{});
     pub const getExtension = bridge.function(WebGLRenderingContext.getExtension, .{});
     pub const getSupportedExtensions = bridge.function(WebGLRenderingContext.getSupportedExtensions, .{});
 };

@@ -66,8 +66,12 @@
   const rendererInfo = ctx.getExtension("WEBGL_debug_renderer_info");
   testing.expectEqual(true, rendererInfo instanceof WEBGL_debug_renderer_info);
 
-  testing.expectEqual(rendererInfo.UNMASKED_VENDOR_WEBGL, 0x9245);
-  testing.expectEqual(rendererInfo.UNMASKED_RENDERER_WEBGL, 0x9246);
+  const { UNMASKED_VENDOR_WEBGL, UNMASKED_RENDERER_WEBGL } = rendererInfo;
+  testing.expectEqual(UNMASKED_VENDOR_WEBGL, 0x9245);
+  testing.expectEqual(UNMASKED_RENDERER_WEBGL, 0x9246);
+
+  testing.expectEqual("", ctx.getParameter(UNMASKED_VENDOR_WEBGL));
+  testing.expectEqual("", ctx.getParameter(UNMASKED_RENDERER_WEBGL));
 }
 
 // WEBGL_lose_context
