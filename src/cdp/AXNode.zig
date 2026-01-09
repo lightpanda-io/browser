@@ -52,7 +52,7 @@ pub const Writer = struct {
 
     fn toJSON(self: *const Writer, node: *const Node, w: anytype) !void {
         try w.beginArray();
-        const root = try AXNode.fromNode(node.dom);
+        const root = AXNode.fromNode(node.dom);
         if (try self.writeNode(node.id, root, w)) {
             try self.writeNodeChildren(root, w);
         }
@@ -77,7 +77,7 @@ pub const Writer = struct {
             }
 
             const node = try self.registry.register(dom_node);
-            const axn = try AXNode.fromNode(node.dom);
+            const axn = AXNode.fromNode(node.dom);
             if (try self.writeNode(node.id, axn, w)) {
                 try self.writeNodeChildren(axn, w);
             }
@@ -214,7 +214,7 @@ pub const Writer = struct {
         try w.objectField("role");
         try self.writeAXValue(.{ .type = .role, .value = .{ .string = try axn.getRole() } }, w);
 
-        const ignore = try axn.isIgnore(self.page);
+        const ignore = axn.isIgnore(self.page);
         try w.objectField("ignored");
         try w.write(ignore);
 
@@ -486,7 +486,7 @@ pub const AXRole = enum(u8) {
 dom: *DOMNode,
 role_attr: ?[]const u8,
 
-pub fn fromNode(dom: *DOMNode) !AXNode {
+pub fn fromNode(dom: *DOMNode) AXNode {
     return .{
         .dom = dom,
         .role_attr = blk: {
@@ -664,7 +664,7 @@ fn ignoreChildren(self: AXNode) bool {
     };
 }
 
-fn isIgnore(self: AXNode, page: *Page) !bool {
+fn isIgnore(self: AXNode, page: *Page) bool {
     const node = self.dom;
     const role_attr = self.role_attr;
 
@@ -705,8 +705,8 @@ fn isIgnore(self: AXNode, page: *Page) !bool {
             // Check if it has any non-ignored children
             var it = node.childrenIterator();
             while (it.next()) |child| {
-                const axn = try AXNode.fromNode(child);
-                if (!try axn.isIgnore(page)) {
+                const axn = AXNode.fromNode(child);
+                if (!axn.isIgnore(page)) {
                     return false;
                 }
             }
