@@ -54,12 +54,9 @@ pub const Writer = struct {
         try w.beginArray();
         const root = try AXNode.fromNode(node.dom);
         if (try self.writeNode(node.id, root, w)) {
-            // skip children
-            try w.endArray();
-            return;
+            try self.writeNodeChildren(root, w);
         }
-        try self.writeNodeChildren(root, w);
-        try w.endArray();
+        return w.endArray();
     }
 
     fn writeNodeChildren(self: *const Writer, parent: AXNode, w: anytype) !void {
@@ -82,10 +79,8 @@ pub const Writer = struct {
             const node = try self.registry.register(dom_node);
             const axn = try AXNode.fromNode(node.dom);
             if (try self.writeNode(node.id, axn, w)) {
-                // skip children
-                continue;
+                try self.writeNodeChildren(axn, w);
             }
-            try self.writeNodeChildren(axn, w);
         }
     }
 
@@ -205,7 +200,7 @@ pub const Writer = struct {
         try w.endObject();
     }
 
-    // write a node. returns true if children must be skipped.
+    // write a node. returns true if children must be written.
     fn writeNode(self: *const Writer, id: u32, axn: AXNode, w: anytype) !bool {
         // ignore empty texts
         try w.beginObject();
@@ -264,12 +259,12 @@ pub const Writer = struct {
         }
 
         // Children
-        const skip_children = axn.ignoreChildren();
+        const write_children = axn.ignoreChildren() == false;
         const skip_text = ignoreText(axn.dom);
 
         try w.objectField("childIds");
         try w.beginArray();
-        if (!skip_children) {
+        if (write_children) {
             var registry = self.registry;
             var it = n.childrenIterator();
             while (it.next()) |child| {
@@ -286,7 +281,7 @@ pub const Writer = struct {
 
         try w.endObject();
 
-        return skip_children;
+        return write_children;
     }
 };
 
