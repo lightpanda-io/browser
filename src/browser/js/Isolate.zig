@@ -113,14 +113,6 @@ pub fn initNumber(self: Isolate, val: anytype) js.Number {
     return js.Number.init(self.handle, val);
 }
 
-pub fn createContextHandle(self: Isolate, global_tmpl: ?*const v8.ObjectTemplate, global_obj: ?*const v8.Value) *const v8.Context {
-    return v8.v8__Context__New(self.handle, global_tmpl, global_obj).?;
-}
-
-pub fn createFunctionTemplateHandle(self: Isolate) *const v8.FunctionTemplate {
-    return v8.v8__FunctionTemplate__New__DEFAULT(self.handle).?;
-}
-
 pub fn createExternal(self: Isolate, val: *anyopaque) *const v8.External {
     return v8.v8__External__New(self.handle, val).?;
 }

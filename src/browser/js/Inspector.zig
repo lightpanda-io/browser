@@ -97,8 +97,8 @@ pub fn init(self: *Inspector, isolate: *v8.Isolate, ctx: anytype) !void {
 
 pub fn deinit(self: *const Inspector) void {
     var temp_scope: v8.HandleScope = undefined;
-    v8.HandleScope.init(&temp_scope, self.isolate);
-    defer temp_scope.deinit();
+    v8.v8__HandleScope__CONSTRUCT(&temp_scope, self.isolate);
+    defer v8.v8__HandleScope__DESTRUCT(&temp_scope);
 
     self.session.deinit();
     self.client.deinit();
