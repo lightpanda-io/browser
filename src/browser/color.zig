@@ -19,7 +19,23 @@
 const std = @import("std");
 const Io = std.Io;
 
-const isHexColor = @import("webapi/css/CSSStyleDeclaration.zig").isHexColor;
+pub fn isHexColor(value: []const u8) bool {
+    if (value.len == 0) {
+        return false;
+    }
+
+    if (value[0] != '#') {
+        return false;
+    }
+
+    const hex_part = value[1..];
+    switch (hex_part.len) {
+        3, 4, 6, 8 => for (hex_part) |c| if (!std.ascii.isHex(c)) return false,
+        else => return false,
+    }
+
+    return true;
+}
 
 pub const RGBA = packed struct(u32) {
     r: u8,

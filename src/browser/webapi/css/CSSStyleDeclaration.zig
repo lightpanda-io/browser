@@ -246,24 +246,6 @@ fn isInlineTag(tag_name: []const u8) bool {
     return false;
 }
 
-pub fn isHexColor(value: []const u8) bool {
-    if (value.len == 0) {
-        return false;
-    }
-
-    if (value[0] != '#') {
-        return false;
-    }
-
-    const hex_part = value[1..];
-    switch (hex_part.len) {
-        3, 4, 6, 8 => for (hex_part) |c| if (!std.ascii.isHex(c)) return false,
-        else => return false,
-    }
-
-    return true;
-}
-
 fn getDefaultColor(element: *const Element) []const u8 {
     switch (element._type) {
         .html => |html| {
