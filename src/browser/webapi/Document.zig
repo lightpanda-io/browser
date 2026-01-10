@@ -934,8 +934,8 @@ pub const JsApi = struct {
     pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
     pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, null, .{});
-    pub const createElement = bridge.function(Document.createElement, .{});
-    pub const createElementNS = bridge.function(Document.createElementNS, .{});
+    pub const createElement = bridge.function(Document.createElement, .{.dom_exception = true});
+    pub const createElementNS = bridge.function(Document.createElementNS, .{.dom_exception = true});
     pub const createDocumentFragment = bridge.function(Document.createDocumentFragment, .{});
     pub const createComment = bridge.function(Document.createComment, .{});
     pub const createTextNode = bridge.function(Document.createTextNode, .{});
