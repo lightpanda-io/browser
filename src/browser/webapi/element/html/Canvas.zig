@@ -23,150 +23,11 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
-pub fn registerTypes() []const type {
-    return &.{
-        Canvas,
-        RenderingContext2D,
-    };
-}
+const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
+const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
 
 const Canvas = @This();
 _proto: *HtmlElement,
-
-pub const RenderingContext2D = struct {
-    pub fn save(_: *RenderingContext2D) void {}
-    pub fn restore(_: *RenderingContext2D) void {}
-
-    pub fn scale(_: *RenderingContext2D, _: f64, _: f64) void {}
-    pub fn rotate(_: *RenderingContext2D, _: f64) void {}
-    pub fn translate(_: *RenderingContext2D, _: f64, _: f64) void {}
-    pub fn transform(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-    pub fn setTransform(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-    pub fn resetTransform(_: *RenderingContext2D) void {}
-
-    pub fn getGlobalAlpha(_: *const RenderingContext2D) f64 {
-        return 1.0;
-    }
-    pub fn setGlobalAlpha(_: *RenderingContext2D, _: f64) void {}
-    pub fn getGlobalCompositeOperation(_: *const RenderingContext2D) []const u8 {
-        return "source-over";
-    }
-    pub fn setGlobalCompositeOperation(_: *RenderingContext2D, _: []const u8) void {}
-
-    pub fn getFillStyle(_: *const RenderingContext2D) []const u8 {
-        return "#000000";
-    }
-    pub fn setFillStyle(_: *RenderingContext2D, _: []const u8) void {}
-    pub fn getStrokeStyle(_: *const RenderingContext2D) []const u8 {
-        return "#000000";
-    }
-    pub fn setStrokeStyle(_: *RenderingContext2D, _: []const u8) void {}
-
-    pub fn getLineWidth(_: *const RenderingContext2D) f64 {
-        return 1.0;
-    }
-    pub fn setLineWidth(_: *RenderingContext2D, _: f64) void {}
-    pub fn getLineCap(_: *const RenderingContext2D) []const u8 {
-        return "butt";
-    }
-    pub fn setLineCap(_: *RenderingContext2D, _: []const u8) void {}
-    pub fn getLineJoin(_: *const RenderingContext2D) []const u8 {
-        return "miter";
-    }
-    pub fn setLineJoin(_: *RenderingContext2D, _: []const u8) void {}
-    pub fn getMiterLimit(_: *const RenderingContext2D) f64 {
-        return 10.0;
-    }
-    pub fn setMiterLimit(_: *RenderingContext2D, _: f64) void {}
-
-    pub fn clearRect(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-    pub fn fillRect(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-    pub fn strokeRect(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-
-    pub fn beginPath(_: *RenderingContext2D) void {}
-    pub fn closePath(_: *RenderingContext2D) void {}
-    pub fn moveTo(_: *RenderingContext2D, _: f64, _: f64) void {}
-    pub fn lineTo(_: *RenderingContext2D, _: f64, _: f64) void {}
-    pub fn quadraticCurveTo(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-    pub fn bezierCurveTo(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-    pub fn arc(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
-    pub fn arcTo(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-    pub fn rect(_: *RenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-
-    pub fn fill(_: *RenderingContext2D) void {}
-    pub fn stroke(_: *RenderingContext2D) void {}
-    pub fn clip(_: *RenderingContext2D) void {}
-
-    pub fn getFont(_: *const RenderingContext2D) []const u8 {
-        return "10px sans-serif";
-    }
-    pub fn setFont(_: *RenderingContext2D, _: []const u8) void {}
-    pub fn getTextAlign(_: *const RenderingContext2D) []const u8 {
-        return "start";
-    }
-    pub fn setTextAlign(_: *RenderingContext2D, _: []const u8) void {}
-    pub fn getTextBaseline(_: *const RenderingContext2D) []const u8 {
-        return "alphabetic";
-    }
-    pub fn setTextBaseline(_: *RenderingContext2D, _: []const u8) void {}
-    pub fn fillText(_: *RenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
-    pub fn strokeText(_: *RenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
-
-    pub const JsApi = struct {
-        pub const bridge = js.Bridge(RenderingContext2D);
-
-        pub const Meta = struct {
-            pub const name = "CanvasRenderingContext2D";
-            pub const prototype_chain = bridge.prototypeChain();
-            pub var class_id: bridge.ClassId = undefined;
-        };
-
-        pub const save = bridge.function(RenderingContext2D.save, .{});
-        pub const restore = bridge.function(RenderingContext2D.restore, .{});
-
-        pub const scale = bridge.function(RenderingContext2D.scale, .{});
-        pub const rotate = bridge.function(RenderingContext2D.rotate, .{});
-        pub const translate = bridge.function(RenderingContext2D.translate, .{});
-        pub const transform = bridge.function(RenderingContext2D.transform, .{});
-        pub const setTransform = bridge.function(RenderingContext2D.setTransform, .{});
-        pub const resetTransform = bridge.function(RenderingContext2D.resetTransform, .{});
-
-        pub const globalAlpha = bridge.accessor(RenderingContext2D.getGlobalAlpha, RenderingContext2D.setGlobalAlpha, .{});
-        pub const globalCompositeOperation = bridge.accessor(RenderingContext2D.getGlobalCompositeOperation, RenderingContext2D.setGlobalCompositeOperation, .{});
-
-        pub const fillStyle = bridge.accessor(RenderingContext2D.getFillStyle, RenderingContext2D.setFillStyle, .{});
-        pub const strokeStyle = bridge.accessor(RenderingContext2D.getStrokeStyle, RenderingContext2D.setStrokeStyle, .{});
-
-        pub const lineWidth = bridge.accessor(RenderingContext2D.getLineWidth, RenderingContext2D.setLineWidth, .{});
-        pub const lineCap = bridge.accessor(RenderingContext2D.getLineCap, RenderingContext2D.setLineCap, .{});
-        pub const lineJoin = bridge.accessor(RenderingContext2D.getLineJoin, RenderingContext2D.setLineJoin, .{});
-        pub const miterLimit = bridge.accessor(RenderingContext2D.getMiterLimit, RenderingContext2D.setMiterLimit, .{});
-
-        pub const clearRect = bridge.function(RenderingContext2D.clearRect, .{});
-        pub const fillRect = bridge.function(RenderingContext2D.fillRect, .{});
-        pub const strokeRect = bridge.function(RenderingContext2D.strokeRect, .{});
-
-        pub const beginPath = bridge.function(RenderingContext2D.beginPath, .{});
-        pub const closePath = bridge.function(RenderingContext2D.closePath, .{});
-        pub const moveTo = bridge.function(RenderingContext2D.moveTo, .{});
-        pub const lineTo = bridge.function(RenderingContext2D.lineTo, .{});
-        pub const quadraticCurveTo = bridge.function(RenderingContext2D.quadraticCurveTo, .{});
-        pub const bezierCurveTo = bridge.function(RenderingContext2D.bezierCurveTo, .{});
-        pub const arc = bridge.function(RenderingContext2D.arc, .{});
-        pub const arcTo = bridge.function(RenderingContext2D.arcTo, .{});
-        pub const rect = bridge.function(RenderingContext2D.rect, .{});
-
-        pub const fill = bridge.function(RenderingContext2D.fill, .{});
-        pub const stroke = bridge.function(RenderingContext2D.stroke, .{});
-        pub const clip = bridge.function(RenderingContext2D.clip, .{});
-
-        pub const font = bridge.accessor(RenderingContext2D.getFont, RenderingContext2D.setFont, .{});
-        pub const textAlign = bridge.accessor(RenderingContext2D.getTextAlign, RenderingContext2D.setTextAlign, .{});
-        pub const textBaseline = bridge.accessor(RenderingContext2D.getTextBaseline, RenderingContext2D.setTextBaseline, .{});
-        pub const fillText = bridge.function(RenderingContext2D.fillText, .{});
-        pub const strokeText = bridge.function(RenderingContext2D.strokeText, .{});
-    };
-};
 
 pub fn asElement(self: *Canvas) *Element {
     return self._proto._proto;
@@ -198,16 +59,25 @@ pub fn setHeight(self: *Canvas, value: u32, page: *Page) !void {
     try self.asElement().setAttributeSafe("height", str, page);
 }
 
-pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?*RenderingContext2D {
-    _ = self;
+/// Since there's no base class rendering contextes inherit from,
+/// we're using tagged union.
+const DrawingContext = union(enum) {
+    @"2d": *CanvasRenderingContext2D,
+    webgl: *WebGLRenderingContext,
+};
 
-    if (!std.mem.eql(u8, context_type, "2d")) {
-        return null;
+pub fn getContext(_: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
+    if (std.mem.eql(u8, context_type, "2d")) {
+        const ctx = try page._factory.create(CanvasRenderingContext2D{});
+        return .{ .@"2d" = ctx };
     }
 
-    const ctx = try page.arena.create(RenderingContext2D);
-    ctx.* = .{};
-    return ctx;
+    if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
+        const ctx = try page._factory.create(WebGLRenderingContext{});
+        return .{ .webgl = ctx };
+    }
+
+    return null;
 }
 
 pub const JsApi = struct {
