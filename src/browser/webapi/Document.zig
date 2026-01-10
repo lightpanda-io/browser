@@ -124,6 +124,7 @@ const CreateElementOptions = struct {
 };
 
 pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElementOptions, page: *Page) !*Element {
+    try validateElementName(name);
     const namespace: Element.Namespace = blk: {
         if (self._type == .html) {
             break :blk .html;
@@ -149,6 +150,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
 }
 
 pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8, page: *Page) !*Element {
+    try validateElementName(name);
     const node = try page.createElementNS(Element.Namespace.parse(namespace), name, null);
 
     // Track owner document if it's not the main document
@@ -867,6 +869,29 @@ fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, compti
                     return error.HierarchyError;
                 }
             },
+        }
+    }
+}
+
+fn validateElementName(name: []const u8) !void {
+    if (name.len == 0) {
+        return error.InvalidCharacterError;
+    }
+
+    const first = name[0];
+    // Element names cannot start with: digits, period, hyphen
+    if ((first >= '0' and first <= '9') or first == '.' or first == '-') {
+        return error.InvalidCharacterError;
+    }
+
+    for (name[1..]) |c| {
+        const is_valid = (c >= 'a' and c <= 'z') or
+            (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or
+            c == '_' or c == '-' or c == '.' or c == ':';
+
+        if (!is_valid) {
+            return error.InvalidCharacterError;
         }
     }
 }
