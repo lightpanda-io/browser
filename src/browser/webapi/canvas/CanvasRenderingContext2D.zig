@@ -29,11 +29,11 @@ const Page = @import("../../Page.zig");
 const CanvasRenderingContext2D = @This();
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
-fill_style: color.RGBA = color.RGBA.Named.black,
+_fill_style: color.RGBA = color.RGBA.Named.black,
 
 pub fn getFillStyle(self: *const CanvasRenderingContext2D, page: *Page) ![]const u8 {
     var w = std.Io.Writer.Allocating.init(page.call_arena);
-    try self.fill_style.format(&w.writer);
+    try self._fill_style.format(&w.writer);
     return w.written();
 }
 
@@ -42,7 +42,7 @@ pub fn setFillStyle(
     value: []const u8,
 ) !void {
     // Prefer the same fill_style if fails.
-    self.fill_style = color.RGBA.parse(value) catch self.fill_style;
+    self._fill_style = color.RGBA.parse(value) catch self._fill_style;
 }
 
 pub fn getGlobalAlpha(_: *const CanvasRenderingContext2D) f64 {
