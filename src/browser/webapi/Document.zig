@@ -125,11 +125,11 @@ const CreateElementOptions = struct {
 
 pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElementOptions, page: *Page) !*Element {
     const namespace: Element.Namespace = blk: {
-        if (self._type == .xml) {
-            @branchHint(.unlikely);
-            break :blk .xml;
+        if (self._type == .html) {
+            break :blk .html;
         }
-        break :blk .html;
+        // Generic and XML documents create XML elements
+        break :blk .xml;
     };
     const node = try page.createElementNS(namespace, name, null);
     const element = node.as(Element);
@@ -432,20 +432,103 @@ pub fn importNode(_: *const Document, node: *Node, deep_: ?bool, page: *Page) !*
 }
 
 pub fn append(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !void {
+    try validateDocumentNodes(self, nodes, false);
+
+    page.domChanged();
     const parent = self.asNode();
+    const parent_is_connected = parent.isConnected();
+
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(page);
-        _ = try parent.appendChild(child, page);
+
+        // DocumentFragments are special - append all their children
+        if (child.is(Node.DocumentFragment)) |_| {
+            try page.appendAllChildren(child, parent);
+            continue;
+        }
+
+        var child_connected = false;
+        if (child._parent) |previous_parent| {
+            child_connected = child.isConnected();
+            page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
+        }
+        try page.appendNode(parent, child, .{ .child_already_connected = child_connected });
     }
 }
 
 pub fn prepend(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !void {
+    try validateDocumentNodes(self, nodes, false);
+
+    page.domChanged();
     const parent = self.asNode();
+    const parent_is_connected = parent.isConnected();
+
     var i = nodes.len;
     while (i > 0) {
         i -= 1;
         const child = try nodes[i].toNode(page);
-        _ = try parent.insertBefore(child, parent.firstChild(), page);
+
+        // DocumentFragments are special - need to insert all their children
+        if (child.is(Node.DocumentFragment)) |frag| {
+            const first_child = parent.firstChild();
+            var frag_child = frag.asNode().lastChild();
+            while (frag_child) |fc| {
+                const prev = fc.previousSibling();
+                page.removeNode(frag.asNode(), fc, .{ .will_be_reconnected = parent_is_connected });
+                if (first_child) |before| {
+                    try page.insertNodeRelative(parent, fc, .{ .before = before }, .{});
+                } else {
+                    try page.appendNode(parent, fc, .{});
+                }
+                frag_child = prev;
+            }
+            continue;
+        }
+
+        var child_connected = false;
+        if (child._parent) |previous_parent| {
+            child_connected = child.isConnected();
+            page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
+        }
+
+        const first_child = parent.firstChild();
+        if (first_child) |before| {
+            try page.insertNodeRelative(parent, child, .{ .before = before }, .{ .child_already_connected = child_connected });
+        } else {
+            try page.appendNode(parent, child, .{ .child_already_connected = child_connected });
+        }
+    }
+}
+
+pub fn replaceChildren(self: *Document, nodes: []const Node.NodeOrText, page: *Page) !void {
+    try validateDocumentNodes(self, nodes, true);
+
+    page.domChanged();
+    const parent = self.asNode();
+
+    // Remove all existing children
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        page.removeNode(parent, child, .{ .will_be_reconnected = false });
+    }
+
+    // Append new children
+    const parent_is_connected = parent.isConnected();
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+
+        // DocumentFragments are special - append all their children
+        if (child.is(Node.DocumentFragment)) |_| {
+            try page.appendAllChildren(child, parent);
+            continue;
+        }
+
+        var child_connected = false;
+        if (child._parent) |previous_parent| {
+            child_connected = child.isConnected();
+            page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent_is_connected });
+        }
+        try page.appendNode(parent, child, .{ .child_already_connected = child_connected });
     }
 }
 
@@ -699,6 +782,95 @@ pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
 
+// Validates that nodes can be inserted into a Document, respecting Document constraints:
+// - At most one Element child
+// - At most one DocumentType child
+// - No Document, Attribute, or Text nodes
+// - Only Element, DocumentType, Comment, and ProcessingInstruction are allowed
+// When replacing=true, existing children are not counted (for replaceChildren)
+fn validateDocumentNodes(self: *Document, nodes: []const Node.NodeOrText, comptime replacing: bool) !void {
+    const parent = self.asNode();
+
+    // Check existing elements and doctypes (unless we're replacing all children)
+    var has_element = false;
+    var has_doctype = false;
+
+    if (!replacing) {
+        var it = parent.childrenIterator();
+        while (it.next()) |child| {
+            if (child._type == .element) {
+                has_element = true;
+            } else if (child._type == .document_type) {
+                has_doctype = true;
+            }
+        }
+    }
+
+    // Validate new nodes
+    for (nodes) |node_or_text| {
+        switch (node_or_text) {
+            .text => {
+                // Text nodes are not allowed as direct children of Document
+                return error.HierarchyError;
+            },
+            .node => |child| {
+                // Check if it's a DocumentFragment - need to validate its children
+                if (child.is(Node.DocumentFragment)) |frag| {
+                    var frag_it = frag.asNode().childrenIterator();
+                    while (frag_it.next()) |frag_child| {
+                        // Document can only contain: Element, DocumentType, Comment, ProcessingInstruction
+                        switch (frag_child._type) {
+                            .element => {
+                                if (has_element) {
+                                    return error.HierarchyError;
+                                }
+                                has_element = true;
+                            },
+                            .document_type => {
+                                if (has_doctype) {
+                                    return error.HierarchyError;
+                                }
+                                has_doctype = true;
+                            },
+                            .cdata => |cd| switch (cd._type) {
+                                .comment, .processing_instruction => {}, // Allowed
+                                .text, .cdata_section => return error.HierarchyError, // Not allowed in Document
+                            },
+                            .document, .attribute, .document_fragment => return error.HierarchyError,
+                        }
+                    }
+                } else {
+                    // Validate node type for direct insertion
+                    switch (child._type) {
+                        .element => {
+                            if (has_element) {
+                                return error.HierarchyError;
+                            }
+                            has_element = true;
+                        },
+                        .document_type => {
+                            if (has_doctype) {
+                                return error.HierarchyError;
+                            }
+                            has_doctype = true;
+                        },
+                        .cdata => |cd| switch (cd._type) {
+                            .comment, .processing_instruction => {}, // Allowed
+                            .text, .cdata_section => return error.HierarchyError, // Not allowed in Document
+                        },
+                        .document, .attribute, .document_fragment => return error.HierarchyError,
+                    }
+                }
+
+                // Check for cycles
+                if (child.contains(parent)) {
+                    return error.HierarchyError;
+                }
+            },
+        }
+    }
+}
+
 const ReadyState = enum {
     loading,
     interactive,
@@ -768,8 +940,9 @@ pub const JsApi = struct {
     pub const getElementsByName = bridge.function(Document.getElementsByName, .{});
     pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true });
     pub const importNode = bridge.function(Document.importNode, .{ .dom_exception = true });
-    pub const append = bridge.function(Document.append, .{});
-    pub const prepend = bridge.function(Document.prepend, .{});
+    pub const append = bridge.function(Document.append, .{ .dom_exception = true });
+    pub const prepend = bridge.function(Document.prepend, .{ .dom_exception = true });
+    pub const replaceChildren = bridge.function(Document.replaceChildren, .{ .dom_exception = true });
     pub const elementFromPoint = bridge.function(Document.elementFromPoint, .{});
     pub const elementsFromPoint = bridge.function(Document.elementsFromPoint, .{});
     pub const write = bridge.function(Document.write, .{ .dom_exception = true });
