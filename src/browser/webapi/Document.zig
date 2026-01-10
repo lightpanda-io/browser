@@ -491,7 +491,13 @@ pub fn elementsFromPoint(self: *Document, x: f64, y: f64, page: *Page) ![]const 
     return result.items;
 }
 
-pub fn getDocType(_: *const Document) ?*DocumentType {
+pub fn getDocType(self: *Document) ?*Node {
+    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    while (tw.next()) |node| {
+        if (node._type == .document_type) {
+            return node;
+        }
+    }
     return null;
 }
 
