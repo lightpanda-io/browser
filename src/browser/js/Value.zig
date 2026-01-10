@@ -53,6 +53,10 @@ pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
     return self.context.valueToString(self.js_val, .{ .allocator = allocator });
 }
 
+pub fn toBool(self: Value) bool {
+    return self.js_val.toBool(self.context.isolate);
+}
+
 pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
     const json_string = v8.String.initUtf8(ctx.isolate, json);
     const value = try v8.Json.parse(ctx.v8_context, json_string);
@@ -86,19 +90,3 @@ pub fn toArray(self: Value) js.Array {
         .js_arr = self.js_val.castTo(v8.Array),
     };
 }
-
-// pub const Value = struct {
-//     value: v8.Value,
-//     context: *const Context,
-
-//     // the caller needs to deinit the string returned
-//     pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-//         return self.context.valueToString(self.value, .{ .allocator = allocator });
-//     }
-
-//     pub fn fromJson(ctx: *Context, json: []const u8) !Value {
-//         const json_string = v8.String.initUtf8(ctx.isolate, json);
-//         const value = try v8.Json.parse(ctx.v8_context, json_string);
-//         return Value{ .context = ctx, .value = value };
-//     }
-// };
