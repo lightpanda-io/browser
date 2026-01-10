@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<head>
+  <title>document.replaceChildren Tests</title>
+</head>
+<body>
+  <div id="test">Original content</div>
+</body>
+
+<script id=error_multiple_elements>
+  {
+    // Test that we cannot have more than one Element child
+    const doc = new Document();
+    const div1 = doc.createElement('div');
+    const div2 = doc.createElement('div');
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren(div1, div2);
+    });
+  }
+</script>
+
+<script id=error_multiple_elements_via_fragment>
+  {
+    // Test that we cannot have more than one Element child via DocumentFragment
+    const doc = new Document();
+    const fragment = doc.createDocumentFragment();
+    fragment.appendChild(doc.createElement('div'));
+    fragment.appendChild(doc.createElement('span'));
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren(fragment);
+    });
+  }
+</script>
+
+<script id=error_multiple_doctypes>
+  {
+    // Test that we cannot have more than one DocumentType child
+    const doc = new Document();
+    const doctype1 = doc.implementation.createDocumentType('html', '', '');
+    const doctype2 = doc.implementation.createDocumentType('html', '', '');
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren(doctype1, doctype2);
+    });
+  }
+</script>
+
+<script id=error_text_node>
+  {
+    // Test that we cannot insert Text nodes directly into Document
+    const doc = new Document();
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren('Just text');
+    });
+  }
+</script>
+
+<script id=error_text_with_element>
+  {
+    // Test that we cannot insert Text nodes even with valid Element
+    const doc = new Document();
+    const html = doc.createElement('html');
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren('Text 1', html, 'Text 2');
+    });
+  }
+</script>
+
+<script id=error_append_multiple_elements>
+  {
+    // Test that append also validates
+    const doc = new Document();
+    doc.append(doc.createElement('html'));
+
+    const div = doc.createElement('div');
+    testing.expectError('HierarchyRequest', () => {
+      doc.append(div);
+    });
+  }
+</script>
+
+<script id=error_prepend_multiple_elements>
+  {
+    // Test that prepend also validates
+    const doc = new Document();
+    doc.prepend(doc.createElement('html'));
+
+    const div = doc.createElement('div');
+    testing.expectError('HierarchyRequest', () => {
+      doc.prepend(div);
+    });
+  }
+</script>
+
+<script id=error_append_text>
+  {
+    // Test that append rejects text nodes
+    const doc = new Document();
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.append('text');
+    });
+  }
+</script>
+
+<script id=error_prepend_text>
+  {
+    // Test that prepend rejects text nodes
+    const doc = new Document();
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.prepend('text');
+    });
+  }
+</script>
+
+<script id=replace_with_single_element>
+  {
+    const doc = new Document();
+    const html = doc.createElement('html');
+    html.id = 'replaced';
+    html.textContent = 'New content';
+
+    doc.replaceChildren(html);
+
+    testing.expectEqual(1, doc.childNodes.length);
+    testing.expectEqual(html, doc.firstChild);
+    testing.expectEqual('replaced', doc.firstChild.id);
+  }
+</script>
+
+<script id=replace_with_comments>
+  {
+    const doc = new Document();
+    const comment1 = doc.createComment('Comment 1');
+    const html = doc.createElement('html');
+    const comment2 = doc.createComment('Comment 2');
+
+    doc.replaceChildren(comment1, html, comment2);
+
+    testing.expectEqual(3, doc.childNodes.length);
+    testing.expectEqual('#comment', doc.firstChild.nodeName);
+    testing.expectEqual('Comment 1', doc.firstChild.textContent);
+    testing.expectEqual('html', doc.childNodes[1].nodeName);
+    testing.expectEqual('#comment', doc.lastChild.nodeName);
+    testing.expectEqual('Comment 2', doc.lastChild.textContent);
+  }
+</script>
+
+<script id=replace_with_empty>
+  {
+    const doc = new Document();
+    // First add some content
+    const div = doc.createElement('div');
+    doc.replaceChildren(div);
+    testing.expectEqual(1, doc.childNodes.length);
+
+    // Now replace with nothing
+    doc.replaceChildren();
+
+    testing.expectEqual(0, doc.childNodes.length);
+    testing.expectEqual(null, doc.firstChild);
+    testing.expectEqual(null, doc.lastChild);
+  }
+</script>
+
+<script id=replace_removes_old_children>
+  {
+    const doc = new Document();
+    const comment1 = doc.createComment('old');
+
+    doc.replaceChildren(comment1);
+    testing.expectEqual(1, doc.childNodes.length);
+    testing.expectEqual(doc, comment1.parentNode);
+
+    const html = doc.createElement('html');
+    html.id = 'new';
+
+    doc.replaceChildren(html);
+
+    // Old child should be removed
+    testing.expectEqual(null, comment1.parentNode);
+    testing.expectEqual(1, doc.childNodes.length);
+    testing.expectEqual('new', doc.firstChild.id);
+  }
+</script>
+
+<script id=replace_with_document_fragment_valid>
+  {
+    const doc = new Document();
+    const fragment = doc.createDocumentFragment();
+    const html = doc.createElement('html');
+    const comment = doc.createComment('comment');
+
+    fragment.appendChild(comment);
+    fragment.appendChild(html);
+
+    doc.replaceChildren(fragment);
+
+    // Fragment contents should be moved
+    testing.expectEqual(2, doc.childNodes.length);
+    testing.expectEqual('#comment', doc.firstChild.nodeName);
+    testing.expectEqual('html', doc.lastChild.nodeName);
+
+    // Fragment should be empty now
+    testing.expectEqual(0, fragment.childNodes.length);
+  }
+</script>
+
+<script id=replace_maintains_child_order>
+  {
+    const doc = new Document();
+    const nodes = [];
+
+    // Document can have: comment, processing instruction, doctype, element
+    nodes.push(doc.createComment('comment'));
+    nodes.push(doc.createElement('html'));
+
+    doc.replaceChildren(...nodes);
+
+    testing.expectEqual(2, doc.childNodes.length);
+    testing.expectEqual('#comment', doc.childNodes[0].nodeName);
+    testing.expectEqual('html', doc.childNodes[1].nodeName);
+  }
+</script>
+
+<script id=replace_with_nested_structure>
+  {
+    const doc = new Document();
+    const outer = doc.createElement('html');
+    outer.id = 'outer';
+    const middle = doc.createElement('body');
+    middle.id = 'middle';
+    const inner = doc.createElement('span');
+    inner.id = 'inner';
+    inner.textContent = 'Nested';
+
+    middle.appendChild(inner);
+    outer.appendChild(middle);
+
+    doc.replaceChildren(outer);
+
+    testing.expectEqual(1, doc.childNodes.length);
+    testing.expectEqual('outer', doc.firstChild.id);
+
+    const foundInner = doc.getElementById('inner');
+    testing.expectEqual(inner, foundInner);
+    testing.expectEqual('Nested', foundInner.textContent);
+  }
+</script>
+
+<script id=consecutive_replaces>
+  {
+    const doc = new Document();
+    const html1 = doc.createElement('html');
+    html1.id = 'first-replace';
+    doc.replaceChildren(html1);
+    testing.expectEqual('first-replace', doc.firstChild.id);
+
+    // Replace element with comments
+    const comment = doc.createComment('in between');
+    doc.replaceChildren(comment);
+    testing.expectEqual(1, doc.childNodes.length);
+    testing.expectEqual('#comment', doc.firstChild.nodeName);
+
+    // Replace comments with new element
+    const html2 = doc.createElement('html');
+    html2.id = 'second-replace';
+    doc.replaceChildren(html2);
+    testing.expectEqual('second-replace', doc.firstChild.id);
+    testing.expectEqual(1, doc.childNodes.length);
+
+    // First element should no longer be in document
+    testing.expectEqual(null, html1.parentNode);
+    testing.expectEqual(null, comment.parentNode);
+  }
+</script>
+
+<script id=replace_with_comments_only>
+  {
+    const doc = new Document();
+    const comment1 = doc.createComment('First');
+    const comment2 = doc.createComment('Second');
+
+    doc.replaceChildren(comment1, comment2);
+
+    testing.expectEqual(2, doc.childNodes.length);
+    testing.expectEqual('#comment', doc.firstChild.nodeName);
+    testing.expectEqual('First', doc.firstChild.textContent);
+    testing.expectEqual('#comment', doc.lastChild.nodeName);
+    testing.expectEqual('Second', doc.lastChild.textContent);
+  }
+</script>
+
+<script id=error_fragment_with_text>
+  {
+    // DocumentFragment with text should fail when inserted into Document
+    const doc = new Document();
+    const fragment = doc.createDocumentFragment();
+    fragment.appendChild(doc.createTextNode('text'));
+    fragment.appendChild(doc.createElement('html'));
+
+    testing.expectError('HierarchyRequest', () => {
+      doc.replaceChildren(fragment);
+    });
+  }
+</script>
+
+<script id=append_valid_nodes>
+  {
+    const doc = new Document();
+    const comment = doc.createComment('test');
+    const html = doc.createElement('html');
+
+    doc.append(comment);
+    testing.expectEqual(1, doc.childNodes.length);
+
+    doc.append(html);
+    testing.expectEqual(2, doc.childNodes.length);
+    testing.expectEqual('#comment', doc.firstChild.nodeName);
+    testing.expectEqual('html', doc.lastChild.nodeName);
+  }
+</script>
+
+<script id=prepend_valid_nodes>
+  {
+    const doc = new Document();
+    const html = doc.createElement('html');
+    const comment = doc.createComment('test');
+
+    doc.prepend(html);
+    testing.expectEqual(1, doc.childNodes.length);
+
+    doc.prepend(comment);
+    testing.expectEqual(2, doc.childNodes.length);
+    testing.expectEqual('#comment', doc.firstChild.nodeName);
+    testing.expectEqual('html', doc.lastChild.nodeName);
+  }
+</script>

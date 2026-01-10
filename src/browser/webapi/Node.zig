@@ -378,8 +378,14 @@ pub fn isConnected(self: *const Node) bool {
         root = parent;
     }
 
-    // A node is connected if its root is a document
-    return root._type == .document;
+    switch (root._type) {
+        .document => return true,
+        .document_fragment => |df| {
+            const sr = df.is(ShadowRoot) orelse return false;
+            return sr._host.asNode().isConnected();
+        },
+        else => return false,
+    }
 }
 
 const GetRootNodeOpts = struct {

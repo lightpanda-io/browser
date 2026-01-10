@@ -201,8 +201,8 @@ cdataClassName<!DOCTYPE html>
   root.appendChild(cdata);
   root.appendChild(elem2);
 
-  testing.expectEqual('LAST', cdata.nextElementSibling.tagName);
-  testing.expectEqual('FIRST', cdata.previousElementSibling.tagName);
+  testing.expectEqual('last', cdata.nextElementSibling.tagName);
+  testing.expectEqual('first', cdata.previousElementSibling.tagName);
 }
 </script>
 

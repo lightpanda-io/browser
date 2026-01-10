@@ -215,6 +215,15 @@ pub fn getDocType(self: *HTMLDocument, page: *Page) !*DocumentType {
     if (self._document_type) |dt| {
         return dt;
     }
+
+    var tw = @import("TreeWalker.zig").Full.init(self.asNode(), .{});
+    while (tw.next()) |node| {
+        if (node._type == .document_type) {
+            self._document_type = node.as(DocumentType);
+            return self._document_type.?;
+        }
+    }
+
     self._document_type = try page._factory.node(DocumentType{
         ._proto = undefined,
         ._name = "html",
