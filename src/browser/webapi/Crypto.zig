@@ -19,6 +19,8 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
+const RAND_bytes = @import("../../boringssl.zig").RAND_bytes;
+
 const Crypto = @This();
 _pad: bool = false,
 
@@ -32,7 +34,7 @@ pub fn getRandomValues(_: *const Crypto, js_obj: js.Object) !js.Object {
     if (buf.len > 65_536) {
         return error.QuotaExceededError;
     }
-    std.crypto.random.bytes(buf);
+    _ = RAND_bytes(buf.ptr, buf.len);
     return js_obj;
 }
 
