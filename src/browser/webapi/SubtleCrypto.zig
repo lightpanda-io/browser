@@ -35,33 +35,39 @@ const SubtleCrypto = @This();
 /// Don't optimize away the type.
 _pad: bool = false,
 
-/// NOTE: I think we can use extern union and cast this to intended algorithm
-/// by `name` field. Not sure if it'd make difference memory/performance wise.
-const Algorithm = union(enum) {
-    rsa_hashed_key_gen: RSA,
-    hmac_key_gen: HMAC,
-
+const Params = struct {
     /// https://developer.mozilla.org/en-US/docs/Web/API/RsaHashedKeyGenParams
-    const RSA = struct {
+    const RsaHashedKeyGen = struct {
         name: []const u8,
         /// This should be at least 2048.
         /// Some organizations are now recommending that it should be 4096.
         modulusLength: u32,
         publicExponent: js.TypedArray(u8),
-        hash: []const u8,
+        hash: union(enum) {
+            string: []const u8,
+            object: struct { name: []const u8 },
+        },
     };
 
     /// https://developer.mozilla.org/en-US/docs/Web/API/HmacKeyGenParams
-    const HMAC = struct {
+    const HmacKeyGen = struct {
+        /// Always HMAC.
         name: []const u8,
         /// Its also possible to pass this in an object.
         hash: union(enum) {
-            str: []const u8,
-            obj: struct { name: []const u8 },
+            string: []const u8,
+            object: struct { name: []const u8 },
         },
         /// If omitted, default is the block size of the chosen hash function.
         length: ?usize,
     };
+};
+
+/// NOTE: I think we can use extern union and cast this to intended algorithm
+/// by `name` field. Not sure if it'd make difference memory/performance wise.
+const Algorithm = union(enum) {
+    rsa_hashed_key_gen: Params.RsaHashedKeyGen,
+    hmac_key_gen: Params.HmacKeyGen,
 };
 
 /// Returns the desired digest by its name.
@@ -81,16 +87,19 @@ fn getDigest(name: []const u8) error{Invalid}!*const crypto.EVP_MD {
     };
 }
 
+/// Represents a cryptographic key obtained from one of the SubtleCrypto methods
+/// generateKey(), deriveKey(), importKey(), or unwrapKey().
 pub const CryptoKey = struct {
-    _algorithm: Algorithm,
+    /// Algorithm being used.
+    _type: Type,
     /// Whether the key is extractable.
     _extractable: bool,
-    /// Bit flags of `usages`.
+    /// Bit flags of `usages`; see `Usages` type.
     _usages: u8,
-    /// Algorithm specific data.
-    _internal: union {
-        hmac: []u8,
-    },
+    _key: []const u8,
+    _digest: *const crypto.EVP_MD,
+
+    pub const Type = enum(u8) { hmac, rsa };
 
     pub const Usages = struct {
         // zig fmt: off
@@ -119,10 +128,10 @@ pub const CryptoKey = struct {
         };
     }
 
-    fn initHMAC(algorithm: Algorithm.HMAC, extractable: bool, page: *Page) !*CryptoKey {
+    fn initHMAC(algorithm: Params.HmacKeyGen, extractable: bool, page: *Page) !*CryptoKey {
         const hash = switch (algorithm.hash) {
-            .str => |str| str,
-            .obj => |obj| obj.name,
+            .string => |str| str,
+            .object => |obj| obj.name,
         };
         // Find digest.
         const digest = try getDigest(hash);
@@ -144,17 +153,62 @@ pub const CryptoKey = struct {
         std.debug.assert(res == 1);
 
         return page._factory.create(CryptoKey{
-            ._algorithm = .{
-                .hmac_key_gen = .{
-                    .name = "HMAC",
-                    .hash = .{ .obj = .{ .name = hash } },
-                    .length = block_size,
-                },
-            },
+            ._type = .hmac,
             ._extractable = extractable,
             ._usages = 0,
-            ._internal = .{ .hmac = key },
+            ._key = key,
+            ._digest = digest,
         });
+    }
+
+    fn signHMAC(self: *const CryptoKey, data: []const u8, page: *Page) !js.Promise {
+        const buffer = try page.arena.alloc(u8, crypto.EVP_MD_size(self._digest));
+        errdefer page.arena.free(buffer);
+        var out_len: u32 = 0;
+        // Try to sign.
+        const signed = crypto.HMAC(
+            self._digest,
+            @ptrCast(self._key.ptr),
+            self._key.len,
+            data.ptr,
+            data.len,
+            buffer.ptr,
+            &out_len,
+        );
+
+        if (signed != null) {
+            return page.js.resolvePromise(js.ArrayBuffer{ .values = buffer[0..out_len] });
+        }
+
+        return error.Invalid;
+    }
+
+    fn verifyHMAC(
+        self: *const CryptoKey,
+        signature: []const u8,
+        data: []const u8,
+        page: *Page,
+    ) !js.Promise {
+        var buffer: [crypto.EVP_MAX_MD_BLOCK_SIZE]u8 = undefined;
+        var out_len: u32 = 0;
+        // Try to sign.
+        const signed = crypto.HMAC(
+            self._digest,
+            @ptrCast(self._key.ptr),
+            self._key.len,
+            data.ptr,
+            data.len,
+            &buffer,
+            &out_len,
+        );
+
+        if (signed != null) {
+            // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
+            const res = crypto.CRYPTO_memcmp(signed, @ptrCast(signature.ptr), signature.len);
+            return page.js.resolvePromise(res == 0);
+        }
+
+        return page.js.resolvePromise(false);
     }
 
     pub const JsApi = struct {
@@ -180,16 +234,58 @@ pub fn generateKey(
     return CryptoKey.init(algorithm, extractable, key_usages, page);
 }
 
+const SignatureAlgorithm = union(enum) {
+    string: []const u8,
+    object: struct { name: []const u8 },
+
+    pub fn isHMAC(self: SignatureAlgorithm) bool {
+        const name = switch (self) {
+            .string => |string| string,
+            .object => |object| object.name,
+        };
+
+        if (name.len < 4) return false;
+        const hmac: u32 = @bitCast([4]u8{ 'H', 'M', 'A', 'C' });
+        return @as(u32, @bitCast(name[0..4].*)) == hmac;
+    }
+};
+
 /// Generate a digital signature.
 pub fn sign(
     _: *const SubtleCrypto,
-    algorithm: []const u8,
+    /// This can either be provided as string or object.
+    /// We can't use the `Algorithm` type defined before though since there
+    /// are couple of changes between the two.
+    /// https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/sign#algorithm
+    algorithm: SignatureAlgorithm,
+    key: *CryptoKey,
+    data: []const u8, // ArrayBuffer.
+    page: *Page,
+) !js.Promise {
+    // Verify algorithm.
+    if (!algorithm.isHMAC()) return error.InvalidAccess;
+
+    return switch (key._type) {
+        .hmac => key.signHMAC(data, page),
+        else => return error.InvalidAccess,
+    };
+}
+
+/// Verify a digital signature.
+pub fn verify(
+    _: *const SubtleCrypto,
+    algorithm: SignatureAlgorithm,
     key: *const CryptoKey,
-    data: []const u8,
-) void {
-    _ = algorithm;
-    _ = key;
-    _ = data;
+    signature: []const u8, // ArrayBuffer.
+    data: []const u8, // ArrayBuffer.
+    page: *Page,
+) !js.Promise {
+    if (!algorithm.isHMAC()) return error.InvalidAccess;
+
+    return switch (key._type) {
+        .hmac => key.verifyHMAC(signature, data, page),
+        else => return error.InvalidAccess,
+    };
 }
 
 pub const JsApi = struct {
@@ -203,5 +299,6 @@ pub const JsApi = struct {
     };
 
     pub const generateKey = bridge.function(SubtleCrypto.generateKey, .{});
-    pub const sign = bridge.function(SubtleCrypto.sign, .{});
+    pub const sign = bridge.function(SubtleCrypto.sign, .{ .dom_exception = true, .as_typed_array = false });
+    pub const verify = bridge.function(SubtleCrypto.verify, .{});
 };

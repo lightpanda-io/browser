@@ -10,7 +10,12 @@ pub extern fn EVP_sha256() *const EVP_MD;
 pub extern fn EVP_sha384() *const EVP_MD;
 pub extern fn EVP_sha512() *const EVP_MD;
 
+pub const EVP_MAX_MD_BLOCK_SIZE = 128;
+
+pub extern fn EVP_MD_size(md: ?*const EVP_MD) usize;
 pub extern fn EVP_MD_block_size(md: ?*const EVP_MD) usize;
+
+pub extern fn CRYPTO_memcmp(a: ?*const anyopaque, b: ?*const anyopaque, len: usize) c_int;
 
 pub extern fn HMAC(
     evp_md: *const EVP_MD,
