@@ -19,6 +19,10 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
+const Page = @import("../Page.zig");
+
+const SubtleCrypto = @import("SubtleCrypto.zig");
+
 const Crypto = @This();
 _pad: bool = false,
 
@@ -40,6 +44,11 @@ pub fn randomUUID(_: *const Crypto) ![36]u8 {
     var hex: [36]u8 = undefined;
     @import("../../id.zig").uuidv4(&hex);
     return hex;
+}
+
+pub fn getSubtle(self: *const Crypto, page: *Page) !*SubtleCrypto {
+    _ = self;
+    return page._factory.create(SubtleCrypto{});
 }
 
 const RandomValues = union(enum) {
@@ -78,6 +87,7 @@ pub const JsApi = struct {
 
     pub const getRandomValues = bridge.function(Crypto.getRandomValues, .{});
     pub const randomUUID = bridge.function(Crypto.randomUUID, .{});
+    pub const subtle = bridge.accessor(Crypto.getSubtle, null, .{});
 };
 
 const testing = @import("../../testing.zig");
