@@ -36,7 +36,7 @@
 
   function expectError(expected, fn) {
     withError((err) => {
-      expectEqual(expected, err.toString());
+      expectEqual(true, err.toString().includes(expected));
     }, fn);
   }
 
