@@ -31,10 +31,10 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: build wpt
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast wpt
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -- version
 
       - name: run test with json output
-        run:  ./zig-out/bin/lightpanda-wpt > wpt.json
+        run:  zig-out/bin/lightpanda-wpt --json > wpt.json
 
       - name: write commit
         run: |
