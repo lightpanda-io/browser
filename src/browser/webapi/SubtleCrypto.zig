@@ -101,6 +101,7 @@ pub const CryptoKey = struct {
 
     pub const Type = enum(u8) { hmac, rsa };
 
+    /// Changing the names of fields would affect bitmask creation.
     pub const Usages = struct {
         // zig fmt: off
         pub const encrypt    = 0x001;
@@ -121,20 +122,52 @@ pub const CryptoKey = struct {
         page: *Page,
     ) !*CryptoKey {
         // TODO.
-        _ = key_usages;
         return switch (algorithm) {
-            .hmac_key_gen => |hmac| try initHMAC(hmac, extractable, page),
+            .hmac_key_gen => |hmac| initHMAC(hmac, extractable, key_usages, page),
             else => @panic("NYI"),
         };
     }
 
-    fn initHMAC(algorithm: Params.HmacKeyGen, extractable: bool, page: *Page) !*CryptoKey {
+    /// Create a bitmask out of `key_usages`.-
+    fn createUsagesMask(usages: []const []const u8) !u8 {
+        const decls = @typeInfo(Usages).@"struct".decls;
+        var mask: u8 = 0;
+        iter_usages: for (usages) |usage| {
+            inline for (decls) |decl| {
+                if (std.mem.eql(u8, decl.name, usage)) {
+                    mask |= @field(Usages, decl.name);
+                    continue :iter_usages;
+                }
+            }
+            // Unknown usage if got here, report error.
+            return error.SyntaxError;
+        }
+
+        return mask;
+    }
+
+    inline fn canSign(self: *const CryptoKey) bool {
+        return self._usages & Usages.sign != 0;
+    }
+
+    inline fn canVerify(self: *const CryptoKey) bool {
+        return self._usages & Usages.verify != 0;
+    }
+
+    fn initHMAC(
+        algorithm: Params.HmacKeyGen,
+        extractable: bool,
+        key_usages: []const []const u8,
+        page: *Page,
+    ) !*CryptoKey {
         const hash = switch (algorithm.hash) {
             .string => |str| str,
             .object => |obj| obj.name,
         };
         // Find digest.
         const digest = try getDigest(hash);
+        // Calculate usages mask and check if its correct.
+        const usages_mask = try createUsagesMask(key_usages);
 
         const block_size: usize = blk: {
             // Caller provides this in bits, not bytes.
@@ -155,13 +188,17 @@ pub const CryptoKey = struct {
         return page._factory.create(CryptoKey{
             ._type = .hmac,
             ._extractable = extractable,
-            ._usages = 0,
+            ._usages = usages_mask,
             ._key = key,
             ._digest = digest,
         });
     }
 
-    fn signHMAC(self: *const CryptoKey, data: []const u8, page: *Page) !js.Promise {
+    fn signHMAC(self: *const CryptoKey, data: []const u8, page: *Page) !js.ArrayBuffer {
+        if (!self.canSign()) {
+            return error.InvalidAccessError;
+        }
+
         const buffer = try page.arena.alloc(u8, crypto.EVP_MD_size(self._digest));
         errdefer page.arena.free(buffer);
         var out_len: u32 = 0;
@@ -177,9 +214,10 @@ pub const CryptoKey = struct {
         );
 
         if (signed != null) {
-            return page.js.resolvePromise(js.ArrayBuffer{ .values = buffer[0..out_len] });
+            return js.ArrayBuffer{ .values = buffer[0..out_len] };
         }
 
+        // Not DOM exception, failed on our side.
         return error.Invalid;
     }
 
@@ -189,6 +227,10 @@ pub const CryptoKey = struct {
         data: []const u8,
         page: *Page,
     ) !js.Promise {
+        if (!self.canVerify()) {
+            return error.InvalidAccessError;
+        }
+
         var buffer: [crypto.EVP_MAX_MD_BLOCK_SIZE]u8 = undefined;
         var out_len: u32 = 0;
         // Try to sign.
@@ -230,8 +272,27 @@ pub fn generateKey(
     extractable: bool,
     key_usages: []const []const u8,
     page: *Page,
-) !*CryptoKey {
-    return CryptoKey.init(algorithm, extractable, key_usages, page);
+) !js.Promise {
+    const key = CryptoKey.init(algorithm, extractable, key_usages, page) catch |err| {
+        return page.js.rejectPromise(@errorName(err));
+    };
+
+    return page.js.resolvePromise(key);
+}
+
+/// Exports a key: that is, it takes as input a CryptoKey object and gives you
+/// the key in an external, portable format.
+pub fn exportKey(
+    _: *const SubtleCrypto,
+    format: []const u8,
+    key: *CryptoKey,
+    page: *Page,
+) !js.Promise {
+    if (std.mem.eql(u8, format, "raw")) {
+        return page.js.resolvePromise(js.ArrayBuffer{ .values = key._key });
+    }
+
+    return page.js.rejectPromise(@errorName(error.NotSupported));
 }
 
 const SignatureAlgorithm = union(enum) {
@@ -262,12 +323,21 @@ pub fn sign(
     data: []const u8, // ArrayBuffer.
     page: *Page,
 ) !js.Promise {
-    // Verify algorithm.
-    if (!algorithm.isHMAC()) return error.InvalidAccess;
-
     return switch (key._type) {
-        .hmac => key.signHMAC(data, page),
-        else => return error.InvalidAccess,
+        .hmac => {
+            // Verify algorithm.
+            if (!algorithm.isHMAC()) {
+                return page.js.rejectPromise(@errorName(error.InvalidAccessError));
+            }
+
+            // Call sign for HMAC.
+            const result = key.signHMAC(data, page) catch |err| {
+                return page.js.rejectPromise(@errorName(err));
+            };
+
+            return page.js.resolvePromise(result);
+        },
+        else => return page.js.rejectPromise(@errorName(error.InvalidAccessError)),
     };
 }
 
@@ -298,7 +368,8 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
     };
 
-    pub const generateKey = bridge.function(SubtleCrypto.generateKey, .{});
+    pub const generateKey = bridge.function(SubtleCrypto.generateKey, .{ .dom_exception = true });
+    pub const exportKey = bridge.function(SubtleCrypto.exportKey, .{ .dom_exception = true });
     pub const sign = bridge.function(SubtleCrypto.sign, .{ .dom_exception = true, .as_typed_array = false });
-    pub const verify = bridge.function(SubtleCrypto.verify, .{});
+    pub const verify = bridge.function(SubtleCrypto.verify, .{ .dom_exception = true });
 };
