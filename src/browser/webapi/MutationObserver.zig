@@ -21,6 +21,7 @@ const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
+const log = @import("../../log.zig");
 
 pub fn registerTypes() []const type {
     return &.{
@@ -243,7 +244,11 @@ pub fn deliverRecords(self: *MutationObserver, page: *Page) !void {
     // Take a copy of the records and clear the list before calling callback
     // This ensures mutations triggered during the callback go into a fresh list
     const records = try self.takeRecords(page);
-    try self._callback.call(void, .{ records, self });
+    var result: js.Function.Result = undefined;
+    self._callback.tryCall(void, .{ records, self }, &result) catch |err| {
+        log.err(.page, "MutObserver.deliverRecords", .{ .err = result.exception, .stack = result.stack });
+        return err;
+    };
 }
 
 pub const MutationRecord = struct {
