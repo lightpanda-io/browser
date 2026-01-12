@@ -54,7 +54,7 @@ isolate_params: *v8.CreateParams,
 context_id: usize,
 
 // Global handles that need to be freed on deinit
-globals: []v8.Global,
+eternal_function_templates: []v8.Eternal,
 
 // Dynamic slice to avoid circular dependency on JsApis.len at comptime
 templates: []*const v8.FunctionTemplate,
@@ -83,8 +83,8 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
     v8.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate.handle, Context.metaObjectCallback);
 
     // Allocate arrays dynamically to avoid comptime dependency on JsApis.len
-    const globals = try allocator.alloc(v8.Global, JsApis.len);
-    errdefer allocator.free(globals);
+    const eternal_function_templates = try allocator.alloc(v8.Eternal, JsApis.len);
+    errdefer allocator.free(eternal_function_templates);
 
     const templates = try allocator.alloc(*const v8.FunctionTemplate, JsApis.len);
     errdefer allocator.free(templates);
@@ -98,10 +98,12 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
             JsApi.Meta.class_id = i;
             const data = v8.v8__Isolate__GetDataFromSnapshotOnce(isolate.handle, snapshot.data_start + i);
             const function_handle: *const v8.FunctionTemplate = @ptrCast(data);
-            // Make function template global/persistent
-            v8.v8__Global__New(isolate.handle, @ptrCast(function_handle), &globals[i]);
+            // Make function template eternal
+            v8.v8__Eternal__New(isolate.handle, @ptrCast(function_handle), &eternal_function_templates[i]);
+
             // Extract the local handle from the global for easy access
-            templates[i] = @ptrCast(@alignCast(@as(*const anyopaque, @ptrFromInt(globals[i].data_ptr))));
+            const eternal_ptr = v8.v8__Eternal__Get(&eternal_function_templates[i], isolate.handle);
+            templates[i] = @ptrCast(@alignCast(eternal_ptr.?));
         }
     }
 
@@ -110,19 +112,15 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
         .isolate = isolate,
         .platform = platform,
         .allocator = allocator,
-        .globals = globals,
         .templates = templates,
         .isolate_params = params,
+        .eternal_function_templates = eternal_function_templates,
     };
 }
 
 pub fn deinit(self: *Env) void {
-    // Free global handles before destroying the isolate
-    for (self.globals) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-    self.allocator.free(self.globals);
     self.allocator.free(self.templates);
+    self.allocator.free(self.eternal_function_templates);
 
     self.isolate.exit();
     self.isolate.deinit();

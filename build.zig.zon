@@ -7,7 +7,7 @@
     .dependencies = .{
         .v8 = .{
             .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/direct_v8.tar.gz",
-            .hash = "v8-0.0.0-xddH69smBABCCW8Q-9pislHtX8OolAmcuHk8QoTPx78F",
+            .hash = "v8-0.0.0-xddH6yMpBABN1G8VKVISuYT8LFi05tQmnfDGRkHyIpwD",
         },
         //.v8 = .{ .path = "../zig-v8-fork" },
         .@"boringssl-zig" = .{
