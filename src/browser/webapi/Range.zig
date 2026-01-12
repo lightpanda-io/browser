@@ -357,7 +357,7 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
                 u8,
                 &.{ text_data[0..self._proto._start_offset], text_data[self._proto._end_offset..] },
             );
-            self._proto._start_container.setData(new_text);
+            try self._proto._start_container.setData(new_text, page);
         } else {
             // Delete child nodes in range
             var offset = self._proto._start_offset;
@@ -371,8 +371,43 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
         return;
     }
 
-    // Complex case: different containers - simplified implementation
-    // Just collapse the range for now
+    // Complex case: different containers
+    // Handle start container - if it's a text node, truncate it
+    if (self._proto._start_container.is(Node.CData)) |_| {
+        const text_data = self._proto._start_container.getData();
+        if (self._proto._start_offset < text_data.len) {
+            // Keep only the part before start_offset
+            const new_text = text_data[0..self._proto._start_offset];
+            try self._proto._start_container.setData(new_text, page);
+        }
+    }
+
+    // Handle end container - if it's a text node, truncate it
+    if (self._proto._end_container.is(Node.CData)) |_| {
+        const text_data = self._proto._end_container.getData();
+        if (self._proto._end_offset < text_data.len) {
+            // Keep only the part from end_offset onwards
+            const new_text = text_data[self._proto._end_offset..];
+            try self._proto._end_container.setData(new_text, page);
+        } else if (self._proto._end_offset == text_data.len) {
+            // If we're at the end, set to empty (will be removed if needed)
+            try self._proto._end_container.setData("", page);
+        }
+    }
+
+    // Remove nodes between start and end containers
+    // For now, handle the common case where they're siblings
+    if (self._proto._start_container.parentNode() == self._proto._end_container.parentNode()) {
+        var current = self._proto._start_container.nextSibling();
+        while (current != null and current != self._proto._end_container) {
+            const next = current.?.nextSibling();
+            if (current.?.parentNode()) |parent| {
+                _ = try parent.removeChild(current.?, page);
+            }
+            current = next;
+        }
+    }
+
     self.collapse(true);
 }
 
@@ -399,6 +434,39 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
                     const cloned = try child.cloneNode(true, page);
                     _ = try fragment.asNode().appendChild(cloned, page);
                 }
+            }
+        }
+    } else {
+        // Complex case: different containers
+        // Clone partial start container
+        if (self._proto._start_container.is(Node.CData)) |_| {
+            const text_data = self._proto._start_container.getData();
+            if (self._proto._start_offset < text_data.len) {
+                // Clone from start_offset to end of text
+                const cloned_text = text_data[self._proto._start_offset..];
+                const text_node = try page.createTextNode(cloned_text);
+                _ = try fragment.asNode().appendChild(text_node, page);
+            }
+        }
+
+        // Clone nodes between start and end containers (siblings case)
+        if (self._proto._start_container.parentNode() == self._proto._end_container.parentNode()) {
+            var current = self._proto._start_container.nextSibling();
+            while (current != null and current != self._proto._end_container) {
+                const cloned = try current.?.cloneNode(true, page);
+                _ = try fragment.asNode().appendChild(cloned, page);
+                current = current.?.nextSibling();
+            }
+        }
+
+        // Clone partial end container
+        if (self._proto._end_container.is(Node.CData)) |_| {
+            const text_data = self._proto._end_container.getData();
+            if (self._proto._end_offset > 0 and self._proto._end_offset <= text_data.len) {
+                // Clone from start to end_offset
+                const cloned_text = text_data[0..self._proto._end_offset];
+                const text_node = try page.createTextNode(cloned_text);
+                _ = try fragment.asNode().appendChild(text_node, page);
             }
         }
     }
