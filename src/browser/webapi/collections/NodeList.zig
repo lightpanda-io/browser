@@ -18,7 +18,7 @@
 
 const std = @import("std");
 
-const log = @import("../../..//log.zig");
+const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
