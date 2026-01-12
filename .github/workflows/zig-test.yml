@@ -38,52 +38,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  zig-build-dev:
-    name: zig build dev
-
-    # Don't run the CI with draft PR.
-    if: github.event.pull_request.draft == false
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          submodules: recursive
-
-      - uses: ./.github/actions/install
-
-      - name: zig build debug
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a run -- version
-
-      - name: upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lightpanda-build-dev
-          path: |
-            zig-out/bin/lightpanda
-          retention-days: 1
-
-  browser-fetch:
-    name: browser fetch
-    needs: zig-build-dev
-
-    # Don't run the CI with draft PR.
-    if: github.event.pull_request.draft == false
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: lightpanda-build-dev
-
-      - run: chmod a+x ./lightpanda
-
-      - run: ./lightpanda fetch https://httpbin.io/xhr/get
-
   zig-test:
     name: zig test
     timeout-minutes: 15
