@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const log = @import("../log.zig");
 
@@ -92,7 +93,7 @@ pub fn deinit(self: *Session) void {
 // NOTE: the caller is not the owner of the returned value,
 // the pointer on Page is just returned as a convenience
 pub fn createPage(self: *Session) !*Page {
-    std.debug.assert(self.page == null);
+    lp.assert(self.page == null, "Session.createPage - page not null", .{});
 
     const page_arena = &self.browser.page_arena;
     _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
@@ -116,8 +117,7 @@ pub fn createPage(self: *Session) !*Page {
 pub fn removePage(self: *Session) void {
     // Inform CDP the page is going to be removed, allowing other worlds to remove themselves before the main one
     self.browser.notification.dispatch(.page_remove, .{});
-
-    std.debug.assert(self.page != null);
+    lp.assert(self.page != null, "Session.removePage - page is null", .{});
 
     self.page.?.deinit();
     self.page = null;

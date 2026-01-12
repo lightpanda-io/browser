@@ -24,6 +24,7 @@ const Allocator = std.mem.Allocator;
 const log = lp.log;
 const App = lp.App;
 const SigHandler = @import("Sighandler.zig");
+pub const panic = lp.crash_handler.panic;
 
 pub fn main() !void {
     // allocator
