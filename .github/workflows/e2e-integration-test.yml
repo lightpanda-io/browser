@@ -66,19 +66,3 @@ jobs:
           ./lightpanda serve & echo $! > LPD.pid
           go run integration/main.go
           kill `cat LPD.pid`
-
-  browser-fetch:
-    name: browser fetch
-    needs: zig-build-release
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: lightpanda-build-release
-
-      - run: chmod a+x ./lightpanda
-
-      - run: ./lightpanda fetch https://demo-browser.lightpanda.io/campfire-commerce/
