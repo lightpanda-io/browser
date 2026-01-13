@@ -28,6 +28,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const log = @import("log.zig");
 const App = @import("App.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
+const Http = @import("http/Http.zig");
 
 const MAX_HTTP_REQUEST_SIZE = 4096;
 
@@ -37,22 +38,31 @@ const MAX_HTTP_REQUEST_SIZE = 4096;
 const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
 
 const Server = @This();
+
 app: *App,
+config: Config,
+
 shutdown: bool = false,
 allocator: Allocator,
-client: ?posix.socket_t,
-listener: ?posix.socket_t,
+listener: ?posix.socket_t = null,
+connections: std.Thread.Pool = undefined,
 json_version_response: []const u8,
 
-pub fn init(app: *App, address: net.Address) !Server {
+pub const Config = struct {
+    address: net.Address,
+    timeout_ms: u32,
+    max_connections: u16,
+};
+
+pub fn init(app: *App, config: Config) !Server {
     const allocator = app.allocator;
-    const json_version_response = try buildJSONVersionResponse(allocator, address);
+
+    const json_version_response = try buildJSONVersionResponse(allocator, config.address);
     errdefer allocator.free(json_version_response);
 
     return .{
         .app = app,
-        .client = null,
-        .listener = null,
+        .config = config,
         .allocator = allocator,
         .json_version_response = json_version_response,
     };
@@ -84,14 +94,17 @@ pub fn deinit(self: *Server) void {
         posix.close(listener);
         self.listener = null;
     }
+
+    self.connections.deinit();
+
     // *if* server.run is running, we should really wait for it to return
     // before existing from here.
     self.allocator.free(self.json_version_response);
 }
 
-pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
+pub fn run(self: *Server) !void {
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
-    const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
+    const listener = try posix.socket(self.config.address.any.family, flags, posix.IPPROTO.TCP);
     self.listener = listener;
 
     try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
@@ -99,10 +112,15 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
         try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
     }
 
-    try posix.bind(listener, &address.any, address.getOsSockLen());
+    try posix.bind(listener, &self.config.address.any, self.config.address.getOsSockLen());
     try posix.listen(listener, 1);
 
-    log.info(.app, "server running", .{ .address = address });
+    try self.connections.init(.{
+        .allocator = self.allocator,
+        .n_jobs = try std.Thread.getCpuCount(),
+    });
+
+    log.info(.app, "server running", .{ .address = self.config.address });
     while (!@atomicLoad(bool, &self.shutdown, .monotonic)) {
         const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
             switch (err) {
@@ -118,23 +136,29 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
             }
         };
 
-        self.client = socket;
-        defer if (self.client) |s| {
-            posix.close(s);
-            self.client = null;
-        };
-
-        if (log.enabled(.app, .info)) {
-            var client_address: std.net.Address = undefined;
-            var socklen: posix.socklen_t = @sizeOf(net.Address);
-            try std.posix.getsockname(socket, &client_address.any, &socklen);
-            log.info(.app, "client connected", .{ .ip = client_address });
+        if (self.config.max_connections > self.connections.run_queue.len()) {
+            self.connections.spawn(Server.connect, .{ self, socket }) catch |err| {
+                log.err(.app, "CDP span connection", .{ .err = err });
+            };
+        } else {
+            log.err(.app, "Too many CDP connections", .{});
         }
-
-        self.readLoop(socket, timeout_ms) catch |err| {
-            log.err(.app, "CDP client loop", .{ .err = err });
-        };
     }
+}
+
+fn connect(self: *Server, socket: posix.socket_t) void {
+    defer posix.close(socket);
+
+    if (log.enabled(.app, .info)) {
+        var client_address: std.net.Address = undefined;
+        var socklen: posix.socklen_t = @sizeOf(net.Address);
+        std.posix.getsockname(socket, &client_address.any, &socklen) catch unreachable;
+        log.info(.app, "client connected", .{ .ip = client_address });
+    }
+
+    self.readLoop(socket, self.config.timeout_ms) catch |err| {
+        log.err(.app, "CDP client loop", .{ .err = err });
+    };
 }
 
 fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
@@ -147,7 +171,7 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
     client.* = try Client.init(socket, self);
     defer client.deinit();
 
-    var http = &self.app.http;
+    var http = &client.http;
     http.addCDPClient(.{
         .socket = socket,
         .ctx = client,
@@ -217,6 +241,7 @@ pub const Client = struct {
         cdp: CDP,
     },
 
+    http: Http,
     server: *Server,
     reader: Reader(true),
     socket: posix.socket_t,
@@ -248,6 +273,7 @@ pub const Client = struct {
             .mode = .{ .http = {} },
             .socket_flags = socket_flags,
             .send_arena = ArenaAllocator.init(server.allocator),
+            .http = try Http.init(server.allocator, &server.app.config),
         };
     }
 
@@ -256,6 +282,7 @@ pub const Client = struct {
             .cdp => |*cdp| cdp.deinit(),
             .http => {},
         }
+        self.http.deinit();
         self.reader.deinit();
         self.send_arena.deinit();
     }
@@ -472,7 +499,7 @@ pub const Client = struct {
             break :blk res;
         };
 
-        self.mode = .{ .cdp = try CDP.init(self.server.app, self) };
+        self.mode = .{ .cdp = try CDP.init(self.server.app, &self.http, self) };
         return self.send(response);
     }
 

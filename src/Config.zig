@@ -16,23 +16,25 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const v8 = @import("js.zig").v8;
+pub const Config = @This();
 
-const Platform = @This();
-inner: v8.Platform,
+pub const RunMode = enum {
+    help,
+    fetch,
+    serve,
+    version,
+};
 
-pub fn init() !Platform {
-    if (v8.initV8ICU() == false) {
-        return error.FailedToInitializeICU;
-    }
-    const platform = v8.Platform.initDefault(0, true);
-    v8.initV8Platform(platform);
-    v8.initV8();
-    return .{ .inner = platform };
-}
+run_mode: RunMode,
 
-pub fn deinit(self: Platform) void {
-    _ = v8.deinitV8();
-    v8.deinitV8Platform();
-    self.inner.deinit();
-}
+user_agent: [:0]const u8,
+
+http_proxy: ?[:0]const u8 = null,
+proxy_bearer_token: ?[:0]const u8 = null,
+
+tls_verify_host: bool = true,
+http_timeout_ms: u31 = 5000,
+http_connect_timeout_ms: u31 = 0,
+http_max_redirects: u16 = 10,
+http_max_host_open: u8 = 4,
+http_max_concurrent: u8 = 10,

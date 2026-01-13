@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const Http = @import("http/Http.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -65,7 +66,10 @@ pub fn main() !void {
     });
     defer app.deinit();
 
-    var browser = try lp.Browser.init(app);
+    var http = try Http.init(allocator, &app.config);
+    defer http.deinit();
+
+    var browser = try lp.Browser.init(app, &http);
     defer browser.deinit();
 
     // An arena for running each tests. Is reset after every test.

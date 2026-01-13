@@ -23,6 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const log = lp.log;
 const App = lp.App;
+const Config = lp.Config;
 const SigHandler = @import("Sighandler.zig");
 
 pub fn main() !void {
@@ -53,18 +54,6 @@ pub fn main() !void {
 fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !void {
     const args = try parseArgs(main_arena);
 
-    switch (args.mode) {
-        .help => {
-            args.printUsageAndExit(args.mode.help);
-            return std.process.cleanExit();
-        },
-        .version => {
-            std.debug.print("{s}\n", .{lp.build_config.git_commit});
-            return std.process.cleanExit();
-        },
-        else => {},
-    }
-
     if (args.logLevel()) |ll| {
         log.opts.level = ll;
     }
@@ -75,52 +64,47 @@ fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !vo
         log.opts.filter_scopes = lfs;
     }
 
-    const user_agent = blk: {
-        const USER_AGENT = "User-Agent: Lightpanda/1.0";
-        if (args.userAgentSuffix()) |suffix| {
-            break :blk try std.fmt.allocPrintSentinel(main_arena, "{s} {s}", .{ USER_AGENT, suffix }, 0);
-        }
-        break :blk USER_AGENT;
-    };
-
-    // _app is global to handle graceful shutdown.
-    var app = try App.init(allocator, .{
-        .run_mode = args.mode,
-        .http_proxy = args.httpProxy(),
-        .proxy_bearer_token = args.proxyBearerToken(),
-        .tls_verify_host = args.tlsVerifyHost(),
-        .http_timeout_ms = args.httpTimeout(),
-        .http_connect_timeout_ms = args.httpConnectTiemout(),
-        .http_max_host_open = args.httpMaxHostOpen(),
-        .http_max_concurrent = args.httpMaxConcurrent(),
-        .user_agent = user_agent,
-    });
-
-    defer app.deinit();
-    app.telemetry.record(.{ .run = {} });
-
     switch (args.mode) {
+        .help => {
+            args.printUsageAndExit(args.mode.help);
+            return std.process.cleanExit();
+        },
+        .version => {
+            std.debug.print("{s}\n", .{lp.build_config.git_commit});
+            return std.process.cleanExit();
+        },
         .serve => |opts| {
+            var app = try createApp(allocator, main_arena, args);
+            defer app.deinit();
+
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
             const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
                 return args.printUsageAndExit(false);
             };
 
+            // max timeout of 1 week.
+            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(u32, opts.timeout) * 1000;
+
             // _server is global to handle graceful shutdown.
-            var server = try lp.Server.init(app, address);
+            var server = try lp.Server.init(app, .{
+                .address = address,
+                .timeout_ms = timeout,
+                .max_connections = opts.max_connections,
+            });
             defer server.deinit();
 
             try sighandler.on(lp.Server.stop, .{&server});
 
-            // max timeout of 1 week.
-            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(u32, opts.timeout) * 1000;
-            server.run(address, timeout) catch |err| {
+            server.run() catch |err| {
                 log.fatal(.app, "server run error", .{ .err = err });
                 return err;
             };
         },
         .fetch => |opts| {
+            var app = try createApp(allocator, main_arena, args);
+            defer app.deinit();
+
             const url = opts.url;
             log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = url, .snapshot = app.snapshot.fromEmbedded() });
 
@@ -143,8 +127,36 @@ fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !vo
                 return err;
             };
         },
-        else => unreachable,
     }
+}
+
+fn createApp(allocator: Allocator, main_arena: Allocator, args: Command) !*App {
+    const user_agent = blk: {
+        const USER_AGENT = "User-Agent: Lightpanda/1.0";
+        if (args.userAgentSuffix()) |suffix| {
+            break :blk try std.fmt.allocPrintSentinel(main_arena, "{s} {s}", .{ USER_AGENT, suffix }, 0);
+        }
+        break :blk USER_AGENT;
+    };
+
+    var config = Config{
+        .run_mode = args.mode,
+        .user_agent = user_agent,
+        .tls_verify_host = args.tlsVerifyHost(),
+    };
+
+    if (args.httpProxy()) |it| config.http_proxy = it;
+    if (args.proxyBearerToken()) |it| config.proxy_bearer_token = it;
+    if (args.httpTimeout()) |it| config.http_timeout_ms = it;
+    if (args.httpConnectTiemout()) |it| config.http_connect_timeout_ms = it;
+    if (args.httpMaxHostOpen()) |it| config.http_max_host_open = it;
+    if (args.httpMaxConcurrent()) |it| config.http_max_concurrent = it;
+
+    var app = try App.init(allocator, config);
+
+    app.telemetry.record(.{ .run = {} });
+
+    return app;
 }
 
 const Command = struct {
@@ -228,7 +240,7 @@ const Command = struct {
         };
     }
 
-    const Mode = union(App.RunMode) {
+    const Mode = union(Config.RunMode) {
         help: bool, // false when being printed because of an error
         fetch: Fetch,
         serve: Serve,
@@ -240,6 +252,7 @@ const Command = struct {
         port: u16,
         timeout: u31,
         common: Common,
+        max_connections: u16,
     };
 
     const Fetch = struct {
@@ -315,7 +328,6 @@ const Command = struct {
             \\
             \\--user_agent_suffix
             \\                Suffix to append to the Lightpanda/X.Y User-Agent
-            \\
         ;
 
         //                                                                     MAX_HELP_LEN|
@@ -357,6 +369,10 @@ const Command = struct {
             \\--timeout       Inactivity timeout in seconds before disconnecting clients
             \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
             \\
+            \\--max_connections
+            \\                The maximum number of parallel connections
+            \\                Defaults to 1024. Limited to 65536.
+            \\
         ++ common_options ++
             \\
             \\version command
@@ -386,7 +402,7 @@ fn parseArgs(allocator: Allocator) !Command {
     };
 
     const mode_string = args.next() orelse "";
-    const mode = std.meta.stringToEnum(App.RunMode, mode_string) orelse blk: {
+    const mode = std.meta.stringToEnum(Config.RunMode, mode_string) orelse blk: {
         const inferred_mode = inferMode(mode_string) orelse return cmd;
         // "command" wasn't a command but an option. We can't reset args, but
         // we can create a new one. Not great, but this fallback is temporary
@@ -409,7 +425,7 @@ fn parseArgs(allocator: Allocator) !Command {
     return cmd;
 }
 
-fn inferMode(opt: []const u8) ?App.RunMode {
+fn inferMode(opt: []const u8) ?Config.RunMode {
     if (opt.len == 0) {
         return .serve;
     }
@@ -456,6 +472,7 @@ fn parseServeArgs(
     var host: []const u8 = "127.0.0.1";
     var port: u16 = 9222;
     var timeout: u31 = 10;
+    var max_connections: u16 = 1024;
     var common: Command.Common = .{};
 
     while (args.next()) |opt| {
@@ -494,6 +511,18 @@ fn parseServeArgs(
             continue;
         }
 
+        if (std.mem.eql(u8, "--max_connections", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = "--max_connections" });
+                return error.InvalidArgument;
+            };
+
+            max_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = "--max_connections", .err = err });
+                return error.InvalidArgument;
+            };
+        }
+
         if (try parseCommonArg(allocator, opt, args, &common)) {
             continue;
         }
@@ -507,6 +536,7 @@ fn parseServeArgs(
         .port = port,
         .common = common,
         .timeout = timeout,
+        .max_connections = max_connections,
     };
 }
 

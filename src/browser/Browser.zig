@@ -24,6 +24,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const App = @import("../App.zig");
+const Http = @import("../http/Http.zig");
 const HttpClient = @import("../http/Client.zig");
 const Notification = @import("../Notification.zig");
 
@@ -47,15 +48,15 @@ session_arena: ArenaAllocator,
 transfer_arena: ArenaAllocator,
 notification: *Notification,
 
-pub fn init(app: *App) !Browser {
+pub fn init(app: *App, http: *Http) !Browser {
     const allocator = app.allocator;
 
     var env = try js.Env.init(allocator, &app.platform, &app.snapshot);
     errdefer env.deinit();
 
     const notification = try Notification.init(allocator, app.notification);
-    app.http.client.notification = notification;
-    app.http.client.next_request_id = 0; // Should we track ids in CDP only?
+    http.client.notification = notification;
+    http.client.next_request_id = 0; // Should we track ids in CDP only?
     errdefer notification.deinit();
 
     return .{
@@ -64,7 +65,7 @@ pub fn init(app: *App) !Browser {
         .session = null,
         .allocator = allocator,
         .notification = notification,
-        .http_client = app.http.client,
+        .http_client = http.client,
         .call_arena = ArenaAllocator.init(allocator),
         .page_arena = ArenaAllocator.init(allocator),
         .session_arena = ArenaAllocator.init(allocator),

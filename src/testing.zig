@@ -37,6 +37,7 @@ pub fn reset() void {
 }
 
 const App = @import("App.zig");
+const Http = @import("http/Http.zig");
 const js = @import("browser/js/js.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
@@ -439,20 +440,26 @@ const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const Server = @import("Server.zig");
 var test_cdp_server: ?Server = null;
+var test_http:? Http = null;
 var test_http_server: ?TestHTTPServer = null;
 
 test "tests:beforeAll" {
     log.opts.level = .warn;
     log.opts.format = .pretty;
 
-    test_app = try App.init(@import("root").tracking_allocator, .{
+    const alloc = @import("root").tracking_allocator;
+
+    test_app = try App.init(alloc, .{
         .run_mode = .serve,
         .tls_verify_host = false,
         .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
     });
     errdefer test_app.deinit();
 
-    test_browser = try Browser.init(test_app);
+    test_http = try Http.init(alloc, &test_app.config);
+    errdefer if (test_http) |*http| http.deinit();
+
+    test_browser = try Browser.init(test_app, &test_http.?);
     errdefer test_browser.deinit();
 
     test_session = try test_browser.newSession();
@@ -492,13 +499,14 @@ test "tests:afterAll" {
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(test_app, address);
+    const config = Server.Config{ .address = address, .timeout_ms = 5, .max_connections = 128 };
+    test_cdp_server = try Server.init(test_app, config);
 
-    var server = try Server.init(test_app, address);
+    var server = try Server.init(test_app, config);
     defer server.deinit();
     wg.finish();
 
-    test_cdp_server.?.run(address, 5) catch |err| {
+    test_cdp_server.?.run() catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };

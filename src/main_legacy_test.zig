@@ -1,5 +1,6 @@
 const std = @import("std");
 const lp = @import("lightpanda");
+const Http = @import("./http/Http.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -43,7 +44,10 @@ pub fn main() !void {
     var test_arena = std.heap.ArenaAllocator.init(allocator);
     defer test_arena.deinit();
 
-    var browser = try lp.Browser.init(app);
+    var http = Http.init(test_arena, &app.config);
+    defer http.deinit();
+
+    var browser = try lp.Browser.init(app, &http);
     defer browser.deinit();
 
     const session = try browser.newSession();

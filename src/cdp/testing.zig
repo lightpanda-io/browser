@@ -24,6 +24,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const Testing = @This();
 
 const main = @import("cdp.zig");
+const Http = @import("../http/Http.zig");
 
 const base = @import("../testing.zig");
 pub const allocator = base.allocator;
@@ -69,6 +70,7 @@ const TestCDP = main.CDPT(struct {
 
 const TestContext = struct {
     client: ?Client = null,
+    http_: ?Http = null,
     cdp_: ?TestCDP = null,
     arena: ArenaAllocator,
 
@@ -76,15 +78,20 @@ const TestContext = struct {
         if (self.cdp_) |*c| {
             c.deinit();
         }
+        if (self.http_) |*c| {
+            c.deinit();
+        }
         self.arena.deinit();
     }
 
     pub fn cdp(self: *TestContext) *TestCDP {
         if (self.cdp_ == null) {
+            self.http_ = Http.init(self.arena.allocator(), &base.test_app.config) catch unreachable;
+
             self.client = Client.init(self.arena.allocator());
             // Don't use the arena here. We want to detect leaks in CDP.
             // The arena is only for test-specific stuff
-            self.cdp_ = TestCDP.init(base.test_app, &self.client.?) catch unreachable;
+            self.cdp_ = TestCDP.init(base.test_app, &self.http_.?, &self.client.?) catch unreachable;
         }
         return &self.cdp_.?;
     }
