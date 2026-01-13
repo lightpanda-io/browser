@@ -35,7 +35,16 @@ const SubtleCrypto = @This();
 /// Don't optimize away the type.
 _pad: bool = false,
 
-const Params = struct {
+const Algorithm = union(enum) {
+    /// For RSASSA-PKCS1-v1_5, RSA-PSS, or RSA-OAEP: pass an RsaHashedKeyGenParams object.
+    rsa_hashed_key_gen: RsaHashedKeyGen,
+    /// For HMAC: pass an HmacKeyGenParams object.
+    hmac_key_gen: HmacKeyGen,
+    /// Can be Ed25519 or X25519.
+    name: []const u8,
+    /// Can be Ed25519 or X25519.
+    object: struct { name: []const u8 },
+
     /// https://developer.mozilla.org/en-US/docs/Web/API/RsaHashedKeyGenParams
     const RsaHashedKeyGen = struct {
         name: []const u8,
@@ -63,208 +72,6 @@ const Params = struct {
     };
 };
 
-/// NOTE: I think we can use extern union and cast this to intended algorithm
-/// by `name` field. Not sure if it'd make difference memory/performance wise.
-const Algorithm = union(enum) {
-    rsa_hashed_key_gen: Params.RsaHashedKeyGen,
-    hmac_key_gen: Params.HmacKeyGen,
-};
-
-/// Returns the desired digest by its name.
-fn getDigest(name: []const u8) error{Invalid}!*const crypto.EVP_MD {
-    const digest = std.meta.stringToEnum(enum {
-        @"SHA-1",
-        @"SHA-256",
-        @"SHA-384",
-        @"SHA-512",
-    }, name) orelse return error.Invalid;
-
-    return switch (digest) {
-        .@"SHA-1" => crypto.EVP_sha1(),
-        .@"SHA-256" => crypto.EVP_sha256(),
-        .@"SHA-384" => crypto.EVP_sha384(),
-        .@"SHA-512" => crypto.EVP_sha512(),
-    };
-}
-
-/// Represents a cryptographic key obtained from one of the SubtleCrypto methods
-/// generateKey(), deriveKey(), importKey(), or unwrapKey().
-pub const CryptoKey = struct {
-    /// Algorithm being used.
-    _type: Type,
-    /// Whether the key is extractable.
-    _extractable: bool,
-    /// Bit flags of `usages`; see `Usages` type.
-    _usages: u8,
-    _key: []const u8,
-    _digest: *const crypto.EVP_MD,
-
-    pub const Type = enum(u8) { hmac, rsa };
-
-    /// Changing the names of fields would affect bitmask creation.
-    pub const Usages = struct {
-        // zig fmt: off
-        pub const encrypt    = 0x001;
-        pub const decrypt    = 0x002;
-        pub const sign       = 0x004;
-        pub const verify     = 0x008;
-        pub const deriveKey  = 0x010;
-        pub const deriveBits = 0x020;
-        pub const wrapKey    = 0x040;
-        pub const unwrapKey  = 0x080;
-        // zig fmt: on
-    };
-
-    pub fn init(
-        algorithm: Algorithm,
-        extractable: bool,
-        key_usages: []const []const u8,
-        page: *Page,
-    ) !*CryptoKey {
-        // TODO.
-        return switch (algorithm) {
-            .hmac_key_gen => |hmac| initHMAC(hmac, extractable, key_usages, page),
-            else => @panic("NYI"),
-        };
-    }
-
-    /// Create a bitmask out of `key_usages`.-
-    fn createUsagesMask(usages: []const []const u8) !u8 {
-        const decls = @typeInfo(Usages).@"struct".decls;
-        var mask: u8 = 0;
-        iter_usages: for (usages) |usage| {
-            inline for (decls) |decl| {
-                if (std.mem.eql(u8, decl.name, usage)) {
-                    mask |= @field(Usages, decl.name);
-                    continue :iter_usages;
-                }
-            }
-            // Unknown usage if got here, report error.
-            return error.SyntaxError;
-        }
-
-        return mask;
-    }
-
-    inline fn canSign(self: *const CryptoKey) bool {
-        return self._usages & Usages.sign != 0;
-    }
-
-    inline fn canVerify(self: *const CryptoKey) bool {
-        return self._usages & Usages.verify != 0;
-    }
-
-    fn initHMAC(
-        algorithm: Params.HmacKeyGen,
-        extractable: bool,
-        key_usages: []const []const u8,
-        page: *Page,
-    ) !*CryptoKey {
-        const hash = switch (algorithm.hash) {
-            .string => |str| str,
-            .object => |obj| obj.name,
-        };
-        // Find digest.
-        const digest = try getDigest(hash);
-        // Calculate usages mask and check if its correct.
-        const usages_mask = try createUsagesMask(key_usages);
-
-        const block_size: usize = blk: {
-            // Caller provides this in bits, not bytes.
-            if (algorithm.length) |length| {
-                break :blk length / 8;
-            }
-            // Prefer block size of the hash function instead.
-            break :blk crypto.EVP_MD_block_size(digest);
-        };
-
-        const key = try page.arena.alloc(u8, block_size);
-        errdefer page.arena.free(key);
-
-        // HMAC is simply CSPRNG.
-        const res = crypto.RAND_bytes(key.ptr, key.len);
-        std.debug.assert(res == 1);
-
-        return page._factory.create(CryptoKey{
-            ._type = .hmac,
-            ._extractable = extractable,
-            ._usages = usages_mask,
-            ._key = key,
-            ._digest = digest,
-        });
-    }
-
-    fn signHMAC(self: *const CryptoKey, data: []const u8, page: *Page) !js.ArrayBuffer {
-        if (!self.canSign()) {
-            return error.InvalidAccessError;
-        }
-
-        const buffer = try page.arena.alloc(u8, crypto.EVP_MD_size(self._digest));
-        errdefer page.arena.free(buffer);
-        var out_len: u32 = 0;
-        // Try to sign.
-        const signed = crypto.HMAC(
-            self._digest,
-            @ptrCast(self._key.ptr),
-            self._key.len,
-            data.ptr,
-            data.len,
-            buffer.ptr,
-            &out_len,
-        );
-
-        if (signed != null) {
-            return js.ArrayBuffer{ .values = buffer[0..out_len] };
-        }
-
-        // Not DOM exception, failed on our side.
-        return error.Invalid;
-    }
-
-    fn verifyHMAC(
-        self: *const CryptoKey,
-        signature: []const u8,
-        data: []const u8,
-        page: *Page,
-    ) !js.Promise {
-        if (!self.canVerify()) {
-            return error.InvalidAccessError;
-        }
-
-        var buffer: [crypto.EVP_MAX_MD_BLOCK_SIZE]u8 = undefined;
-        var out_len: u32 = 0;
-        // Try to sign.
-        const signed = crypto.HMAC(
-            self._digest,
-            @ptrCast(self._key.ptr),
-            self._key.len,
-            data.ptr,
-            data.len,
-            &buffer,
-            &out_len,
-        );
-
-        if (signed != null) {
-            // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
-            const res = crypto.CRYPTO_memcmp(signed, @ptrCast(signature.ptr), signature.len);
-            return page.js.resolvePromise(res == 0);
-        }
-
-        return page.js.resolvePromise(false);
-    }
-
-    pub const JsApi = struct {
-        pub const bridge = js.Bridge(CryptoKey);
-
-        pub const Meta = struct {
-            pub const name = "CryptoKey";
-
-            pub var class_id: bridge.ClassId = undefined;
-            pub const prototype_chain = bridge.prototypeChain();
-        };
-    };
-};
-
 /// Generate a new key (for symmetric algorithms) or key pair (for public-key algorithms).
 pub fn generateKey(
     _: *const SubtleCrypto,
@@ -273,11 +80,11 @@ pub fn generateKey(
     key_usages: []const []const u8,
     page: *Page,
 ) !js.Promise {
-    const key = CryptoKey.init(algorithm, extractable, key_usages, page) catch |err| {
+    const key_or_pair = CryptoKey.init(algorithm, extractable, key_usages, page) catch |err| {
         return page.js.rejectPromise(@errorName(err));
     };
 
-    return page.js.resolvePromise(key);
+    return page.js.resolvePromise(key_or_pair);
 }
 
 /// Exports a key: that is, it takes as input a CryptoKey object and gives you
@@ -357,6 +164,296 @@ pub fn verify(
         else => return error.InvalidAccess,
     };
 }
+
+/// Returns the desired digest by its name.
+fn getDigest(name: []const u8) error{Invalid}!*const crypto.EVP_MD {
+    if (std.mem.eql(u8, "SHA-256", name)) {
+        return crypto.EVP_sha256();
+    }
+
+    if (std.mem.eql(u8, "SHA-384", name)) {
+        return crypto.EVP_sha384();
+    }
+
+    if (std.mem.eql(u8, "SHA-512", name)) {
+        return crypto.EVP_sha512();
+    }
+
+    if (std.mem.eql(u8, "SHA-1", name)) {
+        return crypto.EVP_sha1();
+    }
+
+    return error.Invalid;
+}
+
+const KeyOrPair = union(enum) { key: *CryptoKey, pair: CryptoKeyPair };
+
+/// https://developer.mozilla.org/en-US/docs/Web/API/CryptoKeyPair
+const CryptoKeyPair = struct {
+    privateKey: *CryptoKey,
+    publicKey: *CryptoKey,
+};
+
+/// Represents a cryptographic key obtained from one of the SubtleCrypto methods
+/// generateKey(), deriveKey(), importKey(), or unwrapKey().
+pub const CryptoKey = struct {
+    /// Algorithm being used.
+    _type: Type,
+    /// Whether the key is extractable.
+    _extractable: bool,
+    /// Bit flags of `usages`; see `Usages` type.
+    _usages: u8,
+    _key: []const u8,
+    _digest: *const crypto.EVP_MD,
+
+    pub const Type = enum(u8) { hmac, rsa, x25519 };
+
+    /// Changing the names of fields would affect bitmask creation.
+    pub const Usages = struct {
+        // zig fmt: off
+        pub const encrypt    = 0x001;
+        pub const decrypt    = 0x002;
+        pub const sign       = 0x004;
+        pub const verify     = 0x008;
+        pub const deriveKey  = 0x010;
+        pub const deriveBits = 0x020;
+        pub const wrapKey    = 0x040;
+        pub const unwrapKey  = 0x080;
+        // zig fmt: on
+    };
+
+    pub fn init(
+        algorithm: Algorithm,
+        extractable: bool,
+        key_usages: []const []const u8,
+        page: *Page,
+    ) !KeyOrPair {
+        return switch (algorithm) {
+            .hmac_key_gen => |hmac| initHMAC(hmac, extractable, key_usages, page),
+            .name => |name| {
+                if (std.mem.eql(u8, "X25519", name)) {
+                    return initX25519(extractable, key_usages, page);
+                }
+                return error.NotSupported;
+            },
+            .object => |object| {
+                // Ditto.
+                const name = object.name;
+                if (std.mem.eql(u8, "X25519", name)) {
+                    return initX25519(extractable, key_usages, page);
+                }
+                return error.NotSupported;
+            },
+            else => @panic("NYI"),
+        };
+    }
+
+    /// Create a bitmask out of `key_usages`.
+    /// `0` is equal to `SyntaxError`.
+    fn createUsagesMask(usages: []const []const u8) u8 {
+        const decls = @typeInfo(Usages).@"struct".decls;
+        var mask: u8 = 0;
+        iter_usages: for (usages) |usage| {
+            inline for (decls) |decl| {
+                if (std.mem.eql(u8, decl.name, usage)) {
+                    mask |= @field(Usages, decl.name);
+                    continue :iter_usages;
+                }
+            }
+            // Unknown usage if got here.
+            return 0;
+        }
+
+        return mask;
+    }
+
+    inline fn canSign(self: *const CryptoKey) bool {
+        return self._usages & Usages.sign != 0;
+    }
+
+    inline fn canVerify(self: *const CryptoKey) bool {
+        return self._usages & Usages.verify != 0;
+    }
+
+    // HMAC.
+
+    fn initHMAC(
+        algorithm: Algorithm.HmacKeyGen,
+        extractable: bool,
+        key_usages: []const []const u8,
+        page: *Page,
+    ) !KeyOrPair {
+        const hash = switch (algorithm.hash) {
+            .string => |str| str,
+            .object => |obj| obj.name,
+        };
+        // Find digest.
+        const digest = try getDigest(hash);
+        // Calculate usages mask and check if its correct.
+        const usages_mask = createUsagesMask(key_usages);
+        if (usages_mask == 0) {
+            return error.SyntaxError;
+        }
+
+        const block_size: usize = blk: {
+            // Caller provides this in bits, not bytes.
+            if (algorithm.length) |length| {
+                break :blk length / 8;
+            }
+            // Prefer block size of the hash function instead.
+            break :blk crypto.EVP_MD_block_size(digest);
+        };
+
+        const key = try page.arena.alloc(u8, block_size);
+        errdefer page.arena.free(key);
+
+        // HMAC is simply CSPRNG.
+        const res = crypto.RAND_bytes(key.ptr, key.len);
+        std.debug.assert(res == 1);
+
+        const crypto_key = try page._factory.create(CryptoKey{
+            ._type = .hmac,
+            ._extractable = extractable,
+            ._usages = usages_mask,
+            ._key = key,
+            ._digest = digest,
+        });
+
+        return .{ .key = crypto_key };
+    }
+
+    fn signHMAC(self: *const CryptoKey, data: []const u8, page: *Page) !js.ArrayBuffer {
+        if (!self.canSign()) {
+            return error.InvalidAccessError;
+        }
+
+        const buffer = try page.call_arena.alloc(u8, crypto.EVP_MD_size(self._digest));
+        errdefer page.call_arena.free(buffer);
+        var out_len: u32 = 0;
+        // Try to sign.
+        const signed = crypto.HMAC(
+            self._digest,
+            @ptrCast(self._key.ptr),
+            self._key.len,
+            data.ptr,
+            data.len,
+            buffer.ptr,
+            &out_len,
+        );
+
+        if (signed != null) {
+            return js.ArrayBuffer{ .values = buffer[0..out_len] };
+        }
+
+        // Not DOM exception, failed on our side.
+        return error.Invalid;
+    }
+
+    fn verifyHMAC(
+        self: *const CryptoKey,
+        signature: []const u8,
+        data: []const u8,
+        page: *Page,
+    ) !js.Promise {
+        if (!self.canVerify()) {
+            return error.InvalidAccessError;
+        }
+
+        var buffer: [crypto.EVP_MAX_MD_BLOCK_SIZE]u8 = undefined;
+        var out_len: u32 = 0;
+        // Try to sign.
+        const signed = crypto.HMAC(
+            self._digest,
+            @ptrCast(self._key.ptr),
+            self._key.len,
+            data.ptr,
+            data.len,
+            &buffer,
+            &out_len,
+        );
+
+        if (signed != null) {
+            // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
+            const res = crypto.CRYPTO_memcmp(signed, @ptrCast(signature.ptr), signature.len);
+            return page.js.resolvePromise(res == 0);
+        }
+
+        return page.js.resolvePromise(false);
+    }
+
+    // X25519.
+
+    fn initX25519(
+        extractable: bool,
+        key_usages: []const []const u8,
+        page: *Page,
+    ) !KeyOrPair {
+        // This code has too many allocations here and there, might be nice to
+        // gather them together with a single alloc call. Not sure if factory
+        // pattern is suitable for it though.
+
+        // Calculate usages; only matters for private key.
+        // Only deriveKey() and deriveBits() be used for X25519.
+        var mask: u8 = 0;
+        iter_usages: for (key_usages) |usage| {
+            inline for ([_][]const u8{ "deriveKey", "deriveBits" }) |name| {
+                if (std.mem.eql(u8, name, usage)) {
+                    mask |= @field(Usages, name);
+                    continue :iter_usages;
+                }
+            }
+            // Unknown usage if got here.
+            return error.SyntaxError;
+        }
+        // Cannot be empty.
+        if (mask == 0) {
+            return error.SyntaxError;
+        }
+
+        const public_value = try page.arena.alloc(u8, crypto.X25519_PUBLIC_VALUE_LEN);
+        errdefer page.arena.free(public_value);
+
+        const private_key = try page.arena.alloc(u8, crypto.X25519_PRIVATE_KEY_LEN);
+        errdefer page.arena.free(private_key);
+
+        // There's no info about whether this can fail; so I assume it cannot.
+        crypto.X25519_keypair(@ptrCast(public_value), @ptrCast(private_key));
+
+        const private = try page._factory.create(CryptoKey{
+            ._type = .x25519,
+            ._extractable = extractable,
+            ._usages = mask,
+            ._key = private_key,
+            // FIXME: This is unnecessary for X25519.
+            ._digest = crypto.EVP_sha1(),
+        });
+        errdefer page._factory.destroy(private);
+
+        const public = try page._factory.create(CryptoKey{
+            ._type = .x25519,
+            ._extractable = extractable,
+            // Always empty for public key.
+            ._usages = 0,
+            ._key = public_value,
+            // FIXME: This is unnecessary for X25519.
+            ._digest = crypto.EVP_sha1(),
+        });
+        errdefer page._factory.destroy(public);
+
+        return .{ .pair = .{ .privateKey = private, .publicKey = public } };
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(CryptoKey);
+
+        pub const Meta = struct {
+            pub const name = "CryptoKey";
+
+            pub var class_id: bridge.ClassId = undefined;
+            pub const prototype_chain = bridge.prototypeChain();
+        };
+    };
+};
 
 pub const JsApi = struct {
     pub const bridge = js.Bridge(SubtleCrypto);
