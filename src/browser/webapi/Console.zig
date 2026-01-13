@@ -54,7 +54,7 @@ pub fn warn(_: *const Console, values: []js.Value, page: *Page) void {
 
 pub fn clear(_: *const Console) void {}
 
-pub fn assert(_: *const Console, assertion: js.Value, values: []js.Object, page: *Page) void {
+pub fn assert(_: *const Console, assertion: js.Value, values: []js.Value, page: *Page) void {
     if (assertion.toBool()) {
         return;
     }

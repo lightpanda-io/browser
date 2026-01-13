@@ -236,7 +236,7 @@ fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOp
 }
 
 
-pub fn (ctx: *js.Context, json: []const u8) !Value {
+pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
     const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
     const json_string = v8.String.initUtf8(v8_isolate, json);
     const v8_context = v8.Context{ .handle = ctx.handle };
