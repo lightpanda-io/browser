@@ -78,9 +78,9 @@ pub fn forEach(self: *Headers, cb_: js.Function, js_this_: ?js.Object) !void {
     const cb = if (js_this_) |js_this| try cb_.withThis(js_this) else cb_;
 
     for (self._list._entries.items) |entry| {
-        var result: js.Function.Result = undefined;
-        cb.tryCall(void, .{ entry.value.str(), entry.name.str(), self }, &result) catch {
-            log.debug(.js, "forEach callback", .{ .err = result.exception, .stack = result.stack, .source = "headers" });
+        var caught: js.TryCatch.Caught = undefined;
+        cb.tryCall(void, .{ entry.value.str(), entry.name.str(), self }, &caught) catch {
+            log.debug(.js, "forEach callback", .{ .caught = caught, .source = "headers" });
         };
     }
 }

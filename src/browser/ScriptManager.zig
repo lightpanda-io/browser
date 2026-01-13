@@ -834,12 +834,10 @@ pub const Script = struct {
             return;
         }
 
-        const msg = try_catch.err(page.arena) catch |err| @errorName(err) orelse "unknown";
+        const caught = try_catch.caughtOrError(page.call_arena, error.Unknown);
         log.warn(.js, "eval script", .{
             .url = url,
-            .err = msg,
-            .stack = try_catch.stack(page.call_arena) catch null,
-            .line = try_catch.sourceLineNumber() orelse 0,
+            .caught = caught,
             .cacheable = cacheable,
         });
 
@@ -859,13 +857,12 @@ pub const Script = struct {
             return;
         };
 
-        var result: js.Function.Result = undefined;
-        cb.tryCall(void, .{event}, &result) catch {
+        var caught: js.TryCatch.Caught = undefined;
+        cb.tryCall(void, .{event}, &caught) catch {
             log.warn(.js, "script callback", .{
                 .url = self.url,
                 .type = typ,
-                .err = result.exception,
-                .stack = result.stack,
+                .caught = caught,
             });
         };
     }

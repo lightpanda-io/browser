@@ -333,10 +333,10 @@ fn writeString(comptime format: Format, value: []const u8, writer: *std.Io.Write
 pub const LogFormatWriter = struct {
     writer: *std.Io.Writer,
 
-    pub fn write(self: LogFormatWriter, key: []const u8, value: []const u8) !void {
+    pub fn write(self: LogFormatWriter, key: []const u8, value: anytype) !void {
         const writer = self.writer;
         try writer.print(" {s}=", .{key});
-        try writeString(.logfmt, value, writer);
+        try writeValue(.logfmt, value, writer);
     }
 };
 

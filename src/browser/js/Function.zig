@@ -50,7 +50,7 @@ pub fn withThis(self: *const Function, value: anytype) !Function {
     };
 }
 
-pub fn newInstance(self: *const Function, result: *Result) !js.Object {
+pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Object {
     const ctx = self.ctx;
 
     var try_catch: js.TryCatch = undefined;
@@ -60,14 +60,7 @@ pub fn newInstance(self: *const Function, result: *Result) !js.Object {
     // This creates a new instance using this Function as a constructor.
     // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
     const handle = v8.v8__Function__NewInstance(self.handle, ctx.handle, 0, null) orelse {
-        if (try_catch.hasCaught()) {
-            const allocator = ctx.call_arena;
-            result.stack = try_catch.stack(allocator) catch null;
-            result.exception = (try_catch.exception(allocator) catch "???") orelse "???";
-        } else {
-            result.stack = null;
-            result.exception = "???";
-        }
+        caught.* = try_catch.caughtOrError(ctx.call_arena, error.Unknown);
         return error.JsConstructorFailed;
     };
 
@@ -81,25 +74,18 @@ pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
     return self.callWithThis(T, self.getThis(), args);
 }
 
-pub fn tryCall(self: *const Function, comptime T: type, args: anytype, result: *Result) !T {
-    return self.tryCallWithThis(T, self.getThis(), args, result);
+pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *js.TryCatch.Caught) !T {
+    return self.tryCallWithThis(T, self.getThis(), args, caught);
 }
 
-pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, result: *Result) !T {
+pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
     var try_catch: js.TryCatch = undefined;
 
     try_catch.init(self.ctx);
     defer try_catch.deinit();
 
     return self.callWithThis(T, this, args) catch |err| {
-        if (try_catch.hasCaught()) {
-            const allocator = self.ctx.call_arena;
-            result.stack = try_catch.stack(allocator) catch null;
-            result.exception = (try_catch.exception(allocator) catch @errorName(err)) orelse @errorName(err);
-        } else {
-            result.stack = null;
-            result.exception = @errorName(err);
-        }
+        caught.* = try_catch.caughtOrError(self.ctx.call_arena, err);
         return err;
     };
 }
