@@ -143,12 +143,6 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
 }
 
 pub fn removeContext(self: *ExecutionWorld) void {
-    // Force running the micro task to drain the queue before reseting the
-    // context arena.
-    // Tasks in the queue are relying to the arena memory could be present in
-    // the queue. Running them later could lead to invalid memory accesses.
-    self.env.runMicrotasks();
-
     var context = &(self.context orelse return);
     context.deinit();
     self.context = null;
