@@ -47,6 +47,54 @@
   // }
 </script>
 
+<script id=SubtleCrypto>
+  testing.async(async () => {
+    let key = await crypto.subtle.generateKey(
+      {
+        name: "HMAC",
+        hash: { name: "SHA-512" },
+      },
+      true,
+      ["sign", "verify"],
+    );
+
+    //const raw = crypto.subtle.exportKey("adv", key).catch(err => console.warn(err));
+    //testing.expectEqual(128, raw.byteLength);
+
+    const encoder = new TextEncoder();
+
+    const signature = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      encoder.encode("Hello, world!")
+    );
+
+    const result = await window.crypto.subtle.verify(
+      { name: "HMAC" },
+      key,
+      signature,
+      encoder.encode("Hello, world!")
+    );
+
+    testing.expectEqual(true, true);
+  });
+</script>
+
+<script id=X25519>
+  testing.async(async () => {
+    const { privateKey, publicKey } = await crypto.subtle.generateKey(
+      { name: "X25519" },
+      true,
+      ["deriveKey", "deriveBits"],
+    );
+
+    console.warn(privateKey);
+    console.warn(publicKey);
+
+    testing.expectEqual(true, true);
+  });
+</script>
+
 <!-- <script id="randomUUID">
   const uuid = crypto.randomUUID();
   testing.expectEqual('string', typeof uuid);

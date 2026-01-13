@@ -26,3 +26,9 @@ pub extern fn HMAC(
     out: [*]u8,
     out_len: *c_uint,
 ) ?[*]u8;
+
+pub const X25519_PRIVATE_KEY_LEN = 32;
+pub const X25519_PUBLIC_VALUE_LEN = 32;
+pub const X25519_SHARED_KEY_LEN = 32;
+
+pub extern fn X25519_keypair(out_public_value: *[32]u8, out_private_key: *[32]u8) void;
