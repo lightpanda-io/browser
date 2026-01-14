@@ -383,6 +383,7 @@ pub const CryptoKey = struct {
 
     // X25519.
 
+    /// Create a pair of X25519.
     fn initX25519(
         extractable: bool,
         key_usages: []const []const u8,
@@ -419,6 +420,34 @@ pub const CryptoKey = struct {
         // There's no info about whether this can fail; so I assume it cannot.
         crypto.X25519_keypair(@ptrCast(public_value), @ptrCast(private_key));
 
+        // Create EVP_PKEY for public key.
+        // Seems we can use `EVP_PKEY_from_raw_private_key` for this, Chrome
+        // prefer not to, yet BoringSSL added it and recommends instead of what
+        // we're doing currently.
+        const public_pkey = crypto.EVP_PKEY_new_raw_public_key(
+            crypto.EVP_PKEY_X25519,
+            null,
+            public_value.ptr,
+            public_value.len,
+        );
+        if (public_pkey == null) {
+            return error.OutOfMemory;
+        }
+
+        // Create EVP_PKEY for private key.
+        // Seems we can use `EVP_PKEY_from_raw_private_key` for this, Chrome
+        // prefer not to, yet BoringSSL added it and recommends instead of what
+        // we're doing currently.
+        const private_pkey = crypto.EVP_PKEY_new_raw_private_key(
+            crypto.EVP_PKEY_X25519,
+            null,
+            private_key.ptr,
+            private_key.len,
+        );
+        if (private_pkey == null) {
+            return error.OutOfMemory;
+        }
+
         const private = try page._factory.create(CryptoKey{
             ._type = .x25519,
             ._extractable = extractable,
@@ -431,7 +460,8 @@ pub const CryptoKey = struct {
 
         const public = try page._factory.create(CryptoKey{
             ._type = .x25519,
-            ._extractable = extractable,
+            // Public keys are always extractable.
+            ._extractable = true,
             // Always empty for public key.
             ._usages = 0,
             ._key = public_value,
