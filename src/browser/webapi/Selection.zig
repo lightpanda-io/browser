@@ -108,9 +108,15 @@ pub fn removeRange(self: *Selection, range: *Range) void {
     }
 }
 
-pub fn removeAllRanges(self: *Selection) void {
+fn removeAllRangesInner(self: *Selection, reset_direction: bool) void {
     self._ranges.clearRetainingCapacity();
-    self._direction = .none;
+    if (reset_direction) {
+        self._direction = .none;
+    }
+}
+
+pub fn removeAllRanges(self: *Selection) void {
+    self.removeAllRangesInner(true);
 }
 
 pub fn collapseToEnd(self: *Selection, page: *Page) !void {
@@ -124,9 +130,8 @@ pub fn collapseToEnd(self: *Selection, page: *Page) !void {
     try range.setStart(last_node, last_offset);
     try range.setEnd(last_node, last_offset);
 
-    self.removeAllRanges();
+    self.removeAllRangesInner(true);
     try self._ranges.append(page.arena, range);
-    self._direction = .none;
 }
 
 pub fn collapseToStart(self: *Selection, page: *Page) !void {
@@ -140,7 +145,7 @@ pub fn collapseToStart(self: *Selection, page: *Page) !void {
     try range.setStart(first_node, first_offset);
     try range.setStart(first_node, first_offset);
 
-    self.removeAllRanges();
+    self.removeAllRangesInner(true);
     try self._ranges.append(page.arena, range);
     self._direction = .none;
 }
@@ -209,8 +214,6 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32) !void {
     }
 }
 
-// TODO: getComposedRanges
-
 pub fn getRangeAt(self: *Selection, index: u32) !*Range {
     if (index >= self.getRangeCount()) {
         return error.IndexSizeError;
@@ -219,15 +222,129 @@ pub fn getRangeAt(self: *Selection, index: u32) !*Range {
     return self._ranges.items[index];
 }
 
-// TODO: modify
+const ModifyAlter = enum {
+    move,
+    extend,
 
-// TODO: selectAllChildren
+    pub fn fromString(str: []const u8) ?ModifyAlter {
+        return std.meta.stringToEnum(ModifyAlter, str);
+    }
+};
 
-// TODO: setBaseAndExtent
+const ModifyDirection = enum {
+    forward,
+    backward,
+    left,
+    right,
+
+    pub fn fromString(str: []const u8) ?ModifyDirection {
+        return std.meta.stringToEnum(ModifyDirection, str);
+    }
+};
+
+const ModifyGranularity = enum {
+    character,
+    word,
+    line,
+    paragraph,
+    lineboundary,
+    // Firefox doesn't implement:
+    // - sentence
+    // - paragraph
+    // - sentenceboundary
+    // - paragraphboundary
+    // - documentboundary
+    // so we won't either for now.
+
+    pub fn fromString(str: []const u8) ?ModifyGranularity {
+        return std.meta.stringToEnum(ModifyGranularity, str);
+    }
+};
+
+pub fn modify(
+    self: *Selection,
+    alter_str: []const u8,
+    direction_str: []const u8,
+    granularity_str: []const u8,
+) !void {
+    const alter = ModifyAlter.fromString(alter_str) orelse return error.InvalidParams;
+    const direction = ModifyDirection.fromString(direction_str) orelse return error.InvalidParams;
+    const granularity = ModifyGranularity.fromString(granularity_str) orelse return error.InvalidParams;
+
+    if (self._ranges.items.len == 0) return;
+
+    log.warn(.not_implemented, "Selection.modify", .{
+        .alter = alter,
+        .direction = direction,
+        .granularity = granularity,
+    });
+}
+
+pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
+    if (parent._type == .document_type) {
+        return error.InvalidNodeType;
+    }
+
+    const range = try Range.init(page);
+    try range.setStart(parent, 0);
+
+    const child_count = parent.getLength();
+    try range.setEnd(parent, @intCast(child_count));
+
+    self.removeAllRangesInner(true);
+    try self._ranges.append(page.arena, range);
+}
+
+pub fn setBaseAndExtent(
+    self: *Selection,
+    anchor_node: *Node,
+    anchor_offset: u32,
+    focus_node: *Node,
+    focus_offset: u32,
+    page: *Page,
+) !void {
+    if (anchor_offset > anchor_node.getLength()) {
+        return error.IndexSizeError;
+    }
+
+    if (focus_offset > focus_node.getLength()) {
+        return error.IndexSizeError;
+    }
+
+    const cmp = AbstractRange.compareBoundaryPoints(
+        anchor_node,
+        anchor_offset,
+        focus_node,
+        focus_offset,
+    );
+
+    const range = try Range.init(page);
+
+    switch (cmp) {
+        .before => {
+            try range.setStart(anchor_node, anchor_offset);
+            try range.setEnd(focus_node, focus_offset);
+            self._direction = .forward;
+        },
+        .after => {
+            try range.setStart(focus_node, focus_offset);
+            try range.setEnd(anchor_node, anchor_offset);
+            self._direction = .backward;
+        },
+        .equal => {
+            try range.setStart(anchor_node, anchor_offset);
+            try range.setEnd(anchor_node, anchor_offset);
+            self._direction = .none;
+        },
+    }
+
+    self.removeAllRangesInner(false);
+    try self._ranges.append(page.arena, range);
+}
 
 pub fn setPosition(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !void {
     const node = _node orelse {
-        self.removeAllRanges();
+        self.removeAllRangesInner(true);
         return;
     };
 
@@ -241,9 +358,8 @@ pub fn setPosition(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) 
     try range.setStart(node, offset);
     try range.setEnd(node, offset);
 
-    self.removeAllRanges();
+    self.removeAllRangesInner(true);
     try self._ranges.append(page.arena, range);
-    self._direction = .none;
 }
 
 pub const JsApi = struct {
@@ -272,13 +388,13 @@ pub const JsApi = struct {
     pub const deleteFromDocument = bridge.function(Selection.deleteFromDocument, .{});
     pub const empty = bridge.function(Selection.removeAllRanges, .{});
     pub const extend = bridge.function(Selection.extend, .{ .dom_exception = true });
-    // getComposedRanges
+    // unimplemented: getComposedRanges
     pub const getRangeAt = bridge.function(Selection.getRangeAt, .{ .dom_exception = true });
-    // modify
+    pub const modify = bridge.function(Selection.modify, .{});
     pub const removeAllRanges = bridge.function(Selection.removeAllRanges, .{});
     pub const removeRange = bridge.function(Selection.removeRange, .{});
-    // selectAllChildren
-    // setBaseAndExtent
+    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
+    pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
     pub const setPosition = bridge.function(Selection.setPosition, .{});
 };
 

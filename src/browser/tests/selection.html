@@ -406,3 +406,165 @@
     testing.expectEqual("Range", sel.type);
   }
 </script>
+
+<script id=selectAllChildren>
+  {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+
+    const nested = document.getElementById("nested");
+    const s1 = document.getElementById("s1");
+    const s2 = document.getElementById("s2");
+
+    // Select all children of nested div
+    sel.selectAllChildren(nested);
+
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual("Range", sel.type);
+    testing.expectEqual(false, sel.isCollapsed);
+
+    // Anchor and focus should be on the parent node
+    testing.expectEqual(nested, sel.anchorNode);
+    testing.expectEqual(nested, sel.focusNode);
+
+    // Should start at offset 0 (before first child)
+    testing.expectEqual(0, sel.anchorOffset);
+
+    const childrenCount = nested.childNodes.length;
+
+    // Should end at offset equal to number of children (after last child)
+    testing.expectEqual(childrenCount, sel.focusOffset);
+
+    // Direction should be none
+    testing.expectEqual("none", sel.direction);
+
+    // Should contain the children (fully)
+    testing.expectEqual(true, sel.containsNode(s1, false));
+    testing.expectEqual(true, sel.containsNode(s2, false));
+
+    // Should not fully contain the parent itself
+    testing.expectEqual(false, sel.containsNode(nested, false));
+
+    // But should partially contain the parent
+    testing.expectEqual(true, sel.containsNode(nested, true));
+
+    // Verify the range
+    const range = sel.getRangeAt(0);
+    testing.expectEqual(nested, range.startContainer);
+    testing.expectEqual(nested, range.endContainer);
+    testing.expectEqual(0, range.startOffset);
+    testing.expectEqual(childrenCount, range.endOffset);
+  }
+</script>
+
+<script id=selectAllChildrenEmpty>
+  {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+
+    // Create an empty element
+    const empty = document.createElement("div");
+    document.body.appendChild(empty);
+
+    // Select all children of empty element
+    sel.selectAllChildren(empty);
+
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual("Caret", sel.type); // Collapsed because no children
+    testing.expectEqual(true, sel.isCollapsed);
+    testing.expectEqual(empty, sel.anchorNode);
+    testing.expectEqual(0, sel.anchorOffset);
+    testing.expectEqual(0, sel.focusOffset);
+
+    // Clean up
+    document.body.removeChild(empty);
+  }
+</script>
+
+<script id=selectAllChildrenReplacesSelection>
+  {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+
+    // Start with an existing selection
+    const p1 = document.getElementById("p1");
+    sel.selectAllChildren(p1);
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual(p1, sel.anchorNode);
+
+    // selectAllChildren should replace the existing selection
+    const p2 = document.getElementById("p2");
+    sel.selectAllChildren(p2);
+
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual(p2, sel.anchorNode);
+    testing.expectEqual(p2, sel.focusNode);
+
+    // Verify old selection is gone
+    const range = sel.getRangeAt(0);
+    testing.expectEqual(p2, range.startContainer);
+    testing.expectEqual(false, p1 == range.startContainer);
+  }
+</script>
+
+<script id=setBaseAndExtent>
+  {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+
+    const p1 = document.getElementById("p1");
+    const textNode = p1.firstChild;
+
+    // Forward selection (anchor before focus)
+    sel.setBaseAndExtent(textNode, 4, textNode, 15);
+
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual("Range", sel.type);
+    testing.expectEqual(false, sel.isCollapsed);
+    testing.expectEqual(textNode, sel.anchorNode);
+    testing.expectEqual(4, sel.anchorOffset);
+    testing.expectEqual(textNode, sel.focusNode);
+    testing.expectEqual(15, sel.focusOffset);
+    testing.expectEqual("forward", sel.direction);
+
+    // Backward selection (anchor after focus)
+    sel.setBaseAndExtent(textNode, 15, textNode, 4);
+
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual("Range", sel.type);
+    testing.expectEqual(textNode, sel.anchorNode);
+    testing.expectEqual(15, sel.anchorOffset);
+    testing.expectEqual(textNode, sel.focusNode);
+    testing.expectEqual(4, sel.focusOffset);
+    testing.expectEqual("backward", sel.direction);
+
+    // Collapsed selection (anchor equals focus)
+    sel.setBaseAndExtent(textNode, 10, textNode, 10);
+
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual("Caret", sel.type);
+    testing.expectEqual(true, sel.isCollapsed);
+    testing.expectEqual(10, sel.anchorOffset);
+    testing.expectEqual(10, sel.focusOffset);
+    testing.expectEqual("none", sel.direction);
+
+    // Across different nodes
+    const p2 = document.getElementById("p2");
+    const textNode2 = p2.firstChild;
+
+    sel.setBaseAndExtent(textNode, 4, textNode2, 5);
+
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual(textNode, sel.anchorNode);
+    testing.expectEqual(4, sel.anchorOffset);
+    testing.expectEqual(textNode2, sel.focusNode);
+    testing.expectEqual(5, sel.focusOffset);
+    testing.expectEqual("forward", sel.direction);
+
+    // Should replace existing selection
+    sel.setBaseAndExtent(textNode, 0, textNode, 3);
+    testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual(0, sel.anchorOffset);
+    testing.expectEqual(3, sel.focusOffset);
+  }
+</script>
