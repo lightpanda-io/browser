@@ -204,7 +204,6 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-
     // some MicroTasks might be referencing the page, we need to drain it while
     // the page still exists
     self.js.runMicrotasks();
@@ -1051,7 +1050,7 @@ pub fn removeElementId(self: *Page, element: *Element, id: []const u8) void {
 
 pub fn removeElementIdWithMaps(self: *Page, id_maps: ElementIdMaps, id: []const u8) void {
     if (id_maps.lookup.remove(id)) {
-        id_maps.removed_ids.put(self.arena, id, {}) catch {};
+        id_maps.removed_ids.put(self.arena, self.dupeString(id) catch return, {}) catch {};
     }
 }
 
