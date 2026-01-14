@@ -235,7 +235,6 @@ fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOp
     return js.String.toZig(str, opts);
 }
 
-
 pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
     const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
     const json_string = v8.String.initUtf8(v8_isolate, json);
