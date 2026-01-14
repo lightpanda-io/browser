@@ -60,10 +60,8 @@ pub fn asEvent(self: *PopStateEvent) *Event {
 }
 
 pub fn getState(self: *PopStateEvent, page: *Page) !?js.Value {
-    if (self._state == null) return null;
-
-    const value = try js.Value.fromJson(page.js, self._state.?);
-    return value;
+    const s = self._state orelse return null;
+    return try page.js.parseJSON(s);
 }
 
 pub fn hasUAVisualTransition(_: *PopStateEvent) bool {

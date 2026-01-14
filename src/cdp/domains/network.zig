@@ -429,36 +429,6 @@ const TransferAsResponseWriter = struct {
     }
 };
 
-// @ZIGDOM - do we still need this? just send the full URL?
-// const DocumentUrlWriter = struct {
-//     uri: *std.Uri,
-
-//     fn init(uri: *std.Uri) DocumentUrlWriter {
-//         return .{
-//             .uri = uri,
-//         };
-//     }
-
-//     pub fn jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
-//         self._jsonStringify(jws) catch return error.WriteFailed;
-//     }
-//     fn _jsonStringify(self: *const DocumentUrlWriter, jws: anytype) !void {
-//         const writer = jws.writer;
-
-//         try jws.beginWriteRaw();
-//         try writer.writeByte('\"');
-//         try self.uri.writeToStream(writer, .{
-//             .scheme = true,
-//             .authentication = true,
-//             .authority = true,
-//             .path = true,
-//             .query = true,
-//         });
-//         try writer.writeByte('\"');
-//         jws.endWriteRaw();
-//     }
-// };
-
 fn idFromRequestId(request_id: []const u8) !u64 {
     if (!std.mem.startsWith(u8, request_id, "REQ-")) {
         return error.InvalidParams;

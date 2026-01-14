@@ -204,10 +204,11 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-    // removeContext() will execute the destructor of any type that
-    // registered a destructor (e.g. XMLHttpRequest).
-    // Should be called before we deinit the page, because these objects
-    // could be referencing it.
+
+    // some MicroTasks might be referencing the page, we need to drain it while
+    // the page still exists
+    self.js.runMicrotasks();
+
     const session = self._session;
     session.executor.removeContext();
 
@@ -1309,7 +1310,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Page, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(self), .err = err });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err });
         return err;
     };
     return self.nodeIsReady(true, node);

@@ -331,7 +331,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        inspector: js.Inspector,
+        inspector: *js.Inspector,
         isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
 
         http_proxy_changed: bool = false,
@@ -411,15 +411,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 transfer.abort(error.ClientDisconnect);
             }
 
+            for (self.isolated_worlds.items) |*world| {
+                world.deinit();
+            }
+            self.isolated_worlds.clearRetainingCapacity();
+
             // If the session has a page, we need to clear it first. The page
             // context is always nested inside of the isolated world context,
             // so we need to shutdown the page one first.
             self.cdp.browser.closeSession();
 
-            for (self.isolated_worlds.items) |*world| {
-                world.deinit();
-            }
-            self.isolated_worlds.clearRetainingCapacity();
             self.node_registry.deinit();
             self.node_search_list.deinit();
             self.cdp.browser.notification.unregisterAll(self);

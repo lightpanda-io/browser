@@ -57,7 +57,7 @@ pub fn getOnCurrentEntryChange(self: *NavigationEventTarget) ?js.Function {
 
 pub fn setOnCurrentEntryChange(self: *NavigationEventTarget, listener: ?js.Function) !void {
     if (listener) |listen| {
-        self._on_currententrychange = try listen.withThis(self);
+        self._on_currententrychange = try listen.persistWithThis(self);
     } else {
         self._on_currententrychange = null;
     }

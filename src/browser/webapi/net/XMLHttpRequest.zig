@@ -104,7 +104,7 @@ pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function {
 
 pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_ready_state_change = try cb.withThis(self);
+        self._on_ready_state_change = try cb.persistWithThis(self);
     } else {
         self._on_ready_state_change = null;
     }
@@ -254,9 +254,8 @@ pub fn getResponse(self: *XMLHttpRequest, page: *Page) !?Response {
     const res: Response = switch (self._response_type) {
         .text => .{ .text = data },
         .json => blk: {
-            const value = try js.Value.fromJson(page.js, data);
-            const pvalue = try value.persist();
-            break :blk .{ .json = pvalue };
+            const value = try page.js.parseJSON(data);
+            break :blk .{ .json = try value.persist() };
         },
         .document => blk: {
             const document = try page._factory.node(Node.Document{ ._proto = undefined, ._type = .generic });

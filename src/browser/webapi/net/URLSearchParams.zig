@@ -50,7 +50,7 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
                     break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, page);
                 }
                 if (js_val.isString()) {
-                    break :blk try paramsFromString(arena, try js_val.toString(arena), &page.buf);
+                    break :blk try paramsFromString(arena, try js_val.toString(.{ .allocator = arena }), &page.buf);
                 }
                 return error.InvalidArgument;
             },

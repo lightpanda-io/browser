@@ -80,7 +80,7 @@ pub fn getOnLoad(self: *const Script) ?js.Function {
 
 pub fn setOnLoad(self: *Script, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_load = cb;
+        self._on_load = try cb.persist();
     } else {
         self._on_load = null;
     }
@@ -92,7 +92,7 @@ pub fn getOnError(self: *const Script) ?js.Function {
 
 pub fn setOnError(self: *Script, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_error = cb;
+        self._on_error = try cb.persist();
     } else {
         self._on_error = null;
     }
@@ -136,16 +136,22 @@ pub const Build = struct {
         self._src = element.getAttributeSafe("src") orelse "";
 
         if (element.getAttributeSafe("onload")) |on_load| {
-            self._on_load = page.js.stringToFunction(on_load) catch |err| blk: {
-                log.err(.js, "script.onload", .{ .err = err, .str = on_load });
-                break :blk null;
+            self._on_load = blk: {
+                const func = page.js.stringToFunction(on_load) catch |err| {
+                    log.err(.js, "script.onload", .{ .err = err, .str = on_load });
+                    break :blk null;
+                };
+                break :blk try func.persist();
             };
         }
 
         if (element.getAttributeSafe("onerror")) |on_error| {
-            self._on_error = page.js.stringToFunction(on_error) catch |err| blk: {
-                log.err(.js, "script.onerror", .{ .err = err, .str = on_error });
-                break :blk null;
+            self._on_error = blk: {
+                const func = page.js.stringToFunction(on_error) catch |err| {
+                    log.err(.js, "script.onerror", .{ .err = err, .str = on_error });
+                    break :blk null;
+                };
+                break :blk try func.persist();
             };
         }
     }

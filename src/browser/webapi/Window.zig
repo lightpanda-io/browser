@@ -150,7 +150,7 @@ pub fn getOnLoad(self: *const Window) ?js.Function {
 }
 
 pub fn setOnLoad(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_load = getFunctionFromSetter(setter);
+    self._on_load = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnPageShow(self: *const Window) ?js.Function {
@@ -158,7 +158,7 @@ pub fn getOnPageShow(self: *const Window) ?js.Function {
 }
 
 pub fn setOnPageShow(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_pageshow = getFunctionFromSetter(setter);
+    self._on_pageshow = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnPopState(self: *const Window) ?js.Function {
@@ -166,7 +166,7 @@ pub fn getOnPopState(self: *const Window) ?js.Function {
 }
 
 pub fn setOnPopState(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_popstate = getFunctionFromSetter(setter);
+    self._on_popstate = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnError(self: *const Window) ?js.Function {
@@ -174,7 +174,7 @@ pub fn getOnError(self: *const Window) ?js.Function {
 }
 
 pub fn setOnError(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_error = getFunctionFromSetter(setter);
+    self._on_error = try getFunctionFromSetter(setter);
 }
 
 pub fn getOnUnhandledRejection(self: *const Window) ?js.Function {
@@ -182,14 +182,14 @@ pub fn getOnUnhandledRejection(self: *const Window) ?js.Function {
 }
 
 pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_unhandled_rejection = getFunctionFromSetter(setter);
+    self._on_unhandled_rejection = try getFunctionFromSetter(setter);
 }
 
 pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
     return Fetch.init(input, options, page);
 }
 
-pub fn setTimeout(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.Object, page: *Page) !u32 {
+pub fn setTimeout(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.Value, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = false,
         .params = params,
@@ -198,7 +198,7 @@ pub fn setTimeout(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.O
     }, page);
 }
 
-pub fn setInterval(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.Object, page: *Page) !u32 {
+pub fn setInterval(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.Value, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = true,
         .params = params,
@@ -207,7 +207,7 @@ pub fn setInterval(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.
     }, page);
 }
 
-pub fn setImmediate(self: *Window, cb: js.Function, params: []js.Object, page: *Page) !u32 {
+pub fn setImmediate(self: *Window, cb: js.Function, params: []js.Value, page: *Page) !u32 {
     return self.scheduleCallback(cb, 0, .{
         .repeat = false,
         .params = params,
@@ -269,10 +269,10 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
     sc.removed = true;
 }
 
-pub fn reportError(self: *Window, err: js.Object, page: *Page) !void {
+pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     const error_event = try ErrorEvent.initTrusted("error", .{
         .@"error" = err,
-        .message = err.toString() catch "Unknown error",
+        .message = err.toString(.{}) catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
     }, page);
@@ -316,7 +316,7 @@ pub fn getIsSecureContext(_: *const Window) bool {
     return false;
 }
 
-pub fn postMessage(self: *Window, message: js.Object, target_origin: ?[]const u8, page: *Page) !void {
+pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, page: *Page) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
@@ -465,7 +465,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
 const ScheduleOpts = struct {
     repeat: bool,
-    params: []js.Object,
+    params: []js.Value,
     name: []const u8,
     low_priority: bool = false,
     animation_frame: bool = false,
@@ -481,9 +481,9 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
     self._timer_id = timer_id;
 
     const params = opts.params;
-    var persisted_params: []js.Object = &.{};
+    var persisted_params: []js.Value = &.{};
     if (params.len > 0) {
-        persisted_params = try page.arena.alloc(js.Object, params.len);
+        persisted_params = try page.arena.alloc(js.Value, params.len);
         for (params, persisted_params) |a, *ca| {
             ca.* = try a.persist();
         }
@@ -497,7 +497,7 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
     errdefer _ = self._timers.remove(timer_id);
 
     const callback = try page._factory.create(ScheduleCallback{
-        .cb = cb,
+        .cb = try cb.persist(),
         .page = page,
         .mode = opts.mode,
         .name = opts.name,
@@ -530,7 +530,7 @@ const ScheduleCallback = struct {
 
     page: *Page,
 
-    params: []const js.Object,
+    params: []const js.Value,
 
     removed: bool = false,
 
@@ -587,7 +587,7 @@ const ScheduleCallback = struct {
 
 const PostMessageCallback = struct {
     window: *Window,
-    message: js.Object,
+    message: js.Value,
     origin: []const u8,
     page: *Page,
 
@@ -622,10 +622,10 @@ const FunctionSetter = union(enum) {
 // window.onload = {}; doesn't fail, but it doesn't do anything.
 // seems like setting to null is ok (though, at least on Firefix, it preserves
 // the original value, which we could do, but why?)
-fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function {
+fn getFunctionFromSetter(setter_: ?FunctionSetter) !?js.Function {
     const setter = setter_ orelse return null;
     return switch (setter) {
-        .func => |func| func,
+        .func => |func| try func.persist(),
         .anything => null,
     };
 }

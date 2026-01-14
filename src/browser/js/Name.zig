@@ -19,23 +19,6 @@
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const Platform = @This();
-handle: *v8.Platform,
+const Name = @This();
 
-pub fn init() !Platform {
-    if (v8.v8__V8__InitializeICU() == false) {
-        return error.FailedToInitializeICU;
-    }
-    // 0 - threadpool size, 0 == let v8 decide
-    // 1 - idle_task_support, 1 == enabled
-    const handle = v8.v8__Platform__NewDefaultPlatform(0, 1).?;
-    v8.v8__V8__InitializePlatform(handle);
-    v8.v8__V8__Initialize();
-    return .{ .handle = handle };
-}
-
-pub fn deinit(self: Platform) void {
-    _ = v8.v8__V8__Dispose();
-    v8.v8__V8__DisposePlatform();
-    v8.v8__Platform__DELETE(self.handle);
-}
+handle: *const v8.Name,

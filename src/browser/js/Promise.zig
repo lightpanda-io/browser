@@ -16,53 +16,45 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const Array = @This();
+const Promise = @This();
 
 ctx: *js.Context,
-handle: *const v8.Array,
+handle: *const v8.Promise,
 
-pub fn len(self: Array) usize {
-    return v8.v8__Array__Length(self.handle);
-}
-
-pub fn get(self: Array, index: u32) !js.Value {
-    const ctx = self.ctx;
-
-    const idx = js.Integer.init(ctx.isolate.handle, index);
-    const handle = v8.v8__Object__Get(@ptrCast(self.handle), ctx.handle, idx.handle) orelse {
-        return error.JsException;
-    };
-
-    return .{
-        .ctx = self.ctx,
-        .handle = handle,
-    };
-}
-
-pub fn set(self: Array, index: u32, value: anytype, comptime opts: js.bridge.Caller.CallOpts) !bool {
-    const ctx = self.ctx;
-
-    const js_value = try ctx.zigValueToJs(value, opts);
-
-    var out: v8.MaybeBool = undefined;
-    v8.v8__Object__SetAtIndex(@ptrCast(self.handle), ctx.handle, index, js_value.handle, &out);
-    return out.has_value;
-}
-
-pub fn toObject(self: Array) js.Object {
+pub fn toObject(self: Promise) js.Object {
     return .{
         .ctx = self.ctx,
         .handle = @ptrCast(self.handle),
     };
 }
 
-pub fn toValue(self: Array) js.Value {
+pub fn toValue(self: Promise) js.Value {
     return .{
         .ctx = self.ctx,
         .handle = @ptrCast(self.handle),
+    };
+}
+
+pub fn thenAndCatch(self: Promise, on_fulfilled: js.Function, on_rejected: js.Function) !Promise {
+    if (v8.v8__Promise__Then2(self.handle, self.ctx.handle, on_fulfilled.handle, on_rejected.handle)) |handle| {
+        return .{
+            .ctx = self.ctx,
+            .handle = handle,
+        };
+    }
+    return error.PromiseChainFailed;
+}
+pub fn persist(self: Promise) !Promise {
+    var ctx = self.ctx;
+
+    const global = js.Global(Promise).init(ctx.isolate.handle, self.handle);
+    try ctx.global_promises.append(ctx.arena, global);
+
+    return .{
+        .ctx = ctx,
+        .handle = global.local(),
     };
 }

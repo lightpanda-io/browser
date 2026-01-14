@@ -46,7 +46,7 @@ const DefaultDurationThreshold: f64 = 104;
 /// Creates a new PerformanceObserver object with the given observer callback.
 pub fn init(callback: js.Function, page: *Page) !*PerformanceObserver {
     return page._factory.create(PerformanceObserver{
-        ._callback = callback,
+        ._callback = try callback.persist(),
         ._duration_threshold = DefaultDurationThreshold,
         ._interests = 0,
         ._entries = .{},

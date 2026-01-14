@@ -85,7 +85,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) 
         }
 
         if (src.pull) |pull| {
-            self._pull_fn = pull;
+            self._pull_fn = try pull.persist();
             try self.callPullIfNeeded();
         }
     }
@@ -182,7 +182,7 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
 
     var c = &self._cancel.?;
     if (c.resolver == null) {
-        c.resolver = try page.js.createPromiseResolver(.self);
+        c.resolver = try page.js.createPromiseResolver().persist();
     }
 
     // Execute the cancel callback if provided
@@ -213,7 +213,7 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
 const Cancel = struct {
     callback: ?js.Function = null,
     reason: ?[]const u8 = null,
-    resolver: ?js.PersistentPromiseResolver = null,
+    resolver: ?js.PromiseResolver = null,
 };
 
 pub const JsApi = struct {

@@ -30,7 +30,7 @@ const CustomElementDefinition = @import("CustomElementDefinition.zig");
 const CustomElementRegistry = @This();
 
 _definitions: std.StringHashMapUnmanaged(*CustomElementDefinition) = .{},
-_when_defined: std.StringHashMapUnmanaged(js.PersistentPromiseResolver) = .{},
+_when_defined: std.StringHashMapUnmanaged(js.PromiseResolver) = .{},
 
 const DefineOptions = struct {
     extends: ?[]const u8 = null,
@@ -63,7 +63,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
 
     const definition = try page._factory.create(CustomElementDefinition{
         .name = owned_name,
-        .constructor = constructor,
+        .constructor = try constructor.persist(),
         .extends = extends_tag,
     });
 
@@ -72,8 +72,8 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
         if (observed_attrs.isArray()) {
             var js_arr = observed_attrs.toArray();
             for (0..js_arr.len()) |i| {
-                const attr_val = js_arr.get(i) catch continue;
-                const attr_name = attr_val.toString(page.arena) catch continue;
+                const attr_val = js_arr.get(@intCast(i)) catch continue;
+                const attr_name = attr_val.toString(.{ .allocator = page.arena }) catch continue;
                 const owned_attr = page.dupeString(attr_name) catch continue;
                 definition.observed_attributes.put(page.arena, owned_attr, {}) catch continue;
             }
@@ -131,7 +131,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
     errdefer _ = self._when_defined.remove(name);
     const owned_name = try page.dupeString(name);
 
-    const resolver = try page.js.createPromiseResolver(.page);
+    const resolver = try page.js.createPromiseResolver().persist();
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = resolver;
 

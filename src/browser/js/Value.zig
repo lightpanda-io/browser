@@ -21,72 +21,281 @@ const js = @import("js.zig");
 
 const v8 = js.v8;
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Allocator = std.mem.Allocator;
 
-const PersistentValue = v8.Persistent(v8.Value);
-
 const Value = @This();
-js_val: v8.Value,
-context: *js.Context,
+
+ctx: *js.Context,
+handle: *const v8.Value,
 
 pub fn isObject(self: Value) bool {
-    return self.js_val.isObject();
+    return v8.v8__Value__IsObject(self.handle);
 }
 
 pub fn isString(self: Value) bool {
-    return self.js_val.isString();
+    return v8.v8__Value__IsString(self.handle);
 }
 
 pub fn isArray(self: Value) bool {
-    return self.js_val.isArray();
+    return v8.v8__Value__IsArray(self.handle);
+}
+
+pub fn isSymbol(self: Value) bool {
+    return v8.v8__Value__IsSymbol(self.handle);
+}
+
+pub fn isFunction(self: Value) bool {
+    return v8.v8__Value__IsFunction(self.handle);
 }
 
 pub fn isNull(self: Value) bool {
-    return self.js_val.isNull();
+    return v8.v8__Value__IsNull(self.handle);
 }
 
 pub fn isUndefined(self: Value) bool {
-    return self.js_val.isUndefined();
+    return v8.v8__Value__IsUndefined(self.handle);
 }
 
-pub fn toString(self: Value, allocator: Allocator) ![]const u8 {
-    return self.context.valueToString(self.js_val, .{ .allocator = allocator });
+pub fn isNullOrUndefined(self: Value) bool {
+    return v8.v8__Value__IsNullOrUndefined(self.handle);
+}
+
+pub fn isNumber(self: Value) bool {
+    return v8.v8__Value__IsNumber(self.handle);
+}
+
+pub fn isNumberObject(self: Value) bool {
+    return v8.v8__Value__IsNumberObject(self.handle);
+}
+
+pub fn isInt32(self: Value) bool {
+    return v8.v8__Value__IsInt32(self.handle);
+}
+
+pub fn isUint32(self: Value) bool {
+    return v8.v8__Value__IsUint32(self.handle);
+}
+
+pub fn isBigInt(self: Value) bool {
+    return v8.v8__Value__IsBigInt(self.handle);
+}
+
+pub fn isBigIntObject(self: Value) bool {
+    return v8.v8__Value__IsBigIntObject(self.handle);
+}
+
+pub fn isBoolean(self: Value) bool {
+    return v8.v8__Value__IsBoolean(self.handle);
+}
+
+pub fn isBooleanObject(self: Value) bool {
+    return v8.v8__Value__IsBooleanObject(self.handle);
+}
+
+pub fn isTrue(self: Value) bool {
+    return v8.v8__Value__IsTrue(self.handle);
+}
+
+pub fn isFalse(self: Value) bool {
+    return v8.v8__Value__IsFalse(self.handle);
+}
+
+pub fn isTypedArray(self: Value) bool {
+    return v8.v8__Value__IsTypedArray(self.handle);
+}
+
+pub fn isArrayBufferView(self: Value) bool {
+    return v8.v8__Value__IsArrayBufferView(self.handle);
+}
+
+pub fn isArrayBuffer(self: Value) bool {
+    return v8.v8__Value__IsArrayBuffer(self.handle);
+}
+
+pub fn isUint8Array(self: Value) bool {
+    return v8.v8__Value__IsUint8Array(self.handle);
+}
+
+pub fn isUint8ClampedArray(self: Value) bool {
+    return v8.v8__Value__IsUint8ClampedArray(self.handle);
+}
+
+pub fn isInt8Array(self: Value) bool {
+    return v8.v8__Value__IsInt8Array(self.handle);
+}
+
+pub fn isUint16Array(self: Value) bool {
+    return v8.v8__Value__IsUint16Array(self.handle);
+}
+
+pub fn isInt16Array(self: Value) bool {
+    return v8.v8__Value__IsInt16Array(self.handle);
+}
+
+pub fn isUint32Array(self: Value) bool {
+    return v8.v8__Value__IsUint32Array(self.handle);
+}
+
+pub fn isInt32Array(self: Value) bool {
+    return v8.v8__Value__IsInt32Array(self.handle);
+}
+
+pub fn isBigUint64Array(self: Value) bool {
+    return v8.v8__Value__IsBigUint64Array(self.handle);
+}
+
+pub fn isBigInt64Array(self: Value) bool {
+    return v8.v8__Value__IsBigInt64Array(self.handle);
+}
+
+pub fn isPromise(self: Value) bool {
+    return v8.v8__Value__IsPromise(self.handle);
 }
 
 pub fn toBool(self: Value) bool {
-    return self.js_val.toBool(self.context.isolate);
+    return v8.v8__Value__BooleanValue(self.handle, self.ctx.isolate.handle);
 }
 
+pub fn typeOf(self: Value) js.String {
+    const str_handle = v8.v8__Value__TypeOf(self.handle, self.ctx.isolate.handle).?;
+    return js.String{ .ctx = self.ctx, .handle = str_handle };
+}
+
+pub fn toF32(self: Value) !f32 {
+    return @floatCast(try self.toF64());
+}
+
+pub fn toF64(self: Value) !f64 {
+    var maybe: v8.MaybeF64 = undefined;
+    v8.v8__Value__NumberValue(self.handle, self.ctx.handle, &maybe);
+    if (!maybe.has_value) {
+        return error.JsException;
+    }
+    return maybe.value;
+}
+
+pub fn toI32(self: Value) !i32 {
+    var maybe: v8.MaybeI32 = undefined;
+    v8.v8__Value__Int32Value(self.handle, self.ctx.handle, &maybe);
+    if (!maybe.has_value) {
+        return error.JsException;
+    }
+    return maybe.value;
+}
+
+pub fn toU32(self: Value) !u32 {
+    var maybe: v8.MaybeU32 = undefined;
+    v8.v8__Value__Uint32Value(self.handle, self.ctx.handle, &maybe);
+    if (!maybe.has_value) {
+        return error.JsException;
+    }
+    return maybe.value;
+}
+
+pub fn toPromise(self: Value) js.Promise {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isPromise());
+    }
+    return .{
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
+    };
+}
+
+pub fn toString(self: Value, opts: js.String.ToZigOpts) ![]u8 {
+    return self._toString(false, opts);
+}
+pub fn toStringZ(self: Value, opts: js.String.ToZigOpts) ![:0]u8 {
+    return self._toString(true, opts);
+}
+
+pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
+    const json_str_handle = v8.v8__JSON__Stringify(self.ctx.handle, self.handle, null) orelse return error.JsException;
+    return self.ctx.jsStringToZig(json_str_handle, .{ .allocator = allocator });
+}
+
+fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
+    const ctx = self.ctx;
+
+    if (self.isSymbol()) {
+        const sym_handle = v8.v8__Symbol__Description(@ptrCast(self.handle), ctx.isolate.handle).?;
+        return _toString(.{ .handle = @ptrCast(sym_handle), .ctx = ctx }, null_terminate, opts);
+    }
+
+    const str_handle = v8.v8__Value__ToString(self.handle, ctx.handle) orelse {
+        return error.JsException;
+    };
+
+    const str = js.String{ .ctx = ctx, .handle = str_handle };
+    if (comptime null_terminate) {
+        return js.String.toZigZ(str, opts);
+    }
+    return js.String.toZig(str, opts);
+}
+
+
 pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
-    const json_string = v8.String.initUtf8(ctx.isolate, json);
-    const value = try v8.Json.parse(ctx.v8_context, json_string);
-    return Value{ .context = ctx, .js_val = value };
+    const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
+    const json_string = v8.String.initUtf8(v8_isolate, json);
+    const v8_context = v8.Context{ .handle = ctx.handle };
+    const value = try v8.Json.parse(v8_context, json_string);
+    return .{ .ctx = ctx, .handle = value.handle };
 }
 
 pub fn persist(self: Value) !Value {
-    const js_val = self.js_val;
-    var context = self.context;
+    var ctx = self.ctx;
 
-    const persisted = PersistentValue.init(context.isolate, js_val);
-    try context.js_value_list.append(context.arena, persisted);
+    const global = js.Global(Value).init(ctx.isolate.handle, self.handle);
+    try ctx.global_values.append(ctx.arena, global);
 
-    return Value{ .context = context, .js_val = persisted.toValue() };
+    return .{
+        .ctx = ctx,
+        .handle = global.local(),
+    };
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
-    return self.context.jsValueToZig(T, self.js_val);
+    return self.ctx.jsValueToZig(T, self);
 }
 
 pub fn toObject(self: Value) js.Object {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isObject());
+    }
+
     return .{
-        .context = self.context,
-        .js_obj = self.js_val.castTo(v8.Object),
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
     };
 }
 
 pub fn toArray(self: Value) js.Array {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isArray());
+    }
+
     return .{
-        .context = self.context,
-        .js_arr = self.js_val.castTo(v8.Array),
+        .ctx = self.ctx,
+        .handle = @ptrCast(self.handle),
     };
+}
+
+pub fn toBigInt(self: Value) js.BigInt {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.isBigInt());
+    }
+
+    return .{
+        .handle = @ptrCast(self.handle),
+    };
+}
+
+pub fn format(self: Value, writer: *std.Io.Writer) !void {
+    if (comptime IS_DEBUG) {
+        return self.ctx.debugValue(self, writer);
+    }
+    const str = self.toString(.{}) catch return error.WriteFailed;
+    return writer.writeAll(str);
 }
