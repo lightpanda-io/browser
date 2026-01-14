@@ -77,6 +77,7 @@ identity_map: std.AutoHashMapUnmanaged(usize, js.Global(js.Object)) = .empty,
 // the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
 // a reliable way to know if an object has already been persisted,
 // we now simply persist every time persist() is called.
+
 global_values: std.ArrayList(v8.Global) = .empty,
 global_objects: std.ArrayList(v8.Global) = .empty,
 global_modules: std.ArrayList(v8.Global) = .empty,
