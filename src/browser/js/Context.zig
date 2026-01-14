@@ -77,13 +77,12 @@ identity_map: std.AutoHashMapUnmanaged(usize, js.Global(js.Object)) = .empty,
 // the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
 // a reliable way to know if an object has already been persisted,
 // we now simply persist every time persist() is called.
-
 global_values: std.ArrayList(v8.Global) = .empty,
 global_objects: std.ArrayList(v8.Global) = .empty,
-global_modules: std.ArrayList(v8.Global) = .empty,
-global_promises: std.ArrayList(v8.Global) = .empty,
+global_modules: std.ArrayList(js.Global(js.Module)) = .empty,
+global_promises: std.ArrayList(js.Global(js.Promise)) = .empty,
 global_functions: std.ArrayList(v8.Global) = .empty,
-global_promise_resolvers: std.ArrayList(v8.Global) = .empty,
+global_promise_resolvers: std.ArrayList(js.Global(js.PromiseResolver)) = .empty,
 
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
@@ -101,19 +100,19 @@ script_manager: ?*ScriptManager,
 const ModuleEntry = struct {
     // Can be null if we're asynchrously loading the module, in
     // which case resolver_promise cannot be null.
-    module: ?js.Module.Global = null,
+    module: ?js.Module = null,
 
     // The promise of the evaluating module. The resolved value is
     // meaningless to us, but the resolver promise needs to chain
     // to this, since we need to know when it's complete.
-    module_promise: ?js.Promise.Global = null,
+    module_promise: ?js.Promise = null,
 
     // The promise for the resolver which is loading the module.
     // (AKA, the first time we try to load it). This resolver will
     // chain to the module_promise  and, when it's done evaluating
     // will resolve its namespace. Any other attempt to load the
     // module willchain to this.
-    resolver_promise: ?js.Promise.Global = null,
+    resolver_promise: ?js.Promise = null,
 };
 
 pub fn fromC(c_context: *const v8.Context) *Context {
@@ -151,7 +150,7 @@ pub fn deinit(self: *Context) void {
     }
 
     for (self.global_modules.items) |*global| {
-        v8.v8__Global__Reset(global);
+        global.deinit();
     }
 
     for (self.global_functions.items) |*global| {
@@ -159,11 +158,11 @@ pub fn deinit(self: *Context) void {
     }
 
     for (self.global_promises.items) |*global| {
-        v8.v8__Global__Reset(global);
+        global.deinit();
     }
 
     for (self.global_promise_resolvers.items) |*global| {
-        v8.v8__Global__Reset(global);
+        global.deinit();
     }
 
     if (self.handle_scope) |*scope| {
@@ -469,21 +468,6 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             }
 
             if (T == js.Value.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .ctx = self, .handle = @ptrCast(value.local().handle) };
-            }
-
-            if (T == js.Promise.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .ctx = self, .handle = @ptrCast(value.local().handle) };
-            }
-
-            if (T == js.PromiseResolver.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .ctx = self, .handle = @ptrCast(value.local().handle) };
-            }
-
-            if (T == js.Module.Global) {
                 // Auto-convert Global to local for bridge
                 return .{ .ctx = self, .handle = @ptrCast(value.local().handle) };
             }
@@ -856,16 +840,6 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: js.Value) !?T {
         },
         js.Value.Global => {
             return try js_value.persist();
-        },
-        js.Promise.Global => {
-            if (!js_value.isPromise()) {
-                return null;
-            }
-            const promise = js.Promise{
-                .ctx = self,
-                .handle = @ptrCast(js_value.handle),
-            };
-            return try promise.persist();
         },
         else => {
             if (!js_value.isObject()) {
@@ -1312,7 +1286,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
 
     const entry = self.module_cache.getPtr(normalized_specifier).?;
     if (entry.module) |m| {
-        return m.local().handle;
+        return m.handle;
     }
 
     var source = try self.script_manager.?.waitForImport(normalized_specifier);
@@ -1325,7 +1299,7 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
     const mod = try self.compileModule(source.src(), normalized_specifier);
     try self.postCompileModule(mod, normalized_specifier);
     entry.module = try mod.persist();
-    return entry.module.?.local().handle;
+    return entry.module.?.handle;
 }
 
 // Will get passed to ScriptManager and then passed back to us when
@@ -1333,11 +1307,11 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
 const DynamicModuleResolveState = struct {
     // The module that we're resolving (we'll actually resolve its
     // namespace)
-    module: ?js.Module.Global,
+    module: ?js.Module,
     context_id: usize,
     context: *Context,
     specifier: [:0]const u8,
-    resolver: js.PromiseResolver.Global,
+    resolver: js.PromiseResolver,
 };
 
 fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []const u8) !js.Promise {
@@ -1346,7 +1320,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         // This is easy, there's already something responsible
         // for loading the module. Maybe it's still loading, maybe
         // it's complete. Whatever, we can just return that promise.
-        return gop.value_ptr.resolver_promise.?.local();
+        return gop.value_ptr.resolver_promise.?;
     }
 
     const resolver = try self.createPromiseResolver().persist();
@@ -1360,7 +1334,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         .resolver = resolver,
     };
 
-    const promise = try resolver.local().promise().persist();
+    const promise = try resolver.promise().persist();
 
     if (!gop.found_existing) {
         // this module hasn't been seen before. This is the most
@@ -1378,13 +1352,13 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         // Next, we need to actually load it.
         self.script_manager.?.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
             const error_msg = self.newString(@errorName(err));
-            _ = resolver.local().reject("dynamic module get async", error_msg);
+            _ = resolver.reject("dynamic module get async", error_msg);
         };
 
         // For now, we're done. but this will be continued in
         // `dynamicModuleSourceCallback`, once the source for the
         // moduel is loaded.
-        return promise.local();
+        return promise;
     }
 
     // So we have a module, but no async resolver. This can only
@@ -1400,21 +1374,20 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // If the module hasn't been evaluated yet (it was only instantiated
     // as a static import dependency), we need to evaluate it now.
     if (gop.value_ptr.module_promise == null) {
-        const mod_global = gop.value_ptr.module.?;
-        const mod = mod_global.local();
+        const mod = gop.value_ptr.module.?;
         const status = mod.getStatus();
         if (status == .kEvaluated or status == .kEvaluating) {
             // Module was already evaluated (shouldn't normally happen, but handle it).
             // Create a pre-resolved promise with the module namespace.
             const module_resolver = try self.createPromiseResolver().persist();
-            _ = module_resolver.local().resolve("resolve module", mod.getModuleNamespace());
-            gop.value_ptr.module_promise = try module_resolver.local().promise().persist();
+            _ = module_resolver.resolve("resolve module", mod.getModuleNamespace());
+            gop.value_ptr.module_promise = try module_resolver.promise().persist();
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
             const evaluated = mod.evaluate() catch {
                 std.debug.assert(status == .kErrored);
-                _ = resolver.local().reject("module evaluation", self.newString("Module evaluation failed"));
-                return promise.local();
+                _ = resolver.reject("module evaluation", self.newString("Module evaluation failed"));
+                return promise;
             };
             std.debug.assert(evaluated.isPromise());
             gop.value_ptr.module_promise = try evaluated.toPromise().persist();
@@ -1429,7 +1402,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // But we can skip direclty to `resolveDynamicModule` which is
     // what the above callback will eventually do.
     self.resolveDynamicModule(state, gop.value_ptr.*);
-    return promise.local();
+    return promise;
 }
 
 fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManager.ModuleSource) void {
@@ -1437,7 +1410,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
     var self = state.context;
 
     var ms = module_source_ catch |err| {
-        _ = state.resolver.local().reject("dynamic module source", self.newString(@errorName(err)));
+        _ = state.resolver.reject("dynamic module source", self.newString(@errorName(err)));
         return;
     };
 
@@ -1454,7 +1427,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
                 .caught = caught,
                 .specifier = state.specifier,
             });
-            _ = state.resolver.local().reject("dynamic compilation failure", self.newString(caught.exception orelse ""));
+            _ = state.resolver.reject("dynamic compilation failure", self.newString(caught.exception orelse ""));
             return;
         };
     };
@@ -1498,8 +1471,8 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
             }
 
             defer caller.context.runMicrotasks();
-            const namespace = s.module.?.local().getModuleNamespace();
-            _ = s.resolver.local().resolve("resolve namespace", namespace);
+            const namespace = s.module.?.getModuleNamespace();
+            _ = s.resolver.resolve("resolve namespace", namespace);
         }
     }.callback, @ptrCast(state));
 
@@ -1518,19 +1491,19 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
             }
 
             defer ctx.runMicrotasks();
-            _ = s.resolver.local().reject("catch callback", js.Value{
+            _ = s.resolver.reject("catch callback", js.Value{
                 .ctx = ctx,
                 .handle = v8.v8__FunctionCallbackInfo__Data(callback_handle).?,
             });
         }
     }.callback, @ptrCast(state));
 
-    _ = module_entry.module_promise.?.local().thenAndCatch(then_callback, catch_callback) catch |err| {
+    _ = module_entry.module_promise.?.thenAndCatch(then_callback, catch_callback) catch |err| {
         log.err(.js, "module evaluation is promise", .{
             .err = err,
             .specifier = state.specifier,
         });
-        _ = state.resolver.local().reject("module promise", self.newString("Failed to evaluate promise"));
+        _ = state.resolver.reject("module promise", self.newString("Failed to evaluate promise"));
     };
 }
 

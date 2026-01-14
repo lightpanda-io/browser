@@ -27,8 +27,8 @@ const Allocator = std.mem.Allocator;
 const CustomEvent = @This();
 
 _proto: *Event,
-_arena: Allocator,
 _detail: ?js.Value.Global = null,
+_arena: Allocator,
 
 const CustomEventOptions = struct {
     detail: ?js.Value.Global = null,
