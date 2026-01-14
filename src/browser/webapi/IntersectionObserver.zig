@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 const std = @import("std");
 const js = @import("../js/js.zig");
+const log = @import("../../log.zig");
+
 const Page = @import("../Page.zig");
 const Element = @import("Element.zig");
 const DOMRect = @import("DOMRect.zig");
@@ -238,7 +240,11 @@ pub fn deliverEntries(self: *IntersectionObserver, page: *Page) !void {
     }
 
     const entries = try self.takeRecords(page);
-    try self._callback.call(void, .{ entries, self });
+    var result: js.Function.Result = undefined;
+    self._callback.tryCall(void, .{ entries, self }, &result) catch |err| {
+        log.err(.page, "IntsctObserver.deliverEntries", .{ .err = result.exception, .stack = result.stack });
+        return err;
+    };
 }
 
 pub const IntersectionObserverEntry = struct {
