@@ -94,9 +94,8 @@ pub fn run(allocator: Allocator, file: []const u8, session: *lp.Session) !void {
     _ = session.wait(2000);
 
     js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
-        const msg = try_catch.err(allocator) catch @errorName(err) orelse "unknown";
-
-        std.debug.print("{s}: test failure\nError: {s}\n", .{ file, msg });
+        const caught = try_catch.caughtOrError(allocator, err);
+        std.debug.print("{s}: test failure\nError: {f}\n", .{ file, caught });
         return err;
     };
 }

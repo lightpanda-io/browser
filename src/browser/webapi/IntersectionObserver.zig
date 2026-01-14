@@ -245,9 +245,9 @@ pub fn deliverEntries(self: *IntersectionObserver, page: *Page) !void {
     }
 
     const entries = try self.takeRecords(page);
-    var result: js.Function.Result = undefined;
-    self._callback.tryCall(void, .{ entries, self }, &result) catch |err| {
-        log.err(.page, "IntsctObserver.deliverEntries", .{ .err = result.exception, .stack = result.stack });
+    var caught: js.TryCatch.Caught = undefined;
+    self._callback.tryCall(void, .{ entries, self }, &caught) catch |err| {
+        log.err(.page, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
         return err;
     };
 }
