@@ -24,7 +24,7 @@ const Element = @import("Element.zig");
 const CustomElementDefinition = @This();
 
 name: []const u8,
-constructor: js.Function,
+constructor: js.Function.Global,
 observed_attributes: std.StringHashMapUnmanaged(void) = .{},
 // For customized built-in elements, this is the element tag they extend (e.g., .button)
 // For autonomous custom elements, this is null

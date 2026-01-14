@@ -81,7 +81,7 @@ global_values: std.ArrayList(js.Global(js.Value)) = .empty,
 global_objects: std.ArrayList(js.Global(js.Object)) = .empty,
 global_modules: std.ArrayList(js.Global(js.Module)) = .empty,
 global_promises: std.ArrayList(js.Global(js.Promise)) = .empty,
-global_functions: std.ArrayList(js.Global(js.Function)) = .empty,
+global_functions: std.ArrayList(v8.Global) = .empty,
 global_promise_resolvers: std.ArrayList(js.Global(js.PromiseResolver)) = .empty,
 
 // Our module cache: normalized module specifier => module.
@@ -154,7 +154,7 @@ pub fn deinit(self: *Context) void {
     }
 
     for (self.global_functions.items) |*global| {
-        global.deinit();
+        v8.v8__Global__Reset(global);
     }
 
     for (self.global_promises.items) |*global| {
@@ -450,6 +450,11 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             if (T == js.Function) {
                 // we're returning a callback
                 return .{ .ctx = self, .handle = @ptrCast(value.handle) };
+            }
+
+            if (T == js.Function.Global) {
+                // Auto-convert Global to local for bridge
+                return .{ .ctx = self, .handle = @ptrCast(value.local().handle) };
             }
 
             if (T == js.Object) {
@@ -777,6 +782,13 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: js.Value) !?T {
                 return null;
             }
             return try self.newFunction(js_value);
+        },
+        js.Function.Global => {
+            if (!js_value.isFunction()) {
+                return null;
+            }
+            const func = try self.newFunction(js_value);
+            return try func.persist();
         },
         // zig fmt: off
         js.TypedArray(u8), js.TypedArray(u16), js.TypedArray(u32), js.TypedArray(u64),

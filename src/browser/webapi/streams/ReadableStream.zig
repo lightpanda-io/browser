@@ -43,15 +43,15 @@ _state: State,
 _reader: ?*ReadableStreamDefaultReader,
 _controller: *ReadableStreamDefaultController,
 _stored_error: ?[]const u8,
-_pull_fn: ?js.Function = null,
+_pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
 _pull_again: bool = false,
 _cancel: ?Cancel = null,
 
 const UnderlyingSource = struct {
     start: ?js.Function = null,
-    pull: ?js.Function = null,
-    cancel: ?js.Function = null,
+    pull: ?js.Function.Global = null,
+    cancel: ?js.Function.Global = null,
     type: ?[]const u8 = null,
 };
 
@@ -85,7 +85,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) 
         }
 
         if (src.pull) |pull| {
-            self._pull_fn = try pull.persist();
+            self._pull_fn = pull;
             try self.callPullIfNeeded();
         }
     }
@@ -137,12 +137,12 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
 
     self._pulling = true;
 
-    const pull_fn = self._pull_fn orelse return;
+    const pull_fn = &(self._pull_fn orelse return);
 
     // Call the pull function
     // Note: In a complete implementation, we'd handle the promise returned by pull
     // and set _pulling = false when it resolves
-    try pull_fn.call(void, .{self._controller});
+    try pull_fn.local().call(void, .{self._controller});
 
     self._pulling = false;
 
@@ -186,11 +186,11 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
     }
 
     // Execute the cancel callback if provided
-    if (c.callback) |cb| {
+    if (c.callback) |*cb| {
         if (reason) |r| {
-            try cb.call(void, .{r});
+            try cb.local().call(void, .{r});
         } else {
-            try cb.call(void, .{});
+            try cb.local().call(void, .{});
         }
     }
 
@@ -211,7 +211,7 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
 }
 
 const Cancel = struct {
-    callback: ?js.Function = null,
+    callback: ?js.Function.Global = null,
     reason: ?[]const u8 = null,
     resolver: ?js.PromiseResolver = null,
 };

@@ -55,7 +55,7 @@ _response_headers: std.ArrayList([]const u8) = .empty,
 _response_type: ResponseType = .text,
 
 _ready_state: ReadyState = .unsent,
-_on_ready_state_change: ?js.Function = null,
+_on_ready_state_change: ?js.Function.Global = null,
 
 const ReadyState = enum(u8) {
     unsent = 0,
@@ -98,7 +98,7 @@ fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
 
-pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function {
+pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
     return self._on_ready_state_change;
 }
 
@@ -416,10 +416,11 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
     self._ready_state = state;
 
     const event = try Event.initTrusted("readystatechange", .{}, page);
+    const func = if (self._on_ready_state_change) |*g| g.local() else null;
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        self._on_ready_state_change,
+        func,
         .{ .context = "XHR state change" },
     );
 }

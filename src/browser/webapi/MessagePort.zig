@@ -29,8 +29,8 @@ const MessagePort = @This();
 _proto: *EventTarget,
 _enabled: bool = false,
 _closed: bool = false,
-_on_message: ?js.Function = null,
-_on_message_error: ?js.Function = null,
+_on_message: ?js.Function.Global = null,
+_on_message_error: ?js.Function.Global = null,
 _entangled_port: ?*MessagePort = null,
 
 pub fn init(page: *Page) !*MessagePort {
@@ -88,28 +88,20 @@ pub fn close(self: *MessagePort) void {
     self._entangled_port = null;
 }
 
-pub fn getOnMessage(self: *const MessagePort) ?js.Function {
+pub fn getOnMessage(self: *const MessagePort) ?js.Function.Global {
     return self._on_message;
 }
 
-pub fn setOnMessage(self: *MessagePort, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_message = try cb.persist();
-    } else {
-        self._on_message = null;
-    }
+pub fn setOnMessage(self: *MessagePort, cb: ?js.Function.Global) !void {
+    self._on_message = cb;
 }
 
-pub fn getOnMessageError(self: *const MessagePort) ?js.Function {
+pub fn getOnMessageError(self: *const MessagePort) ?js.Function.Global {
     return self._on_message_error;
 }
 
-pub fn setOnMessageError(self: *MessagePort, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_message_error = try cb.persist();
-    } else {
-        self._on_message_error = null;
-    }
+pub fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
+    self._on_message_error = cb;
 }
 
 const PostMessageCallback = struct {
@@ -138,10 +130,11 @@ const PostMessageCallback = struct {
             return null;
         };
 
+        const func = if (self.port._on_message) |*g| g.local() else null;
         self.page._event_manager.dispatchWithFunction(
             self.port.asEventTarget(),
             event.asEvent(),
-            self.port._on_message,
+            func,
             .{ .context = "MessagePort message" },
         ) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });

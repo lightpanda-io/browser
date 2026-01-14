@@ -73,7 +73,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
 
     const em_callback = switch (callback) {
         .object => |obj| EventManager.Callback{ .object = try obj.persist() },
-        .function => |func| EventManager.Callback{ .function = try func.persist() },
+        .function => |func| EventManager.Callback{ .function = func },
     };
 
     const options = blk: {

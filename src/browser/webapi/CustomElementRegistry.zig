@@ -110,7 +110,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
 }
 
-pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function {
+pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function.Global {
     const definition = self._definitions.get(name) orelse return null;
     return definition.constructor;
 }
@@ -175,7 +175,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     defer page._upgrading_element = prev_upgrading;
 
     var caught: js.TryCatch.Caught = undefined;
-    _ = definition.constructor.newInstance(&caught) catch |err| {
+    _ = definition.constructor.local().newInstance(&caught) catch |err| {
         log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err, .caught = caught });
         return error.CustomElementUpgradeFailed;
     };

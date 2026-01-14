@@ -102,7 +102,7 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
     }
 
     const func = switch (callback) {
-        .function => |f| Function{ .value = f },
+        .function => |f| Function{ .value = try f.persist() },
         .object => |o| Function{ .object = o },
     };
 
@@ -368,7 +368,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         }
 
         switch (listener.function) {
-            .value => |value| try value.callWithThis(void, current_target, .{event}),
+            .value => |value| try value.local().callWithThis(void, current_target, .{event}),
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
                 try self.page.js.eval(str, null);
@@ -443,13 +443,13 @@ const Listener = struct {
 };
 
 const Function = union(enum) {
-    value: js.Function,
+    value: js.Function.Global,
     string: String,
     object: js.Object,
 
     fn eqlFunction(self: Function, func: js.Function) bool {
         return switch (self) {
-            .value => |v| return v.id() == func.id(),
+            .value => |v| v.isEqual(func),
             else => false,
         };
     }

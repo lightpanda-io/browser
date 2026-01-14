@@ -26,13 +26,13 @@ const XMLHttpRequestEventTarget = @This();
 
 _type: Type,
 _proto: *EventTarget,
-_on_abort: ?js.Function = null,
-_on_error: ?js.Function = null,
-_on_load: ?js.Function = null,
-_on_load_end: ?js.Function = null,
-_on_load_start: ?js.Function = null,
-_on_progress: ?js.Function = null,
-_on_timeout: ?js.Function = null,
+_on_abort: ?js.Function.Global = null,
+_on_error: ?js.Function.Global = null,
+_on_load: ?js.Function.Global = null,
+_on_load_end: ?js.Function.Global = null,
+_on_load_start: ?js.Function.Global = null,
+_on_progress: ?js.Function.Global = null,
+_on_timeout: ?js.Function.Global = null,
 
 pub const Type = union(enum) {
     request: *@import("XMLHttpRequest.zig"),
@@ -63,15 +63,16 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
         page,
     );
 
+    const func = if (@field(self, field)) |*g| g.local() else null;
     return page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event.asEvent(),
-        @field(self, field),
+        func,
         .{ .context = "XHR " ++ typ },
     );
 }
 
-pub fn getOnAbort(self: *const XMLHttpRequestEventTarget) ?js.Function {
+pub fn getOnAbort(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_abort;
 }
 
@@ -83,7 +84,7 @@ pub fn setOnAbort(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getOnError(self: *const XMLHttpRequestEventTarget) ?js.Function {
+pub fn getOnError(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_error;
 }
 
@@ -95,7 +96,7 @@ pub fn setOnError(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getOnLoad(self: *const XMLHttpRequestEventTarget) ?js.Function {
+pub fn getOnLoad(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_load;
 }
 
@@ -107,7 +108,7 @@ pub fn setOnLoad(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getOnLoadEnd(self: *const XMLHttpRequestEventTarget) ?js.Function {
+pub fn getOnLoadEnd(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_load_end;
 }
 
@@ -119,7 +120,7 @@ pub fn setOnLoadEnd(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void {
     }
 }
 
-pub fn getOnLoadStart(self: *const XMLHttpRequestEventTarget) ?js.Function {
+pub fn getOnLoadStart(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_load_start;
 }
 
@@ -131,7 +132,7 @@ pub fn setOnLoadStart(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void
     }
 }
 
-pub fn getOnProgress(self: *const XMLHttpRequestEventTarget) ?js.Function {
+pub fn getOnProgress(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_progress;
 }
 
@@ -143,7 +144,7 @@ pub fn setOnProgress(self: *XMLHttpRequestEventTarget, cb_: ?js.Function) !void 
     }
 }
 
-pub fn getOnTimeout(self: *const XMLHttpRequestEventTarget) ?js.Function {
+pub fn getOnTimeout(self: *const XMLHttpRequestEventTarget) ?js.Function.Global {
     return self._on_timeout;
 }
 

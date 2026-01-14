@@ -29,7 +29,7 @@ const AbortSignal = @This();
 _proto: *EventTarget,
 _aborted: bool = false,
 _reason: Reason = .undefined,
-_on_abort: ?js.Function = null,
+_on_abort: ?js.Function.Global = null,
 
 pub fn init(page: *Page) !*AbortSignal {
     return page._factory.eventTarget(AbortSignal{
@@ -45,16 +45,12 @@ pub fn getReason(self: *const AbortSignal) Reason {
     return self._reason;
 }
 
-pub fn getOnAbort(self: *const AbortSignal) ?js.Function {
+pub fn getOnAbort(self: *const AbortSignal) ?js.Function.Global {
     return self._on_abort;
 }
 
-pub fn setOnAbort(self: *AbortSignal, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_abort = try cb.persistWithThis(self);
-    } else {
-        self._on_abort = null;
-    }
+pub fn setOnAbort(self: *AbortSignal, cb: ?js.Function.Global) !void {
+    self._on_abort = cb;
 }
 
 pub fn asEventTarget(self: *AbortSignal) *EventTarget {
@@ -81,10 +77,11 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
 
     // Dispatch abort event
     const event = try Event.initTrusted("abort", .{}, page);
+    const func = if (self._on_abort) |*g| g.local() else null;
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        self._on_abort,
+        func,
         .{ .context = "abort signal" },
     );
 }
