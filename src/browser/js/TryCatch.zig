@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -36,53 +36,72 @@ pub fn hasCaught(self: TryCatch) bool {
     return v8.v8__TryCatch__HasCaught(&self.handle);
 }
 
-// the caller needs to deinit the string returned
-pub fn exception(self: TryCatch, allocator: Allocator) !?[]const u8 {
-    const msg_value = v8.v8__TryCatch__Exception(&self.handle) orelse return null;
-    const msg = js.Value{ .ctx = self.ctx, .handle = msg_value };
-    return try self.ctx.valueToString(msg, .{ .allocator = allocator });
-}
-
-// the caller needs to deinit the string returned
-pub fn stack(self: TryCatch, allocator: Allocator) !?[]const u8 {
-    const ctx = self.ctx;
-    const s_value = v8.v8__TryCatch__StackTrace(&self.handle, ctx.handle) orelse return null;
-    const s = js.Value{ .ctx = ctx, .handle = s_value };
-    return try ctx.valueToString(s, .{ .allocator = allocator });
-}
-
-// the caller needs to deinit the string returned
-pub fn sourceLine(self: TryCatch, allocator: Allocator) !?[]const u8 {
-    const ctx = self.ctx;
-    const msg = v8.v8__TryCatch__Message(&self.handle) orelse return null;
-    const source_line_handle = v8.v8__Message__GetSourceLine(msg, ctx.handle) orelse return null;
-    return try ctx.jsStringToZig(source_line_handle, .{ .allocator = allocator });
-}
-
-pub fn sourceLineNumber(self: TryCatch) ?u32 {
-    const ctx = self.ctx;
-    const msg = v8.v8__TryCatch__Message(&self.handle) orelse return null;
-    const line = v8.v8__Message__GetLineNumber(msg, ctx.handle);
-    if (line < 0) {
+pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
+    if (!self.hasCaught()) {
         return null;
     }
-    return @intCast(line);
+
+    const ctx = self.ctx;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(ctx.isolate);
+    defer hs.deinit();
+
+    const line: ?u32 = blk: {
+        const handle = v8.v8__TryCatch__Message(&self.handle) orelse return null;
+        const l = v8.v8__Message__GetLineNumber(handle, ctx.handle);
+        break :blk if (l < 0) null else @intCast(l);
+    };
+
+    const exception: ?[]const u8 = blk: {
+        const handle = v8.v8__TryCatch__Exception(&self.handle) orelse break :blk null;
+        break :blk ctx.valueToString(.{ .ctx = ctx, .handle = handle }, .{ .allocator = allocator }) catch |err| @errorName(err);
+    };
+
+    const stack: ?[]const u8 = blk: {
+        const handle = v8.v8__TryCatch__StackTrace(&self.handle, ctx.handle) orelse break :blk null;
+        break :blk ctx.valueToString(.{ .ctx = ctx, .handle = handle }, .{ .allocator = allocator }) catch |err| @errorName(err);
+    };
+
+    return .{
+        .line = line,
+        .stack = stack,
+        .caught = true,
+        .exception = exception,
+    };
 }
 
-// a shorthand method to return either the entire stack message
-// or just the exception message
-// - in Debug mode return the stack if available
-// - otherwise return the exception if available
-// the caller needs to deinit the string returned
-pub fn err(self: TryCatch, allocator: Allocator) !?[]const u8 {
-    if (comptime @import("builtin").mode == .Debug) {
-        if (try self.stack(allocator)) |msg| {
-            return msg;
-        }
-    }
-    return try self.exception(allocator);
+pub fn caughtOrError(self: TryCatch, allocator: Allocator, err: anyerror) Caught {
+    return self.caught(allocator) orelse .{
+        .caught = false,
+        .line = null,
+        .stack = null,
+        .exception = @errorName(err),
+    };
 }
 
 pub fn deinit(self: *TryCatch) void {
     v8.v8__TryCatch__DESTRUCT(&self.handle);
 }
+
+pub const Caught = struct {
+    line: ?u32,
+    caught: bool,
+    stack: ?[]const u8,
+    exception: ?[]const u8,
+
+    pub fn format(self: Caught, writer: *std.Io.Writer) !void {
+        const separator = @import("../../log.zig").separator();
+        try writer.print("{s}exception: {?s}", .{ separator, self.exception });
+        try writer.print("{s}stack: {?s}", .{ separator, self.stack });
+        try writer.print("{s}line: {?d}", .{ separator, self.line });
+        try writer.print("{s}caught: {any}", .{ separator, self.caught });
+    }
+
+    pub fn logFmt(self: Caught, comptime prefix: []const u8, writer: anytype) !void {
+        try writer.write(prefix ++ ".exception", self.exception orelse "???");
+        try writer.write(prefix ++ ".stack", self.stack orelse "na");
+        try writer.write(prefix ++ ".line", self.line);
+        try writer.write(prefix ++ ".caught", self.caught);
+    }
+};

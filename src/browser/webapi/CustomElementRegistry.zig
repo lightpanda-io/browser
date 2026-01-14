@@ -174,9 +174,9 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     page._upgrading_element = node;
     defer page._upgrading_element = prev_upgrading;
 
-    var result: js.Function.Result = undefined;
-    _ = definition.constructor.newInstance(&result) catch |err| {
-        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err });
+    var caught: js.TryCatch.Caught = undefined;
+    _ = definition.constructor.newInstance(&caught) catch |err| {
+        log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err, .caught = caught });
         return error.CustomElementUpgradeFailed;
     };
 

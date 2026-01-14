@@ -1386,15 +1386,13 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
         try_catch.init(self);
         defer try_catch.deinit();
 
-        break :blk self.module(true, ms.src(), state.specifier, true) catch {
-            const ex = try_catch.exception(self.call_arena) catch |err| @errorName(err) orelse "unknown error";
+        break :blk self.module(true, ms.src(), state.specifier, true) catch |err| {
+            const caught = try_catch.caughtOrError(self.call_arena, err);
             log.err(.js, "module compilation failed", .{
+                .caught = caught,
                 .specifier = state.specifier,
-                .exception = ex,
-                .stack = try_catch.stack(self.call_arena) catch null,
-                .line = try_catch.sourceLineNumber() orelse 0,
             });
-            _ = state.resolver.reject("dynamic compilation failure", self.newString(ex));
+            _ = state.resolver.reject("dynamic compilation failure", self.newString(caught.exception orelse ""));
             return;
         };
     };

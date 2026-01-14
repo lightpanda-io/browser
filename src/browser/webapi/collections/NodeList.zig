@@ -83,9 +83,9 @@ pub fn forEach(self: *NodeList, cb: js.Function, page: *Page) !void {
             return;
         }
 
-        var result: js.Function.Result = undefined;
-        cb.tryCall(void, .{ next.value, i, self }, &result) catch {
-            log.debug(.js, "forEach callback", .{ .err = result.exception, .stack = result.stack, .source = "nodelist" });
+        var caught: js.TryCatch.Caught = undefined;
+        cb.tryCall(void, .{ next.value, i, self }, &caught) catch {
+            log.debug(.js, "forEach callback", .{ .caught = caught, .source = "nodelist" });
             return;
         };
     }

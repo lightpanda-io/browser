@@ -189,9 +189,9 @@ pub fn forEach(self: *DOMTokenList, cb_: js.Function, js_this_: ?js.Object, page
         if (gop.found_existing) {
             continue;
         }
-        var result: js.Function.Result = undefined;
-        cb.tryCall(void, .{ token, i, self }, &result) catch {
-            log.debug(.js, "forEach callback", .{ .err = result.exception, .stack = result.stack, .source = "DOMTokenList" });
+        var caught: js.TryCatch.Caught = undefined;
+        cb.tryCall(void, .{ token, i, self }, &caught) catch {
+            log.debug(.js, "forEach callback", .{ .caught = caught, .source = "DOMTokenList" });
             return;
         };
         i += 1;

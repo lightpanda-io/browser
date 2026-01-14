@@ -407,8 +407,8 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     test_browser.runMicrotasks();
 
     js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
-        const msg = try_catch.err(arena_allocator) catch @errorName(err) orelse "unknown";
-        std.debug.print("{s}: test failure\nError: {s}\n", .{ test_file, msg });
+        const caught = try_catch.caughtOrError(arena_allocator, err);
+        std.debug.print("{s}: test failure\nError: {f}\n", .{ test_file, caught });
         return err;
     };
 }

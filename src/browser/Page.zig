@@ -804,9 +804,8 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                 // it AFTER.
                 const ms_to_next_task = try scheduler.run();
 
-                if (try_catch.hasCaught()) {
-                    const msg = (try try_catch.err(self.arena)) orelse "unknown";
-                    log.info(.js, "page wait", .{ .err = msg, .src = "scheduler" });
+                if (try_catch.caught(self.call_arena)) |caught| {
+                    log.info(.js, "page wait", .{ .caught = caught, .src = "scheduler" });
                 }
 
                 const http_active = http_client.active;
@@ -1992,9 +1991,9 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                 self._upgrading_element = node;
                 defer self._upgrading_element = prev_upgrading;
 
-                var result: JS.Function.Result = undefined;
-                _ = def.constructor.newInstance(&result) catch |err| {
-                    log.warn(.js, "custom element constructor", .{ .name = name, .err = err });
+                var caught: JS.TryCatch.Caught = undefined;
+                _ = def.constructor.newInstance(&caught) catch |err| {
+                    log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught });
                     return node;
                 };
 
