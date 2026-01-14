@@ -204,7 +204,6 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-
     // some MicroTasks might be referencing the page, we need to drain it while
     // the page still exists
     self.js.runMicrotasks();
