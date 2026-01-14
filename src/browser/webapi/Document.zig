@@ -54,7 +54,7 @@ _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
-_adopted_style_sheets: ?js.Object = null,
+_adopted_style_sheets: ?js.Object.Global = null,
 
 pub const Type = union(enum) {
     generic,
@@ -766,7 +766,7 @@ pub fn getChildElementCount(self: *Document) u32 {
     return i;
 }
 
-pub fn getAdoptedStyleSheets(self: *Document, page: *Page) !js.Object {
+pub fn getAdoptedStyleSheets(self: *Document, page: *Page) !js.Object.Global {
     if (self._adopted_style_sheets) |ass| {
         return ass;
     }

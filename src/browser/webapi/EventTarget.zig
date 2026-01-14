@@ -72,7 +72,7 @@ pub fn addEventListener(self: *EventTarget, typ: []const u8, callback_: ?EventLi
     const callback = callback_ orelse return;
 
     const em_callback = switch (callback) {
-        .object => |obj| EventManager.Callback{ .object = try obj.persist() },
+        .object => |obj| EventManager.Callback{ .object = obj },
         .function => |func| EventManager.Callback{ .function = func },
     };
 
@@ -106,7 +106,7 @@ pub fn removeEventListener(self: *EventTarget, typ: []const u8, callback_: ?Even
 
     const em_callback = switch (callback) {
         .function => |func| EventManager.Callback{ .function = func },
-        .object => |obj| EventManager.Callback{ .object = try obj.persist() },
+        .object => |obj| EventManager.Callback{ .object = obj },
     };
 
     const use_capture = blk: {

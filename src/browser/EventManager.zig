@@ -103,7 +103,7 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
 
     const func = switch (callback) {
         .function => |f| Function{ .value = try f.persist() },
-        .object => |o| Function{ .object = o },
+        .object => |o| Function{ .object = try o.persist() },
     };
 
     const listener = try self.listener_pool.create();
@@ -373,7 +373,8 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
                 const str = try page.call_arena.dupeZ(u8, string.str());
                 try self.page.js.eval(str, null);
             },
-            .object => |obj| {
+            .object => |*obj_global| {
+                const obj = obj_global.local();
                 if (try obj.getFunction("handleEvent")) |handleEvent| {
                     try handleEvent.callWithThis(void, obj, .{event});
                 }
@@ -445,7 +446,7 @@ const Listener = struct {
 const Function = union(enum) {
     value: js.Function.Global,
     string: String,
-    object: js.Object,
+    object: js.Object.Global,
 
     fn eqlFunction(self: Function, func: js.Function) bool {
         return switch (self) {
@@ -456,7 +457,7 @@ const Function = union(enum) {
 
     fn eqlObject(self: Function, obj: js.Object) bool {
         return switch (self) {
-            .object => |o| return o.getId() == obj.getId(),
+            .object => |o| return o.isEqual(obj),
             else => false,
         };
     }

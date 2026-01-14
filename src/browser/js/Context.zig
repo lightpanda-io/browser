@@ -77,8 +77,8 @@ identity_map: std.AutoHashMapUnmanaged(usize, js.Global(js.Object)) = .empty,
 // the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
 // a reliable way to know if an object has already been persisted,
 // we now simply persist every time persist() is called.
-global_values: std.ArrayList(js.Global(js.Value)) = .empty,
-global_objects: std.ArrayList(js.Global(js.Object)) = .empty,
+global_values: std.ArrayList(v8.Global) = .empty,
+global_objects: std.ArrayList(v8.Global) = .empty,
 global_modules: std.ArrayList(js.Global(js.Module)) = .empty,
 global_promises: std.ArrayList(js.Global(js.Promise)) = .empty,
 global_functions: std.ArrayList(v8.Global) = .empty,
@@ -142,11 +142,11 @@ pub fn deinit(self: *Context) void {
     }
 
     for (self.global_values.items) |*global| {
-        global.deinit();
+        v8.v8__Global__Reset(global);
     }
 
     for (self.global_objects.items) |*global| {
-        global.deinit();
+        v8.v8__Global__Reset(global);
     }
 
     for (self.global_modules.items) |*global| {
@@ -460,6 +460,16 @@ pub fn zigValueToJs(self: *Context, value: anytype, comptime opts: Caller.CallOp
             if (T == js.Object) {
                 // we're returning a v8.Object
                 return .{ .ctx = self, .handle = @ptrCast(value.handle) };
+            }
+
+            if (T == js.Object.Global) {
+                // Auto-convert Global to local for bridge
+                return .{ .ctx = self, .handle = @ptrCast(value.local().handle) };
+            }
+
+            if (T == js.Value.Global) {
+                // Auto-convert Global to local for bridge
+                return .{ .ctx = self, .handle = @ptrCast(value.local().handle) };
             }
 
             if (T == js.Value) {
@@ -817,6 +827,19 @@ fn jsValueToStruct(self: *Context, comptime T: type, js_value: js.Value) !?T {
                 .ctx = self,
                 .handle = @ptrCast(js_value.handle),
             };
+        },
+        js.Object.Global => {
+            if (!js_value.isObject()) {
+                return null;
+            }
+            const obj = js.Object{
+                .ctx = self,
+                .handle = @ptrCast(js_value.handle),
+            };
+            return try obj.persist();
+        },
+        js.Value.Global => {
+            return try js_value.persist();
         },
         else => {
             if (!js_value.isObject()) {

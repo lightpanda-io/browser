@@ -25,12 +25,12 @@ const Window = @import("../Window.zig");
 const MessageEvent = @This();
 
 _proto: *Event,
-_data: ?js.Value = null,
+_data: ?js.Value.Global = null,
 _origin: []const u8 = "",
 _source: ?*Window = null,
 
 const MessageEventOptions = struct {
-    data: ?js.Value = null,
+    data: ?js.Value.Global = null,
     origin: ?[]const u8 = null,
     source: ?*Window = null,
 };
@@ -52,7 +52,7 @@ fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page)
         typ,
         MessageEvent{
             ._proto = undefined,
-            ._data = if (opts.data) |d| try d.persist() else null,
+            ._data = opts.data,
             ._origin = if (opts.origin) |str| try page.arena.dupe(u8, str) else "",
             ._source = opts.source,
         },
@@ -66,7 +66,7 @@ pub fn asEvent(self: *MessageEvent) *Event {
     return self._proto;
 }
 
-pub fn getData(self: *const MessageEvent) ?js.Value {
+pub fn getData(self: *const MessageEvent) ?js.Value.Global {
     return self._data;
 }
 

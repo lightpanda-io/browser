@@ -189,7 +189,7 @@ pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, pag
     return Fetch.init(input, options, page);
 }
 
-pub fn setTimeout(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value, page: *Page) !u32 {
+pub fn setTimeout(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value.Global, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = false,
         .params = params,
@@ -198,7 +198,7 @@ pub fn setTimeout(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params:
     }, page);
 }
 
-pub fn setInterval(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value, page: *Page) !u32 {
+pub fn setInterval(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value.Global, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = true,
         .params = params,
@@ -207,7 +207,7 @@ pub fn setInterval(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params
     }, page);
 }
 
-pub fn setImmediate(self: *Window, cb: js.Function.Global, params: []js.Value, page: *Page) !u32 {
+pub fn setImmediate(self: *Window, cb: js.Function.Global, params: []js.Value.Global, page: *Page) !u32 {
     return self.scheduleCallback(cb, 0, .{
         .repeat = false,
         .params = params,
@@ -269,10 +269,10 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
     sc.removed = true;
 }
 
-pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
+pub fn reportError(self: *Window, err: js.Value.Global, page: *Page) !void {
     const error_event = try ErrorEvent.initTrusted("error", .{
         .@"error" = err,
-        .message = err.toString(.{}) catch "Unknown error",
+        .message = err.local().toString(.{}) catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
     }, page);
@@ -316,7 +316,7 @@ pub fn getIsSecureContext(_: *const Window) bool {
     return false;
 }
 
-pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, page: *Page) !void {
+pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]const u8, page: *Page) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
@@ -325,7 +325,7 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
     const origin = try self._location.getOrigin(page);
     const callback = try page._factory.create(PostMessageCallback{
         .window = self,
-        .message = try message.persist(),
+        .message = message,
         .origin = try page.arena.dupe(u8, origin),
         .page = page,
     });
@@ -465,7 +465,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
 const ScheduleOpts = struct {
     repeat: bool,
-    params: []js.Value,
+    params: []js.Value.Global,
     name: []const u8,
     low_priority: bool = false,
     animation_frame: bool = false,
@@ -481,12 +481,9 @@ fn scheduleCallback(self: *Window, cb: js.Function.Global, delay_ms: u32, opts: 
     self._timer_id = timer_id;
 
     const params = opts.params;
-    var persisted_params: []js.Value = &.{};
+    var persisted_params: []js.Value.Global = &.{};
     if (params.len > 0) {
-        persisted_params = try page.arena.alloc(js.Value, params.len);
-        for (params, persisted_params) |a, *ca| {
-            ca.* = try a.persist();
-        }
+        persisted_params = try page.arena.dupe(js.Value.Global, params);
     }
 
     const gop = try self._timers.getOrPut(page.arena, timer_id);
@@ -530,7 +527,7 @@ const ScheduleCallback = struct {
 
     page: *Page,
 
-    params: []const js.Value,
+    params: []const js.Value.Global,
 
     removed: bool = false,
 
@@ -587,7 +584,7 @@ const ScheduleCallback = struct {
 
 const PostMessageCallback = struct {
     window: *Window,
-    message: js.Value,
+    message: js.Value.Global,
     origin: []const u8,
     page: *Page,
 

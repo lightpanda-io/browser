@@ -314,7 +314,7 @@ pub const Entry = struct {
 
 pub const Mark = struct {
     _proto: *Entry,
-    _detail: ?js.Value,
+    _detail: ?js.Value.Global,
 
     const Options = struct {
         detail: ?js.Value = null,
@@ -344,7 +344,8 @@ pub const Mark = struct {
         return m;
     }
 
-    pub fn getDetail(self: *const Mark) ?js.Value {
+
+    pub fn getDetail(self: *const Mark) ?js.Value.Global {
         return self._detail;
     }
 
@@ -362,7 +363,7 @@ pub const Mark = struct {
 
 pub const Measure = struct {
     _proto: *Entry,
-    _detail: ?js.Object,
+    _detail: ?js.Object.Global,
 
     const Options = struct {
         detail: ?js.Object = null,
@@ -405,7 +406,7 @@ pub const Measure = struct {
         return m;
     }
 
-    pub fn getDetail(self: *const Measure) ?js.Object {
+    pub fn getDetail(self: *const Measure) ?js.Object.Global {
         return self._detail;
     }
 

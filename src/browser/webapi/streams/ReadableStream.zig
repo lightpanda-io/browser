@@ -80,7 +80,7 @@ pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) 
 
         if (src.cancel) |callback| {
             self._cancel = .{
-                .callback = try callback.persist(),
+                .callback = callback,
             };
         }
 

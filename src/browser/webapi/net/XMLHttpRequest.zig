@@ -67,7 +67,7 @@ const ReadyState = enum(u8) {
 
 const Response = union(ResponseType) {
     text: []const u8,
-    json: js.Value,
+    json: js.Value.Global,
     document: *Node.Document,
 };
 

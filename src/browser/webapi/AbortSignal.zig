@@ -67,7 +67,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     // Store the abort reason (default to a simple string if none provided)
     if (reason_) |reason| {
         switch (reason) {
-            .js_obj => |js_obj| self._reason = .{ .js_obj = try js_obj.persist() },
+            .js_val => |js_val| self._reason = .{ .js_val = js_val },
             .string => |str| self._reason = .{ .string = try page.dupeString(str) },
             .undefined => self._reason = reason,
         }
@@ -87,9 +87,9 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
 }
 
 // Static method to create an already-aborted signal
-pub fn createAborted(reason_: ?js.Object, page: *Page) !*AbortSignal {
+pub fn createAborted(reason_: ?js.Value.Global, page: *Page) !*AbortSignal {
     const signal = try init(page);
-    try signal.abort(if (reason_) |r| .{ .js_obj = r } else null, page);
+    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, page);
     return signal;
 }
 
@@ -115,7 +115,7 @@ pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
     if (self._aborted) {
         const exception = switch (self._reason) {
             .string => |str| page.js.throw(str),
-            .js_obj => |js_obj| page.js.throw(try js_obj.toString()),
+            .js_val => |js_val| page.js.throw(try js_val.local().toString(.{ .allocator = page.call_arena })),
             .undefined => page.js.throw("AbortError"),
         };
         return .{ .exception = exception };
@@ -124,7 +124,7 @@ pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
 }
 
 const Reason = union(enum) {
-    js_obj: js.Object,
+    js_val: js.Value.Global,
     string: []const u8,
     undefined: void,
 };

@@ -48,7 +48,7 @@ pub fn entangle(port1: *MessagePort, port2: *MessagePort) void {
     port2._entangled_port = port1;
 }
 
-pub fn postMessage(self: *MessagePort, message: js.Value, page: *Page) !void {
+pub fn postMessage(self: *MessagePort, message: js.Value.Global, page: *Page) !void {
     if (self._closed) {
         return;
     }
@@ -62,7 +62,7 @@ pub fn postMessage(self: *MessagePort, message: js.Value, page: *Page) !void {
     const callback = try page._factory.create(PostMessageCallback{
         .page = page,
         .port = other,
-        .message = try message.persist(),
+        .message = message,
     });
 
     try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
@@ -106,7 +106,7 @@ pub fn setOnMessageError(self: *MessagePort, cb: ?js.Function.Global) !void {
 
 const PostMessageCallback = struct {
     port: *MessagePort,
-    message: js.Value,
+    message: js.Value.Global,
     page: *Page,
 
     fn deinit(self: *PostMessageCallback) void {

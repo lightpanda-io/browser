@@ -243,15 +243,17 @@ pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
     return .{ .ctx = ctx, .handle = value.handle };
 }
 
-pub fn persist(self: Value) !Value {
+pub fn persist(self: Value) !Global {
     var ctx = self.ctx;
 
-    const global = js.Global(Value).init(ctx.isolate.handle, self.handle);
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
+
     try ctx.global_values.append(ctx.arena, global);
 
     return .{
+        .handle = global,
         .ctx = ctx,
-        .handle = global.local(),
     };
 }
 
@@ -298,3 +300,23 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
     const str = self.toString(.{}) catch return error.WriteFailed;
     return writer.writeAll(str);
 }
+
+pub const Global = struct {
+    handle: v8.Global,
+    ctx: *js.Context,
+
+    pub fn deinit(self: *Global) void {
+        v8.v8__Global__Reset(&self.handle);
+    }
+
+    pub fn local(self: *const Global) Value {
+        return .{
+            .ctx = self.ctx,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+        };
+    }
+
+    pub fn isEqual(self: *const Global, other: Value) bool {
+        return v8.v8__Global__IsEqual(&self.handle, other.handle);
+    }
+};

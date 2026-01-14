@@ -21,8 +21,8 @@ const Page = @import("../../Page.zig");
 
 const Animation = @This();
 
-_effect: ?js.Object = null,
-_timeline: ?js.Object = null,
+_effect: ?js.Object.Global = null,
+_timeline: ?js.Object.Global = null,
 _ready_resolver: ?js.PromiseResolver = null,
 _finished_resolver: ?js.PromiseResolver = null,
 
@@ -62,28 +62,20 @@ pub fn getReady(self: *Animation, page: *Page) !js.Promise {
     return self._ready_resolver.?.promise();
 }
 
-pub fn getEffect(self: *const Animation) ?js.Object {
+pub fn getEffect(self: *const Animation) ?js.Object.Global {
     return self._effect;
 }
 
-pub fn setEffect(self: *Animation, effect: ?js.Object) !void {
-    if (effect) |e| {
-        self._effect = try e.persist();
-    } else {
-        self._effect = null;
-    }
+pub fn setEffect(self: *Animation, effect: ?js.Object.Global) !void {
+    self._effect = effect;
 }
 
-pub fn getTimeline(self: *const Animation) ?js.Object {
+pub fn getTimeline(self: *const Animation) ?js.Object.Global {
     return self._timeline;
 }
 
-pub fn setTimeline(self: *Animation, timeline: ?js.Object) !void {
-    if (timeline) |t| {
-        self._timeline = try t.persist();
-    } else {
-        self._timeline = null;
-    }
+pub fn setTimeline(self: *Animation, timeline: ?js.Object.Global) !void {
+    self._timeline = timeline;
 }
 
 pub const JsApi = struct {
