@@ -125,13 +125,15 @@ fn run(
 
     // Check the final test status.
     js_context.eval("report.status", "teststatus") catch |err| {
-        err_out.* = try_catch.err(arena) catch @errorName(err) orelse "unknown";
+        const caught = try_catch.caughtOrError(arena, err);
+        err_out.* = caught.exception;
         return err;
     };
 
     // return the detailed result.
     const value = js_context.exec("report.log", "report") catch |err| {
-        err_out.* = try_catch.err(arena) catch @errorName(err) orelse "unknown";
+        const caught = try_catch.caughtOrError(arena, err);
+        err_out.* = caught.exception;
         return err;
     };
 
