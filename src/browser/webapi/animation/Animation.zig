@@ -23,8 +23,8 @@ const Animation = @This();
 
 _effect: ?js.Object.Global = null,
 _timeline: ?js.Object.Global = null,
-_ready_resolver: ?js.PromiseResolver = null,
-_finished_resolver: ?js.PromiseResolver = null,
+_ready_resolver: ?js.PromiseResolver.Global = null,
+_finished_resolver: ?js.PromiseResolver.Global = null,
 
 pub fn init(page: *Page) !*Animation {
     return page._factory.create(Animation{});
@@ -47,10 +47,10 @@ pub fn getPending(_: *const Animation) bool {
 pub fn getFinished(self: *Animation, page: *Page) !js.Promise {
     if (self._finished_resolver == null) {
         const resolver = try page.js.createPromiseResolver().persist();
-        resolver.resolve("Animation.getFinished", self);
+        resolver.local().resolve("Animation.getFinished", self);
         self._finished_resolver = resolver;
     }
-    return self._finished_resolver.?.promise();
+    return self._finished_resolver.?.local().promise();
 }
 
 pub fn getReady(self: *Animation, page: *Page) !js.Promise {
@@ -59,7 +59,7 @@ pub fn getReady(self: *Animation, page: *Page) !js.Promise {
         const resolver = try page.js.createPromiseResolver().persist();
         self._ready_resolver = resolver;
     }
-    return self._ready_resolver.?.promise();
+    return self._ready_resolver.?.local().promise();
 }
 
 pub fn getEffect(self: *const Animation) ?js.Object.Global {

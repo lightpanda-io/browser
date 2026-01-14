@@ -170,7 +170,7 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
     if (self._state != .readable) {
         if (self._cancel) |c| {
             if (c.resolver) |r| {
-                return r.promise();
+                return r.local().promise();
             }
         }
         return page.js.resolvePromise(.{});
@@ -201,19 +201,19 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
         .done = true,
         .value = .empty,
     };
-    for (self._controller._pending_reads.items) |resolver| {
-        resolver.resolve("stream cancelled", result);
+    for (self._controller._pending_reads.items) |*resolver| {
+        resolver.local().resolve("stream cancelled", result);
     }
     self._controller._pending_reads.clearRetainingCapacity();
 
-    c.resolver.?.resolve("ReadableStream.cancel", {});
-    return c.resolver.?.promise();
+    c.resolver.?.local().resolve("ReadableStream.cancel", {});
+    return c.resolver.?.local().promise();
 }
 
 const Cancel = struct {
     callback: ?js.Function.Global = null,
     reason: ?[]const u8 = null,
-    resolver: ?js.PromiseResolver = null,
+    resolver: ?js.PromiseResolver.Global = null,
 };
 
 pub const JsApi = struct {

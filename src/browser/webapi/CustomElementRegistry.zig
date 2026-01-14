@@ -30,7 +30,7 @@ const CustomElementDefinition = @import("CustomElementDefinition.zig");
 const CustomElementRegistry = @This();
 
 _definitions: std.StringHashMapUnmanaged(*CustomElementDefinition) = .{},
-_when_defined: std.StringHashMapUnmanaged(js.PromiseResolver) = .{},
+_when_defined: std.StringHashMapUnmanaged(js.PromiseResolver.Global) = .{},
 
 const DefineOptions = struct {
     extends: ?[]const u8 = null,
@@ -106,7 +106,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
 
     if (self._when_defined.fetchRemove(name)) |entry| {
-        entry.value.resolve("whenDefined", constructor);
+        entry.value.local().resolve("whenDefined", constructor);
     }
 }
 
@@ -126,7 +126,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
 
     const gop = try self._when_defined.getOrPut(page.arena, name);
     if (gop.found_existing) {
-        return gop.value_ptr.promise();
+        return gop.value_ptr.local().promise();
     }
     errdefer _ = self._when_defined.remove(name);
     const owned_name = try page.dupeString(name);
@@ -135,7 +135,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = resolver;
 
-    return resolver.promise();
+    return resolver.local().promise();
 }
 
 fn upgradeNode(self: *CustomElementRegistry, node: *Node, page: *Page) !void {
