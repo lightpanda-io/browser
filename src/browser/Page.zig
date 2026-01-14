@@ -204,10 +204,11 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-    // removeContext() will execute the destructor of any type that
-    // registered a destructor (e.g. XMLHttpRequest).
-    // Should be called before we deinit the page, because these objects
-    // could be referencing it.
+
+    // some MicroTasks might be referencing the page, we need to drain it while
+    // the page still exists
+    self.js.runMicrotasks();
+
     const session = self._session;
     session.executor.removeContext();
 
