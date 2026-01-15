@@ -58,6 +58,14 @@ pub const Writer = struct {
     }
 
     fn writeNodeChildren(self: *const Writer, parent: AXNode, w: anytype) !void {
+        // Add ListMarker for listitem elements
+        if (parent.dom.is(DOMNode.Element) != null) {
+            const parent_el = parent.dom.as(DOMNode.Element);
+            if (parent_el.getTag() == .li) {
+                try self.writeListMarker(parent.dom, w);
+            }
+        }
+
         var it = parent.dom.childrenIterator();
         const ignore_text = ignoreText(parent.dom);
         while (it.next()) |dom_node| {
@@ -80,6 +88,94 @@ pub const Writer = struct {
                 try self.writeNodeChildren(axn, w);
             }
         }
+    }
+
+    fn writeListMarker(self: *const Writer, li_node: *DOMNode, w: anytype) !void {
+        // Find the parent list element
+        const parent = li_node._parent orelse return;
+        if (parent.is(DOMNode.Element) == null) return;
+
+        const parent_el = parent.as(DOMNode.Element);
+        const list_type = parent_el.getTag();
+
+        // Only create markers for actual list elements
+        switch (list_type) {
+            .ul, .ol, .menu => {},
+            else => return,
+        }
+
+        // Write the ListMarker node
+        try w.beginObject();
+
+        // Use the next available ID for the marker
+        try w.objectField("nodeId");
+        const marker_id = self.registry.node_id;
+        self.registry.node_id += 1;
+        try w.write(marker_id);
+
+        try w.objectField("backendDOMNodeId");
+        try w.write(marker_id);
+
+        try w.objectField("role");
+        try self.writeAXValue(.{ .role = "ListMarker" }, w);
+
+        try w.objectField("ignored");
+        try w.write(false);
+
+        try w.objectField("name");
+        try w.beginObject();
+        try w.objectField("type");
+        try w.write("computedString");
+        try w.objectField("value");
+
+        // Write marker text directly based on list type
+        switch (list_type) {
+            .ul, .menu => try w.write("• "),
+            .ol => {
+                // Calculate the list item number by counting preceding li siblings
+                var count: usize = 1;
+                var it = parent.childrenIterator();
+                while (it.next()) |child| {
+                    if (child == li_node) break;
+                    if (child.is(DOMNode.Element.Html) == null) continue;
+                    const child_el = child.as(DOMNode.Element);
+                    if (child_el.getTag() == .li) count += 1;
+                }
+
+                // Sanity check: lists with >9999 items are unrealistic
+                if (count > 9999) return error.ListTooLong;
+
+                // Use a small stack buffer to format the number (max "9999. " = 6 chars)
+                var buf: [6]u8 = undefined;
+                const marker_text = try std.fmt.bufPrint(&buf, "{d}. ", .{count});
+                try w.write(marker_text);
+            },
+            else => unreachable,
+        }
+
+        try w.objectField("sources");
+        try w.beginArray();
+        try w.beginObject();
+        try w.objectField("type");
+        try w.write("contents");
+        try w.endObject();
+        try w.endArray();
+        try w.endObject();
+
+        try w.objectField("properties");
+        try w.beginArray();
+        try w.endArray();
+
+        // Get the parent node ID for the parentId field
+        const li_registered = try self.registry.register(li_node);
+        try w.objectField("parentId");
+        try w.write(li_registered.id);
+
+        try w.objectField("childIds");
+        try w.beginArray();
+        try w.endArray();
+
+        try w.endObject();
     }
 
     const AXValue = union(enum) {
@@ -702,7 +798,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                 .textarea, .select, .img, .audio, .video, .iframe, .embed,
                 .object, .progress, .meter, .main, .nav, .aside, .header,
                 .footer, .form, .section, .article, .ul, .ol, .dl, .menu,
-                .thead, .tbody, .tfoot, .tr, .td, .div, .span, .p, .details,
+                .thead, .tbody, .tfoot, .tr, .td, .div, .span, .p, .details, .li,
                 // zig fmt: on
                 => {},
                 else => {
