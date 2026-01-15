@@ -424,27 +424,10 @@ pub const Writer = struct {
                 break :blk val;
             },
             .select => blk: {
-                // Get the selected option's text content
-                var it = node.childrenIterator();
-                while (it.next()) |child| {
-                    if (child.is(DOMNode.Element.Html) == null) {
-                        continue;
-                    }
-                    const child_el = child.as(DOMNode.Element);
-                    if (child_el.getTag() != .option) {
-                        continue;
-                    }
-                    const option = child_el.as(DOMNode.Element.Html.Option);
-                    if (option.getSelected()) {
-                        // Get the text content of the option
-                        var buf = std.Io.Writer.Allocating.init(self.page.call_arena);
-                        try child_el.getInnerText(&buf.writer);
-                        const text = buf.written();
-                        if (text.len == 0) break :blk null;
-                        break :blk text;
-                    }
-                }
-                break :blk null;
+                const select = el.as(DOMNode.Element.Html.Select);
+                const val = select.getValue(self.page);
+                if (val.len == 0) break :blk null;
+                break :blk val;
             },
             else => null,
         };
