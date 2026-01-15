@@ -799,6 +799,13 @@ fn isIgnore(self: AXNode, page: *Page) bool {
                 return true;
             }
         },
+        .input => {
+            // Check for hidden inputs
+            const input = elt.as(DOMNode.Element.Html.Input);
+            if (input._input_type == .hidden) {
+                return true;
+            }
+        },
         else => {},
     }
 
