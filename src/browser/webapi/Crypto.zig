@@ -24,7 +24,7 @@ const Page = @import("../Page.zig");
 const SubtleCrypto = @import("SubtleCrypto.zig");
 
 const Crypto = @This();
-_pad: bool = false,
+_subtle: SubtleCrypto = .{},
 
 pub const init: Crypto = .{};
 
@@ -46,9 +46,8 @@ pub fn randomUUID(_: *const Crypto) ![36]u8 {
     return hex;
 }
 
-pub fn getSubtle(self: *const Crypto, page: *Page) !*SubtleCrypto {
-    _ = self;
-    return page._factory.create(SubtleCrypto{});
+pub fn getSubtle(self: *Crypto) *SubtleCrypto {
+    return &self._subtle;
 }
 
 const RandomValues = union(enum) {
