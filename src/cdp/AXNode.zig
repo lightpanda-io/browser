@@ -300,6 +300,24 @@ pub const Writer = struct {
                     try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
                     try self.writeAXProperty(.{ .name = .orientation, .value = .{ .token = "horizontal" } }, w);
                 },
+                .li => {
+                    // Calculate level by counting list ancestors (ul, ol, menu)
+                    var level: usize = 0;
+                    var current = dom_node._parent;
+                    while (current) |node| {
+                        if (node.is(DOMNode.Element) == null) {
+                            current = node._parent;
+                            continue;
+                        }
+                        const current_el = node.as(DOMNode.Element);
+                        switch (current_el.getTag()) {
+                            .ul, .ol, .menu => level += 1,
+                            else => {},
+                        }
+                        current = node._parent;
+                    }
+                    try self.writeAXProperty(.{ .name = .level, .value = .{ .integer = level } }, w);
+                },
                 else => {},
             },
             else => |tag| {
