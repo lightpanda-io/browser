@@ -624,7 +624,7 @@ pub const AXRole = enum(u8) {
                         .search => .searchbox,
                         .checkbox => .checkbox,
                         // zig fmt: off
-                        .password, .datetime_local, .hidden, .month, .color,
+                        .password, .@"datetime-local", .hidden, .month, .color,
                         .week, .time, .file, .date => .none,
                         // zig fmt: ofn
                     };
