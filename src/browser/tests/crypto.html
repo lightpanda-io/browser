@@ -47,7 +47,19 @@
   // }
 </script>
 
+<!-- <script id="randomUUID">
+  const uuid = crypto.randomUUID();
+  testing.expectEqual('string', typeof uuid);
+  testing.expectEqual(36, uuid.length);
+  const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  testing.expectEqual(true, regex.test(uuid));
+</script> -->
+
 <script id=SubtleCrypto>
+  testing.expectEqual(true, crypto.subtle instanceof SubtleCrypto);
+</script>
+
+<script id=sign-and-verify-hmac>
   testing.async(async () => {
     let key = await crypto.subtle.generateKey(
       {
@@ -58,8 +70,10 @@
       ["sign", "verify"],
     );
 
-    //const raw = crypto.subtle.exportKey("adv", key).catch(err => console.warn(err));
-    //testing.expectEqual(128, raw.byteLength);
+    testing.expectEqual(true, key instanceof CryptoKey);
+
+    const raw = await crypto.subtle.exportKey("raw", key);
+    testing.expectEqual(128, raw.byteLength);
 
     const encoder = new TextEncoder();
 
@@ -69,6 +83,8 @@
       encoder.encode("Hello, world!")
     );
 
+    testing.expectEqual(true, signature instanceof ArrayBuffer);
+
     const result = await window.crypto.subtle.verify(
       { name: "HMAC" },
       key,
@@ -76,29 +92,30 @@
       encoder.encode("Hello, world!")
     );
 
-    testing.expectEqual(true, true);
+    testing.expectEqual(true, result);
   });
 </script>
 
-<script id=X25519>
+<script id=derive-shared-key-x25519>
   testing.async(async () => {
     const { privateKey, publicKey } = await crypto.subtle.generateKey(
       { name: "X25519" },
       true,
-      ["deriveKey", "deriveBits"],
+      ["deriveBits"],
     );
 
-    console.warn(privateKey);
-    console.warn(publicKey);
+    testing.expectEqual(true, privateKey instanceof CryptoKey);
+    testing.expectEqual(true, publicKey instanceof CryptoKey);
 
-    testing.expectEqual(true, true);
+    const sharedKey = await crypto.subtle.deriveBits(
+      {
+        name: "X25519",
+        public: publicKey,
+      },
+      privateKey,
+      128,
+    );
+
+    testing.expectEqual(16, sharedKey.byteLength);
   });
 </script>
-
-<!-- <script id="randomUUID">
-  const uuid = crypto.randomUUID();
-  testing.expectEqual('string', typeof uuid);
-  testing.expectEqual(36, uuid.length);
-  const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  testing.expectEqual(true, regex.test(uuid));
-</script> -->
