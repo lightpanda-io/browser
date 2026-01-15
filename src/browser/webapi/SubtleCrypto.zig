@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 
 const crypto = @import("../../crypto.zig");
 
@@ -70,6 +71,19 @@ const Algorithm = union(enum) {
         /// If omitted, default is the block size of the chosen hash function.
         length: ?usize,
     };
+    /// Alias.
+    const HmacImport = HmacKeyGen;
+
+    const EcdhKeyDeriveParams = struct {
+        /// Can be Ed25519 or X25519.
+        name: []const u8,
+        public: *const CryptoKey,
+    };
+
+    /// Algorithm for deriveBits() and deriveKey().
+    const DeriveBits = union(enum) {
+        ecdh_or_x25519: EcdhKeyDeriveParams,
+    };
 };
 
 /// Generate a new key (for symmetric algorithms) or key pair (for public-key algorithms).
@@ -95,11 +109,46 @@ pub fn exportKey(
     key: *CryptoKey,
     page: *Page,
 ) !js.Promise {
+    if (!key.canExportKey()) {
+        return error.InvalidAccessError;
+    }
+
     if (std.mem.eql(u8, format, "raw")) {
         return page.js.resolvePromise(js.ArrayBuffer{ .values = key._key });
     }
 
+    const is_unsupported = std.mem.eql(u8, format, "pkcs8") or
+        std.mem.eql(u8, format, "spki") or std.mem.eql(u8, format, "jwk");
+
+    if (is_unsupported) {
+        log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
+    }
+
     return page.js.rejectPromise(@errorName(error.NotSupported));
+}
+
+/// Derive a secret key from a master key.
+pub fn deriveBits(
+    _: *const SubtleCrypto,
+    algorithm: Algorithm.DeriveBits,
+    base_key: *const CryptoKey, // Private key.
+    length: usize,
+    page: *Page,
+) !js.Promise {
+    return switch (algorithm) {
+        .ecdh_or_x25519 => |p| {
+            const name = p.name;
+            if (std.mem.eql(u8, name, "X25519")) {
+                return page.js.resolvePromise(base_key.deriveBitsX25519(p.public, length, page));
+            }
+
+            if (std.mem.eql(u8, name, "ECDH")) {
+                log.warn(.not_implemented, "SubtleCrypto.deriveBits", .{ .name = name });
+            }
+
+            return page.js.rejectPromise(@errorName(error.NotSupported));
+        },
+    };
 }
 
 const SignatureAlgorithm = union(enum) {
@@ -144,7 +193,10 @@ pub fn sign(
 
             return page.js.resolvePromise(result);
         },
-        else => return page.js.rejectPromise(@errorName(error.InvalidAccessError)),
+        else => {
+            log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
+            return page.js.rejectPromise(@errorName(error.InvalidAccessError));
+        },
     };
 }
 
@@ -157,16 +209,16 @@ pub fn verify(
     data: []const u8, // ArrayBuffer.
     page: *Page,
 ) !js.Promise {
-    if (!algorithm.isHMAC()) return error.InvalidAccess;
+    if (!algorithm.isHMAC()) return error.InvalidAccessError;
 
     return switch (key._type) {
         .hmac => key.verifyHMAC(signature, data, page),
-        else => return error.InvalidAccess,
+        else => return error.InvalidAccessError,
     };
 }
 
 /// Returns the desired digest by its name.
-fn getDigest(name: []const u8) error{Invalid}!*const crypto.EVP_MD {
+fn findDigest(name: []const u8) error{Invalid}!*const crypto.EVP_MD {
     if (std.mem.eql(u8, "SHA-256", name)) {
         return crypto.EVP_sha256();
     }
@@ -203,8 +255,17 @@ pub const CryptoKey = struct {
     _extractable: bool,
     /// Bit flags of `usages`; see `Usages` type.
     _usages: u8,
+    /// Raw bytes of key.
     _key: []const u8,
-    _digest: *const crypto.EVP_MD,
+    /// Different algorithms may use different data structures;
+    /// this union can be used for such situations. Active field is understood
+    /// from `_type`.
+    _vary: extern union {
+        /// Used by HMAC.
+        digest: *const crypto.EVP_MD,
+        /// Used by asymmetric algorithms (X25519, Ed25519).
+        pkey: *crypto.EVP_PKEY,
+    },
 
     pub const Type = enum(u8) { hmac, rsa, x25519 };
 
@@ -248,31 +309,30 @@ pub const CryptoKey = struct {
         };
     }
 
-    /// Create a bitmask out of `key_usages`.
-    /// `0` is equal to `SyntaxError`.
-    fn createUsagesMask(usages: []const []const u8) u8 {
-        const decls = @typeInfo(Usages).@"struct".decls;
-        var mask: u8 = 0;
-        iter_usages: for (usages) |usage| {
-            inline for (decls) |decl| {
-                if (std.mem.eql(u8, decl.name, usage)) {
-                    mask |= @field(Usages, decl.name);
-                    continue :iter_usages;
-                }
-            }
-            // Unknown usage if got here.
-            return 0;
-        }
-
-        return mask;
-    }
-
     inline fn canSign(self: *const CryptoKey) bool {
         return self._usages & Usages.sign != 0;
     }
 
     inline fn canVerify(self: *const CryptoKey) bool {
         return self._usages & Usages.verify != 0;
+    }
+
+    inline fn canDeriveBits(self: *const CryptoKey) bool {
+        return self._usages & Usages.deriveBits != 0;
+    }
+
+    inline fn canExportKey(self: *const CryptoKey) bool {
+        return self._extractable;
+    }
+
+    /// Only valid for HMAC.
+    inline fn getDigest(self: *const CryptoKey) *const crypto.EVP_MD {
+        return self._vary.digest;
+    }
+
+    /// Only valid for asymmetric algorithms (X25519, Ed25519).
+    inline fn getKeyObject(self: *const CryptoKey) *crypto.EVP_PKEY {
+        return self._vary.pkey;
     }
 
     // HMAC.
@@ -288,10 +348,23 @@ pub const CryptoKey = struct {
             .object => |obj| obj.name,
         };
         // Find digest.
-        const digest = try getDigest(hash);
-        // Calculate usages mask and check if its correct.
-        const usages_mask = createUsagesMask(key_usages);
-        if (usages_mask == 0) {
+        const digest = try findDigest(hash);
+
+        // We need at least a single usage.
+        if (key_usages.len == 0) {
+            return error.SyntaxError;
+        }
+        // Calculate usages mask.
+        const decls = @typeInfo(Usages).@"struct".decls;
+        var usages_mask: u8 = 0;
+        iter_usages: for (key_usages) |usage| {
+            inline for (decls) |decl| {
+                if (std.mem.eql(u8, decl.name, usage)) {
+                    usages_mask |= @field(Usages, decl.name);
+                    continue :iter_usages;
+                }
+            }
+            // Unknown usage if got here.
             return error.SyntaxError;
         }
 
@@ -316,7 +389,7 @@ pub const CryptoKey = struct {
             ._extractable = extractable,
             ._usages = usages_mask,
             ._key = key,
-            ._digest = digest,
+            ._vary = .{ .digest = digest },
         });
 
         return .{ .key = crypto_key };
@@ -327,12 +400,12 @@ pub const CryptoKey = struct {
             return error.InvalidAccessError;
         }
 
-        const buffer = try page.call_arena.alloc(u8, crypto.EVP_MD_size(self._digest));
+        const buffer = try page.call_arena.alloc(u8, crypto.EVP_MD_size(self.getDigest()));
         errdefer page.call_arena.free(buffer);
         var out_len: u32 = 0;
         // Try to sign.
         const signed = crypto.HMAC(
-            self._digest,
+            self.getDigest(),
             @ptrCast(self._key.ptr),
             self._key.len,
             data.ptr,
@@ -363,7 +436,7 @@ pub const CryptoKey = struct {
         var out_len: u32 = 0;
         // Try to sign.
         const signed = crypto.HMAC(
-            self._digest,
+            self.getDigest(),
             @ptrCast(self._key.ptr),
             self._key.len,
             data.ptr,
@@ -395,6 +468,9 @@ pub const CryptoKey = struct {
 
         // Calculate usages; only matters for private key.
         // Only deriveKey() and deriveBits() be used for X25519.
+        if (key_usages.len == 0) {
+            return error.SyntaxError;
+        }
         var mask: u8 = 0;
         iter_usages: for (key_usages) |usage| {
             inline for ([_][]const u8{ "deriveKey", "deriveBits" }) |name| {
@@ -404,10 +480,6 @@ pub const CryptoKey = struct {
                 }
             }
             // Unknown usage if got here.
-            return error.SyntaxError;
-        }
-        // Cannot be empty.
-        if (mask == 0) {
             return error.SyntaxError;
         }
 
@@ -453,8 +525,7 @@ pub const CryptoKey = struct {
             ._extractable = extractable,
             ._usages = mask,
             ._key = private_key,
-            // FIXME: This is unnecessary for X25519.
-            ._digest = crypto.EVP_sha1(),
+            ._vary = .{ .pkey = private_pkey.? },
         });
         errdefer page._factory.destroy(private);
 
@@ -465,12 +536,70 @@ pub const CryptoKey = struct {
             // Always empty for public key.
             ._usages = 0,
             ._key = public_value,
-            // FIXME: This is unnecessary for X25519.
-            ._digest = crypto.EVP_sha1(),
+            ._vary = .{ .pkey = public_pkey.? },
         });
         errdefer page._factory.destroy(public);
 
         return .{ .pair = .{ .privateKey = private, .publicKey = public } };
+    }
+
+    fn deriveBitsX25519(
+        private: *const CryptoKey,
+        public: *const CryptoKey,
+        length_in_bits: usize,
+        page: *Page,
+    ) !js.ArrayBuffer {
+        if (!private.canDeriveBits()) {
+            return error.InvalidAccessError;
+        }
+
+        const maybe_ctx = crypto.EVP_PKEY_CTX_new(private.getKeyObject(), null);
+        if (maybe_ctx) |ctx| {
+            // Context is valid, free it on failure.
+            errdefer crypto.EVP_PKEY_CTX_free(ctx);
+
+            // Init derive operation and set public key as peer.
+            if (crypto.EVP_PKEY_derive_init(ctx) != 1 or
+                crypto.EVP_PKEY_derive_set_peer(ctx, public.getKeyObject()) != 1)
+            {
+                // Failed on our end.
+                return error.Internal;
+            }
+
+            const derived_key = try page.call_arena.alloc(u8, 32);
+            errdefer page.call_arena.free(derived_key);
+
+            var out_key_len: usize = derived_key.len;
+            const result = crypto.EVP_PKEY_derive(ctx, derived_key.ptr, &out_key_len);
+            if (result != 1) {
+                // Failed on our end.
+                return error.Internal;
+            }
+            // Sanity check.
+            std.debug.assert(derived_key.len == out_key_len);
+
+            // Length is in bits, convert to byte length.
+            const length = (length_in_bits / 8) + (7 + (length_in_bits % 8)) / 8;
+            // Truncate the slice to specified length.
+            // Same as `derived_key`.
+            const tailored = blk: {
+                if (length > derived_key.len) {
+                    return error.LengthTooLong;
+                }
+                break :blk derived_key[0..length];
+            };
+
+            // Zero any "unused bits" in the final byte.
+            const remainder_bits: u3 = @intCast(length_in_bits % 8);
+            if (remainder_bits != 0) {
+                tailored[tailored.len - 1] &= ~(@as(u8, 0xFF) >> remainder_bits);
+            }
+
+            return js.ArrayBuffer{ .values = tailored };
+        }
+
+        // Failed on our end.
+        return error.Internal;
     }
 
     pub const JsApi = struct {
@@ -497,6 +626,7 @@ pub const JsApi = struct {
 
     pub const generateKey = bridge.function(SubtleCrypto.generateKey, .{ .dom_exception = true });
     pub const exportKey = bridge.function(SubtleCrypto.exportKey, .{ .dom_exception = true });
-    pub const sign = bridge.function(SubtleCrypto.sign, .{ .dom_exception = true, .as_typed_array = false });
+    pub const sign = bridge.function(SubtleCrypto.sign, .{ .dom_exception = true });
     pub const verify = bridge.function(SubtleCrypto.verify, .{ .dom_exception = true });
+    pub const deriveBits = bridge.function(SubtleCrypto.deriveBits, .{ .dom_exception = true });
 };
