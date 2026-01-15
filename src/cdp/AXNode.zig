@@ -89,8 +89,9 @@ pub const Writer = struct {
         integer: usize,
         boolean: bool,
         booleanOrUndefined: bool,
+        token: []const u8,
         // TODO not implemented:
-        // tristate, idrefList, node, nodeList, number, token, tokenList,
+        // tristate, idrefList, node, nodeList, number, tokenList,
         // domRelation, internalRole, valueUndefined,
     };
 
@@ -190,6 +191,110 @@ pub const Writer = struct {
                     if (uri.len == 0) return;
                     try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                     try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                },
+                .input => {
+                    const input = el.as(DOMNode.Element.Html.Input);
+                    const is_disabled = el.hasAttributeSafe("disabled");
+
+                    switch (input._input_type) {
+                        .text, .email, .tel, .url, .search, .password, .number => {
+                            if (is_disabled) {
+                                try self.writeAXProperty(.{ .name = .disabled, .value = .{ .boolean = true } }, w);
+                            }
+                            try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                            if (!is_disabled) {
+                                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                            }
+                            try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
+                            if (!is_disabled) {
+                                try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
+                            }
+                            try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = false } }, w);
+                            try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe("readonly") } }, w);
+                            try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe("required") } }, w);
+                        },
+                        .button, .submit, .reset, .image => {
+                            try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                            if (!is_disabled) {
+                                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                            }
+                        },
+                        .checkbox, .radio => {
+                            try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                            if (!is_disabled) {
+                                try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                            }
+                            const is_checked = el.hasAttributeSafe("checked");
+                            try self.writeAXProperty(.{ .name = .checked, .value = .{ .token = if (is_checked) "true" else "false" } }, w);
+                        },
+                        else => {},
+                    }
+                },
+                .textarea => {
+                    const is_disabled = el.hasAttributeSafe("disabled");
+
+                    try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                    if (!is_disabled) {
+                        try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                    }
+                    try self.writeAXProperty(.{ .name = .editable, .value = .{ .token = "plaintext" } }, w);
+                    if (!is_disabled) {
+                        try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
+                    }
+                    try self.writeAXProperty(.{ .name = .multiline, .value = .{ .boolean = true } }, w);
+                    try self.writeAXProperty(.{ .name = .readonly, .value = .{ .boolean = el.hasAttributeSafe("readonly") } }, w);
+                    try self.writeAXProperty(.{ .name = .required, .value = .{ .boolean = el.hasAttributeSafe("required") } }, w);
+                },
+                .select => {
+                    const is_disabled = el.hasAttributeSafe("disabled");
+
+                    try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                    if (!is_disabled) {
+                        try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                    }
+                    try self.writeAXProperty(.{ .name = .hasPopup, .value = .{ .token = "menu" } }, w);
+                    try self.writeAXProperty(.{ .name = .expanded, .value = .{ .booleanOrUndefined = false } }, w);
+                },
+                .option => {
+                    const option = el.as(DOMNode.Element.Html.Option);
+                    try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+
+                    // Check if this option is selected by examining the parent select
+                    const is_selected = blk: {
+                        // First check if explicitly selected
+                        if (option.getSelected()) break :blk true;
+
+                        // Check if implicitly selected (first enabled option in select with no explicit selection)
+                        const parent = dom_node._parent orelse break :blk false;
+                        const parent_el = parent.as(DOMNode.Element);
+                        if (parent_el.getTag() != .select) break :blk false;
+
+                        const select = parent_el.as(DOMNode.Element.Html.Select);
+                        const selected_idx = select.getSelectedIndex();
+
+                        // Find this option's index
+                        var idx: i32 = 0;
+                        var it = parent.childrenIterator();
+                        while (it.next()) |child| {
+                            if (child.is(DOMNode.Element.Html.Option) == null) continue;
+                            if (child == dom_node) {
+                                break :blk idx == selected_idx;
+                            }
+                            idx += 1;
+                        }
+                        break :blk false;
+                    };
+
+                    if (is_selected) {
+                        try self.writeAXProperty(.{ .name = .selected, .value = .{ .booleanOrUndefined = true } }, w);
+                    }
+                },
+                .button => {
+                    const is_disabled = el.hasAttributeSafe("disabled");
+                    try self.writeAXProperty(.{ .name = .invalid, .value = .{ .token = "false" } }, w);
+                    if (!is_disabled) {
+                        try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                    }
                 },
                 else => {},
             },
