@@ -630,3 +630,8 @@
   let bubbledEvent = new Event('bubble', {bubbles: true});
   testing.expectEqual(false, bubbledEvent.isTrusted);
 </script>
+
+<script id=emptyMessageEvent>
+  // https://github.com/lightpanda-io/browser/pull/1316
+  testing.expectError('TypeError', () => MessageEvent(''));
+</script>
