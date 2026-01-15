@@ -141,7 +141,22 @@ pub const Writer = struct {
     }
 
     const AXProperty = struct {
-        name: enum(u8) { actions, busy, disabled, editable, focusable, focused, hidden, hiddenRoot, invalid, keyshortcuts, settable, roledescription, live, atomic, relevant, root, autocomplete, hasPopup, level, multiselectable, orientation, multiline, readonly, required, valuemin, valuemax, valuetext, checked, expanded, modal, pressed, selected, activedescendant, controls, describedby, details, errormessage, flowto, labelledby, owns, url, activeFullscreenElement, activeModalDialog, activeAriaModalDialog, ariaHiddenElement, ariaHiddenSubtree, emptyAlt, emptyText, inertElement, inertSubtree, labelContainer, labelFor, notRendered, notVisible, presentationalRole, probablyPresentational, inactiveCarouselTabContent, uninteresting },
+        // zig fmt: off
+        name: enum(u8) {
+            actions, busy, disabled, editable, focusable, focused, hidden,
+            hiddenRoot, invalid, keyshortcuts, settable, roledescription, live,
+            atomic, relevant, root, autocomplete, hasPopup, level,
+            multiselectable, orientation, multiline, readonly, required,
+            valuemin, valuemax, valuetext, checked, expanded, modal, pressed,
+            selected, activedescendant, controls, describedby, details,
+            errormessage, flowto, labelledby, owns, url,
+            activeFullscreenElement, activeModalDialog, activeAriaModalDialog,
+            ariaHiddenElement, ariaHiddenSubtree, emptyAlt, emptyText,
+            inertElement, inertSubtree, labelContainer, labelFor, notRendered,
+            notVisible, presentationalRole, probablyPresentational,
+            inactiveCarouselTabContent, uninteresting,
+        },
+        // zig fmt: on
         value: AXValue,
     };
 
@@ -337,62 +352,16 @@ pub const Writer = struct {
 };
 
 pub const AXRole = enum(u8) {
-    none,
-    article,
-    banner,
-    blockquote,
-    button,
-    caption,
-    cell,
-    checkbox,
-    code,
-    columnheader,
-    combobox,
-    complementary,
-    contentinfo,
-    definition,
-    deletion,
-    dialog,
-    document,
-    emphasis,
-    figure,
-    form,
-    group,
-    heading,
-    image,
-    insertion,
-    link,
-    list,
-    listbox,
-    listitem,
-    main,
-    marquee,
-    meter,
-    navigation,
-    option,
-    paragraph,
-    presentation,
-    progressbar,
-    radio,
-    region,
-    row,
-    rowgroup,
-    rowheader,
-    searchbox,
-    separator,
-    slider,
-    spinbutton,
-    status,
-    strong,
-    subscript,
-    superscript,
-    table,
-    term,
-    textbox,
-    time,
-    RootWebArea,
-    LineBreak,
+    // zig fmt: off
+    none, article, banner, blockquote, button, caption, cell, checkbox, code,
+    columnheader, combobox, complementary, contentinfo, definition, deletion,
+    dialog, document, emphasis, figure, form, group, heading, image, insertion,
+    link, list, listbox, listitem, main, marquee, meter, navigation, option,
+    paragraph, presentation, progressbar, radio, region, row, rowgroup,
+    rowheader, searchbox, separator, slider, spinbutton, status, strong,
+    subscript, superscript, table, term, textbox, time, RootWebArea, LineBreak,
     StaticText,
+    // zig fmt: on
 
     fn fromNode(node: *DOMNode) !AXRole {
         return switch (node._type) {
@@ -447,7 +416,10 @@ pub const AXRole = enum(u8) {
                         .number => .spinbutton,
                         .search => .searchbox,
                         .checkbox => .checkbox,
-                        .password, .datetime_local, .hidden, .month, .color, .week, .time, .file, .date => .none,
+                        // zig fmt: off
+                        .password, .datetime_local, .hidden, .month, .color,
+                        .week, .time, .file, .date => .none,
+                        // zig fmt: ofn
                     };
                 },
                 .textarea => .textbox,
@@ -616,37 +588,12 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                     // TODO Check for <label> with matching "for" attribute
                     // TODO Check if input is wrapped in a <label>
                 },
-                .textarea,
-                .select,
-                .img,
-                .audio,
-                .video,
-                .iframe,
-                .embed,
-                .object,
-                .progress,
-                .meter,
-                .main,
-                .nav,
-                .aside,
-                .header,
-                .footer,
-                .form,
-                .section,
-                .article,
-                .ul,
-                .ol,
-                .dl,
-                .menu,
-                .thead,
-                .tbody,
-                .tfoot,
-                .tr,
-                .td,
-                .div,
-                .span,
-                .p,
-                .details,
+                // zig fmt: off
+                .textarea, .select, .img, .audio, .video, .iframe, .embed,
+                .object, .progress, .meter, .main, .nav, .aside, .header,
+                .footer, .form, .section, .article, .ul, .ol, .dl, .menu,
+                .thead, .tbody, .tfoot, .tr, .td, .div, .span, .p, .details,
+                // zig fmt: on
                 => {},
                 else => {
                     // write text content if exists.
@@ -708,33 +655,21 @@ fn ignoreText(node: *DOMNode) bool {
     // Only ignore text for structural/container elements that typically
     // don't have meaningful direct text content
     return switch (elt.getTag()) {
+        // zig fmt: off
         // Structural containers
-        .html,
-        .body,
-        .head,
+        .html, .body, .head,
         // Lists (text is in li elements, not in ul/ol)
-        .ul,
-        .ol,
-        .menu,
+        .ul, .ol, .menu,
         // Tables (text is in cells, not in table/tbody/thead/tfoot/tr)
-        .table,
-        .thead,
-        .tbody,
-        .tfoot,
-        .tr,
+        .table, .thead, .tbody, .tfoot, .tr,
         // Form containers
-        .form,
-        .fieldset,
-        .datalist,
+        .form, .fieldset, .datalist,
         // Grouping elements
-        .details,
-        .figure,
+        .details, .figure,
         // Other containers
-        .select,
-        .optgroup,
-        .colgroup,
-        .script,
+        .select, .optgroup, .colgroup, .script,
         => true,
+        // zig fmt: on
         // All other elements should include their text content
         else => false,
     };
@@ -763,7 +698,12 @@ fn isIgnore(self: AXNode, page: *Page) bool {
     const elt = node.as(DOMNode.Element);
     const tag = elt.getTag();
     switch (tag) {
-        .script, .style, .meta, .link, .title, .base, .head, .noscript, .template, .param, .source, .track, .datalist, .col, .colgroup, .html, .body => return true,
+        // zig fmt: off
+        .script, .style, .meta, .link, .title, .base, .head, .noscript,
+        .template, .param, .source, .track, .datalist, .col, .colgroup, .html,
+        .body
+        => return true,
+        // zig fmt: on
         .img => {
             // Check for empty decorative images
             const alt_ = elt.getAttributeSafe("alt");
