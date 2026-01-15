@@ -270,11 +270,15 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         });
 
         if (comptime IS_DEBUG) {
+            var ls: js.Local.Scope = undefined;
+            page.js.localScope(&ls);
+            defer ls.deinit();
+
             log.debug(.http, "script queue", .{
                 .ctx = ctx,
                 .url = remote_url.?,
                 .element = element,
-                .stack = page.js.stackTrace() catch "???",
+                .stack = ls.local.stackTrace() catch "???",
             });
         }
     }
@@ -356,11 +360,15 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
     if (comptime IS_DEBUG) {
+        var ls: js.Local.Scope = undefined;
+        self.page.js.localScope(&ls);
+        defer ls.deinit();
+
         log.debug(.http, "script queue", .{
             .url = url,
             .ctx = "module",
             .referrer = referrer,
-            .stack = self.page.js.stackTrace() catch "???",
+            .stack = ls.local.stackTrace() catch "???",
         });
     }
 
@@ -447,11 +455,15 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
 
     if (comptime IS_DEBUG) {
+        var ls: js.Local.Scope = undefined;
+        self.page.js.localScope(&ls);
+        defer ls.deinit();
+
         log.debug(.http, "script queue", .{
             .url = url,
             .ctx = "dynamic module",
             .referrer = referrer,
-            .stack = self.page.js.stackTrace() catch "???",
+            .stack = ls.local.stackTrace() catch "???",
         });
     }
 
@@ -782,6 +794,12 @@ pub const Script = struct {
             .cacheable = cacheable,
         });
 
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        const local = &ls.local;
+
         // Handle importmap special case here: the content is a JSON containing
         // imports.
         if (self.kind == .importmap) {
@@ -792,25 +810,24 @@ pub const Script = struct {
                     .kind = self.kind,
                     .cacheable = cacheable,
                 });
-                self.executeCallback("error", script_element._on_error, page);
+                self.executeCallback("error", local.toLocal(script_element._on_error), page);
                 return;
             };
-            self.executeCallback("load", script_element._on_load, page);
+            self.executeCallback("load", local.toLocal(script_element._on_load), page);
             return;
         }
 
-        const js_context = page.js;
         var try_catch: js.TryCatch = undefined;
-        try_catch.init(js_context);
+        try_catch.init(local);
         defer try_catch.deinit();
 
         const success = blk: {
             const content = self.source.content();
             switch (self.kind) {
-                .javascript => _ = js_context.eval(content, url) catch break :blk false,
+                .javascript => _ = local.eval(content, url) catch break :blk false,
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    js_context.module(false, content, url, cacheable) catch break :blk false;
+                    page.js.module(false, local, content, url, cacheable) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -830,7 +847,7 @@ pub const Script = struct {
         }
 
         if (success) {
-            self.executeCallback("load", script_element._on_load, page);
+            self.executeCallback("load", local.toLocal(script_element._on_load), page);
             return;
         }
 
@@ -841,12 +858,11 @@ pub const Script = struct {
             .cacheable = cacheable,
         });
 
-        self.executeCallback("error", script_element._on_error, page);
+        self.executeCallback("error", local.toLocal(script_element._on_error), page);
     }
 
-    fn executeCallback(self: *const Script, comptime typ: []const u8, cb_: ?js.Function.Global, page: *Page) void {
-        const cb_global = cb_ orelse return;
-        const cb = cb_global.local();
+    fn executeCallback(self: *const Script, comptime typ: []const u8, cb_: ?js.Function, page: *Page) void {
+        const cb = cb_ orelse return;
 
         const Event = @import("webapi/Event.zig");
         const event = Event.initTrusted(typ, .{}, page) catch |err| {

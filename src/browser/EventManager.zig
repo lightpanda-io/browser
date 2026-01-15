@@ -367,14 +367,18 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             event._target = getAdjustedTarget(original_target, current_target);
         }
 
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
         switch (listener.function) {
-            .value => |value| try value.local().callWithThis(void, current_target, .{event}),
+            .value => |value| try ls.toLocal(value).callWithThis(void, current_target, .{event}),
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
-                try self.page.js.eval(str, null);
+                try ls.local.eval(str, null);
             },
-            .object => |*obj_global| {
-                const obj = obj_global.local();
+            .object => |obj_global| {
+                const obj = ls.toLocal(obj_global);
                 if (try obj.getFunction("handleEvent")) |handleEvent| {
                     try handleEvent.callWithThis(void, obj, .{event});
                 }

@@ -53,7 +53,6 @@ context_arena: ArenaAllocator,
 // does all the work, but having all page-specific data structures
 // grouped together helps keep things clean.
 context: ?Context = null,
-persisted_context: ?js.Global(Context) = null,
 
 // no init, must be initialized via env.newExecutionWorld()
 
@@ -77,7 +76,12 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     const isolate = env.isolate;
     const arena = self.context_arena.allocator();
 
-    const persisted_context: js.Global(Context) = blk: {
+    // our window wrapped in a v8::Global
+    var global_global: v8.Global = undefined;
+
+    // Create the v8::Context and wrap it in a v8::Global
+    var context_global: v8.Global = undefined;
+    const v8_context = blk: {
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
         defer temp_scope.deinit();
@@ -97,14 +101,15 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
 
-        const context_handle = v8.v8__Context__New(isolate.handle, global_template, null).?;
-        break :blk js.Global(Context).init(isolate.handle, context_handle);
+        const local_context = v8.v8__Context__New(isolate.handle, global_template, null).?;
+        v8.v8__Global__New(isolate.handle, local_context, &context_global);
+
+        const global_obj = v8.v8__Context__Global(local_context).?;
+        v8.v8__Global__New(isolate.handle, global_obj, &global_global);
+
+        break :blk local_context;
     };
 
-    // For a Page we only create one HandleScope, it is stored in the main World (enter==true). A page can have multple contexts, 1 for each World.
-    // The main Context that enters and holds the HandleScope should therefore always be created first. Following other worlds for this page
-    // like isolated Worlds, will thereby place their objects on the main page's HandleScope. Note: In the furure the number of context will multiply multiple frames support
-    const v8_context = persisted_context.local();
     var handle_scope: ?js.HandleScope = null;
     if (enter) {
         handle_scope = @as(js.HandleScope, undefined);
@@ -123,32 +128,30 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
         .page = page,
         .id = context_id,
         .isolate = isolate,
-        .handle = v8_context,
+        .handle = context_global,
+        .global_global = global_global,
         .templates = env.templates,
         .handle_scope = handle_scope,
         .script_manager = &page._script_manager,
         .call_arena = page.call_arena,
         .arena = arena,
     };
-    self.persisted_context = persisted_context;
 
     var context = &self.context.?;
+    try context.identity_map.putNoClobber(arena, @intFromPtr(page.window), global_global);
+
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
-    const data = isolate.initBigInt(@intFromPtr(context));
-    v8.v8__Context__SetEmbedderData(context.handle, 1, @ptrCast(data.handle));
+    const data = isolate.initBigInt(@intFromPtr(&self.context.?));
+    v8.v8__Context__SetEmbedderData(v8_context, 1, @ptrCast(data.handle));
 
-    try context.setupGlobal();
-    return context;
+    return &self.context.?;
 }
 
 pub fn removeContext(self: *ExecutionWorld) void {
     var context = &(self.context orelse return);
     context.deinit();
     self.context = null;
-
-    self.persisted_context.?.deinit();
-    self.persisted_context = null;
 
     self.env.isolate.notifyContextDisposed();
     _ = self.context_arena.reset(.{ .retain_with_limit = CONTEXT_ARENA_RETAIN });

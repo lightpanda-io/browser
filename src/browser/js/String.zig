@@ -25,7 +25,7 @@ const v8 = js.v8;
 
 const String = @This();
 
-ctx: *js.Context,
+local: *const js.Local,
 handle: *const v8.String,
 
 pub const ToZigOpts = struct {
@@ -41,8 +41,8 @@ pub fn toZigZ(self: String, opts: ToZigOpts) ![:0]u8 {
 }
 
 fn _toZig(self: String, comptime null_terminate: bool, opts: ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
-    const isolate = self.ctx.isolate.handle;
-    const allocator = opts.allocator orelse self.ctx.call_arena;
+    const isolate = self.local.isolate.handle;
+    const allocator = opts.allocator orelse self.local.ctx.call_arena;
     const len: u32 = @intCast(v8.v8__String__Utf8Length(self.handle, isolate));
     const buf = if (null_terminate) try allocator.allocSentinel(u8, len, 0) else try allocator.alloc(u8, len);
 

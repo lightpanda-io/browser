@@ -194,9 +194,12 @@ fn createIsolatedWorld(cmd: anytype) !void {
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
     const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
-    bc.inspector.contextCreated(js_context, world.name, "", aux_data, false);
+    var ls: js.Local.Scope = undefined;
+    js_context.localScope(&ls);
+    defer ls.deinit();
 
-    return cmd.sendResult(.{ .executionContextId = js_context.debugContextId() }, .{});
+    bc.inspector.contextCreated(&ls.local, world.name, "", aux_data, false);
+    return cmd.sendResult(.{ .executionContextId = ls.local.debugContextId() }, .{});
 }
 
 fn navigate(cmd: anytype) !void {
@@ -351,8 +354,13 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     {
         const page = bc.session.currentPage() orelse return error.PageNotLoaded;
         const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
         bc.inspector.contextCreated(
-            page.js,
+            &ls.local,
             "",
             try page.getOrigin(arena) orelse "",
             aux_data,
@@ -361,9 +369,15 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     }
     for (bc.isolated_worlds.items) |*isolated_world| {
         const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
+
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
+
+        var ls: js.Local.Scope = undefined;
+        (isolated_world.executor.context orelse continue).localScope(&ls);
+        defer ls.deinit();
+
         bc.inspector.contextCreated(
-            &isolated_world.executor.context.?,
+            &ls.local,
             isolated_world.name,
             "://",
             aux_json,

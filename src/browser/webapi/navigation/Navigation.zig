@@ -265,8 +265,9 @@ pub fn navigateInner(
     //
     // These will only settle on same-origin navigation (mostly intended for SPAs).
     // It is fine (and expected) for these to not settle on cross-origin requests :)
-    const committed = try page.js.createPromiseResolver().persist();
-    const finished = try page.js.createPromiseResolver().persist();
+    const local = page.js.local.?;
+    const committed = local.createPromiseResolver();
+    const finished = local.createPromiseResolver();
 
     const new_url = try URL.resolve(arena, page.url, url, .{});
     const is_same_document = URL.eqlDocument(new_url, page.url);
@@ -278,9 +279,9 @@ pub fn navigateInner(
             if (is_same_document) {
                 page.url = new_url;
 
-                committed.local().resolve("navigation push", {});
+                committed.resolve("navigation push", {});
                 // todo: Fire navigate event
-                finished.local().resolve("navigation push", {});
+                finished.resolve("navigation push", {});
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
@@ -291,9 +292,9 @@ pub fn navigateInner(
             if (is_same_document) {
                 page.url = new_url;
 
-                committed.local().resolve("navigation replace", {});
+                committed.resolve("navigation replace", {});
                 // todo: Fire navigate event
-                finished.local().resolve("navigation replace", {});
+                finished.resolve("navigation replace", {});
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
@@ -306,9 +307,9 @@ pub fn navigateInner(
             if (is_same_document) {
                 page.url = new_url;
 
-                committed.local().resolve("navigation traverse", {});
+                committed.resolve("navigation traverse", {});
                 // todo: Fire navigate event
-                finished.local().resolve("navigation traverse", {});
+                finished.resolve("navigation traverse", {});
             } else {
                 try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
             }
@@ -326,9 +327,11 @@ pub fn navigateInner(
     );
     try self._proto.dispatch(.{ .currententrychange = event }, page);
 
+    _ = try committed.persist();
+    _ = try finished.persist();
     return .{
-        .committed = try committed.local().promise().persist(),
-        .finished = try finished.local().promise().persist(),
+        .committed = try committed.promise().persist(),
+        .finished = try finished.promise().persist(),
     };
 }
 

@@ -21,7 +21,7 @@ const v8 = js.v8;
 
 const Module = @This();
 
-ctx: *js.Context,
+local: *const js.Local,
 handle: *const v8.Module,
 
 pub const Status = enum(u32) {
@@ -39,21 +39,21 @@ pub fn getStatus(self: Module) Status {
 
 pub fn getException(self: Module) js.Value {
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = v8.v8__Module__GetException(self.handle).?,
     };
 }
 
 pub fn getModuleRequests(self: Module) Requests {
     return .{
-        .ctx = self.ctx.handle,
+        .context_handle = self.local.handle,
         .handle = v8.v8__Module__GetModuleRequests(self.handle).?,
     };
 }
 
 pub fn instantiate(self: Module, cb: v8.ResolveModuleCallback) !bool {
     var out: v8.MaybeBool = undefined;
-    v8.v8__Module__InstantiateModule(self.handle, self.ctx.handle, cb, &out);
+    v8.v8__Module__InstantiateModule(self.handle, self.local.handle, cb, &out);
     if (out.has_value) {
         return out.value;
     }
@@ -61,15 +61,14 @@ pub fn instantiate(self: Module, cb: v8.ResolveModuleCallback) !bool {
 }
 
 pub fn evaluate(self: Module) !js.Value {
-    const ctx = self.ctx;
-    const res = v8.v8__Module__Evaluate(self.handle, ctx.handle) orelse return error.JsException;
+    const res = v8.v8__Module__Evaluate(self.handle, self.local.handle) orelse return error.JsException;
 
     if (self.getStatus() == .kErrored) {
         return error.JsException;
     }
 
     return .{
-        .ctx = ctx,
+        .local = self.local,
         .handle = res,
     };
 }
@@ -80,7 +79,7 @@ pub fn getIdentityHash(self: Module) u32 {
 
 pub fn getModuleNamespace(self: Module) js.Value {
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = v8.v8__Module__GetModuleNamespace(self.handle).?,
     };
 }
@@ -90,28 +89,24 @@ pub fn getScriptId(self: Module) u32 {
 }
 
 pub fn persist(self: Module) !Global {
-    var ctx = self.ctx;
+    var ctx = self.local.ctx;
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     try ctx.global_modules.append(ctx.arena, global);
-    return .{
-        .handle = global,
-        .ctx = ctx,
-    };
+    return .{ .handle = global };
 }
 
 pub const Global = struct {
     handle: v8.Global,
-    ctx: *js.Context,
 
     pub fn deinit(self: *Global) void {
         v8.v8__Global__Reset(&self.handle);
     }
 
-    pub fn local(self: *const Global) Module {
+    pub fn local(self: *const Global, l: *const js.Local) Module {
         return .{
-            .ctx = self.ctx,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
         };
     }
 
@@ -121,15 +116,15 @@ pub const Global = struct {
 };
 
 const Requests = struct {
-    ctx: *const v8.Context,
     handle: *const v8.FixedArray,
+    context_handle: *const v8.Context,
 
     pub fn len(self: Requests) usize {
         return @intCast(v8.v8__FixedArray__Length(self.handle));
     }
 
     pub fn get(self: Requests, idx: usize) Request {
-        return .{ .handle = v8.v8__FixedArray__Get(self.handle, self.ctx, @intCast(idx)).? };
+        return .{ .handle = v8.v8__FixedArray__Get(self.handle, self.context_handle, @intCast(idx)).? };
     }
 };
 

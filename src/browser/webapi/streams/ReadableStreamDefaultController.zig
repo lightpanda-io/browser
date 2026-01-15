@@ -57,9 +57,9 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, page: *Page) !*Readab
 }
 
 pub fn addPendingRead(self: *ReadableStreamDefaultController, page: *Page) !js.Promise {
-    const resolver = try page.js.createPromiseResolver().persist();
-    try self._pending_reads.append(self._arena, resolver);
-    return resolver.local().promise();
+    const resolver = page.js.local.?.createPromiseResolver();
+    try self._pending_reads.append(self._arena, try resolver.persist());
+    return resolver.promise();
 }
 
 pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
@@ -79,7 +79,7 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
         .done = false,
         .value = .fromChunk(chunk),
     };
-    resolver.local().resolve("stream enqueue", result);
+    self._page.js.toLocal(resolver).resolve("stream enqueue", result);
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
@@ -94,8 +94,8 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
         .done = true,
         .value = .empty,
     };
-    for (self._pending_reads.items) |*resolver| {
-        resolver.local().resolve("stream close", result);
+    for (self._pending_reads.items) |resolver| {
+        self._page.js.toLocal(resolver).resolve("stream close", result);
     }
     self._pending_reads.clearRetainingCapacity();
 }
@@ -109,8 +109,8 @@ pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
     self._stream._stored_error = try self._page.arena.dupe(u8, err);
 
     // Reject all pending reads
-    for (self._pending_reads.items) |*resolver| {
-        resolver.local().reject("stream errror", err);
+    for (self._pending_reads.items) |resolver| {
+        self._page.js.toLocal(resolver).reject("stream errror", err);
     }
     self._pending_reads.clearRetainingCapacity();
 }

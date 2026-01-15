@@ -27,7 +27,7 @@ const Allocator = std.mem.Allocator;
 
 const Value = @This();
 
-ctx: *js.Context,
+local: *const js.Local,
 handle: *const v8.Value,
 
 pub fn isObject(self: Value) bool {
@@ -155,12 +155,12 @@ pub fn isPromise(self: Value) bool {
 }
 
 pub fn toBool(self: Value) bool {
-    return v8.v8__Value__BooleanValue(self.handle, self.ctx.isolate.handle);
+    return v8.v8__Value__BooleanValue(self.handle, self.local.isolate.handle);
 }
 
 pub fn typeOf(self: Value) js.String {
-    const str_handle = v8.v8__Value__TypeOf(self.handle, self.ctx.isolate.handle).?;
-    return js.String{ .ctx = self.ctx, .handle = str_handle };
+    const str_handle = v8.v8__Value__TypeOf(self.handle, self.local.isolate.handle).?;
+    return js.String{ .local = self.local, .handle = str_handle };
 }
 
 pub fn toF32(self: Value) !f32 {
@@ -169,7 +169,7 @@ pub fn toF32(self: Value) !f32 {
 
 pub fn toF64(self: Value) !f64 {
     var maybe: v8.MaybeF64 = undefined;
-    v8.v8__Value__NumberValue(self.handle, self.ctx.handle, &maybe);
+    v8.v8__Value__NumberValue(self.handle, self.local.handle, &maybe);
     if (!maybe.has_value) {
         return error.JsException;
     }
@@ -178,7 +178,7 @@ pub fn toF64(self: Value) !f64 {
 
 pub fn toI32(self: Value) !i32 {
     var maybe: v8.MaybeI32 = undefined;
-    v8.v8__Value__Int32Value(self.handle, self.ctx.handle, &maybe);
+    v8.v8__Value__Int32Value(self.handle, self.local.handle, &maybe);
     if (!maybe.has_value) {
         return error.JsException;
     }
@@ -187,7 +187,7 @@ pub fn toI32(self: Value) !i32 {
 
 pub fn toU32(self: Value) !u32 {
     var maybe: v8.MaybeU32 = undefined;
-    v8.v8__Value__Uint32Value(self.handle, self.ctx.handle, &maybe);
+    v8.v8__Value__Uint32Value(self.handle, self.local.handle, &maybe);
     if (!maybe.has_value) {
         return error.JsException;
     }
@@ -199,7 +199,7 @@ pub fn toPromise(self: Value) js.Promise {
         std.debug.assert(self.isPromise());
     }
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = @ptrCast(self.handle),
     };
 }
@@ -212,53 +212,42 @@ pub fn toStringZ(self: Value, opts: js.String.ToZigOpts) ![:0]u8 {
 }
 
 pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
-    const json_str_handle = v8.v8__JSON__Stringify(self.ctx.handle, self.handle, null) orelse return error.JsException;
-    return self.ctx.jsStringToZig(json_str_handle, .{ .allocator = allocator });
+    const json_str_handle = v8.v8__JSON__Stringify(self.local.handle, self.handle, null) orelse return error.JsException;
+    return self.local.jsStringToZig(json_str_handle, .{ .allocator = allocator });
 }
 
 fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
-    const ctx = self.ctx;
+    const l = self.local;
 
     if (self.isSymbol()) {
-        const sym_handle = v8.v8__Symbol__Description(@ptrCast(self.handle), ctx.isolate.handle).?;
-        return _toString(.{ .handle = @ptrCast(sym_handle), .ctx = ctx }, null_terminate, opts);
+        const sym_handle = v8.v8__Symbol__Description(@ptrCast(self.handle), l.isolate.handle).?;
+        return _toString(.{ .handle = @ptrCast(sym_handle), .local = l }, null_terminate, opts);
     }
 
-    const str_handle = v8.v8__Value__ToString(self.handle, ctx.handle) orelse {
+    const str_handle = v8.v8__Value__ToString(self.handle, l.handle) orelse {
         return error.JsException;
     };
 
-    const str = js.String{ .ctx = ctx, .handle = str_handle };
+    const str = js.String{ .local = l, .handle = str_handle };
     if (comptime null_terminate) {
         return js.String.toZigZ(str, opts);
     }
     return js.String.toZig(str, opts);
 }
 
-pub fn fromJson(ctx: *js.Context, json: []const u8) !Value {
-    const v8_isolate = v8.Isolate{ .handle = ctx.isolate.handle };
-    const json_string = v8.String.initUtf8(v8_isolate, json);
-    const v8_context = v8.Context{ .handle = ctx.handle };
-    const value = try v8.Json.parse(v8_context, json_string);
-    return .{ .ctx = ctx, .handle = value.handle };
-}
-
 pub fn persist(self: Value) !Global {
-    var ctx = self.ctx;
+    var ctx = self.local.ctx;
 
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
 
     try ctx.global_values.append(ctx.arena, global);
 
-    return .{
-        .handle = global,
-        .ctx = ctx,
-    };
+    return .{ .handle = global };
 }
 
 pub fn toZig(self: Value, comptime T: type) !T {
-    return self.ctx.jsValueToZig(T, self);
+    return self.local.jsValueToZig(T, self);
 }
 
 pub fn toObject(self: Value) js.Object {
@@ -267,7 +256,7 @@ pub fn toObject(self: Value) js.Object {
     }
 
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = @ptrCast(self.handle),
     };
 }
@@ -278,7 +267,7 @@ pub fn toArray(self: Value) js.Array {
     }
 
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = @ptrCast(self.handle),
     };
 }
@@ -295,7 +284,7 @@ pub fn toBigInt(self: Value) js.BigInt {
 
 pub fn format(self: Value, writer: *std.Io.Writer) !void {
     if (comptime IS_DEBUG) {
-        return self.ctx.debugValue(self, writer);
+        return self.local.debugValue(self, writer);
     }
     const str = self.toString(.{}) catch return error.WriteFailed;
     return writer.writeAll(str);
@@ -303,16 +292,15 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
 
 pub const Global = struct {
     handle: v8.Global,
-    ctx: *js.Context,
 
     pub fn deinit(self: *Global) void {
         v8.v8__Global__Reset(&self.handle);
     }
 
-    pub fn local(self: *const Global) Value {
+    pub fn local(self: *const Global, l: *const js.Local) Value {
         return .{
-            .ctx = self.ctx,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
         };
     }
 
