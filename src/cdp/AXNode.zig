@@ -296,6 +296,10 @@ pub const Writer = struct {
                         try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
                     }
                 },
+                .hr => {
+                    try self.writeAXProperty(.{ .name = .settable, .value = .{ .booleanOrUndefined = true } }, w);
+                    try self.writeAXProperty(.{ .name = .orientation, .value = .{ .token = "horizontal" } }, w);
+                },
                 else => {},
             },
             else => |tag| {
