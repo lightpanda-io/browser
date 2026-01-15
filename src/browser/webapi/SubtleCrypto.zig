@@ -295,6 +295,7 @@ pub const CryptoKey = struct {
                 if (std.mem.eql(u8, "X25519", name)) {
                     return initX25519(extractable, key_usages, page);
                 }
+                log.warn(.not_implemented, "CryptoKey.init", .{ .name = name });
                 return error.NotSupported;
             },
             .object => |object| {
@@ -303,9 +304,13 @@ pub const CryptoKey = struct {
                 if (std.mem.eql(u8, "X25519", name)) {
                     return initX25519(extractable, key_usages, page);
                 }
+                log.warn(.not_implemented, "CryptoKey.init", .{ .name = name });
                 return error.NotSupported;
             },
-            else => @panic("NYI"),
+            else => {
+                log.warn(.not_implemented, "CryptoKey.init", .{ .algorithm = algorithm });
+                return error.NotSupported;
+            },
         };
     }
 
