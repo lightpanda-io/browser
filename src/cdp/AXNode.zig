@@ -265,6 +265,7 @@ pub const Writer = struct {
                 const uri = document.getURL(page);
                 try self.writeAXProperty(.{ .name = .url, .value = .{ .string = uri } }, w);
                 try self.writeAXProperty(.{ .name = .focusable, .value = .{ .booleanOrUndefined = true } }, w);
+                try self.writeAXProperty(.{ .name = .focused, .value = .{ .booleanOrUndefined = true } }, w);
                 return;
             },
             .cdata => return,
