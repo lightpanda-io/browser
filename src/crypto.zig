@@ -193,6 +193,8 @@ pub const struct_evp_pkey_st = extern struct {
     ameth: ?*const EVP_PKEY_ASN1_METHOD,
 };
 pub const EVP_PKEY = struct_evp_pkey_st;
+pub const struct_evp_pkey_ctx_st = opaque {};
+pub const EVP_PKEY_CTX = struct_evp_pkey_ctx_st;
 
 pub extern fn RAND_bytes(buf: [*]u8, len: usize) c_int;
 
@@ -229,3 +231,8 @@ pub const EVP_PKEY_X25519 = NID_X25519;
 
 pub extern fn EVP_PKEY_new_raw_private_key(@"type": c_int, unused: ?*ENGINE, in: [*c]const u8, len: usize) [*c]EVP_PKEY;
 pub extern fn EVP_PKEY_new_raw_public_key(@"type": c_int, unused: ?*ENGINE, in: [*c]const u8, len: usize) [*c]EVP_PKEY;
+pub extern fn EVP_PKEY_CTX_new(pkey: [*c]EVP_PKEY, e: ?*ENGINE) ?*EVP_PKEY_CTX;
+pub extern fn EVP_PKEY_CTX_free(ctx: ?*EVP_PKEY_CTX) void;
+pub extern fn EVP_PKEY_derive_init(ctx: ?*EVP_PKEY_CTX) c_int;
+pub extern fn EVP_PKEY_derive(ctx: ?*EVP_PKEY_CTX, key: [*c]u8, out_key_len: [*c]usize) c_int;
+pub extern fn EVP_PKEY_derive_set_peer(ctx: ?*EVP_PKEY_CTX, peer: [*c]EVP_PKEY) c_int;
