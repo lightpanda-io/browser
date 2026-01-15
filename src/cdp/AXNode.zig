@@ -236,6 +236,9 @@ pub const Writer = struct {
             }
             try w.endObject();
 
+            // Value (for form controls)
+            try self.writeNodeValue(axn, w);
+
             // Properties
             try w.objectField("properties");
             try w.beginArray();
@@ -276,6 +279,60 @@ pub const Writer = struct {
         try w.endObject();
 
         return write_children;
+    }
+
+    fn writeNodeValue(self: *const Writer, axnode: AXNode, w: anytype) !void {
+        const node = axnode.dom;
+
+        if (node.is(DOMNode.Element.Html) == null) {
+            return;
+        }
+
+        const el = node.as(DOMNode.Element);
+
+        const value: ?[]const u8 = switch (el.getTag()) {
+            .input => blk: {
+                const input = el.as(DOMNode.Element.Html.Input);
+                const val = input.getValue();
+                if (val.len == 0) break :blk null;
+                break :blk val;
+            },
+            .textarea => blk: {
+                const textarea = el.as(DOMNode.Element.Html.TextArea);
+                const val = textarea.getValue();
+                if (val.len == 0) break :blk null;
+                break :blk val;
+            },
+            .select => blk: {
+                // Get the selected option's text content
+                var it = node.childrenIterator();
+                while (it.next()) |child| {
+                    if (child.is(DOMNode.Element.Html) == null) {
+                        continue;
+                    }
+                    const child_el = child.as(DOMNode.Element);
+                    if (child_el.getTag() != .option) {
+                        continue;
+                    }
+                    const option = child_el.as(DOMNode.Element.Html.Option);
+                    if (option.getSelected()) {
+                        // Get the text content of the option
+                        var buf = std.Io.Writer.Allocating.init(self.page.call_arena);
+                        try child_el.getInnerText(&buf.writer);
+                        const text = buf.written();
+                        if (text.len == 0) break :blk null;
+                        break :blk text;
+                    }
+                }
+                break :blk null;
+            },
+            else => null,
+        };
+
+        if (value) |val| {
+            try w.objectField("value");
+            try self.writeAXValue(.{ .string = val }, w);
+        }
     }
 };
 
@@ -544,8 +601,14 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                 .input => {
                     const input = el.as(DOMNode.Element.Html.Input);
                     switch (input._input_type) {
-                        .reset, .button, .submit => {
-                            try w.write(input.getValue());
+                        .reset, .button, .submit => |t| {
+                            const v = input.getValue();
+                            if (v.len > 0) {
+                                try w.write(input.getValue());
+                            } else {
+                                try w.write(@tagName(t));
+                            }
+
                             return .value;
                         },
                         else => {},
