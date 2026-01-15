@@ -899,8 +899,13 @@ fn isIgnore(self: AXNode, page: *Page) bool {
     const node = self.dom;
     const role_attr = self.role_attr;
 
-    if (node.is(DOMNode.Element.Html) == null) {
+    // Don't ignore non-Element node: CData, Document...
+    if (node.is(DOMNode.Element) == null) {
         return false;
+    }
+    // Ignore non-HTML elements: svg...
+    if (node.is(DOMNode.Element.Html) == null) {
+        return true;
     }
     const elt = node.as(DOMNode.Element);
     const tag = elt.getTag();
