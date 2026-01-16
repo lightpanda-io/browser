@@ -208,10 +208,15 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32) !void {
             try range.setEnd(old_anchor, old_anchor_offset);
             self._direction = .backward;
         },
-        else => {
+        .after => {
             try range.setStart(old_anchor, old_anchor_offset);
             try range.setEnd(node, offset);
             self._direction = .forward;
+        },
+        .equal => {
+            try range.setStart(old_anchor, old_anchor_offset);
+            try range.setEnd(old_anchor, old_anchor_offset);
+            self._direction = .none;
         },
     }
 }
