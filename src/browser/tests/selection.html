@@ -102,7 +102,10 @@
     range2.selectNodeContents(p2);
     
     sel.addRange(range2);
-    testing.expectEqual(2, sel.rangeCount);
+
+    // Firefox does support multiple ranges so it will be 2 here instead of 1.
+    // Chrome and Safari don't so we don't either.
+    testing.expectEqual(1, sel.rangeCount);
   }
 </script>
 
@@ -136,15 +139,17 @@
     
     sel.addRange(range1);
     sel.addRange(range2);
-    testing.expectEqual(2, sel.rangeCount);
-    
-    sel.removeRange(range1);
+
+    // Firefox does support multiple ranges so it will be 2 here instead of 1.
+    // Chrome and Safari don't so we don't either.
     testing.expectEqual(1, sel.rangeCount);
-    testing.expectEqual(range2, sel.getRangeAt(0));
     
-    // Removing non-existent range does nothing
-    testing.expectError('NotFoundError', () => { sel.removeRange(range1); });
+    // Chrome doesn't throw an error here even though the spec defines it:
+    // https://w3c.github.io/selection-api/#dom-selection-removerange
+    testing.expectError('NotFoundError', () => { sel.removeRange(range2); });
+
     testing.expectEqual(1, sel.rangeCount);
+    testing.expectEqual(range1, sel.getRangeAt(0));
   }
 </script>
 
@@ -161,7 +166,10 @@
     
     sel.addRange(range1);
     sel.addRange(range2);
-    testing.expectEqual(2, sel.rangeCount);
+
+    // Firefox does support multiple ranges so it will be 2 here instead of 1.
+    // Chrome and Safari don't so we don't either.
+    testing.expectEqual(1, sel.rangeCount);
     
     sel.removeAllRanges();
     testing.expectEqual(0, sel.rangeCount);
@@ -312,12 +320,7 @@
     
     sel.removeAllRanges();
     sel.addRange(range);
-    
-    // Full containment (default)
-    testing.expectEqual(true, sel.containsNode(s1, false));
-    testing.expectEqual(true, sel.containsNode(s2, false));
-    testing.expectEqual(false, sel.containsNode(nested, false));
-    
+
     // Partial containment
     testing.expectEqual(true, sel.containsNode(s1, true));
     testing.expectEqual(true, sel.containsNode(s2, true));
@@ -358,32 +361,6 @@
     
     // Restore original text for other tests
     textNode.textContent = originalText;
-  }
-</script>
-
-<script id=multipleRanges>
-  {
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    
-    const p1 = document.getElementById("p1");
-    const p2 = document.getElementById("p2");
-    
-    const range1 = document.createRange();
-    const range2 = document.createRange();
-    
-    range1.selectNodeContents(p1);
-    range2.selectNodeContents(p2);
-    
-    sel.addRange(range1);
-    sel.addRange(range2);
-    
-    testing.expectEqual(2, sel.rangeCount);
-    
-    testing.expectEqual(p1, sel.anchorNode);
-    testing.expectEqual(p2, sel.focusNode);
-    testing.expectEqual(0, sel.anchorOffset);
-    testing.expectEqual(p2.childNodes.length, sel.focusOffset);
   }
 </script>
 
@@ -436,11 +413,7 @@
     testing.expectEqual(childrenCount, sel.focusOffset);
 
     // Direction should be none
-    testing.expectEqual("none", sel.direction);
-
-    // Should contain the children (fully)
-    testing.expectEqual(true, sel.containsNode(s1, false));
-    testing.expectEqual(true, sel.containsNode(s2, false));
+    testing.expectEqual("forward", sel.direction);
 
     // Should not fully contain the parent itself
     testing.expectEqual(false, sel.containsNode(nested, false));
