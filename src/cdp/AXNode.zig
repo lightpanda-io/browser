@@ -801,6 +801,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                 .object, .progress, .meter, .main, .nav, .aside, .header,
                 .footer, .form, .section, .article, .ul, .ol, .dl, .menu,
                 .thead, .tbody, .tfoot, .tr, .td, .div, .span, .p, .details, .li,
+                .style, .script,
                 // zig fmt: on
                 => {},
                 else => {
@@ -891,7 +892,7 @@ fn ignoreChildren(self: AXNode) bool {
 
     const elt = node.as(DOMNode.Element);
     return switch (elt.getTag()) {
-        .head => true,
+        .head, .script, .style => true,
         else => false,
     };
 }
