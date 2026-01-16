@@ -25,30 +25,39 @@ const Range = @import("Range.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const Node = @import("Node.zig");
 
+/// https://w3c.github.io/selection-api/
 const Selection = @This();
 
 const SelectionDirection = enum { backward, forward, none };
 
-_ranges: std.ArrayList(*Range) = .empty,
+_range: ?*Range = null,
 _direction: SelectionDirection = .none,
 
 pub const init: Selection = .{};
 
-pub fn getAnchorNode(self: *const Selection) ?*Node {
-    if (self._ranges.items.len == 0) return null;
+fn isInTree(self: *const Selection) bool {
+    if (self._range == null) return false;
+    return self.getAnchorNode().?.isConnected() and self.getFocusNode().?.isConnected();
+}
 
-    return switch (self._direction) {
-        .backward => self._ranges.getLast().asAbstractRange().getEndContainer(),
-        .forward, .none => self._ranges.items[0].asAbstractRange().getStartContainer(),
+pub fn getAnchorNode(self: *const Selection) ?*Node {
+    const range = self._range orelse return null;
+
+    const node = switch (self._direction) {
+        .backward => range.asAbstractRange().getEndContainer(),
+        .forward, .none => range.asAbstractRange().getStartContainer(),
     };
+
+    return if (node.isConnected()) node else null;
 }
 
 pub fn getAnchorOffset(self: *const Selection) u32 {
-    if (self._ranges.items.len == 0) return 0;
+    const range = self._range orelse return 0;
+    if (!self.getAnchorNode().?.isConnected()) return 0;
 
     return switch (self._direction) {
-        .backward => self._ranges.getLast().asAbstractRange().getEndOffset(),
-        .forward, .none => self._ranges.items[0].asAbstractRange().getStartOffset(),
+        .backward => range.asAbstractRange().getEndOffset(),
+        .forward, .none => range.asAbstractRange().getStartOffset(),
     };
 }
 
@@ -57,117 +66,108 @@ pub fn getDirection(self: *const Selection) []const u8 {
 }
 
 pub fn getFocusNode(self: *const Selection) ?*Node {
-    if (self._ranges.items.len == 0) return null;
+    const range = self._range orelse return null;
 
-    return switch (self._direction) {
-        .backward => self._ranges.items[0].asAbstractRange().getStartContainer(),
-        .forward, .none => self._ranges.getLast().asAbstractRange().getEndContainer(),
+    const node = switch (self._direction) {
+        .backward => range.asAbstractRange().getStartContainer(),
+        .forward, .none => range.asAbstractRange().getEndContainer(),
     };
+
+    return if (node.isConnected()) node else null;
 }
 
 pub fn getFocusOffset(self: *const Selection) u32 {
-    if (self._ranges.items.len == 0) return 0;
+    const range = self._range orelse return 0;
+    if (!self.getFocusNode().?.isConnected()) return 0;
 
     return switch (self._direction) {
-        .backward => self._ranges.items[0].asAbstractRange().getStartOffset(),
-        .forward, .none => self._ranges.getLast().asAbstractRange().getEndOffset(),
+        .backward => range.asAbstractRange().getStartOffset(),
+        .forward, .none => range.asAbstractRange().getEndOffset(),
     };
 }
 
 pub fn getIsCollapsed(self: *const Selection) bool {
-    if (self._ranges.items.len == 0) return true;
-    if (self._ranges.items.len > 1) return false;
-
-    return self._ranges.items[0].asAbstractRange().getCollapsed();
+    const range = self._range orelse return true;
+    return range.asAbstractRange().getCollapsed();
 }
 
 pub fn getRangeCount(self: *const Selection) u32 {
-    return @intCast(self._ranges.items.len);
+    if (self._range == null) return 0;
+    if (!self.isInTree()) return 0;
+
+    return 1;
 }
 
 pub fn getType(self: *const Selection) []const u8 {
-    if (self._ranges.items.len == 0) return "None";
+    if (self._range == null) return "None";
+    if (!self.isInTree()) return "None";
     if (self.getIsCollapsed()) return "Caret";
     return "Range";
 }
 
-pub fn addRange(self: *Selection, range: *Range, page: *Page) !void {
-    for (self._ranges.items) |r| {
-        if (r == range) return;
-    }
-
-    return try self._ranges.append(page.arena, range);
+pub fn addRange(self: *Selection, range: *Range) !void {
+    if (self._range != null) return;
+    self._range = range;
 }
 
 pub fn removeRange(self: *Selection, range: *Range) !void {
-    for (self._ranges.items, 0..) |r, i| {
-        if (r == range) {
-            _ = self._ranges.orderedRemove(i);
-            return;
-        }
-    }
-
-    return error.NotFound;
-}
-
-fn removeAllRangesInner(self: *Selection, reset_direction: bool) void {
-    self._ranges.clearRetainingCapacity();
-    if (reset_direction) {
-        self._direction = .none;
+    if (self._range == range) {
+        self._range = null;
+        return;
+    } else {
+        return error.NotFound;
     }
 }
 
 pub fn removeAllRanges(self: *Selection) void {
-    self.removeAllRangesInner(true);
+    self._range = null;
+    self._direction = .none;
 }
 
-pub fn collapseToEnd(self: *Selection, page: *Page) !void {
-    if (self._ranges.items.len == 0) return;
+pub fn collapseToEnd(self: *Selection) !void {
+    const range = self._range orelse return;
 
-    const last_range = self._ranges.getLast().asAbstractRange();
-    const last_node = last_range.getEndContainer();
-    const last_offset = last_range.getEndOffset();
+    const abstract = range.asAbstractRange();
+    const last_node = abstract.getEndContainer();
+    const last_offset = abstract.getEndOffset();
 
-    const range = try Range.init(page);
     try range.setStart(last_node, last_offset);
     try range.setEnd(last_node, last_offset);
-
-    self.removeAllRangesInner(true);
-    try self._ranges.append(page.arena, range);
+    self._direction = .none;
 }
 
-pub fn collapseToStart(self: *Selection, page: *Page) !void {
-    if (self._ranges.items.len == 0) return;
+pub fn collapseToStart(self: *Selection) !void {
+    const range = self._range orelse return;
 
-    const first_range = self._ranges.items[0].asAbstractRange();
-    const first_node = first_range.getStartContainer();
-    const first_offset = first_range.getStartOffset();
+    const abstract = range.asAbstractRange();
+    const first_node = abstract.getStartContainer();
+    const first_offset = abstract.getStartOffset();
 
-    const range = try Range.init(page);
     try range.setStart(first_node, first_offset);
     try range.setEnd(first_node, first_offset);
-
-    self.removeAllRangesInner(true);
-    try self._ranges.append(page.arena, range);
     self._direction = .none;
 }
 
 pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
-    for (self._ranges.items) |r| {
-        if (partial) {
-            if (r.intersectsNode(node)) {
-                return true;
-            }
-        } else {
-            const parent = node.parentNode() orelse continue;
-            const offset = parent.getChildIndex(node) orelse continue;
+    const range = self._range orelse return false;
 
-            const start_in = r.isPointInRange(parent, offset) catch false;
-            const end_in = r.isPointInRange(parent, offset + 1) catch false;
+    if (partial) {
+        if (range.intersectsNode(node)) {
+            return true;
+        }
+    } else {
+        const abstract = range.asAbstractRange();
+        if (abstract.getStartContainer() == node or abstract.getEndContainer() == node) {
+            return false;
+        }
 
-            if (start_in and end_in) {
-                return true;
-            }
+        const parent = node.parentNode() orelse return false;
+        const offset = parent.getChildIndex(node) orelse return false;
+        const start_cmp = range.comparePoint(parent, offset) catch return false;
+        const end_cmp = range.comparePoint(parent, offset + 1) catch return false;
+
+        if (start_cmp <= 0 and end_cmp >= 0) {
+            return true;
         }
     }
 
@@ -175,23 +175,19 @@ pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
 }
 
 pub fn deleteFromDocument(self: *Selection, page: *Page) !void {
-    if (self._ranges.items.len == 0) return;
+    const range = self._range orelse return;
 
-    try self._ranges.items[0].deleteContents(page);
+    try range.deleteContents(page);
 }
 
-pub fn extend(self: *Selection, node: *Node, _offset: ?u32) !void {
-    if (self._ranges.items.len == 0) {
-        return error.InvalidState;
-    }
-
+pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
+    const range = self._range orelse return error.InvalidState;
     const offset = _offset orelse 0;
 
     if (offset > node.getLength()) {
         return error.IndexSizeError;
     }
 
-    const range = self._ranges.items[0];
     const old_anchor = switch (self._direction) {
         .backward => range.asAbstractRange().getEndContainer(),
         .forward, .none => range.asAbstractRange().getStartContainer(),
@@ -201,32 +197,36 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32) !void {
         .forward, .none => range.asAbstractRange().getStartOffset(),
     };
 
+    const new_range = try Range.init(page);
+
     const cmp = AbstractRange.compareBoundaryPoints(node, offset, old_anchor, old_anchor_offset);
     switch (cmp) {
         .before => {
-            try range.setStart(node, offset);
-            try range.setEnd(old_anchor, old_anchor_offset);
+            try new_range.setStart(node, offset);
+            try new_range.setEnd(old_anchor, old_anchor_offset);
             self._direction = .backward;
         },
         .after => {
-            try range.setStart(old_anchor, old_anchor_offset);
-            try range.setEnd(node, offset);
+            try new_range.setStart(old_anchor, old_anchor_offset);
+            try new_range.setEnd(node, offset);
             self._direction = .forward;
         },
         .equal => {
-            try range.setStart(old_anchor, old_anchor_offset);
-            try range.setEnd(old_anchor, old_anchor_offset);
+            try new_range.setStart(old_anchor, old_anchor_offset);
+            try new_range.setEnd(old_anchor, old_anchor_offset);
             self._direction = .none;
         },
     }
+
+    self._range = new_range;
 }
 
 pub fn getRangeAt(self: *Selection, index: u32) !*Range {
-    if (index >= self.getRangeCount()) {
-        return error.IndexSizeError;
-    }
+    if (index != 0) return error.IndexSizeError;
+    if (!self.isInTree()) return error.IndexSizeError;
+    const range = self._range orelse return error.IndexSizeError;
 
-    return self._ranges.items[index];
+    return range;
 }
 
 const ModifyAlter = enum {
@@ -278,7 +278,7 @@ pub fn modify(
     const direction = ModifyDirection.fromString(direction_str) orelse return error.InvalidParams;
     const granularity = ModifyGranularity.fromString(granularity_str) orelse return error.InvalidParams;
 
-    if (self._ranges.items.len == 0) return;
+    _ = self._range orelse return;
 
     log.warn(.not_implemented, "Selection.modify", .{
         .alter = alter,
@@ -288,9 +288,7 @@ pub fn modify(
 }
 
 pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
-    if (parent._type == .document_type) {
-        return error.InvalidNodeType;
-    }
+    if (parent._type == .document_type) return error.InvalidNodeTypeError;
 
     const range = try Range.init(page);
     try range.setStart(parent, 0);
@@ -298,8 +296,8 @@ pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
     const child_count = parent.getLength();
     try range.setEnd(parent, @intCast(child_count));
 
-    self.removeAllRangesInner(true);
-    try self._ranges.append(page.arena, range);
+    self._range = range;
+    self._direction = .forward;
 }
 
 pub fn setBaseAndExtent(
@@ -345,18 +343,18 @@ pub fn setBaseAndExtent(
         },
     }
 
-    self.removeAllRangesInner(false);
-    try self._ranges.append(page.arena, range);
+    self._range = range;
 }
 
-pub fn setPosition(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !void {
+pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !void {
     const node = _node orelse {
-        self.removeAllRangesInner(true);
+        self.removeAllRanges();
         return;
     };
 
-    const offset = _offset orelse 0;
+    if (node._type == .document_type) return error.InvalidNodeType;
 
+    const offset = _offset orelse 0;
     if (offset > node.getLength()) {
         return error.IndexSizeError;
     }
@@ -365,8 +363,8 @@ pub fn setPosition(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) 
     try range.setStart(node, offset);
     try range.setEnd(node, offset);
 
-    self.removeAllRangesInner(true);
-    try self._ranges.append(page.arena, range);
+    self._range = range;
+    self._direction = .none;
 }
 
 pub const JsApi = struct {
@@ -388,7 +386,7 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Selection.getType, null, .{});
 
     pub const addRange = bridge.function(Selection.addRange, .{});
-    pub const collapse = bridge.function(Selection.setPosition, .{ .dom_exception = true });
+    pub const collapse = bridge.function(Selection.collapse, .{ .dom_exception = true });
     pub const collapseToEnd = bridge.function(Selection.collapseToEnd, .{});
     pub const collapseToStart = bridge.function(Selection.collapseToStart, .{});
     pub const containsNode = bridge.function(Selection.containsNode, .{});
@@ -402,7 +400,7 @@ pub const JsApi = struct {
     pub const removeRange = bridge.function(Selection.removeRange, .{ .dom_exception = true });
     pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
     pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
-    pub const setPosition = bridge.function(Selection.setPosition, .{});
+    pub const setPosition = bridge.function(Selection.collapse, .{});
 };
 
 const testing = @import("../../testing.zig");
