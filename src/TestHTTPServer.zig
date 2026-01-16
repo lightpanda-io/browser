@@ -35,7 +35,7 @@ pub fn init(handler: Handler) TestHTTPServer {
 }
 
 pub fn deinit(self: *TestHTTPServer) void {
-    self.shutdown = true;
+    @atomicStore(bool,  &self.shutdown, true, .release);
     if (self.listener) |*listener| {
         listener.deinit();
     }
@@ -51,7 +51,7 @@ pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
 
     while (true) {
         const conn = listener.accept() catch |err| {
-            if (self.shutdown) {
+            if (@atomicLoad(bool, &self.shutdown, .acquire)) {
                 return;
             }
             return err;

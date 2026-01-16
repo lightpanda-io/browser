@@ -439,6 +439,10 @@ const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const Server = @import("Server.zig");
 var test_cdp_server: ?Server = null;
+// Use a distinct allocator for the TestCDP server to avoid tsan errors. The CDP
+// server doesn't have a thread-safe shutdown. This is a simple "solution".
+var test_cdp_server_gpa: std.heap.DebugAllocator(.{}) = .init;
+
 var test_http_server: ?TestHTTPServer = null;
 
 test "tests:beforeAll" {
@@ -480,6 +484,7 @@ test "tests:afterAll" {
     if (test_cdp_server) |*server| {
         server.deinit();
     }
+
     if (test_http_server) |*server| {
         server.deinit();
     }
@@ -492,10 +497,7 @@ test "tests:afterAll" {
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(test_app, address);
-
-    var server = try Server.init(test_app, address);
-    defer server.deinit();
+    test_cdp_server = try Server.init(test_cdp_server_gpa.allocator(), test_app, address);
     wg.finish();
 
     test_cdp_server.?.run(address, 5) catch |err| {

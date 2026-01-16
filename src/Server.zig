@@ -44,8 +44,7 @@ client: ?posix.socket_t,
 listener: ?posix.socket_t,
 json_version_response: []const u8,
 
-pub fn init(app: *App, address: net.Address) !Server {
-    const allocator = app.allocator;
+pub fn init(allocator: Allocator, app: *App, address: net.Address) !Server {
     const json_version_response = try buildJSONVersionResponse(allocator, address);
     errdefer allocator.free(json_version_response);
 

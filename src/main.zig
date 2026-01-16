@@ -108,7 +108,7 @@ fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !vo
             };
 
             // _server is global to handle graceful shutdown.
-            var server = try lp.Server.init(app, address);
+            var server = try lp.Server.init(app.allocator, app, address);
             defer server.deinit();
 
             try sighandler.on(lp.Server.stop, .{&server});
