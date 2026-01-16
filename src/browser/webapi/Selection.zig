@@ -37,7 +37,9 @@ pub const init: Selection = .{};
 
 fn isInTree(self: *const Selection) bool {
     if (self._range == null) return false;
-    return self.getAnchorNode().?.isConnected() and self.getFocusNode().?.isConnected();
+    const anchor_node = self.getAnchorNode() orelse return false;
+    const focus_node = self.getFocusNode() orelse return false;
+    return anchor_node.isConnected() and focus_node.isConnected();
 }
 
 pub fn getAnchorNode(self: *const Selection) ?*Node {
@@ -53,7 +55,9 @@ pub fn getAnchorNode(self: *const Selection) ?*Node {
 
 pub fn getAnchorOffset(self: *const Selection) u32 {
     const range = self._range orelse return 0;
-    if (!self.getAnchorNode().?.isConnected()) return 0;
+
+    const anchor_node = self.getAnchorNode() orelse return 0;
+    if (!anchor_node.isConnected()) return 0;
 
     return switch (self._direction) {
         .backward => range.asAbstractRange().getEndOffset(),
@@ -78,7 +82,8 @@ pub fn getFocusNode(self: *const Selection) ?*Node {
 
 pub fn getFocusOffset(self: *const Selection) u32 {
     const range = self._range orelse return 0;
-    if (!self.getFocusNode().?.isConnected()) return 0;
+    const focus_node = self.getFocusNode() orelse return 0;
+    if (!focus_node.isConnected()) return 0;
 
     return switch (self._direction) {
         .backward => range.asAbstractRange().getStartOffset(),
