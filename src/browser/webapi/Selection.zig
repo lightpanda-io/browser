@@ -99,13 +99,15 @@ pub fn addRange(self: *Selection, range: *Range, page: *Page) !void {
     return try self._ranges.append(page.arena, range);
 }
 
-pub fn removeRange(self: *Selection, range: *Range) void {
+pub fn removeRange(self: *Selection, range: *Range) !void {
     for (self._ranges.items, 0..) |r, i| {
         if (r == range) {
             _ = self._ranges.orderedRemove(i);
             return;
         }
     }
+
+    return error.NotFound;
 }
 
 fn removeAllRangesInner(self: *Selection, reset_direction: bool) void {
@@ -392,7 +394,7 @@ pub const JsApi = struct {
     pub const getRangeAt = bridge.function(Selection.getRangeAt, .{ .dom_exception = true });
     pub const modify = bridge.function(Selection.modify, .{});
     pub const removeAllRanges = bridge.function(Selection.removeAllRanges, .{});
-    pub const removeRange = bridge.function(Selection.removeRange, .{});
+    pub const removeRange = bridge.function(Selection.removeRange, .{ .dom_exception = true });
     pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
     pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
     pub const setPosition = bridge.function(Selection.setPosition, .{});

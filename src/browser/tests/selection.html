@@ -143,7 +143,7 @@
     testing.expectEqual(range2, sel.getRangeAt(0));
     
     // Removing non-existent range does nothing
-    sel.removeRange(range1);
+    testing.expectError('NotFoundError', () => { sel.removeRange(range1); });
     testing.expectEqual(1, sel.rangeCount);
   }
 </script>
