@@ -42,6 +42,7 @@ const storage = @import("storage/storage.zig");
 const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
+const Selection = @import("Selection.zig");
 
 const Window = @This();
 
@@ -127,6 +128,10 @@ pub fn getSessionStorage(self: *const Window) *storage.Lookup {
 
 pub fn getLocation(self: *const Window) *Location {
     return self._location;
+}
+
+pub fn getSelection(self: *const Window) *Selection {
+    return &self._document._selection;
 }
 
 pub fn setLocation(_: *const Window, url: [:0]const u8, page: *Page) !void {
@@ -679,6 +684,7 @@ pub const JsApi = struct {
     pub const atob = bridge.function(Window.atob, .{});
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
+    pub const getSelection = bridge.function(Window.getSelection, .{});
     pub const isSecureContext = bridge.accessor(Window.getIsSecureContext, null, .{});
     pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
     pub const index = bridge.indexed(Window.getFrame, .{ .null_as_undefined = true });

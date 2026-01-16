@@ -36,6 +36,7 @@ const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
+const Selection = @import("Selection.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
@@ -55,6 +56,7 @@ _style_sheets: ?*StyleSheetList = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
 _adopted_style_sheets: ?js.Object = null,
+_selection: Selection = .init,
 
 pub const Type = union(enum) {
     generic,
@@ -274,6 +276,10 @@ pub fn getDocumentElement(self: *Document) ?*Element {
         child = node.nextSibling();
     }
     return null;
+}
+
+pub fn getSelection(self: *Document) *Selection {
+    return &self._selection;
 }
 
 pub fn querySelector(self: *Document, input: []const u8, page: *Page) !?*Element {
@@ -962,6 +968,7 @@ pub const JsApi = struct {
     pub const querySelector = bridge.function(Document.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});
+    pub const getSelection = bridge.function(Document.getSelection, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
     pub const getElementsByName = bridge.function(Document.getElementsByName, .{});
     pub const adoptNode = bridge.function(Document.adoptNode, .{ .dom_exception = true });
