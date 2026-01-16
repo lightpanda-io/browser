@@ -35,7 +35,7 @@ pub fn init(handler: Handler) TestHTTPServer {
 }
 
 pub fn deinit(self: *TestHTTPServer) void {
-    @atomicStore(bool,  &self.shutdown, true, .release);
+    @atomicStore(bool, &self.shutdown, true, .release);
     if (self.listener) |*listener| {
         listener.deinit();
     }
