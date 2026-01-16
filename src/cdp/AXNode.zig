@@ -808,8 +808,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                     // write text content if exists.
                     var buf = std.Io.Writer.Allocating.init(page.call_arena);
                     try el.getInnerText(&buf.writer);
-                    const written = buf.written();
-                    try w.write(written);
+                    try writeString(buf.written(), w);
                     return .contents;
                 },
             }
