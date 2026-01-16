@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2024  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -60,8 +60,7 @@ pub const Writer = struct {
 
     fn writeNodeChildren(self: *const Writer, parent: AXNode, w: anytype) !void {
         // Add ListMarker for listitem elements
-        if (parent.dom.is(DOMNode.Element) != null) {
-            const parent_el = parent.dom.as(DOMNode.Element);
+        if (parent.dom.is(DOMNode.Element)) |parent_el| {
             if (parent_el.getTag() == .li) {
                 try self.writeListMarker(parent.dom, w);
             }
@@ -94,9 +93,7 @@ pub const Writer = struct {
     fn writeListMarker(self: *const Writer, li_node: *DOMNode, w: anytype) !void {
         // Find the parent list element
         const parent = li_node._parent orelse return;
-        if (parent.is(DOMNode.Element) == null) return;
-
-        const parent_el = parent.as(DOMNode.Element);
+        const parent_el = parent.is(DOMNode.Element) orelse return;
         const list_type = parent_el.getTag();
 
         // Only create markers for actual list elements
@@ -627,7 +624,7 @@ pub const AXRole = enum(u8) {
                         // zig fmt: off
                         .password, .@"datetime-local", .hidden, .month, .color,
                         .week, .time, .file, .date => .none,
-                        // zig fmt: ofn
+                        // zig fmt: on
                     };
                 },
                 .textarea => .textbox,
@@ -768,7 +765,6 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
 
                 // Parse space-separated list of IDs and concatenate their text content
                 var it = std.mem.splitScalar(u8, labelledby, ' ');
-                var first = true;
                 var has_content = false;
 
                 var buf = std.Io.Writer.Allocating.init(page.call_arena);
@@ -777,13 +773,9 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                     if (trimmed_id.len == 0) continue;
 
                     if (doc.getElementById(trimmed_id, page)) |referenced_el| {
-                        if (!first) {
-                            try buf.writer.writeByte(' ');
-                        }
-                        first = false;
-
                         // Get the text content of the referenced element
                         try referenced_el.getInnerText(&buf.writer);
+                        try buf.writer.writeByte(' ');
                         has_content = true;
                     }
                 }
@@ -932,14 +924,12 @@ fn isIgnore(self: AXNode, page: *Page) bool {
     const role_attr = self.role_attr;
 
     // Don't ignore non-Element node: CData, Document...
-    if (node.is(DOMNode.Element) == null) {
-        return false;
-    }
+    const elt = node.is(DOMNode.Element) orelse return false;
     // Ignore non-HTML elements: svg...
-    if (node.is(DOMNode.Element.Html) == null) {
+    if (elt._type != .html) {
         return true;
     }
-    const elt = node.as(DOMNode.Element);
+
     const tag = elt.getTag();
     switch (tag) {
         // zig fmt: off
