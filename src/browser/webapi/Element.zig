@@ -467,6 +467,11 @@ pub fn getAttribute(self: *const Element, name: []const u8, page: *Page) !?[]con
     return attributes.get(name, page);
 }
 
+/// For simplicity, the namespace is currently ignored and only the local name is used.
+pub fn getAttributeNS(self: *const Element, _: ?[]const u8, local_name: []const u8, page: *Page) !?[]const u8 {
+    return self.getAttribute(local_name, page);
+}
+
 pub fn getAttributeSafe(self: *const Element, name: []const u8) ?[]const u8 {
     const attributes = self._attributes orelse return null;
     return attributes.getSafe(name);
@@ -497,6 +502,14 @@ pub fn setAttribute(self: *Element, name: []const u8, value: []const u8, page: *
     try Attribute.validateAttributeName(name);
     const attributes = try self.getOrCreateAttributeList(page);
     _ = try attributes.put(name, value, self, page);
+}
+
+pub fn setAttributeNS(self: *Element, _: ?[]const u8, qualified_name: []const u8, value: []const u8, page: *Page) !void {
+    const local_name = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
+        qualified_name[idx + 1 ..]
+    else
+        qualified_name;
+    return self.setAttribute(local_name, value, page);
 }
 
 pub fn setAttributeSafe(self: *Element, name: []const u8, value: []const u8, page: *Page) !void {
@@ -1371,8 +1384,10 @@ pub const JsApi = struct {
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
     pub const hasAttributes = bridge.function(Element.hasAttributes, .{});
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
+    pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
     pub const setAttribute = bridge.function(Element.setAttribute, .{ .dom_exception = true });
+    pub const setAttributeNS = bridge.function(Element.setAttributeNS, .{ .dom_exception = true });
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{});
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
     pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true });
