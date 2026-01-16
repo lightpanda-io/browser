@@ -27,6 +27,9 @@ pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const build_config = @import("build_config");
+pub const crash_handler = @import("crash_handler.zig");
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
@@ -67,6 +70,23 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     const writer = opts.writer orelse return;
     try dump.root(page.window._document, opts.dump, writer, page);
     try writer.flush();
+}
+
+pub inline fn assert(ok: bool, comptime ctx: []const u8, args: anytype) void {
+    if (!ok) {
+        if (comptime IS_DEBUG) {
+            unreachable;
+        }
+        assertionFailure(ctx, args);
+    }
+}
+
+noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
+    @branchHint(.cold);
+    if (@inComptime()) {
+        @compileError(std.fmt.comptimePrint("assertion failure: " ++ ctx, args));
+    }
+    @import("crash_handler.zig").crash(ctx, args, @returnAddress());
 }
 
 test {

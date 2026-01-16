@@ -48,6 +48,7 @@ pub fn build(b: *Build) !void {
             .sanitize_c = enable_csan,
             .sanitize_thread = enable_tsan,
         });
+        mod.addImport("lightpanda", mod); // allow circular "lightpanda" import
 
         try addDependencies(b, mod, opts, prebuilt_v8_path);
 

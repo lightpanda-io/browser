@@ -10,6 +10,10 @@ const Notification = @import("../Notification.zig");
 const uuidv4 = @import("../id.zig").uuidv4;
 const IID_FILE = "iid";
 
+pub fn isDisabled() bool {
+    return std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
+}
+
 pub const Telemetry = TelemetryT(blk: {
     if (builtin.mode == .Debug or builtin.is_test) break :blk NoopProvider;
     break :blk @import("lightpanda.zig").LightPanda;
@@ -30,7 +34,7 @@ fn TelemetryT(comptime P: type) type {
         const Self = @This();
 
         pub fn init(app: *App, run_mode: App.RunMode) !Self {
-            const disabled = std.process.hasEnvVarConstant("LIGHTPANDA_DISABLE_TELEMETRY");
+            const disabled = isDisabled();
             if (builtin.mode != .Debug and builtin.is_test == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
             }
