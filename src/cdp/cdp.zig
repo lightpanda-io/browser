@@ -152,7 +152,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
             }
 
             if (is_startup) {
-                dispatchStartupCommand(&command) catch |err| {
+                dispatchStartupCommand(&command, input.method) catch |err| {
                     command.sendError(-31999, @errorName(err), .{}) catch {};
                     return err;
                 };
@@ -174,7 +174,23 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // "special" handling - the bare minimum we need to do until the driver
         // switches to a real BrowserContext.
         // (I can imagine this logic will become driver-specific)
-        fn dispatchStartupCommand(command: anytype) !void {
+        fn dispatchStartupCommand(command: anytype, method: []const u8) !void {
+            // Stagehand parses the response and error if we don't return a
+            // correct one for this call.
+            if (std.mem.eql(u8, method, "Page.getFrameTree")) {
+                return command.sendResult(.{
+                    .frameTree = .{
+                        .frame = .{
+                            .id = "TID-STARTUP-B",
+                            .loaderId = LOADER_ID,
+                            .securityOrigin = URL_BASE,
+                            .url = "about:blank",
+                            .secureContextType = "Secure",
+                        },
+                    },
+                }, .{});
+            }
+
             return command.sendResult(null, .{});
         }
 
