@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
 
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
@@ -25,6 +26,21 @@ const Media = @import("Media.zig");
 const Audio = @This();
 
 _proto: *Media,
+
+pub fn constructor(maybe_url: ?[]const u8, page: *Page) !*Media {
+    const node = try page.createElementNS(.html, "audio", null);
+    const el = node.as(Element);
+
+    const list = try el.getOrCreateAttributeList(page);
+    // Always set to "auto" initially.
+    _ = try list.putSafe("preload", "auto", el, page);
+    // Set URL if provided.
+    if (maybe_url) |url| {
+        _ = try list.putSafe("src", url, el, page);
+    }
+
+    return node.as(Media);
+}
 
 pub fn asMedia(self: *Audio) *Media {
     return self._proto;
@@ -43,7 +59,10 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "HTMLAudioElement";
+        pub const constructor_alias = "Audio";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const constructor = bridge.constructor(Audio.constructor, .{});
 };
