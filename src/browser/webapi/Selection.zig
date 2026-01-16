@@ -124,27 +124,33 @@ pub fn removeAllRanges(self: *Selection) void {
     self._direction = .none;
 }
 
-pub fn collapseToEnd(self: *Selection) !void {
+pub fn collapseToEnd(self: *Selection, page: *Page) !void {
     const range = self._range orelse return;
 
     const abstract = range.asAbstractRange();
     const last_node = abstract.getEndContainer();
     const last_offset = abstract.getEndOffset();
 
-    try range.setStart(last_node, last_offset);
-    try range.setEnd(last_node, last_offset);
+    const new_range = try Range.init(page);
+    try new_range.setStart(last_node, last_offset);
+    try new_range.setEnd(last_node, last_offset);
+
+    self._range = new_range;
     self._direction = .none;
 }
 
-pub fn collapseToStart(self: *Selection) !void {
+pub fn collapseToStart(self: *Selection, page: *Page) !void {
     const range = self._range orelse return;
 
     const abstract = range.asAbstractRange();
     const first_node = abstract.getStartContainer();
     const first_offset = abstract.getStartOffset();
 
-    try range.setStart(first_node, first_offset);
-    try range.setEnd(first_node, first_offset);
+    const new_range = try Range.init(page);
+    try new_range.setStart(first_node, first_offset);
+    try new_range.setEnd(first_node, first_offset);
+
+    self._range = new_range;
     self._direction = .none;
 }
 
