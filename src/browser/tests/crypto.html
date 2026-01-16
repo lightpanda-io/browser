@@ -54,3 +54,68 @@
   const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   testing.expectEqual(true, regex.test(uuid));
 </script> -->
+
+<script id=SubtleCrypto>
+  testing.expectEqual(true, crypto.subtle instanceof SubtleCrypto);
+</script>
+
+<script id=sign-and-verify-hmac>
+  testing.async(async () => {
+    let key = await crypto.subtle.generateKey(
+      {
+        name: "HMAC",
+        hash: { name: "SHA-512" },
+      },
+      true,
+      ["sign", "verify"],
+    );
+
+    testing.expectEqual(true, key instanceof CryptoKey);
+
+    const raw = await crypto.subtle.exportKey("raw", key);
+    testing.expectEqual(128, raw.byteLength);
+
+    const encoder = new TextEncoder();
+
+    const signature = await crypto.subtle.sign(
+      "HMAC",
+      key,
+      encoder.encode("Hello, world!")
+    );
+
+    testing.expectEqual(true, signature instanceof ArrayBuffer);
+
+    const result = await window.crypto.subtle.verify(
+      { name: "HMAC" },
+      key,
+      signature,
+      encoder.encode("Hello, world!")
+    );
+
+    testing.expectEqual(true, result);
+  });
+</script>
+
+<script id=derive-shared-key-x25519>
+  testing.async(async () => {
+    const { privateKey, publicKey } = await crypto.subtle.generateKey(
+      { name: "X25519" },
+      true,
+      ["deriveBits"],
+    );
+
+    testing.expectEqual(true, privateKey instanceof CryptoKey);
+    testing.expectEqual(true, publicKey instanceof CryptoKey);
+
+    const sharedKey = await crypto.subtle.deriveBits(
+      {
+        name: "X25519",
+        public: publicKey,
+      },
+      privateKey,
+      128,
+    );
+
+    testing.expectEqual(16, sharedKey.byteLength);
+  });
+</script>
