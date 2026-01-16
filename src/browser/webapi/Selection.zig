@@ -143,7 +143,7 @@ pub fn collapseToStart(self: *Selection, page: *Page) !void {
 
     const range = try Range.init(page);
     try range.setStart(first_node, first_offset);
-    try range.setStart(first_node, first_offset);
+    try range.setEnd(first_node, first_offset);
 
     self.removeAllRangesInner(true);
     try self._ranges.append(page.arena, range);
