@@ -36,6 +36,7 @@ pub fn processMessage(cmd: anytype) !void {
         sendMessageToTarget,
         setAutoAttach,
         setDiscoverTargets,
+        activateTarget,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -51,14 +52,16 @@ pub fn processMessage(cmd: anytype) !void {
         .sendMessageToTarget => return sendMessageToTarget(cmd),
         .setAutoAttach => return setAutoAttach(cmd),
         .setDiscoverTargets => return setDiscoverTargets(cmd),
+        .activateTarget => return cmd.sendResult(null, .{}),
     }
 }
 
 fn getTargets(cmd: anytype) !void {
-    // Some clients like Stagehand expects to have an existing context.
-    const bc = cmd.browser_context orelse cmd.createBrowserContext() catch |err| switch (err) {
-        error.AlreadyExists => unreachable,
-        else => return err,
+    // If no context available, return an empty array.
+    const bc = cmd.browser_context orelse {
+        return cmd.sendResult(.{
+            .targetInfos = [_]TargetInfo{},
+        }, .{ .include_session_id = false });
     };
 
     const target_id = bc.target_id orelse {
@@ -228,10 +231,6 @@ fn attachToTarget(cmd: anytype) !void {
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
     if (std.mem.eql(u8, target_id, params.targetId) == false) {
         return error.UnknownTargetId;
-    }
-
-    if (bc.session_id != null) {
-        return error.SessionAlreadyLoaded;
     }
 
     if (bc.session_id == null) {
