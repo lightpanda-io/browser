@@ -378,6 +378,11 @@ pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !vo
     self._direction = .none;
 }
 
+pub fn toString(self: *const Selection, page: *Page) ![]const u8 {
+    const range = self._range orelse return "";
+    return try range.toString(page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Selection);
 
@@ -412,6 +417,7 @@ pub const JsApi = struct {
     pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
     pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
     pub const setPosition = bridge.function(Selection.collapse, .{});
+    pub const toString = bridge.function(Selection.toString, .{});
 };
 
 const testing = @import("../../testing.zig");
