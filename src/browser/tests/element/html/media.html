@@ -238,6 +238,15 @@
     testing.expectEqual('[object HTMLAudioElement]', audio.toString());
     testing.expectEqual(true, audio.paused);
   }
+
+  // Create with `Audio` constructor.
+  {
+    const audio = new Audio();
+    testing.expectEqual(true, audio instanceof HTMLAudioElement);
+    testing.expectEqual("[object HTMLAudioElement]", audio.toString());
+    testing.expectEqual(true, audio.paused);
+    testing.expectEqual("auto", audio.getAttribute("preload"));
+  }
 </script>
 
 <script id="create_video_element">
