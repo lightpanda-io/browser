@@ -372,7 +372,12 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.Prope
     caller.init(v8_isolate);
     defer caller.deinit();
 
-    const local = caller.local;
+    const local = &caller.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
     const property: []const u8 = local.valueHandleToString(@ptrCast(c_name.?), .{}) catch {
         return 0;
     };

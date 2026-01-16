@@ -88,6 +88,10 @@ pub const CallOpts = struct {
 };
 
 pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.local.isolate);
+    defer hs.deinit();
+
     const info = FunctionCallbackInfo{ .handle = handle };
     self._constructor(func, info) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
@@ -127,6 +131,10 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo) !void 
 }
 
 pub fn method(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.local.isolate);
+    defer hs.deinit();
+
     const info = FunctionCallbackInfo{ .handle = handle };
     self._method(T, func, info, opts) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
@@ -146,6 +154,10 @@ fn _method(self: *Caller, comptime T: type, func: anytype, info: FunctionCallbac
 }
 
 pub fn function(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.local.isolate);
+    defer hs.deinit();
+
     const info = FunctionCallbackInfo{ .handle = handle };
     self._function(func, info, opts) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
@@ -160,6 +172,10 @@ fn _function(self: *Caller, func: anytype, info: FunctionCallbackInfo, comptime 
 }
 
 pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.local.isolate);
+    defer hs.deinit();
+
     const info = PropertyCallbackInfo{ .handle = handle };
     return self._getIndex(T, func, idx, info, opts) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
@@ -178,6 +194,10 @@ fn _getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, info: Pro
 }
 
 pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.local.isolate);
+    defer hs.deinit();
+
     const info = PropertyCallbackInfo{ .handle = handle };
     return self._getNamedIndex(T, func, name, info, opts) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
@@ -196,6 +216,10 @@ fn _getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v
 }
 
 pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.local.isolate);
+    defer hs.deinit();
+
     const info = PropertyCallbackInfo{ .handle = handle };
     return self._setNamedIndex(T, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
@@ -218,6 +242,10 @@ fn _setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v
 }
 
 pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    var hs: js.HandleScope = undefined;
+    hs.init(self.local.isolate);
+    defer hs.deinit();
+
     const info = PropertyCallbackInfo{ .handle = handle };
     return self._deleteNamedIndex(T, func, name, info, opts) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);

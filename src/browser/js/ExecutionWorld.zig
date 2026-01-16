@@ -76,49 +76,41 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     const isolate = env.isolate;
     const arena = self.context_arena.allocator();
 
-    // our window wrapped in a v8::Global
-    var global_global: v8.Global = undefined;
+    var hs: js.HandleScope = undefined;
+    hs.init(isolate);
+    defer hs.deinit();
+
+    // Getting this into the snapshot is tricky (anything involving the
+    // global is tricky). Easier to do here
+    const global_template = @import("Snapshot.zig").createGlobalTemplate(isolate.handle, env.templates);
+    v8.v8__ObjectTemplate__SetNamedHandler(global_template, &.{
+        .getter = bridge.unknownPropertyCallback,
+        .setter = null,
+        .query = null,
+        .deleter = null,
+        .enumerator = null,
+        .definer = null,
+        .descriptor = null,
+        .data = null,
+        .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
+    });
+
+    const v8_context = v8.v8__Context__New(isolate.handle, global_template, null).?;
 
     // Create the v8::Context and wrap it in a v8::Global
     var context_global: v8.Global = undefined;
-    const v8_context = blk: {
-        var temp_scope: js.HandleScope = undefined;
-        temp_scope.init(isolate);
-        defer temp_scope.deinit();
+    v8.v8__Global__New(isolate.handle, v8_context, &context_global);
 
-        // Getting this into the snapshot is tricky (anything involving the
-        // global is tricky). Easier to do here
-        const global_template = @import("Snapshot.zig").createGlobalTemplate(isolate.handle, env.templates);
-        v8.v8__ObjectTemplate__SetNamedHandler(global_template, &.{
-            .getter = bridge.unknownPropertyCallback,
-            .setter = null,
-            .query = null,
-            .deleter = null,
-            .enumerator = null,
-            .definer = null,
-            .descriptor = null,
-            .data = null,
-            .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
-        });
+    // our window wrapped in a v8::Global
+    const global_obj = v8.v8__Context__Global(v8_context).?;
+    var global_global: v8.Global = undefined;
+    v8.v8__Global__New(isolate.handle, global_obj, &global_global);
 
-        const local_context = v8.v8__Context__New(isolate.handle, global_template, null).?;
-        v8.v8__Global__New(isolate.handle, local_context, &context_global);
-
-        const global_obj = v8.v8__Context__Global(local_context).?;
-        v8.v8__Global__New(isolate.handle, global_obj, &global_global);
-
-        break :blk local_context;
-    };
-
-    var handle_scope: ?js.HandleScope = null;
     if (enter) {
-        handle_scope = @as(js.HandleScope, undefined);
-        handle_scope.?.init(isolate);
         v8.v8__Context__Enter(v8_context);
     }
     errdefer if (enter) {
         v8.v8__Context__Exit(v8_context);
-        handle_scope.?.deinit();
     };
 
     const context_id = env.context_id;
@@ -127,11 +119,10 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     self.context = Context{
         .page = page,
         .id = context_id,
+        .entered = enter,
         .isolate = isolate,
         .handle = context_global,
-        .global_global = global_global,
         .templates = env.templates,
-        .handle_scope = handle_scope,
         .script_manager = &page._script_manager,
         .call_arena = page.call_arena,
         .arena = arena,

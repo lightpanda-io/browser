@@ -45,10 +45,9 @@ isolate: js.Isolate,
 // from this, and we can free it when the context is done.
 handle: v8.Global,
 
-// The Context Global (our Window) as a v8::Global.
-global_global: v8.Global,
+// True if the context is auto-entered,
+entered: bool,
 
-handle_scope: ?js.HandleScope,
 cpu_profiler: ?*v8.CpuProfiler = null,
 
 // references Env.templates
@@ -67,7 +66,8 @@ call_arena: Allocator,
 call_depth: usize = 0,
 
 // When a Caller is active (V8->Zig callback), this points to its Local.
-// When null, Zig->V8 calls must create a temporary Local with HandleScope.
+// When null, Zig->V8 calls must create a js.Local.Scope and initialize via
+// context.localScope
 local: ?*const js.Local = null,
 
 // Serves two purposes. Like `global_objects`, this is used to free
@@ -168,20 +168,20 @@ pub fn deinit(self: *Context) void {
         v8.v8__Global__Reset(global);
     }
 
-    if (self.handle_scope) |_| {
+    if (self.entered) {
         var ls: js.Local.Scope = undefined;
         self.localScope(&ls);
         defer ls.deinit();
         v8.v8__Context__Exit(ls.local.handle);
     }
-
-    // v8.v8__Global__Reset(&self.global_global);
-    // v8.v8__Global__Reset(&self.handle);
+    v8.v8__Global__Reset(&self.handle);
 }
 
 // Any operation on the context have to be made from a local.
 pub fn localScope(self: *Context, ls: *js.Local.Scope) void {
     const isolate = self.isolate;
+    js.HandleScope.init(&ls.handle_scope, isolate);
+
     // TODO: add and init ls.hs  for the handlescope
     ls.local = .{
         .ctx = self,

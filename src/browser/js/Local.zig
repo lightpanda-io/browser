@@ -1287,7 +1287,7 @@ pub fn debugContextId(self: *const Local) i32 {
     return v8.v8__Context__DebugContextId(self.handle);
 }
 
-// Encapsulates a Local and a HandleScope (TODO). When we're going from V8->Zig
+// Encapsulates a Local and a HandleScope. When we're going from V8->Zig
 // we easily get both a Local and a HandleScope via Caller.init.
 // But when we're going from Zig -> V8, things are more complicated.
 
@@ -1314,9 +1314,10 @@ pub fn debugContextId(self: *const Local) i32 {
 //   page.js.local.?
 pub const Scope = struct {
     local: Local,
+    handle_scope: js.HandleScope,
 
-    pub fn deinit(self: *const Scope) void {
-        _ = self;
+    pub fn deinit(self: *Scope) void {
+        self.handle_scope.deinit();
     }
 
     pub fn toLocal(self: *Scope, global: anytype) ToLocalReturnType(@TypeOf(global)) {
