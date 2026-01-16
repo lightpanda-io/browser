@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const jsonStringify = std.json.Stringify;
 
 const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
@@ -988,6 +989,7 @@ fn writeString(s: []const u8, w: anytype) !void {
     w.endWriteRaw();
 }
 
+// string written is json encoded.
 fn stripWhitespaces(s: []const u8, writer: anytype) !void {
     var start: usize = 0;
     var prev_w: ?bool = null;
@@ -1008,7 +1010,7 @@ fn stripWhitespaces(s: []const u8, writer: anytype) !void {
         // Starting here, the chunk changed.
         if (is_w) {
             // We have a chunk of non-whitespaces, we write it as it.
-            try writer.writeAll(s[start..i]);
+            try jsonStringify.encodeJsonStringChars(s[start..i], .{}, writer);
         } else {
             // We have a chunk of whitespaces, replace with one space,
             // depending the position.
@@ -1023,7 +1025,7 @@ fn stripWhitespaces(s: []const u8, writer: anytype) !void {
     // Write the reminder chunk.
     if (!is_w) {
         // last chunk is non whitespaces.
-        try writer.writeAll(s[start..]);
+        try jsonStringify.encodeJsonStringChars(s[start..], .{}, writer);
     }
 }
 
@@ -1045,6 +1047,8 @@ test "AXnode: stripWhitespaces" {
         .{ .value = "  foo bar  ", .expected = "foo bar" },
         .{ .value = "foo\n\tbar", .expected = "foo bar" },
         .{ .value = "\tfoo bar   baz   \t\n yeah\r\n", .expected = "foo bar baz yeah" },
+        // string must be json encoded.
+        .{ .value = "\"foo\"", .expected = "\\\"foo\\\"" },
     };
 
     var buffer = std.io.Writer.Allocating.init(allocator);
