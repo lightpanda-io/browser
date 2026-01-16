@@ -761,7 +761,38 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
             else => null,
         },
         .element => |el| {
-            // TODO handle aria-labelledby attribute
+            // Handle aria-labelledby attribute (highest priority)
+            if (el.getAttributeSafe("aria-labelledby")) |labelledby| {
+                // Get the document to look up elements by ID
+                const doc = node.ownerDocument(page) orelse return null;
+
+                // Parse space-separated list of IDs and concatenate their text content
+                var it = std.mem.splitScalar(u8, labelledby, ' ');
+                var first = true;
+                var has_content = false;
+
+                var buf = std.Io.Writer.Allocating.init(page.call_arena);
+                while (it.next()) |id| {
+                    const trimmed_id = std.mem.trim(u8, id, &std.ascii.whitespace);
+                    if (trimmed_id.len == 0) continue;
+
+                    if (doc.getElementById(trimmed_id, page)) |referenced_el| {
+                        if (!first) {
+                            try buf.writer.writeByte(' ');
+                        }
+                        first = false;
+
+                        // Get the text content of the referenced element
+                        try referenced_el.getInnerText(&buf.writer);
+                        has_content = true;
+                    }
+                }
+
+                if (has_content) {
+                    try writeString(buf.written(), w);
+                    return .aria_labelledby;
+                }
+            }
 
             if (el.getAttributeSafe("aria-label")) |aria_label| {
                 try w.write(aria_label);
