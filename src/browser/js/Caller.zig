@@ -93,6 +93,12 @@ pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *cons
     defer hs.deinit();
 
     const info = FunctionCallbackInfo{ .handle = handle };
+
+    if (!info.isConstructCall()) {
+        self.handleError(T, @TypeOf(func), error.InvalidArgument, info, opts);
+        return;
+    }
+
     self._constructor(func, info) catch |err| {
         self.handleError(T, @TypeOf(func), err, info, opts);
     };
@@ -524,6 +530,10 @@ pub const FunctionCallbackInfo = struct {
         var rv: v8.ReturnValue = undefined;
         v8.v8__FunctionCallbackInfo__GetReturnValue(self.handle, &rv);
         return .{ .handle = rv };
+    }
+
+    fn isConstructCall(self: FunctionCallbackInfo) bool {
+        return v8.v8__FunctionCallbackInfo__IsConstructCall(self.handle);
     }
 };
 
