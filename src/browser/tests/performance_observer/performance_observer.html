@@ -36,3 +36,31 @@
   performance.mark("operationEnd", { startTime: 34.0 });
 }
 </script>
+
+<script id="microtask_access_to_list">
+{
+
+  let savedList;
+  const promise = new Promise((resolve) => {
+    const observer = new PerformanceObserver((list, observer) => {
+      savedList = list;
+      resolve();
+      observer.disconnect();
+    });
+    observer.observe({ type: "mark" });
+    performance.mark("testMark");
+  });
+
+  testing.async(async () => {
+    await promise;
+    // force a call_depth reset, which will clear the call_arena
+    document.getElementsByTagName('*');
+
+    const entries = savedList.getEntries();
+    testing.expectEqual(true, entries instanceof Array, {script_id: 'microtask_access_to_list'});
+    testing.expectEqual(1, entries.length);
+    testing.expectEqual("testMark", entries[0].name);
+    testing.expectEqual("mark", entries[0].entryType);
+  });
+}
+</script>
