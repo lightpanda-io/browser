@@ -149,10 +149,6 @@ pub fn method(self: *Caller, comptime T: type, func: anytype, handle: *const v8.
 
 fn _method(self: *Caller, comptime T: type, func: anytype, info: FunctionCallbackInfo, comptime opts: CallOpts) !void {
     const F = @TypeOf(func);
-    var handle_scope: js.HandleScope = undefined;
-    handle_scope.init(self.local.isolate);
-    defer handle_scope.deinit();
-
     var args = try self.getArgs(F, 1, info);
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     const res = @call(.auto, func, args);
