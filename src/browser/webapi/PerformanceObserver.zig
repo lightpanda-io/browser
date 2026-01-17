@@ -126,7 +126,9 @@ pub fn disconnect(self: *PerformanceObserver, page: *Page) void {
 /// Returns the current list of PerformanceEntry objects
 /// stored in the performance observer, emptying it out.
 pub fn takeRecords(self: *PerformanceObserver, page: *Page) ![]*Performance.Entry {
-    const records = try page.call_arena.dupe(*Performance.Entry, self._entries.items);
+    // Use page.arena instead of call_arena because this slice is wrapped in EntryList
+    // and may be accessed later.
+    const records = try page.arena.dupe(*Performance.Entry, self._entries.items);
     self._entries.clearRetainingCapacity();
     return records;
 }
