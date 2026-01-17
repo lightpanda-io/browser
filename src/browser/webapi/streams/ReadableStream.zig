@@ -137,12 +137,12 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
 
     self._pulling = true;
 
-    const pull_fn = &(self._pull_fn orelse return);
+    const pull_fn = self._page.js.toLocal(self._pull_fn) orelse return;
 
     // Call the pull function
     // Note: In a complete implementation, we'd handle the promise returned by pull
     // and set _pulling = false when it resolves
-    try pull_fn.local().call(void, .{self._controller});
+    try pull_fn.call(void, .{self._controller});
 
     self._pulling = false;
 
@@ -167,13 +167,15 @@ fn shouldCallPull(self: *const ReadableStream) bool {
 }
 
 pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promise {
+    const local = page.js.local.?;
+
     if (self._state != .readable) {
         if (self._cancel) |c| {
             if (c.resolver) |r| {
-                return r.local().promise();
+                return local.toLocal(r).promise();
             }
         }
-        return page.js.resolvePromise(.{});
+        return local.resolvePromise(.{});
     }
 
     if (self._cancel == null) {
@@ -181,16 +183,21 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
     }
 
     var c = &self._cancel.?;
-    if (c.resolver == null) {
-        c.resolver = try page.js.createPromiseResolver().persist();
-    }
+    var resolver = blk: {
+        if (c.resolver) |r| {
+            break :blk local.toLocal(r);
+        }
+        var temp = local.createPromiseResolver();
+        c.resolver = try temp.persist();
+        break :blk temp;
+    };
 
     // Execute the cancel callback if provided
-    if (c.callback) |*cb| {
+    if (c.callback) |cb| {
         if (reason) |r| {
-            try cb.local().call(void, .{r});
+            try local.toLocal(cb).call(void, .{r});
         } else {
-            try cb.local().call(void, .{});
+            try local.toLocal(cb).call(void, .{});
         }
     }
 
@@ -201,13 +208,12 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
         .done = true,
         .value = .empty,
     };
-    for (self._controller._pending_reads.items) |*resolver| {
-        resolver.local().resolve("stream cancelled", result);
+    for (self._controller._pending_reads.items) |r| {
+        local.toLocal(r).resolve("stream cancelled", result);
     }
     self._controller._pending_reads.clearRetainingCapacity();
-
-    c.resolver.?.local().resolve("ReadableStream.cancel", {});
-    return c.resolver.?.local().promise();
+    resolver.resolve("ReadableStream.cancel", {});
+    return resolver.promise();
 }
 
 const Cancel = struct {
@@ -250,7 +256,7 @@ pub const AsyncIterator = struct {
 
     pub fn @"return"(self: *AsyncIterator, page: *Page) !js.Promise {
         self._reader.releaseLock();
-        return page.js.resolvePromise(.{ .done = true, .value = null });
+        return page.js.local.?.resolvePromise(.{ .done = true, .value = null });
     }
 
     pub const JsApi = struct {

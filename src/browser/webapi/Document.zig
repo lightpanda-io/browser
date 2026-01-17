@@ -770,7 +770,7 @@ pub fn getAdoptedStyleSheets(self: *Document, page: *Page) !js.Object.Global {
     if (self._adopted_style_sheets) |ass| {
         return ass;
     }
-    const js_arr = page.js.newArray(0);
+    const js_arr = page.js.local.?.newArray(0);
     const js_obj = js_arr.toObject();
     self._adopted_style_sheets = try js_obj.persist();
     return self._adopted_style_sheets.?;

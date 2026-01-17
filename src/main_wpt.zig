@@ -118,20 +118,23 @@ fn run(
 
     _ = page.wait(2000);
 
-    const js_context = page.js;
+    var ls: lp.js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     var try_catch: lp.js.TryCatch = undefined;
-    try_catch.init(js_context);
+    try_catch.init(&ls.local);
     defer try_catch.deinit();
 
     // Check the final test status.
-    js_context.eval("report.status", "teststatus") catch |err| {
+    ls.local.eval("report.status", "teststatus") catch |err| {
         const caught = try_catch.caughtOrError(arena, err);
         err_out.* = caught.exception;
         return err;
     };
 
     // return the detailed result.
-    const value = js_context.exec("report.log", "report") catch |err| {
+    const value = ls.local.exec("report.log", "report") catch |err| {
         const caught = try_catch.caughtOrError(arena, err);
         err_out.* = caught.exception;
         return err;

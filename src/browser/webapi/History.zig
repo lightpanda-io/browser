@@ -34,7 +34,7 @@ pub fn getLength(_: *const History, page: *Page) u32 {
 
 pub fn getState(_: *const History, page: *Page) !?js.Value {
     if (page._session.navigation.getCurrentEntry()._state.value) |state| {
-        const value = try page.js.parseJSON(state);
+        const value = try page.js.local.?.parseJSON(state);
         return value;
     } else return null;
 }
@@ -81,11 +81,10 @@ fn goInner(delta: i32, page: *Page) !void {
         if (try page.isSameOrigin(url)) {
             const event = try PopStateEvent.initTrusted("popstate", .{ .state = entry._state.value }, page);
 
-            const func = if (page.window._on_popstate) |*g| g.local() else null;
             try page._event_manager.dispatchWithFunction(
                 page.window.asEventTarget(),
                 event.asEvent(),
-                func,
+                page.js.toLocal(page.window._on_popstate),
                 .{ .context = "Pop State" },
             );
         }

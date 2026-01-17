@@ -24,12 +24,12 @@ const Allocator = std.mem.Allocator;
 
 const TryCatch = @This();
 
-ctx: *js.Context,
 handle: v8.TryCatch,
+local: *const js.Local,
 
-pub fn init(self: *TryCatch, ctx: *js.Context) void {
-    self.ctx = ctx;
-    v8.v8__TryCatch__CONSTRUCT(&self.handle, ctx.isolate.handle);
+pub fn init(self: *TryCatch, l: *const js.Local) void {
+    self.local = l;
+    v8.v8__TryCatch__CONSTRUCT(&self.handle, l.isolate.handle);
 }
 
 pub fn hasCaught(self: TryCatch) bool {
@@ -41,26 +41,21 @@ pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
         return null;
     }
 
-    const ctx = self.ctx;
-
-    var hs: js.HandleScope = undefined;
-    hs.init(ctx.isolate);
-    defer hs.deinit();
-
+    const l = self.local;
     const line: ?u32 = blk: {
         const handle = v8.v8__TryCatch__Message(&self.handle) orelse return null;
-        const l = v8.v8__Message__GetLineNumber(handle, ctx.handle);
-        break :blk if (l < 0) null else @intCast(l);
+        const line = v8.v8__Message__GetLineNumber(handle, l.handle);
+        break :blk if (line < 0) null else @intCast(line);
     };
 
     const exception: ?[]const u8 = blk: {
         const handle = v8.v8__TryCatch__Exception(&self.handle) orelse break :blk null;
-        break :blk ctx.valueToString(.{ .ctx = ctx, .handle = handle }, .{ .allocator = allocator }) catch |err| @errorName(err);
+        break :blk l.valueHandleToString(@ptrCast(handle), .{ .allocator = allocator }) catch |err| @errorName(err);
     };
 
     const stack: ?[]const u8 = blk: {
-        const handle = v8.v8__TryCatch__StackTrace(&self.handle, ctx.handle) orelse break :blk null;
-        break :blk ctx.valueToString(.{ .ctx = ctx, .handle = handle }, .{ .allocator = allocator }) catch |err| @errorName(err);
+        const handle = v8.v8__TryCatch__StackTrace(&self.handle, l.handle) orelse break :blk null;
+        break :blk l.valueHandleToString(@ptrCast(handle), .{ .allocator = allocator }) catch |err| @errorName(err);
     };
 
     return .{

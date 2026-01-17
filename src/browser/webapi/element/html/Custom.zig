@@ -160,10 +160,12 @@ pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: []const 
 fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefinition, comptime callback_name: [:0]const u8, args: anytype, page: *Page) void {
     _ = definition;
 
-    const ctx = page.js;
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
 
     // Get the JS element object
-    const js_val = ctx.zigValueToJs(element, .{}) catch return;
+    const js_val = ls.local.zigValueToJs(element, .{}) catch return;
     const js_element = js_val.toObject();
 
     // Call the callback method if it exists
@@ -195,8 +197,26 @@ pub fn checkAndAttachBuiltIn(element: *Element, page: *Page) !void {
     page._upgrading_element = node;
     defer page._upgrading_element = prev_upgrading;
 
+    // PERFORMANCE OPTIMIZATION: This pattern is discouraged in general code.
+    // Used here because: (1) multiple early returns before needing Local,
+    // (2) called from both V8 callbacks (Local exists) and parser (no Local).
+    // Prefer either: requiring *const js.Local parameter, OR always creating
+    // Local.Scope upfront.
+    var ls: ?js.Local.Scope = null;
+    var local = blk: {
+        if (page.js.local) |l| {
+            break :blk l;
+        }
+        ls = undefined;
+        page.js.localScope(&ls.?);
+        break :blk &ls.?.local;
+    };
+    defer if (ls) |*_ls| {
+        _ls.deinit();
+    };
+
     var caught: js.TryCatch.Caught = undefined;
-    _ = definition.constructor.local().newInstance(&caught) catch |err| {
+    _ = local.toLocal(definition.constructor).newInstance(&caught) catch |err| {
         log.warn(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
         return;
     };
@@ -207,9 +227,11 @@ fn invokeCallback(self: *Custom, comptime callback_name: [:0]const u8, args: any
         return;
     }
 
-    const ctx = page.js;
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
 
-    const js_val = ctx.zigValueToJs(self, .{}) catch return;
+    const js_val = ls.local.zigValueToJs(self, .{}) catch return;
     const js_element = js_val.toObject();
 
     js_element.callMethod(void, callback_name, args) catch return;

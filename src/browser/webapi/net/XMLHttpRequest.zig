@@ -131,7 +131,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 
     self._method = try parseMethod(method_);
     self._url = try URL.resolve(self._arena, self._page.base(), url, .{ .always_dupe = true });
-    try self.stateChanged(.opened, self._page);
+    try self.stateChanged(.opened, self._page.js.local.?, self._page);
 }
 
 pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8, page: *Page) !void {
@@ -254,7 +254,7 @@ pub fn getResponse(self: *XMLHttpRequest, page: *Page) !?Response {
     const res: Response = switch (self._response_type) {
         .text => .{ .text = data },
         .json => blk: {
-            const value = try page.js.parseJSON(data);
+            const value = try page.js.local.?.parseJSON(data);
             break :blk .{ .json = try value.persist() };
         },
         .document => blk: {
@@ -322,19 +322,32 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
     }
     self._response_url = try self._arena.dupeZ(u8, std.mem.span(header.url));
 
-    try self.stateChanged(.headers_received, self._page);
-    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, self._page);
-    try self.stateChanged(.loading, self._page);
+    const page = self._page;
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    try self.stateChanged(.headers_received, local, page);
+    try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, local, page);
+    try self.stateChanged(.loading, local, page);
 }
 
 fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     try self._response_data.appendSlice(self._arena, data);
 
+    const page = self._page;
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     try self._proto.dispatch(.progress, .{
         .total = self._response_len orelse 0,
         .loaded = self._response_data.items.len,
-    }, self._page);
+    }, &ls.local, page);
 }
 
 fn httpDoneCallback(ctx: *anyopaque) !void {
@@ -350,17 +363,25 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     // Not that the request is done, the http/client will free the transfer
     // object. It isn't safe to keep it around.
     self._transfer = null;
-    try self.stateChanged(.done, self._page);
+
+    const page = self._page;
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+    const local = &ls.local;
+
+    try self.stateChanged(.done, local, page);
 
     const loaded = self._response_data.items.len;
     try self._proto.dispatch(.load, .{
         .total = loaded,
         .loaded = loaded,
-    }, self._page);
+    }, local, page);
     try self._proto.dispatch(.load_end, .{
         .total = loaded,
         .loaded = loaded,
-    }, self._page);
+    }, local, page);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -392,12 +413,18 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
     const new_state: ReadyState = if (is_abort) .unsent else .done;
     if (new_state != self._ready_state) {
         const page = self._page;
-        try self.stateChanged(new_state, page);
+
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+        const local = &ls.local;
+
+        try self.stateChanged(new_state, local, page);
         if (is_abort) {
-            try self._proto.dispatch(.abort, null, page);
+            try self._proto.dispatch(.abort, null, local, page);
         }
-        try self._proto.dispatch(.err, null, page);
-        try self._proto.dispatch(.load_end, null, page);
+        try self._proto.dispatch(.err, null, local, page);
+        try self._proto.dispatch(.load_end, null, local, page);
     }
 
     const level: log.Level = if (err == error.Abort) .debug else .err;
@@ -408,7 +435,7 @@ fn _handleError(self: *XMLHttpRequest, err: anyerror) !void {
     });
 }
 
-fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
+fn stateChanged(self: *XMLHttpRequest, state: ReadyState, local: *const js.Local, page: *Page) !void {
     if (state == self._ready_state) {
         return;
     }
@@ -416,11 +443,10 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
     self._ready_state = state;
 
     const event = try Event.initTrusted("readystatechange", .{}, page);
-    const func = if (self._on_ready_state_change) |*g| g.local() else null;
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        func,
+        local.toLocal(self._on_ready_state_change),
         .{ .context = "XHR state change" },
     );
 }

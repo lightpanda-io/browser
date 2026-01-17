@@ -44,12 +44,14 @@ pub const InitOpts = Request.InitOpts;
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
 
+    const resolver = page.js.local.?.createPromiseResolver();
+
     const fetch = try page.arena.create(Fetch);
     fetch.* = .{
         ._page = page,
         ._buf = .empty,
         ._url = try page.arena.dupe(u8, request._url),
-        ._resolver = try page.js.createPromiseResolver().persist(),
+        ._resolver = try resolver.persist(),
         ._response = try Response.init(null, .{ .status = 0 }, page),
     };
 
@@ -77,7 +79,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
     });
-    return fetch._resolver.local().promise();
+    return resolver.promise();
 }
 
 pub fn deinit(self: *Fetch) void {
@@ -149,13 +151,22 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .len = self._buf.items.len,
     });
 
-    return self._resolver.local().resolve("fetch done", self._response);
+    var ls: js.Local.Scope = undefined;
+    self._page.js.localScope(&ls);
+    defer ls.deinit();
+
+    return ls.toLocal(self._resolver).resolve("fetch done", self._response);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     self._response._type = .@"error"; // Set type to error for network failures
-    self._resolver.local().reject("fetch error", @errorName(err));
+
+    var ls: js.Local.Scope = undefined;
+    self._page.js.localScope(&ls);
+    defer ls.deinit();
+
+    ls.toLocal(self._resolver).reject("fetch error", @errorName(err));
 }
 
 const testing = @import("../../../testing.zig");

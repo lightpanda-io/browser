@@ -43,11 +43,10 @@ pub fn dispatch(self: *NavigationEventTarget, event_type: DispatchType, page: *P
         };
     };
 
-    const func = if (@field(self, field)) |*g| g.local() else null;
     return page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        func,
+        page.js.toLocal(@field(self, field)),
         .{ .context = "Navigation" },
     );
 }

@@ -106,7 +106,7 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
 
     if (self._when_defined.fetchRemove(name)) |entry| {
-        entry.value.local().resolve("whenDefined", constructor);
+        page.js.toLocal(entry.value).resolve("whenDefined", constructor);
     }
 }
 
@@ -120,22 +120,23 @@ pub fn upgrade(self: *CustomElementRegistry, root: *Node, page: *Page) !void {
 }
 
 pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) !js.Promise {
+    const local = page.js.local.?;
     if (self._definitions.get(name)) |definition| {
-        return page.js.resolvePromise(definition.constructor);
+        return local.resolvePromise(definition.constructor);
     }
 
     const gop = try self._when_defined.getOrPut(page.arena, name);
     if (gop.found_existing) {
-        return gop.value_ptr.local().promise();
+        return local.toLocal(gop.value_ptr.*).promise();
     }
     errdefer _ = self._when_defined.remove(name);
     const owned_name = try page.dupeString(name);
 
-    const resolver = try page.js.createPromiseResolver().persist();
+    const resolver = local.createPromiseResolver();
     gop.key_ptr.* = owned_name;
-    gop.value_ptr.* = resolver;
+    gop.value_ptr.* = try resolver.persist();
 
-    return resolver.local().promise();
+    return resolver.promise();
 }
 
 fn upgradeNode(self: *CustomElementRegistry, node: *Node, page: *Page) !void {
@@ -174,8 +175,12 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     page._upgrading_element = node;
     defer page._upgrading_element = prev_upgrading;
 
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     var caught: js.TryCatch.Caught = undefined;
-    _ = definition.constructor.local().newInstance(&caught) catch |err| {
+    _ = ls.toLocal(definition.constructor).newInstance(&caught) catch |err| {
         log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err, .caught = caught });
         return error.CustomElementUpgradeFailed;
     };

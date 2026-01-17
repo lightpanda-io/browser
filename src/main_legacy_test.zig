@@ -85,15 +85,18 @@ pub fn run(allocator: Allocator, file: []const u8, session: *lp.Session) !void {
     const page = try session.createPage();
     defer session.removePage();
 
-    const js_context = page.js;
+    var ls: lp.js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     var try_catch: lp.js.TryCatch = undefined;
-    try_catch.init(js_context);
+    try_catch.init(&ls.local);
     defer try_catch.deinit();
 
     try page.navigate(url, .{});
     _ = session.wait(2000);
 
-    js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
+    ls.local.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
         const caught = try_catch.caughtOrError(allocator, err);
         std.debug.print("{s}: test failure\nError: {f}\n", .{ file, caught });
         return err;

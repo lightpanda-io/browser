@@ -30,7 +30,7 @@
 
   testing.eventually(() => {
     testing.expectEqual(true, popstateEventFired);
-    testing.expectEqual(state, popstateEventState);
+    testing.expectEqual({testInProgress: true }, popstateEventState);
   })
 
   history.back();

@@ -248,8 +248,12 @@ pub fn deliverRecords(self: *MutationObserver, page: *Page) !void {
     // Take a copy of the records and clear the list before calling callback
     // This ensures mutations triggered during the callback go into a fresh list
     const records = try self.takeRecords(page);
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     var caught: js.TryCatch.Caught = undefined;
-    self._callback.local().tryCall(void, .{ records, self }, &caught) catch |err| {
+    ls.toLocal(self._callback).tryCall(void, .{ records, self }, &caught) catch |err| {
         log.err(.page, "MutObserver.deliverRecords", .{ .err = err, .caught = caught });
         return err;
     };

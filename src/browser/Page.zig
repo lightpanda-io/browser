@@ -561,21 +561,24 @@ fn _documentIsComplete(self: *Page) !void {
     const event = try Event.initTrusted("load", .{}, self);
     // this event is weird, it's dispatched directly on the window, but
     // with the document as the target
+
+    var ls: JS.Local.Scope = undefined;
+    self.js.localScope(&ls);
+    defer ls.deinit();
+
     event._target = self.document.asEventTarget();
-    const on_load = if (self.window._on_load) |*g| g.local() else null;
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
         event,
-        on_load,
+        ls.toLocal(self.window._on_load),
         .{ .inject_target = false, .context = "page load" },
     );
 
     const pageshow_event = try PageTransitionEvent.initTrusted("pageshow", .{}, self);
-    const on_pageshow = if (self.window._on_pageshow) |*g| g.local() else null;
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
         pageshow_event.asEvent(),
-        on_pageshow,
+        ls.toLocal(self.window._on_pageshow),
         .{ .context = "page show" },
     );
 }
@@ -747,10 +750,6 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
     var timer = try std.time.Timer.start();
     var ms_remaining = wait_ms;
 
-    var try_catch: JS.TryCatch = undefined;
-    try_catch.init(self.js);
-    defer try_catch.deinit();
-
     var scheduler = &self.scheduler;
     var http_client = self._session.browser.http_client;
 
@@ -804,10 +803,6 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                 // store http_client.active BEFORE this call and then use
                 // it AFTER.
                 const ms_to_next_task = try scheduler.run();
-
-                if (try_catch.caught(self.call_arena)) |caught| {
-                    log.info(.js, "page wait", .{ .caught = caught, .src = "scheduler" });
-                }
 
                 const http_active = http_client.active;
                 const total_network_activity = http_active + http_client.intercepted;
@@ -1992,8 +1987,12 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                 self._upgrading_element = node;
                 defer self._upgrading_element = prev_upgrading;
 
+                var ls: JS.Local.Scope = undefined;
+                self.js.localScope(&ls);
+                defer ls.deinit();
+
                 var caught: JS.TryCatch.Caught = undefined;
-                _ = def.constructor.local().newInstance(&caught) catch |err| {
+                _ = ls.toLocal(def.constructor).newInstance(&caught) catch |err| {
                     log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught });
                     return node;
                 };

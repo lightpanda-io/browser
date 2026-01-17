@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 const Function = @This();
 
-ctx: *js.Context,
+local: *const js.Local,
 this: ?*const v8.Object = null,
 handle: *const v8.Function,
 
@@ -34,34 +34,35 @@ pub const Result = struct {
 };
 
 pub fn withThis(self: *const Function, value: anytype) !Function {
+    const local = self.local;
     const this_obj = if (@TypeOf(value) == js.Object)
         value.handle
     else
-        (try self.ctx.zigValueToJs(value, .{})).handle;
+        (try local.zigValueToJs(value, .{})).handle;
 
     return .{
-        .ctx = self.ctx,
+        .local = local,
         .this = this_obj,
         .handle = self.handle,
     };
 }
 
 pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Object {
-    const ctx = self.ctx;
+    const local = self.local;
 
     var try_catch: js.TryCatch = undefined;
-    try_catch.init(ctx);
+    try_catch.init(local);
     defer try_catch.deinit();
 
     // This creates a new instance using this Function as a constructor.
     // const c_args = @as(?[*]const ?*c.Value, @ptrCast(&.{}));
-    const handle = v8.v8__Function__NewInstance(self.handle, ctx.handle, 0, null) orelse {
-        caught.* = try_catch.caughtOrError(ctx.call_arena, error.Unknown);
+    const handle = v8.v8__Function__NewInstance(self.handle, local.handle, 0, null) orelse {
+        caught.* = try_catch.caughtOrError(local.call_arena, error.Unknown);
         return error.JsConstructorFailed;
     };
 
     return .{
-        .ctx = ctx,
+        .local = local,
         .handle = handle,
     };
 }
@@ -77,17 +78,17 @@ pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *
 pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
     var try_catch: js.TryCatch = undefined;
 
-    try_catch.init(self.ctx);
+    try_catch.init(self.local);
     defer try_catch.deinit();
 
     return self.callWithThis(T, this, args) catch |err| {
-        caught.* = try_catch.caughtOrError(self.ctx.call_arena, err);
+        caught.* = try_catch.caughtOrError(self.local.ctx.call_arena, err);
         return err;
     };
 }
 
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
-    const ctx = self.ctx;
+    const local = self.local;
 
     // When we're calling a function from within JavaScript itself, this isn't
     // necessary. We're within a Caller instantiation, which will already have
@@ -98,6 +99,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     // need to increase the call_depth so that the call_arena remains valid for
     // the duration of the function call. If we don't do this, the call_arena
     // will be reset after each statement of the function which executes Zig code.
+    const ctx = local.ctx;
     const call_depth = ctx.call_depth;
     ctx.call_depth = call_depth + 1;
     defer ctx.call_depth = call_depth;
@@ -106,7 +108,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
         if (@TypeOf(this) == js.Object) {
             break :blk this;
         }
-        break :blk try ctx.zigValueToJs(this, .{});
+        break :blk try local.zigValueToJs(this, .{});
     };
 
     const aargs = if (comptime @typeInfo(@TypeOf(args)) == .null) struct {}{} else args;
@@ -116,15 +118,15 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
             const fields = s.fields;
             var js_args: [fields.len]*const v8.Value = undefined;
             inline for (fields, 0..) |f, i| {
-                js_args[i] = (try ctx.zigValueToJs(@field(aargs, f.name), .{})).handle;
+                js_args[i] = (try local.zigValueToJs(@field(aargs, f.name), .{})).handle;
             }
             const cargs: [fields.len]*const v8.Value = js_args;
             break :blk &cargs;
         },
         .pointer => blk: {
-            var values = try ctx.call_arena.alloc(*const v8.Value, args.len);
+            var values = try local.call_arena.alloc(*const v8.Value, args.len);
             for (args, 0..) |a, i| {
-                values[i] = (try ctx.zigValueToJs(a, .{})).handle;
+                values[i] = (try local.zigValueToJs(a, .{})).handle;
             }
             break :blk values;
         },
@@ -132,7 +134,7 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     };
 
     const c_args = @as(?[*]const ?*v8.Value, @ptrCast(js_args.ptr));
-    const handle = v8.v8__Function__Call(self.handle, ctx.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
+    const handle = v8.v8__Function__Call(self.handle, local.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
         // std.debug.print("CB ERR: {s}\n", .{self.src() catch "???"});
         return error.JSExecCallback;
     };
@@ -140,13 +142,13 @@ pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args
     if (@typeInfo(T) == .void) {
         return {};
     }
-    return ctx.jsValueToZig(T, .{ .ctx = ctx, .handle = handle });
+    return local.jsValueToZig(T, .{ .local = local, .handle = handle });
 }
 
 fn getThis(self: *const Function) js.Object {
-    const handle = if (self.this) |t| t else v8.v8__Context__Global(self.ctx.handle).?;
+    const handle = if (self.this) |t| t else v8.v8__Context__Global(self.local.handle).?;
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = handle,
     };
 }
@@ -156,30 +158,24 @@ pub fn src(self: *const Function) ![]const u8 {
 }
 
 pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
-    const ctx = self.ctx;
-    const key = ctx.isolate.initStringHandle(name);
-    const handle = v8.v8__Object__Get(self.handle, ctx.handle, key) orelse {
+    const local = self.local;
+    const key = local.isolate.initStringHandle(name);
+    const handle = v8.v8__Object__Get(self.handle, self.local.handle, key) orelse {
         return error.JsException;
     };
 
     return .{
-        .ctx = ctx,
+        .local = local,
         .handle = handle,
     };
 }
 
 pub fn persist(self: *const Function) !Global {
-    var ctx = self.ctx;
-
+    var ctx = self.local.ctx;
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-
     try ctx.global_functions.append(ctx.arena, global);
-
-    return .{
-        .handle = global,
-        .ctx = ctx,
-    };
+    return .{ .handle = global };
 }
 
 pub fn persistWithThis(self: *const Function, value: anytype) !Global {
@@ -189,16 +185,15 @@ pub fn persistWithThis(self: *const Function, value: anytype) !Global {
 
 pub const Global = struct {
     handle: v8.Global,
-    ctx: *js.Context,
 
     pub fn deinit(self: *Global) void {
         v8.v8__Global__Reset(&self.handle);
     }
 
-    pub fn local(self: *const Global) Function {
+    pub fn local(self: *const Global, l: *const js.Local) Function {
         return .{
-            .ctx = self.ctx,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
         };
     }
 

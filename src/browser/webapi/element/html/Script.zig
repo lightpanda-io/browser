@@ -128,16 +128,16 @@ pub const Build = struct {
         self._src = element.getAttributeSafe("src") orelse "";
 
         if (element.getAttributeSafe("onload")) |on_load| {
-            if (page.js.stringToFunction(on_load)) |func| {
-                self._on_load = try func.persist();
+            if (page.js.stringToPersistedFunction(on_load)) |func| {
+                self._on_load = func;
             } else |err| {
                 log.err(.js, "script.onload", .{ .err = err, .str = on_load });
             }
         }
 
         if (element.getAttributeSafe("onerror")) |on_error| {
-            if (page.js.stringToFunction(on_error)) |func| {
-                self._on_error = try func.persist();
+            if (page.js.stringToPersistedFunction(on_error)) |func| {
+                self._on_error = func;
             } else |err| {
                 log.err(.js, "script.onerror", .{ .err = err, .str = on_error });
             }

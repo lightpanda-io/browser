@@ -187,19 +187,27 @@ pub fn dumpMemoryStats(self: *Env) void {
 
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
     const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
-    const isolate_handle = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
-    const js_isolate = js.Isolate{ .handle = isolate_handle };
-    const context = Context.fromIsolate(js_isolate);
+    const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
+    const js_isolate = js.Isolate{ .handle = v8_isolate };
+    const ctx = Context.fromIsolate(js_isolate);
+
+    const local = js.Local{
+        .ctx = ctx,
+        .isolate = js_isolate,
+        .handle = v8.v8__Isolate__GetCurrentContext(v8_isolate).?,
+        .call_arena = ctx.call_arena,
+    };
 
     const value =
         if (v8.v8__PromiseRejectMessage__GetValue(&message_handle)) |v8_value|
-            context.valueToString(.{ .ctx = context, .handle = v8_value }, .{}) catch |err| @errorName(err)
+            // @HandleScope - no reason to create a js.Context here
+            local.valueHandleToString(v8_value, .{}) catch |err| @errorName(err)
         else
             "no value";
 
     log.debug(.js, "unhandled rejection", .{
         .value = value,
-        .stack = context.stackTrace() catch |err| @errorName(err) orelse "???",
+        .stack = local.stackTrace() catch |err| @errorName(err) orelse "???",
         .note = "This should be updated to call window.unhandledrejection",
     });
 }

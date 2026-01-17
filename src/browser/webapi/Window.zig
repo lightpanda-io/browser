@@ -269,10 +269,10 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
     sc.removed = true;
 }
 
-pub fn reportError(self: *Window, err: js.Value.Global, page: *Page) !void {
+pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     const error_event = try ErrorEvent.initTrusted("error", .{
-        .@"error" = err,
-        .message = err.local().toString(.{}) catch "Unknown error",
+        .@"error" = try err.persist(),
+        .message = err.toString(.{}) catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
     }, page);
@@ -552,20 +552,24 @@ const ScheduleCallback = struct {
             return null;
         }
 
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
         switch (self.mode) {
             .idle => {
                 const IdleDeadline = @import("IdleDeadline.zig");
-                self.cb.local().call(void, .{IdleDeadline{}}) catch |err| {
+                ls.toLocal(self.cb).call(void, .{IdleDeadline{}}) catch |err| {
                     log.warn(.js, "window.idleCallback", .{ .name = self.name, .err = err });
                 };
             },
             .animation_frame => {
-                self.cb.local().call(void, .{page.window._performance.now()}) catch |err| {
+                ls.toLocal(self.cb).call(void, .{page.window._performance.now()}) catch |err| {
                     log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
                 };
             },
             .normal => {
-                self.cb.local().call(void, self.params) catch |err| {
+                ls.toLocal(self.cb).call(void, self.params) catch |err| {
                     log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
                 };
             },

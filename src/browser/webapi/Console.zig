@@ -31,7 +31,7 @@ pub const init: Console = .{};
 
 pub fn trace(_: *const Console, values: []js.Value, page: *Page) !void {
     logger.debug(.js, "console.trace", .{
-        .stack = page.js.stackTrace() catch "???",
+        .stack = page.js.local.?.stackTrace() catch "???",
         .args = ValueWriter{ .page = page, .values = values },
     });
 }
@@ -138,7 +138,7 @@ const ValueWriter = struct {
             try writer.print("\n  arg({d}): {f}", .{ i, value });
         }
         if (self.include_stack) {
-            try writer.print("\n stack: {s}", .{self.page.js.stackTrace() catch |err| @errorName(err) orelse "???"});
+            try writer.print("\n stack: {s}", .{self.page.js.local.?.stackTrace() catch |err| @errorName(err) orelse "???"});
         }
     }
 

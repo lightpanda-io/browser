@@ -151,8 +151,13 @@ pub inline fn hasRecords(self: *const PerformanceObserver) bool {
 /// Runs the PerformanceObserver's callback with records; emptying it out.
 pub fn dispatch(self: *PerformanceObserver, page: *Page) !void {
     const records = try self.takeRecords(page);
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     var caught: js.TryCatch.Caught = undefined;
-    self._callback.local().tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
+    ls.toLocal(self._callback).tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
         log.err(.page, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
         return err;
     };

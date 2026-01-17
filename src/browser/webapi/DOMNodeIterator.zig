@@ -63,14 +63,14 @@ pub fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
     return self._filter._original_filter;
 }
 
-pub fn nextNode(self: *DOMNodeIterator) !?*Node {
+pub fn nextNode(self: *DOMNodeIterator, page: *Page) !?*Node {
     var node = self._reference_node;
     var before_node = self._pointer_before_reference_node;
 
     while (true) {
         if (before_node) {
             before_node = false;
-            const result = try self.filterNode(node);
+            const result = try self.filterNode(node, page);
             if (result == NodeFilter.FILTER_ACCEPT) {
                 self._reference_node = node;
                 self._pointer_before_reference_node = false;
@@ -84,7 +84,7 @@ pub fn nextNode(self: *DOMNodeIterator) !?*Node {
             }
             node = next.?;
 
-            const result = try self.filterNode(node);
+            const result = try self.filterNode(node, page);
             if (result == NodeFilter.FILTER_ACCEPT) {
                 self._reference_node = node;
                 self._pointer_before_reference_node = false;
@@ -94,13 +94,13 @@ pub fn nextNode(self: *DOMNodeIterator) !?*Node {
     }
 }
 
-pub fn previousNode(self: *DOMNodeIterator) !?*Node {
+pub fn previousNode(self: *DOMNodeIterator, page: *Page) !?*Node {
     var node = self._reference_node;
     var before_node = self._pointer_before_reference_node;
 
     while (true) {
         if (!before_node) {
-            const result = try self.filterNode(node);
+            const result = try self.filterNode(node, page);
             if (result == NodeFilter.FILTER_ACCEPT) {
                 self._reference_node = node;
                 self._pointer_before_reference_node = true;
@@ -119,7 +119,7 @@ pub fn previousNode(self: *DOMNodeIterator) !?*Node {
     }
 }
 
-fn filterNode(self: *const DOMNodeIterator, node: *Node) !i32 {
+fn filterNode(self: *const DOMNodeIterator, node: *Node, page: *Page) !i32 {
     // First check whatToShow
     if (!NodeFilter.shouldShow(node, self._what_to_show)) {
         return NodeFilter.FILTER_SKIP;
@@ -128,7 +128,7 @@ fn filterNode(self: *const DOMNodeIterator, node: *Node) !i32 {
     // Then check the filter callback
     // For NodeIterator, REJECT and SKIP are equivalent - both skip the node
     // but continue with its descendants
-    const result = try self._filter.acceptNode(node);
+    const result = try self._filter.acceptNode(node, page.js.local.?);
     return result;
 }
 

@@ -61,7 +61,7 @@ pub fn asEvent(self: *PopStateEvent) *Event {
 
 pub fn getState(self: *PopStateEvent, page: *Page) !?js.Value {
     const s = self._state orelse return null;
-    return try page.js.parseJSON(s);
+    return try page.js.local.?.parseJSON(s);
 }
 
 pub fn hasUAVisualTransition(_: *PopStateEvent) bool {
