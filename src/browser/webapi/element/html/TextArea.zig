@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -27,7 +27,6 @@ const Form = @import("Form.zig");
 const TextArea = @This();
 
 _proto: *HtmlElement,
-_default_value: ?[]const u8 = null,
 _value: ?[]const u8 = null,
 
 pub fn asElement(self: *TextArea) *Element {
@@ -39,9 +38,12 @@ pub fn asConstElement(self: *const TextArea) *const Element {
 pub fn asNode(self: *TextArea) *Node {
     return self.asElement().asNode();
 }
+pub fn asConstNode(self: *const TextArea) *const Node {
+    return self.asConstElement().asConstNode();
+}
 
 pub fn getValue(self: *const TextArea) []const u8 {
-    return self._value orelse self._default_value orelse "";
+    return self._value orelse self.getDefaultValue();
 }
 
 pub fn setValue(self: *TextArea, value: []const u8, page: *Page) !void {
@@ -50,7 +52,29 @@ pub fn setValue(self: *TextArea, value: []const u8, page: *Page) !void {
 }
 
 pub fn getDefaultValue(self: *const TextArea) []const u8 {
-    return self._default_value orelse "";
+    const node = self.asConstNode();
+    if (node.firstChild()) |child| {
+        if (child.is(Node.CData.Text)) |txt| {
+            return txt.getWholeText();
+        }
+    }
+    return "";
+}
+
+pub fn setDefaultValue(self: *TextArea, value: []const u8, page: *Page) !void {
+    const owned = try page.dupeString(value);
+
+    const node = self.asNode();
+    if (node.firstChild()) |child| {
+        if (child.is(Node.CData.Text)) |txt| {
+            txt._proto._data = owned;
+            return;
+        }
+    }
+
+    // No text child exists, create one
+    const text_node = try page.createTextNode(owned);
+    _ = try node.appendChild(text_node, page);
 }
 
 pub fn getDisabled(self: *const TextArea) bool {
@@ -119,7 +143,7 @@ pub const JsApi = struct {
     };
 
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
-    pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, null, .{});
+    pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{});
     pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{});
     pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{});
     pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{});
@@ -127,20 +151,10 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    const CData = @import("../../CData.zig");
-
-    pub fn complete(node: *Node, _: *const Page) !void {
-        var self = node.as(TextArea);
-
-        // Get default value from text content
-        if (node.firstChild()) |child| {
-            if (child.is(CData.Text)) |txt| {
-                self._default_value = txt.getWholeText();
-            }
-        }
-
-        // Current state starts equal to default
-        self._value = self._default_value;
+    pub fn cloned(source_element: *Element, cloned_element: *Element, _: *Page) !void {
+        const source = source_element.as(TextArea);
+        const clone = cloned_element.as(TextArea);
+        clone._value = source._value;
     }
 };
 
