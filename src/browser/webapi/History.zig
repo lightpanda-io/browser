@@ -81,10 +81,11 @@ fn goInner(delta: i32, page: *Page) !void {
         if (try page.isSameOrigin(url)) {
             const event = try PopStateEvent.initTrusted("popstate", .{ .state = entry._state.value }, page);
 
+            const func = if (page.window._on_popstate) |*g| g.local() else null;
             try page._event_manager.dispatchWithFunction(
                 page.window.asEventTarget(),
                 event.asEvent(),
-                page.window._on_popstate,
+                func,
                 .{ .context = "Pop State" },
             );
         }

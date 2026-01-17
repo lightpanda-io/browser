@@ -29,7 +29,7 @@ const AbortSignal = @This();
 _proto: *EventTarget,
 _aborted: bool = false,
 _reason: Reason = .undefined,
-_on_abort: ?js.Function = null,
+_on_abort: ?js.Function.Global = null,
 
 pub fn init(page: *Page) !*AbortSignal {
     return page._factory.eventTarget(AbortSignal{
@@ -45,16 +45,12 @@ pub fn getReason(self: *const AbortSignal) Reason {
     return self._reason;
 }
 
-pub fn getOnAbort(self: *const AbortSignal) ?js.Function {
+pub fn getOnAbort(self: *const AbortSignal) ?js.Function.Global {
     return self._on_abort;
 }
 
-pub fn setOnAbort(self: *AbortSignal, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_abort = try cb.persistWithThis(self);
-    } else {
-        self._on_abort = null;
-    }
+pub fn setOnAbort(self: *AbortSignal, cb: ?js.Function.Global) !void {
+    self._on_abort = cb;
 }
 
 pub fn asEventTarget(self: *AbortSignal) *EventTarget {
@@ -71,7 +67,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     // Store the abort reason (default to a simple string if none provided)
     if (reason_) |reason| {
         switch (reason) {
-            .js_obj => |js_obj| self._reason = .{ .js_obj = try js_obj.persist() },
+            .js_val => |js_val| self._reason = .{ .js_val = js_val },
             .string => |str| self._reason = .{ .string = try page.dupeString(str) },
             .undefined => self._reason = reason,
         }
@@ -81,18 +77,19 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
 
     // Dispatch abort event
     const event = try Event.initTrusted("abort", .{}, page);
+    const func = if (self._on_abort) |*g| g.local() else null;
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        self._on_abort,
+        func,
         .{ .context = "abort signal" },
     );
 }
 
 // Static method to create an already-aborted signal
-pub fn createAborted(reason_: ?js.Object, page: *Page) !*AbortSignal {
+pub fn createAborted(reason_: ?js.Value.Global, page: *Page) !*AbortSignal {
     const signal = try init(page);
-    try signal.abort(if (reason_) |r| .{ .js_obj = r } else null, page);
+    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, page);
     return signal;
 }
 
@@ -118,7 +115,7 @@ pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
     if (self._aborted) {
         const exception = switch (self._reason) {
             .string => |str| page.js.throw(str),
-            .js_obj => |js_obj| page.js.throw(try js_obj.toString()),
+            .js_val => |js_val| page.js.throw(try js_val.local().toString(.{ .allocator = page.call_arena })),
             .undefined => page.js.throw("AbortError"),
         };
         return .{ .exception = exception };
@@ -127,7 +124,7 @@ pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
 }
 
 const Reason = union(enum) {
-    js_obj: js.Object,
+    js_val: js.Value.Global,
     string: []const u8,
     undefined: void,
 };

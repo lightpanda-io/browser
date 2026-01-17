@@ -844,8 +844,9 @@ pub const Script = struct {
         self.executeCallback("error", script_element._on_error, page);
     }
 
-    fn executeCallback(self: *const Script, comptime typ: []const u8, cb_: ?js.Function, page: *Page) void {
-        const cb = cb_ orelse return;
+    fn executeCallback(self: *const Script, comptime typ: []const u8, cb_: ?js.Function.Global, page: *Page) void {
+        const cb_global = cb_ orelse return;
+        const cb = cb_global.local();
 
         const Event = @import("webapi/Event.zig");
         const event = Event.initTrusted(typ, .{}, page) catch |err| {

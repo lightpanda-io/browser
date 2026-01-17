@@ -50,9 +50,10 @@ pub const Build = struct {
     pub fn complete(node: *Node, page: *Page) !void {
         const el = node.as(Element);
         const on_load = el.getAttributeSafe("onload") orelse return;
-        page.window._on_load = page.js.stringToFunction(on_load) catch |err| blk: {
+        if (page.js.stringToFunction(on_load)) |func| {
+            page.window._on_load = try func.persist();
+        } else |err| {
             log.err(.js, "body.onload", .{ .err = err, .str = on_load });
-            break :blk null;
-        };
+        }
     }
 };

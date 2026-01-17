@@ -30,7 +30,7 @@ _message: []const u8 = "",
 _filename: []const u8 = "",
 _line_number: u32 = 0,
 _column_number: u32 = 0,
-_error: ?js.Value = null,
+_error: ?js.Value.Global = null,
 _arena: Allocator,
 
 pub const ErrorEventOptions = struct {
@@ -38,7 +38,7 @@ pub const ErrorEventOptions = struct {
     filename: ?[]const u8 = null,
     lineno: u32 = 0,
     colno: u32 = 0,
-    @"error": ?js.Value = null,
+    @"error": ?js.Value.Global = null,
 };
 
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
@@ -64,7 +64,7 @@ fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page)
             ._filename = if (opts.filename) |str| try arena.dupe(u8, str) else "",
             ._line_number = opts.lineno,
             ._column_number = opts.colno,
-            ._error = if (opts.@"error") |err| try err.persist() else null,
+            ._error = opts.@"error",
         },
     );
 
@@ -92,7 +92,7 @@ pub fn getColumnNumber(self: *const ErrorEvent) u32 {
     return self._column_number;
 }
 
-pub fn getError(self: *const ErrorEvent) ?js.Value {
+pub fn getError(self: *const ErrorEvent) ?js.Value.Global {
     return self._error;
 }
 

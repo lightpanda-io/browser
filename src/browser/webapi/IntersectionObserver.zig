@@ -32,7 +32,7 @@ pub fn registerTypes() []const type {
 
 const IntersectionObserver = @This();
 
-_callback: js.Function,
+_callback: js.Function.Global,
 _observing: std.ArrayList(*Element) = .{},
 _root: ?*Element = null,
 _root_margin: []const u8 = "0px",
@@ -59,7 +59,7 @@ pub const ObserverInit = struct {
     };
 };
 
-pub fn init(callback: js.Function, options: ?ObserverInit, page: *Page) !*IntersectionObserver {
+pub fn init(callback: js.Function.Global, options: ?ObserverInit, page: *Page) !*IntersectionObserver {
     const opts = options orelse ObserverInit{};
     const root_margin = if (opts.rootMargin) |rm| try page.arena.dupe(u8, rm) else "0px";
 
@@ -73,7 +73,7 @@ pub fn init(callback: js.Function, options: ?ObserverInit, page: *Page) !*Inters
     };
 
     return page._factory.create(IntersectionObserver{
-        ._callback = try callback.persist(),
+        ._callback = callback,
         ._root = opts.root,
         ._root_margin = root_margin,
         ._threshold = threshold,
@@ -246,7 +246,7 @@ pub fn deliverEntries(self: *IntersectionObserver, page: *Page) !void {
 
     const entries = try self.takeRecords(page);
     var caught: js.TryCatch.Caught = undefined;
-    self._callback.tryCall(void, .{ entries, self }, &caught) catch |err| {
+    self._callback.local().tryCall(void, .{ entries, self }, &caught) catch |err| {
         log.err(.page, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
         return err;
     };

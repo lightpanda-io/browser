@@ -27,11 +27,11 @@ const Allocator = std.mem.Allocator;
 const CustomEvent = @This();
 
 _proto: *Event,
-_detail: ?js.Value = null,
 _arena: Allocator,
+_detail: ?js.Value.Global = null,
 
 const CustomEventOptions = struct {
-    detail: ?js.Value = null,
+    detail: ?js.Value.Global = null,
 };
 
 const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
@@ -45,7 +45,7 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
         CustomEvent{
             ._arena = arena,
             ._proto = undefined,
-            ._detail = if (opts.detail) |detail| try detail.persist() else null,
+            ._detail = opts.detail,
         },
     );
 
@@ -58,7 +58,7 @@ pub fn initCustomEvent(
     event_string: []const u8,
     bubbles: ?bool,
     cancelable: ?bool,
-    detail_: ?js.Value,
+    detail_: ?js.Value.Global,
     page: *Page,
 ) !void {
     // This function can only be called after the constructor has called.
@@ -67,16 +67,14 @@ pub fn initCustomEvent(
     self._proto._bubbles = bubbles orelse false;
     self._proto._cancelable = cancelable orelse false;
     // Detail is stored separately.
-    if (detail_) |detail| {
-        self._detail = try detail.persist();
-    }
+    self._detail = detail_;
 }
 
 pub fn asEvent(self: *CustomEvent) *Event {
     return self._proto;
 }
 
-pub fn getDetail(self: *const CustomEvent) ?js.Value {
+pub fn getDetail(self: *const CustomEvent) ?js.Value.Global {
     return self._detail;
 }
 

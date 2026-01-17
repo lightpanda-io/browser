@@ -47,14 +47,37 @@ pub fn thenAndCatch(self: Promise, on_fulfilled: js.Function, on_rejected: js.Fu
     }
     return error.PromiseChainFailed;
 }
-pub fn persist(self: Promise) !Promise {
+pub fn persist(self: Promise) !Global {
     var ctx = self.ctx;
-
-    const global = js.Global(Promise).init(ctx.isolate.handle, self.handle);
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     try ctx.global_promises.append(ctx.arena, global);
-
     return .{
+        .handle = global,
         .ctx = ctx,
-        .handle = global.local(),
     };
 }
+
+pub const Global = struct {
+    handle: v8.Global,
+    ctx: *js.Context,
+
+    pub fn deinit(self: *Global) void {
+        v8.v8__Global__Reset(&self.handle);
+    }
+
+    pub fn local(self: *const Global) Promise {
+        return .{
+            .ctx = self.ctx,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+        };
+    }
+
+    pub fn isEqual(self: *const Global, other: Promise) bool {
+        return v8.v8__Global__IsEqual(&self.handle, other.handle);
+    }
+
+    pub fn promise(self: *const Global) Promise {
+        return self.local();
+    }
+};

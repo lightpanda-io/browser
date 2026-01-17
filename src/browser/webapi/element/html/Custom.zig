@@ -196,7 +196,7 @@ pub fn checkAndAttachBuiltIn(element: *Element, page: *Page) !void {
     defer page._upgrading_element = prev_upgrading;
 
     var caught: js.TryCatch.Caught = undefined;
-    _ = definition.constructor.newInstance(&caught) catch |err| {
+    _ = definition.constructor.local().newInstance(&caught) catch |err| {
         log.warn(.js, "custom builtin ctor", .{ .name = is_value, .err = err, .caught = caught });
         return;
     };

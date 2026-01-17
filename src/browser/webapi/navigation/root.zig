@@ -47,7 +47,7 @@ pub const NavigationState = struct {
 
 // https://developer.mozilla.org/en-US/docs/Web/API/NavigationTransition
 pub const NavigationTransition = struct {
-    finished: js.Promise,
+    finished: js.Promise.Global,
     from: NavigationHistoryEntry,
     navigation_type: NavigationType,
 };

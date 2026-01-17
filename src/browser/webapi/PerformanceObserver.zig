@@ -32,7 +32,7 @@ pub fn registerTypes() []const type {
 const PerformanceObserver = @This();
 
 /// Emitted when there are events with same interests.
-_callback: js.Function,
+_callback: js.Function.Global,
 /// The threshold to deliver `PerformanceEventTiming` entries.
 _duration_threshold: f64,
 /// Entry types we're looking for are encoded as bit flags.
@@ -44,9 +44,9 @@ _entries: std.ArrayList(*Performance.Entry),
 const DefaultDurationThreshold: f64 = 104;
 
 /// Creates a new PerformanceObserver object with the given observer callback.
-pub fn init(callback: js.Function, page: *Page) !*PerformanceObserver {
+pub fn init(callback: js.Function.Global, page: *Page) !*PerformanceObserver {
     return page._factory.create(PerformanceObserver{
-        ._callback = try callback.persist(),
+        ._callback = callback,
         ._duration_threshold = DefaultDurationThreshold,
         ._interests = 0,
         ._entries = .{},
@@ -152,7 +152,7 @@ pub inline fn hasRecords(self: *const PerformanceObserver) bool {
 pub fn dispatch(self: *PerformanceObserver, page: *Page) !void {
     const records = try self.takeRecords(page);
     var caught: js.TryCatch.Caught = undefined;
-    self._callback.tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
+    self._callback.local().tryCall(void, .{ EntryList{ ._entries = records }, self }, &caught) catch |err| {
         log.err(.page, "PerfObserver.dispatch", .{ .err = err, .caught = caught });
         return err;
     };

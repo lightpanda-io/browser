@@ -26,7 +26,7 @@ const VTTCue = @This();
 
 _proto: *TextTrackCue,
 _text: []const u8 = "",
-_region: ?js.Object = null,
+_region: ?js.Object.Global = null,
 _vertical: []const u8 = "",
 _snap_to_lines: bool = true,
 _line: ?f64 = null, // null represents "auto"
@@ -65,16 +65,12 @@ pub fn setText(self: *VTTCue, value: []const u8, page: *Page) !void {
     self._text = try page.dupeString(value);
 }
 
-pub fn getRegion(self: *const VTTCue) ?js.Object {
+pub fn getRegion(self: *const VTTCue) ?js.Object.Global {
     return self._region;
 }
 
-pub fn setRegion(self: *VTTCue, value: ?js.Object) !void {
-    if (value) |v| {
-        self._region = try v.persist();
-    } else {
-        self._region = null;
-    }
+pub fn setRegion(self: *VTTCue, value: ?js.Object.Global) !void {
+    self._region = value;
 }
 
 pub fn getVertical(self: *const VTTCue) []const u8 {

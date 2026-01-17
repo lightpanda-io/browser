@@ -562,18 +562,20 @@ fn _documentIsComplete(self: *Page) !void {
     // this event is weird, it's dispatched directly on the window, but
     // with the document as the target
     event._target = self.document.asEventTarget();
+    const on_load = if (self.window._on_load) |*g| g.local() else null;
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
         event,
-        self.window._on_load,
+        on_load,
         .{ .inject_target = false, .context = "page load" },
     );
 
     const pageshow_event = try PageTransitionEvent.initTrusted("pageshow", .{}, self);
+    const on_pageshow = if (self.window._on_pageshow) |*g| g.local() else null;
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
         pageshow_event.asEvent(),
-        self.window._on_pageshow,
+        on_pageshow,
         .{ .context = "page show" },
     );
 }
@@ -1997,7 +1999,7 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                 defer self._upgrading_element = prev_upgrading;
 
                 var caught: JS.TryCatch.Caught = undefined;
-                _ = def.constructor.newInstance(&caught) catch |err| {
+                _ = def.constructor.local().newInstance(&caught) catch |err| {
                     log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught });
                     return node;
                 };
