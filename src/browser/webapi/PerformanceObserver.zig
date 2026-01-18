@@ -133,7 +133,7 @@ pub fn takeRecords(self: *PerformanceObserver, page: *Page) ![]*Performance.Entr
     return records;
 }
 
-pub fn getSupportedEntryTypes(_: *const PerformanceObserver) []const []const u8 {
+pub fn getSupportedEntryTypes() []const []const u8 {
     return &.{ "mark", "measure" };
 }
 

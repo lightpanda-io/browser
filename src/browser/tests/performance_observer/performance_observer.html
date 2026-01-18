@@ -37,6 +37,7 @@
 }
 </script>
 
+<<<<<<< HEAD
 <script id="microtask_access_to_list">
 {
 
@@ -63,4 +64,8 @@
     testing.expectEqual("mark", entries[0].entryType);
   });
 }
+</script>
+
+<script>
+  testing.expectEqual(['mark', 'measure'], PerformanceObserver.supportedEntryTypes);
 </script>
