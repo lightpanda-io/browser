@@ -344,7 +344,6 @@ pub const Mark = struct {
         return m;
     }
 
-
     pub fn getDetail(self: *const Mark) ?js.Value.Global {
         return self._detail;
     }
