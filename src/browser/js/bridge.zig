@@ -720,10 +720,17 @@ pub const Accessor = struct {
                     defer caller.deinit();
 
                     const info = FunctionCallbackInfo{ .handle = handle.? };
-                    caller.method(T, getter, info, .{
-                        .as_typed_array = opts.as_typed_array,
-                        .null_as_undefined = opts.null_as_undefined,
-                    });
+                    if (comptime opts.static) {
+                        caller.function(T, getter, info, .{
+                            .as_typed_array = opts.as_typed_array,
+                            .null_as_undefined = opts.null_as_undefined,
+                        });
+                    } else {
+                        caller.method(T, getter, info, .{
+                            .as_typed_array = opts.as_typed_array,
+                            .null_as_undefined = opts.null_as_undefined,
+                        });
+                    }
                 }
             }.wrap;
         }
