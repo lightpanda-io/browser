@@ -22,22 +22,22 @@ const Node = @import("Node.zig");
 
 const NodeFilter = @This();
 
-_func: ?js.Function,
+_func: ?js.Function.Global,
 _original_filter: ?FilterOpts,
 
 pub const FilterOpts = union(enum) {
-    function: js.Function,
+    function: js.Function.Global,
     object: struct {
         pub const js_as_object = true;
-        acceptNode: js.Function,
+        acceptNode: js.Function.Global,
     },
 };
 
 pub fn init(opts_: ?FilterOpts) !NodeFilter {
     const opts = opts_ orelse return .{ ._func = null, ._original_filter = null };
     const func = switch (opts) {
-        .function => |func| try func.persist(),
-        .object => |obj| try obj.acceptNode.persist(),
+        .function => |func| func,
+        .object => |obj| obj.acceptNode,
     };
     return .{
         ._func = func,
@@ -67,7 +67,7 @@ pub const SHOW_NOTATION: u32 = 0x800;
 
 pub fn acceptNode(self: *const NodeFilter, node: *Node) !i32 {
     const func = self._func orelse return FILTER_ACCEPT;
-    return func.call(i32, .{node});
+    return func.local().call(i32, .{node});
 }
 
 pub fn shouldShow(node: *const Node, what_to_show: u32) bool {

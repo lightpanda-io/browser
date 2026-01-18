@@ -33,10 +33,6 @@ pub const Result = struct {
     exception: []const u8,
 };
 
-pub fn id(self: *const Function) u32 {
-    return @as(u32, @bitCast(v8.v8__Object__GetIdentityHash(@ptrCast(self.handle))));
-}
-
 pub fn withThis(self: *const Function, value: anytype) !Function {
     const this_obj = if (@TypeOf(value) == js.Object)
         value.handle
@@ -172,20 +168,41 @@ pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
     };
 }
 
-pub fn persist(self: *const Function) !Function {
+pub fn persist(self: *const Function) !Global {
     var ctx = self.ctx;
 
-    const global = js.Global(Function).init(ctx.isolate.handle, self.handle);
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
+
     try ctx.global_functions.append(ctx.arena, global);
 
     return .{
+        .handle = global,
         .ctx = ctx,
-        .this = self.this,
-        .handle = global.local(),
     };
 }
 
-pub fn persistWithThis(self: *const Function, value: anytype) !Function {
-    var persisted = try self.persist();
-    return persisted.withThis(value);
+pub fn persistWithThis(self: *const Function, value: anytype) !Global {
+    const with_this = try self.withThis(value);
+    return with_this.persist();
 }
+
+pub const Global = struct {
+    handle: v8.Global,
+    ctx: *js.Context,
+
+    pub fn deinit(self: *Global) void {
+        v8.v8__Global__Reset(&self.handle);
+    }
+
+    pub fn local(self: *const Global) Function {
+        return .{
+            .ctx = self.ctx,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+        };
+    }
+
+    pub fn isEqual(self: *const Global, other: Function) bool {
+        return v8.v8__Global__IsEqual(&self.handle, other.handle);
+    }
+};

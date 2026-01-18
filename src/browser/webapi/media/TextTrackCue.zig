@@ -30,8 +30,8 @@ _id: []const u8 = "",
 _start_time: f64 = 0,
 _end_time: f64 = 0,
 _pause_on_exit: bool = false,
-_on_enter: ?js.Function = null,
-_on_exit: ?js.Function = null,
+_on_enter: ?js.Function.Global = null,
+_on_exit: ?js.Function.Global = null,
 
 pub const Type = union(enum) {
     vtt: *@import("VTTCue.zig"),
@@ -73,28 +73,20 @@ pub fn setPauseOnExit(self: *TextTrackCue, value: bool) void {
     self._pause_on_exit = value;
 }
 
-pub fn getOnEnter(self: *const TextTrackCue) ?js.Function {
+pub fn getOnEnter(self: *const TextTrackCue) ?js.Function.Global {
     return self._on_enter;
 }
 
-pub fn setOnEnter(self: *TextTrackCue, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_enter = try cb.persistWithThis(self);
-    } else {
-        self._on_enter = null;
-    }
+pub fn setOnEnter(self: *TextTrackCue, cb: ?js.Function.Global) !void {
+    self._on_enter = cb;
 }
 
-pub fn getOnExit(self: *const TextTrackCue) ?js.Function {
+pub fn getOnExit(self: *const TextTrackCue) ?js.Function.Global {
     return self._on_exit;
 }
 
-pub fn setOnExit(self: *TextTrackCue, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_exit = try cb.persistWithThis(self);
-    } else {
-        self._on_exit = null;
-    }
+pub fn setOnExit(self: *TextTrackCue, cb: ?js.Function.Global) !void {
+    self._on_exit = cb;
 }
 
 pub const JsApi = struct {

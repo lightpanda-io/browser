@@ -54,11 +54,11 @@ _navigator: Navigator = .init,
 _screen: *Screen,
 _performance: Performance,
 _storage_bucket: *storage.Bucket,
-_on_load: ?js.Function = null,
-_on_pageshow: ?js.Function = null,
-_on_popstate: ?js.Function = null,
-_on_error: ?js.Function = null, // TODO: invoke on error?
-_on_unhandled_rejection: ?js.Function = null, // TODO: invoke on error
+_on_load: ?js.Function.Global = null,
+_on_pageshow: ?js.Function.Global = null,
+_on_popstate: ?js.Function.Global = null,
+_on_error: ?js.Function.Global = null, // TODO: invoke on error?
+_on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
 _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
@@ -145,51 +145,51 @@ pub fn getCustomElements(self: *Window) *CustomElementRegistry {
     return &self._custom_elements;
 }
 
-pub fn getOnLoad(self: *const Window) ?js.Function {
+pub fn getOnLoad(self: *const Window) ?js.Function.Global {
     return self._on_load;
 }
 
-pub fn setOnLoad(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_load = try getFunctionFromSetter(setter);
+pub fn setOnLoad(self: *Window, setter: ?FunctionSetter) void {
+    self._on_load = getFunctionFromSetter(setter);
 }
 
-pub fn getOnPageShow(self: *const Window) ?js.Function {
+pub fn getOnPageShow(self: *const Window) ?js.Function.Global {
     return self._on_pageshow;
 }
 
-pub fn setOnPageShow(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_pageshow = try getFunctionFromSetter(setter);
+pub fn setOnPageShow(self: *Window, setter: ?FunctionSetter) void {
+    self._on_pageshow = getFunctionFromSetter(setter);
 }
 
-pub fn getOnPopState(self: *const Window) ?js.Function {
+pub fn getOnPopState(self: *const Window) ?js.Function.Global {
     return self._on_popstate;
 }
 
-pub fn setOnPopState(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_popstate = try getFunctionFromSetter(setter);
+pub fn setOnPopState(self: *Window, setter: ?FunctionSetter) void {
+    self._on_popstate = getFunctionFromSetter(setter);
 }
 
-pub fn getOnError(self: *const Window) ?js.Function {
+pub fn getOnError(self: *const Window) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_error = try getFunctionFromSetter(setter);
+pub fn setOnError(self: *Window, setter: ?FunctionSetter) void {
+    self._on_error = getFunctionFromSetter(setter);
 }
 
-pub fn getOnUnhandledRejection(self: *const Window) ?js.Function {
+pub fn getOnUnhandledRejection(self: *const Window) ?js.Function.Global {
     return self._on_unhandled_rejection;
 }
 
-pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) !void {
-    self._on_unhandled_rejection = try getFunctionFromSetter(setter);
+pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) void {
+    self._on_unhandled_rejection = getFunctionFromSetter(setter);
 }
 
 pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
     return Fetch.init(input, options, page);
 }
 
-pub fn setTimeout(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.Value, page: *Page) !u32 {
+pub fn setTimeout(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value.Global, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = false,
         .params = params,
@@ -198,7 +198,7 @@ pub fn setTimeout(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.V
     }, page);
 }
 
-pub fn setInterval(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.Value, page: *Page) !u32 {
+pub fn setInterval(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value.Global, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = true,
         .params = params,
@@ -207,7 +207,7 @@ pub fn setInterval(self: *Window, cb: js.Function, delay_ms: ?u32, params: []js.
     }, page);
 }
 
-pub fn setImmediate(self: *Window, cb: js.Function, params: []js.Value, page: *Page) !u32 {
+pub fn setImmediate(self: *Window, cb: js.Function.Global, params: []js.Value.Global, page: *Page) !u32 {
     return self.scheduleCallback(cb, 0, .{
         .repeat = false,
         .params = params,
@@ -216,7 +216,7 @@ pub fn setImmediate(self: *Window, cb: js.Function, params: []js.Value, page: *P
     }, page);
 }
 
-pub fn requestAnimationFrame(self: *Window, cb: js.Function, page: *Page) !u32 {
+pub fn requestAnimationFrame(self: *Window, cb: js.Function.Global, page: *Page) !u32 {
     return self.scheduleCallback(cb, 5, .{
         .repeat = false,
         .params = &.{},
@@ -253,7 +253,7 @@ pub fn cancelAnimationFrame(self: *Window, id: u32) void {
 const RequestIdleCallbackOpts = struct {
     timeout: ?u32 = null,
 };
-pub fn requestIdleCallback(self: *Window, cb: js.Function, opts_: ?RequestIdleCallbackOpts, page: *Page) !u32 {
+pub fn requestIdleCallback(self: *Window, cb: js.Function.Global, opts_: ?RequestIdleCallbackOpts, page: *Page) !u32 {
     const opts = opts_ orelse RequestIdleCallbackOpts{};
     return self.scheduleCallback(cb, opts.timeout orelse 50, .{
         .mode = .idle,
@@ -269,10 +269,10 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
     sc.removed = true;
 }
 
-pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
+pub fn reportError(self: *Window, err: js.Value.Global, page: *Page) !void {
     const error_event = try ErrorEvent.initTrusted("error", .{
         .@"error" = err,
-        .message = err.toString(.{}) catch "Unknown error",
+        .message = err.local().toString(.{}) catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
     }, page);
@@ -316,7 +316,7 @@ pub fn getIsSecureContext(_: *const Window) bool {
     return false;
 }
 
-pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8, page: *Page) !void {
+pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]const u8, page: *Page) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
@@ -325,7 +325,7 @@ pub fn postMessage(self: *Window, message: js.Value, target_origin: ?[]const u8,
     const origin = try self._location.getOrigin(page);
     const callback = try page._factory.create(PostMessageCallback{
         .window = self,
-        .message = try message.persist(),
+        .message = message,
         .origin = try page.arena.dupe(u8, origin),
         .page = page,
     });
@@ -465,13 +465,13 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
 const ScheduleOpts = struct {
     repeat: bool,
-    params: []js.Value,
+    params: []js.Value.Global,
     name: []const u8,
     low_priority: bool = false,
     animation_frame: bool = false,
     mode: ScheduleCallback.Mode = .normal,
 };
-fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
+fn scheduleCallback(self: *Window, cb: js.Function.Global, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
     if (self._timers.count() > 512) {
         // these are active
         return error.TooManyTimeout;
@@ -481,12 +481,9 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
     self._timer_id = timer_id;
 
     const params = opts.params;
-    var persisted_params: []js.Value = &.{};
+    var persisted_params: []js.Value.Global = &.{};
     if (params.len > 0) {
-        persisted_params = try page.arena.alloc(js.Value, params.len);
-        for (params, persisted_params) |a, *ca| {
-            ca.* = try a.persist();
-        }
+        persisted_params = try page.arena.dupe(js.Value.Global, params);
     }
 
     const gop = try self._timers.getOrPut(page.arena, timer_id);
@@ -497,7 +494,7 @@ fn scheduleCallback(self: *Window, cb: js.Function, delay_ms: u32, opts: Schedul
     errdefer _ = self._timers.remove(timer_id);
 
     const callback = try page._factory.create(ScheduleCallback{
-        .cb = try cb.persist(),
+        .cb = cb,
         .page = page,
         .mode = opts.mode,
         .name = opts.name,
@@ -526,11 +523,11 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, will be removed after the first time
     repeat_ms: ?u32,
 
-    cb: js.Function,
+    cb: js.Function.Global,
 
     page: *Page,
 
-    params: []const js.Value,
+    params: []const js.Value.Global,
 
     removed: bool = false,
 
@@ -558,17 +555,17 @@ const ScheduleCallback = struct {
         switch (self.mode) {
             .idle => {
                 const IdleDeadline = @import("IdleDeadline.zig");
-                self.cb.call(void, .{IdleDeadline{}}) catch |err| {
+                self.cb.local().call(void, .{IdleDeadline{}}) catch |err| {
                     log.warn(.js, "window.idleCallback", .{ .name = self.name, .err = err });
                 };
             },
             .animation_frame => {
-                self.cb.call(void, .{page.window._performance.now()}) catch |err| {
+                self.cb.local().call(void, .{page.window._performance.now()}) catch |err| {
                     log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
                 };
             },
             .normal => {
-                self.cb.call(void, self.params) catch |err| {
+                self.cb.local().call(void, self.params) catch |err| {
                     log.warn(.js, "window.timer", .{ .name = self.name, .err = err });
                 };
             },
@@ -587,7 +584,7 @@ const ScheduleCallback = struct {
 
 const PostMessageCallback = struct {
     window: *Window,
-    message: js.Value,
+    message: js.Value.Global,
     origin: []const u8,
     page: *Page,
 
@@ -615,17 +612,17 @@ const PostMessageCallback = struct {
 };
 
 const FunctionSetter = union(enum) {
-    func: js.Function,
+    func: js.Function.Global,
     anything: js.Value,
 };
 
 // window.onload = {}; doesn't fail, but it doesn't do anything.
 // seems like setting to null is ok (though, at least on Firefix, it preserves
 // the original value, which we could do, but why?)
-fn getFunctionFromSetter(setter_: ?FunctionSetter) !?js.Function {
+fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
     const setter = setter_ orelse return null;
     return switch (setter) {
-        .func => |func| try func.persist(),
+        .func => |func| func, // Already a Global from bridge auto-conversion
         .anything => null,
     };
 }

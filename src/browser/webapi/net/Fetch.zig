@@ -36,7 +36,7 @@ _page: *Page,
 _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
-_resolver: js.PromiseResolver,
+_resolver: js.PromiseResolver.Global,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
@@ -77,7 +77,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
     });
-    return fetch._resolver.promise();
+    return fetch._resolver.local().promise();
 }
 
 pub fn deinit(self: *Fetch) void {
@@ -149,13 +149,13 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .len = self._buf.items.len,
     });
 
-    return self._resolver.resolve("fetch done", self._response);
+    return self._resolver.local().resolve("fetch done", self._response);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     self._response._type = .@"error"; // Set type to error for network failures
-    self._resolver.reject("fetch error", @errorName(err));
+    self._resolver.local().reject("fetch error", @errorName(err));
 }
 
 const testing = @import("../../../testing.zig");

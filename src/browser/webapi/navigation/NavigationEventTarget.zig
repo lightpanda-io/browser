@@ -26,7 +26,7 @@ const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEnt
 pub const NavigationEventTarget = @This();
 
 _proto: *EventTarget,
-_on_currententrychange: ?js.Function = null,
+_on_currententrychange: ?js.Function.Global = null,
 
 pub fn asEventTarget(self: *NavigationEventTarget) *EventTarget {
     return self._proto;
@@ -43,15 +43,16 @@ pub fn dispatch(self: *NavigationEventTarget, event_type: DispatchType, page: *P
         };
     };
 
+    const func = if (@field(self, field)) |*g| g.local() else null;
     return page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        @field(self, field),
+        func,
         .{ .context = "Navigation" },
     );
 }
 
-pub fn getOnCurrentEntryChange(self: *NavigationEventTarget) ?js.Function {
+pub fn getOnCurrentEntryChange(self: *NavigationEventTarget) ?js.Function.Global {
     return self._on_currententrychange;
 }
 

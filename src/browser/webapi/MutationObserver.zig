@@ -32,7 +32,7 @@ pub fn registerTypes() []const type {
 
 const MutationObserver = @This();
 
-_callback: js.Function,
+_callback: js.Function.Global,
 _observing: std.ArrayList(Observing) = .{},
 _pending_records: std.ArrayList(*MutationRecord) = .{},
 /// Intrusively linked to next element (see Page.zig).
@@ -53,9 +53,9 @@ pub const ObserveOptions = struct {
     attributeFilter: ?[]const []const u8 = null,
 };
 
-pub fn init(callback: js.Function, page: *Page) !*MutationObserver {
+pub fn init(callback: js.Function.Global, page: *Page) !*MutationObserver {
     return page._factory.create(MutationObserver{
-        ._callback = try callback.persist(),
+        ._callback = callback,
     });
 }
 
@@ -249,7 +249,7 @@ pub fn deliverRecords(self: *MutationObserver, page: *Page) !void {
     // This ensures mutations triggered during the callback go into a fresh list
     const records = try self.takeRecords(page);
     var caught: js.TryCatch.Caught = undefined;
-    self._callback.tryCall(void, .{ records, self }, &caught) catch |err| {
+    self._callback.local().tryCall(void, .{ records, self }, &caught) catch |err| {
         log.err(.page, "MutObserver.deliverRecords", .{ .err = err, .caught = caught });
         return err;
     };

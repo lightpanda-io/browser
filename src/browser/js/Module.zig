@@ -89,17 +89,36 @@ pub fn getScriptId(self: Module) u32 {
     return @intCast(v8.v8__Module__ScriptId(self.handle));
 }
 
-pub fn persist(self: Module) !Module {
+pub fn persist(self: Module) !Global {
     var ctx = self.ctx;
-
-    const global = js.Global(Module).init(ctx.isolate.handle, self.handle);
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     try ctx.global_modules.append(ctx.arena, global);
-
     return .{
+        .handle = global,
         .ctx = ctx,
-        .handle = global.local(),
     };
 }
+
+pub const Global = struct {
+    handle: v8.Global,
+    ctx: *js.Context,
+
+    pub fn deinit(self: *Global) void {
+        v8.v8__Global__Reset(&self.handle);
+    }
+
+    pub fn local(self: *const Global) Module {
+        return .{
+            .ctx = self.ctx,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+        };
+    }
+
+    pub fn isEqual(self: *const Global, other: Module) bool {
+        return v8.v8__Global__IsEqual(&self.handle, other.handle);
+    }
+};
 
 const Requests = struct {
     ctx: *const v8.Context,

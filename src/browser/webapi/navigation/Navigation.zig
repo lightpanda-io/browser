@@ -92,8 +92,8 @@ pub fn getTransition(_: *const Navigation) ?NavigationTransition {
 }
 
 const NavigationReturn = struct {
-    committed: js.Promise,
-    finished: js.Promise,
+    committed: js.Promise.Global,
+    finished: js.Promise.Global,
 };
 
 pub fn back(self: *Navigation, page: *Page) !NavigationReturn {
@@ -278,9 +278,9 @@ pub fn navigateInner(
             if (is_same_document) {
                 page.url = new_url;
 
-                committed.resolve("navigation push", {});
+                committed.local().resolve("navigation push", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation push", {});
+                finished.local().resolve("navigation push", {});
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
@@ -291,9 +291,9 @@ pub fn navigateInner(
             if (is_same_document) {
                 page.url = new_url;
 
-                committed.resolve("navigation replace", {});
+                committed.local().resolve("navigation replace", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation replace", {});
+                finished.local().resolve("navigation replace", {});
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
@@ -306,9 +306,9 @@ pub fn navigateInner(
             if (is_same_document) {
                 page.url = new_url;
 
-                committed.resolve("navigation traverse", {});
+                committed.local().resolve("navigation traverse", {});
                 // todo: Fire navigate event
-                finished.resolve("navigation traverse", {});
+                finished.local().resolve("navigation traverse", {});
             } else {
                 try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
             }
@@ -327,8 +327,8 @@ pub fn navigateInner(
     try self._proto.dispatch(.{ .currententrychange = event }, page);
 
     return .{
-        .committed = committed.promise(),
-        .finished = finished.promise(),
+        .committed = try committed.local().promise().persist(),
+        .finished = try finished.local().promise().persist(),
     };
 }
 

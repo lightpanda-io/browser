@@ -103,15 +103,17 @@ pub fn format(self: Object, writer: *std.Io.Writer) !void {
     return writer.writeAll(str);
 }
 
-pub fn persist(self: Object) !Object {
+pub fn persist(self: Object) !Global {
     var ctx = self.ctx;
 
-    const global = js.Global(Object).init(ctx.isolate.handle, self.handle);
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
+
     try ctx.global_objects.append(ctx.arena, global);
 
     return .{
+        .handle = global,
         .ctx = ctx,
-        .handle = global.local(),
     };
 }
 
@@ -175,6 +177,26 @@ pub fn toZig(self: Object, comptime T: type) !T {
     const js_value = js.Value{ .ctx = self.ctx, .handle = @ptrCast(self.handle) };
     return self.ctx.jsValueToZig(T, js_value);
 }
+
+pub const Global = struct {
+    handle: v8.Global,
+    ctx: *js.Context,
+
+    pub fn deinit(self: *Global) void {
+        v8.v8__Global__Reset(&self.handle);
+    }
+
+    pub fn local(self: *const Global) Object {
+        return .{
+            .ctx = self.ctx,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+        };
+    }
+
+    pub fn isEqual(self: *const Global, other: Object) bool {
+        return v8.v8__Global__IsEqual(&self.handle, other.handle);
+    }
+};
 
 pub const NameIterator = struct {
     count: u32,

@@ -29,8 +29,8 @@ const Script = @This();
 
 _proto: *HtmlElement,
 _src: []const u8 = "",
-_on_load: ?js.Function = null,
-_on_error: ?js.Function = null,
+_on_load: ?js.Function.Global = null,
+_on_error: ?js.Function.Global = null,
 _executed: bool = false,
 
 pub fn asElement(self: *Script) *Element {
@@ -74,28 +74,20 @@ pub fn setNonce(self: *Script, value: []const u8, page: *Page) !void {
     return self.asElement().setAttributeSafe("nonce", value, page);
 }
 
-pub fn getOnLoad(self: *const Script) ?js.Function {
+pub fn getOnLoad(self: *const Script) ?js.Function.Global {
     return self._on_load;
 }
 
-pub fn setOnLoad(self: *Script, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_load = try cb.persist();
-    } else {
-        self._on_load = null;
-    }
+pub fn setOnLoad(self: *Script, cb: ?js.Function.Global) void {
+    self._on_load = cb;
 }
 
-pub fn getOnError(self: *const Script) ?js.Function {
+pub fn getOnError(self: *const Script) ?js.Function.Global {
     return self._on_error;
 }
 
-pub fn setOnError(self: *Script, cb_: ?js.Function) !void {
-    if (cb_) |cb| {
-        self._on_error = try cb.persist();
-    } else {
-        self._on_error = null;
-    }
+pub fn setOnError(self: *Script, cb: ?js.Function.Global) void {
+    self._on_error = cb;
 }
 
 pub fn getNoModule(self: *const Script) bool {
@@ -136,23 +128,19 @@ pub const Build = struct {
         self._src = element.getAttributeSafe("src") orelse "";
 
         if (element.getAttributeSafe("onload")) |on_load| {
-            self._on_load = blk: {
-                const func = page.js.stringToFunction(on_load) catch |err| {
-                    log.err(.js, "script.onload", .{ .err = err, .str = on_load });
-                    break :blk null;
-                };
-                break :blk try func.persist();
-            };
+            if (page.js.stringToFunction(on_load)) |func| {
+                self._on_load = try func.persist();
+            } else |err| {
+                log.err(.js, "script.onload", .{ .err = err, .str = on_load });
+            }
         }
 
         if (element.getAttributeSafe("onerror")) |on_error| {
-            self._on_error = blk: {
-                const func = page.js.stringToFunction(on_error) catch |err| {
-                    log.err(.js, "script.onerror", .{ .err = err, .str = on_error });
-                    break :blk null;
-                };
-                break :blk try func.persist();
-            };
+            if (page.js.stringToFunction(on_error)) |func| {
+                self._on_error = try func.persist();
+            } else |err| {
+                log.err(.js, "script.onerror", .{ .err = err, .str = on_error });
+            }
         }
     }
 };

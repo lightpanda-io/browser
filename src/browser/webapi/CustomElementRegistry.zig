@@ -30,7 +30,7 @@ const CustomElementDefinition = @import("CustomElementDefinition.zig");
 const CustomElementRegistry = @This();
 
 _definitions: std.StringHashMapUnmanaged(*CustomElementDefinition) = .{},
-_when_defined: std.StringHashMapUnmanaged(js.PromiseResolver) = .{},
+_when_defined: std.StringHashMapUnmanaged(js.PromiseResolver.Global) = .{},
 
 const DefineOptions = struct {
     extends: ?[]const u8 = null,
@@ -106,11 +106,11 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
     }
 
     if (self._when_defined.fetchRemove(name)) |entry| {
-        entry.value.resolve("whenDefined", constructor);
+        entry.value.local().resolve("whenDefined", constructor);
     }
 }
 
-pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function {
+pub fn get(self: *CustomElementRegistry, name: []const u8) ?js.Function.Global {
     const definition = self._definitions.get(name) orelse return null;
     return definition.constructor;
 }
@@ -126,7 +126,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
 
     const gop = try self._when_defined.getOrPut(page.arena, name);
     if (gop.found_existing) {
-        return gop.value_ptr.promise();
+        return gop.value_ptr.local().promise();
     }
     errdefer _ = self._when_defined.remove(name);
     const owned_name = try page.dupeString(name);
@@ -135,7 +135,7 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
     gop.key_ptr.* = owned_name;
     gop.value_ptr.* = resolver;
 
-    return resolver.promise();
+    return resolver.local().promise();
 }
 
 fn upgradeNode(self: *CustomElementRegistry, node: *Node, page: *Page) !void {
@@ -175,7 +175,7 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     defer page._upgrading_element = prev_upgrading;
 
     var caught: js.TryCatch.Caught = undefined;
-    _ = definition.constructor.newInstance(&caught) catch |err| {
+    _ = definition.constructor.local().newInstance(&caught) catch |err| {
         log.warn(.js, "custom element upgrade", .{ .name = definition.name, .err = err, .caught = caught });
         return error.CustomElementUpgradeFailed;
     };
