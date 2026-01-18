@@ -112,3 +112,28 @@
     });
   });
 </script>
+
+<script id="microtask_access_to_records">
+  testing.async(async () => {
+    let savedRecords;
+    const promise = new Promise((resolve) => {
+      const element = document.createElement('div');
+      const observer = new MutationObserver((records) => {
+        // Save the records array itself
+        savedRecords = records;
+        resolve();
+        observer.disconnect();
+      });
+      observer.observe(element, { attributes: true });
+      element.setAttribute('test', 'value');
+    });
+
+    await promise;
+    // Force arena reset by making a Zig call
+    document.getElementsByTagName('*');
+
+    testing.expectEqual(1, savedRecords.length);
+    testing.expectEqual('attributes', savedRecords[0].type);
+    testing.expectEqual('test', savedRecords[0].attributeName);
+  });
+</script>
