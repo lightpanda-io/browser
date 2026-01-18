@@ -42,6 +42,34 @@
   testing.expectEqual('initial text', $('#textarea1').defaultValue)
 </script>
 
+<script id="defaultValue_set">
+  {
+    const textarea = document.createElement('textarea')
+    testing.expectEqual('', textarea.defaultValue)
+    testing.expectEqual('', textarea.value)
+
+    // Setting defaultValue should update the text content
+    textarea.defaultValue = 'new default'
+    testing.expectEqual('new default', textarea.defaultValue)
+    testing.expectEqual('new default', textarea.value)
+    testing.expectEqual('new default', textarea.textContent)
+
+    // Setting value should not affect defaultValue
+    textarea.value = 'user input'
+    testing.expectEqual('new default', textarea.defaultValue)
+    testing.expectEqual('user input', textarea.value)
+
+    // Test setting defaultValue on element that already has content
+    const textarea2 = document.createElement('textarea')
+    textarea2.textContent = 'initial content'
+    testing.expectEqual('initial content', textarea2.defaultValue)
+
+    textarea2.defaultValue = 'modified default'
+    testing.expectEqual('modified default', textarea2.defaultValue)
+    testing.expectEqual('modified default', textarea2.textContent)
+  }
+</script>
+
 <script id="disabled_initial">
   testing.expectEqual(false, $('#textarea1').disabled)
   testing.expectEqual(true, $('#textarea3').disabled)
@@ -147,5 +175,57 @@
     textarea.required = false
     testing.expectEqual(null, textarea.getAttribute('required'))
     testing.expectFalse(textarea.outerHTML.includes('required'))
+  }
+</script>
+
+<script id="clone_basic">
+  {
+    const original = document.createElement('textarea')
+    original.defaultValue = 'default text'
+    testing.expectEqual('default text', original.value)
+
+    // Change the value
+    original.value = 'user modified'
+    testing.expectEqual('user modified', original.value)
+    testing.expectEqual('default text', original.defaultValue)
+
+    // Clone the textarea
+    const clone = original.cloneNode(true)
+
+    // Clone should have the runtime value copied
+    testing.expectEqual('user modified', clone.value)
+    testing.expectEqual('default text', clone.defaultValue)
+  }
+</script>
+
+<script id="clone_preserves_user_changes">
+  {
+    // Create a fresh element to avoid interfering with other tests
+    const original = document.createElement('textarea')
+    original.textContent = 'initial text'
+    testing.expectEqual('initial text', original.defaultValue)
+    testing.expectEqual('initial text', original.value)
+
+    // User modifies the value
+    original.value = 'user typed this'
+    testing.expectEqual('user typed this', original.value)
+    testing.expectEqual('initial text', original.defaultValue)
+
+    // Clone should preserve the user's changes
+    const clone = original.cloneNode(true)
+    testing.expectEqual('user typed this', clone.value)
+    testing.expectEqual('initial text', clone.defaultValue)
+  }
+</script>
+
+<script id="clone_empty_textarea">
+  {
+    const original = document.createElement('textarea')
+    testing.expectEqual('', original.value)
+
+    original.value = 'some content'
+    const clone = original.cloneNode(true)
+
+    testing.expectEqual('some content', clone.value)
   }
 </script>
