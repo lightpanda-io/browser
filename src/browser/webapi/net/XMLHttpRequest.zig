@@ -154,7 +154,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
     }
-    self._page.js.strongRef(self);
 
     if (body_) |b| {
         if (self._method != .GET and self._method != .HEAD) {
@@ -392,8 +391,6 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .total = loaded,
         .loaded = loaded,
     }, local, page);
-
-    page.js.weakRef(self);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -401,7 +398,6 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // http client will close it after an error, it isn't safe to keep around
     self._transfer = null;
     self.handleError(err);
-    self._page.js.weakRef(self);
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
@@ -410,7 +406,6 @@ pub fn abort(self: *XMLHttpRequest) void {
         transfer.abort(error.Abort);
         self._transfer = null;
     }
-    self._page.js.weakRef(self);
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
@@ -488,7 +483,6 @@ pub const JsApi = struct {
         pub const name = "XMLHttpRequest";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
         pub const finalizer = bridge.finalizer(XMLHttpRequest.deinit);
     };
 
