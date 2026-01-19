@@ -17,9 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const IS_DEBUG = @import("builtin").mode == .Debug;
+const lp = @import("lightpanda");
 
 const log = @import("../../log.zig");
+const Page = @import("../Page.zig");
 
 const js = @import("js.zig");
 const v8 = js.v8;
@@ -28,9 +29,8 @@ const Env = @import("Env.zig");
 const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 
-const Page = @import("../Page.zig");
-
 const ArenaAllocator = std.heap.ArenaAllocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const CONTEXT_ARENA_RETAIN = 1024 * 64;
 
@@ -71,7 +71,7 @@ pub fn deinit(self: *ExecutionWorld) void {
 // We also maintain our own "context_arena" which allows us to have
 // all page related memory easily managed.
 pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context {
-    std.debug.assert(self.context == null);
+    lp.assert(self.context == null, "ExecptionWorld.createContext has context", .{});
 
     const env = self.env;
     const isolate = env.isolate;

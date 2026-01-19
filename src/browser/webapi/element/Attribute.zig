@@ -26,6 +26,8 @@ const GenericIterator = @import("../collections/iterator.zig").Entry;
 const Page = @import("../../Page.zig");
 const String = @import("../../../string.zig").String;
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 pub fn registerTypes() []const type {
     return &.{
         Attribute,
@@ -223,7 +225,6 @@ pub const List = struct {
 
         if (is_id) {
             const parent = element.asNode()._parent orelse {
-                std.debug.assert(false);
                 return entry;
             };
             try page.addElementId(parent, element, entry._value.str());
@@ -248,7 +249,9 @@ pub const List = struct {
     // not efficient, won't be called often (if ever!)
     pub fn putAttribute(self: *List, attribute: *Attribute, element: *Element, page: *Page) !?*Attribute {
         // we expect our caller to make sure this is true
-        std.debug.assert(attribute._element == null);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(attribute._element == null);
+        }
 
         const existing_attribute = try self.getAttribute(attribute._name, element, page);
         if (existing_attribute) |ea| {

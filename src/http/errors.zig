@@ -19,6 +19,8 @@
 const std = @import("std");
 const c = @import("Http.zig").c;
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 pub const Error = error{
     UnsupportedProtocol,
     FailedInit,
@@ -109,7 +111,9 @@ pub const Error = error{
 };
 
 pub fn fromCode(code: c.CURLcode) Error {
-    std.debug.assert(code != c.CURLE_OK);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(code != c.CURLE_OK);
+    }
 
     return switch (code) {
         c.CURLE_UNSUPPORTED_PROTOCOL => Error.UnsupportedProtocol,
@@ -218,7 +222,9 @@ pub const Multi = error{
 };
 
 pub fn fromMCode(code: c.CURLMcode) Multi {
-    std.debug.assert(code != c.CURLM_OK);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(code != c.CURLM_OK);
+    }
 
     return switch (code) {
         c.CURLM_BAD_HANDLE => Multi.BadHandle,

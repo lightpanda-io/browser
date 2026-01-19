@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const JS = @import("js/js.zig");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
@@ -786,7 +787,9 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                     // an extra socket, so it should not be possibl to
                     // get an cdp_socket message when exit_when_done
                     // is true.
-                    std.debug.assert(exit_when_done == false);
+                    if (IS_DEBUG) {
+                        std.debug.assert(exit_when_done == false);
+                    }
 
                     // data on a socket we aren't handling, return to caller
                     return .cdp_socket;
@@ -822,7 +825,9 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                     // we don't need to consider http_client.intercepted here
                     // because exit_when_done is true, and that can only be
                     // the case when interception isn't possible.
-                    std.debug.assert(http_client.intercepted == 0);
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(http_client.intercepted == 0);
+                    }
 
                     const ms = ms_to_next_task orelse blk: {
                         if (wait_ms - ms_remaining < 100) {
@@ -1019,7 +1024,9 @@ fn getElementIdMap(page: *Page, node: *Node) ElementIdMaps {
                 };
             }
             // Detached nodes should not have IDs registered
-            std.debug.assert(false);
+            if (IS_DEBUG) {
+                std.debug.assert(false);
+            }
             return .{
                 .lookup = &page.document._elements_by_id,
                 .removed_ids = &page.document._removed_ids,
@@ -1265,14 +1272,14 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 }
 
 fn notifyNetworkIdle(self: *Page) void {
-    std.debug.assert(self._notified_network_idle == .done);
+    lp.assert(self._notified_network_idle == .done, "Page.notifyNetworkIdle", .{});
     self._session.browser.notification.dispatch(.page_network_idle, &.{
         .timestamp = timestamp(.monotonic),
     });
 }
 
 fn notifyNetworkAlmostIdle(self: *Page) void {
-    std.debug.assert(self._notified_network_almost_idle == .done);
+    lp.assert(self._notified_network_almost_idle == .done, "Page.notifyNetworkAlmostIdle", .{});
     self._session.browser.notification.dispatch(.page_network_almost_idle, &.{
         .timestamp = timestamp(.monotonic),
     });
@@ -1298,7 +1305,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
         },
     };
 
-    std.debug.assert(node._parent == null);
+    lp.assert(node._parent == null, "Page.appendNew", .{});
     try self._insertNodeRelative(true, parent, node, .append, .{
         // this opts has no meaning since we're passing `true` as the first
         // parameter, which indicates this comes from the parser, and has its
@@ -2213,7 +2220,7 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     const children = parent._children.?;
     switch (children.*) {
         .one => |n| {
-            std.debug.assert(n == child);
+            lp.assert(n == child, "Page.removeNode.one", .{});
             parent._children = null;
             self._factory.destroy(children);
         },
@@ -2340,7 +2347,8 @@ pub fn insertNodeRelative(self: *Page, parent: *Node, child: *Node, relative: In
 }
 pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     // caller should have made sure this was the case
-    std.debug.assert(child._parent == null);
+
+    lp.assert(child._parent == null, "Page.insertNodeRelative parent", .{ .url = self.url });
 
     const children = blk: {
         // expand parent._children so that it can take another child
@@ -2369,14 +2377,14 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         },
         .after => |ref_node| {
             // caller should have made sure this was the case
-            std.debug.assert(ref_node._parent.? == parent);
+            lp.assert(ref_node._parent.? == parent, "Page.insertNodeRelative after", .{ .url = self.url });
             // if ref_node is in parent, and expanded _children above to
             // accommodate another child, then `children` must be a list
             children.list.insertAfter(&ref_node._child_link, &child._child_link);
         },
         .before => |ref_node| {
             // caller should have made sure this was the case
-            std.debug.assert(ref_node._parent.? == parent);
+            lp.assert(ref_node._parent.? == parent, "Page.insertNodeRelative before", .{ .url = self.url });
             // if ref_node is in parent, and expanded _children above to
             // accommodate another child, then `children` must be a list
             children.list.insertBefore(&ref_node._child_link, &child._child_link);
@@ -2654,7 +2662,7 @@ pub fn parseHtmlAsChildren(self: *Page, node: *Node, html: []const u8) !void {
     // https://github.com/servo/html5ever/issues/583
     const children = node._children orelse return;
     const first = children.one;
-    std.debug.assert(first.is(Element.Html.Html) != null);
+    lp.assert(first.is(Element.Html.Html) != null, "Page.parseHtmlAsChildren root", .{ .type = first._type });
     node._children = first._children;
 
     if (self.hasMutationObservers()) {

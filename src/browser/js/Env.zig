@@ -76,6 +76,8 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
     v8.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate.handle, Context.dynamicModuleCallback);
     v8.v8__Isolate__SetPromiseRejectCallback(isolate.handle, promiseRejectCallback);
     v8.v8__Isolate__SetMicrotasksPolicy(isolate.handle, v8.kExplicit);
+    v8.v8__Isolate__SetFatalErrorHandler(isolate.handle, fatalCallback);
+    v8.v8__Isolate__SetOOMErrorHandler(isolate.handle, oomCallback);
 
     isolate.enter();
     errdefer isolate.exit();
@@ -202,4 +204,18 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         .stack = context.stackTrace() catch |err| @errorName(err) orelse "???",
         .note = "This should be updated to call window.unhandledrejection",
     });
+}
+
+fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c) void {
+    const location = std.mem.span(c_location);
+    const message = std.mem.span(c_message);
+    log.fatal(.app, "V8 fatal callback", .{ .location = location, .message = message });
+    @import("../../crash_handler.zig").crash("Fatal V8 Error", .{ .location = location, .message = message }, @returnAddress());
+}
+
+fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callconv(.c) void {
+    const location = std.mem.span(c_location);
+    const detail = if (details) |d| std.mem.span(d.detail) else "";
+    log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
+    @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }

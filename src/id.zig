@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 // Generates incrementing prefixed integers, i.e. CTX-1, CTX-2, CTX-3.
 // Wraps to 0 on overflow.
@@ -85,7 +86,7 @@ pub fn Incrementing(comptime T: type, comptime prefix: []const u8) type {
 }
 
 pub fn uuidv4(hex: []u8) void {
-    std.debug.assert(hex.len == 36);
+    lp.assert(hex.len == 36, "uuidv4.len", .{ .len = hex.len });
 
     var bin: [16]u8 = undefined;
     std.crypto.random.bytes(&bin);

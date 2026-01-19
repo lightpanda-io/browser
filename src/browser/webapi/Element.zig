@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const log = @import("../../log.zig");
 const String = @import("../../string.zig").String;
@@ -545,7 +546,7 @@ pub fn getOrCreateAttributeList(self: *Element, page: *Page) !*Attribute.List {
 }
 
 pub fn createAttributeList(self: *Element, page: *Page) !*Attribute.List {
-    std.debug.assert(self._attributes == null);
+    lp.assert(self._attributes == null, "Element.createAttributeList non-null _attributes", .{});
     const a = try page.arena.create(Attribute.List);
     a.* = .{ .normalize = self._namespace == .html };
     self._attributes = a;

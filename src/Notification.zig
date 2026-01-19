@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const log = @import("log.zig");
 const Page = @import("browser/Page.zig");
@@ -241,7 +242,7 @@ pub fn unregister(self: *Notification, comptime event: EventType, receiver: anyt
     if (listeners.items.len == 0) {
         listeners.deinit(self.allocator);
         const removed = self.listeners.remove(@intFromPtr(receiver));
-        std.debug.assert(removed == true);
+        lp.assert(removed == true, "Notification.unregister", .{ .type = event });
     }
 }
 

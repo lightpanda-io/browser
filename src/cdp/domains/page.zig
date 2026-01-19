@@ -17,13 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
+const log = @import("../../log.zig");
+const js = @import("../../browser/js/js.zig");
 const Page = @import("../../browser/Page.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
-const log = @import("../../log.zig");
-const js = @import("../../browser/js/js.zig");
-const v8 = js.v8;
 
+const v8 = js.v8;
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: anytype) !void {
@@ -142,7 +144,7 @@ fn close(cmd: anytype) !void {
     const target_id = bc.target_id orelse return error.TargetNotLoaded;
 
     // can't be null if we have a target_id
-    std.debug.assert(bc.session.page != null);
+    lp.assert(bc.session.page != null, "CDP.page.close null page", .{});
 
     try cmd.sendResult(.{}, .{});
 
