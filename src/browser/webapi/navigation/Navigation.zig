@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const log = @import("../../../log.zig");
 const URL = @import("../URL.zig");
 
@@ -81,7 +82,8 @@ pub fn getCurrentEntryOrNull(self: *Navigation) ?*NavigationHistoryEntry {
 pub fn getCurrentEntry(self: *Navigation) *NavigationHistoryEntry {
     // This should never fail. An entry should always be created before
     // we run the scripts on the page we are loading.
-    std.debug.assert(self._entries.items.len > 0);
+    const len = self._entries.items.len;
+    lp.assert(len > 0, "Navigation.getCurrentEntry", .{ .len = len });
 
     return self.getCurrentEntryOrNull().?;
 }

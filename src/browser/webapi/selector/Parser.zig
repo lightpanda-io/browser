@@ -18,16 +18,18 @@
 
 const std = @import("std");
 
-const Allocator = std.mem.Allocator;
-
 const Page = @import("../../Page.zig");
 
 const Node = @import("../Node.zig");
-const Selector = @import("Selector.zig");
-const Part = Selector.Part;
-const Combinator = Selector.Combinator;
-const Segment = Selector.Segment;
 const Attribute = @import("../element/Attribute.zig");
+
+const Selector = @import("Selector.zig");
+
+const Part = Selector.Part;
+const Segment = Selector.Segment;
+const Combinator = Selector.Combinator;
+const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Parser = @This();
 
@@ -308,8 +310,11 @@ fn consumeUntilCommaOrParen(self: *Parser) []const u8 {
 }
 
 fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoClass {
-    // Must be called when we're at a ':'
-    std.debug.assert(self.peek() == ':');
+    if (comptime IS_DEBUG) {
+        // Should have been verified by caller
+        std.debug.assert(self.peek() == ':');
+    }
+
     self.input = self.input[1..];
 
     // Parse the pseudo-class name
@@ -657,13 +662,21 @@ fn parseNthPattern(self: *Parser) !Selector.NthPattern {
 }
 
 pub fn id(self: *Parser, arena: Allocator) ![]const u8 {
-    std.debug.assert(self.peek() == '#');
+    if (comptime IS_DEBUG) {
+        // should have been verified by caller
+        std.debug.assert(self.peek() == '#');
+    }
+
     self.input = self.input[1..]; // Skip '#'
     return self.parseIdentifier(arena, error.InvalidIDSelector);
 }
 
 fn class(self: *Parser, arena: Allocator) ![]const u8 {
-    std.debug.assert(self.peek() == '.');
+    if (comptime IS_DEBUG) {
+        // should have been verified by caller
+        std.debug.assert(self.peek() == '.');
+    }
+
     self.input = self.input[1..]; // Skip '.'
     return self.parseIdentifier(arena, error.InvalidClassSelector);
 }
@@ -822,8 +835,10 @@ fn tag(self: *Parser) ![]const u8 {
 }
 
 fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
-    // Must be called when we're at a '['
-    std.debug.assert(self.peek() == '[');
+    if (comptime IS_DEBUG) {
+        // should have been verified by caller
+        std.debug.assert(self.peek() == '[');
+    }
 
     self.input = self.input[1..];
     _ = self.skipSpaces();

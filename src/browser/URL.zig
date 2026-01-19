@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const Allocator = std.mem.Allocator;
 
 const ResolveOpts = struct {
@@ -93,7 +94,7 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
         }
 
         if (std.mem.startsWith(u8, out[in_i..], "../")) {
-            std.debug.assert(out[out_i - 1] == '/');
+            lp.assert(out[out_i - 1] == '/', "URL.resolve", .{ .out = out });
 
             if (out_i > path_marker) {
                 // go back before the /

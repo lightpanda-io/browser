@@ -25,6 +25,8 @@ const NodeList = @import("NodeList.zig");
 const RadioNodeList = @import("RadioNodeList.zig");
 const HTMLCollection = @import("HTMLCollection.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const HTMLFormControlsCollection = @This();
 
 _proto: *HTMLCollection,
@@ -95,7 +97,9 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Pag
     }
 
     // case == 2 was handled inside the loop
-    std.debug.assert(count == 1);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(count == 1);
+    }
 
     return .{ .element = first_element.? };
 }

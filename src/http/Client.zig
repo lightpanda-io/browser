@@ -178,7 +178,9 @@ pub fn abort(self: *Client) void {
         };
         transfer.kill();
     }
-    std.debug.assert(self.active == 0);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.active == 0);
+    }
 
     var n = self.queue.first;
     while (n) |node| {
@@ -188,11 +190,10 @@ pub fn abort(self: *Client) void {
     }
     self.queue = .{};
 
-    // Maybe a bit of overkill
-    // We can remove some (all?) of these once we're confident its right.
-    std.debug.assert(self.handles.in_use.first == null);
-    std.debug.assert(self.handles.available.len() == self.handles.handles.len);
     if (comptime IS_DEBUG) {
+        std.debug.assert(self.handles.in_use.first == null);
+        std.debug.assert(self.handles.available.len() == self.handles.handles.len);
+
         var running: c_int = undefined;
         std.debug.assert(c.curl_multi_perform(self.multi, &running) == c.CURLE_OK);
         std.debug.assert(running == 0);
@@ -373,7 +374,9 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
 fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
     // this shouldn't happen, we'll crash in debug mode. But in release, we'll
     // just noop this state.
-    std.debug.assert(transfer._notified_fail == false);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(transfer._notified_fail == false);
+    }
     if (transfer._notified_fail) {
         return;
     }
@@ -552,7 +555,9 @@ fn processMessages(self: *Client) !bool {
     while (c.curl_multi_info_read(multi, &messages_count)) |msg_| {
         const msg: *c.CURLMsg = @ptrCast(msg_);
         // This is the only possible message type from CURL for now.
-        std.debug.assert(msg.msg == c.CURLMSG_DONE);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(msg.msg == c.CURLMSG_DONE);
+        }
 
         const easy = msg.easy_handle.?;
         const transfer = try Transfer.fromEasy(easy);
@@ -893,7 +898,9 @@ pub const Transfer = struct {
     }
 
     fn buildResponseHeader(self: *Transfer, easy: *c.CURL) !void {
-        std.debug.assert(self.response_header == null);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(self.response_header == null);
+        }
 
         var url: [*c]u8 = undefined;
         try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url));
@@ -1036,7 +1043,9 @@ pub const Transfer = struct {
     // It can be called either on dataCallback or once the request for those
     // w/o body.
     fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !void {
-        std.debug.assert(transfer._header_done_called == false);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(transfer._header_done_called == false);
+        }
         defer transfer._header_done_called = true;
 
         try transfer.buildResponseHeader(easy);
@@ -1076,7 +1085,9 @@ pub const Transfer = struct {
     // headerCallback is called by curl on each request's header line read.
     fn headerCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 header at a time
-        std.debug.assert(header_count == 1);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(header_count == 1);
+        }
 
         const easy: *c.CURL = @ptrCast(@alignCast(data));
         var transfer = fromEasy(easy) catch |err| {
@@ -1084,7 +1095,9 @@ pub const Transfer = struct {
             return 0;
         };
 
-        std.debug.assert(std.mem.endsWith(u8, buffer[0..buf_len], "\r\n"));
+        if (comptime IS_DEBUG) {
+            std.debug.assert(std.mem.endsWith(u8, buffer[0..buf_len], "\r\n"));
+        }
 
         const header = buffer[0 .. buf_len - 2];
 
@@ -1105,7 +1118,9 @@ pub const Transfer = struct {
 
             // a bit silly, but it makes sure that we don't change the length check
             // above in a way that could break this.
-            std.debug.assert(version_end < 13);
+            if (comptime IS_DEBUG) {
+                std.debug.assert(version_end < 13);
+            }
 
             const status = std.fmt.parseInt(u16, header[version_start..version_end], 10) catch {
                 if (comptime IS_DEBUG) {
@@ -1180,7 +1195,9 @@ pub const Transfer = struct {
 
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
         // libcurl should only ever emit 1 chunk at a time
-        std.debug.assert(chunk_count == 1);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(chunk_count == 1);
+        }
 
         const easy: *c.CURL = @ptrCast(@alignCast(data));
         var transfer = fromEasy(easy) catch |err| {

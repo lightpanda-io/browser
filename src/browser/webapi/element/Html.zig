@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const js = @import("../../js/js.zig");
 const reflect = @import("../../reflect.zig");
 
@@ -293,11 +294,11 @@ pub fn insertAdjacentHTML(
     // <html><head></head><body>{ ... }</body></html>
     // None of the following can be null.
     const maybe_html_node = doc_node.firstChild();
-    std.debug.assert(maybe_html_node != null);
+    lp.assert(maybe_html_node != null, "Html.insertAdjacentHTML null html", .{});
     const html_node = maybe_html_node orelse return;
 
     const maybe_body_node = html_node.lastChild();
-    std.debug.assert(maybe_body_node != null);
+    lp.assert(maybe_body_node != null, "Html.insertAdjacentHTML null bodys", .{});
     const body = maybe_body_node orelse return;
 
     const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position);

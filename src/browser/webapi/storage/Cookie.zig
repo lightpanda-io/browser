@@ -88,9 +88,6 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
             continue;
         }
 
-        // Make sure no one changes our max length without also expanding the size of scrap
-        std.debug.assert(key_string.len <= 8);
-
         const key = std.meta.stringToEnum(enum {
             path,
             domain,

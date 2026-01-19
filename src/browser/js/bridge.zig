@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("js.zig");
+const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 
 const v8 = js.v8;
@@ -743,7 +744,9 @@ pub const Accessor = struct {
                     defer caller.deinit();
 
                     const info = FunctionCallbackInfo{ .handle = handle.? };
-                    std.debug.assert(info.length() == 1);
+                    if (comptime IS_DEBUG) {
+                        lp.assert(info.length() == 1, "bridge.setter", .{ .len = info.length() });
+                    }
 
                     caller.method(T, setter, info, .{
                         .as_typed_array = opts.as_typed_array,
