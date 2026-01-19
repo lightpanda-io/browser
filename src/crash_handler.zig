@@ -79,7 +79,7 @@ fn report(reason: []const u8) !void {
     var args_buffer: [4096]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&args_buffer);
 
-    try writer.print("https://crash.lightpanda.io/?v={s}&r=", .{lp.build_config.git_commit});
+    try writer.print("https://crash.lightpanda.io/c?v={s}&r=", .{lp.build_config.git_commit});
     for (reason) |b| {
         switch (b) {
             'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_' => try writer.writeByte(b),
