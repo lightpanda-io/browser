@@ -651,7 +651,7 @@ pub const JsApi = struct {
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{ .cache = "localStorage" });
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
-    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{ .cache = "location" });
+    pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{});
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
     pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });
