@@ -356,10 +356,13 @@ pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
     return try URL.getOrigin(allocator, self.url);
 }
 
-pub fn getArena(self: *Page, comptime owner: []const u8) !Allocator {
+const GetArenaOpts = struct {
+    debug: []const u8,
+};
+pub fn getArena(self: *Page, comptime opts: GetArenaOpts) !Allocator {
     const allocator = try self.arena_pool.acquire();
     if (comptime IS_DEBUG) {
-        try self._arena_pool_leak_track.put(self.arena, @intFromPtr(allocator.ptr), owner);
+        try self._arena_pool_leak_track.put(self.arena, @intFromPtr(allocator.ptr), opts.debug);
     }
     return allocator;
 }

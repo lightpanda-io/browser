@@ -79,7 +79,7 @@ const ResponseType = enum {
 };
 
 pub fn init(page: *Page) !*XMLHttpRequest {
-    const arena = try page.getArena("XMLHttpRequest");
+    const arena = try page.getArena(.{.debug = "XMLHttpRequest"});
     errdefer page.releaseArena(arena);
 
     const xx = try page._factory.xhrEventTarget(XMLHttpRequest{
