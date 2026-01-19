@@ -468,7 +468,18 @@ pub fn getAttribute(self: *const Element, name: []const u8, page: *Page) !?[]con
 }
 
 /// For simplicity, the namespace is currently ignored and only the local name is used.
-pub fn getAttributeNS(self: *const Element, _: ?[]const u8, local_name: []const u8, page: *Page) !?[]const u8 {
+pub fn getAttributeNS(
+    self: *const Element,
+    maybe_namespace: ?[]const u8,
+    local_name: []const u8,
+    page: *Page,
+) !?[]const u8 {
+    if (maybe_namespace) |namespace| {
+        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
+            log.warn(.not_implemented, "Element.getAttributeNS", .{ .namespace = namespace });
+        }
+    }
+
     return self.getAttribute(local_name, page);
 }
 
@@ -504,7 +515,19 @@ pub fn setAttribute(self: *Element, name: []const u8, value: []const u8, page: *
     _ = try attributes.put(name, value, self, page);
 }
 
-pub fn setAttributeNS(self: *Element, _: ?[]const u8, qualified_name: []const u8, value: []const u8, page: *Page) !void {
+pub fn setAttributeNS(
+    self: *Element,
+    maybe_namespace: ?[]const u8,
+    qualified_name: []const u8,
+    value: []const u8,
+    page: *Page,
+) !void {
+    if (maybe_namespace) |namespace| {
+        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
+            log.warn(.not_implemented, "Element.setAttributeNS", .{ .namespace = namespace });
+        }
+    }
+
     const local_name = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
         qualified_name[idx + 1 ..]
     else
