@@ -27,7 +27,7 @@ const IS_DEBUG = builtin.mode == .Debug;
 
 const log = @import("../log.zig");
 
-const Http = @import("../http/Http.zig");
+const App = @import("../App.zig");
 const String = @import("../string.zig").String;
 
 const Mime = @import("Mime.zig");
@@ -58,6 +58,9 @@ const storage = @import("webapi/storage/storage.zig");
 const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
+
+const Http = App.Http;
+const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
@@ -168,6 +171,11 @@ arena: Allocator,
 // from JS. Best arena to use, when possible.
 call_arena: Allocator,
 
+arena_pool: *ArenaPool,
+// In Debug, we use this to see if anything fails to release an arena back to
+// the pool.
+_arena_pool_leak_track: (if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, []const u8) else void),
+
 window: *Window,
 document: *Document,
 
@@ -185,10 +193,14 @@ pub fn init(arena: Allocator, call_arena: Allocator, session: *Session) !*Page {
     }
 
     const page = try session.browser.allocator.create(Page);
+    page._session = session;
 
     page.arena = arena;
     page.call_arena = call_arena;
-    page._session = session;
+    page.arena_pool = session.browser.arena_pool;
+    if (comptime IS_DEBUG) {
+        page._arena_pool_leak_track = .empty;
+    }
 
     try page.reset(true);
     return page;
@@ -220,6 +232,14 @@ pub fn deinit(self: *Page) void {
     self._script_manager.shutdown = true;
     session.browser.http_client.abort();
     self._script_manager.deinit();
+
+    if (comptime IS_DEBUG) {
+        var it = self._arena_pool_leak_track.valueIterator();
+        while (it.next()) |value_ptr| {
+            log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+        }
+    }
+
     session.browser.allocator.destroy(self);
 }
 
@@ -294,6 +314,14 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._undefined_custom_elements = .{};
 
     try self.registerBackgroundTasks();
+
+    if (comptime IS_DEBUG) {
+        var it = self._arena_pool_leak_track.valueIterator();
+        while (it.next()) |value_ptr| {
+            log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+        }
+        self._arena_pool_leak_track.clearRetainingCapacity();
+    }
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
@@ -326,6 +354,21 @@ pub fn getTitle(self: *Page) !?[]const u8 {
 
 pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
     return try URL.getOrigin(allocator, self.url);
+}
+
+pub fn getArena(self: *Page, comptime owner: []const u8) !Allocator {
+    const allocator = try self.arena_pool.acquire();
+    if (comptime IS_DEBUG) {
+        try self._arena_pool_leak_track.put(self.arena, @intFromPtr(allocator.ptr), owner);
+    }
+    return allocator;
+}
+
+pub fn releaseArena(self: *Page, allocator: Allocator) void {
+    if (comptime IS_DEBUG) {
+        _ = self._arena_pool_leak_track.remove(@intFromPtr(allocator.ptr));
+    }
+    return self.arena_pool.release(allocator);
 }
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {

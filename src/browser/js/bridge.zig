@@ -91,6 +91,36 @@ pub fn Builder(comptime T: type) type {
             }
             return entries;
         }
+
+        pub fn finalizer(comptime func: *const fn (self: *T) void) Finalizer {
+            return .{
+                .from_zig = struct {
+                    fn wrap(ptr: *anyopaque) void {
+                        func(@ptrCast(@alignCast(ptr)));
+                    }
+                }.wrap,
+
+                .from_v8 = struct {
+                    fn wrap(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
+                        const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
+                        const self: *T = @ptrCast(@alignCast(ptr));
+                        // This is simply a requirement of any type that Finalizes:
+                        // It must have a _page: *Page field. We need it because
+                        // we need to check the item has already been cleared
+                        // (There are all types of weird timing issues that seem
+                        // to be possible between finalization and context shutdown,
+                        // we need to be defensive).
+                        // There _ARE_ alternatives to this. But this is simple.
+                        const ctx = self._page.js;
+                        if (!ctx.identity_map.contains(@intFromPtr(ptr))) {
+                            return;
+                        }
+                        func(self);
+                        ctx.release(ptr);
+                    }
+                }.wrap,
+            };
+        }
     };
 }
 
@@ -367,6 +397,17 @@ pub const Callable = struct {
 
 pub const Property = union(enum) {
     int: i64,
+};
+
+const Finalizer = struct {
+    // The finalizer wrapper when called fro Zig. This is only called on
+    // Context.deinit
+    from_zig: *const fn (ctx: *anyopaque) void,
+
+    // The finalizer wrapper when called from V8. This may never be called
+    // (hence why we fallback to calling in Context.denit). If it is called,
+    // it is only ever called after we SetWeak on the Global.
+    from_v8: *const fn (?*const v8.WeakCallbackInfo) callconv(.c) void,
 };
 
 pub fn unknownPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
