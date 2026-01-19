@@ -207,7 +207,10 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 }
 
                 try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), .init(value));
-                if (@hasDecl(JsApi.Meta, "finalizer")) {
+                if (@hasDecl(JsApi.Meta, "weak")) {
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(JsApi.Meta.weak == true);
+                    }
                     v8.v8__Global__SetWeakFinalizer(gop.value_ptr, resolved.ptr, JsApi.Meta.finalizer.from_v8, v8.kParameter);
                 }
             }
