@@ -392,15 +392,20 @@ fn scrollIntoViewIfNeeded(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn getNode(arena: Allocator, browser_context: anytype, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
+fn getNode(arena: Allocator, bc: anytype, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
     const input_node_id = node_id orelse backend_node_id;
     if (input_node_id) |input_node_id_| {
-        return browser_context.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
+        return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
     }
     if (object_id) |object_id_| {
+        const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
         // Retrieve the object from which ever context it is in.
-        const parser_node = try browser_context.inspector.getNodePtr(arena, object_id_);
-        return try browser_context.node_registry.register(@ptrCast(@alignCast(parser_node)));
+        const parser_node = try bc.inspector.getNodePtr(arena, object_id_, &ls.local);
+        return try bc.node_registry.register(@ptrCast(@alignCast(parser_node)));
     }
     return error.MissingParams;
 }

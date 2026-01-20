@@ -176,12 +176,14 @@ pub fn getRemoteObject(
 }
 
 // Gets a value by object ID regardless of which context it is in.
-// Our TaggedAnyOpaque stores the "resolved" ptr value (the most specific _type,
+// Our TaggedOpaque stores the "resolved" ptr value (the most specific _type,
 // e.g. we store the ptr to the Div not the EventTarget). But, this is asking for
 // the pointer to the Node, so we need to use the same resolution mechanism which
 // is used when we're calling a function to turn the Div into a Node, which is
-// what Context.typeTaggedAnyOpaque does.
-pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8) !*anyopaque {
+// what TaggedOpaque.fromJS does.
+pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8, local: *js.Local) !*anyopaque {
+    // just to indicate that the caller is responsible for ensure there's a local environment
+    _ = local;
     const unwrapped = try self.session.unwrapObject(allocator, object_id);
     // The values context and groupId are not used here
     const js_val = unwrapped.value;
