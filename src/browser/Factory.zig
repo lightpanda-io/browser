@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -29,6 +29,7 @@ const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const UIEvent = @import("webapi/event/UIEvent.zig");
+const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const Element = @import("webapi/Element.zig");
 const Document = @import("webapi/Document.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -211,6 +212,29 @@ pub fn uiEvent(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child)
     chain.setLeaf(2, child);
 
     return chain.get(2);
+}
+
+pub fn mouseEvent(self: *Factory, typ: []const u8, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+
+    const chain = try PrototypeChain(
+        &.{ Event, UIEvent, MouseEvent, @TypeOf(child) },
+    ).allocate(allocator);
+
+    // Special case: Event has a _type_string field, so we need manual setup
+    const event_ptr = chain.get(0);
+    event_ptr.* = try eventInit(typ, chain.get(1), self._page);
+    chain.setMiddle(1, UIEvent.Type);
+
+    // Set MouseEvent with all its fields
+    const mouse_ptr = chain.get(2);
+    mouse_ptr.* = mouse;
+    mouse_ptr._proto = chain.get(1);
+    mouse_ptr._type = unionInit(MouseEvent.Type, chain.get(3));
+
+    chain.setLeaf(3, child);
+
+    return chain.get(3);
 }
 
 pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {

@@ -22,10 +22,11 @@ const UIEvent = @import("UIEvent.zig");
 const EventTarget = @import("../EventTarget.zig");
 const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");
+const PointerEvent = @import("PointerEvent.zig");
 
 const MouseEvent = @This();
 
-const MouseButton = enum(u8) {
+pub const MouseButton = enum(u8) {
     main = 0,
     auxillary = 1,
     secondary = 2,
@@ -33,6 +34,12 @@ const MouseButton = enum(u8) {
     fifth = 4,
 };
 
+pub const Type = union(enum) {
+    generic,
+    pointer_event: *PointerEvent,
+};
+
+_type: Type,
 _proto: *UIEvent,
 
 _alt_key: bool,
@@ -62,7 +69,7 @@ pub const MouseEventOptions = struct {
     relatedTarget: ?*EventTarget = null,
 };
 
-const Options = Event.inheritOptions(
+pub const Options = Event.inheritOptions(
     MouseEvent,
     MouseEventOptions,
 );
@@ -73,6 +80,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
     const event = try page._factory.uiEvent(
         typ,
         MouseEvent{
+            ._type = .generic,
             ._proto = undefined,
             ._screen_x = opts.screenX,
             ._screen_y = opts.screenY,
@@ -93,6 +101,18 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
 
 pub fn asEvent(self: *MouseEvent) *Event {
     return self._proto.asEvent();
+}
+
+pub fn as(self: *MouseEvent, comptime T: type) *T {
+    return self.is(T).?;
+}
+
+pub fn is(self: *MouseEvent, comptime T: type) ?*T {
+    switch (self._type) {
+        .generic => return if (T == MouseEvent) self else null,
+        .pointer_event => |e| return if (T == PointerEvent) e else null,
+    }
+    return null;
 }
 
 pub fn getAltKey(self: *const MouseEvent) bool {
