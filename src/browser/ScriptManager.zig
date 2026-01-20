@@ -851,6 +851,30 @@ pub const Script = struct {
 
         if (success) {
             self.executeCallback("load", local.toLocal(script_element._on_load), page);
+
+            // Dispatch load events if required.
+            const event_target = script_element.asNode().asEventTarget();
+            if (page._event_manager.hasListener(event_target, "load")) {
+                const Event = @import("webapi/Event.zig");
+
+                const event = Event.initTrusted("load", .{}, page) catch |err| {
+                    log.warn(.js, "script internal callback", .{
+                        .url = self.url,
+                        .type = "load",
+                        .err = err,
+                    });
+                    return;
+                };
+
+                page._event_manager.dispatch(script_element.asNode().asEventTarget(), event) catch {
+                    log.warn(.js, "script callback", .{
+                        .url = self.url,
+                        .type = "load",
+                    });
+                    return;
+                };
+            }
+
             return;
         }
 
