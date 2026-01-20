@@ -24,6 +24,7 @@ const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const URL = @import("../../URL.zig");
 
 const Script = @This();
 
@@ -45,8 +46,9 @@ pub fn asNode(self: *Script) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getSrc(self: *const Script) []const u8 {
-    return self._src;
+pub fn getSrc(self: *const Script, page: *Page) ![]const u8 {
+    if (self._src.len == 0) return "";
+    return try URL.resolve(page.call_arena, page.base(), self._src, .{});
 }
 
 pub fn setSrc(self: *Script, src: []const u8, page: *Page) !void {
