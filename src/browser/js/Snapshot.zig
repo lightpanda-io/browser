@@ -22,7 +22,6 @@ const bridge = @import("bridge.zig");
 const log = @import("../../log.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
-const Window = @import("../webapi/Window.zig");
 
 const v8 = js.v8;
 const JsApis = bridge.JsApis;
@@ -114,20 +113,6 @@ fn isValid(self: Snapshot) bool {
     return v8.v8__StartupData__IsValid(self.startup_data);
 }
 
-pub fn createGlobalTemplate(isolate: *v8.Isolate, templates: anytype) *const v8.ObjectTemplate {
-    // Set up the global template to inherit from Window's template
-    // This way the global object gets all Window properties through inheritance
-    const js_global = v8.v8__FunctionTemplate__New__DEFAULT(isolate);
-    const window_name = v8.v8__String__NewFromUtf8(isolate, "Window", v8.kNormal, 6);
-    v8.v8__FunctionTemplate__SetClassName(js_global, window_name);
-
-    // Find Window in JsApis by name (avoids circular import)
-    const window_index = comptime bridge.JsApiLookup.getId(Window.JsApi);
-    v8.v8__FunctionTemplate__Inherit(js_global, templates[window_index]);
-
-    return v8.v8__FunctionTemplate__InstanceTemplate(js_global).?;
-}
-
 pub fn create() !Snapshot {
     var external_references = collectExternalReferences();
 
@@ -169,8 +154,7 @@ pub fn create() !Snapshot {
 
         // Set up the global template to inherit from Window's template
         // This way the global object gets all Window properties through inheritance
-        const global_template = createGlobalTemplate(isolate, templates[0..]);
-        const context = v8.v8__Context__New(isolate, global_template, null);
+        const context = v8.v8__Context__New(isolate, null, null);
         v8.v8__Context__Enter(context);
         defer v8.v8__Context__Exit(context);
 

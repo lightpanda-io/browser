@@ -29,6 +29,8 @@ const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
 const ExecutionWorld = @import("ExecutionWorld.zig");
 
+const Window = @import("../webapi/Window.zig");
+
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -58,6 +60,9 @@ eternal_function_templates: []v8.Eternal,
 
 // Dynamic slice to avoid circular dependency on JsApis.len at comptime
 templates: []*const v8.FunctionTemplate,
+
+// Global template created once per isolate and reused across all contexts
+global_template: v8.Eternal,
 
 pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot) !Env {
     var params = try allocator.create(v8.CreateParams);
@@ -91,6 +96,7 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
     const templates = try allocator.alloc(*const v8.FunctionTemplate, JsApis.len);
     errdefer allocator.free(templates);
 
+    var global_eternal: v8.Eternal = undefined;
     {
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
@@ -107,6 +113,29 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
             const eternal_ptr = v8.v8__Eternal__Get(&eternal_function_templates[i], isolate.handle);
             templates[i] = @ptrCast(@alignCast(eternal_ptr.?));
         }
+
+        // Create global template once per isolate
+        const js_global = v8.v8__FunctionTemplate__New__DEFAULT(isolate.handle);
+        const window_name = v8.v8__String__NewFromUtf8(isolate.handle, "Window", v8.kNormal, 6);
+        v8.v8__FunctionTemplate__SetClassName(js_global, window_name);
+
+        // Find Window in JsApis by name (avoids circular import)
+        const window_index = comptime bridge.JsApiLookup.getId(Window.JsApi);
+        v8.v8__FunctionTemplate__Inherit(js_global, templates[window_index]);
+
+        const global_template_local = v8.v8__FunctionTemplate__InstanceTemplate(js_global).?;
+        v8.v8__ObjectTemplate__SetNamedHandler(global_template_local, &.{
+            .getter = bridge.unknownPropertyCallback,
+            .setter = null,
+            .query = null,
+            .deleter = null,
+            .enumerator = null,
+            .definer = null,
+            .descriptor = null,
+            .data = null,
+            .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
+        });
+        v8.v8__Eternal__New(isolate.handle, @ptrCast(global_template_local), &global_eternal);
     }
 
     return .{
@@ -117,6 +146,7 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
         .templates = templates,
         .isolate_params = params,
         .eternal_function_templates = eternal_function_templates,
+        .global_template = global_eternal,
     };
 }
 

@@ -80,21 +80,8 @@ pub fn createContext(self: *ExecutionWorld, page: *Page, enter: bool) !*Context 
     hs.init(isolate);
     defer hs.deinit();
 
-    // Getting this into the snapshot is tricky (anything involving the
-    // global is tricky). Easier to do here
-    const global_template = @import("Snapshot.zig").createGlobalTemplate(isolate.handle, env.templates);
-    v8.v8__ObjectTemplate__SetNamedHandler(global_template, &.{
-        .getter = bridge.unknownPropertyCallback,
-        .setter = null,
-        .query = null,
-        .deleter = null,
-        .enumerator = null,
-        .definer = null,
-        .descriptor = null,
-        .data = null,
-        .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
-    });
-
+    // Get the global template that was created once per isolate
+    const global_template: *const v8.ObjectTemplate = @ptrCast(@alignCast(v8.v8__Eternal__Get(&env.global_template, isolate.handle).?));
     const v8_context = v8.v8__Context__New(isolate.handle, global_template, null).?;
 
     // Create the v8::Context and wrap it in a v8::Global
