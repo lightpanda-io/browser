@@ -28,7 +28,7 @@ const Node = @import("Node.zig");
 /// https://w3c.github.io/selection-api/
 const Selection = @This();
 
-const SelectionDirection = enum { backward, forward, none };
+pub const SelectionDirection = enum { backward, forward, none };
 
 _range: ?*Range = null,
 _direction: SelectionDirection = .none,
