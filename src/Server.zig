@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const net = std.net;
@@ -157,7 +158,7 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
     });
     defer http.removeCDPClient();
 
-    std.debug.assert(client.mode == .http);
+    lp.assert(client.mode == .http, "Server.readLoop invalid mode", .{});
     while (true) {
         if (http.poll(timeout_ms) != .cdp_socket) {
             log.info(.app, "CDP timeout", .{});
@@ -236,7 +237,7 @@ pub const Client = struct {
         const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
         // we expect the socket to come to us as nonblocking
-        std.debug.assert(socket_flags & nonblocking == nonblocking);
+        lp.assert(socket_flags & nonblocking == nonblocking, "Client.init blocking", .{});
 
         var reader = try Reader(true).init(server.allocator);
         errdefer reader.deinit();
@@ -311,7 +312,7 @@ pub const Client = struct {
     }
 
     fn processHTTPRequest(self: *Client) !bool {
-        std.debug.assert(self.reader.pos == 0);
+        lp.assert(self.reader.pos == 0, "Client.HTTP pos", .{ .pos = self.reader.pos });
         const request = self.reader.buf[0..self.reader.len];
 
         if (request.len > MAX_HTTP_REQUEST_SIZE) {
@@ -592,8 +593,7 @@ pub const Client = struct {
                     // blocking and switch it back to non-blocking after the write
                     // is complete. Doesn't seem particularly efficiently, but
                     // this should virtually never happen.
-                    std.debug.assert(changed_to_blocking == false);
-                    log.debug(.app, "CDP write would block", .{});
+                    lp.assert(changed_to_blocking == false, "Client.double block", .{});
                     changed_to_blocking = true;
                     _ = try posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
                     continue :LOOP;
@@ -821,7 +821,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
             const pos = self.pos;
             const len = self.len;
 
-            std.debug.assert(pos <= len);
+            lp.assert(pos <= len, "Client.Reader.compact precondition", .{ .pos = pos, .len = len });
 
             // how many (if any) partial bytes do we have
             const partial_bytes = len - pos;
@@ -842,7 +842,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
                 const next_message_len = length_meta.@"1";
                 // if this isn't true, then we have a full message and it
                 // should have been processed.
-                std.debug.assert(next_message_len > partial_bytes);
+                lp.assert(pos <= len, "Client.Reader.compact postcondition", .{ .next_len = next_message_len, .partial = partial_bytes });
 
                 const missing_bytes = next_message_len - partial_bytes;
 
@@ -929,7 +929,7 @@ fn fillWebsocketHeader(buf: std.ArrayListUnmanaged(u8)) []const u8 {
 // makes the assumption that our caller reserved the first
 // 10 bytes for the header
 fn websocketHeader(buf: []u8, op_code: OpCode, payload_len: usize) []const u8 {
-    std.debug.assert(buf.len == 10);
+    lp.assert(buf.len == 10, "Websocket.Header", .{ .len = buf.len });
 
     const len = payload_len;
     buf[0] = 128 | @intFromEnum(op_code); // fin | opcode

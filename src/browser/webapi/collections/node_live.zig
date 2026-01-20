@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const String = @import("../../../string.zig").String;
 
@@ -124,7 +125,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             // _tw is reset. Again, this should always be the case, but we're
             // asserting to make sure, else we'll have weird behavior, namely
             // the wrong item being returned for the wrong index.
-            std.debug.assert(self._last_index == 0);
+            lp.assert(self._last_index == 0, "NodeLives.length", .{ .last_index = self._last_index });
 
             var tw = &self._tw;
             defer tw.reset();

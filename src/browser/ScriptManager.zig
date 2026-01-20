@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const js = @import("js/js.zig");
@@ -496,7 +497,7 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
 // Called from the Page to let us know it's done parsing the HTML. Necessary that
 // we know this so that we know that we can start evaluating deferred scripts.
 pub fn staticScriptsDone(self: *ScriptManager) void {
-    std.debug.assert(self.static_scripts_done == false);
+    lp.assert(self.static_scripts_done == false, "ScriptManager.staticScriptsDone", .{});
     self.static_scripts_done = true;
     self.evaluate();
 }
@@ -687,7 +688,7 @@ pub const Script = struct {
         // set `CURLOPT_SUPPRESS_CONNECT_HEADERS` and CONNECT to a proxy, this
         // will fail. This assertion exists to catch incorrect assumptions about
         // how libcurl works, or about how we've configured it.
-        std.debug.assert(self.source.remote.capacity == 0);
+        lp.assert(self.source.remote.capacity == 0, "ScriptManager.HeaderCallback", .{ .capacity = self.source.remote.capacity });
         var buffer = self.manager.buffer_pool.get();
         if (transfer.getContentLength()) |cl| {
             try buffer.ensureTotalCapacity(self.manager.allocator, cl);
@@ -762,10 +763,12 @@ pub const Script = struct {
 
     fn eval(self: *Script, page: *Page) void {
         // never evaluated, source is passed back to v8, via callbacks.
-        std.debug.assert(self.mode != .import_async);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(self.mode != .import_async);
 
-        // never evaluated, source is passed back to v8 when asked for it.
-        std.debug.assert(self.mode != .import);
+            // never evaluated, source is passed back to v8 when asked for it.
+            std.debug.assert(self.mode != .import);
+        }
 
         if (page.isGoingAway()) {
             // don't evaluate scripts for a dying page.

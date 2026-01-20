@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const h5e = @import("html5ever.zig");
 
 const Page = @import("../Page.zig");
@@ -162,7 +163,7 @@ pub const Streaming = struct {
     }
 
     pub fn start(self: *Streaming) !void {
-        std.debug.assert(self.handle == null);
+        lp.assert(self.handle == null, "Parser.start non-null handle", .{});
 
         self.handle = h5e.html5ever_streaming_parser_create(
             &self.parser.container,
@@ -357,7 +358,7 @@ fn getDataCallback(ctx: *anyopaque) callconv(.c) *anyopaque {
     const pn: *ParsedNode = @ptrCast(@alignCast(ctx));
     // For non-elements, data is null. But, we expect this to only ever
     // be called for elements.
-    std.debug.assert(pn.data != null);
+    lp.assert(pn.data != null, "Parser.getDataCallback null data", .{});
     return pn.data.?;
 }
 

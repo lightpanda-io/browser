@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const log = @import("../../log.zig");
 const String = @import("../../string.zig").String;
@@ -467,6 +468,22 @@ pub fn getAttribute(self: *const Element, name: []const u8, page: *Page) !?[]con
     return attributes.get(name, page);
 }
 
+/// For simplicity, the namespace is currently ignored and only the local name is used.
+pub fn getAttributeNS(
+    self: *const Element,
+    maybe_namespace: ?[]const u8,
+    local_name: []const u8,
+    page: *Page,
+) !?[]const u8 {
+    if (maybe_namespace) |namespace| {
+        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
+            log.warn(.not_implemented, "Element.getAttributeNS", .{ .namespace = namespace });
+        }
+    }
+
+    return self.getAttribute(local_name, page);
+}
+
 pub fn getAttributeSafe(self: *const Element, name: []const u8) ?[]const u8 {
     const attributes = self._attributes orelse return null;
     return attributes.getSafe(name);
@@ -499,6 +516,26 @@ pub fn setAttribute(self: *Element, name: []const u8, value: []const u8, page: *
     _ = try attributes.put(name, value, self, page);
 }
 
+pub fn setAttributeNS(
+    self: *Element,
+    maybe_namespace: ?[]const u8,
+    qualified_name: []const u8,
+    value: []const u8,
+    page: *Page,
+) !void {
+    if (maybe_namespace) |namespace| {
+        if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
+            log.warn(.not_implemented, "Element.setAttributeNS", .{ .namespace = namespace });
+        }
+    }
+
+    const local_name = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
+        qualified_name[idx + 1 ..]
+    else
+        qualified_name;
+    return self.setAttribute(local_name, value, page);
+}
+
 pub fn setAttributeSafe(self: *Element, name: []const u8, value: []const u8, page: *Page) !void {
     const attributes = try self.getOrCreateAttributeList(page);
     _ = try attributes.putSafe(name, value, self, page);
@@ -509,7 +546,7 @@ pub fn getOrCreateAttributeList(self: *Element, page: *Page) !*Attribute.List {
 }
 
 pub fn createAttributeList(self: *Element, page: *Page) !*Attribute.List {
-    std.debug.assert(self._attributes == null);
+    lp.assert(self._attributes == null, "Element.createAttributeList non-null _attributes", .{});
     const a = try page.arena.create(Attribute.List);
     a.* = .{ .normalize = self._namespace == .html };
     self._attributes = a;
@@ -1380,8 +1417,10 @@ pub const JsApi = struct {
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
     pub const hasAttributes = bridge.function(Element.hasAttributes, .{});
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
+    pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
     pub const setAttribute = bridge.function(Element.setAttribute, .{ .dom_exception = true });
+    pub const setAttributeNS = bridge.function(Element.setAttributeNS, .{ .dom_exception = true });
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{});
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
     pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true });

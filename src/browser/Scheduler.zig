@@ -96,7 +96,9 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
 
         if (repeat_in_ms) |ms| {
             // Task cannot be repeated immediately, and they should know that
-            std.debug.assert(ms != 0);
+            if (comptime IS_DEBUG) {
+                std.debug.assert(ms != 0);
+            }
             task.run_at = now + ms;
             try self.low_priority.add(task);
         }

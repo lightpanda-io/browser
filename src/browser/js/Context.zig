@@ -17,7 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
+const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 
 const js = @import("js.zig");
@@ -244,7 +244,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
-            std.debug.assert(gop.value_ptr.module == null);
+            lp.assert(gop.value_ptr.module == null, "Context.module has module", .{});
             gop.value_ptr.module = try m.persist();
             if (!gop.found_existing) {
                 gop.key_ptr.* = owned_url;
@@ -261,7 +261,9 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
     }
 
     const evaluated = mod.evaluate() catch {
-        std.debug.assert(mod.getStatus() == .kErrored);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(mod.getStatus() == .kErrored);
+        }
 
         // Some module-loading errors aren't handled by TryCatch. We need to
         // get the error from the module itself.
@@ -274,7 +276,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 
     // https://v8.github.io/api/head/classv8_1_1Module.html#a1f1758265a4082595757c3251bb40e0f
     // Must be a promise that gets returned here.
-    std.debug.assert(evaluated.isPromise());
+    lp.assert(evaluated.isPromise(), "Context.module non-promise", .{});
 
     if (comptime !want_result) {
         // avoid creating a bunch of persisted objects if it isn't
@@ -288,14 +290,16 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 
     // anyone who cares about the result, should also want it to
     // be cached
-    std.debug.assert(cacheable);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(cacheable);
+    }
 
     // entry has to have been created atop this function
     const entry = self.module_cache.getPtr(owned_url).?;
 
     // and the module must have been set after we compiled it
-    std.debug.assert(entry.module != null);
-    std.debug.assert(entry.module_promise == null);
+    lp.assert(entry.module != null, "Context.module with module", .{});
+    lp.assert(entry.module_promise == null, "Context.module with module_promise", .{});
 
     entry.module_promise = try evaluated.toPromise().persist();
     return if (comptime want_result) entry.* else {};
@@ -589,7 +593,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
     // We need to do part of what the first case is going to do in
     // `dynamicModuleSourceCallback`, but we can skip some steps
     // since the module is alrady loaded,
-    std.debug.assert(gop.value_ptr.module != null);
+    lp.assert(gop.value_ptr.module != null, "Context._dynamicModuleCallback has module", .{});
 
     // If the module hasn't been evaluated yet (it was only instantiated
     // as a static import dependency), we need to evaluate it now.
@@ -606,11 +610,13 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
             const evaluated = mod.evaluate() catch {
-                std.debug.assert(status == .kErrored);
+                if (comptime IS_DEBUG) {
+                    std.debug.assert(status == .kErrored);
+                }
                 _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
                 return promise;
             };
-            std.debug.assert(evaluated.isPromise());
+            lp.assert(evaluated.isPromise(), "Context._dynamicModuleCallback non-promise", .{});
             gop.value_ptr.module_promise = try evaluated.toPromise().persist();
         }
     }
@@ -667,9 +673,11 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 
     // we can only be here if the module has been evaluated and if
     // we have a resolve loading this asynchronously.
-    std.debug.assert(module_entry.module_promise != null);
-    std.debug.assert(module_entry.resolver_promise != null);
-    std.debug.assert(self.module_cache.contains(state.specifier));
+    lp.assert(module_entry.module_promise != null, "Context.resolveDynamicModule has module_promise", .{});
+    lp.assert(module_entry.resolver_promise != null, "Context.resolveDynamicModule has resolver_promise", .{});
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.module_cache.contains(state.specifier));
+    }
     state.module = module_entry.module.?;
 
     // We've gotten the source for the module and are evaluating it.

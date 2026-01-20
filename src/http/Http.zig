@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 pub const c = @cImport({
     @cInclude("curl/curl.h");
@@ -90,7 +91,7 @@ pub fn poll(self: *Http, timeout_ms: u32) Client.PerformStatus {
 }
 
 pub fn addCDPClient(self: *Http, cdp_client: Client.CDPClient) void {
-    std.debug.assert(self.client.cdp_client == null);
+    lp.assert(self.client.cdp_client == null, "Http addCDPClient existing", .{});
     self.client.cdp_client = cdp_client;
 }
 
@@ -144,7 +145,7 @@ pub const Connection = struct {
                 try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_CAINFO_BLOB, ca_blob));
             }
         } else {
-            std.debug.assert(opts.tls_verify_host == false);
+            lp.assert(opts.tls_verify_host == false, "Http.init tls_verify_host", .{});
 
             // Verify peer checks that the cert is signed by a CA, verify host makes sure the
             // cert contains the server name.
@@ -405,7 +406,7 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
     }
 
     // Final encoding should not be larger than our initial size estimate
-    std.debug.assert(buffer_size > arr.items.len);
+    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estiate = buffer_size, .len = arr.items.len });
 
     return .{
         .len = arr.items.len,

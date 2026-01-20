@@ -17,10 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const assert = std.debug.assert;
 const builtin = @import("builtin");
 const reflect = @import("reflect.zig");
-const IS_DEBUG = builtin.mode == .Debug;
 
 const log = @import("../log.zig");
 const String = @import("../string.zig").String;
@@ -37,6 +35,9 @@ const EventTarget = @import("webapi/EventTarget.zig");
 const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.zig");
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
+
+const IS_DEBUG = builtin.mode == .Debug;
+const assert = std.debug.assert;
 
 const Factory = @This();
 _page: *Page,

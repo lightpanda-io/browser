@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const Allocator = std.mem.Allocator;
 
 const CdpStorage = @import("storage.zig");
@@ -215,7 +216,7 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, msg: *const Notification.R
 
     // Isn't possible to do a network request within a Browser (which our
     // notification is tied to), without a page.
-    std.debug.assert(bc.session.page != null);
+    lp.assert(bc.session.page != null, "CDP.network.httpRequestFail null page", .{});
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{

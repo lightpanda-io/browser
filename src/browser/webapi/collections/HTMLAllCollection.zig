@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
@@ -58,7 +59,7 @@ pub fn length(self: *HTMLAllCollection, page: *const Page) u32 {
         }
     }
 
-    std.debug.assert(self._last_index == 0);
+    lp.assert(self._last_index == 0, "HTMLAllCollection.length", .{ .last_index = self._last_index });
 
     var tw = &self._tw;
     defer tw.reset();

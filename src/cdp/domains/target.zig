@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 const js = @import("../../browser/js/js.zig");
 
@@ -165,10 +166,10 @@ fn createTarget(cmd: anytype) !void {
     }
 
     // if target_id is null, we should never have a page
-    std.debug.assert(bc.session.page == null);
+    lp.assert(bc.session.page == null, "CDP.target.createTarget not null page", .{});
 
     // if target_id is null, we should never have a session_id
-    std.debug.assert(bc.session_id == null);
+    lp.assert(bc.session_id == null, "CDP.target.createTarget not null session_id", .{});
 
     const target_id = cmd.cdp.target_id_gen.next();
 
@@ -260,7 +261,7 @@ fn closeTarget(cmd: anytype) !void {
     }
 
     // can't be null if we have a target_id
-    std.debug.assert(bc.session.page != null);
+    lp.assert(bc.session.page != null, "CDP.target.closeTarget null page", .{});
 
     try cmd.sendResult(.{ .success = true }, .{ .include_session_id = false });
 
@@ -337,7 +338,7 @@ fn sendMessageToTarget(cmd: anytype) !void {
         return error.TargetNotLoaded;
     }
 
-    std.debug.assert(bc.session_id != null);
+    lp.assert(bc.session_id != null, "CDP.target.sendMessageToTarget null session_id", .{});
     if (std.mem.eql(u8, bc.session_id.?, params.sessionId) == false) {
         // Is this right? Is the params.sessionId meant to be the active
         // sessionId? What else could it be? We have no other session_id.
@@ -445,7 +446,7 @@ fn setAutoAttach(cmd: anytype) !void {
 
 fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
     const bc = cmd.browser_context.?;
-    std.debug.assert(bc.session_id == null);
+    lp.assert(bc.session_id == null, "CDP.target.doAttachtoTarget not null session_id", .{});
     const session_id = cmd.cdp.session_id_gen.next();
 
     // extra_headers should not be kept on a new page or tab,

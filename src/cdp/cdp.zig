@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const Allocator = std.mem.Allocator;
 const json = std.json;
 
@@ -34,6 +36,8 @@ const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 pub const URL_BASE = "chrome://newtab/";
 pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const CDP = CDPT(struct {
     const Client = *@import("../Server.zig").Client;
@@ -657,7 +661,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onInspectorEvent(ctx: *anyopaque, msg: []const u8) void {
             if (log.enabled(.cdp, .debug)) {
                 // msg should be {"method":<method>,...
-                std.debug.assert(std.mem.startsWith(u8, msg, "{\"method\":"));
+                lp.assert(std.mem.startsWith(u8, msg, "{\"method\":"), "onInspectorEvent prefix", .{});
                 const method_end = std.mem.indexOfScalar(u8, msg, ',') orelse {
                     log.err(.cdp, "invalid inspector event", .{ .msg = msg });
                     return;
@@ -716,7 +720,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             buf.appendSliceAssumeCapacity(field);
             buf.appendSliceAssumeCapacity(session_id);
             buf.appendSliceAssumeCapacity("\"}");
-            std.debug.assert(buf.items.len == message_len);
+            if (comptime IS_DEBUG) {
+                std.debug.assert(buf.items.len == message_len);
+            }
 
             try cdp.client.sendJSONRaw(buf);
         }

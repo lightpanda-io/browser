@@ -426,7 +426,9 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                         v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(target, js_name, getter_callback);
                     }
                 } else {
-                    std.debug.assert(value.static == false);
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(value.static == false);
+                    }
                     const setter_callback = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.setter.?).?);
                     v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT2(target, js_name, getter_callback, setter_callback);
                 }

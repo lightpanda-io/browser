@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 
 const crypto = @import("../../crypto.zig");
@@ -387,7 +388,7 @@ pub const CryptoKey = struct {
 
         // HMAC is simply CSPRNG.
         const res = crypto.RAND_bytes(key.ptr, key.len);
-        std.debug.assert(res == 1);
+        lp.assert(res == 1, "SubtleCrypto.initHMAC", .{ .res = res });
 
         const crypto_key = try page._factory.create(CryptoKey{
             ._type = .hmac,
@@ -581,7 +582,7 @@ pub const CryptoKey = struct {
                 return error.Internal;
             }
             // Sanity check.
-            std.debug.assert(derived_key.len == out_key_len);
+            lp.assert(derived_key.len == out_key_len, "SubtleCrypto.deriveBitsX25519", .{});
 
             // Length is in bits, convert to byte length.
             const length = (length_in_bits / 8) + (7 + (length_in_bits % 8)) / 8;

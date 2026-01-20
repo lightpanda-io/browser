@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
 const builtin = @import("builtin");
 const posix = std.posix;
 
@@ -612,7 +613,7 @@ fn writeTime(into: []u8, time: Time) u8 {
 }
 
 fn paddingTwoDigits(value: usize) [2]u8 {
-    std.debug.assert(value < 61);
+    lp.assert(value < 61, "datetime.paddingTwoDigits", .{ .value = value });
     const digits = "0001020304050607080910111213141516171819" ++
         "2021222324252627282930313233343536373839" ++
         "4041424344454647484950515253545556575859" ++
