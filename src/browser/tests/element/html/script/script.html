@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<script id="script">
+   {
+    let s = document.createElement('script');
+    testing.expectEqual('', s.src);
+
+    s.src = '/over.9000.js';
+    testing.expectEqual('http://127.0.0.1:9582/over.9000.js', s.src);
+   }
+</script>
