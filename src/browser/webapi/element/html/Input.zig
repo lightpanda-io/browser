@@ -290,8 +290,8 @@ pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
             // if the input is fully selected, replace the content.
             const new_value = try arena.dupe(u8, str);
             try self.setValue(new_value, page);
-            self._selection_start = 1;
-            self._selection_end = 1;
+            self._selection_start = @intCast(new_value.len);
+            self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
         },
         .partial => |range| {
