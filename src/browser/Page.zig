@@ -2932,16 +2932,7 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
 
         // Handle printable characters
         if (key.isPrintable()) {
-            // if the input is selected, replace the content.
-            if (input._selected) {
-                const new_value = try self.arena.dupe(u8, key.asString());
-                try input.setValue(new_value, self);
-                input._selected = false;
-                return;
-            }
-            const current_value = input.getValue();
-            const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, key.asString() });
-            try input.setValue(new_value, self);
+            try input.innerInsert(key.asString(), self);
         }
         return;
     }
@@ -3010,18 +3001,7 @@ pub fn insertText(self: *Page, v: []const u8) !void {
             return;
         }
 
-        // If the input is selected, replace the existing value
-        if (input._selected) {
-            const new_value = try self.arena.dupe(u8, v);
-            try input.setValue(new_value, self);
-            input._selected = false;
-            return;
-        }
-
-        // Or append the value
-        const current_value = input.getValue();
-        const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, v });
-        return input.setValue(new_value, self);
+        try input.innerInsert(v, self);
     }
 
     if (html_element.is(Element.Html.TextArea)) |textarea| {
