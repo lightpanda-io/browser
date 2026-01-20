@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=default>
+{
+  let event = new PointerEvent('pointerdown');
+  testing.expectEqual('pointerdown', event.type);
+  testing.expectEqual(true, event instanceof PointerEvent);
+  testing.expectEqual(true, event instanceof MouseEvent);
+  testing.expectEqual(true, event instanceof UIEvent);
+  testing.expectEqual(true, event instanceof Event);
+  testing.expectEqual(0, event.pointerId);
+  testing.expectEqual('', event.pointerType);
+  testing.expectEqual(1.0, event.width);
+  testing.expectEqual(1.0, event.height);
+  testing.expectEqual(0.0, event.pressure);
+  testing.expectEqual(0.0, event.tangentialPressure);
+  testing.expectEqual(0, event.tiltX);
+  testing.expectEqual(0, event.tiltY);
+  testing.expectEqual(0, event.twist);
+  testing.expectEqual(false, event.isPrimary);
+}
+</script>
+
+<script id=parameters>
+{
+  let new_event = new PointerEvent('pointerdown', {
+    pointerId: 42,
+    pointerType: 'pen',
+    width: 10.5,
+    height: 20.5,
+    pressure: 0.75,
+    tangentialPressure: -0.25,
+    tiltX: 30,
+    tiltY: 45,
+    twist: 90,
+    isPrimary: true,
+    clientX: 100,
+    clientY: 200,
+    screenX: 300,
+    screenY: 400
+  });
+  testing.expectEqual(42, new_event.pointerId);
+  testing.expectEqual('pen', new_event.pointerType);
+  testing.expectEqual(10.5, new_event.width);
+  testing.expectEqual(20.5, new_event.height);
+  testing.expectEqual(0.75, new_event.pressure);
+  testing.expectEqual(-0.25, new_event.tangentialPressure);
+  testing.expectEqual(30, new_event.tiltX);
+  testing.expectEqual(45, new_event.tiltY);
+  testing.expectEqual(90, new_event.twist);
+  testing.expectEqual(true, new_event.isPrimary);
+  testing.expectEqual(100, new_event.clientX);
+  testing.expectEqual(200, new_event.clientY);
+  testing.expectEqual(300, new_event.screenX);
+  testing.expectEqual(400, new_event.screenY);
+}
+</script>
+
+<script id=mousePointerType>
+{
+  let mouse_event = new PointerEvent('pointerdown', { pointerType: 'mouse' });
+  testing.expectEqual('mouse', mouse_event.pointerType);
+}
+</script>
+
+<script id=touchPointerType>
+{
+  let touch_event = new PointerEvent('pointerdown', { pointerType: 'touch', pointerId: 1, pressure: 0.5 });
+  testing.expectEqual('touch', touch_event.pointerType);
+  testing.expectEqual(1, touch_event.pointerId);
+  testing.expectEqual(0.5, touch_event.pressure);
+}
+</script>
+
+<script id=listener>
+{
+  let pe = new PointerEvent('pointerdown', { pointerId: 123 });
+  testing.expectEqual(true, pe instanceof PointerEvent);
+  testing.expectEqual(true, pe instanceof MouseEvent);
+  testing.expectEqual(true, pe instanceof Event);
+
+  var evt = null;
+  document.addEventListener('pointerdown', function (e) {
+    evt = e;
+  });
+  document.dispatchEvent(pe);
+  testing.expectEqual('pointerdown', evt.type);
+  testing.expectEqual(true, evt instanceof PointerEvent);
+  testing.expectEqual(123, evt.pointerId);
+}
+</script>
+
+<script id=isTrusted>
+{
+  let pointerEvent = new PointerEvent('pointerup');
+  testing.expectEqual(false, pointerEvent.isTrusted);
+
+  let pointerIsTrusted = null;
+  document.addEventListener('pointertest', (e) => {
+    pointerIsTrusted = e.isTrusted;
+    testing.expectEqual(true, e instanceof PointerEvent);
+  });
+  document.dispatchEvent(new PointerEvent('pointertest'));
+  testing.expectEqual(false, pointerIsTrusted);
+}
+</script>
+
+<script id=eventTypes>
+{
+  let down = new PointerEvent('pointerdown');
+  testing.expectEqual('pointerdown', down.type);
+
+  let up = new PointerEvent('pointerup');
+  testing.expectEqual('pointerup', up.type);
+
+  let move = new PointerEvent('pointermove');
+  testing.expectEqual('pointermove', move.type);
+
+  let enter = new PointerEvent('pointerenter');
+  testing.expectEqual('pointerenter', enter.type);
+
+  let leave = new PointerEvent('pointerleave');
+  testing.expectEqual('pointerleave', leave.type);
+
+  let over = new PointerEvent('pointerover');
+  testing.expectEqual('pointerover', over.type);
+
+  let out = new PointerEvent('pointerout');
+  testing.expectEqual('pointerout', out.type);
+
+  let cancel = new PointerEvent('pointercancel');
+  testing.expectEqual('pointercancel', cancel.type);
+}
+</script>
+
+<script id=inheritedMouseProperties>
+{
+  let pe = new PointerEvent('pointerdown', {
+    button: 2,
+    buttons: 4,
+    altKey: true,
+    ctrlKey: true,
+    shiftKey: true,
+    metaKey: true
+  });
+  testing.expectEqual(2, pe.button);
+  testing.expectEqual(true, pe.altKey);
+  testing.expectEqual(true, pe.ctrlKey);
+  testing.expectEqual(true, pe.shiftKey);
+  testing.expectEqual(true, pe.metaKey);
+}
+</script>
+
+<script id=inheritedUIEventProperties>
+{
+  let pe = new PointerEvent('pointerdown', {
+    detail: 5,
+    bubbles: true,
+    cancelable: true
+  });
+  testing.expectEqual(5, pe.detail);
+  testing.expectEqual(true, pe.bubbles);
+  testing.expectEqual(true, pe.cancelable);
+}
+</script>

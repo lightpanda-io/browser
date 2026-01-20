@@ -68,7 +68,10 @@ pub fn as(self: *UIEvent, comptime T: type) *T {
 pub fn is(self: *UIEvent, comptime T: type) ?*T {
     switch (self._type) {
         .generic => return if (T == UIEvent) self else null,
-        .mouse_event => |e| return if (T == @import("MouseEvent.zig")) e else null,
+        .mouse_event => |e| {
+            if (T == @import("MouseEvent.zig")) return e;
+            return e.is(T);
+        },
         .keyboard_event => |e| return if (T == @import("KeyboardEvent.zig")) e else null,
     }
     return null;
