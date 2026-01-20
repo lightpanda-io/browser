@@ -96,7 +96,6 @@ fn report(reason: []const u8) !void {
         "-fsSL",
         url[0 .. url.len - 1 :0],
     };
-    std.debug.print("*{s}*\n", .{argv[2].?});
 
     const result = std.c.fork();
     switch (result) {
