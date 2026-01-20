@@ -5,6 +5,7 @@ const URL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Event = @import("../../Event.zig");
 
 const Image = @This();
 _proto: *HtmlElement,
@@ -47,6 +48,13 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe("src", value, page);
+
+    // We don't actually fetch the media, here we fake the load call.
+    const event_target = self.asNode().asEventTarget();
+    if (page._event_manager.hasListener(event_target, "load")) {
+        const event = try Event.initTrusted("load", .{}, page);
+        return page._event_manager.dispatch(event_target, event);
+    }
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
