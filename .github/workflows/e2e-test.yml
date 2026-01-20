@@ -124,8 +124,8 @@ jobs:
     needs: zig-build-release
 
     env:
-      MAX_MEMORY: 28000
-      MAX_AVG_DURATION: 23
+      MAX_MEMORY: 26000
+      MAX_AVG_DURATION: 17
       LIGHTPANDA_DISABLE_TELEMETRY: true
 
     # use a self host runner.
