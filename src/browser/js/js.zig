@@ -24,7 +24,9 @@ const log = @import("../../log.zig");
 pub const Env = @import("Env.zig");
 pub const bridge = @import("bridge.zig");
 pub const ExecutionWorld = @import("ExecutionWorld.zig");
+pub const Caller = @import("Caller.zig");
 pub const Context = @import("Context.zig");
+pub const Local = @import("Local.zig");
 pub const Inspector = @import("Inspector.zig");
 pub const Snapshot = @import("Snapshot.zig");
 pub const Platform = @import("Platform.zig");
@@ -43,7 +45,6 @@ pub const Module = @import("Module.zig");
 pub const BigInt = @import("BigInt.zig");
 pub const Number = @import("Number.zig");
 pub const Integer = @import("Integer.zig");
-pub const Global = @import("global.zig").Global;
 pub const PromiseResolver = @import("PromiseResolver.zig");
 
 const Allocator = std.mem.Allocator;
@@ -78,11 +79,11 @@ pub const ArrayBuffer = struct {
 };
 
 pub const Exception = struct {
-    ctx: *const Context,
+    local: *const Local,
     handle: *const v8.Value,
 
     pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
-        return self.context.valueToString(self.inner, .{ .allocator = allocator });
+        return self.local.valueToString(self.handel, .{ .allocator = allocator });
     }
 };
 
@@ -215,61 +216,6 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
     }
     return null;
 }
-// When we return a Zig object to V8, we put it on the heap and pass it into
-// v8 as an *anyopaque (i.e. void *). When V8 gives us back the value, say, as a
-// function parameter, we know what type it _should_ be.
-//
-// In a simple/perfect world, we could use this knowledge to cast the *anyopaque
-// to the parameter type:
-//   const arg: @typeInfo(@TypeOf(function)).@"fn".params[0] = @ptrCast(v8_data);
-//
-// But there are 2 reasons we can't do that.
-//
-// == Reason 1 ==
-// The JS code might pass the wrong type:
-//
-//   var cat = new Cat();
-//   cat.setOwner(new Cat());
-//
-// The zig_setOwner method expects the 2nd parameter to be an *Owner, but
-// the JS code passed a *Cat.
-//
-// To solve this issue, we tag every returned value so that we can check what
-// type it is. In the above case, we'd expect an *Owner, but the tag would tell
-// us that we got a *Cat. We use the type index in our Types lookup as the tag.
-//
-// == Reason 2 ==
-// Because of prototype inheritance, even "correct" code can be a challenge. For
-// example, say the above JavaScript is fixed:
-//
-//   var cat = new Cat();
-//   cat.setOwner(new Owner("Leto"));
-//
-// The issue is that setOwner might not expect an *Owner, but rather a
-// *Person, which is the prototype for Owner. Now our Zig code is expecting
-// a *Person, but it was (correctly) given an *Owner.
-// For this reason, we also store the prototype chain.
-pub const TaggedAnyOpaque = struct {
-    prototype_len: u16,
-    prototype_chain: [*]const PrototypeChainEntry,
-
-    // Ptr to the Zig instance. Between the context where it's called (i.e.
-    // we have the comptime parameter info for all functions), and the index field
-    // we can figure out what type this is.
-    value: *anyopaque,
-
-    // When we're asked to describe an object via the Inspector, we _must_ include
-    // the proper subtype (and description) fields in the returned JSON.
-    // V8 will give us a Value and ask us for the subtype. From the js.Value we
-    // can get a js.Object, and from the js.Object, we can get out TaggedAnyOpaque
-    // which is where we store the subtype.
-    subtype: ?bridge.SubType,
-};
-
-pub const PrototypeChainEntry = struct {
-    index: bridge.JsApiLookup.BackingInt,
-    offset: u16, // offset to the _proto field
-};
 
 // These are here, and not in Inspector.zig, because Inspector.zig isn't always
 // included (e.g. in the wpt build).
@@ -281,7 +227,7 @@ pub export fn v8_inspector__Client__IMPL__valueSubtype(
     _: *v8.InspectorClientImpl,
     c_value: *const v8.Value,
 ) callconv(.c) [*c]const u8 {
-    const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
+    const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
     return if (external_entry.subtype) |st| @tagName(st) else null;
 }
 
@@ -298,11 +244,11 @@ pub export fn v8_inspector__Client__IMPL__descriptionForValueSubtype(
 
     // We _must_ include a non-null description in order for the subtype value
     // to be included. Besides that, I don't know if the value has any meaning
-    const external_entry = Inspector.getTaggedAnyOpaque(c_value) orelse return null;
+    const external_entry = Inspector.getTaggedOpaque(c_value) orelse return null;
     return if (external_entry.subtype == null) null else "";
 }
 
 test "TaggedAnyOpaque" {
     // If we grow this, fine, but it should be a conscious decision
-    try std.testing.expectEqual(24, @sizeOf(TaggedAnyOpaque));
+    try std.testing.expectEqual(24, @sizeOf(@import("TaggedOpaque.zig")));
 }

@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const log = @import("../../log.zig");
+const js = @import("../../browser/js/js.zig");
 
 // TODO: hard coded IDs
 const LOADER_ID = "LOADERID42AA389647D702B4D805F49A";
@@ -176,9 +177,13 @@ fn createTarget(cmd: anytype) !void {
 
     const page = try bc.session.createPage();
     {
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
         bc.inspector.contextCreated(
-            page.js,
+            &ls.local,
             "",
             "", // @ZIGDOM
             // try page.origin(arena),

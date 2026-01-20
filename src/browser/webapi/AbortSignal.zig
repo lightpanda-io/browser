@@ -57,7 +57,7 @@ pub fn asEventTarget(self: *AbortSignal) *EventTarget {
     return self._proto;
 }
 
-pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
+pub fn abort(self: *AbortSignal, reason_: ?Reason, local: *const js.Local, page: *Page) !void {
     if (self._aborted) {
         return;
     }
@@ -77,11 +77,10 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
 
     // Dispatch abort event
     const event = try Event.initTrusted("abort", .{}, page);
-    const func = if (self._on_abort) |*g| g.local() else null;
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        func,
+        local.toLocal(self._on_abort),
         .{ .context = "abort signal" },
     );
 }
@@ -89,7 +88,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
 // Static method to create an already-aborted signal
 pub fn createAborted(reason_: ?js.Value.Global, page: *Page) !*AbortSignal {
     const signal = try init(page);
-    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, page);
+    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, page.js.local.?, page);
     return signal;
 }
 
@@ -112,11 +111,13 @@ const ThrowIfAborted = union(enum) {
     undefined: void,
 };
 pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
+    const local = page.js.local.?;
+
     if (self._aborted) {
         const exception = switch (self._reason) {
-            .string => |str| page.js.throw(str),
-            .js_val => |js_val| page.js.throw(try js_val.local().toString(.{ .allocator = page.call_arena })),
-            .undefined => page.js.throw("AbortError"),
+            .string => |str| local.throw(str),
+            .js_val => |js_val| local.throw(try local.toLocal(js_val).toString(.{ .allocator = page.call_arena })),
+            .undefined => local.throw("AbortError"),
         };
         return .{ .exception = exception };
     }
@@ -135,7 +136,11 @@ const TimeoutCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
-        self.signal.abort(.{ .string = "TimeoutError" }, self.page) catch |err| {
+        var ls: js.Local.Scope = undefined;
+        self.page.js.localScope(&ls);
+        defer ls.deinit();
+
+        self.signal.abort(.{ .string = "TimeoutError" }, &ls.local, self.page) catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
         return null;

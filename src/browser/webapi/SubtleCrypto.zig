@@ -96,10 +96,10 @@ pub fn generateKey(
     page: *Page,
 ) !js.Promise {
     const key_or_pair = CryptoKey.init(algorithm, extractable, key_usages, page) catch |err| {
-        return page.js.rejectPromise(@errorName(err));
+        return page.js.local.?.rejectPromise(@errorName(err));
     };
 
-    return page.js.resolvePromise(key_or_pair);
+    return page.js.local.?.resolvePromise(key_or_pair);
 }
 
 /// Exports a key: that is, it takes as input a CryptoKey object and gives you
@@ -115,7 +115,7 @@ pub fn exportKey(
     }
 
     if (std.mem.eql(u8, format, "raw")) {
-        return page.js.resolvePromise(js.ArrayBuffer{ .values = key._key });
+        return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = key._key });
     }
 
     const is_unsupported = std.mem.eql(u8, format, "pkcs8") or
@@ -125,7 +125,7 @@ pub fn exportKey(
         log.warn(.not_implemented, "SubtleCrypto.exportKey", .{ .format = format });
     }
 
-    return page.js.rejectPromise(@errorName(error.NotSupported));
+    return page.js.local.?.rejectPromise(@errorName(error.NotSupported));
 }
 
 /// Derive a secret key from a master key.
@@ -140,14 +140,14 @@ pub fn deriveBits(
         .ecdh_or_x25519 => |p| {
             const name = p.name;
             if (std.mem.eql(u8, name, "X25519")) {
-                return page.js.resolvePromise(base_key.deriveBitsX25519(p.public, length, page));
+                return page.js.local.?.resolvePromise(base_key.deriveBitsX25519(p.public, length, page));
             }
 
             if (std.mem.eql(u8, name, "ECDH")) {
                 log.warn(.not_implemented, "SubtleCrypto.deriveBits", .{ .name = name });
             }
 
-            return page.js.rejectPromise(@errorName(error.NotSupported));
+            return page.js.local.?.rejectPromise(@errorName(error.NotSupported));
         },
     };
 }
@@ -184,19 +184,19 @@ pub fn sign(
         .hmac => {
             // Verify algorithm.
             if (!algorithm.isHMAC()) {
-                return page.js.rejectPromise(@errorName(error.InvalidAccessError));
+                return page.js.local.?.rejectPromise(@errorName(error.InvalidAccessError));
             }
 
             // Call sign for HMAC.
             const result = key.signHMAC(data, page) catch |err| {
-                return page.js.rejectPromise(@errorName(err));
+                return page.js.local.?.rejectPromise(@errorName(err));
             };
 
-            return page.js.resolvePromise(result);
+            return page.js.local.?.resolvePromise(result);
         },
         else => {
             log.warn(.not_implemented, "SubtleCrypto.sign", .{ .key_type = key._type });
-            return page.js.rejectPromise(@errorName(error.InvalidAccessError));
+            return page.js.local.?.rejectPromise(@errorName(error.InvalidAccessError));
         },
     };
 }
@@ -454,10 +454,10 @@ pub const CryptoKey = struct {
         if (signed != null) {
             // CRYPTO_memcmp compare in constant time so prohibits time-based attacks.
             const res = crypto.CRYPTO_memcmp(signed, @ptrCast(signature.ptr), signature.len);
-            return page.js.resolvePromise(res == 0);
+            return page.js.local.?.resolvePromise(res == 0);
         }
 
-        return page.js.resolvePromise(false);
+        return page.js.local.?.resolvePromise(false);
     }
 
     // X25519.

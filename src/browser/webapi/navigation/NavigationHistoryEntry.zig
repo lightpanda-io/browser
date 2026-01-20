@@ -81,7 +81,7 @@ pub const StateReturn = union(enum) { value: ?js.Value, undefined: void };
 pub fn getState(self: *const NavigationHistoryEntry, page: *Page) !StateReturn {
     if (self._state.source == .navigation) {
         if (self._state.value) |value| {
-            return .{ .value = try page.js.parseJSON(value) };
+            return .{ .value = try page.js.local.?.parseJSON(value) };
         }
     }
 

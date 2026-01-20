@@ -20,7 +20,7 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const Context = @import("Context.zig");
+const TaggedOpaque = @import("TaggedOpaque.zig");
 
 const Allocator = std.mem.Allocator;
 const RndGen = std.Random.DefaultPrng;
@@ -36,7 +36,7 @@ client: Client,
 channel: Channel,
 session: Session,
 rnd: RndGen = RndGen.init(0),
-default_context: ?*const v8.Context = null,
+default_context: ?v8.Global,
 
 // We expect allocator to be an arena
 // Note: This initializes the pre-allocated inspector in-place
@@ -96,9 +96,9 @@ pub fn init(self: *Inspector, isolate: *v8.Isolate, ctx: anytype) !void {
 }
 
 pub fn deinit(self: *const Inspector) void {
-    var temp_scope: v8.HandleScope = undefined;
-    v8.v8__HandleScope__CONSTRUCT(&temp_scope, self.isolate);
-    defer v8.v8__HandleScope__DESTRUCT(&temp_scope);
+    var hs: v8.HandleScope = undefined;
+    v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
+    defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     self.session.deinit();
     self.client.deinit();
@@ -128,7 +128,7 @@ pub fn send(self: *const Inspector, msg: []const u8) void {
 // - is_default_context: Whether the execution context is default, should match the auxData
 pub fn contextCreated(
     self: *Inspector,
-    context: *const Context,
+    local: *const js.Local,
     name: []const u8,
     origin: []const u8,
     aux_data: []const u8,
@@ -143,11 +143,11 @@ pub fn contextCreated(
         aux_data.ptr,
         aux_data.len,
         CONTEXT_GROUP_ID,
-        context.handle,
+        local.handle,
     );
 
     if (is_default_context) {
-        self.default_context = context.handle;
+        self.default_context = local.ctx.handle;
     }
 }
 
@@ -158,41 +158,42 @@ pub fn contextCreated(
 // we'll create it and track it for cleanup when the context ends.
 pub fn getRemoteObject(
     self: *const Inspector,
-    context: *Context,
+    local: *const js.Local,
     group: []const u8,
     value: anytype,
 ) !RemoteObject {
-    const js_value = try context.zigValueToJs(value, .{});
+    const js_val = try local.zigValueToJs(value, .{});
 
     // We do not want to expose this as a parameter for now
     const generate_preview = false;
     return self.session.wrapObject(
-        context.isolate.handle,
-        context.handle,
-        js_value.handle,
+        local.isolate.handle,
+        local.handle,
+        js_val.handle,
         group,
         generate_preview,
     );
 }
 
 // Gets a value by object ID regardless of which context it is in.
-// Our TaggedAnyOpaque stores the "resolved" ptr value (the most specific _type,
+// Our TaggedOpaque stores the "resolved" ptr value (the most specific _type,
 // e.g. we store the ptr to the Div not the EventTarget). But, this is asking for
 // the pointer to the Node, so we need to use the same resolution mechanism which
 // is used when we're calling a function to turn the Div into a Node, which is
-// what Context.typeTaggedAnyOpaque does.
-pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8) !*anyopaque {
+// what TaggedOpaque.fromJS does.
+pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8, local: *js.Local) !*anyopaque {
+    // just to indicate that the caller is responsible for ensure there's a local environment
+    _ = local;
     const unwrapped = try self.session.unwrapObject(allocator, object_id);
     // The values context and groupId are not used here
     const js_val = unwrapped.value;
     if (!v8.v8__Value__IsObject(js_val)) {
         return error.ObjectIdIsNotANode;
     }
+
     const Node = @import("../webapi/Node.zig");
     // Cast to *const v8.Object for typeTaggedAnyOpaque
-    return Context.typeTaggedAnyOpaque(*Node, @ptrCast(js_val)) catch {
-        return error.ObjectIdIsNotANode;
-    };
+    return TaggedOpaque.fromJS(*Node, @ptrCast(js_val)) catch return error.ObjectIdIsNotANode;
 }
 
 pub const RemoteObject = struct {
@@ -399,7 +400,7 @@ fn fromData(data: *anyopaque) *Inspector {
     return @ptrCast(@alignCast(data));
 }
 
-pub fn getTaggedAnyOpaque(value: *const v8.Value) ?*js.TaggedAnyOpaque {
+pub fn getTaggedOpaque(value: *const v8.Value) ?*TaggedOpaque {
     if (!v8.v8__Value__IsObject(value)) {
         return null;
     }
@@ -469,7 +470,8 @@ pub export fn v8_inspector__Client__IMPL__ensureDefaultContextInGroup(
     data: *anyopaque,
 ) callconv(.c) ?*const v8.Context {
     const inspector: *Inspector = @ptrCast(@alignCast(data));
-    return inspector.default_context;
+    const global_handle = inspector.default_context orelse return null;
+    return v8.v8__Global__Get(&global_handle, inspector.isolate);
 }
 
 pub export fn v8_inspector__Channel__IMPL__sendResponse(

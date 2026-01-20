@@ -22,7 +22,7 @@ const v8 = js.v8;
 
 const Array = @This();
 
-ctx: *js.Context,
+local: *const js.Local,
 handle: *const v8.Array,
 
 pub fn len(self: Array) usize {
@@ -30,39 +30,37 @@ pub fn len(self: Array) usize {
 }
 
 pub fn get(self: Array, index: u32) !js.Value {
-    const ctx = self.ctx;
+    const ctx = self.local.ctx;
 
     const idx = js.Integer.init(ctx.isolate.handle, index);
-    const handle = v8.v8__Object__Get(@ptrCast(self.handle), ctx.handle, idx.handle) orelse {
+    const handle = v8.v8__Object__Get(@ptrCast(self.handle), self.local.handle, idx.handle) orelse {
         return error.JsException;
     };
 
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = handle,
     };
 }
 
-pub fn set(self: Array, index: u32, value: anytype, comptime opts: js.bridge.Caller.CallOpts) !bool {
-    const ctx = self.ctx;
-
-    const js_value = try ctx.zigValueToJs(value, opts);
+pub fn set(self: Array, index: u32, value: anytype, comptime opts: js.Caller.CallOpts) !bool {
+    const js_value = try self.local.zigValueToJs(value, opts);
 
     var out: v8.MaybeBool = undefined;
-    v8.v8__Object__SetAtIndex(@ptrCast(self.handle), ctx.handle, index, js_value.handle, &out);
+    v8.v8__Object__SetAtIndex(@ptrCast(self.handle), self.local.handle, index, js_value.handle, &out);
     return out.has_value;
 }
 
 pub fn toObject(self: Array) js.Object {
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = @ptrCast(self.handle),
     };
 }
 
 pub fn toValue(self: Array) js.Value {
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = @ptrCast(self.handle),
     };
 }

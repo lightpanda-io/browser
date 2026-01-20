@@ -246,7 +246,12 @@ pub fn deliverEntries(self: *IntersectionObserver, page: *Page) !void {
 
     const entries = try self.takeRecords(page);
     var caught: js.TryCatch.Caught = undefined;
-    self._callback.local().tryCall(void, .{ entries, self }, &caught) catch |err| {
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    ls.toLocal(self._callback).tryCall(void, .{ entries, self }, &caught) catch |err| {
         log.err(.page, "IntsctObserver.deliverEntries", .{ .err = err, .caught = caught });
         return err;
     };

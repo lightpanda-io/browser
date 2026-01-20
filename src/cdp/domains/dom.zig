@@ -24,7 +24,6 @@ const Selector = @import("../../browser/webapi/selector/Selector.zig");
 
 const dump = @import("../../browser/dump.zig");
 const js = @import("../../browser/js/js.zig");
-const v8 = js.v8;
 
 const Allocator = std.mem.Allocator;
 
@@ -273,16 +272,32 @@ fn resolveNode(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    var js_context = page.js;
-    if (params.executionContextId) |context_id| {
-        if (js_context.debugContextId() != context_id) {
-            for (bc.isolated_worlds.items) |*isolated_world| {
-                js_context = &(isolated_world.executor.context orelse return error.ContextNotFound);
-                if (js_context.debugContextId() == context_id) {
-                    break;
-                }
-            } else return error.ContextNotFound;
+    var ls: ?js.Local.Scope = null;
+    defer if (ls) |*_ls| {
+        _ls.deinit();
+    };
+
+    if (params.executionContextId) |context_id| blk: {
+        ls = undefined;
+        page.js.localScope(&ls.?);
+        if (ls.?.local.debugContextId() == context_id) {
+            break :blk;
         }
+        // not the default scope, check the other ones
+        for (bc.isolated_worlds.items) |*isolated_world| {
+            ls.?.deinit();
+            ls = null;
+
+            const ctx = &(isolated_world.executor.context orelse return error.ContextNotFound);
+            ls = undefined;
+            ctx.localScope(&ls.?);
+            if (ls.?.local.debugContextId() == context_id) {
+                break :blk;
+            }
+        } else return error.ContextNotFound;
+    } else {
+        ls = undefined;
+        page.js.localScope(&ls.?);
     }
 
     const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
@@ -291,7 +306,7 @@ fn resolveNode(cmd: anytype) !void {
     // node._node is a *DOMNode we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
     const remote_object = try bc.inspector.getRemoteObject(
-        js_context,
+        &ls.?.local,
         params.objectGroup orelse "",
         node.dom,
     );
@@ -377,15 +392,20 @@ fn scrollIntoViewIfNeeded(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-fn getNode(arena: Allocator, browser_context: anytype, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
+fn getNode(arena: Allocator, bc: anytype, node_id: ?Node.Id, backend_node_id: ?Node.Id, object_id: ?[]const u8) !*Node {
     const input_node_id = node_id orelse backend_node_id;
     if (input_node_id) |input_node_id_| {
-        return browser_context.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
+        return bc.node_registry.lookup_by_id.get(input_node_id_) orelse return error.NodeNotFound;
     }
     if (object_id) |object_id_| {
+        const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
         // Retrieve the object from which ever context it is in.
-        const parser_node = try browser_context.inspector.getNodePtr(arena, object_id_);
-        return try browser_context.node_registry.register(@ptrCast(@alignCast(parser_node)));
+        const parser_node = try bc.inspector.getNodePtr(arena, object_id_, &ls.local);
+        return try bc.node_registry.register(@ptrCast(@alignCast(parser_node)));
     }
     return error.MissingParams;
 }

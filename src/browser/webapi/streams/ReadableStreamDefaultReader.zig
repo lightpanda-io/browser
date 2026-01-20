@@ -56,12 +56,12 @@ pub const ReadResult = struct {
 
 pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
     const stream = self._stream orelse {
-        return page.js.rejectPromise("Reader has been released");
+        return page.js.local.?.rejectPromise("Reader has been released");
     };
 
     if (stream._state == .errored) {
         const err = stream._stored_error orelse "Stream errored";
-        return page.js.rejectPromise(err);
+        return page.js.local.?.rejectPromise(err);
     }
 
     if (stream._controller.dequeue()) |chunk| {
@@ -69,7 +69,7 @@ pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
             .done = false,
             .value = .fromChunk(chunk),
         };
-        return page.js.resolvePromise(result);
+        return page.js.local.?.resolvePromise(result);
     }
 
     if (stream._state == .closed) {
@@ -77,7 +77,7 @@ pub fn read(self: *ReadableStreamDefaultReader, page: *Page) !js.Promise {
             .done = true,
             .value = .empty,
         };
-        return page.js.resolvePromise(result);
+        return page.js.local.?.resolvePromise(result);
     }
 
     // No data, but not closed. We need to queue the read for any future data
@@ -93,7 +93,7 @@ pub fn releaseLock(self: *ReadableStreamDefaultReader) void {
 
 pub fn cancel(self: *ReadableStreamDefaultReader, reason_: ?[]const u8, page: *Page) !js.Promise {
     const stream = self._stream orelse {
-        return page.js.rejectPromise("Reader has been released");
+        return page.js.local.?.rejectPromise("Reader has been released");
     };
 
     self.releaseLock();

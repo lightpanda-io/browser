@@ -116,6 +116,7 @@ const PostMessageCallback = struct {
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
+        const page = self.page;
 
         if (self.port._closed) {
             return null;
@@ -125,16 +126,19 @@ const PostMessageCallback = struct {
             .data = self.message,
             .origin = "",
             .source = null,
-        }, self.page) catch |err| {
+        }, page) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
             return null;
         };
 
-        const func = if (self.port._on_message) |*g| g.local() else null;
-        self.page._event_manager.dispatchWithFunction(
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        page._event_manager.dispatchWithFunction(
             self.port.asEventTarget(),
             event.asEvent(),
-            func,
+            ls.toLocal(self.port._on_message),
             .{ .context = "MessagePort message" },
         ) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });

@@ -115,15 +115,16 @@ pub fn isOK(self: *const Response) bool {
 
 pub fn getText(self: *const Response, page: *Page) !js.Promise {
     const body = self._body orelse "";
-    return page.js.resolvePromise(body);
+    return page.js.local.?.resolvePromise(body);
 }
 
 pub fn getJson(self: *Response, page: *Page) !js.Promise {
     const body = self._body orelse "";
-    const value = page.js.parseJSON(body) catch |err| {
-        return page.js.rejectPromise(.{@errorName(err)});
+    const local = page.js.local.?;
+    const value = local.parseJSON(body) catch |err| {
+        return local.rejectPromise(.{@errorName(err)});
     };
-    return page.js.resolvePromise(try value.persist());
+    return local.resolvePromise(try value.persist());
 }
 
 pub const JsApi = struct {

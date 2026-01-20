@@ -396,9 +396,12 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
         0,
     );
 
-    const js_context = page.js;
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     var try_catch: js.TryCatch = undefined;
-    try_catch.init(js_context);
+    try_catch.init(&ls.local);
     defer try_catch.deinit();
 
     try page.navigate(url, .{});
@@ -406,7 +409,7 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
 
     test_browser.runMicrotasks();
 
-    js_context.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
+    ls.local.eval("testing.assertOk()", "testing.assertOk()") catch |err| {
         const caught = try_catch.caughtOrError(arena_allocator, err);
         std.debug.print("{s}: test failure\nError: {f}\n", .{ test_file, caught });
         return err;

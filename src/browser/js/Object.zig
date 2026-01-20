@@ -28,7 +28,7 @@ const Allocator = std.mem.Allocator;
 
 const Object = @This();
 
-ctx: *js.Context,
+local: *const js.Local,
 handle: *const v8.Object,
 
 pub fn getId(self: Object) u32 {
@@ -36,11 +36,11 @@ pub fn getId(self: Object) u32 {
 }
 
 pub fn has(self: Object, key: anytype) bool {
-    const ctx = self.ctx;
+    const ctx = self.local.ctx;
     const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
 
     var out: v8.MaybeBool = undefined;
-    v8.v8__Object__Has(self.handle, self.ctx.handle, key_handle, &out);
+    v8.v8__Object__Has(self.handle, self.local.handle, key_handle, &out);
     if (out.has_value) {
         return out.value;
     }
@@ -48,34 +48,34 @@ pub fn has(self: Object, key: anytype) bool {
 }
 
 pub fn get(self: Object, key: anytype) !js.Value {
-    const ctx = self.ctx;
+    const ctx = self.local.ctx;
 
     const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
-    const js_val_handle = v8.v8__Object__Get(self.handle, ctx.handle, key_handle) orelse return error.JsException;
+    const js_val_handle = v8.v8__Object__Get(self.handle, self.local.handle, key_handle) orelse return error.JsException;
 
     return .{
-        .ctx = ctx,
+        .local = self.local,
         .handle = js_val_handle,
     };
 }
 
-pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.bridge.Caller.CallOpts) !bool {
-    const ctx = self.ctx;
+pub fn set(self: Object, key: anytype, value: anytype, comptime opts: js.Caller.CallOpts) !bool {
+    const ctx = self.local.ctx;
 
-    const js_value = try ctx.zigValueToJs(value, opts);
+    const js_value = try self.local.zigValueToJs(value, opts);
     const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);
 
     var out: v8.MaybeBool = undefined;
-    v8.v8__Object__Set(self.handle, ctx.handle, key_handle, js_value.handle, &out);
+    v8.v8__Object__Set(self.handle, self.local.handle, key_handle, js_value.handle, &out);
     return out.has_value;
 }
 
 pub fn defineOwnProperty(self: Object, name: []const u8, value: js.Value, attr: v8.PropertyAttribute) ?bool {
-    const ctx = self.ctx;
+    const ctx = self.local.ctx;
     const name_handle = ctx.isolate.initStringHandle(name);
 
     var out: v8.MaybeBool = undefined;
-    v8.v8__Object__DefineOwnProperty(self.handle, ctx.handle, @ptrCast(name_handle), value.handle, attr, &out);
+    v8.v8__Object__DefineOwnProperty(self.handle, self.local.handle, @ptrCast(name_handle), value.handle, attr, &out);
 
     if (out.has_value) {
         return out.value;
@@ -85,52 +85,49 @@ pub fn defineOwnProperty(self: Object, name: []const u8, value: js.Value, attr: 
 }
 
 pub fn toString(self: Object) ![]const u8 {
-    return self.ctx.valueToString(self.toValue(), .{});
+    return self.local.ctx.valueToString(self.toValue(), .{});
 }
 
 pub fn toValue(self: Object) js.Value {
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = @ptrCast(self.handle),
     };
 }
 
 pub fn format(self: Object, writer: *std.Io.Writer) !void {
     if (comptime IS_DEBUG) {
-        return self.ctx.debugValue(self.toValue(), writer);
+        return self.local.ctx.debugValue(self.toValue(), writer);
     }
     const str = self.toString() catch return error.WriteFailed;
     return writer.writeAll(str);
 }
 
 pub fn persist(self: Object) !Global {
-    var ctx = self.ctx;
+    var ctx = self.local.ctx;
 
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
 
     try ctx.global_objects.append(ctx.arena, global);
 
-    return .{
-        .handle = global,
-        .ctx = ctx,
-    };
+    return .{ .handle = global };
 }
 
 pub fn getFunction(self: Object, name: []const u8) !?js.Function {
     if (self.isNullOrUndefined()) {
         return null;
     }
-    const ctx = self.ctx;
+    const local = self.local;
 
-    const js_name = ctx.isolate.initStringHandle(name);
-    const js_val_handle = v8.v8__Object__Get(self.handle, ctx.handle, js_name) orelse return error.JsException;
+    const js_name = local.isolate.initStringHandle(name);
+    const js_val_handle = v8.v8__Object__Get(self.handle, local.handle, js_name) orelse return error.JsException;
 
     if (v8.v8__Value__IsFunction(js_val_handle) == false) {
         return null;
     }
     return .{
-        .ctx = ctx,
+        .local = local,
         .handle = @ptrCast(js_val_handle),
     };
 }
@@ -145,51 +142,48 @@ pub fn isNullOrUndefined(self: Object) bool {
 }
 
 pub fn getOwnPropertyNames(self: Object) js.Array {
-    const handle = v8.v8__Object__GetOwnPropertyNames(self.handle, self.ctx.handle).?;
+    const handle = v8.v8__Object__GetOwnPropertyNames(self.handle, self.local.handle).?;
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = handle,
     };
 }
 
 pub fn getPropertyNames(self: Object) js.Array {
-    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.ctx.handle).?;
+    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.local.handle).?;
     return .{
-        .ctx = self.ctx,
+        .local = self.local,
         .handle = handle,
     };
 }
 
 pub fn nameIterator(self: Object) NameIterator {
-    const ctx = self.ctx;
-
-    const handle = v8.v8__Object__GetPropertyNames(self.handle, ctx.handle).?;
+    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.local.handle).?;
     const count = v8.v8__Array__Length(handle);
 
     return .{
-        .ctx = ctx,
+        .local = self.local,
         .handle = handle,
         .count = count,
     };
 }
 
 pub fn toZig(self: Object, comptime T: type) !T {
-    const js_value = js.Value{ .ctx = self.ctx, .handle = @ptrCast(self.handle) };
-    return self.ctx.jsValueToZig(T, js_value);
+    const js_value = js.Value{ .local = self.local, .handle = @ptrCast(self.handle) };
+    return self.local.jsValueToZig(T, js_value);
 }
 
 pub const Global = struct {
     handle: v8.Global,
-    ctx: *js.Context,
 
     pub fn deinit(self: *Global) void {
         v8.v8__Global__Reset(&self.handle);
     }
 
-    pub fn local(self: *const Global) Object {
+    pub fn local(self: *const Global, l: *const js.Local) Object {
         return .{
-            .ctx = self.ctx,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, self.ctx.isolate.handle)),
+            .local = l,
+            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
         };
     }
 
@@ -201,7 +195,7 @@ pub const Global = struct {
 pub const NameIterator = struct {
     count: u32,
     idx: u32 = 0,
-    ctx: *Context,
+    local: *const js.Local,
     handle: *const v8.Array,
 
     pub fn next(self: *NameIterator) !?[]const u8 {
@@ -211,8 +205,8 @@ pub const NameIterator = struct {
         }
         self.idx += 1;
 
-        const js_val_handle = v8.v8__Object__GetIndex(@ptrCast(self.handle), self.ctx.handle, idx) orelse return error.JsException;
-        const js_val = js.Value{ .ctx = self.ctx, .handle = js_val_handle };
-        return try self.ctx.valueToString(js_val, .{});
+        const js_val_handle = v8.v8__Object__GetIndex(@ptrCast(self.handle), self.local.handle, idx) orelse return error.JsException;
+        const js_val = js.Value{ .local = self.local, .handle = js_val_handle };
+        return try self.local.valueToString(js_val, .{});
     }
 };

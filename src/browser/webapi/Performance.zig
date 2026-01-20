@@ -362,10 +362,10 @@ pub const Mark = struct {
 
 pub const Measure = struct {
     _proto: *Entry,
-    _detail: ?js.Object.Global,
+    _detail: ?js.Value.Global,
 
     const Options = struct {
-        detail: ?js.Object = null,
+        detail: ?js.Value = null,
         start: ?TimestampOrMark,
         end: ?TimestampOrMark,
         duration: ?f64 = null,
@@ -378,7 +378,7 @@ pub const Measure = struct {
 
     pub fn init(
         name: []const u8,
-        maybe_detail: ?js.Object,
+        maybe_detail: ?js.Value,
         start_timestamp: f64,
         end_timestamp: f64,
         maybe_duration: ?f64,
@@ -405,7 +405,7 @@ pub const Measure = struct {
         return m;
     }
 
-    pub fn getDetail(self: *const Measure) ?js.Object.Global {
+    pub fn getDetail(self: *const Measure) ?js.Value.Global {
         return self._detail;
     }
 
