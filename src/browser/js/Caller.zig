@@ -82,6 +82,7 @@ pub fn deinit(self: *Caller) void {
 }
 
 pub const CallOpts = struct {
+    cache: ?[]const u8 = null,
     dom_exception: bool = false,
     null_as_undefined: bool = false,
     as_typed_array: bool = false,
@@ -150,9 +151,27 @@ pub fn method(self: *Caller, comptime T: type, func: anytype, handle: *const v8.
 fn _method(self: *Caller, comptime T: type, func: anytype, info: FunctionCallbackInfo, comptime opts: CallOpts) !void {
     const F = @TypeOf(func);
     var args = try self.getArgs(F, 1, info);
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+
+    const js_this = info.getThis();
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, js_this);
+
     const res = @call(.auto, func, args);
-    info.getReturnValue().set(try self.local.zigValueToJs(res, opts));
+
+    const mapped = try self.local.zigValueToJs(res, opts);
+    const return_value = info.getReturnValue();
+    return_value.set(mapped);
+
+    if (comptime opts.cache != null) {
+        // store the return value directly in the JS object for faster subsequent
+        // calls. We only do this for a few frequently used properties (e.g. window.document)
+        const local = self.local;
+        const key_handle = local.isolate.initStringHandle(opts.cache.?);
+        var out: v8.MaybeBool = undefined;
+        v8.v8__Object__DefineOwnProperty(js_this, local.handle, key_handle, mapped.handle, 0, &out);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(out.has_value and out.value);
+        }
+    }
 }
 
 pub fn function(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {

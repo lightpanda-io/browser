@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -164,7 +164,7 @@ pub const Accessor = struct {
 
     const Opts = struct {
         static: bool = false,
-        cache: ?[]const u8 = null, // @ZIGDOM
+        cache: ?[]const u8 = null,
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
     };
@@ -184,11 +184,13 @@ pub const Accessor = struct {
 
                     if (comptime opts.static) {
                         caller.function(T, getter, handle.?, .{
+                            .cache = opts.cache,
                             .as_typed_array = opts.as_typed_array,
                             .null_as_undefined = opts.null_as_undefined,
                         });
                     } else {
                         caller.method(T, getter, handle.?, .{
+                            .cache = opts.cache,
                             .as_typed_array = opts.as_typed_array,
                             .null_as_undefined = opts.null_as_undefined,
                         });

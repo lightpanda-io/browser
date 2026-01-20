@@ -261,7 +261,7 @@ pub const JsApi = struct {
     pub const applets = bridge.accessor(HTMLDocument.getApplets, null, .{});
     pub const plugins = bridge.accessor(HTMLDocument.getEmbeds, null, .{});
     pub const currentScript = bridge.accessor(HTMLDocument.getCurrentScript, null, .{});
-    pub const location = bridge.accessor(HTMLDocument.getLocation, HTMLDocument.setLocation, .{ .cache = "location" });
+    pub const location = bridge.accessor(HTMLDocument.getLocation, HTMLDocument.setLocation, .{});
     pub const all = bridge.accessor(HTMLDocument.getAll, null, .{});
     pub const cookie = bridge.accessor(HTMLDocument.getCookie, HTMLDocument.setCookie, .{});
     pub const doctype = bridge.accessor(HTMLDocument.getDocType, null, .{});
