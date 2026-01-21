@@ -171,6 +171,10 @@ pub fn runMicrotasks(self: *const Env) void {
 }
 
 pub fn pumpMessageLoop(self: *const Env) bool {
+    var hs: v8.HandleScope = undefined;
+    v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
+    defer v8.v8__HandleScope__DESTRUCT(&hs);
+
     return v8.v8__Platform__PumpMessageLoop(self.platform.handle, self.isolate.handle, false);
 }
 
