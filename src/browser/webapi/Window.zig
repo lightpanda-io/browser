@@ -586,7 +586,7 @@ const ScheduleCallback = struct {
         defer self.deinit();
 
         _ = page.window._timers.remove(self.timer_id);
-        page.js.runMicrotasks();
+        ls.local.runMicrotasks();
         return null;
     }
 };

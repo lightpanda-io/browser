@@ -54,7 +54,7 @@ fn _resolve(self: PromiseResolver, value: anytype) !void {
     if (!out.has_value or !out.value) {
         return error.FailedToResolvePromise;
     }
-    local.ctx.runMicrotasks();
+    local.runMicrotasks();
 }
 
 pub fn reject(self: PromiseResolver, comptime source: []const u8, value: anytype) void {
@@ -72,7 +72,7 @@ fn _reject(self: PromiseResolver, value: anytype) !void {
     if (!out.has_value or !out.value) {
         return error.FailedToRejectPromise;
     }
-    local.ctx.runMicrotasks();
+    local.runMicrotasks();
 }
 
 pub fn persist(self: PromiseResolver) !Global {
