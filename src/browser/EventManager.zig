@@ -197,21 +197,6 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
     try self.dispatchAll(list, target, event, &was_dispatched);
 }
 
-/// Returns true if there's at least 1 listener for given `event_type`.
-pub fn hasListener(self: *const EventManager, event_target: *const EventTarget, typ: []const u8) bool {
-    const list = self.lookup.get(@intFromPtr(event_target)) orelse return false;
-
-    var current_node = list.first;
-    while (current_node) |node| : (current_node = node.next) {
-        const listener: *const Listener = @alignCast(@fieldParentPtr("node", node));
-        if (listener.typ.eqlSlice(typ)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool) !void {
     const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
