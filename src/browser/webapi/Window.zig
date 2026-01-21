@@ -194,7 +194,7 @@ pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, pag
     return Fetch.init(input, options, page);
 }
 
-pub fn setTimeout(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value.Global, page: *Page) !u32 {
+pub fn setTimeout(self: *Window, cb: js.Function.Temp, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = false,
         .params = params,
@@ -203,7 +203,7 @@ pub fn setTimeout(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params:
     }, page);
 }
 
-pub fn setInterval(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params: []js.Value.Global, page: *Page) !u32 {
+pub fn setInterval(self: *Window, cb: js.Function.Temp, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
     return self.scheduleCallback(cb, delay_ms orelse 0, .{
         .repeat = true,
         .params = params,
@@ -212,7 +212,7 @@ pub fn setInterval(self: *Window, cb: js.Function.Global, delay_ms: ?u32, params
     }, page);
 }
 
-pub fn setImmediate(self: *Window, cb: js.Function.Global, params: []js.Value.Global, page: *Page) !u32 {
+pub fn setImmediate(self: *Window, cb: js.Function.Temp, params: []js.Value.Temp, page: *Page) !u32 {
     return self.scheduleCallback(cb, 0, .{
         .repeat = false,
         .params = params,
@@ -221,7 +221,7 @@ pub fn setImmediate(self: *Window, cb: js.Function.Global, params: []js.Value.Gl
     }, page);
 }
 
-pub fn requestAnimationFrame(self: *Window, cb: js.Function.Global, page: *Page) !u32 {
+pub fn requestAnimationFrame(self: *Window, cb: js.Function.Temp, page: *Page) !u32 {
     return self.scheduleCallback(cb, 5, .{
         .repeat = false,
         .params = &.{},
@@ -258,7 +258,7 @@ pub fn cancelAnimationFrame(self: *Window, id: u32) void {
 const RequestIdleCallbackOpts = struct {
     timeout: ?u32 = null,
 };
-pub fn requestIdleCallback(self: *Window, cb: js.Function.Global, opts_: ?RequestIdleCallbackOpts, page: *Page) !u32 {
+pub fn requestIdleCallback(self: *Window, cb: js.Function.Temp, opts_: ?RequestIdleCallbackOpts, page: *Page) !u32 {
     const opts = opts_ orelse RequestIdleCallbackOpts{};
     return self.scheduleCallback(cb, opts.timeout orelse 50, .{
         .mode = .idle,
@@ -496,13 +496,13 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
 const ScheduleOpts = struct {
     repeat: bool,
-    params: []js.Value.Global,
+    params: []js.Value.Temp,
     name: []const u8,
     low_priority: bool = false,
     animation_frame: bool = false,
     mode: ScheduleCallback.Mode = .normal,
 };
-fn scheduleCallback(self: *Window, cb: js.Function.Global, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
+fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
     if (self._timers.count() > 512) {
         // these are active
         return error.TooManyTimeout;
@@ -512,9 +512,9 @@ fn scheduleCallback(self: *Window, cb: js.Function.Global, delay_ms: u32, opts: 
     self._timer_id = timer_id;
 
     const params = opts.params;
-    var persisted_params: []js.Value.Global = &.{};
+    var persisted_params: []js.Value.Temp = &.{};
     if (params.len > 0) {
-        persisted_params = try page.arena.dupe(js.Value.Global, params);
+        persisted_params = try page.arena.dupe(js.Value.Temp, params);
     }
 
     const gop = try self._timers.getOrPut(page.arena, timer_id);
@@ -554,11 +554,11 @@ const ScheduleCallback = struct {
     // delay, in ms, to repeat. When null, will be removed after the first time
     repeat_ms: ?u32,
 
-    cb: js.Function.Global,
+    cb: js.Function.Temp,
 
     page: *Page,
 
-    params: []const js.Value.Global,
+    params: []const js.Value.Temp,
 
     removed: bool = false,
 
@@ -571,6 +571,10 @@ const ScheduleCallback = struct {
     };
 
     fn deinit(self: *ScheduleCallback) void {
+        self.page.js.release(self.cb);
+        for (self.params) |param| {
+            self.page.js.release(param);
+        }
         self.page._factory.destroy(self);
     }
 
@@ -605,14 +609,12 @@ const ScheduleCallback = struct {
                 };
             },
         }
-
+        ls.local.runMicrotasks();
         if (self.repeat_ms) |ms| {
             return ms;
         }
         defer self.deinit();
-
         _ = page.window._timers.remove(self.timer_id);
-        ls.local.runMicrotasks();
         return null;
     }
 };

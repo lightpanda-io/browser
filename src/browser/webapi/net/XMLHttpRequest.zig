@@ -55,7 +55,7 @@ _response_headers: std.ArrayList([]const u8) = .empty,
 _response_type: ResponseType = .text,
 
 _ready_state: ReadyState = .unsent,
-_on_ready_state_change: ?js.Function.Global = null,
+_on_ready_state_change: ?js.Function.Temp = null,
 
 const ReadyState = enum(u8) {
     unsent = 0,
@@ -79,7 +79,7 @@ const ResponseType = enum {
 };
 
 pub fn init(page: *Page) !*XMLHttpRequest {
-    const arena = try page.getArena(.{.debug = "XMLHttpRequest"});
+    const arena = try page.getArena(.{ .debug = "XMLHttpRequest" });
     errdefer page.releaseArena(arena);
     return page._factory.xhrEventTarget(XMLHttpRequest{
         ._page = page,
@@ -98,21 +98,26 @@ pub fn deinit(self: *XMLHttpRequest, comptime shutdown: bool) void {
         }
         self._transfer = null;
     }
-    self._page.releaseArena(self._arena);
-    self._page._factory.destroy(self);
+
+    const page = self._page;
+    if (self._on_ready_state_change) |func| {
+        page.js.release(func);
+    }
+    page.releaseArena(self._arena);
+    page._factory.destroy(self);
 }
 
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
 
-pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
+pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Temp {
     return self._on_ready_state_change;
 }
 
 pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_ready_state_change = try cb.persistWithThis(self);
+        self._on_ready_state_change = try cb.tempWithThis(self);
     } else {
         self._on_ready_state_change = null;
     }

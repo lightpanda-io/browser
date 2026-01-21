@@ -171,11 +171,29 @@ pub fn getPropertyValue(self: *const Function, name: []const u8) !?js.Value {
 }
 
 pub fn persist(self: *const Function) !Global {
+    return self._persist(true);
+}
+
+pub fn temp(self: *const Function) !Temp {
+    return self._persist(false);
+}
+
+fn _persist(self: *const Function, comptime is_global: bool) !(if (is_global) Global else Temp) {
     var ctx = self.local.ctx;
+
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    try ctx.global_functions.append(ctx.arena, global);
+    if (comptime is_global) {
+        try ctx.global_functions.append(ctx.arena, global);
+    } else {
+        try ctx.global_functions_temp.put(ctx.arena, global.data_ptr, global);
+    }
     return .{ .handle = global };
+}
+
+pub fn tempWithThis(self: *const Function, value: anytype) !Temp {
+    const with_this = try self.withThis(value);
+    return with_this.temp();
 }
 
 pub fn persistWithThis(self: *const Function, value: anytype) !Global {
@@ -183,21 +201,31 @@ pub fn persistWithThis(self: *const Function, value: anytype) !Global {
     return with_this.persist();
 }
 
-pub const Global = struct {
-    handle: v8.Global,
+pub const Temp = G(0);
+pub const Global = G(1);
 
-    pub fn deinit(self: *Global) void {
-        v8.v8__Global__Reset(&self.handle);
-    }
+fn G(comptime discriminator: u8) type {
+    return struct {
+        handle: v8.Global,
 
-    pub fn local(self: *const Global, l: *const js.Local) Function {
-        return .{
-            .local = l,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
-        };
-    }
+        // makes the types different (G(0) != G(1)), without taking up space
+        comptime _: u8 = discriminator,
 
-    pub fn isEqual(self: *const Global, other: Function) bool {
-        return v8.v8__Global__IsEqual(&self.handle, other.handle);
-    }
-};
+        const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            v8.v8__Global__Reset(&self.handle);
+        }
+
+        pub fn local(self: *const Self, l: *const js.Local) Function {
+            return .{
+                .local = l,
+                .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
+            };
+        }
+
+        pub fn isEqual(self: *const Self, other: Function) bool {
+            return v8.v8__Global__IsEqual(&self.handle, other.handle);
+        }
+    };
+}
