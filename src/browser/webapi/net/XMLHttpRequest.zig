@@ -82,13 +82,12 @@ pub fn init(page: *Page) !*XMLHttpRequest {
     const arena = try page.getArena(.{.debug = "XMLHttpRequest"});
     errdefer page.releaseArena(arena);
 
-    const xx = try page._factory.xhrEventTarget(XMLHttpRequest{
+    return try page._factory.xhrEventTarget(XMLHttpRequest{
         ._page = page,
         ._arena = arena,
         ._proto = undefined,
         ._request_headers = try Headers.init(null, page),
     });
-    return xx;
 }
 
 pub fn deinit(self: *XMLHttpRequest) void {
