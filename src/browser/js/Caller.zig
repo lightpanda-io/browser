@@ -160,18 +160,6 @@ fn _method(self: *Caller, comptime T: type, func: anytype, info: FunctionCallbac
     const mapped = try self.local.zigValueToJs(res, opts);
     const return_value = info.getReturnValue();
     return_value.set(mapped);
-
-    if (comptime opts.cache != null) {
-        // store the return value directly in the JS object for faster subsequent
-        // calls. We only do this for a few frequently used properties (e.g. window.document)
-        const local = self.local;
-        const key_handle = local.isolate.initStringHandle(opts.cache.?);
-        var out: v8.MaybeBool = undefined;
-        v8.v8__Object__DefineOwnProperty(js_this, local.handle, key_handle, mapped.handle, 0, &out);
-        if (comptime IS_DEBUG) {
-            std.debug.assert(out.has_value and out.value);
-        }
-    }
 }
 
 pub fn function(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
