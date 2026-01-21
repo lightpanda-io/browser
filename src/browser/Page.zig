@@ -225,6 +225,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
         self._session.browser.http_client.abort();
         self._script_manager.deinit();
         _ = self._session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        self._session.browser.env.lowMemoryNotification();
     }
 
     self._factory = Factory.init(self);
