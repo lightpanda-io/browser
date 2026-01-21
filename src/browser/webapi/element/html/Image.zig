@@ -51,10 +51,8 @@ pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
 
     // We don't actually fetch the media, here we fake the load call.
     const event_target = self.asNode().asEventTarget();
-    if (page._event_manager.hasListener(event_target, "load")) {
-        const event = try Event.initTrusted("load", .{}, page);
-        return page._event_manager.dispatch(event_target, event);
-    }
+    const event = try Event.initTrusted("load", .{}, page);
+    return page._event_manager.dispatch(event_target, event);
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
