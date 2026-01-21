@@ -10,3 +10,26 @@
     testing.expectEqual('http://127.0.0.1:9582/over.9000.js', s.src);
    }
 </script>
+
+<script id="load-trigger-event">
+  {
+    const script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src="./load-me.js";
+
+    script.addEventListener("load", ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
+      testing.expectEqual(false, bubbles);
+      testing.expectEqual(false, cancelBubble);
+      testing.expectEqual(false, cancelable);
+      testing.expectEqual(false, composed);
+      testing.expectEqual(true, isTrusted);
+      testing.expectEqual(script, target);
+    });
+
+    document.head.appendChild(script);
+
+    testing.expectEqual("text/javascript", script.type);
+    testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/element/html/script/load-me.js", script.src);
+    testing.expectEqual(true, true);
+  }
+</script>
