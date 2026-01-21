@@ -51,7 +51,18 @@ pub const Opts = struct {
 
 pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
     if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
-        try writer.writeAll("<!DOCTYPE html>");
+        blk: {
+            // Ideally we just render the doctype which is part of the document
+            if (doc.asNode().firstChild()) |first| {
+                if (first._type == .document_type) {
+                    break :blk;
+                }
+            }
+            // But if the doc has no child, or the first child isn't a doctype
+            // well force it.
+            try writer.writeAll("<!DOCTYPE html>");
+        }
+
         if (opts.with_base) {
             const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
             const base = try doc.createElement("base", null, page);
