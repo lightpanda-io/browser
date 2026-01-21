@@ -441,8 +441,10 @@ const log = @import("log.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const Server = @import("Server.zig");
+const SharedState = @import("SharedState.zig");
 var test_cdp_server: ?Server = null;
 var test_http_server: ?TestHTTPServer = null;
+var test_shared_state: ?*SharedState = null;
 
 test "tests:beforeAll" {
     log.opts.level = .warn;
@@ -455,7 +457,7 @@ test "tests:beforeAll" {
     });
     errdefer test_app.deinit();
 
-    test_browser = try Browser.init(test_app);
+    test_browser = try Browser.initFromApp(test_app);
     errdefer test_browser.deinit();
 
     test_session = try test_browser.newSession();
@@ -483,6 +485,10 @@ test "tests:afterAll" {
     if (test_cdp_server) |*server| {
         server.deinit();
     }
+    if (test_shared_state) |shared| {
+        shared.deinit();
+        test_shared_state = null;
+    }
     if (test_http_server) |*server| {
         server.deinit();
     }
@@ -495,13 +501,16 @@ test "tests:afterAll" {
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(test_app, address);
 
-    var server = try Server.init(test_app, address);
+    // Create SharedState by borrowing V8 resources from test_app
+    test_shared_state = try SharedState.initFromApp(test_app, @import("root").tracking_allocator);
+
+    var server = try Server.init(test_shared_state.?, address, 10, 64 * 1024 * 1024);
+    test_cdp_server = server;
     defer server.deinit();
     wg.finish();
 
-    test_cdp_server.?.run(address, 5) catch |err| {
+    server.run(address, 5) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };

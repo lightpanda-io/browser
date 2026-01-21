@@ -27,7 +27,15 @@ _pad: bool = false,
 pub const init: Navigator = .{};
 
 pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
-    return page._session.browser.app.config.user_agent;
+    const browser = page._session.browser;
+    // Handle both modes: SharedState (multi-session) or App (single-session)
+    if (browser.shared) |shared| {
+        return shared.http_opts.user_agent;
+    } else if (browser.app) |app| {
+        return app.config.user_agent;
+    } else {
+        return "Lightpanda/1.0";
+    }
 }
 
 pub fn getAppName(_: *const Navigator) []const u8 {

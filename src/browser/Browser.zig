@@ -24,6 +24,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const App = @import("../App.zig");
+const SharedState = @import("../SharedState.zig");
 const HttpClient = @import("../http/Client.zig");
 const Notification = @import("../Notification.zig");
 
@@ -37,7 +38,8 @@ const Session = @import("Session.zig");
 const Browser = @This();
 
 env: js.Env,
-app: *App,
+shared: ?*SharedState,
+app: ?*App,
 session: ?Session,
 allocator: Allocator,
 http_client: *HttpClient,
@@ -47,7 +49,33 @@ session_arena: ArenaAllocator,
 transfer_arena: ArenaAllocator,
 notification: *Notification,
 
-pub fn init(app: *App) !Browser {
+/// Initialize a Browser with SharedState (for multi-session CDP mode)
+pub fn init(shared: *SharedState, http_client: *HttpClient, allocator: Allocator) !Browser {
+    var env = try js.Env.init(allocator, &shared.platform, &shared.snapshot);
+    errdefer env.deinit();
+
+    const notification = try Notification.init(allocator, shared.notification);
+    http_client.notification = notification;
+    http_client.next_request_id = 0; // Should we track ids in CDP only?
+    errdefer notification.deinit();
+
+    return .{
+        .shared = shared,
+        .app = null,
+        .env = env,
+        .session = null,
+        .allocator = allocator,
+        .notification = notification,
+        .http_client = http_client,
+        .call_arena = ArenaAllocator.init(allocator),
+        .page_arena = ArenaAllocator.init(allocator),
+        .session_arena = ArenaAllocator.init(allocator),
+        .transfer_arena = ArenaAllocator.init(allocator),
+    };
+}
+
+/// Initialize a Browser with App (for single-session mode like fetch)
+pub fn initFromApp(app: *App) !Browser {
     const allocator = app.allocator;
 
     var env = try js.Env.init(allocator, &app.platform, &app.snapshot);
@@ -55,10 +83,11 @@ pub fn init(app: *App) !Browser {
 
     const notification = try Notification.init(allocator, app.notification);
     app.http.client.notification = notification;
-    app.http.client.next_request_id = 0; // Should we track ids in CDP only?
+    app.http.client.next_request_id = 0;
     errdefer notification.deinit();
 
     return .{
+        .shared = null,
         .app = app,
         .env = env,
         .session = null,

@@ -66,7 +66,7 @@ pub fn init(self: *Session, browser: *Browser) !void {
     var executor = try browser.env.newExecutionWorld();
     errdefer executor.deinit();
 
-    const allocator = browser.app.allocator;
+    const allocator = browser.allocator;
     const session_allocator = browser.session_arena.allocator();
 
     self.* = .{
@@ -86,7 +86,7 @@ pub fn deinit(self: *Session) void {
         self.removePage();
     }
     self.cookie_jar.deinit();
-    self.storage_shed.deinit(self.browser.app.allocator);
+    self.storage_shed.deinit(self.browser.allocator);
     self.executor.deinit();
 }
 

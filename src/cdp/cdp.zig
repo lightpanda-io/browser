@@ -25,7 +25,8 @@ const json = std.json;
 const log = @import("../log.zig");
 const js = @import("../browser/js/js.zig");
 
-const App = @import("../App.zig");
+const SharedState = @import("../SharedState.zig");
+const HttpClient = @import("../http/Client.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 const Page = @import("../browser/Page.zig");
@@ -78,9 +79,25 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
         const Self = @This();
 
-        pub fn init(app: *App, client: TypeProvider.Client) !Self {
+        pub fn init(shared: *SharedState, http_client: *HttpClient, client: TypeProvider.Client) !Self {
+            const allocator = shared.allocator;
+            const browser = try Browser.init(shared, http_client, allocator);
+            errdefer browser.deinit();
+
+            return .{
+                .client = client,
+                .browser = browser,
+                .allocator = allocator,
+                .browser_context = null,
+                .message_arena = std.heap.ArenaAllocator.init(allocator),
+                .notification_arena = std.heap.ArenaAllocator.init(allocator),
+            };
+        }
+
+        /// Initialize CDP with App (for testing and single-session mode)
+        pub fn initFromApp(app: *lp.App, client: TypeProvider.Client) !Self {
             const allocator = app.allocator;
-            const browser = try Browser.init(app);
+            const browser = try Browser.initFromApp(app);
             errdefer browser.deinit();
 
             return .{

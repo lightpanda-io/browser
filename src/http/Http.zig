@@ -66,7 +66,7 @@ pub fn init(allocator: Allocator, opts: Opts) !Http {
         ca_blob = try loadCerts(allocator, arena.allocator());
     }
 
-    var client = try Client.init(allocator, ca_blob, adjusted_opts);
+    var client = try Client.init(allocator, ca_blob, adjusted_opts, null);
     errdefer client.deinit();
 
     return .{

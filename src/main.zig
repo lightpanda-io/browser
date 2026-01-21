@@ -108,8 +108,12 @@ fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !vo
                 return args.printUsageAndExit(false);
             };
 
+            // Create SharedState for multi-session CDP server
+            const shared = try app.createSharedState();
+            defer shared.deinit();
+
             // _server is global to handle graceful shutdown.
-            var server = try lp.Server.init(app, address);
+            var server = try lp.Server.init(shared, address, app.config.max_sessions, app.config.session_memory_limit);
             defer server.deinit();
 
             try sighandler.on(lp.Server.stop, .{&server});

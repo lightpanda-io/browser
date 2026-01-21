@@ -27,6 +27,7 @@ const Platform = @import("browser/js/Platform.zig");
 
 const Notification = @import("Notification.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
+const SharedState = @import("SharedState.zig");
 
 // Container for global state / objects that various parts of the system
 // might need.
@@ -40,6 +41,7 @@ telemetry: Telemetry,
 allocator: Allocator,
 app_dir_path: ?[]const u8,
 notification: *Notification,
+shared: ?*SharedState = null,
 shutdown: bool = false,
 
 pub const RunMode = enum {
@@ -59,6 +61,8 @@ pub const Config = struct {
     http_max_host_open: ?u8 = null,
     http_max_concurrent: ?u8 = null,
     user_agent: [:0]const u8,
+    max_sessions: u32 = 10,                           // Max concurrent CDP connections
+    session_memory_limit: usize = 64 * 1024 * 1024,   // 64MB per session
 };
 
 pub fn init(allocator: Allocator, config: Config) !*App {
@@ -67,6 +71,8 @@ pub fn init(allocator: Allocator, config: Config) !*App {
 
     app.config = config;
     app.allocator = allocator;
+    app.shared = null;
+    app.shutdown = false;
 
     app.notification = try Notification.init(allocator, null);
     errdefer app.notification.deinit();
@@ -105,6 +111,12 @@ pub fn deinit(self: *App) void {
     }
 
     const allocator = self.allocator;
+
+    if (self.shared) |shared| {
+        shared.deinit();
+        self.shared = null;
+    }
+
     if (self.app_dir_path) |app_dir_path| {
         allocator.free(app_dir_path);
         self.app_dir_path = null;
@@ -116,6 +128,31 @@ pub fn deinit(self: *App) void {
     self.platform.deinit();
 
     allocator.destroy(self);
+}
+
+/// Create SharedState for multi-session server mode.
+/// This must be called before starting the server for multi-CDP support.
+pub fn createSharedState(self: *App) !*SharedState {
+    if (self.shared != null) {
+        return error.SharedStateAlreadyExists;
+    }
+
+    const shared = try SharedState.init(self.allocator, .{
+        .run_mode = self.config.run_mode,
+        .tls_verify_host = self.config.tls_verify_host,
+        .http_proxy = self.config.http_proxy,
+        .proxy_bearer_token = self.config.proxy_bearer_token,
+        .http_timeout_ms = self.config.http_timeout_ms,
+        .http_connect_timeout_ms = self.config.http_connect_timeout_ms,
+        .http_max_host_open = self.config.http_max_host_open,
+        .http_max_concurrent = self.config.http_max_concurrent,
+        .user_agent = self.config.user_agent,
+        .max_sessions = self.config.max_sessions,
+        .session_memory_limit = self.config.session_memory_limit,
+    });
+
+    self.shared = shared;
+    return shared;
 }
 
 fn getAndMakeAppDir(allocator: Allocator) ?[]const u8 {

@@ -19,6 +19,9 @@
 const std = @import("std");
 pub const App = @import("App.zig");
 pub const Server = @import("Server.zig");
+pub const SharedState = @import("SharedState.zig");
+pub const SessionThread = @import("SessionThread.zig");
+pub const SessionManager = @import("SessionManager.zig");
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
@@ -37,7 +40,7 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    var browser = try Browser.init(app);
+    var browser = try Browser.initFromApp(app);
     defer browser.deinit();
 
     var session = try browser.newSession();

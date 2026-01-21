@@ -43,7 +43,7 @@ pub fn main() !void {
     var test_arena = std.heap.ArenaAllocator.init(allocator);
     defer test_arena.deinit();
 
-    var browser = try lp.Browser.init(app);
+    var browser = try lp.Browser.initFromApp(app);
     defer browser.deinit();
 
     const session = try browser.newSession();

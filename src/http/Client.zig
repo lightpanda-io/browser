@@ -124,7 +124,7 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Client {
+pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts, share_handle: ?*c.CURLSH) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -136,7 +136,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
 
     try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, opts.max_host_open)));
 
-    var handles = try Handles.init(allocator, client, ca_blob, &opts);
+    var handles = try Handles.init(allocator, client, ca_blob, &opts, share_handle);
     errdefer handles.deinit(allocator);
 
     client.* = .{
@@ -650,7 +650,7 @@ const Handles = struct {
     const HandleList = std.DoublyLinkedList;
 
     // pointer to opts is not stable, don't hold a reference to it!
-    fn init(allocator: Allocator, client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handles {
+    fn init(allocator: Allocator, client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts, share_handle: ?*c.CURLSH) !Handles {
         const count = if (opts.max_concurrent == 0) 1 else opts.max_concurrent;
 
         const handles = try allocator.alloc(Handle, count);
@@ -658,7 +658,7 @@ const Handles = struct {
 
         var available: HandleList = .{};
         for (0..count) |i| {
-            handles[i] = try Handle.init(client, ca_blob, opts);
+            handles[i] = try Handle.init(client, ca_blob, opts, share_handle);
             available.append(&handles[i].node);
         }
 
@@ -706,11 +706,16 @@ pub const Handle = struct {
     node: Handles.HandleList.Node,
 
     // pointer to opts is not stable, don't hold a reference to it!
-    fn init(client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handle {
+    fn init(client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts, share_handle: ?*c.CURLSH) !Handle {
         const conn = try Http.Connection.init(ca_blob, opts);
         errdefer conn.deinit();
 
         const easy = conn.easy;
+
+        // Configure shared resources (DNS cache, TLS sessions, connections)
+        if (share_handle) |sh| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SHARE, sh));
+        }
 
         // callbacks
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERDATA, easy));

@@ -65,7 +65,7 @@ pub fn main() !void {
     });
     defer app.deinit();
 
-    var browser = try lp.Browser.init(app);
+    var browser = try lp.Browser.initFromApp(app);
     defer browser.deinit();
 
     // An arena for running each tests. Is reset after every test.
