@@ -979,6 +979,13 @@ pub const Transfer = struct {
         self.deinit();
     }
 
+    pub fn terminate(self: *Transfer) void {
+        if (self._handle != null) {
+            self.client.endTransfer(self);
+        }
+        self.deinit();
+    }
+
     // internal, when the page is shutting down. Doesn't have the same ceremony
     // as abort (doesn't send a notification, doesn't invoke an error callback)
     fn kill(self: *Transfer) void {

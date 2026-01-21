@@ -93,7 +93,7 @@ pub fn init(page: *Page) !*XMLHttpRequest {
 
 pub fn deinit(self: *XMLHttpRequest) void {
     if (self._transfer) |transfer| {
-        transfer.abort(error.Abort);
+        transfer.terminate();
         self._transfer = null;
     }
     self._page.releaseArena(self._arena);
