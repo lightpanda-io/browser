@@ -103,6 +103,7 @@
   const img = document.createElement("img");
   let count = 0;
   img.addEventListener("load", ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
+    testing.expectEqual(true, count < 3);
     count++;
 
     testing.expectEqual(false, bubbles);
@@ -118,7 +119,7 @@
     testing.expectEqual("https://cdn.lightpanda.io/website/assets/images/docs/hn.png", img.src);
   }
 
-  // Should work since we synchronously exeute the listener.
-  testing.expectEqual(3, count);
+  // Make sure count is incremented asynchronously.
+  testing.expectEqual(0, count);
 }
 </script>
