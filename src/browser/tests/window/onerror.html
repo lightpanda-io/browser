@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=onerrorBasicCallback>
+{
+  let callbackCalled = false;
+  let receivedArgs = null;
+
+  window.onerror = function(message, source, lineno, colno, error) {
+    callbackCalled = true;
+    receivedArgs = { message, source, lineno, colno, error };
+  };
+
+  const err = new Error('Test error');
+  window.reportError(err);
+
+  testing.expectEqual(true, callbackCalled);
+  testing.expectEqual(true, receivedArgs.message.includes('Test error'));
+  testing.expectEqual(err, receivedArgs.error);
+
+  window.onerror = null;
+}
+</script>
+
+<script id=onerrorFiveArguments>
+{
+  let argCount = 0;
+
+  window.onerror = function() {
+    argCount = arguments.length;
+  };
+
+  window.reportError(new Error('Five args test'));
+
+  // Per WHATWG spec, onerror receives exactly 5 arguments
+  testing.expectEqual(5, argCount);
+
+  window.onerror = null;
+}
+</script>
+
+<script id=onerrorReturnTrueCancelsEvent>
+{
+  let listenerCalled = false;
+
+  window.onerror = function() {
+    return true; // Should cancel the event
+  };
+
+  const listener = function() {
+    listenerCalled = true;
+  };
+  window.addEventListener('error', listener);
+
+  window.reportError(new Error('Should be cancelled'));
+
+  // The event listener should still be called (onerror returning true
+  // only prevents default, not propagation)
+  testing.expectEqual(true, listenerCalled);
+
+  window.onerror = null;
+  window.removeEventListener('error', listener);
+}
+</script>
+
+<script id=onerrorAndEventListenerBothCalled>
+{
+  let onerrorCalled = false;
+  let listenerCalled = false;
+
+  window.onerror = function() {
+    onerrorCalled = true;
+  };
+
+  const listener = function() {
+    listenerCalled = true;
+  };
+  window.addEventListener('error', listener);
+
+  window.reportError(new Error('Both should fire'));
+
+  testing.expectEqual(true, onerrorCalled);
+  testing.expectEqual(true, listenerCalled);
+
+  window.onerror = null;
+  window.removeEventListener('error', listener);
+}
+</script>
+
+<script id=onerrorCalledBeforeEventListener>
+{
+  let callOrder = [];
+
+  window.onerror = function() {
+    callOrder.push('onerror');
+  };
+
+  const listener = function() {
+    callOrder.push('listener');
+  };
+  window.addEventListener('error', listener);
+
+  window.reportError(new Error('Order test'));
+
+  // onerror should be called before addEventListener handlers
+  testing.expectEqual('onerror', callOrder[0]);
+  testing.expectEqual('listener', callOrder[1]);
+
+  window.onerror = null;
+  window.removeEventListener('error', listener);
+}
+</script>
+
+<script id=onerrorGetterSetter>
+{
+  const handler = function() {};
+
+  testing.expectEqual(null, window.onerror);
+
+  window.onerror = handler;
+  testing.expectEqual(handler, window.onerror);
+
+  window.onerror = null;
+  testing.expectEqual(null, window.onerror);
+}
+</script>
+
+<script id=onerrorWithNonFunction>
+{
+  // Setting onerror to a non-function should not throw
+  // but should not be stored as the handler
+  window.onerror = "not a function";
+  testing.expectEqual(null, window.onerror);
+
+  window.onerror = {};
+  testing.expectEqual(null, window.onerror);
+
+  window.onerror = 123;
+  testing.expectEqual(null, window.onerror);
+}
+</script>
+
+<script id=onerrorArgumentTypes>
+{
+  let receivedTypes = null;
+
+  window.onerror = function(message, source, lineno, colno, error) {
+    receivedTypes = {
+      message: typeof message,
+      source: typeof source,
+      lineno: typeof lineno,
+      colno: typeof colno,
+      error: typeof error
+    };
+  };
+
+  window.reportError(new Error('Type check'));
+
+  testing.expectEqual('string', receivedTypes.message);
+  testing.expectEqual('string', receivedTypes.source);
+  testing.expectEqual('number', receivedTypes.lineno);
+  testing.expectEqual('number', receivedTypes.colno);
+  testing.expectEqual('object', receivedTypes.error);
+
+  window.onerror = null;
+}
+</script>
+
+<script id=onerrorReturnFalseDoesNotCancel>
+{
+  let eventDefaultPrevented = false;
+
+  window.onerror = function() {
+    return false; // Should NOT cancel the event
+  };
+
+  const listener = function(e) {
+    eventDefaultPrevented = e.defaultPrevented;
+  };
+  window.addEventListener('error', listener);
+
+  window.reportError(new Error('Return false test'));
+
+  testing.expectEqual(false, eventDefaultPrevented);
+
+  window.onerror = null;
+  window.removeEventListener('error', listener);
+}
+</script>
+
+<script id=onerrorReturnTruePreventsDefault>
+{
+  let eventDefaultPrevented = false;
+
+  window.onerror = function() {
+    return true; // Should cancel (prevent default)
+  };
+
+  const listener = function(e) {
+    eventDefaultPrevented = e.defaultPrevented;
+  };
+  window.addEventListener('error', listener);
+
+  window.reportError(new Error('Return true test'));
+
+  testing.expectEqual(true, eventDefaultPrevented);
+
+  window.onerror = null;
+  window.removeEventListener('error', listener);
+}
+</script>
