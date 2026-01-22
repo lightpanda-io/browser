@@ -205,9 +205,14 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-    // some MicroTasks might be referencing the page, we need to drain it while
-    // the page still exists
-    self.js.runMicrotasks();
+    {
+        // some MicroTasks might be referencing the page, we need to drain it while
+        // the page still exists
+        var ls: JS.Local.Scope = undefined;
+        self.js.localScope(&ls);
+        defer ls.deinit();
+        ls.local.runMicrotasks();
+    }
 
     const session = self._session;
     session.executor.removeContext();
@@ -956,16 +961,6 @@ fn printWaitAnalysis(self: *Page) void {
             std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.run_at - now });
         }
     }
-}
-
-pub fn tick(self: *Page) void {
-    if (comptime IS_DEBUG) {
-        log.debug(.page, "tick", .{});
-    }
-    _ = self.scheduler.run() catch |err| {
-        log.err(.page, "tick", .{ .err = err });
-    };
-    self.js.runMicrotasks();
 }
 
 pub fn isGoingAway(self: *const Page) bool {

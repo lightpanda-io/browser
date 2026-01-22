@@ -384,10 +384,6 @@ fn newFunctionWithData(local: *const js.Local, comptime callback: *const fn (?*c
     };
 }
 
-pub fn runMicrotasks(self: *Context) void {
-    self.isolate.performMicrotasksCheckpoint();
-}
-
 // == Callbacks ==
 // Callback from V8, asking us to load a module. The "specifier" is
 // the src of the module to load.
@@ -669,7 +665,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
 }
 
 fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, module_entry: ModuleEntry, local: *const js.Local) void {
-    defer self.runMicrotasks();
+    defer local.runMicrotasks();
 
     // we can only be here if the module has been evaluated and if
     // we have a resolve loading this asynchronously.
@@ -706,7 +702,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
                 return;
             }
             const l = c.local;
-            defer l.ctx.runMicrotasks();
+            defer l.runMicrotasks();
             const namespace = l.toLocal(s.module.?).getModuleNamespace();
             _ = l.toLocal(s.resolver).resolve("resolve namespace", namespace);
         }
@@ -728,7 +724,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
                 return;
             }
 
-            defer ctx.runMicrotasks();
+            defer l.runMicrotasks();
             _ = l.toLocal(s.resolver).reject("catch callback", js.Value{
                 .local = l,
                 .handle = v8.v8__FunctionCallbackInfo__Data(callback_handle).?,

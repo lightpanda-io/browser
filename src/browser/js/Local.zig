@@ -72,6 +72,10 @@ pub fn newArray(self: *const Local, len: u32) js.Array {
     };
 }
 
+pub fn runMicrotasks(self: *const Local) void {
+    self.isolate.performMicrotasksCheckpoint();
+}
+
 // == Executors ==
 pub fn eval(self: *const Local, src: []const u8, name: ?[]const u8) !void {
     _ = try self.exec(src, name);

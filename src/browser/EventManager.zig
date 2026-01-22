@@ -137,7 +137,10 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
     var was_handled = false;
 
     defer if (was_handled) {
-        self.page.js.runMicrotasks();
+        var ls: js.Local.Scope = undefined;
+        self.page.js.localScope(&ls);
+        defer ls.deinit();
+        ls.local.runMicrotasks();
     };
 
     switch (target._type) {
@@ -180,7 +183,10 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
 
     var was_dispatched = false;
     defer if (was_dispatched) {
-        self.page.js.runMicrotasks();
+        var ls: js.Local.Scope = undefined;
+        self.page.js.localScope(&ls);
+        defer ls.deinit();
+        ls.local.runMicrotasks();
     };
 
     if (function_) |func| {

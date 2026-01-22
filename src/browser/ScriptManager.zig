@@ -843,7 +843,7 @@ pub const Script = struct {
 
         defer {
             // We should run microtasks even if script execution fails.
-            page.js.runMicrotasks();
+            local.runMicrotasks();
             _ = page.scheduler.run() catch |err| {
                 log.err(.page, "scheduler", .{ .err = err });
             };
