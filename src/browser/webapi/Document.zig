@@ -282,12 +282,12 @@ pub fn getSelection(self: *Document) *Selection {
     return &self._selection;
 }
 
-pub fn querySelector(self: *Document, input: []const u8, page: *Page) !?*Element {
-    return Selector.querySelector(self.asNode(), input, page);
+pub fn querySelector(self: *Document, input: String, page: *Page) !?*Element {
+    return Selector.querySelector(self.asNode(), input.str(), page);
 }
 
-pub fn querySelectorAll(self: *Document, input: []const u8, page: *Page) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input, page);
+pub fn querySelectorAll(self: *Document, input: String, page: *Page) !*Selector.List {
+    return Selector.querySelectorAll(self.asNode(), input.str(), page);
 }
 
 pub fn getImplementation(_: *const Document) DOMImplementation {

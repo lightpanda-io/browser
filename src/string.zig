@@ -188,6 +188,13 @@ pub const String = packed struct {
     }
 };
 
+// Discriminatory type that signals the bridge to use arena instead of call_arena
+// Use this for strings that need to persist beyond the current call
+// The caller can unwrap and store just the underlying .str field
+pub const Global = struct {
+    str: String,
+};
+
 fn asUint(comptime string: anytype) std.meta.Int(
     .unsigned,
     @bitSizeOf(@TypeOf(string.*)) - 8, // (- 8) to exclude sentinel 0
