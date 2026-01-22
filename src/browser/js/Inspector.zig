@@ -151,6 +151,10 @@ pub fn contextCreated(
     }
 }
 
+pub fn contextDestroyed(self: *Inspector, local: *const js.Local) void {
+    v8.v8_inspector__Inspector__ContextDestroyed(self.handle, local.handle);
+}
+
 // Retrieves the RemoteObject for a given value.
 // The value is loaded through the ExecutionWorld's mapZigInstanceToJs function,
 // just like a method return value. Therefore, if we've mapped this
