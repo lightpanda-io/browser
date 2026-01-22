@@ -6,9 +6,11 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const Event = @import("../../Event.zig");
+const log = @import("../../../../log.zig");
 
 const Image = @This();
 _proto: *HtmlElement,
+_on_load: ?js.Function.Global = null,
 
 pub fn constructor(w_: ?u32, h_: ?u32, page: *Page) !*Image {
     const node = try page.createElementNS(.html, "img", null);
@@ -149,6 +151,82 @@ pub const JsApi = struct {
     pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{});
     pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{});
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
+};
+
+/// Parameters passed to scheduler for "load" events.
+const CallbackParams = struct { page: *Page, element: *Element };
+
+pub const Build = struct {
+    pub fn created(node: *Node, page: *Page) !void {
+        const self = node.as(Image);
+        const image = self.asElement();
+        // Exit if src not set. We might want to check if src point to valid image.
+        _ = image.getAttributeSafe("src") orelse return;
+        // Exit if there's no `onload`.
+        const on_load_str = image.getAttributeSafe("onload") orelse return;
+
+        // Derive function from string.
+        const on_load_func = page.js.stringToPersistedFunction(on_load_str) catch |err| {
+            log.err(.js, "Image.onload", .{ .err = err, .str = on_load_str });
+            return;
+        };
+        // Set onload.
+        self._on_load = on_load_func;
+
+        const args = try page._factory.create(CallbackParams{
+            .page = page,
+            .element = image,
+        });
+        errdefer page._factory.destroy(args);
+
+        // Execute it asynchronously; Chrome and FF seem to do like this.
+        // We may change the behavior if its inconsistent.
+        //
+        // I'm well aware that such scenario is possible:
+        // imageElement.onload = () => console.warn("HA HA HA overwritten!");
+        //
+        // this is allowed both in Chrome and FF. Honestly it makes the logic
+        // quite easier, which might be the reason.
+        return page.scheduler.add(
+            args,
+            struct {
+                fn wrap(raw: *anyopaque) anyerror!?u32 {
+                    const _args: *CallbackParams = @ptrCast(@alignCast(raw));
+                    const _page = _args.page;
+                    defer _page._factory.destroy(_args);
+
+                    const _element = _args.element;
+                    const _img = _element.as(Image);
+                    const event_target = _element.asEventTarget();
+                    const event = try Event.initTrusted("load", .{}, _page);
+
+                    // If onload still there, dispatch with it.
+                    if (_img._on_load) |_on_load| {
+                        var ls: js.Local.Scope = undefined;
+                        _page.js.localScope(&ls);
+                        defer ls.deinit();
+
+                        try _page._event_manager.dispatchWithFunction(
+                            event_target,
+                            event,
+                            _on_load.local(&ls.local),
+                            .{ .context = "Image.onload" },
+                        );
+                        return null;
+                    }
+
+                    // Dispatch to addEventListener listeners.
+                    try _page._event_manager.dispatch(event_target, event);
+                    return null;
+                }
+            }.wrap,
+            25,
+            .{
+                .low_priority = false,
+                .name = "Image.Build.created",
+            },
+        );
+    }
 };
 
 const testing = @import("../../../../testing.zig");
