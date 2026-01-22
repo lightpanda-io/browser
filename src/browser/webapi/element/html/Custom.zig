@@ -174,7 +174,7 @@ fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefiniti
 
 // Check if element has "is" attribute and attach customized built-in definition
 pub fn checkAndAttachBuiltIn(element: *Element, page: *Page) !void {
-    const is_value = element.getAttributeSafe("is") orelse return;
+    const is_value = element.getAttributeSafe(comptime .literal("is")) orelse return;
 
     const custom_elements = page.window.getCustomElements();
     const definition = custom_elements._definitions.get(is_value) orelse return;

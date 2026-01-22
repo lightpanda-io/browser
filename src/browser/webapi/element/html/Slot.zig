@@ -25,7 +25,7 @@ pub fn asNode(self: *Slot) *Node {
 }
 
 pub fn getName(self: *const Slot) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
 }
 
 pub fn setName(self: *Slot, name: []const u8, page: *Page) !void {
@@ -131,7 +131,7 @@ fn isAssignedToSlot(node: *Node, slot_name: []const u8) bool {
     // Check if a node should be assigned to a slot with the given name
     if (node.is(Element)) |element| {
         // Get the slot attribute from the element
-        const node_slot = element.getAttributeSafe("slot") orelse "";
+        const node_slot = element.getAttributeSafe(comptime .literal("slot")) orelse "";
 
         // Match if:
         // - Both are empty (default slot)

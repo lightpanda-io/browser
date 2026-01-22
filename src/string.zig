@@ -34,6 +34,44 @@ pub const String = packed struct {
     pub const empty = String{ .len = 0, .payload = .{ .content = @splat(0) } };
     pub const deleted = String{ .len = tombstone, .payload = .{ .content = @splat(0) } };
 
+    // Create a String from a string literal. For strings with len <= 12, the
+    // this can be done at comptime: comptime String.literal("id");
+    // For strings with len > 12, this must be done at runtime. This is because,
+    // at comptime, we do not have a ptr for data and thus can't store it.
+    pub fn literal(input: anytype) String {
+        if (@inComptime()) {
+            const l = input.len;
+            if (l > 12) {
+                @compileError("Comptime string must be <= 12 bytes (SSO only): " ++ input);
+            }
+
+            var content: [12]u8 = @splat(0);
+            @memcpy(content[0..l], input);
+            return .{ .len = @intCast(l), .payload = .{ .content = content } };
+        }
+
+        // Runtime path - handle both String and []const u8
+        if (@TypeOf(input) == String) {
+            return input;
+        }
+
+        const l = input.len;
+
+        if (l <= 12) {
+            var content: [12]u8 = @splat(0);
+            @memcpy(content[0..l], input);
+            return .{ .len = @intCast(l), .payload = .{ .content = content } };
+        }
+
+        return .{
+            .len = @intCast(l),
+            .payload = .{ .heap = .{
+                .prefix = input[0..4].*,
+                .ptr = input.ptr,
+            } },
+        };
+    }
+
     pub const InitOpts = struct {
         dupe: bool = true,
     };
@@ -47,13 +85,11 @@ pub const String = packed struct {
             @memcpy(content[0..l], input);
             return .{ .len = @intCast(l), .payload = .{ .content = content } };
         }
-        var prefix: [4]u8 = @splat(0);
-        @memcpy(&prefix, input[0..4]);
 
         return .{
             .len = @intCast(l),
             .payload = .{ .heap = .{
-                .prefix = prefix,
+                .prefix = input[0..4].*,
                 .ptr = (intern(input) orelse (if (opts.dupe) (try allocator.dupe(u8, input)) else input)).ptr,
             } },
         };

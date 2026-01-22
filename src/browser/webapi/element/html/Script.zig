@@ -54,14 +54,14 @@ pub fn getSrc(self: *const Script, page: *Page) ![]const u8 {
 pub fn setSrc(self: *Script, src: []const u8, page: *Page) !void {
     const element = self.asElement();
     try element.setAttributeSafe("src", src, page);
-    self._src = element.getAttributeSafe("src") orelse unreachable;
+    self._src = element.getAttributeSafe(comptime .literal("src")) orelse unreachable;
     if (element.asNode().isConnected()) {
         try page.scriptAddedCallback(false, self);
     }
 }
 
 pub fn getType(self: *const Script) []const u8 {
-    return self.asConstElement().getAttributeSafe("type") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("type")) orelse "";
 }
 
 pub fn setType(self: *Script, value: []const u8, page: *Page) !void {
@@ -69,7 +69,7 @@ pub fn setType(self: *Script, value: []const u8, page: *Page) !void {
 }
 
 pub fn getNonce(self: *const Script) []const u8 {
-    return self.asConstElement().getAttributeSafe("nonce") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("nonce")) orelse "";
 }
 
 pub fn setNonce(self: *Script, value: []const u8, page: *Page) !void {
@@ -93,7 +93,7 @@ pub fn setOnError(self: *Script, cb: ?js.Function.Global) void {
 }
 
 pub fn getNoModule(self: *const Script) bool {
-    return self.asConstElement().getAttributeSafe("nomodule") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("nomodule")) != null;
 }
 
 pub fn setInnerText(self: *Script, text: []const u8, page: *Page) !void {
@@ -127,9 +127,9 @@ pub const Build = struct {
     pub fn complete(node: *Node, page: *Page) !void {
         const self = node.as(Script);
         const element = self.asElement();
-        self._src = element.getAttributeSafe("src") orelse "";
+        self._src = element.getAttributeSafe(comptime .literal("src")) orelse "";
 
-        if (element.getAttributeSafe("onload")) |on_load| {
+        if (element.getAttributeSafe(comptime .literal("onload"))) |on_load| {
             if (page.js.stringToPersistedFunction(on_load)) |func| {
                 self._on_load = func;
             } else |err| {
@@ -137,7 +137,7 @@ pub const Build = struct {
             }
         }
 
-        if (element.getAttributeSafe("onerror")) |on_error| {
+        if (element.getAttributeSafe(comptime .literal("onerror"))) |on_error| {
             if (page.js.stringToPersistedFunction(on_error)) |func| {
                 self._on_error = func;
             } else |err| {

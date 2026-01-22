@@ -199,7 +199,7 @@ pub fn getElementById(self: *Document, id: []const u8, page: *Page) ?*Element {
     if (self._removed_ids.remove(id)) {
         var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
         while (tw.next()) |el| {
-            const element_id = el.getAttributeSafe("id") orelse continue;
+            const element_id = el.getAttributeSafe(comptime .literal("id")) orelse continue;
             if (std.mem.eql(u8, element_id, id)) {
                 // we ignore this error to keep getElementById easy to call
                 // if it really failed, then we're out of memory and nothing's

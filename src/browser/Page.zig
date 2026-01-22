@@ -1037,7 +1037,7 @@ pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Ele
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
-            .src = script.asElement().getAttributeSafe("src"),
+            .src = script.asElement().getAttributeSafe(comptime .literal("src")),
         });
     };
 }
@@ -1122,7 +1122,7 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
     }
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(node, .{});
     while (tw.next()) |el| {
-        const element_id = el.getAttributeSafe("id") orelse continue;
+        const element_id = el.getAttributeSafe(comptime .literal("id")) orelse continue;
         if (std.mem.eql(u8, element_id, id)) {
             return el;
         }
@@ -1696,7 +1696,7 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         // If page's base url is not already set, fill it with the base
                         // tag.
                         if (self.base_url == null) {
-                            if (n.as(Element).getAttributeSafe("href")) |href| {
+                            if (n.as(Element).getAttributeSafe(comptime .literal("href"))) |href| {
                                 self.base_url = try URL.resolve(self.arena, self.url, href, .{});
                             }
                         }
@@ -2307,7 +2307,7 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
         if (parent.is(Element)) |parent_el| {
             if (self._element_shadow_roots.get(parent_el)) |shadow_root| {
                 // Signal slot changes for any affected slots
-                const slot_name = el.getAttributeSafe("slot") orelse "";
+                const slot_name = el.getAttributeSafe(comptime .literal("slot")) orelse "";
                 var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(shadow_root.asNode(), .{});
                 while (tw.next()) |slot_el| {
                     if (slot_el.is(Element.Html.Slot)) |slot| {
@@ -2346,7 +2346,7 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     // the ID map and invoking disconnectedCallback for custom elements
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe("id")) |id| {
+        if (el.getAttributeSafe(comptime .literal("id"))) |id| {
             self.removeElementIdWithMaps(id_maps.?, id);
         }
 
@@ -2480,7 +2480,7 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
             // For main document parsing, we know nodes are connected (fast path)
             // For fragment parsing (innerHTML), we need to check connectivity
             if (child.isConnected() or child.isInShadowTree()) {
-                if (el.getAttributeSafe("id")) |id| {
+                if (el.getAttributeSafe(comptime .literal("id"))) |id| {
                     try self.addElementId(parent, el, id);
                 }
                 try Element.Html.Custom.invokeConnectedCallbackOnElement(true, el, self);
@@ -2519,7 +2519,7 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
 
     var tw = @import("webapi/TreeWalker.zig").Full.Elements.init(child, .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe("id")) |id| {
+        if (el.getAttributeSafe(comptime .literal("id"))) |id| {
             try self.addElementId(el.asNode()._parent.?, el, id);
         }
 
@@ -2622,7 +2622,7 @@ fn updateElementAssignedSlot(self: *Page, element: *Element) void {
     const parent_el = parent.is(Element) orelse return;
     const shadow_root = self._element_shadow_roots.get(parent_el) orelse return;
 
-    const slot_name = element.getAttributeSafe("slot") orelse "";
+    const slot_name = element.getAttributeSafe(comptime .literal("slot")) orelse "";
 
     // Recursively search through the shadow root for a matching slot
     if (findMatchingSlot(shadow_root.asNode(), slot_name)) |slot| {
@@ -2919,7 +2919,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 
     switch (html_element._type) {
         .anchor => |anchor| {
-            const href = element.getAttributeSafe("href") orelse return;
+            const href = element.getAttributeSafe(comptime .literal("href")) orelse return;
             if (href.len == 0) {
                 return;
             }
@@ -3015,7 +3015,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const form = form_ orelse return;
 
     if (submitter_) |submitter| {
-        if (submitter.getAttributeSafe("disabled") != null) {
+        if (submitter.getAttributeSafe(comptime .literal("disabled")) != null) {
             return;
         }
     }
@@ -3028,13 +3028,13 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
     const transfer_arena = self._session.transfer_arena;
 
-    const encoding = form_element.getAttributeSafe("enctype");
+    const encoding = form_element.getAttributeSafe(comptime .literal("enctype"));
 
     var buf = std.Io.Writer.Allocating.init(transfer_arena);
     try form_data.write(encoding, &buf.writer);
 
-    const method = form_element.getAttributeSafe("method") orelse "";
-    var action = form_element.getAttributeSafe("action") orelse self.url;
+    const method = form_element.getAttributeSafe(comptime .literal("method")) orelse "";
+    var action = form_element.getAttributeSafe(comptime .literal("action")) orelse self.url;
 
     var opts = NavigateOpts{
         .reason = .form,

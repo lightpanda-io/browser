@@ -43,7 +43,7 @@ pub fn asNode(self: *Form) *Node {
 }
 
 pub fn getName(self: *const Form) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
 }
 
 pub fn setName(self: *Form, name: []const u8, page: *Page) !void {
@@ -51,7 +51,7 @@ pub fn setName(self: *Form, name: []const u8, page: *Page) !void {
 }
 
 pub fn getMethod(self: *const Form) []const u8 {
-    const method = self.asConstElement().getAttributeSafe("method") orelse return "get";
+    const method = self.asConstElement().getAttributeSafe(comptime .literal("method")) orelse return "get";
 
     if (std.ascii.eqlIgnoreCase(method, "post")) {
         return "post";
@@ -68,7 +68,7 @@ pub fn setMethod(self: *Form, method: []const u8, page: *Page) !void {
 }
 
 pub fn getElements(self: *Form, page: *Page) !*collections.HTMLFormControlsCollection {
-    const form_id = self.asElement().getAttributeSafe("id");
+    const form_id = self.asElement().getAttributeSafe(comptime .literal("id"));
     const root = if (form_id != null)
         self.asNode().getRootNode(null) // Has ID: walk entire document to find form=ID controls
     else

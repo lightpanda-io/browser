@@ -53,7 +53,7 @@ pub fn getVideoHeight(_: *const Video) u32 {
 
 pub fn getPoster(self: *const Video, page: *Page) ![]const u8 {
     const element = self.asConstElement();
-    const poster = element.getAttributeSafe("poster") orelse return "";
+    const poster = element.getAttributeSafe(comptime .literal("poster")) orelse return "";
     if (poster.len == 0) {
         return "";
     }

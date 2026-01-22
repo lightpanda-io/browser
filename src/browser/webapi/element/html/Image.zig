@@ -36,7 +36,7 @@ pub fn asNode(self: *Image) *Node {
 
 pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe("src") orelse return "";
+    const src = element.getAttributeSafe(comptime .literal("src")) orelse return "";
     if (src.len == 0) {
         return "";
     }
@@ -50,7 +50,7 @@ pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe("alt") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("alt")) orelse "";
 }
 
 pub fn setAlt(self: *Image, value: []const u8, page: *Page) !void {
@@ -58,7 +58,7 @@ pub fn setAlt(self: *Image, value: []const u8, page: *Page) !void {
 }
 
 pub fn getWidth(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe("width") orelse return 0;
+    const attr = self.asConstElement().getAttributeSafe(comptime .literal("width")) orelse return 0;
     return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
@@ -68,7 +68,7 @@ pub fn setWidth(self: *Image, value: u32, page: *Page) !void {
 }
 
 pub fn getHeight(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe("height") orelse return 0;
+    const attr = self.asConstElement().getAttributeSafe(comptime .literal("height")) orelse return 0;
     return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
@@ -78,7 +78,7 @@ pub fn setHeight(self: *Image, value: u32, page: *Page) !void {
 }
 
 pub fn getCrossOrigin(self: *const Image) ?[]const u8 {
-    return self.asConstElement().getAttributeSafe("crossorigin");
+    return self.asConstElement().getAttributeSafe(comptime .literal("crossorigin"));
 }
 
 pub fn setCrossOrigin(self: *Image, value: ?[]const u8, page: *Page) !void {
@@ -89,7 +89,7 @@ pub fn setCrossOrigin(self: *Image, value: ?[]const u8, page: *Page) !void {
 }
 
 pub fn getLoading(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe("loading") orelse "eager";
+    return self.asConstElement().getAttributeSafe(comptime .literal("loading")) orelse "eager";
 }
 
 pub fn setLoading(self: *Image, value: []const u8, page: *Page) !void {

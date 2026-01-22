@@ -156,7 +156,7 @@ pub fn setDefaultChecked(self: *Input, checked: bool, page: *Page) !void {
 pub fn getDisabled(self: *const Input) bool {
     // TODO: Also check for disabled fieldset ancestors
     // (but not if we're inside a <legend> of that fieldset)
-    return self.asConstElement().getAttributeSafe("disabled") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Input, disabled: bool, page: *Page) !void {
@@ -168,7 +168,7 @@ pub fn setDisabled(self: *Input, disabled: bool, page: *Page) !void {
 }
 
 pub fn getName(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
 }
 
 pub fn setName(self: *Input, name: []const u8, page: *Page) !void {
@@ -176,7 +176,7 @@ pub fn setName(self: *Input, name: []const u8, page: *Page) !void {
 }
 
 pub fn getAccept(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe("accept") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("accept")) orelse "";
 }
 
 pub fn setAccept(self: *Input, accept: []const u8, page: *Page) !void {
@@ -184,7 +184,7 @@ pub fn setAccept(self: *Input, accept: []const u8, page: *Page) !void {
 }
 
 pub fn getAlt(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe("alt") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("alt")) orelse "";
 }
 
 pub fn setAlt(self: *Input, alt: []const u8, page: *Page) !void {
@@ -192,7 +192,7 @@ pub fn setAlt(self: *Input, alt: []const u8, page: *Page) !void {
 }
 
 pub fn getMaxLength(self: *const Input) i32 {
-    const attr = self.asConstElement().getAttributeSafe("maxlength") orelse return -1;
+    const attr = self.asConstElement().getAttributeSafe(comptime .literal("maxlength")) orelse return -1;
     return std.fmt.parseInt(i32, attr, 10) catch -1;
 }
 
@@ -206,7 +206,7 @@ pub fn setMaxLength(self: *Input, max_length: i32, page: *Page) !void {
 }
 
 pub fn getSize(self: *const Input) i32 {
-    const attr = self.asConstElement().getAttributeSafe("size") orelse return 20;
+    const attr = self.asConstElement().getAttributeSafe(comptime .literal("size")) orelse return 20;
     const parsed = std.fmt.parseInt(i32, attr, 10) catch return 20;
     return if (parsed == 0) 20 else parsed;
 }
@@ -225,7 +225,7 @@ pub fn setSize(self: *Input, size: i32, page: *Page) !void {
 }
 
 pub fn getSrc(self: *const Input, page: *Page) ![]const u8 {
-    const src = self.asConstElement().getAttributeSafe("src") orelse return "";
+    const src = self.asConstElement().getAttributeSafe(comptime .literal("src")) orelse return "";
     // If attribute is explicitly set (even if empty), resolve it against the base URL
     return @import("../../URL.zig").resolve(page.call_arena, page.base(), src, .{});
 }
@@ -236,7 +236,7 @@ pub fn setSrc(self: *Input, src: []const u8, page: *Page) !void {
 }
 
 pub fn getReadonly(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe("readonly") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("readonly")) != null;
 }
 
 pub fn setReadonly(self: *Input, readonly: bool, page: *Page) !void {
@@ -248,7 +248,7 @@ pub fn setReadonly(self: *Input, readonly: bool, page: *Page) !void {
 }
 
 pub fn getRequired(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe("required") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("required")) != null;
 }
 
 pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
@@ -379,7 +379,7 @@ pub fn getForm(self: *Input, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe("form")) |form_id| {
+    if (element.getAttributeSafe(comptime .literal("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }
@@ -402,7 +402,7 @@ pub fn getForm(self: *Input, page: *Page) ?*Form {
 fn uncheckRadioGroup(self: *Input, page: *Page) !void {
     const element = self.asElement();
 
-    const name = element.getAttributeSafe("name") orelse return;
+    const name = element.getAttributeSafe(comptime .literal("name")) orelse return;
     if (name.len == 0) {
         return;
     }
@@ -420,7 +420,7 @@ fn uncheckRadioGroup(self: *Input, page: *Page) !void {
             continue;
         }
 
-        const other_name = other_element.getAttributeSafe("name") orelse continue;
+        const other_name = other_element.getAttributeSafe(comptime .literal("name")) orelse continue;
         if (!std.mem.eql(u8, name, other_name)) {
             continue;
         }
@@ -481,14 +481,14 @@ pub const Build = struct {
         const element = self.asElement();
 
         // Store initial values from attributes
-        self._default_value = element.getAttributeSafe("value");
-        self._default_checked = element.getAttributeSafe("checked") != null;
+        self._default_value = element.getAttributeSafe(comptime .literal("value"));
+        self._default_checked = element.getAttributeSafe(comptime .literal("checked")) != null;
 
         // Current state starts equal to default
         self._value = self._default_value;
         self._checked = self._default_checked;
 
-        self._input_type = if (element.getAttributeSafe("type")) |type_attr|
+        self._input_type = if (element.getAttributeSafe(comptime .literal("type"))) |type_attr|
             Type.fromString(type_attr)
         else
             .text;

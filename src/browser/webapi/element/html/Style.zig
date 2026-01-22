@@ -39,7 +39,7 @@ pub fn asNode(self: *Style) *Node {
 // Attribute-backed properties
 
 pub fn getBlocking(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe("blocking") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("blocking")) orelse "";
 }
 
 pub fn setBlocking(self: *Style, value: []const u8, page: *Page) !void {
@@ -47,7 +47,7 @@ pub fn setBlocking(self: *Style, value: []const u8, page: *Page) !void {
 }
 
 pub fn getMedia(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe("media") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("media")) orelse "";
 }
 
 pub fn setMedia(self: *Style, value: []const u8, page: *Page) !void {
@@ -55,7 +55,7 @@ pub fn setMedia(self: *Style, value: []const u8, page: *Page) !void {
 }
 
 pub fn getType(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe("type") orelse "text/css";
+    return self.asConstElement().getAttributeSafe(comptime .literal("type")) orelse "text/css";
 }
 
 pub fn setType(self: *Style, value: []const u8, page: *Page) !void {
@@ -63,7 +63,7 @@ pub fn setType(self: *Style, value: []const u8, page: *Page) !void {
 }
 
 pub fn getDisabled(self: *const Style) bool {
-    return self.asConstElement().getAttributeSafe("disabled") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {

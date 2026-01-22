@@ -170,13 +170,13 @@ pub const List = struct {
     }
 
     // meant for internal usage, where the name is known to be properly cased
-    pub fn getSafe(self: *const List, name: []const u8) ?[]const u8 {
+    pub fn getSafe(self: *const List, name: String) ?[]const u8 {
         const entry = self.getEntryWithNormalizedName(name) orelse return null;
         return entry._value.str();
     }
 
     // meant for internal usage, where the name is known to be properly cased
-    pub fn hasSafe(self: *const List, name: []const u8) bool {
+    pub fn hasSafe(self: *const List, name: String) bool {
         return self.getEntryWithNormalizedName(name) != null;
     }
 
@@ -197,7 +197,7 @@ pub const List = struct {
     }
 
     pub fn putSafe(self: *List, name: []const u8, value: []const u8, element: *Element, page: *Page) !*Entry {
-        const entry = self.getEntryWithNormalizedName(name);
+        const entry = self.getEntryWithNormalizedNameOld(name);
         return self._put(.{ .entry = entry, .normalized = name }, value, element, page);
     }
 
@@ -331,11 +331,24 @@ pub const List = struct {
 
         return .{
             .normalized = normalized,
-            .entry = self.getEntryWithNormalizedName(normalized),
+            .entry = self.getEntryWithNormalizedNameOld(normalized),
         };
     }
 
-    fn getEntryWithNormalizedName(self: *const List, name: []const u8) ?*Entry {
+    fn getEntryWithNormalizedName(self: *const List, name: String) ?*Entry {
+        var node = self._list.first;
+        while (node) |n| {
+            var e = Entry.fromNode(n);
+            if (e._name.eql(name)) {
+                return e;
+            }
+            node = n.next;
+        }
+        return null;
+    }
+
+    // TODO remove when we're done making everything String-based
+    fn getEntryWithNormalizedNameOld(self: *const List, name: []const u8) ?*Entry {
         var node = self._list.first;
         while (node) |n| {
             var e = Entry.fromNode(n);

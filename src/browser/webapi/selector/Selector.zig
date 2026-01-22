@@ -18,6 +18,8 @@
 
 const std = @import("std");
 
+const String = @import("../../../string.zig").String;
+
 const Parser = @import("Parser.zig");
 const Node = @import("../Node.zig");
 const Page = @import("../../Page.zig");
@@ -117,7 +119,7 @@ pub const Part = union(enum) {
 };
 
 pub const Attribute = struct {
-    name: []const u8,
+    name: String,
     matcher: AttributeMatcher,
     case_insensitive: bool,
 };

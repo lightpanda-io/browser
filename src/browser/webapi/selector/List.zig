@@ -412,11 +412,11 @@ fn matchesCompound(el: *Node.Element, compound: Selector.Compound, scope: *Node,
 fn matchesPart(el: *Node.Element, part: Part, scope: *Node, page: *Page) bool {
     switch (part) {
         .id => |id| {
-            const element_id = el.getAttributeSafe("id") orelse return false;
+            const element_id = el.getAttributeSafe(comptime .literal("id")) orelse return false;
             return std.mem.eql(u8, element_id, id);
         },
         .class => |cls| {
-            const class_attr = el.getAttributeSafe("class") orelse return false;
+            const class_attr = el.getAttributeSafe(comptime .literal("class")) orelse return false;
             return Selector.classAttributeContains(class_attr, cls);
         },
         .tag => |tag| {
@@ -526,10 +526,10 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return input.getChecked();
         },
         .disabled => {
-            return el.getAttributeSafe("disabled") != null;
+            return el.getAttributeSafe(comptime .literal("disabled")) != null;
         },
         .enabled => {
-            return el.getAttributeSafe("disabled") == null;
+            return el.getAttributeSafe(comptime .literal("disabled")) == null;
         },
         .indeterminate => return false,
 
@@ -537,19 +537,19 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .valid => return false,
         .invalid => return false,
         .required => {
-            return el.getAttributeSafe("required") != null;
+            return el.getAttributeSafe(comptime .literal("required")) != null;
         },
         .optional => {
-            return el.getAttributeSafe("required") == null;
+            return el.getAttributeSafe(comptime .literal("required")) == null;
         },
         .in_range => return false,
         .out_of_range => return false,
         .placeholder_shown => return false,
         .read_only => {
-            return el.getAttributeSafe("readonly") != null;
+            return el.getAttributeSafe(comptime .literal("readonly")) != null;
         },
         .read_write => {
-            return el.getAttributeSafe("readonly") == null;
+            return el.getAttributeSafe(comptime .literal("readonly")) == null;
         },
         .default => return false,
 
@@ -571,10 +571,10 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .visited => return false,
         .any_link => {
             if (el.getTag() != .anchor) return false;
-            return el.getAttributeSafe("href") != null;
+            return el.getAttributeSafe(comptime .literal("href")) != null;
         },
         .target => {
-            const element_id = el.getAttributeSafe("id") orelse return false;
+            const element_id = el.getAttributeSafe(comptime .literal("id")) orelse return false;
             const location = page.document._location orelse return false;
             const hash = location.getHash();
             if (hash.len <= 1) return false;

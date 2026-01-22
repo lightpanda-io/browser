@@ -84,7 +84,7 @@ pub fn setDefaultValue(self: *TextArea, value: []const u8, page: *Page) !void {
 }
 
 pub fn getDisabled(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe("disabled") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
 }
 
 pub fn setDisabled(self: *TextArea, disabled: bool, page: *Page) !void {
@@ -96,7 +96,7 @@ pub fn setDisabled(self: *TextArea, disabled: bool, page: *Page) !void {
 }
 
 pub fn getName(self: *const TextArea) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
 }
 
 pub fn setName(self: *TextArea, name: []const u8, page: *Page) !void {
@@ -104,7 +104,7 @@ pub fn setName(self: *TextArea, name: []const u8, page: *Page) !void {
 }
 
 pub fn getRequired(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe("required") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("required")) != null;
 }
 
 pub fn setRequired(self: *TextArea, required: bool, page: *Page) !void {
@@ -221,7 +221,7 @@ pub fn getForm(self: *TextArea, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe("form")) |form_id| {
+    if (element.getAttributeSafe(comptime .literal("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }

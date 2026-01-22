@@ -59,12 +59,12 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Pag
     var it = try self.iterator();
     while (it.next()) |element| {
         const is_match = blk: {
-            if (element.getAttributeSafe("id")) |id| {
+            if (element.getAttributeSafe(comptime .literal("id"))) |id| {
                 if (std.mem.eql(u8, id, name)) {
                     break :blk true;
                 }
             }
-            if (element.getAttributeSafe("name")) |elem_name| {
+            if (element.getAttributeSafe(comptime .literal("name"))) |elem_name| {
                 if (std.mem.eql(u8, elem_name, name)) {
                     break :blk true;
                 }

@@ -121,7 +121,7 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
 }
 
 pub fn getMultiple(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe("multiple") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("multiple")) != null;
 }
 
 pub fn setMultiple(self: *Select, multiple: bool, page: *Page) !void {
@@ -133,7 +133,7 @@ pub fn setMultiple(self: *Select, multiple: bool, page: *Page) !void {
 }
 
 pub fn getDisabled(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe("disabled") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Select, disabled: bool, page: *Page) !void {
@@ -145,7 +145,7 @@ pub fn setDisabled(self: *Select, disabled: bool, page: *Page) !void {
 }
 
 pub fn getName(self: *const Select) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
 }
 
 pub fn setName(self: *Select, name: []const u8, page: *Page) !void {
@@ -153,7 +153,7 @@ pub fn setName(self: *Select, name: []const u8, page: *Page) !void {
 }
 
 pub fn getSize(self: *const Select) u32 {
-    const s = self.asConstElement().getAttributeSafe("size") orelse return 0;
+    const s = self.asConstElement().getAttributeSafe(comptime .literal("size")) orelse return 0;
 
     const trimmed = std.mem.trimLeft(u8, s, &std.ascii.whitespace);
 
@@ -176,7 +176,7 @@ pub fn setSize(self: *Select, size: u32, page: *Page) !void {
 }
 
 pub fn getRequired(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe("required") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("required")) != null;
 }
 
 pub fn setRequired(self: *Select, required: bool, page: *Page) !void {
@@ -218,7 +218,7 @@ pub fn getForm(self: *Select, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe("form")) |form_id| {
+    if (element.getAttributeSafe(comptime .literal("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }

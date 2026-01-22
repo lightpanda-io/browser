@@ -39,7 +39,7 @@ pub fn asNode(self: *Button) *Node {
 }
 
 pub fn getDisabled(self: *const Button) bool {
-    return self.asConstElement().getAttributeSafe("disabled") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Button, disabled: bool, page: *Page) !void {
@@ -51,7 +51,7 @@ pub fn setDisabled(self: *Button, disabled: bool, page: *Page) !void {
 }
 
 pub fn getName(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
 }
 
 pub fn setName(self: *Button, name: []const u8, page: *Page) !void {
@@ -59,7 +59,7 @@ pub fn setName(self: *Button, name: []const u8, page: *Page) !void {
 }
 
 pub fn getType(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe("type") orelse "submit";
+    return self.asConstElement().getAttributeSafe(comptime .literal("type")) orelse "submit";
 }
 
 pub fn setType(self: *Button, typ: []const u8, page: *Page) !void {
@@ -67,7 +67,7 @@ pub fn setType(self: *Button, typ: []const u8, page: *Page) !void {
 }
 
 pub fn getValue(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe("value") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("value")) orelse "";
 }
 
 pub fn setValue(self: *Button, value: []const u8, page: *Page) !void {
@@ -75,7 +75,7 @@ pub fn setValue(self: *Button, value: []const u8, page: *Page) !void {
 }
 
 pub fn getRequired(self: *const Button) bool {
-    return self.asConstElement().getAttributeSafe("required") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("required")) != null;
 }
 
 pub fn setRequired(self: *Button, required: bool, page: *Page) !void {
@@ -90,7 +90,7 @@ pub fn getForm(self: *Button, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe("form")) |form_id| {
+    if (element.getAttributeSafe(comptime .literal("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }

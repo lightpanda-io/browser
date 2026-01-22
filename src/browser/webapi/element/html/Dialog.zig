@@ -20,7 +20,7 @@ pub fn asNode(self: *Dialog) *Node {
 }
 
 pub fn getOpen(self: *const Dialog) bool {
-    return self.asConstElement().getAttributeSafe("open") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("open")) != null;
 }
 
 pub fn setOpen(self: *Dialog, open: bool, page: *Page) !void {
@@ -32,7 +32,7 @@ pub fn setOpen(self: *Dialog, open: bool, page: *Page) !void {
 }
 
 pub fn getReturnValue(self: *const Dialog) []const u8 {
-    return self.asConstElement().getAttributeSafe("returnvalue") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("returnvalue")) orelse "";
 }
 
 pub fn setReturnValue(self: *Dialog, value: []const u8, page: *Page) !void {

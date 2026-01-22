@@ -219,7 +219,7 @@ pub fn setCurrentTime(self: *Media, value: f64) void {
 
 pub fn getSrc(self: *const Media, page: *Page) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe("src") orelse return "";
+    const src = element.getAttributeSafe(comptime .literal("src")) orelse return "";
     if (src.len == 0) {
         return "";
     }
@@ -232,7 +232,7 @@ pub fn setSrc(self: *Media, value: []const u8, page: *Page) !void {
 }
 
 pub fn getAutoplay(self: *const Media) bool {
-    return self.asConstElement().getAttributeSafe("autoplay") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("autoplay")) != null;
 }
 
 pub fn setAutoplay(self: *Media, value: bool, page: *Page) !void {
@@ -244,7 +244,7 @@ pub fn setAutoplay(self: *Media, value: bool, page: *Page) !void {
 }
 
 pub fn getControls(self: *const Media) bool {
-    return self.asConstElement().getAttributeSafe("controls") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("controls")) != null;
 }
 
 pub fn setControls(self: *Media, value: bool, page: *Page) !void {
@@ -256,7 +256,7 @@ pub fn setControls(self: *Media, value: bool, page: *Page) !void {
 }
 
 pub fn getLoop(self: *const Media) bool {
-    return self.asConstElement().getAttributeSafe("loop") != null;
+    return self.asConstElement().getAttributeSafe(comptime .literal("loop")) != null;
 }
 
 pub fn setLoop(self: *Media, value: bool, page: *Page) !void {
@@ -268,7 +268,7 @@ pub fn setLoop(self: *Media, value: bool, page: *Page) !void {
 }
 
 pub fn getPreload(self: *const Media) []const u8 {
-    return self.asConstElement().getAttributeSafe("preload") orelse "auto";
+    return self.asConstElement().getAttributeSafe(comptime .literal("preload")) orelse "auto";
 }
 
 pub fn setPreload(self: *Media, value: []const u8, page: *Page) !void {

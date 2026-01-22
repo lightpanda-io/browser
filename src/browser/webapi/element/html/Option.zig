@@ -94,7 +94,7 @@ pub fn setDisabled(self: *Option, disabled: bool, page: *Page) !void {
 }
 
 pub fn getName(self: *const Option) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
 }
 
 pub fn setName(self: *Option, name: []const u8, page: *Page) !void {
@@ -124,14 +124,14 @@ pub const Build = struct {
         const element = self.asElement();
 
         // Check for value attribute
-        self._value = element.getAttributeSafe("value");
+        self._value = element.getAttributeSafe(comptime .literal("value"));
 
         // Check for selected attribute
-        self._default_selected = element.getAttributeSafe("selected") != null;
+        self._default_selected = element.getAttributeSafe(comptime .literal("selected")) != null;
         self._selected = self._default_selected;
 
         // Check for disabled attribute
-        self._disabled = element.getAttributeSafe("disabled") != null;
+        self._disabled = element.getAttributeSafe(comptime .literal("disabled")) != null;
     }
 
     pub fn attributeChange(element: *Element, name: []const u8, value: []const u8, _: *Page) !void {

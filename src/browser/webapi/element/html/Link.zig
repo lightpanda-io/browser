@@ -36,7 +36,7 @@ pub fn asNode(self: *Link) *Node {
 
 pub fn getHref(self: *Link, page: *Page) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe("href") orelse return "";
+    const href = element.getAttributeSafe(comptime .literal("href")) orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -50,7 +50,7 @@ pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
 }
 
 pub fn getRel(self: *Link) []const u8 {
-    return self.asElement().getAttributeSafe("rel") orelse return "";
+    return self.asElement().getAttributeSafe(comptime .literal("rel")) orelse return "";
 }
 
 pub fn setRel(self: *Link, value: []const u8, page: *Page) !void {

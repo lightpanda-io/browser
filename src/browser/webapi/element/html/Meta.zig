@@ -37,7 +37,7 @@ pub fn asNode(self: *Meta) *Node {
 }
 
 pub fn getName(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe("name") orelse return "";
+    return self.asElement().getAttributeSafe(comptime .literal("name")) orelse return "";
 }
 
 pub fn setName(self: *Meta, value: []const u8, page: *Page) !void {
@@ -45,7 +45,7 @@ pub fn setName(self: *Meta, value: []const u8, page: *Page) !void {
 }
 
 pub fn getHttpEquiv(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe("http-equiv") orelse return "";
+    return self.asElement().getAttributeSafe(comptime .literal("http-equiv")) orelse return "";
 }
 
 pub fn setHttpEquiv(self: *Meta, value: []const u8, page: *Page) !void {
@@ -53,7 +53,7 @@ pub fn setHttpEquiv(self: *Meta, value: []const u8, page: *Page) !void {
 }
 
 pub fn getContent(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe("content") orelse return "";
+    return self.asElement().getAttributeSafe(comptime .literal("content")) orelse return "";
 }
 
 pub fn setContent(self: *Meta, value: []const u8, page: *Page) !void {
@@ -61,7 +61,7 @@ pub fn setContent(self: *Meta, value: []const u8, page: *Page) !void {
 }
 
 pub fn getMedia(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe("media") orelse return "";
+    return self.asElement().getAttributeSafe(comptime .literal("media")) orelse return "";
 }
 
 pub fn setMedia(self: *Meta, value: []const u8, page: *Page) !void {

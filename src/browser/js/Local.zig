@@ -624,14 +624,14 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             if (!js_val.isString()) {
                 return null;
             }
-            return try self.valueToStringSSO(js_val, .{.allocator = self.ctx.call_arena});
+            return try self.valueToStringSSO(js_val, .{ .allocator = self.ctx.call_arena });
         },
         string.Global => {
             if (!js_val.isString()) {
                 return null;
             }
             // Use arena for persistent strings
-            return .{.str = try self.valueToStringSSO(js_val, .{ .allocator = self.ctx.arena }) };
+            return .{ .str = try self.valueToStringSSO(js_val, .{ .allocator = self.ctx.arena }) };
         },
         else => {
             if (!js_val.isObject()) {
