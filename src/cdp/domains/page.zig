@@ -168,17 +168,7 @@ fn close(cmd: anytype) !void {
     }
 
     bc.session.removePage();
-    for (bc.isolated_worlds.items) |*world| {
-        // Indicate that inspector context is about to be removed.
-        if (world.executor.context) |*ctx| {
-            var ls: js.Local.Scope = undefined;
-            ctx.localScope(&ls);
-            bc.inspector.contextDestroyed(&ls.local);
-            ls.deinit();
-        }
-        world.deinit();
-    }
-    bc.isolated_worlds.clearRetainingCapacity();
+    bc.deinitIsolatedWorlds();
     bc.target_id = null;
 }
 

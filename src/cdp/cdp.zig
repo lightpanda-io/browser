@@ -477,6 +477,19 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             return world;
         }
 
+        pub fn deinitIsolatedWorlds(self: *Self) void {
+            for (self.isolated_worlds.items) |*world| {
+                if (world.executor.context) |*ctx| {
+                    var ls: js.Local.Scope = undefined;
+                    ctx.localScope(&ls);
+                    self.inspector.contextDestroyed(&ls.local);
+                    ls.deinit();
+                }
+                world.deinit();
+            }
+            self.isolated_worlds.clearRetainingCapacity();
+        }
+
         pub fn nodeWriter(self: *Self, root: *const Node, opts: Node.Writer.Opts) Node.Writer {
             return .{
                 .root = root,
