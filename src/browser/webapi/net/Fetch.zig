@@ -89,7 +89,7 @@ pub fn deinit(self: *Fetch) void {
     }
 }
 
-fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
+fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
 
     if (transfer.getContentLength()) |cl| {
@@ -133,6 +133,8 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
     while (it.next()) |hdr| {
         try res._headers.append(hdr.name, hdr.value, self._page);
     }
+
+    return true;
 }
 
 fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
