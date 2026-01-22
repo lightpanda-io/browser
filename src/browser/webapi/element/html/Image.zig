@@ -49,10 +49,39 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
 
-    // We don't actually fetch the media, here we fake the load call.
     const event_target = self.asNode().asEventTarget();
-    const event = try Event.initTrusted("load", .{}, page);
-    return page._event_manager.dispatch(event_target, event);
+
+    // Have to do this since `Scheduler` only allow passing a single arg.
+    const SetSrcCallback = struct {
+        page: *Page,
+        event_target: *@import("../../EventTarget.zig"),
+    };
+    const args = try page._factory.create(SetSrcCallback{
+        .page = page,
+        .event_target = event_target,
+    });
+    errdefer page._factory.destroy(args);
+
+    // We don't actually fetch the media, here we fake the load call.
+    try page.scheduler.add(
+        args,
+        struct {
+            fn wrap(raw: *anyopaque) anyerror!?u32 {
+                const _args: *SetSrcCallback = @ptrCast(@alignCast(raw));
+                const _page = _args.page;
+                // Dispatch.
+                const event = try Event.initTrusted("load", .{}, _page);
+                try _page._event_manager.dispatch(_args.event_target, event);
+
+                return null;
+            }
+        }.wrap,
+        25,
+        .{
+            .low_priority = false,
+            .name = "Image.setSrc",
+        },
+    );
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
