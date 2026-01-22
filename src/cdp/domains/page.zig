@@ -222,6 +222,13 @@ fn navigate(cmd: anytype) !void {
 
     var page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
+    // Inform the inspector the page's context will be removed during
+    // navigation.
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    bc.inspector.contextDestroyed(&ls.local);
+    ls.deinit();
+
     try page.navigate(params.url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
