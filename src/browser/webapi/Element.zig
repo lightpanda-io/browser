@@ -589,8 +589,9 @@ pub fn insertAdjacentText(
     data: []const u8,
     page: *Page,
 ) !void {
-    const text_node = try page.createTextNode(data);
-    const target_node, const prev_node = try self.asNode().findAdjacentNodes(where);
+    const node = self.asNode();
+    const text_node = try page.createTextNode(data, node);
+    const target_node, const prev_node = try node.findAdjacentNodes(where);
     _ = try target_node.insertBefore(text_node, prev_node, page);
 }
 

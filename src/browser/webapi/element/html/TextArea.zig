@@ -79,7 +79,7 @@ pub fn setDefaultValue(self: *TextArea, value: []const u8, page: *Page) !void {
     }
 
     // No text child exists, create one
-    const text_node = try page.createTextNode(owned);
+    const text_node = try page.createTextNode(owned, node);
     _ = try node.appendChild(text_node, page);
 }
 

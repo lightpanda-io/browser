@@ -313,7 +313,7 @@ pub fn createComment(self: *Document, data: []const u8, page: *Page) !*Node {
 }
 
 pub fn createTextNode(self: *Document, data: []const u8, page: *Page) !*Node {
-    const node = try page.createTextNode(data);
+    const node = try page.createTextNode(data, null);
     // Track owner document if it's not the main document
     if (self != page.document) {
         try page.setNodeOwnerDocument(node, self);

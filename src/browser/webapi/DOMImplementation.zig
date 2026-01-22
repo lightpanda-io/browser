@@ -54,7 +54,7 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page:
     if (title) |t| {
         const title_node = try page.createElementNS(.html, "title", null);
         _ = try head_node.appendChild(title_node, page);
-        const text_node = try page.createTextNode(t);
+        const text_node = try page.createTextNode(t, title_node);
         _ = try title_node.appendChild(text_node, page);
     }
 

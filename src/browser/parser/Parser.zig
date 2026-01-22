@@ -410,7 +410,7 @@ fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e
     const parent = sibling.parentNode() orelse return error.NoParent;
     const node: *Node = switch (node_or_text.toUnion()) {
         .node => |cpn| getNode(cpn),
-        .text => |txt| try self.page.createTextNode(txt),
+        .text => |txt| try self.page.createTextNode(txt, parent),
     };
     try self.page.insertNodeRelative(parent, node, .{ .before = sibling }, .{});
 }

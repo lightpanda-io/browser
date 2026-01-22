@@ -134,6 +134,7 @@ pub const String = packed struct {
     // This can be used outside of the small string optimization
     pub fn intern(input: []const u8) ?[]const u8 {
         switch (input.len) {
+            0 => return "",
             1 => switch (input[0]) {
                 '\n' => return "\n",
                 '\r' => return "\r",

@@ -322,8 +322,8 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
                 const before_text = text_data[0..offset];
                 const after_text = text_data[offset..];
 
-                const before = try page.createTextNode(before_text);
-                const after = try page.createTextNode(after_text);
+                const before = try page.createTextNode(before_text, parent);
+                const after = try page.createTextNode(after_text, parent);
 
                 _ = try parent.replaceChild(before, container, page);
                 _ = try parent.insertBefore(node, before.nextSibling(), page);
@@ -423,8 +423,9 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             const text_data = self._proto._start_container.getData();
             if (self._proto._start_offset < text_data.len and self._proto._end_offset <= text_data.len) {
                 const cloned_text = text_data[self._proto._start_offset..self._proto._end_offset];
-                const text_node = try page.createTextNode(cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, page);
+                const parent = fragment.asNode();
+                const text_node = try page.createTextNode(cloned_text, parent);
+                _ = try parent.appendChild(text_node, page);
             }
         } else {
             // Clone child nodes in range
@@ -444,7 +445,7 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             if (self._proto._start_offset < text_data.len) {
                 // Clone from start_offset to end of text
                 const cloned_text = text_data[self._proto._start_offset..];
-                const text_node = try page.createTextNode(cloned_text);
+                const text_node = try page.createTextNode(cloned_text, null);
                 _ = try fragment.asNode().appendChild(text_node, page);
             }
         }
@@ -465,8 +466,9 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             if (self._proto._end_offset > 0 and self._proto._end_offset <= text_data.len) {
                 // Clone from start to end_offset
                 const cloned_text = text_data[0..self._proto._end_offset];
-                const text_node = try page.createTextNode(cloned_text);
-                _ = try fragment.asNode().appendChild(text_node, page);
+                const parent = fragment.asNode();
+                const text_node = try page.createTextNode(cloned_text, parent);
+                _ = try parent.appendChild(text_node, page);
             }
         }
     }

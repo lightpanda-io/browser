@@ -676,7 +676,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, Str
         .cdata => |cd| {
             const data = cd.getData();
             return switch (cd._type) {
-                .text => page.createTextNode(data),
+                .text => page.createTextNode(data, null),
                 .cdata_section => page.createCDATASection(data),
                 .comment => page.createComment(data),
                 .processing_instruction => |pi| page.createProcessingInstruction(pi._target, data),
@@ -994,7 +994,7 @@ pub const NodeOrText = union(enum) {
     pub fn toNode(self: *const NodeOrText, page: *Page) !*Node {
         return switch (self.*) {
             .node => |n| n,
-            .text => |txt| page.createTextNode(txt),
+            .text => |txt| page.createTextNode(txt, null),
         };
     }
 };

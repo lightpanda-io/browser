@@ -264,7 +264,7 @@ pub fn setInnerText(self: *HtmlElement, text: []const u8, page: *Page) !void {
     }
 
     // Create and append text node
-    const text_node = try page.createTextNode(text);
+    const text_node = try page.createTextNode(text, parent);
     try page.appendNode(parent, text_node, .{ .child_already_connected = false });
 }
 

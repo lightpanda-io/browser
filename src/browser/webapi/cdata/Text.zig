@@ -24,7 +24,7 @@ const Text = @This();
 _proto: *CData,
 
 pub fn init(str: ?[]const u8, page: *Page) !*Text {
-    const node = try page.createTextNode(str orelse "");
+    const node = try page.createTextNode(str orelse "", null);
     return node.as(Text);
 }
 
@@ -40,7 +40,7 @@ pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
     }
 
     const new_data = data[offset..];
-    const new_node = try page.createTextNode(new_data);
+    const new_node = try page.createTextNode(new_data, null);
     const new_text = new_node.as(Text);
 
     const old_data = data[0..offset];

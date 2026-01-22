@@ -1292,7 +1292,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
                     return;
                 }
             }
-            break :blk try self.createTextNode(txt);
+            break :blk try self.createTextNode(txt, parent);
         },
     };
 
@@ -2112,10 +2112,45 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
     }
 }
 
-pub fn createTextNode(self: *Page, text: []const u8) !*Node {
+pub fn createTextNode(self: *Page, text: []const u8, parent: ?*Node) !*Node {
+    var normalized = text;
+    if (parent) |p| {
+        if (text.len > 0 and text.len <= self.buf.len and canCollapseWhiteSpace(p)) {
+            const has_leading_ws = switch (text[0]) {
+                ' ', '\t', '\r', '\n' => true,
+                else => false,
+            };
+            const has_trailing_ws = switch (text[text.len - 1]) {
+                ' ', '\t', '\r', '\n' => true,
+                else => false,
+            };
+
+            if (has_leading_ws or has_trailing_ws) {
+                const trimmed = std.mem.trim(u8, text, " \t\r\n");
+                var idx: usize = 0;
+
+                var buf = &self.buf;
+                if (has_leading_ws) {
+                    buf[idx] = ' ';
+                    idx += 1;
+                }
+
+                @memcpy(buf[idx..][0..trimmed.len], trimmed);
+                idx += trimmed.len;
+
+                if (has_trailing_ws) {
+                    buf[idx] = ' ';
+                    idx += 1;
+                }
+
+                normalized = buf[0..idx];
+            }
+        }
+    }
+
     // might seem unlikely that we get an intern hit, but we'll get some nodes
     // with just '\n'
-    const owned_text = try self.dupeString(text);
+    const owned_text = try self.dupeString(normalized);
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .text = .{
@@ -2125,6 +2160,16 @@ pub fn createTextNode(self: *Page, text: []const u8) !*Node {
     });
     cd._type.text._proto = cd;
     return cd.asNode();
+}
+
+fn canCollapseWhiteSpace(node: *Node) bool {
+    // it's possible that some of these are safe to collapse, but it isn't worth
+    // the risk/complexity.
+    const el = node.is(Element.Html) orelse return false;
+    return switch (el._type) {
+        .script, .style, .textarea, .pre => false,
+        else => true,
+    };
 }
 
 pub fn createComment(self: *Page, text: []const u8) !*Node {
