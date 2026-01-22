@@ -69,6 +69,7 @@ pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
             fn wrap(raw: *anyopaque) anyerror!?u32 {
                 const _args: *SetSrcCallback = @ptrCast(@alignCast(raw));
                 const _page = _args.page;
+                defer _page._factory.destroy(_args);
                 // Dispatch.
                 const event = try Event.initTrusted("load", .{}, _page);
                 try _page._event_manager.dispatch(_args.event_target, event);
