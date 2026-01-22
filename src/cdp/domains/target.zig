@@ -284,6 +284,12 @@ fn closeTarget(cmd: anytype) !void {
 
     bc.session.removePage();
     for (bc.isolated_worlds.items) |*world| {
+        if (world.executor.context) |*ctx| {
+            var ls: js.Local.Scope = undefined;
+            ctx.localScope(&ls);
+            bc.inspector.contextDestroyed(&ls.local);
+            ls.deinit();
+        }
         world.deinit();
     }
     bc.isolated_worlds.clearRetainingCapacity();
