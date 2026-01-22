@@ -92,11 +92,11 @@ pub fn Builder(comptime T: type) type {
             return entries;
         }
 
-        pub fn finalizer(comptime func: *const fn (self: *T) void) Finalizer {
+        pub fn finalizer(comptime func: *const fn (self: *T, comptime shutdown: bool) void) Finalizer {
             return .{
                 .from_zig = struct {
                     fn wrap(ptr: *anyopaque) void {
-                        func(@ptrCast(@alignCast(ptr)));
+                        func(@ptrCast(@alignCast(ptr)), true);
                     }
                 }.wrap,
 
@@ -115,7 +115,7 @@ pub fn Builder(comptime T: type) type {
                         if (!ctx.identity_map.contains(@intFromPtr(ptr))) {
                             return;
                         }
-                        func(self);
+                        func(self, false);
                         ctx.release(ptr);
                     }
                 }.wrap,

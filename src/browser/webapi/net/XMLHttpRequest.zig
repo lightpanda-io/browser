@@ -90,9 +90,13 @@ pub fn init(page: *Page) !*XMLHttpRequest {
     });
 }
 
-pub fn deinit(self: *XMLHttpRequest) void {
+pub fn deinit(self: *XMLHttpRequest, comptime shutdown: bool) void {
     if (self._transfer) |transfer| {
-        transfer.terminate();
+        if (shutdown) {
+            transfer.terminate();
+        } else {
+            transfer.abort(error.Abort);
+        }
         self._transfer = null;
     }
     self._page.releaseArena(self._arena);
