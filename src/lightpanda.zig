@@ -51,10 +51,31 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     // defer {
     //     if (page.js.stopCpuProfiler()) |profile| {
     //         std.fs.cwd().writeFile(.{
-    //             .sub_path = "v8/profile.json",
+    //             .sub_path = ".lp-cache/cpu_profile.json",
     //             .data = profile,
     //         }) catch |err| {
     //             log.err(.app, "profile write error", .{ .err = err });
+    //         };
+    //     } else |err| {
+    //         log.err(.app, "profile error", .{ .err = err });
+    //     }
+    // }
+
+    // // Comment this out to get a heap V8 heap profil
+    // page.js.startHeapProfiler();
+    // defer {
+    //     if (page.js.stopHeapProfiler()) |profile| {
+    //         std.fs.cwd().writeFile(.{
+    //             .sub_path = ".lp-cache/allocating.heapprofile",
+    //             .data = profile.@"0",
+    //         }) catch |err| {
+    //             log.err(.app, "allocating write error", .{ .err = err });
+    //         };
+    //         std.fs.cwd().writeFile(.{
+    //             .sub_path = ".lp-cache/snapshot.heapsnapshot",
+    //             .data = profile.@"1",
+    //         }) catch |err| {
+    //             log.err(.app, "heapsnapshot write error", .{ .err = err });
     //         };
     //     } else |err| {
     //         log.err(.app, "profile error", .{ .err = err });

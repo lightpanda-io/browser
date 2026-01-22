@@ -50,6 +50,8 @@ entered: bool,
 
 cpu_profiler: ?*v8.CpuProfiler = null,
 
+heap_profiler: ?*v8.HeapProfiler = null,
+
 // references Env.templates
 templates: []*const v8.FunctionTemplate,
 
@@ -819,6 +821,10 @@ pub fn startCpuProfiler(self: *Context) void {
         @compileError("CPU Profiling is only available in debug builds");
     }
 
+    var ls: js.Local.Scope = undefined;
+    self.localScope(&ls);
+    defer ls.deinit();
+
     std.debug.assert(self.cpu_profiler == null);
     v8.v8__CpuProfiler__UseDetailedSourcePositionsForProfiling(self.isolate.handle);
 
@@ -829,8 +835,55 @@ pub fn startCpuProfiler(self: *Context) void {
 }
 
 pub fn stopCpuProfiler(self: *Context) ![]const u8 {
+    var ls: js.Local.Scope = undefined;
+    self.localScope(&ls);
+    defer ls.deinit();
+
     const title = self.isolate.initStringHandle("v8_cpu_profile");
     const handle = v8.v8__CpuProfiler__StopProfiling(self.cpu_profiler.?, title) orelse return error.NoProfiles;
     const string_handle = v8.v8__CpuProfile__Serialize(handle, self.isolate.handle) orelse return error.NoProfile;
-    return self.jsStringToZig(string_handle, .{});
+    return ls.local.jsStringToZig(string_handle, .{});
+}
+
+pub fn startHeapProfiler(self: *Context) void {
+    if (comptime !IS_DEBUG) {
+        @compileError("Heap Profiling is only available in debug builds");
+    }
+
+    var ls: js.Local.Scope = undefined;
+    self.localScope(&ls);
+    defer ls.deinit();
+
+    std.debug.assert(self.heap_profiler == null);
+    const heap_profiler = v8.v8__HeapProfiler__Get(self.isolate.handle).?;
+
+    // Sample every 32KB, stack depth 32
+    v8.v8__HeapProfiler__StartSamplingHeapProfiler(heap_profiler, 32 * 1024, 32);
+    v8.v8__HeapProfiler__StartTrackingHeapObjects(heap_profiler, true);
+
+    self.heap_profiler = heap_profiler;
+}
+
+pub fn stopHeapProfiler(self: *Context) !struct{[]const u8, []const u8} {
+    var ls: js.Local.Scope = undefined;
+    self.localScope(&ls);
+    defer ls.deinit();
+
+    const allocating = blk: {
+        const profile = v8.v8__HeapProfiler__GetAllocationProfile(self.heap_profiler.?);
+        const string_handle = v8.v8__AllocationProfile__Serialize(profile, self.isolate.handle);
+        v8.v8__HeapProfiler__StopSamplingHeapProfiler(self.heap_profiler.?);
+        v8.v8__AllocationProfile__Delete(profile);
+        break :blk try ls.local.jsStringToZig(string_handle, .{});
+    };
+
+    const snapshot = blk: {
+        const snapshot = v8.v8__HeapProfiler__TakeHeapSnapshot(self.heap_profiler.?, null) orelse return error.NoProfiles;
+        const string_handle = v8.v8__HeapSnapshot__Serialize(snapshot, self.isolate.handle);
+        v8.v8__HeapProfiler__StopTrackingHeapObjects(self.heap_profiler.?);
+        v8.v8__HeapSnapshot__Delete(snapshot);
+        break :blk try ls.local.jsStringToZig(string_handle, .{});
+    };
+
+    return .{allocating, snapshot};
 }
