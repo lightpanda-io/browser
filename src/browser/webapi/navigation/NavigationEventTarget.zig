@@ -17,8 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../../../log.zig");
+
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const EventTarget = @import("../EventTarget.zig");
 const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEntryChangeEvent.zig");
@@ -43,10 +47,23 @@ pub fn dispatch(self: *NavigationEventTarget, event_type: DispatchType, page: *P
         };
     };
 
+    if (comptime IS_DEBUG) {
+        if (page.js.local == null) {
+            log.fatal(.bug, "null context scope", .{.src = "NavigationEventTarget.dispatch", .url = page.url});
+            std.debug.assert(page.js.local != null);
+        }
+    }
+
+    const func = @field(self, field) orelse return;
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
     return page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,
-        page.js.toLocal(@field(self, field)),
+        ls.toLocal(func),
         .{ .context = "Navigation" },
     );
 }

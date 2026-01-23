@@ -17,11 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("../../js/js.zig");
+const log = @import("../../../log.zig");
 
+const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+
 const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub fn registerTypes() []const type {
     return &.{
@@ -137,12 +141,25 @@ pub fn callPullIfNeeded(self: *ReadableStream) !void {
 
     self._pulling = true;
 
-    const pull_fn = self._page.js.toLocal(self._pull_fn) orelse return;
+    if (comptime IS_DEBUG) {
+        if (self._page.js.local == null) {
+            log.fatal(.bug, "null context scope", .{.src = "ReadableStream.callPullIfNeeded", .url = self._page.url});
+            std.debug.assert(self._page.js.local != null);
+        }
+    }
 
-    // Call the pull function
-    // Note: In a complete implementation, we'd handle the promise returned by pull
-    // and set _pulling = false when it resolves
-    try pull_fn.call(void, .{self._controller});
+    {
+        const func = self._pull_fn orelse return;
+
+        var ls: js.Local.Scope = undefined;
+        self._page.js.localScope(&ls);
+        defer ls.deinit();
+
+        // Call the pull function
+        // Note: In a complete implementation, we'd handle the promise returned by pull
+        // and set _pulling = false when it resolves
+        try ls.toLocal(func).call(void, .{self._controller});
+    }
 
     self._pulling = false;
 
