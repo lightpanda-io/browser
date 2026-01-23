@@ -58,3 +58,6 @@
     testing.expectEqual(true, e.toString().includes("FailedToLoad"), {script_id: 'import-404'});
   }
 </script>
+
+<!-- this used to crash -->
+<script type=module src=modules/self_async.js></script>

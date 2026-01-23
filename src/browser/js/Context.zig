@@ -301,9 +301,17 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 
     // and the module must have been set after we compiled it
     lp.assert(entry.module != null, "Context.module with module", .{});
-    lp.assert(entry.module_promise == null, "Context.module with module_promise", .{});
-
-    entry.module_promise = try evaluated.toPromise().persist();
+    if (entry.module_promise != null) {
+        // While loading this script, it's possible that it was dynamically
+        // included (either the module dynamically loaded itself (unlikely) or
+        // it included a script which dynamically imported it). If it was, then
+        // the module_promise would already be setup, and we don't need to do
+        // anything
+    } else {
+        // The *much* more likely case where the module we're trying to load
+        // didn't [directly or indirectly] dynamically load itself.
+        entry.module_promise = try evaluated.toPromise().persist();
+    }
     return if (comptime want_result) entry.* else {};
 }
 
