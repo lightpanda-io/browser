@@ -57,42 +57,7 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
 }
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("src", value, page);
-
-    const event_target = self.asNode().asEventTarget();
-
-    // Have to do this since `Scheduler` only allow passing a single arg.
-    const SetSrcCallback = struct {
-        page: *Page,
-        event_target: *@import("../../EventTarget.zig"),
-    };
-    const args = try page._factory.create(SetSrcCallback{
-        .page = page,
-        .event_target = event_target,
-    });
-    errdefer page._factory.destroy(args);
-
-    // We don't actually fetch the media, here we fake the load call.
-    try page.scheduler.add(
-        args,
-        struct {
-            fn wrap(raw: *anyopaque) anyerror!?u32 {
-                const _args: *SetSrcCallback = @ptrCast(@alignCast(raw));
-                const _page = _args.page;
-                defer _page._factory.destroy(_args);
-                // Dispatch.
-                const event = try Event.initTrusted("load", .{}, _page);
-                try _page._event_manager.dispatch(_args.event_target, event);
-
-                return null;
-            }
-        }.wrap,
-        25,
-        .{
-            .low_priority = false,
-            .name = "Image.setSrc",
-        },
-    );
+    return self.asElement().setAttributeSafe("src", value, page);
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
@@ -162,15 +127,50 @@ pub const JsApi = struct {
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
 };
 
-/// Parameters passed to scheduler for "load" events.
+/// Argument passed to `dispatchLoadEvent`.
 const CallbackParams = struct { page: *Page, element: *Element };
+
+/// Callback passed to `Scheduler` to execute load listeners.
+fn dispatchLoadEvent(raw: *anyopaque) !?u32 {
+    const _args: *CallbackParams = @ptrCast(@alignCast(raw));
+    const _page = _args.page;
+    defer _page._factory.destroy(_args);
+
+    const _element = _args.element;
+    const _img = _element.as(Image);
+    const event_target = _element.asEventTarget();
+    const event = try Event.initTrusted("load", .{}, _page);
+
+    // If onload provided, dispatch with it.
+    if (_img._on_load) |_on_load| {
+        var ls: js.Local.Scope = undefined;
+        _page.js.localScope(&ls);
+        defer ls.deinit();
+
+        try _page._event_manager.dispatchWithFunction(
+            event_target,
+            event,
+            _on_load.local(&ls.local),
+            .{ .context = "Image.onload" },
+        );
+        return null;
+    }
+
+    // Dispatch to addEventListener listeners.
+    try _page._event_manager.dispatch(event_target, event);
+    return null;
+}
 
 pub const Build = struct {
     pub fn created(node: *Node, page: *Page) !void {
         const self = node.as(Image);
         const image = self.asElement();
         // Exit if src not set. We might want to check if src point to valid image.
-        _ = image.getAttributeSafe("src") orelse return;
+        const src = image.getAttributeSafe("src") orelse return;
+        // We can at least check if this is a valid URL.
+        if (!URL.isCompleteHTTPUrl(src)) {
+            return;
+        }
 
         // Set `onload` if provided.
         blk: {
@@ -202,43 +202,46 @@ pub const Build = struct {
         // quite easier, which might be the reason.
         return page.scheduler.add(
             args,
-            struct {
-                fn wrap(raw: *anyopaque) anyerror!?u32 {
-                    const _args: *CallbackParams = @ptrCast(@alignCast(raw));
-                    const _page = _args.page;
-                    defer _page._factory.destroy(_args);
-
-                    const _element = _args.element;
-                    const _img = _element.as(Image);
-                    const event_target = _element.asEventTarget();
-                    const event = try Event.initTrusted("load", .{}, _page);
-
-                    // If onload provided, dispatch with it.
-                    if (_img._on_load) |_on_load| {
-                        var ls: js.Local.Scope = undefined;
-                        _page.js.localScope(&ls);
-                        defer ls.deinit();
-
-                        try _page._event_manager.dispatchWithFunction(
-                            event_target,
-                            event,
-                            _on_load.local(&ls.local),
-                            .{ .context = "Image.onload" },
-                        );
-                        return null;
-                    }
-
-                    // Dispatch to addEventListener listeners.
-                    try _page._event_manager.dispatch(event_target, event);
-                    return null;
-                }
-            }.wrap,
+            dispatchLoadEvent,
             25,
             .{
                 .low_priority = false,
                 .name = "Image.Build.created",
             },
         );
+    }
+
+    pub fn attributeChange(
+        element: *Element,
+        attr_name: []const u8,
+        attr_value: []const u8,
+        page: *Page,
+    ) !void {
+        const self = element.as(Image);
+        const image = self.asElement();
+
+        const src_changed_and_valid = std.mem.eql(u8, attr_name, "src") and
+            URL.isCompleteHTTPUrl(attr_value);
+
+        if (src_changed_and_valid) {
+            // Have to do this since `Scheduler` only allow passing a single arg.
+            const args = try page._factory.create(CallbackParams{
+                .page = page,
+                .element = image,
+            });
+            errdefer page._factory.destroy(args);
+
+            // We don't actually fetch the media, here we fake the load call.
+            try page.scheduler.add(
+                args,
+                dispatchLoadEvent,
+                25,
+                .{
+                    .low_priority = false,
+                    .name = "Image.Build.attributeChange",
+                },
+            );
+        }
     }
 };
 
