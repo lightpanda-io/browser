@@ -103,15 +103,16 @@ fn report(reason: []const u8, begin_addr: usize) !void {
         // overwrite the last character with our null terminator, safest since
         // our buffer could be full at this point
         written[written.len] = 0;
-        break :blk written[0..written.len + 1];
+        break :blk written[0 .. written.len + 1];
     };
 
     var argv = [_:null]?[*:0]const u8{
         curl_path[0..curl_path_len :0],
         "-fsSL",
-        "-H", "Content-Type: application/octet-stream",
+        "-H",
+        "Content-Type: application/octet-stream",
         "--data-binary",
-        stack[0..stack.len - 1 : 0],
+        stack[0 .. stack.len - 1 :0],
         url[0 .. url.len - 1 :0],
     };
 
