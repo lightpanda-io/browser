@@ -32,12 +32,8 @@ pub fn init(self: *TryCatch, l: *const js.Local) void {
     v8.v8__TryCatch__CONSTRUCT(&self.handle, l.isolate.handle);
 }
 
-pub fn hasCaught(self: TryCatch) bool {
-    return v8.v8__TryCatch__HasCaught(&self.handle);
-}
-
 pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
-    if (!self.hasCaught()) {
+    if (!v8.v8__TryCatch__HasCaught(&self.handle)) {
         return null;
     }
 

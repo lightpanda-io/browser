@@ -1190,7 +1190,8 @@ fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnman
     const js_obj = js_val.toObject();
     {
         // explicit scope because gop will become invalid in recursive call
-        const gop = try seen.getOrPut(self.call_arena, js_obj.getId());
+        const obj_id: u32 = @bitCast(v8.v8__Object__GetIdentityHash(js_obj.handle));
+        const gop = try seen.getOrPut(self.call_arena, obj_id);
         if (gop.found_existing) {
             return writer.writeAll("<circular>\n");
         }

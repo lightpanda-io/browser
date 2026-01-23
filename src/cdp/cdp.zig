@@ -771,11 +771,6 @@ const IsolatedWorld = struct {
             false,
         );
     }
-
-    pub fn createContextAndLoadPolyfills(self: *IsolatedWorld, page: *Page) !void {
-        // We need to recreate the isolated world context
-        try self.createContext(page);
-    }
 };
 
 // This is a generic because when we send a result we have two different

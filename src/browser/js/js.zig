@@ -81,10 +81,6 @@ pub const ArrayBuffer = struct {
 pub const Exception = struct {
     local: *const Local,
     handle: *const v8.Value,
-
-    pub fn exception(self: Exception, allocator: Allocator) ![]const u8 {
-        return self.local.valueToString(self.handel, .{ .allocator = allocator });
-    }
 };
 
 // These are simple types that we can convert to JS with only an isolate. This

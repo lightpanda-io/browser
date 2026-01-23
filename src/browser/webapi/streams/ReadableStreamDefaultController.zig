@@ -86,7 +86,7 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
 
     if (comptime IS_DEBUG) {
         if (self._page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{.src = "ReadableStreamDefaultController.enqueue", .url = self._page.url});
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueue", .url = self._page.url });
             std.debug.assert(self._page.js.local != null);
         }
     }
@@ -113,7 +113,7 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
 
     if (comptime IS_DEBUG) {
         if (self._page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{.src = "ReadableStreamDefaultController.close", .url = self._page.url});
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.close", .url = self._page.url });
             std.debug.assert(self._page.js.local != null);
         }
     }

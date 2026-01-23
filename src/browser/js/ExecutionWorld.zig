@@ -134,11 +134,3 @@ pub fn removeContext(self: *ExecutionWorld) void {
     self.env.isolate.notifyContextDisposed();
     _ = self.context_arena.reset(.{ .retain_with_limit = CONTEXT_ARENA_RETAIN });
 }
-
-pub fn terminateExecution(self: *const ExecutionWorld) void {
-    self.env.isolate.terminateExecution();
-}
-
-pub fn resumeExecution(self: *const ExecutionWorld) void {
-    self.env.isolate.cancelTerminateExecution();
-}

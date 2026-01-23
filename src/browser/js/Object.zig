@@ -31,10 +31,6 @@ const Object = @This();
 local: *const js.Local,
 handle: *const v8.Object,
 
-pub fn getId(self: Object) u32 {
-    return @bitCast(v8.v8__Object__GetIdentityHash(self.handle));
-}
-
 pub fn has(self: Object, key: anytype) bool {
     const ctx = self.local.ctx;
     const key_handle = if (@TypeOf(key) == *const v8.String) key else ctx.isolate.initStringHandle(key);

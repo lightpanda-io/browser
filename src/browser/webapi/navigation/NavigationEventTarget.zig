@@ -49,7 +49,7 @@ pub fn dispatch(self: *NavigationEventTarget, event_type: DispatchType, page: *P
 
     if (comptime IS_DEBUG) {
         if (page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{.src = "NavigationEventTarget.dispatch", .url = page.url});
+            log.fatal(.bug, "null context scope", .{ .src = "NavigationEventTarget.dispatch", .url = page.url });
             std.debug.assert(page.js.local != null);
         }
     }
