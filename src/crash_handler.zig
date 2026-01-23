@@ -79,7 +79,7 @@ fn report(reason: []const u8, begin_addr: usize) !void {
     var url_buffer: [4096]u8 = undefined;
     const url = blk: {
         var writer: std.Io.Writer = .fixed(&url_buffer);
-        try writer.print("http://localhost:1234/c?v={s}&r=", .{lp.build_config.git_commit});
+        try writer.print("https://crash.lightpanda.io/c?v={s}&r=", .{lp.build_config.git_commit});
         for (reason) |b| {
             switch (b) {
                 'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_' => try writer.writeByte(b),
