@@ -58,7 +58,7 @@ _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
-_on_error: ?js.Function.Global = null, // TODO: invoke on error?
+_on_error: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
 _location: *Location,
 _timer_id: u30 = 0,
@@ -283,6 +283,32 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     }, page);
 
     const event = error_event.asEvent();
+
+    // Invoke window.onerror callback if set (per WHATWG spec, this is called
+    // with 5 arguments: message, source, lineno, colno, error)
+    // If it returns true, the event is cancelled.
+    if (self._on_error) |on_error| {
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+
+        const local_func = ls.toLocal(on_error);
+        const result = local_func.call(js.Value, .{
+            error_event._message,
+            error_event._filename,
+            error_event._line_number,
+            error_event._column_number,
+            err,
+        }) catch null;
+
+        // Per spec: returning true from onerror cancels the event
+        if (result) |r| {
+            if (r.isTrue()) {
+                event._prevent_default = true;
+            }
+        }
+    }
+
     try page._event_manager.dispatch(self.asEventTarget(), event);
 
     if (comptime builtin.is_test == false) {
@@ -665,7 +691,7 @@ pub const JsApi = struct {
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
-    pub const onerror = bridge.accessor(Window.getOnError, Window.getOnError, .{});
+    pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
