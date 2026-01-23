@@ -37,6 +37,14 @@ pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getOnLoad(self: *const Image) ?js.Function.Global {
+    return self._on_load;
+}
+
+pub fn setOnLoad(self: *Image, callback: js.Function.Global) void {
+    self._on_load = callback;
+}
+
 pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
     const element = self.asConstElement();
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
@@ -145,6 +153,7 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(Image.constructor, .{});
+    pub const onload = bridge.accessor(Image.getOnLoad, Image.setOnLoad, .{});
     pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{});
     pub const alt = bridge.accessor(Image.getAlt, Image.setAlt, .{});
     pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{});
