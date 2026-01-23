@@ -96,14 +96,14 @@ fn report(reason: []const u8, begin_addr: usize) !void {
     const stack = blk: {
         var writer: std.Io.Writer = .fixed(stack_buffer[0..4095]); // reserve 1 space
         std.debug.dumpCurrentStackTraceToWriter(begin_addr, &writer) catch {};
-        var written = writer.buffered();
+        const written = writer.buffered();
         if (written.len == 0) {
             break :blk "???";
         }
-        // overwrite the last character with our null terminator, safest since
-        // our buffer could be full at this point
-        written[written.len] = 0;
-        break :blk written[0 .. written.len + 1];
+        // Overwrite the last character with our null terminator
+        // stack_buffer always has to be > written
+        stack_buffer[written.len] = 0;
+        break :blk stack_buffer[0 .. written.len + 1];
     };
 
     var argv = [_:null]?[*:0]const u8{
