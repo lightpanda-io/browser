@@ -256,7 +256,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self.window._location = &default_location;
 
     self._parse_state = .pre;
-    self._load_state = .parsing;
+    self._load_state = .waiting;
     self._queued_navigation = null;
     self._parse_mode = .document;
     self._attribute_lookup = .empty;
@@ -335,11 +335,12 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
     const session = self._session;
-    if (self._parse_state != .pre) {
+    if (self._parse_state != .pre or self._load_state != .waiting) {
         // it's possible for navigate to be called multiple times on the
         // same page (via CDP). We want to reset the page between each call.
         try self.reset(false);
     }
+    self._load_state = .parsing;
 
     const req_id = self._session.browser.http_client.nextReqId();
     log.info(.page, "navigate", .{
@@ -2710,6 +2711,9 @@ const ParseState = union(enum) {
 };
 
 const LoadState = enum {
+    // waiting for the main HTML
+    waiting,
+
     // the main HTML is being parsed (or downloaded)
     parsing,
 
