@@ -17,11 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("../../js/js.zig");
+const log = @import("../../../log.zig");
 
+const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+
 const ReadableStream = @import("ReadableStream.zig");
 const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const ReadableStreamDefaultController = @This();
 
@@ -79,7 +83,19 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
         .done = false,
         .value = .fromChunk(chunk),
     };
-    self._page.js.toLocal(resolver).resolve("stream enqueue", result);
+
+    if (comptime IS_DEBUG) {
+        if (self._page.js.local == null) {
+            log.fatal(.bug, "null context scope", .{.src = "ReadableStreamDefaultController.enqueue", .url = self._page.url});
+            std.debug.assert(self._page.js.local != null);
+        }
+    }
+
+    var ls: js.Local.Scope = undefined;
+    self._page.js.localScope(&ls);
+    defer ls.deinit();
+
+    ls.toLocal(resolver).resolve("stream enqueue", result);
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
@@ -94,9 +110,21 @@ pub fn close(self: *ReadableStreamDefaultController) !void {
         .done = true,
         .value = .empty,
     };
-    for (self._pending_reads.items) |resolver| {
-        self._page.js.toLocal(resolver).resolve("stream close", result);
+
+    if (comptime IS_DEBUG) {
+        if (self._page.js.local == null) {
+            log.fatal(.bug, "null context scope", .{.src = "ReadableStreamDefaultController.close", .url = self._page.url});
+            std.debug.assert(self._page.js.local != null);
+        }
     }
+
+    for (self._pending_reads.items) |resolver| {
+        var ls: js.Local.Scope = undefined;
+        self._page.js.localScope(&ls);
+        defer ls.deinit();
+        ls.toLocal(resolver).resolve("stream close", result);
+    }
+
     self._pending_reads.clearRetainingCapacity();
 }
 
