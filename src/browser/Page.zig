@@ -590,7 +590,7 @@ fn _documentIsComplete(self: *Page) !void {
     );
 }
 
-fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
+fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
     // would be different than self.url in the case of a redirect
@@ -607,6 +607,8 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !void {
             .content_type = header.contentType(),
         });
     }
+
+    return true;
 }
 
 fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {

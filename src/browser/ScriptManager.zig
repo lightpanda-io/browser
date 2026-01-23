@@ -663,7 +663,7 @@ pub const Script = struct {
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    fn headerCallback(transfer: *Http.Transfer) !void {
+    fn headerCallback(transfer: *Http.Transfer) !bool {
         const self: *Script = @ptrCast(@alignCast(transfer.ctx));
         const header = &transfer.response_header.?;
         self.status = header.status;
@@ -673,7 +673,7 @@ pub const Script = struct {
                 .status = header.status,
                 .content_type = header.contentType(),
             });
-            return;
+            return false;
         }
 
         if (comptime IS_DEBUG) {
@@ -694,6 +694,7 @@ pub const Script = struct {
             try buffer.ensureTotalCapacity(self.manager.allocator, cl);
         }
         self.source = .{ .remote = buffer };
+        return true;
     }
 
     fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
@@ -733,7 +734,7 @@ pub const Script = struct {
         log.warn(.http, "script fetch error", .{
             .err = err,
             .req = self.url,
-            .mode = self.mode,
+            .mode = std.meta.activeTag(self.mode),
             .kind = self.kind,
             .status = self.status,
         });
@@ -753,9 +754,13 @@ pub const Script = struct {
             return;
         }
 
-        if (self.mode == .import) {
-            const entry = self.manager.imported_modules.getPtr(self.url).?;
-            entry.state = .err;
+         switch (self.mode) {
+            .import_async => |ia| ia.callback(ia.data, error.FailedToLoad),
+            .import => {
+                const entry = manager.imported_modules.getPtr(self.url).?;
+                entry.state = .err;
+            },
+            else => {},
         }
         self.deinit(true);
         manager.evaluate();

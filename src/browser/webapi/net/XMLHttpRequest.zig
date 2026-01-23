@@ -290,7 +290,7 @@ fn httpHeaderCallback(transfer: *Http.Transfer, header: Http.Header) !void {
     try self._response_headers.append(self._arena, joined);
 }
 
-fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
+fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
 
     const header = &transfer.response_header.?;
@@ -305,7 +305,8 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
 
     if (header.contentType()) |ct| {
         self._response_mime = Mime.parse(ct) catch |e| {
-            return self.handleError(e);
+            log.info(.http, "invalid content type", .{.content_Type = ct, .err = e, .url = self._url,});
+            return false;
         };
     }
 
@@ -332,6 +333,8 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !void {
     try self.stateChanged(.headers_received, local, page);
     try self._proto.dispatch(.load_start, .{ .loaded = 0, .total = self._response_len orelse 0 }, local, page);
     try self.stateChanged(.loading, local, page);
+
+    return true;
 }
 
 fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {

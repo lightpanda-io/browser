@@ -594,15 +594,19 @@ fn processMessages(self: *Client) !bool {
 
         defer transfer.deinit();
 
-        if (errorCheck(msg.data.result)) {
+        if (errorCheck(msg.data.result)) blk: {
             // In case of request w/o data, we need to call the header done
             // callback now.
             if (!transfer._header_done_called) {
-                transfer.headerDoneCallback(easy) catch |err| {
+                const proceed = transfer.headerDoneCallback(easy) catch |err| {
                     log.err(.http, "header_done_callback", .{ .err = err });
                     self.requestFailed(transfer, err);
                     continue;
                 };
+                if (!proceed) {
+                    self.requestFailed(transfer, error.Abort);
+                    break :blk;
+                }
             }
             transfer.req.done_callback(transfer.ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
@@ -771,7 +775,7 @@ pub const Request = struct {
     ctx: *anyopaque = undefined,
 
     start_callback: ?*const fn (transfer: *Transfer) anyerror!void = null,
-    header_callback: *const fn (transfer: *Transfer) anyerror!void,
+    header_callback: *const fn (transfer: *Transfer) anyerror!bool,
     data_callback: *const fn (transfer: *Transfer, data: []const u8) anyerror!void,
     done_callback: *const fn (ctx: *anyopaque) anyerror!void,
     error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
@@ -1042,7 +1046,7 @@ pub const Transfer = struct {
     // headerDoneCallback is called once the headers have been read.
     // It can be called either on dataCallback or once the request for those
     // w/o body.
-    fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !void {
+    fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !bool {
         if (comptime IS_DEBUG) {
             std.debug.assert(transfer._header_done_called == false);
         }
@@ -1070,7 +1074,7 @@ pub const Transfer = struct {
             if (i >= ct.?.amount) break;
         }
 
-        transfer.req.header_callback(transfer) catch |err| {
+        const proceed = transfer.req.header_callback(transfer) catch |err| {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
             return err;
         };
@@ -1080,6 +1084,8 @@ pub const Transfer = struct {
                 .transfer = transfer,
             });
         }
+
+        return proceed;
     }
 
     // headerCallback is called by curl on each request's header line read.
@@ -1193,7 +1199,7 @@ pub const Transfer = struct {
         return buf_len;
     }
 
-    fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) usize {
+    fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) isize {
         // libcurl should only ever emit 1 chunk at a time
         if (comptime IS_DEBUG) {
             std.debug.assert(chunk_count == 1);
@@ -1206,14 +1212,18 @@ pub const Transfer = struct {
         };
 
         if (transfer._redirecting or transfer._auth_challenge != null) {
-            return chunk_len;
+            return @intCast(chunk_len);
         }
 
         if (!transfer._header_done_called) {
-            transfer.headerDoneCallback(easy) catch |err| {
+            const proceed = transfer.headerDoneCallback(easy) catch |err| {
                 log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
                 return c.CURL_WRITEFUNC_ERROR;
             };
+            if (!proceed) {
+                // signal abort to libcurl
+                return -1;
+            }
         }
 
         transfer.bytes_received += chunk_len;
@@ -1230,7 +1240,7 @@ pub const Transfer = struct {
             });
         }
 
-        return chunk_len;
+        return @intCast(chunk_len);
     }
 
     pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
@@ -1288,7 +1298,10 @@ pub const Transfer = struct {
             }
         }
 
-        try req.header_callback(transfer);
+        if (try req.header_callback(transfer) == false) {
+            transfer.abort(error.Abort);
+            return;
+        }
 
         if (body) |b| {
             try req.data_callback(transfer, b);
