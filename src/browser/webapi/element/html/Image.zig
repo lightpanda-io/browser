@@ -162,17 +162,21 @@ pub const Build = struct {
         const image = self.asElement();
         // Exit if src not set. We might want to check if src point to valid image.
         _ = image.getAttributeSafe("src") orelse return;
-        // Exit if there's no `onload`.
-        const on_load_str = image.getAttributeSafe("onload") orelse return;
 
-        // Derive function from string.
-        const on_load_func = page.js.stringToPersistedFunction(on_load_str) catch |err| {
-            log.err(.js, "Image.onload", .{ .err = err, .str = on_load_str });
-            return;
-        };
-        // Set onload.
-        self._on_load = on_load_func;
+        // Set `onload` if provided.
+        blk: {
+            // Exit if there's no `onload`.
+            const on_load_str = image.getAttributeSafe("onload") orelse break :blk;
+            // Derive function from string.
+            const on_load_func = page.js.stringToPersistedFunction(on_load_str) catch |err| {
+                log.err(.js, "Image.onload", .{ .err = err, .str = on_load_str });
+                break :blk;
+            };
+            // Set onload.
+            self._on_load = on_load_func;
+        }
 
+        // Since src set, we should send dispatch operation to Scheduler.
         const args = try page._factory.create(CallbackParams{
             .page = page,
             .element = image,
@@ -200,7 +204,7 @@ pub const Build = struct {
                     const event_target = _element.asEventTarget();
                     const event = try Event.initTrusted("load", .{}, _page);
 
-                    // If onload still there, dispatch with it.
+                    // If onload provided, dispatch with it.
                     if (_img._on_load) |_on_load| {
                         var ls: js.Local.Scope = undefined;
                         _page.js.localScope(&ls);
