@@ -352,7 +352,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        inspector: *js.Inspector,
+        inspector: js.Inspector,
         isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
 
         http_proxy_changed: bool = false,
@@ -376,12 +376,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
+            const browser = &cdp.browser;
             const allocator = cdp.allocator;
 
-            const session = try cdp.browser.newSession();
+            const session = try browser.newSession();
             const arena = session.arena;
-
-            const inspector = try cdp.browser.env.newInspector(arena, self);
 
             var registry = Node.Registry.init(allocator);
             errdefer registry.deinit();
@@ -400,19 +399,21 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .node_registry = registry,
                 .node_search_list = undefined,
                 .isolated_worlds = .empty,
-                .inspector = inspector,
+                .inspector = undefined,
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
                 .captured_responses = .empty,
                 .log_interceptor = LogInterceptor(Self).init(allocator, self),
             };
+            try browser.env.newInspector(&self.inspector, self);
+
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
 
-            try cdp.browser.notification.register(.page_remove, self, onPageRemove);
-            try cdp.browser.notification.register(.page_created, self, onPageCreated);
-            try cdp.browser.notification.register(.page_navigate, self, onPageNavigate);
-            try cdp.browser.notification.register(.page_navigated, self, onPageNavigated);
+            try browser.notification.register(.page_remove, self, onPageRemove);
+            try browser.notification.register(.page_created, self, onPageCreated);
+            try browser.notification.register(.page_navigate, self, onPageNavigate);
+            try browser.notification.register(.page_navigated, self, onPageNavigated);
         }
 
         pub fn deinit(self: *Self) void {
@@ -422,9 +423,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             // Drain microtasks makes sure we don't have inspector's callback
             // in progress before deinit.
-            self.cdp.browser.env.runMicrotasks();
+            const browser = &self.cdp.browser;
+            browser.env.runMicrotasks();
 
-            self.inspector.deinit();
+
 
             // abort all intercepted requests before closing the sesion/page
             // since some of these might callback into the page/scriptmanager
@@ -440,16 +442,19 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // If the session has a page, we need to clear it first. The page
             // context is always nested inside of the isolated world context,
             // so we need to shutdown the page one first.
-            self.cdp.browser.closeSession();
+            browser.closeSession();
+
+            _ = browser.env.pumpMessageLoop();
+            self.inspector.deinit();
 
             self.node_registry.deinit();
             self.node_search_list.deinit();
-            self.cdp.browser.notification.unregisterAll(self);
+            browser.notification.unregisterAll(self);
 
             if (self.http_proxy_changed) {
                 // has to be called after browser.closeSession, since it won't
                 // work if there are active connections.
-                self.cdp.browser.http_client.restoreOriginalProxy() catch |err| {
+                browser.http_client.restoreOriginalProxy() catch |err| {
                     log.warn(.http, "restoreOriginalProxy", .{ .err = err });
                 };
             }
@@ -770,11 +775,6 @@ const IsolatedWorld = struct {
             page,
             false,
         );
-    }
-
-    pub fn createContextAndLoadPolyfills(self: *IsolatedWorld, page: *Page) !void {
-        // We need to recreate the isolated world context
-        try self.createContext(page);
     }
 };
 

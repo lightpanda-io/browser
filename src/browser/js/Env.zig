@@ -160,10 +160,8 @@ pub fn deinit(self: *Env) void {
     self.allocator.destroy(self.isolate_params);
 }
 
-pub fn newInspector(self: *Env, arena: Allocator, ctx: anytype) !*Inspector {
-    const inspector = try arena.create(Inspector);
+pub fn newInspector(self: *Env, inspector: *Inspector, ctx: anytype) !void {
     try Inspector.init(inspector, self.isolate.handle, ctx);
-    return inspector;
 }
 
 pub fn runMicrotasks(self: *const Env) void {
