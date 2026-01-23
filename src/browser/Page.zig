@@ -225,12 +225,24 @@ pub fn deinit(self: *Page) void {
 
 fn reset(self: *Page, comptime initializing: bool) !void {
     if (comptime initializing == false) {
+        // Removins the context triggers the linked inspector.
+        // It seems to append a collect task to the message loop.
         self._session.executor.removeContext();
+
+        // We force running the message loop after removing the context b/c we
+        // will force a GC run just after. If we remove this part, the task
+        // will run after the GC and we will use memory after free.
+        self._session.browser.runMessageLoop();
+
+        // We force a garbage collection with lowMemoryNotification between
+        // page navigations to keep v8 memory usage as low as possible.
+        // Calling immediately after a runMessageLoop ensure
+        self._session.browser.env.lowMemoryNotification();
+
         self._script_manager.shutdown = true;
         self._session.browser.http_client.abort();
         self._script_manager.deinit();
         _ = self._session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
-        self._session.browser.env.lowMemoryNotification();
     }
 
     self._factory = Factory.init(self);
