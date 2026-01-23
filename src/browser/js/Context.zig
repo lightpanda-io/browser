@@ -872,7 +872,7 @@ pub fn startHeapProfiler(self: *Context) void {
     self.heap_profiler = heap_profiler;
 }
 
-pub fn stopHeapProfiler(self: *Context) !struct{[]const u8, []const u8} {
+pub fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
     defer ls.deinit();
@@ -893,5 +893,5 @@ pub fn stopHeapProfiler(self: *Context) !struct{[]const u8, []const u8} {
         break :blk try ls.local.jsStringToZig(string_handle, .{});
     };
 
-    return .{allocating, snapshot};
+    return .{ allocating, snapshot };
 }
