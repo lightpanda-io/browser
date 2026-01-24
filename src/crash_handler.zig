@@ -54,7 +54,7 @@ pub noinline fn crash(
                 std.debug.dumpCurrentStackTraceToWriter(begin_addr, writer) catch abort();
             }
 
-            report(reason) catch {};
+            report(reason, begin_addr) catch {};
         },
         1 => {
             panic_level = 2;
@@ -68,7 +68,7 @@ pub noinline fn crash(
     abort();
 }
 
-fn report(reason: []const u8) !void {
+fn report(reason: []const u8, begin_addr: usize) !void {
     if (@import("telemetry/telemetry.zig").isDisabled()) {
         return;
     }
@@ -76,24 +76,43 @@ fn report(reason: []const u8) !void {
     var curl_path: [2048]u8 = undefined;
     const curl_path_len = curlPath(&curl_path) orelse return;
 
-    var args_buffer: [4096]u8 = undefined;
-    var writer: std.Io.Writer = .fixed(&args_buffer);
-
-    try writer.print("https://crash.lightpanda.io/c?v={s}&r=", .{lp.build_config.git_commit});
-    for (reason) |b| {
-        switch (b) {
-            'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_' => try writer.writeByte(b),
-            ' ' => try writer.writeByte('+'),
-            else => try writer.writeByte('!'), // some weird character, that we shouldn't have, but that'll we'll replace with a weird (bur url-safe) character
+    var url_buffer: [4096]u8 = undefined;
+    const url = blk: {
+        var writer: std.Io.Writer = .fixed(&url_buffer);
+        try writer.print("https://crash.lightpanda.io/c?v={s}&r=", .{lp.build_config.git_commit});
+        for (reason) |b| {
+            switch (b) {
+                'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_' => try writer.writeByte(b),
+                ' ' => try writer.writeByte('+'),
+                else => try writer.writeByte('!'), // some weird character, that we shouldn't have, but that'll we'll replace with a weird (bur url-safe) character
+            }
         }
-    }
 
-    try writer.writeByte(0);
-    const url = writer.buffered();
+        try writer.writeByte(0);
+        break :blk writer.buffered();
+    };
+
+    var stack_buffer: [4096]u8 = undefined;
+    const stack = blk: {
+        var writer: std.Io.Writer = .fixed(stack_buffer[0..4095]); // reserve 1 space
+        std.debug.dumpCurrentStackTraceToWriter(begin_addr, &writer) catch {};
+        const written = writer.buffered();
+        if (written.len == 0) {
+            break :blk "???";
+        }
+        // Overwrite the last character with our null terminator
+        // stack_buffer always has to be > written
+        stack_buffer[written.len] = 0;
+        break :blk stack_buffer[0 .. written.len + 1];
+    };
 
     var argv = [_:null]?[*:0]const u8{
         curl_path[0..curl_path_len :0],
         "-fsSL",
+        "-H",
+        "Content-Type: application/octet-stream",
+        "--data-binary",
+        stack[0 .. stack.len - 1 :0],
         url[0 .. url.len - 1 :0],
     };
 
