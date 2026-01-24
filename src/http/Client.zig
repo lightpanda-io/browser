@@ -606,7 +606,7 @@ fn processMessages(self: *Client) !bool {
                     continue;
                 };
                 if (!proceed) {
-                    self.requestFailed(transfer, error.Abort);
+                    self.requestFailed(transfer, error.Abort, true);
                     break :blk;
                 }
             }
