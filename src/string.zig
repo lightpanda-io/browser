@@ -137,20 +137,22 @@ pub const String = packed struct {
     }
 
     pub fn eql(a: String, b: String) bool {
-        if (a.len != b.len or a.len < 0 or b.len < 0) {
+        if (@as(*const u64, @ptrCast(&a)).* != @as(*const u64, @ptrCast(&b)).*) {
             return false;
         }
 
-        if (a.len <= 12) {
+        const len = a.len;
+        if (len < 0 or b.len < 0) {
+            return false;
+        }
+
+        if (len <= 12) {
             return @reduce(.And, a.payload.content == b.payload.content);
         }
 
-        if (@reduce(.And, a.payload.heap.prefix == b.payload.heap.prefix) == false) {
-            return false;
-        }
-
-        const al: usize = @intCast(a.len);
-        const bl: usize = @intCast(a.len);
+        // a.len == b.len at this point
+        const al: usize = @intCast(len);
+        const bl: usize = @intCast(len);
         return std.mem.eql(u8, a.payload.heap.ptr[0..al], b.payload.heap.ptr[0..bl]);
     }
 
