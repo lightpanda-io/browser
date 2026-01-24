@@ -219,7 +219,7 @@ pub fn setCurrentTime(self: *Media, value: f64) void {
 
 pub fn getSrc(self: *const Media, page: *Page) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .literal("src")) orelse return "";
+    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
     if (src.len == 0) {
         return "";
     }
@@ -228,51 +228,51 @@ pub fn getSrc(self: *const Media, page: *Page) ![]const u8 {
 }
 
 pub fn setSrc(self: *Media, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("src", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
 }
 
 pub fn getAutoplay(self: *const Media) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("autoplay")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("autoplay")) != null;
 }
 
 pub fn setAutoplay(self: *Media, value: bool, page: *Page) !void {
     if (value) {
-        try self.asElement().setAttributeSafe("autoplay", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("autoplay"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("autoplay", page);
+        try self.asElement().removeAttribute(comptime .wrap("autoplay"), page);
     }
 }
 
 pub fn getControls(self: *const Media) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("controls")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("controls")) != null;
 }
 
 pub fn setControls(self: *Media, value: bool, page: *Page) !void {
     if (value) {
-        try self.asElement().setAttributeSafe("controls", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("controls"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("controls", page);
+        try self.asElement().removeAttribute(comptime .wrap("controls"), page);
     }
 }
 
 pub fn getLoop(self: *const Media) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("loop")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("loop")) != null;
 }
 
 pub fn setLoop(self: *Media, value: bool, page: *Page) !void {
     if (value) {
-        try self.asElement().setAttributeSafe("loop", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("loop"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("loop", page);
+        try self.asElement().removeAttribute(comptime .wrap("loop"), page);
     }
 }
 
 pub fn getPreload(self: *const Media) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("preload")) orelse "auto";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("preload")) orelse "auto";
 }
 
 pub fn setPreload(self: *Media, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("preload", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("preload"), .wrap(value), page);
 }
 
 pub const JsApi = struct {

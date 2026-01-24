@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const String = @import("../../string.zig").String;
+
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
@@ -109,8 +111,8 @@ pub fn takeRecords(self: *MutationObserver, page: *Page) ![]*MutationRecord {
 pub fn notifyAttributeChange(
     self: *MutationObserver,
     target: *Element,
-    attribute_name: []const u8,
-    old_value: ?[]const u8,
+    attribute_name: String,
+    old_value: ?String,
     page: *Page,
 ) !void {
     const target_node = target.asNode();
@@ -129,7 +131,7 @@ pub fn notifyAttributeChange(
         }
         if (obs.options.attributeFilter) |filter| {
             for (filter) |name| {
-                if (std.mem.eql(u8, name, attribute_name)) {
+                if (attribute_name.eqlSlice(name)) {
                     break;
                 }
             } else {
@@ -140,9 +142,9 @@ pub fn notifyAttributeChange(
         const record = try page._factory.create(MutationRecord{
             ._type = .attributes,
             ._target = target_node,
-            ._attribute_name = try page.arena.dupe(u8, attribute_name),
+            ._attribute_name = try page.arena.dupe(u8, attribute_name.str()),
             ._old_value = if (obs.options.attributeOldValue and old_value != null)
-                try page.arena.dupe(u8, old_value.?)
+                try page.arena.dupe(u8, old_value.?.str())
             else
                 null,
             ._added_nodes = &.{},

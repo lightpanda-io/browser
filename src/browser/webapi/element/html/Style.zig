@@ -39,38 +39,38 @@ pub fn asNode(self: *Style) *Node {
 // Attribute-backed properties
 
 pub fn getBlocking(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("blocking")) orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("blocking")) orelse "";
 }
 
 pub fn setBlocking(self: *Style, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("blocking", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("blocking"), .wrap(value), page);
 }
 
 pub fn getMedia(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("media")) orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("media")) orelse "";
 }
 
 pub fn setMedia(self: *Style, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("media", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), page);
 }
 
 pub fn getType(self: *const Style) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("type")) orelse "text/css";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "text/css";
 }
 
 pub fn setType(self: *Style, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("type", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
 }
 
 pub fn getDisabled(self: *const Style) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe("disabled", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("disabled", page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
     }
 }
 

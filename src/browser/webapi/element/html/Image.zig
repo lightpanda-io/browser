@@ -15,11 +15,11 @@ pub fn constructor(w_: ?u32, h_: ?u32, page: *Page) !*Image {
 
     if (w_) |w| blk: {
         const w_string = std.fmt.bufPrint(&page.buf, "{d}", .{w}) catch break :blk;
-        try el.setAttributeSafe("width", w_string, page);
+        try el.setAttributeSafe(comptime .wrap("width"), .wrap(w_string), page);
     }
     if (h_) |h| blk: {
         const h_string = std.fmt.bufPrint(&page.buf, "{d}", .{h}) catch break :blk;
-        try el.setAttributeSafe("height", h_string, page);
+        try el.setAttributeSafe(comptime .wrap("height"), .wrap(h_string), page);
     }
     return el.as(Image);
 }
@@ -36,7 +36,7 @@ pub fn asNode(self: *Image) *Node {
 
 pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
     const element = self.asConstElement();
-    const src = element.getAttributeSafe(comptime .literal("src")) orelse return "";
+    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return "";
     if (src.len == 0) {
         return "";
     }
@@ -46,54 +46,54 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
 }
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("src", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("alt")) orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
 }
 
 pub fn setAlt(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("alt", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(value), page);
 }
 
 pub fn getWidth(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .literal("width")) orelse return 0;
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("width")) orelse return 0;
     return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
 pub fn setWidth(self: *Image, value: u32, page: *Page) !void {
     const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe("width", str, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), page);
 }
 
 pub fn getHeight(self: *const Image) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .literal("height")) orelse return 0;
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse return 0;
     return std.fmt.parseUnsigned(u32, attr, 10) catch 0;
 }
 
 pub fn setHeight(self: *Image, value: u32, page: *Page) !void {
     const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe("height", str, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), page);
 }
 
 pub fn getCrossOrigin(self: *const Image) ?[]const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("crossorigin"));
+    return self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin"));
 }
 
 pub fn setCrossOrigin(self: *Image, value: ?[]const u8, page: *Page) !void {
     if (value) |v| {
-        return self.asElement().setAttributeSafe("crossorigin", v, page);
+        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(v), page);
     }
-    return self.asElement().removeAttribute("crossorigin", page);
+    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), page);
 }
 
 pub fn getLoading(self: *const Image) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("loading")) orelse "eager";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("loading")) orelse "eager";
 }
 
 pub fn setLoading(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("loading", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("loading"), .wrap(value), page);
 }
 
 pub const JsApi = struct {

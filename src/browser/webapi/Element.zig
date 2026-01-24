@@ -427,35 +427,35 @@ pub fn setInnerHTML(self: *Element, html: []const u8, page: *Page) !void {
 }
 
 pub fn getId(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .literal("id")) orelse "";
+    return self.getAttributeSafe(comptime .wrap("id")) orelse "";
 }
 
 pub fn setId(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe("id", value, page);
+    return self.setAttributeSafe(comptime .wrap("id"), .wrap(value), page);
 }
 
 pub fn getSlot(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .literal("slot")) orelse "";
+    return self.getAttributeSafe(comptime .wrap("slot")) orelse "";
 }
 
 pub fn setSlot(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe("slot", value, page);
+    return self.setAttributeSafe(comptime .wrap("slot"), .wrap(value), page);
 }
 
 pub fn getDir(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .literal("dir")) orelse "";
+    return self.getAttributeSafe(comptime .wrap("dir")) orelse "";
 }
 
 pub fn setDir(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe("dir", value, page);
+    return self.setAttributeSafe(comptime .wrap("dir"), .wrap(value), page);
 }
 
 pub fn getClassName(self: *const Element) []const u8 {
-    return self.getAttributeSafe(comptime .literal("class")) orelse "";
+    return self.getAttributeSafe(comptime .wrap("class")) orelse "";
 }
 
 pub fn setClassName(self: *Element, value: []const u8, page: *Page) !void {
-    return self.setAttributeSafe("class", value, page);
+    return self.setAttributeSafe(comptime .wrap("class"), .wrap(value), page);
 }
 
 pub fn attributeIterator(self: *Element) Attribute.InnerIterator {
@@ -463,7 +463,7 @@ pub fn attributeIterator(self: *Element) Attribute.InnerIterator {
     return attributes.iterator();
 }
 
-pub fn getAttribute(self: *const Element, name: []const u8, page: *Page) !?[]const u8 {
+pub fn getAttribute(self: *const Element, name: String, page: *Page) !?String {
     const attributes = self._attributes orelse return null;
     return attributes.get(name, page);
 }
@@ -472,9 +472,9 @@ pub fn getAttribute(self: *const Element, name: []const u8, page: *Page) !?[]con
 pub fn getAttributeNS(
     self: *const Element,
     maybe_namespace: ?[]const u8,
-    local_name: []const u8,
+    local_name: String,
     page: *Page,
-) !?[]const u8 {
+) !?String {
     if (maybe_namespace) |namespace| {
         if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
             log.warn(.not_implemented, "Element.getAttributeNS", .{ .namespace = namespace });
@@ -489,7 +489,7 @@ pub fn getAttributeSafe(self: *const Element, name: String) ?[]const u8 {
     return attributes.getSafe(name);
 }
 
-pub fn hasAttribute(self: *const Element, name: []const u8, page: *Page) !bool {
+pub fn hasAttribute(self: *const Element, name: String, page: *Page) !bool {
     const attributes = self._attributes orelse return false;
     const value = try attributes.get(name, page);
     return value != null;
@@ -505,12 +505,12 @@ pub fn hasAttributes(self: *const Element) bool {
     return attributes.isEmpty() == false;
 }
 
-pub fn getAttributeNode(self: *Element, name: []const u8, page: *Page) !?*Attribute {
+pub fn getAttributeNode(self: *Element, name: String, page: *Page) !?*Attribute {
     const attributes = self._attributes orelse return null;
     return attributes.getAttribute(name, self, page);
 }
 
-pub fn setAttribute(self: *Element, name: []const u8, value: []const u8, page: *Page) !void {
+pub fn setAttribute(self: *Element, name: String, value: String, page: *Page) !void {
     try Attribute.validateAttributeName(name);
     const attributes = try self.getOrCreateAttributeList(page);
     _ = try attributes.put(name, value, self, page);
@@ -533,10 +533,10 @@ pub fn setAttributeNS(
         qualified_name[idx + 1 ..]
     else
         qualified_name;
-    return self.setAttribute(local_name, value, page);
+    return self.setAttribute(.wrap(local_name), .wrap(value), page);
 }
 
-pub fn setAttributeSafe(self: *Element, name: []const u8, value: []const u8, page: *Page) !void {
+pub fn setAttributeSafe(self: *Element, name: String, value: String, page: *Page) !void {
     const attributes = try self.getOrCreateAttributeList(page);
     _ = try attributes.putSafe(name, value, self, page);
 }
@@ -607,19 +607,19 @@ pub fn setAttributeNode(self: *Element, attr: *Attribute, page: *Page) !?*Attrib
     return attributes.putAttribute(attr, self, page);
 }
 
-pub fn removeAttribute(self: *Element, name: []const u8, page: *Page) !void {
+pub fn removeAttribute(self: *Element, name: String, page: *Page) !void {
     const attributes = self._attributes orelse return;
     return attributes.delete(name, self, page);
 }
 
-pub fn toggleAttribute(self: *Element, name: []const u8, force: ?bool, page: *Page) !bool {
+pub fn toggleAttribute(self: *Element, name: String, force: ?bool, page: *Page) !bool {
     try Attribute.validateAttributeName(name);
     const has = try self.hasAttribute(name, page);
 
     const should_add = force orelse !has;
 
     if (should_add and !has) {
-        try self.setAttribute(name, "", page);
+        try self.setAttribute(name, String.empty, page);
         return true;
     } else if (!should_add and has) {
         try self.removeAttribute(name, page);
@@ -666,7 +666,7 @@ pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try page._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .literal("class"),
+            ._attribute_name = comptime .wrap("class"),
         });
     }
     return gop.value_ptr.*;
@@ -677,7 +677,7 @@ pub fn getRelList(self: *Element, page: *Page) !*collections.DOMTokenList {
     if (!gop.found_existing) {
         gop.value_ptr.* = try page._factory.create(collections.DOMTokenList{
             ._element = self,
-            ._attribute_name = comptime .literal("rel"),
+            ._attribute_name = comptime .wrap("rel"),
         });
     }
     return gop.value_ptr.*;
@@ -919,10 +919,10 @@ fn getElementDimensions(self: *Element, page: *Page) !struct { width: f64, heigh
             if (width == 5.0) width = 1920.0;
             if (height == 5.0) height = 100_000_000.0;
         } else if (tag == .img or tag == .iframe) {
-            if (self.getAttributeSafe(comptime .literal("width"))) |w| {
+            if (self.getAttributeSafe(comptime .wrap("width"))) |w| {
                 width = std.fmt.parseFloat(f64, w) catch width;
             }
-            if (self.getAttributeSafe(comptime .literal("height"))) |h| {
+            if (self.getAttributeSafe(comptime .wrap("height"))) |h| {
                 height = std.fmt.parseFloat(f64, h) catch height;
             }
         }

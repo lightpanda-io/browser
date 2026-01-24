@@ -37,35 +37,35 @@ pub fn asNode(self: *Meta) *Node {
 }
 
 pub fn getName(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .literal("name")) orelse return "";
+    return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse return "";
 }
 
 pub fn setName(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("name", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
 }
 
 pub fn getHttpEquiv(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .literal("http-equiv")) orelse return "";
+    return self.asElement().getAttributeSafe(comptime .wrap("http-equiv")) orelse return "";
 }
 
 pub fn setHttpEquiv(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("http-equiv", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("http-equiv"), .wrap(value), page);
 }
 
 pub fn getContent(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .literal("content")) orelse return "";
+    return self.asElement().getAttributeSafe(comptime .wrap("content")) orelse return "";
 }
 
 pub fn setContent(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("content", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("content"), .wrap(value), page);
 }
 
 pub fn getMedia(self: *Meta) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .literal("media")) orelse return "";
+    return self.asElement().getAttributeSafe(comptime .wrap("media")) orelse return "";
 }
 
 pub fn setMedia(self: *Meta, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("media", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("media"), .wrap(value), page);
 }
 
 pub const JsApi = struct {

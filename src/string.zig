@@ -20,6 +20,8 @@ const std = @import("std");
 const js = @import("browser/js/js.zig");
 const Allocator = std.mem.Allocator;
 
+const M = @This();
+
 // German-string (small string optimization)
 pub const String = packed struct {
     len: i32,
@@ -34,11 +36,15 @@ pub const String = packed struct {
     pub const empty = String{ .len = 0, .payload = .{ .content = @splat(0) } };
     pub const deleted = String{ .len = tombstone, .payload = .{ .content = @splat(0) } };
 
-    // Create a String from a string literal. For strings with len <= 12, the
-    // this can be done at comptime: comptime String.literal("id");
-    // For strings with len > 12, this must be done at runtime. This is because,
-    // at comptime, we do not have a ptr for data and thus can't store it.
-    pub fn literal(input: anytype) String {
+    // for packages that already have String imported, then can use String.Global
+    pub const Global = M.Global;
+
+    // Wraps an existing string. For strings with len <= 12, this can be done at
+    // comptime: comptime String.wrap("id");
+    // For strings with len > 12, this must be done at runtime even for a string
+    // literal. This is because, at comptime, we do not have a ptr for data and
+    // thus can't store it.
+    pub fn wrap(input: anytype) String {
         if (@inComptime()) {
             const l = input.len;
             if (l > 12) {
@@ -102,9 +108,8 @@ pub const String = packed struct {
         }
     }
 
-    pub fn fromJS(allocator: Allocator, js_obj: js.Object) !String {
-        const js_str = js_obj.toString();
-        return init(allocator, js_str, .{});
+    pub fn dupe(self: *const String, allocator: Allocator) !String {
+        return .init(allocator, self.str(), .{ .dupe = true });
     }
 
     pub fn str(self: *const String) []const u8 {

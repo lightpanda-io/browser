@@ -121,39 +121,39 @@ pub fn setSelectedIndex(self: *Select, index: i32) !void {
 }
 
 pub fn getMultiple(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("multiple")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
 }
 
 pub fn setMultiple(self: *Select, multiple: bool, page: *Page) !void {
     if (multiple) {
-        try self.asElement().setAttributeSafe("multiple", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("multiple", page);
+        try self.asElement().removeAttribute(comptime .wrap("multiple"), page);
     }
 }
 
 pub fn getDisabled(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Select, disabled: bool, page: *Page) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe("disabled", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("disabled", page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
     }
 }
 
 pub fn getName(self: *const Select) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
 pub fn setName(self: *Select, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("name", name, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
 }
 
 pub fn getSize(self: *const Select) u32 {
-    const s = self.asConstElement().getAttributeSafe(comptime .literal("size")) orelse return 0;
+    const s = self.asConstElement().getAttributeSafe(comptime .wrap("size")) orelse return 0;
 
     const trimmed = std.mem.trimLeft(u8, s, &std.ascii.whitespace);
 
@@ -172,18 +172,18 @@ pub fn getSize(self: *const Select) u32 {
 
 pub fn setSize(self: *Select, size: u32, page: *Page) !void {
     const size_string = try std.fmt.allocPrint(page.call_arena, "{d}", .{size});
-    try self.asElement().setAttributeSafe("size", size_string, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(size_string), page);
 }
 
 pub fn getRequired(self: *const Select) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("required")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
 pub fn setRequired(self: *Select, required: bool, page: *Page) !void {
     if (required) {
-        try self.asElement().setAttributeSafe("required", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("required", page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), page);
     }
 }
 
@@ -218,7 +218,7 @@ pub fn getForm(self: *Select, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .literal("form"))) |form_id| {
+    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }

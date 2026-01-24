@@ -64,7 +64,7 @@ pub fn invokeDisconnectedCallback(self: *Custom, page: *Page) void {
     self.invokeCallback("disconnectedCallback", .{}, page);
 }
 
-pub fn invokeAttributeChangedCallback(self: *Custom, name: []const u8, old_value: ?[]const u8, new_value: ?[]const u8, page: *Page) void {
+pub fn invokeAttributeChangedCallback(self: *Custom, name: String, old_value: ?String, new_value: ?String, page: *Page) void {
     const definition = self._definition orelse return;
     if (!definition.isAttributeObserved(name)) {
         return;
@@ -144,7 +144,7 @@ pub fn invokeDisconnectedCallbackOnElement(element: *Element, page: *Page) void 
     invokeCallbackOnElement(element, definition, "disconnectedCallback", .{}, page);
 }
 
-pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: []const u8, old_value: ?[]const u8, new_value: ?[]const u8, page: *Page) void {
+pub fn invokeAttributeChangedCallbackOnElement(element: *Element, name: String, old_value: ?String, new_value: ?String, page: *Page) void {
     // Autonomous custom element
     if (element.is(Custom)) |custom| {
         custom.invokeAttributeChangedCallback(name, old_value, new_value, page);
@@ -174,7 +174,7 @@ fn invokeCallbackOnElement(element: *Element, definition: *CustomElementDefiniti
 
 // Check if element has "is" attribute and attach customized built-in definition
 pub fn checkAndAttachBuiltIn(element: *Element, page: *Page) !void {
-    const is_value = element.getAttributeSafe(comptime .literal("is")) orelse return;
+    const is_value = element.getAttributeSafe(comptime .wrap("is")) orelse return;
 
     const custom_elements = page.window.getCustomElements();
     const definition = custom_elements._definitions.get(is_value) orelse return;

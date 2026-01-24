@@ -160,8 +160,8 @@ pub fn getValue(self: *const DOMTokenList) []const u8 {
     return self._element.getAttributeSafe(self._attribute_name) orelse "";
 }
 
-pub fn setValue(self: *DOMTokenList, value: []const u8, page: *Page) !void {
-    try self._element.setAttribute(self._attribute_name.str(), value, page);
+pub fn setValue(self: *DOMTokenList, value: String, page: *Page) !void {
+    try self._element.setAttribute(self._attribute_name, value, page);
 }
 
 pub fn keys(self: *DOMTokenList, page: *Page) !*KeyIterator {
@@ -227,7 +227,7 @@ fn validateToken(token: []const u8) !void {
 
 fn updateAttribute(self: *DOMTokenList, tokens: Lookup, page: *Page) !void {
     const joined = try std.mem.join(page.call_arena, " ", tokens.keys());
-    try self._element.setAttribute(self._attribute_name.str(), joined, page);
+    try self._element.setAttribute(self._attribute_name, .wrap(joined), page);
 }
 
 const Iterator = struct {

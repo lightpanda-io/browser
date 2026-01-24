@@ -66,7 +66,7 @@ pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *
         if (opts.with_base) {
             const parent = if (html_doc.getHead()) |head| head.asNode() else doc.asNode();
             const base = try doc.createElement("base", null, page);
-            try base.setAttributeSafe("base", page.base(), page);
+            try base.setAttributeSafe(comptime .wrap("base"), .wrap(page.base()), page);
             _ = try parent.insertBefore(base.asNode(), parent.firstChild(), page);
         }
     }
@@ -110,7 +110,7 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             // to render that "active" content, so when we're trying to render
             // it, we don't want to skip it.
             if ((comptime force_slot == false) and opts.shadow == .rendered) {
-                if (el.getAttributeSafe(comptime .literal("slot"))) |_| {
+                if (el.getAttributeSafe(comptime .wrap("slot"))) |_| {
                     // Skip - will be rendered by the Slot if it's the active container
                     return;
                 }
@@ -253,12 +253,12 @@ fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
         if (std.mem.eql(u8, tag_name, "noscript")) return true;
 
         if (std.mem.eql(u8, tag_name, "link")) {
-            if (el.getAttributeSafe(comptime .literal("as"))) |as| {
+            if (el.getAttributeSafe(comptime .wrap("as"))) |as| {
                 if (std.mem.eql(u8, as, "script")) return true;
             }
-            if (el.getAttributeSafe(comptime .literal("rel"))) |rel| {
+            if (el.getAttributeSafe(comptime .wrap("rel"))) |rel| {
                 if (std.mem.eql(u8, rel, "modulepreload") or std.mem.eql(u8, rel, "preload")) {
-                    if (el.getAttributeSafe(comptime .literal("as"))) |as| {
+                    if (el.getAttributeSafe(comptime .wrap("as"))) |as| {
                         if (std.mem.eql(u8, as, "script")) return true;
                     }
                 }
@@ -270,7 +270,7 @@ fn shouldStripElement(el: *const Node.Element, opts: Opts) bool {
         if (std.mem.eql(u8, tag_name, "style")) return true;
 
         if (std.mem.eql(u8, tag_name, "link")) {
-            if (el.getAttributeSafe(comptime .literal("rel"))) |rel| {
+            if (el.getAttributeSafe(comptime .wrap("rel"))) |rel| {
                 if (std.mem.eql(u8, rel, "stylesheet")) return true;
             }
         }

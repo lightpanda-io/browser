@@ -18,6 +18,8 @@
 
 const std = @import("std");
 const log = @import("../../log.zig");
+const string = @import("../../string.zig");
+
 const Page = @import("../Page.zig");
 
 const js = @import("js.zig");
@@ -219,7 +221,7 @@ fn _getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v
     const F = @TypeOf(func);
     var args = try self.getArgs(F, 2, info);
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-    @field(args, "1") = try self.nameToString(name);
+    @field(args, "1") = try self.nameToString(@TypeOf(args.@"1"), name);
     const ret = @call(.auto, func, args);
     return self.handleIndexedReturn(T, F, true, ret, info, opts);
 }
@@ -241,7 +243,7 @@ fn _setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-    @field(args, "1") = try self.nameToString(name);
+    @field(args, "1") = try self.nameToString(@TypeOf(args.@"1"), name);
     @field(args, "2") = try self.local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
     if (@typeInfo(F).@"fn".params.len == 4) {
         @field(args, "3") = self.local.ctx.page;
@@ -266,7 +268,7 @@ fn _deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *cons
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-    @field(args, "1") = try self.nameToString(name);
+    @field(args, "1") = try self.nameToString(@TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".params.len == 3) {
         @field(args, "2") = self.local.ctx.page;
     }
@@ -311,8 +313,15 @@ fn isInErrorSet(err: anyerror, comptime T: type) bool {
     return false;
 }
 
-fn nameToString(self: *const Caller, name: *const v8.Name) ![]const u8 {
-    return self.local.valueHandleToString(@ptrCast(name), .{});
+fn nameToString(self: *const Caller, comptime T: type, name: *const v8.Name) !T {
+    const v8_string = @as(*const v8.String, @ptrCast(name));
+    if (T == string.String) {
+        return self.local.jsStringToStringSSO(v8_string, .{});
+    }
+    if (T == string.Global) {
+        return self.local.jsStringToStringSSO(v8_string, .{ .allocator = self.local.ctx.allocator });
+    }
+    return try self.local.valueHandleToString(v8_string, .{});
 }
 
 fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror, info: anytype, comptime opts: CallOpts) void {

@@ -39,33 +39,33 @@ pub fn registerTypes() []const type {
 pub const Attribute = @This();
 
 _proto: *Node,
-_name: []const u8,
-_value: []const u8,
+_name: String,
+_value: String,
 _element: ?*Element,
 
 pub fn format(self: *const Attribute, writer: *std.Io.Writer) !void {
     return formatAttribute(self._name, self._value, writer);
 }
 
-pub fn getName(self: *const Attribute) []const u8 {
+pub fn getName(self: *const Attribute) String {
     return self._name;
 }
 
-pub fn getValue(self: *const Attribute) []const u8 {
+pub fn getValue(self: *const Attribute) String {
     return self._value;
 }
 
-pub fn setValue(self: *Attribute, data_: ?[]const u8, page: *Page) !void {
-    const data = data_ orelse "";
+pub fn setValue(self: *Attribute, data_: ?String, page: *Page) !void {
+    const data = data_ orelse String.empty;
     const el = self._element orelse {
-        self._value = try page.dupeString(data);
+        self._value = try data.dupe(page.arena);
         return;
     };
     // this takes ownership of the data
     try el.setAttribute(self._name, data, page);
 
     // not the most efficient, but we don't expect this to be called often
-    self._value = (try el.getAttribute(self._name, page)) orelse "";
+    self._value = (try el.getAttribute(self._name, page)) orelse String.empty;
 }
 
 pub fn getNamespaceURI(_: *const Attribute) ?[]const u8 {
@@ -77,7 +77,7 @@ pub fn getOwnerElement(self: *const Attribute) ?*Element {
 }
 
 pub fn isEqualNode(self: *const Attribute, other: *const Attribute) bool {
-    return std.mem.eql(u8, self.getName(), other.getName()) and std.mem.eql(u8, self.getValue(), other.getValue());
+    return self.getName().eql(other.getName()) and self.getValue().eql(other.getValue());
 }
 
 pub fn clone(self: *const Attribute, page: *Page) !*Attribute {
@@ -139,9 +139,9 @@ pub const List = struct {
         return self._list.first == null;
     }
 
-    pub fn get(self: *const List, name: []const u8, page: *Page) !?[]const u8 {
+    pub fn get(self: *const List, name: String, page: *Page) !?String {
         const entry = (try self.getEntry(name, page)) orelse return null;
-        return entry._value.str();
+        return entry._value;
     }
 
     pub inline fn length(self: *const List) usize {
@@ -180,7 +180,7 @@ pub const List = struct {
         return self.getEntryWithNormalizedName(name) != null;
     }
 
-    pub fn getAttribute(self: *const List, name: []const u8, element: ?*Element, page: *Page) !?*Attribute {
+    pub fn getAttribute(self: *const List, name: String, element: ?*Element, page: *Page) !?*Attribute {
         const entry = (try self.getEntry(name, page)) orelse return null;
         const gop = try page._attribute_lookup.getOrPut(page.arena, @intFromPtr(entry));
         if (gop.found_existing) {
@@ -191,33 +191,33 @@ pub const List = struct {
         return attribute;
     }
 
-    pub fn put(self: *List, name: []const u8, value: []const u8, element: *Element, page: *Page) !*Entry {
+    pub fn put(self: *List, name: String, value: String, element: *Element, page: *Page) !*Entry {
         const result = try self.getEntryAndNormalizedName(name, page);
         return self._put(result, value, element, page);
     }
 
-    pub fn putSafe(self: *List, name: []const u8, value: []const u8, element: *Element, page: *Page) !*Entry {
-        const entry = self.getEntryWithNormalizedNameOld(name);
+    pub fn putSafe(self: *List, name: String, value: String, element: *Element, page: *Page) !*Entry {
+        const entry = self.getEntryWithNormalizedName(name);
         return self._put(.{ .entry = entry, .normalized = name }, value, element, page);
     }
 
-    fn _put(self: *List, result: NormalizeAndEntry, value: []const u8, element: *Element, page: *Page) !*Entry {
+    fn _put(self: *List, result: NormalizeAndEntry, value: String, element: *Element, page: *Page) !*Entry {
         const is_id = shouldAddToIdMap(result.normalized, element);
 
         var entry: *Entry = undefined;
-        var old_value: ?[]const u8 = null;
+        var old_value: ?String = null;
         if (result.entry) |e| {
-            old_value = try page.call_arena.dupe(u8, e._value.str());
+            old_value = try e._value.dupe(page.call_arena);
             if (is_id) {
                 page.removeElementId(element, e._value.str());
             }
-            e._value = try String.init(page.arena, value, .{});
+            e._value = try value.dupe(page.arena);
             entry = e;
         } else {
             entry = try page._factory.create(Entry{
                 ._node = .{},
-                ._name = try String.init(page.arena, result.normalized, .{}),
-                ._value = try String.init(page.arena, value, .{}),
+                ._name = try result.normalized.dupe(page.arena),
+                ._value = try value.dupe(page.arena),
             });
             self._list.append(&entry._node);
             self._len += 1;
@@ -230,7 +230,7 @@ pub const List = struct {
             try page.addElementId(parent, element, entry._value.str());
         }
         page.domChanged();
-        page.attributeChange(element, result.normalized, entry._value.str(), old_value);
+        page.attributeChange(element, result.normalized, entry._value, old_value);
         return entry;
     }
 
@@ -266,7 +266,7 @@ pub const List = struct {
 
     // called form our parser, names already lower-cased
     pub fn putNew(self: *List, name: []const u8, value: []const u8, page: *Page) !void {
-        if (try self.getEntry(name, page) != null) {
+        if (try self.getEntry(.wrap(name), page) != null) {
             // When parsing, if there are dupicate names, it isn't valid, and
             // the first is kept
             return;
@@ -281,12 +281,12 @@ pub const List = struct {
         self._len += 1;
     }
 
-    pub fn delete(self: *List, name: []const u8, element: *Element, page: *Page) !void {
+    pub fn delete(self: *List, name: String, element: *Element, page: *Page) !void {
         const result = try self.getEntryAndNormalizedName(name, page);
         const entry = result.entry orelse return;
 
         const is_id = shouldAddToIdMap(result.normalized, element);
-        const old_value = entry._value.str();
+        const old_value = entry._value;
 
         if (is_id) {
             page.removeElementId(element, entry._value.str());
@@ -314,7 +314,7 @@ pub const List = struct {
         return .{ ._node = self._list.first };
     }
 
-    fn getEntry(self: *const List, name: []const u8, page: *Page) !?*Entry {
+    fn getEntry(self: *const List, name: String, page: *Page) !?*Entry {
         const result = try self.getEntryAndNormalizedName(name, page);
         return result.entry;
     }
@@ -322,16 +322,16 @@ pub const List = struct {
     // Dangerous, the returned normalized name is only valid until someone
     // else uses pages.buf.
     const NormalizeAndEntry = struct {
-        normalized: []const u8,
         entry: ?*Entry,
+        normalized: String,
     };
-    fn getEntryAndNormalizedName(self: *const List, name: []const u8, page: *Page) !NormalizeAndEntry {
+    fn getEntryAndNormalizedName(self: *const List, name: String, page: *Page) !NormalizeAndEntry {
         const normalized =
             if (self.normalize) try normalizeNameForLookup(name, page) else name;
 
         return .{
             .normalized = normalized,
-            .entry = self.getEntryWithNormalizedNameOld(normalized),
+            .entry = self.getEntryWithNormalizedName(normalized),
         };
     }
 
@@ -340,19 +340,6 @@ pub const List = struct {
         while (node) |n| {
             var e = Entry.fromNode(n);
             if (e._name.eql(name)) {
-                return e;
-            }
-            node = n.next;
-        }
-        return null;
-    }
-
-    // TODO remove when we're done making everything String-based
-    fn getEntryWithNormalizedNameOld(self: *const List, name: []const u8) ?*Entry {
-        var node = self._list.first;
-        while (node) |n| {
-            var e = Entry.fromNode(n);
-            if (e._name.eqlSlice(name)) {
                 return e;
             }
             node = n.next;
@@ -376,7 +363,7 @@ pub const List = struct {
         }
 
         pub fn format(self: *const Entry, writer: *std.Io.Writer) !void {
-            return formatAttribute(self._name.str(), self._value.str(), writer);
+            return formatAttribute(self._name, self._value, writer);
         }
 
         pub fn toAttribute(self: *const Entry, element: ?*Element, page: *Page) !*Attribute {
@@ -386,15 +373,15 @@ pub const List = struct {
                 // Cannot directly reference self._name.str() and self._value.str()
                 // This attribute can outlive the list entry (the node can be
                 // removed from the element's attribute, but still exist in the DOM)
-                ._name = try page.dupeString(self._name.str()),
-                ._value = try page.dupeString(self._value.str()),
+                ._name = try self._name.dupe(page.arena),
+                ._value = try self._value.dupe(page.arena),
             });
         }
     };
 };
 
-fn shouldAddToIdMap(normalized_name: []const u8, element: *Element) bool {
-    if (!std.mem.eql(u8, normalized_name, "id")) {
+fn shouldAddToIdMap(normalized_name: String, element: *Element) bool {
+    if (!normalized_name.eql(comptime .wrap("id"))) {
         return false;
     }
 
@@ -407,17 +394,19 @@ fn shouldAddToIdMap(normalized_name: []const u8, element: *Element) bool {
     return node.isConnected();
 }
 
-pub fn validateAttributeName(name: []const u8) !void {
-    if (name.len == 0) {
+pub fn validateAttributeName(name: String) !void {
+    const name_str = name.str();
+
+    if (name_str.len == 0) {
         return error.InvalidCharacterError;
     }
 
-    const first = name[0];
+    const first = name_str[0];
     if ((first >= '0' and first <= '9') or first == '-' or first == '.') {
         return error.InvalidCharacterError;
     }
 
-    for (name) |c| {
+    for (name_str) |c| {
         if (c == 0 or c == '/' or c == '=' or c == '>' or std.ascii.isWhitespace(c)) {
             return error.InvalidCharacterError;
         }
@@ -433,14 +422,16 @@ pub fn validateAttributeName(name: []const u8) !void {
     }
 }
 
-pub fn normalizeNameForLookup(name: []const u8, page: *Page) ![]const u8 {
-    if (!needsLowerCasing(name)) {
+pub fn normalizeNameForLookup(name: String, page: *Page) !String {
+    if (!needsLowerCasing(name.str())) {
         return name;
     }
-    if (name.len < page.buf.len) {
-        return std.ascii.lowerString(&page.buf, name);
-    }
-    return std.ascii.allocLowerString(page.call_arena, name);
+    const normalized = if (name.len < page.buf.len)
+        std.ascii.lowerString(&page.buf, name.str())
+    else
+        try std.ascii.allocLowerString(page.call_arena, name.str());
+
+    return .wrap(normalized);
 }
 
 fn needsLowerCasing(name: []const u8) bool {
@@ -494,7 +485,7 @@ pub const NamedNodeMap = struct {
         return null;
     }
 
-    pub fn getByName(self: *const NamedNodeMap, name: []const u8, page: *Page) !?*Attribute {
+    pub fn getByName(self: *const NamedNodeMap, name: String, page: *Page) !?*Attribute {
         return self._list.getAttribute(name, self._element, page);
     }
 
@@ -503,7 +494,7 @@ pub const NamedNodeMap = struct {
         return self._list.putAttribute(attribute, self._element, page);
     }
 
-    pub fn removeByName(self: *const NamedNodeMap, name: []const u8, page: *Page) !?*Attribute {
+    pub fn removeByName(self: *const NamedNodeMap, name: String, page: *Page) !?*Attribute {
         // this 2-step process (get then delete) isn't efficient. But we don't
         // expect this to be called often, and this lets us keep delete straightforward.
         const attr = (try self.getByName(name, page)) orelse return null;
@@ -569,11 +560,13 @@ pub const InnerIterator = struct {
     }
 };
 
-fn formatAttribute(name: []const u8, value: []const u8, writer: *std.Io.Writer) !void {
-    try writer.writeAll(name);
+fn formatAttribute(name: String, value_: String, writer: *std.Io.Writer) !void {
+    try writer.writeAll(name.str());
 
     // Boolean attributes with empty values are serialized without a value
-    if (value.len == 0 and boolean_attributes_lookup.has(name)) {
+
+    const value = value_.str();
+    if (value.len == 0 and boolean_attributes_lookup.has(name.str())) {
         return;
     }
 

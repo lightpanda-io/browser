@@ -36,7 +36,7 @@ pub fn asNode(self: *Link) *Node {
 
 pub fn getHref(self: *Link, page: *Page) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe(comptime .literal("href")) orelse return "";
+    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -46,15 +46,15 @@ pub fn getHref(self: *Link, page: *Page) ![]const u8 {
 }
 
 pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("href", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), page);
 }
 
 pub fn getRel(self: *Link) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .literal("rel")) orelse return "";
+    return self.asElement().getAttributeSafe(comptime .wrap("rel")) orelse return "";
 }
 
 pub fn setRel(self: *Link, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("rel", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), page);
 }
 
 pub const JsApi = struct {

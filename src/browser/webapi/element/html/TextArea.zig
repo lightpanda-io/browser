@@ -84,34 +84,34 @@ pub fn setDefaultValue(self: *TextArea, value: []const u8, page: *Page) !void {
 }
 
 pub fn getDisabled(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("disabled")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
 pub fn setDisabled(self: *TextArea, disabled: bool, page: *Page) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe("disabled", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("disabled", page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
     }
 }
 
 pub fn getName(self: *const TextArea) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
 pub fn setName(self: *TextArea, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("name", name, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
 }
 
 pub fn getRequired(self: *const TextArea) bool {
-    return self.asConstElement().getAttributeSafe(comptime .literal("required")) != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
 pub fn setRequired(self: *TextArea, required: bool, page: *Page) !void {
     if (required) {
-        try self.asElement().setAttributeSafe("required", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("required", page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), page);
     }
 }
 
@@ -221,7 +221,7 @@ pub fn getForm(self: *TextArea, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe(comptime .literal("form"))) |form_id| {
+    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }

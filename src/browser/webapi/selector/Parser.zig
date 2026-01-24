@@ -846,9 +846,10 @@ fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
     _ = self.skipSpaces();
 
     const attr_name = try self.attributeName();
+
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
-    const normalized = try Attribute.normalizeNameForLookup(attr_name, page);
-    const name = try String.init(arena, normalized, .{});
+    const normalized = try Attribute.normalizeNameForLookup(.wrap(attr_name), page);
+    const name = try normalized.dupe(arena);
     var case_insensitive = false;
     _ = self.skipSpaces();
 

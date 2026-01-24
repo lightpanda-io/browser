@@ -187,7 +187,7 @@ pub fn NodeLive(comptime mode: Mode) type {
             // (like length or getAtIndex)
             var tw = self._tw.clone();
             while (self.nextTw(&tw)) |element| {
-                const element_name = element.getAttributeSafe(comptime .literal("name")) orelse continue;
+                const element_name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
                 if (std.mem.eql(u8, element_name, name)) {
                     return element;
                 }
@@ -228,7 +228,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                     }
 
                     const el = node.is(Element) orelse return false;
-                    const class_attr = el.getAttributeSafe(comptime .literal("class")) orelse return false;
+                    const class_attr = el.getAttributeSafe(comptime .wrap("class")) orelse return false;
                     for (self._filter) |class_name| {
                         if (!Selector.classAttributeContains(class_attr, class_name)) {
                             return false;
@@ -238,7 +238,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 },
                 .name => {
                     const el = node.is(Element) orelse return false;
-                    const name_attr = el.getAttributeSafe(comptime .literal("name")) orelse return false;
+                    const name_attr = el.getAttributeSafe(comptime .wrap("name")) orelse return false;
                     return std.mem.eql(u8, name_attr, self._filter);
                 },
                 .all_elements => return node._type == .element,
@@ -258,14 +258,14 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const el = node.is(Element) orelse return false;
                     const Anchor = Element.Html.Anchor;
                     if (el.is(Anchor) == null) return false;
-                    return el.hasAttributeSafe(comptime .literal("href"));
+                    return el.hasAttributeSafe(comptime .wrap("href"));
                 },
                 .anchors => {
                     // Anchors are <a> elements with name attribute
                     const el = node.is(Element) orelse return false;
                     const Anchor = Element.Html.Anchor;
                     if (el.is(Anchor) == null) return false;
-                    return el.hasAttributeSafe(comptime .literal("name"));
+                    return el.hasAttributeSafe(comptime .wrap("name"));
                 },
                 .form => {
                     const el = node.is(Element) orelse return false;
@@ -273,8 +273,8 @@ pub fn NodeLive(comptime mode: Mode) type {
                         return false;
                     }
 
-                    if (el.getAttributeSafe(comptime .literal("form"))) |form_attr| {
-                        const form_id = self._filter.asElement().getAttributeSafe(comptime .literal("id")) orelse return false;
+                    if (el.getAttributeSafe(comptime .wrap("form"))) |form_attr| {
+                        const form_id = self._filter.asElement().getAttributeSafe(comptime .wrap("id")) orelse return false;
                         return std.mem.eql(u8, form_attr, form_id);
                     }
 

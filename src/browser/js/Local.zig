@@ -293,6 +293,10 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                     return js_obj.toValue();
                 }
             }
+            if (T == string.String or T == string.Global) {
+                // would have been handled by simpleZigValueToJs
+                unreachable;
+            }
 
             // zig fmt: off
             switch (T) {
@@ -1154,11 +1158,15 @@ pub fn jsStringToStringSSO(self: *const Local, str: anytype, opts: ToStringOpts)
     const len: usize = @intCast(v8.v8__String__Utf8Length(handle, self.isolate.handle));
 
     if (len <= 12) {
-        var content: [12]u8 = @splat(0);
-        const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, &content, len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+        var content: [12]u8 = undefined;
+        const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
         if (comptime IS_DEBUG) {
             std.debug.assert(n == len);
         }
+        // Weird that we do this _after_, but we have to..I've seen weird issues
+        // in ReleaseMode where v8 won't write to content if it starts off zero
+        // initiated
+        @memset(content[len..], 0);
         return .{ .len = @intCast(len), .payload = .{ .content = content } };
     }
 

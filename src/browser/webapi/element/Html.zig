@@ -243,7 +243,7 @@ fn _getInnerText(self: *HtmlElement, writer: *std.Io.Writer, state: *innerTextSt
             .document => {},
             .document_type => {},
             .document_fragment => {},
-            .attribute => |attr| try writer.writeAll(attr._value),
+            .attribute => |attr| try writer.writeAll(attr._value.str()),
         }
     }
 }

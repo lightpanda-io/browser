@@ -21,6 +21,7 @@ const js = @import("../../js/js.zig");
 
 const Element = @import("../Element.zig");
 const Page = @import("../../Page.zig");
+const String = @import("../../../string.zig").String;
 
 const Allocator = std.mem.Allocator;
 
@@ -28,28 +29,60 @@ const DOMStringMap = @This();
 
 _element: *Element,
 
-fn getProperty(self: *DOMStringMap, name: []const u8, page: *Page) !?[]const u8 {
+fn getProperty(self: *DOMStringMap, name: String, page: *Page) !?String {
     const attr_name = try camelToKebab(page.call_arena, name);
     return try self._element.getAttribute(attr_name, page);
 }
 
-fn setProperty(self: *DOMStringMap, name: []const u8, value: []const u8, page: *Page) !void {
+fn setProperty(self: *DOMStringMap, name: String, value: String, page: *Page) !void {
     const attr_name = try camelToKebab(page.call_arena, name);
     return self._element.setAttributeSafe(attr_name, value, page);
 }
 
-fn deleteProperty(self: *DOMStringMap, name: []const u8, page: *Page) !void {
+fn deleteProperty(self: *DOMStringMap, name: String, page: *Page) !void {
     const attr_name = try camelToKebab(page.call_arena, name);
     try self._element.removeAttribute(attr_name, page);
 }
 
-// fooBar -> foo-bar
-fn camelToKebab(arena: Allocator, camel: []const u8) ![]const u8 {
+// fooBar -> data-foo-bar (with SSO optimization for short strings)
+fn camelToKebab(arena: Allocator, camel: String) !String {
+    const camel_str = camel.str();
+
+    // Calculate output length
+    var output_len: usize = 5; // "data-"
+    for (camel_str, 0..) |c, i| {
+        output_len += 1;
+        if (std.ascii.isUpper(c) and i > 0) output_len += 1; // extra char for '-'
+    }
+
+    if (output_len <= 12) {
+        // SSO path - no allocation!
+        var content: [12]u8 = @splat(0);
+        @memcpy(content[0..5], "data-");
+        var idx: usize = 5;
+
+        for (camel_str, 0..) |c, i| {
+            if (std.ascii.isUpper(c)) {
+                if (i > 0) {
+                    content[idx] = '-';
+                    idx += 1;
+                }
+                content[idx] = std.ascii.toLower(c);
+            } else {
+                content[idx] = c;
+            }
+            idx += 1;
+        }
+
+        return .{ .len = @intCast(output_len), .payload = .{ .content = content } };
+    }
+
+    // Fallback: allocate for longer strings
     var result: std.ArrayList(u8) = .empty;
-    try result.ensureTotalCapacity(arena, 5 + camel.len * 2);
+    try result.ensureTotalCapacity(arena, output_len);
     result.appendSliceAssumeCapacity("data-");
 
-    for (camel, 0..) |c, i| {
+    for (camel_str, 0..) |c, i| {
         if (std.ascii.isUpper(c)) {
             if (i > 0) {
                 result.appendAssumeCapacity('-');
@@ -60,7 +93,7 @@ fn camelToKebab(arena: Allocator, camel: []const u8) ![]const u8 {
         }
     }
 
-    return result.items;
+    return try String.init(arena, result.items, .{});
 }
 
 // data-foo-bar -> fooBar

@@ -40,23 +40,23 @@ pub fn asNode(self: *Canvas) *Node {
 }
 
 pub fn getWidth(self: *const Canvas) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .literal("width")) orelse return 300;
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("width")) orelse return 300;
     return std.fmt.parseUnsigned(u32, attr, 10) catch 300;
 }
 
 pub fn setWidth(self: *Canvas, value: u32, page: *Page) !void {
     const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe("width", str, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), page);
 }
 
 pub fn getHeight(self: *const Canvas) u32 {
-    const attr = self.asConstElement().getAttributeSafe(comptime .literal("height")) orelse return 150;
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("height")) orelse return 150;
     return std.fmt.parseUnsigned(u32, attr, 10) catch 150;
 }
 
 pub fn setHeight(self: *Canvas, value: u32, page: *Page) !void {
     const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
-    try self.asElement().setAttributeSafe("height", str, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), page);
 }
 
 /// Since there's no base class rendering contextes inherit from,

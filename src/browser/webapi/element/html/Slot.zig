@@ -25,11 +25,11 @@ pub fn asNode(self: *Slot) *Node {
 }
 
 pub fn getName(self: *const Slot) []const u8 {
-    return self.asConstElement().getAttributeSafe(comptime .literal("name")) orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
 pub fn setName(self: *Slot, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("name", name, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
 }
 
 const AssignedNodesOptions = struct {
@@ -131,7 +131,7 @@ fn isAssignedToSlot(node: *Node, slot_name: []const u8) bool {
     // Check if a node should be assigned to a slot with the given name
     if (node.is(Element)) |element| {
         // Get the slot attribute from the element
-        const node_slot = element.getAttributeSafe(comptime .literal("slot")) orelse "";
+        const node_slot = element.getAttributeSafe(comptime .wrap("slot")) orelse "";
 
         // Match if:
         // - Both are empty (default slot)

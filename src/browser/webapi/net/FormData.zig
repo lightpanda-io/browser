@@ -127,7 +127,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Pa
     var elements = try form.getElements(page);
     var it = try elements.iterator();
     while (it.next()) |element| {
-        if (element.getAttributeSafe(comptime .literal("disabled")) != null) {
+        if (element.getAttributeSafe(comptime .wrap("disabled")) != null) {
             continue;
         }
 
@@ -139,7 +139,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Pa
                     continue;
                 }
 
-                const name = element.getAttributeSafe(comptime .literal("name"));
+                const name = element.getAttributeSafe(comptime .wrap("name"));
                 const x_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.x", .{n}) else "x";
                 const y_key = if (name) |n| try std.fmt.allocPrint(arena, "{s}.y", .{n}) else "y";
                 try list.append(arena, x_key, "0");
@@ -148,7 +148,7 @@ fn collectForm(arena: Allocator, form_: ?*Form, submitter_: ?*Element, page: *Pa
             }
         }
 
-        const name = element.getAttributeSafe(comptime .literal("name")) orelse continue;
+        const name = element.getAttributeSafe(comptime .wrap("name")) orelse continue;
         const value = blk: {
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;

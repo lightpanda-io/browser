@@ -152,14 +152,14 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     script_element._executed = true;
 
     const element = script_element.asElement();
-    if (element.getAttributeSafe(comptime .literal("nomodule")) != null) {
+    if (element.getAttributeSafe(comptime .wrap("nomodule")) != null) {
         // these scripts should only be loaded if we don't support modules
         // but since we do support modules, we can just skip them.
         return;
     }
 
     const kind: Script.Kind = blk: {
-        const script_type = element.getAttributeSafe(comptime .literal("type")) orelse break :blk .javascript;
+        const script_type = element.getAttributeSafe(comptime .wrap("type")) orelse break :blk .javascript;
         if (script_type.len == 0) {
             break :blk .javascript;
         }
@@ -186,7 +186,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     var source: Script.Source = undefined;
     var remote_url: ?[:0]const u8 = null;
     const base_url = page.base();
-    if (element.getAttributeSafe(comptime .literal("src"))) |src| {
+    if (element.getAttributeSafe(comptime .wrap("src"))) |src| {
         if (try parseDataURI(page.arena, src)) |data_uri| {
             source = .{ .@"inline" = data_uri };
         } else {
@@ -217,12 +217,12 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
                 break :blk if (kind == .module) .@"defer" else .normal;
             }
 
-            if (element.getAttributeSafe(comptime .literal("async")) != null) {
+            if (element.getAttributeSafe(comptime .wrap("async")) != null) {
                 break :blk .async;
             }
 
             // Check for defer or module (before checking dynamic script default)
-            if (kind == .module or element.getAttributeSafe(comptime .literal("defer")) != null) {
+            if (kind == .module or element.getAttributeSafe(comptime .wrap("defer")) != null) {
                 break :blk .@"defer";
             }
 
@@ -754,7 +754,7 @@ pub const Script = struct {
             return;
         }
 
-         switch (self.mode) {
+        switch (self.mode) {
             .import_async => |ia| ia.callback(ia.data, error.FailedToLoad),
             .import => {
                 const entry = manager.imported_modules.getPtr(self.url).?;
