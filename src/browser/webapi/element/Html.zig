@@ -290,22 +290,23 @@ pub fn insertAdjacentHTML(
         return error.Invalid;
     }
 
-    // We always get it wrapped like so:
-    // <html><head></head><body>{ ... }</body></html>
-    // None of the following can be null.
-    const maybe_html_node = doc_node.firstChild();
-    lp.assert(maybe_html_node != null, "Html.insertAdjacentHTML null html", .{});
-    const html_node = maybe_html_node orelse return;
-
-    const maybe_body_node = html_node.lastChild();
-    lp.assert(maybe_body_node != null, "Html.insertAdjacentHTML null bodys", .{});
-    const body = maybe_body_node orelse return;
+    // The parser wraps content in a document structure:
+    // - Typical: <html><head>...</head><body>...</body></html>
+    // - Head-only: <html><head><meta></head></html> (no body)
+    // - Empty/comments: May have no <html> element at all
+    const html_node = doc_node.firstChild() orelse return;
 
     const target_node, const prev_node = try self.asElement().asNode().findAdjacentNodes(position);
 
-    var iter = body.childrenIterator();
-    while (iter.next()) |child_node| {
-        _ = try target_node.insertBefore(child_node, prev_node, page);
+    // Iterate through all children of <html> (typically <head> and/or <body>)
+    // and insert their children (not the containers themselves) into the target.
+    // This handles both body content AND head-only elements like <meta>, <title>, etc.
+    var html_children = html_node.childrenIterator();
+    while (html_children.next()) |container| {
+        var iter = container.childrenIterator();
+        while (iter.next()) |child_node| {
+            _ = try target_node.insertBefore(child_node, prev_node, page);
+        }
     }
 }
 
