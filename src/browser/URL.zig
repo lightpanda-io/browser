@@ -502,6 +502,16 @@ pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []cons
     return buf.items[0 .. buf.items.len - 1 :0];
 }
 
+pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) !?[:0]const u8 {
+    const origin = try getOrigin(arena, url) orelse return null;
+    return try std.fmt.allocPrintSentinel(
+        arena,
+        "{s}/robots.txt",
+        .{origin},
+        0,
+    );
+}
+
 const testing = @import("../testing.zig");
 test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(true, isCompleteHTTPUrl("http://example.com/about"));
@@ -776,5 +786,33 @@ test "URL: concatQueryString" {
     {
         const url = try concatQueryString(arena, "https://www.lightpanda.io/index?1=2&", "a=b");
         try testing.expectEqual("https://www.lightpanda.io/index?1=2&a=b", url);
+    }
+}
+
+test "URL: getRobotsUrl" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    {
+        const url = try getRobotsUrl(arena, "https://www.lightpanda.io");
+        try testing.expectEqual("https://www.lightpanda.io/robots.txt", url.?);
+    }
+
+    {
+        const url = try getRobotsUrl(arena, "https://www.lightpanda.io/some/path");
+        try testing.expectString("https://www.lightpanda.io/robots.txt", url.?);
+    }
+
+    {
+        const url = try getRobotsUrl(arena, "https://www.lightpanda.io:8080/page");
+        try testing.expectString("https://www.lightpanda.io:8080/robots.txt", url.?);
+    }
+    {
+        const url = try getRobotsUrl(arena, "http://example.com/deep/nested/path?query=value#fragment");
+        try testing.expectString("http://example.com/robots.txt", url.?);
+    }
+    {
+        const url = try getRobotsUrl(arena, "https://user:pass@example.com/page");
+        try testing.expectString("https://example.com/robots.txt", url.?);
     }
 }
