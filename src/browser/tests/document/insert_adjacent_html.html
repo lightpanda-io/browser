@@ -41,4 +41,53 @@
   testing.expectEqual("DIV", newElement.tagName);
   testing.expectEqual("after begin", newElement.innerText);
   testing.expectEqual("afterbegin", newElement.className);
+
+  const fuzzWrapper = document.createElement("div");
+  fuzzWrapper.id = "fuzz-wrapper";
+  document.body.appendChild(fuzzWrapper);
+
+  const fuzzCases = [
+    // These cases have no <body> element (or empty body), so nothing is inserted
+    { name: "empty string", html: "", expectElements: 0 },
+    { name: "comment only", html: "<!-- comment -->", expectElements: 0 },
+    { name: "doctype only", html: "<!DOCTYPE html>", expectElements: 0 },
+    { name: "full empty doc", html: "<!DOCTYPE html><html><head></head><body></body></html>", expectElements: 0 },
+
+    { name: "whitespace only", html: "   ", expectElements: 0 },
+    { name: "newlines only", html: "\n\n\n", expectElements: 0 },
+    { name: "just text", html: "plain text", expectElements: 0 },
+    // Head-only elements: Extracted from <head> container
+    { name: "empty meta", html: "<meta>", expectElements: 1 },
+    { name: "empty title", html: "<title></title>", expectElements: 1 },
+    { name: "empty head", html: "<head></head>", expectElements: 0 },  // Container with no children
+    { name: "empty body", html: "<body></body>", expectElements: 0 },  // Container with no children
+    { name: "empty html", html: "<html></html>", expectElements: 0 },  // Container with no children
+    { name: "meta only", html: "<meta charset='utf-8'>", expectElements: 1 },
+    { name: "title only", html: "<title>Test</title>", expectElements: 1 },
+    { name: "link only", html: "<link rel='stylesheet' href='test.css'>", expectElements: 1 },
+    { name: "meta and title", html: "<meta charset='utf-8'><title>Test</title>", expectElements: 2 },
+    { name: "script only", html: "<script>console.log('hi')<\/script>", expectElements: 1 },
+    { name: "style only", html: "<style>body { color: red; }<\/style>", expectElements: 1 },
+    { name: "unclosed div", html: "<div>content", expectElements: 1 },
+    { name: "unclosed span", html: "<span>text", expectElements: 1 },
+    { name: "invalid tag", html: "<notarealtag>content</notarealtag>", expectElements: 1 },
+    { name: "malformed", html: "<<div>>test<</div>>", expectElements: 1 },  // Parser handles it
+    { name: "just closing tag", html: "</div>", expectElements: 0 },
+    { name: "nested empty", html: "<div><div></div></div>", expectElements: 1 },
+    { name: "multiple top-level", html: "<span>1</span><span>2</span><span>3</span>", expectElements: 3 },
+    { name: "mixed text and elements", html: "Text before<b>bold</b>Text after", expectElements: 1 },
+    { name: "deeply nested", html: "<div><div><div><span>deep</span></div></div></div>", expectElements: 1 },
+  ];
+
+  fuzzCases.forEach((tc, idx) => {
+    fuzzWrapper.innerHTML = "";
+    fuzzWrapper.insertAdjacentHTML("beforeend", tc.html);
+    if (tc.expectElements !== fuzzWrapper.childElementCount) {
+      console.warn(`Fuzz idx: ${idx}`);
+      testing.expectEqual(tc.expectElements, fuzzWrapper.childElementCount);
+    }
+  });
+
+  // Clean up
+  document.body.removeChild(fuzzWrapper);
 </script>
