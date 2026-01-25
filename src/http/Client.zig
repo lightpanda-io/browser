@@ -371,7 +371,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     return transfer;
 }
 
-fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
+fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror, comptime execute_callback: bool) void {
     // this shouldn't happen, we'll crash in debug mode. But in release, we'll
     // just noop this state.
     if (comptime IS_DEBUG) {
@@ -390,7 +390,9 @@ fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror) void {
         });
     }
 
-    transfer.req.error_callback(transfer.ctx, err);
+    if (execute_callback) {
+        transfer.req.error_callback(transfer.ctx, err);
+    }
 }
 
 // Restrictive since it'll only work if there are no inflight requests. In some
@@ -600,18 +602,18 @@ fn processMessages(self: *Client) !bool {
             if (!transfer._header_done_called) {
                 const proceed = transfer.headerDoneCallback(easy) catch |err| {
                     log.err(.http, "header_done_callback", .{ .err = err });
-                    self.requestFailed(transfer, err);
+                    self.requestFailed(transfer, err, true);
                     continue;
                 };
                 if (!proceed) {
-                    self.requestFailed(transfer, error.Abort);
+                    self.requestFailed(transfer, error.Abort, true);
                     break :blk;
                 }
             }
             transfer.req.done_callback(transfer.ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
-                self.requestFailed(transfer, err);
+                self.requestFailed(transfer, err, true);
                 continue;
             };
 
@@ -622,7 +624,7 @@ fn processMessages(self: *Client) !bool {
             }
             processed = true;
         } else |err| {
-            self.requestFailed(transfer, err);
+            self.requestFailed(transfer, err, true);
         }
     }
     return processed;
@@ -972,7 +974,15 @@ pub const Transfer = struct {
     }
 
     pub fn abort(self: *Transfer, err: anyerror) void {
-        self.client.requestFailed(self, err);
+        self.client.requestFailed(self, err, true);
+        if (self._handle != null) {
+            self.client.endTransfer(self);
+        }
+        self.deinit();
+    }
+
+    pub fn terminate(self: *Transfer) void {
+        self.client.requestFailed(self, error.Shutdown, false);
         if (self._handle != null) {
             self.client.endTransfer(self);
         }

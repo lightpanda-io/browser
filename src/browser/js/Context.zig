@@ -79,6 +79,11 @@ local: ?*const js.Local = null,
 // The key is the @intFromPtr of the Zig value
 identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 
+// Any type that is stored in the identity_map which has a finalizer declared
+// will have its finalizer stored here. This is only used when shutting down
+// if v8 hasn't called the finalizer directly itself.
+finalizer_callbacks: std.AutoHashMapUnmanaged(usize, FinalizerCallback) = .empty,
+
 // Some web APIs have to manage opaque values. Ideally, they use an
 // js.Object, but the js.Object has no lifetime guarantee beyond the
 // current call. They can call .persist() on their js.Object to get
@@ -145,6 +150,12 @@ pub fn deinit(self: *Context) void {
             v8.v8__Global__Reset(global);
         }
     }
+    {
+        var it = self.finalizer_callbacks.valueIterator();
+        while (it.next()) |finalizer| {
+            finalizer.deinit();
+        }
+    }
 
     for (self.global_values.items) |*global| {
         v8.v8__Global__Reset(global);
@@ -177,6 +188,48 @@ pub fn deinit(self: *Context) void {
         v8.v8__Context__Exit(ls.local.handle);
     }
     v8.v8__Global__Reset(&self.handle);
+}
+
+pub fn weakRef(self: *Context, obj: anytype) void {
+    const global = self.identity_map.getPtr(@intFromPtr(obj)) orelse {
+        if (comptime IS_DEBUG) {
+            // should not be possible
+            std.debug.assert(false);
+        }
+        return;
+    };
+    v8.v8__Global__SetWeakFinalizer(global, obj, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
+}
+
+pub fn strongRef(self: *Context, obj: anytype) void {
+    const global = self.identity_map.getPtr(@intFromPtr(obj)) orelse {
+        if (comptime IS_DEBUG) {
+            // should not be possible
+            std.debug.assert(false);
+        }
+        return;
+    };
+    v8.v8__Global__ClearWeak(global);
+}
+
+pub fn release(self: *Context, obj: *anyopaque) void {
+    var global = self.identity_map.fetchRemove(@intFromPtr(obj)) orelse {
+        if (comptime IS_DEBUG) {
+            // should not be possible
+            std.debug.assert(false);
+        }
+        return;
+    };
+    v8.v8__Global__Reset(&global.value);
+
+    // The item has been fianalized, remove it for the finalizer callback so that
+    // we don't try to call it again on shutdown.
+    _ = self.finalizer_callbacks.fetchRemove(@intFromPtr(obj)) orelse {
+        if (comptime IS_DEBUG) {
+            // should not be possible
+            std.debug.assert(false);
+        }
+    };
 }
 
 // Any operation on the context have to be made from a local.
@@ -793,31 +846,28 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
 }
 
 // == Misc ==
-// An interface for types that want to have their jsDeinit function to be
-// called when the call context ends
-const DestructorCallback = struct {
+// A type that has a finalizer can have its finalizer called one of two ways.
+// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
+// guaranteed to fire, so we track this in ctx._finalizers and call them on
+// context shutdown.
+const FinalizerCallback = struct {
     ptr: *anyopaque,
-    destructorFn: *const fn (ptr: *anyopaque) void,
+    finalizerFn: *const fn (ptr: *anyopaque) void,
 
-    fn init(ptr: anytype) DestructorCallback {
-        const T = @TypeOf(ptr);
-        const ptr_info = @typeInfo(T);
-
-        const gen = struct {
-            pub fn destructor(pointer: *anyopaque) void {
-                const self: T = @ptrCast(@alignCast(pointer));
-                return ptr_info.pointer.child.destructor(self);
-            }
-        };
-
+    pub fn init(ptr: anytype) FinalizerCallback {
+        const T = bridge.Struct(@TypeOf(ptr));
         return .{
             .ptr = ptr,
-            .destructorFn = gen.destructor,
+            .finalizerFn = struct {
+                pub fn wrap(self: *anyopaque) void {
+                    T.JsApi.Meta.finalizer.from_zig(self);
+                }
+            }.wrap,
         };
     }
 
-    pub fn destructor(self: DestructorCallback) void {
-        self.destructorFn(self.ptr);
+    pub fn deinit(self: FinalizerCallback) void {
+        self.finalizerFn(self.ptr);
     }
 };
 

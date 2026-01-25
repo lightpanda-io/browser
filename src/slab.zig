@@ -404,7 +404,6 @@ pub const SlabAllocator = struct {
         const ptr = memory.ptr;
         const len = memory.len;
         const aligned_len = std.mem.alignForward(usize, len, alignment.toByteUnits());
-
         const list = self.slabs.getPtr(.{ .size = aligned_len, .alignment = alignment }).?;
         list.free(ptr);
     }

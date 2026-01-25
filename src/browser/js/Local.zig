@@ -26,6 +26,8 @@ const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const v8 = js.v8;
 const CallOpts = Caller.CallOpts;
 const Allocator = std.mem.Allocator;
@@ -194,6 +196,21 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
             // dont' use js_obj.persist(), because we don't want to track this in
             // context.global_objects, we want to track it in context.identity_map.
             v8.v8__Global__New(isolate.handle, js_obj.handle, gop.value_ptr);
+            if (@hasDecl(JsApi.Meta, "finalizer")) {
+                if (comptime IS_DEBUG) {
+                    // You can normally return a "*Node" and we'll correctly
+                    // handle it as what it really is, e.g. an HTMLScriptElement.
+                    // But for finalizers, we can't do that. I think this
+                    // limitation will be OK - this auto-resolution is largely
+                    // limited to Node -> HtmlElement, none of which has finalizers
+                    std.debug.assert(resolved.class_id == JsApi.Meta.class_id);
+                }
+
+                try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), .init(value));
+                if (@hasDecl(JsApi.Meta, "finalizer")) {
+                    v8.v8__Global__SetWeakFinalizer(gop.value_ptr, resolved.ptr, JsApi.Meta.finalizer.from_v8, v8.kParameter);
+                }
+            }
             return js_obj;
         },
         else => @compileError("Expected a struct or pointer, got " ++ @typeName(T) ++ " (constructors must return struct or pointers)"),

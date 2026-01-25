@@ -79,19 +79,28 @@ const ResponseType = enum {
 };
 
 pub fn init(page: *Page) !*XMLHttpRequest {
-    return page._factory.xhrEventTarget(XMLHttpRequest{
+    const arena = try page.getArena(.{.debug = "XMLHttpRequest"});
+    errdefer page.releaseArena(arena);
+
+    return try page._factory.xhrEventTarget(XMLHttpRequest{
         ._page = page,
+        ._arena = arena,
         ._proto = undefined,
-        ._arena = page.arena,
         ._request_headers = try Headers.init(null, page),
     });
 }
 
-pub fn deinit(self: *XMLHttpRequest) void {
-    if (self.transfer) |transfer| {
-        transfer.abort(error.Abort);
-        self.transfer = null;
+pub fn deinit(self: *XMLHttpRequest, comptime shutdown: bool) void {
+    if (self._transfer) |transfer| {
+        if (shutdown) {
+            transfer.terminate();
+        } else {
+            transfer.abort(error.Abort);
+        }
+        self._transfer = null;
     }
+    self._page.releaseArena(self._arena);
+    self._page._factory.destroy(self);
 }
 
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
@@ -110,7 +119,7 @@ pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     }
 }
 
-// TODO: this takes an opitonal 3 more parameters
+// TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
     // Abort any in-progress request
@@ -477,6 +486,7 @@ pub const JsApi = struct {
         pub const name = "XMLHttpRequest";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const finalizer = bridge.finalizer(XMLHttpRequest.deinit);
     };
 
     pub const constructor = bridge.constructor(XMLHttpRequest.init, .{});

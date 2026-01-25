@@ -361,32 +361,6 @@ pub fn textTrackCue(self: *Factory, child: anytype) !*@TypeOf(child) {
     ).create(allocator, child);
 }
 
-fn hasChainRoot(comptime T: type) bool {
-    // Check if this is a root
-    if (@hasDecl(T, "_prototype_root")) {
-        return true;
-    }
-
-    // If no _proto field, we're at the top but not a recognized root
-    if (!@hasField(T, "_proto")) return false;
-
-    // Get the _proto field's type and recurse
-    const fields = @typeInfo(T).@"struct".fields;
-    inline for (fields) |field| {
-        if (std.mem.eql(u8, field.name, "_proto")) {
-            const ProtoType = reflect.Struct(field.type);
-            return hasChainRoot(ProtoType);
-        }
-    }
-
-    return false;
-}
-
-fn isChainType(comptime T: type) bool {
-    if (@hasField(T, "_proto")) return false;
-    return comptime hasChainRoot(T);
-}
-
 pub fn destroy(self: *Factory, value: anytype) void {
     const S = reflect.Struct(@TypeOf(value));
 
@@ -403,7 +377,7 @@ pub fn destroy(self: *Factory, value: anytype) void {
         }
     }
 
-    if (comptime isChainType(S)) {
+    if (comptime @hasField(S, "_proto")) {
         self.destroyChain(value, true, 0, std.mem.Alignment.@"1");
     } else {
         self.destroyStandalone(value);
@@ -411,20 +385,7 @@ pub fn destroy(self: *Factory, value: anytype) void {
 }
 
 pub fn destroyStandalone(self: *Factory, value: anytype) void {
-    const S = reflect.Struct(@TypeOf(value));
-    assert(!@hasDecl(S, "_prototype_root"));
-
     const allocator = self._slab.allocator();
-
-    if (@hasDecl(S, "deinit")) {
-        // And it has a deinit, we'll call it
-        switch (@typeInfo(@TypeOf(S.deinit)).@"fn".params.len) {
-            1 => value.deinit(),
-            2 => value.deinit(self._page),
-            else => @compileLog(@typeName(S) ++ " has an invalid deinit function"),
-        }
-    }
-
     allocator.destroy(value);
 }
 
@@ -440,10 +401,8 @@ fn destroyChain(
 
     // aligns the old size to the alignment of this element
     const current_size = std.mem.alignForward(usize, old_size, @alignOf(S));
-    const alignment = std.mem.Alignment.fromByteUnits(@alignOf(S));
-
-    const new_align = std.mem.Alignment.max(old_align, alignment);
     const new_size = current_size + @sizeOf(S);
+    const new_align = std.mem.Alignment.max(old_align, std.mem.Alignment.of(S));
 
     // This is initially called from a deinit. We don't want to call that
     // same deinit. So when this is the first time destroyChain is called
@@ -462,20 +421,15 @@ fn destroyChain(
 
     if (@hasField(S, "_proto")) {
         self.destroyChain(value._proto, false, new_size, new_align);
-    } else if (@hasDecl(S, "JsApi")) {
-        // Doesn't have a _proto, but has a JsApi.
-        if (self._page.js.removeTaggedMapping(@intFromPtr(value))) |tagged| {
-            allocator.destroy(tagged);
-        }
     } else {
         // no proto so this is the head of the chain.
         // we use this as the ptr to the start of the chain.
         // and we have summed up the length.
         assert(@hasDecl(S, "_prototype_root"));
 
-        const memory_ptr: [*]const u8 = @ptrCast(value);
+        const memory_ptr: [*]u8 = @ptrCast(@constCast(value));
         const len = std.mem.alignForward(usize, new_size, new_align.toByteUnits());
-        allocator.free(memory_ptr[0..len]);
+        allocator.rawFree(memory_ptr[0..len], new_align, @returnAddress());
     }
 }
 

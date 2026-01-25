@@ -21,12 +21,13 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
-const Http = @import("http/Http.zig");
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
-
-const Notification = @import("Notification.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
+
+pub const Http = @import("http/Http.zig");
+pub const ArenaPool = @import("ArenaPool.zig");
+pub const Notification = @import("Notification.zig");
 
 // Container for global state / objects that various parts of the system
 // might need.
@@ -38,6 +39,7 @@ platform: Platform,
 snapshot: Snapshot,
 telemetry: Telemetry,
 allocator: Allocator,
+arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 notification: *Notification,
 shutdown: bool = false,
@@ -96,6 +98,9 @@ pub fn init(allocator: Allocator, config: Config) !*App {
 
     try app.telemetry.register(app.notification);
 
+    app.arena_pool = ArenaPool.init(allocator);
+    errdefer app.arena_pool.deinit();
+
     return app;
 }
 
@@ -114,6 +119,7 @@ pub fn deinit(self: *App) void {
     self.http.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
+    self.arena_pool.deinit();
 
     allocator.destroy(self);
 }
