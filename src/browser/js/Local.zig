@@ -207,7 +207,10 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 }
 
                 try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), .init(value));
-                if (@hasDecl(JsApi.Meta, "finalizer")) {
+                if (@hasDecl(JsApi.Meta, "weak")) {
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(JsApi.Meta.weak == true);
+                    }
                     v8.v8__Global__SetWeakFinalizer(gop.value_ptr, resolved.ptr, JsApi.Meta.finalizer.from_v8, v8.kParameter);
                 }
             }
@@ -290,61 +293,29 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 }
             }
 
-            if (T == js.Function) {
-                // we're returning a callback
-                return .{ .local = self, .handle = @ptrCast(value.handle) };
-            }
+            // zig fmt: off
+            switch (T) {
+                js.Value => return value,
+                js.Exception => return .{ .local = self, .handle = isolate.throwException(value.handle) },
 
-            if (T == js.Function.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .local = self, .handle = @ptrCast(value.local(self).handle) };
-            }
+                inline
+                js.Function,
+                js.Object,
+                js.Promise,
+                js.String => return .{ .local = self, .handle = @ptrCast(value.handle) },
 
-            if (T == js.Object) {
-                // we're returning a v8.Object
-                return .{ .local = self, .handle = @ptrCast(value.handle) };
+                inline
+                js.Function.Global,
+                js.Function.Temp,
+                js.Value.Global,
+                js.Value.Temp,
+                js.Object.Global,
+                js.Promise.Global,
+                js.PromiseResolver.Global,
+                js.Module.Global => return .{ .local = self, .handle = @ptrCast(value.local(self).handle) },
+                else => {}
             }
-
-            if (T == js.Object.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .local = self, .handle = @ptrCast(value.local(self).handle) };
-            }
-
-            if (T == js.Value.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .local = self, .handle = @ptrCast(value.local(self).handle) };
-            }
-
-            if (T == js.Promise.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .local = self, .handle = @ptrCast(value.local(self).handle) };
-            }
-
-            if (T == js.PromiseResolver.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .local = self, .handle = @ptrCast(value.local(self).handle) };
-            }
-
-            if (T == js.Module.Global) {
-                // Auto-convert Global to local for bridge
-                return .{ .local = self, .handle = @ptrCast(value.local(self).handle) };
-            }
-
-            if (T == js.Value) {
-                return value;
-            }
-
-            if (T == js.Promise) {
-                return .{ .local = self, .handle = @ptrCast(value.handle) };
-            }
-
-            if (T == js.Exception) {
-                return .{ .local = self, .handle = isolate.throwException(value.handle) };
-            }
-
-            if (T == js.String) {
-                return .{ .local = self, .handle = @ptrCast(value.handle) };
-            }
+            // zig fmt: on
 
             if (@hasDecl(T, "runtimeGenericWrap")) {
                 const wrap = try value.runtimeGenericWrap(self.ctx.page);
@@ -593,17 +564,17 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
 // probeJsValueToZig. Avoids having to duplicate this logic when probing.
 fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
     return switch (T) {
-        js.Function => {
+        js.Function, js.Function.Global, js.Function.Temp => {
             if (!js_val.isFunction()) {
                 return null;
             }
-            return .{ .local = self, .handle = @ptrCast(js_val.handle) };
-        },
-        js.Function.Global => {
-            if (!js_val.isFunction()) {
-                return null;
-            }
-            return try (js.Function{ .local = self, .handle = @ptrCast(js_val.handle) }).persist();
+            const js_func = js.Function{ .local = self, .handle = @ptrCast(js_val.handle) };
+            return switch (T) {
+                js.Function => js_func,
+                js.Function.Temp => try js_func.temp(),
+                js.Function.Global => try js_func.persist(),
+                else => unreachable,
+            };
         },
         // zig fmt: off
         js.TypedArray(u8), js.TypedArray(u16), js.TypedArray(u32), js.TypedArray(u64),
@@ -617,6 +588,7 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
         },
         js.Value => js_val,
         js.Value.Global => return try js_val.persist(),
+        js.Value.Temp => return try js_val.temp(),
         js.Object => {
             if (!js_val.isObject()) {
                 return null;

@@ -55,7 +55,7 @@ _response_headers: std.ArrayList([]const u8) = .empty,
 _response_type: ResponseType = .text,
 
 _ready_state: ReadyState = .unsent,
-_on_ready_state_change: ?js.Function.Global = null,
+_on_ready_state_change: ?js.Function.Temp = null,
 
 const ReadyState = enum(u8) {
     unsent = 0,
@@ -79,10 +79,9 @@ const ResponseType = enum {
 };
 
 pub fn init(page: *Page) !*XMLHttpRequest {
-    const arena = try page.getArena(.{.debug = "XMLHttpRequest"});
+    const arena = try page.getArena(.{ .debug = "XMLHttpRequest" });
     errdefer page.releaseArena(arena);
-
-    return try page._factory.xhrEventTarget(XMLHttpRequest{
+    return page._factory.xhrEventTarget(XMLHttpRequest{
         ._page = page,
         ._arena = arena,
         ._proto = undefined,
@@ -99,21 +98,26 @@ pub fn deinit(self: *XMLHttpRequest, comptime shutdown: bool) void {
         }
         self._transfer = null;
     }
-    self._page.releaseArena(self._arena);
-    self._page._factory.destroy(self);
+
+    const page = self._page;
+    if (self._on_ready_state_change) |func| {
+        page.js.release(func);
+    }
+    page.releaseArena(self._arena);
+    page._factory.destroy(self);
 }
 
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
     return self._proto._proto;
 }
 
-pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Global {
+pub fn getOnReadyStateChange(self: *const XMLHttpRequest) ?js.Function.Temp {
     return self._on_ready_state_change;
 }
 
 pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     if (cb_) |cb| {
-        self._on_ready_state_change = try cb.persistWithThis(self);
+        self._on_ready_state_change = try cb.tempWithThis(self);
     } else {
         self._on_ready_state_change = null;
     }
@@ -157,6 +161,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
     }
+    self._page.js.strongRef(self);
 
     if (body_) |b| {
         if (self._method != .GET and self._method != .HEAD) {
@@ -394,6 +399,8 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .total = loaded,
         .loaded = loaded,
     }, local, page);
+
+    page.js.weakRef(self);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -401,6 +408,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // http client will close it after an error, it isn't safe to keep around
     self._transfer = null;
     self.handleError(err);
+    self._page.js.weakRef(self);
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
@@ -409,6 +417,7 @@ pub fn abort(self: *XMLHttpRequest) void {
         transfer.abort(error.Abort);
         self._transfer = null;
     }
+    self._page.js.weakRef(self);
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
@@ -486,6 +495,7 @@ pub const JsApi = struct {
         pub const name = "XMLHttpRequest";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
         pub const finalizer = bridge.finalizer(XMLHttpRequest.deinit);
     };
 

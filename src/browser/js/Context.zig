@@ -99,6 +99,11 @@ global_promises: std.ArrayList(v8.Global) = .empty,
 global_functions: std.ArrayList(v8.Global) = .empty,
 global_promise_resolvers: std.ArrayList(v8.Global) = .empty,
 
+// Temp variants stored in HashMaps for O(1) early cleanup.
+// Key is global.data_ptr.
+global_values_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+global_functions_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
 
@@ -181,6 +186,20 @@ pub fn deinit(self: *Context) void {
         v8.v8__Global__Reset(global);
     }
 
+    {
+        var it = self.global_values_temp.valueIterator();
+        while (it.next()) |global| {
+            v8.v8__Global__Reset(global);
+        }
+    }
+
+    {
+        var it = self.global_functions_temp.valueIterator();
+        while (it.next()) |global| {
+            v8.v8__Global__Reset(global);
+        }
+    }
+
     if (self.entered) {
         var ls: js.Local.Scope = undefined;
         self.localScope(&ls);
@@ -212,24 +231,40 @@ pub fn strongRef(self: *Context, obj: anytype) void {
     v8.v8__Global__ClearWeak(global);
 }
 
-pub fn release(self: *Context, obj: *anyopaque) void {
-    var global = self.identity_map.fetchRemove(@intFromPtr(obj)) orelse {
-        if (comptime IS_DEBUG) {
-            // should not be possible
-            std.debug.assert(false);
-        }
-        return;
-    };
-    v8.v8__Global__Reset(&global.value);
+pub fn release(self: *Context, item: anytype) void {
+    if (@TypeOf(item) == *anyopaque) {
+        // Existing *anyopaque path for identity_map. Called internally from
+        // finalizers
+        var global = self.identity_map.fetchRemove(@intFromPtr(item)) orelse {
+            if (comptime IS_DEBUG) {
+                // should not be possible
+                std.debug.assert(false);
+            }
+            return;
+        };
+        v8.v8__Global__Reset(&global.value);
 
-    // The item has been fianalized, remove it for the finalizer callback so that
-    // we don't try to call it again on shutdown.
-    _ = self.finalizer_callbacks.fetchRemove(@intFromPtr(obj)) orelse {
-        if (comptime IS_DEBUG) {
-            // should not be possible
-            std.debug.assert(false);
-        }
+        // The item has been fianalized, remove it for the finalizer callback so that
+        // we don't try to call it again on shutdown.
+        _ = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
+            if (comptime IS_DEBUG) {
+                // should not be possible
+                std.debug.assert(false);
+            }
+        };
+        return;
+    }
+
+    var map = switch (@TypeOf(item)) {
+        js.Value.Temp => &self.global_values_temp,
+        js.Function.Temp => &self.global_functions_temp,
+        else => |T| @compileError("Context.release cannot be called with a " ++ @typeName(T)),
     };
+
+    if (map.fetchRemove(item.handle.data_ptr)) |kv| {
+        var global = kv.value;
+        v8.v8__Global__Reset(&global);
+    }
 }
 
 // Any operation on the context have to be made from a local.
