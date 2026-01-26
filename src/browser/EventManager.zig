@@ -485,8 +485,10 @@ fn findListener(list: *const std.DoublyLinkedList, typ: []const u8, callback: Ca
 }
 
 /// Creates a lookup key to use with `inline_lookup`.
-inline fn createLookupKey(event_target: *EventTarget, event_type: Listener.Type) usize {
-    return @intFromPtr(event_target) >> 3 | (@as(u64, @intFromEnum(event_type)) << 57);
+fn createLookupKey(event_target: *EventTarget, event_type: Listener.Type) usize {
+    const ptr = @intFromPtr(event_target) >> 3;
+    lp.assert(ptr < (1 << 57), "createLookupKey: pointer overflow", .{ .ptr = ptr });
+    return ptr | (@as(u64, @intFromEnum(event_type)) << 57);
 }
 
 /// Returns listener type from `inline_lookup` key.
