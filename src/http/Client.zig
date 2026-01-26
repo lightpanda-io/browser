@@ -21,6 +21,7 @@ const log = @import("../log.zig");
 const builtin = @import("builtin");
 
 const Http = @import("Http.zig");
+const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
@@ -121,7 +122,7 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Client {
+pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, config: *const Config) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -131,10 +132,18 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
     const multi = c.curl_multi_init() orelse return error.FailedToInitializeMulti;
     errdefer _ = c.curl_multi_cleanup(multi);
 
-    try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, opts.max_host_open)));
+    try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, config.httpMaxHostOpen())));
 
-    var handles = try Handles.init(allocator, client, ca_blob, &opts);
+    const user_agent = try config.userAgent(allocator);
+    var proxy_bearer_header: ?[:0]const u8 = null;
+    if (config.proxyBearerToken()) |bt| {
+        proxy_bearer_header = try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{bt}, 0);
+    }
+
+    var handles = try Handles.init(allocator, client, ca_blob, config, user_agent, proxy_bearer_header);
     errdefer handles.deinit(allocator);
+
+    const http_proxy = config.httpProxy();
 
     client.* = .{
         .queue = .{},
@@ -143,9 +152,9 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, opts: Http.Opts) !*Clie
         .multi = multi,
         .handles = handles,
         .allocator = allocator,
-        .http_proxy = opts.http_proxy,
-        .use_proxy = opts.http_proxy != null,
-        .user_agent = opts.user_agent,
+        .http_proxy = http_proxy,
+        .use_proxy = http_proxy != null,
+        .user_agent = user_agent,
         .transfer_pool = transfer_pool,
     };
 
@@ -646,16 +655,23 @@ const Handles = struct {
 
     const HandleList = std.DoublyLinkedList;
 
-    // pointer to opts is not stable, don't hold a reference to it!
-    fn init(allocator: Allocator, client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handles {
-        const count = if (opts.max_concurrent == 0) 1 else opts.max_concurrent;
+    fn init(
+        allocator: Allocator,
+        client: *Client,
+        ca_blob: ?c.curl_blob,
+        config: *const Config,
+        user_agent: [:0]const u8,
+        proxy_bearer_header: ?[:0]const u8,
+    ) !Handles {
+        const count: usize = config.httpMaxConcurrent();
+        if (count == 0) return error.InvalidMaxConcurrent;
 
         const handles = try allocator.alloc(Handle, count);
         errdefer allocator.free(handles);
 
         var available: HandleList = .{};
         for (0..count) |i| {
-            handles[i] = try Handle.init(client, ca_blob, opts);
+            handles[i] = try Handle.init(client, ca_blob, config, user_agent, proxy_bearer_header);
             available.append(&handles[i].node);
         }
 
@@ -702,9 +718,14 @@ pub const Handle = struct {
     conn: Http.Connection,
     node: Handles.HandleList.Node,
 
-    // pointer to opts is not stable, don't hold a reference to it!
-    fn init(client: *Client, ca_blob: ?c.curl_blob, opts: *const Http.Opts) !Handle {
-        const conn = try Http.Connection.init(ca_blob, opts);
+    fn init(
+        client: *Client,
+        ca_blob: ?c.curl_blob,
+        config: *const Config,
+        user_agent: [:0]const u8,
+        proxy_bearer_header: ?[:0]const u8,
+    ) !Handle {
+        const conn = try Http.Connection.init(ca_blob, config, user_agent, proxy_bearer_header);
         errdefer conn.deinit();
 
         const easy = conn.easy;

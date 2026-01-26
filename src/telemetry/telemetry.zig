@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
 const App = @import("../App.zig");
+const Config = @import("../Config.zig");
 
 const uuidv4 = @import("../id.zig").uuidv4;
 const IID_FILE = "iid";
@@ -28,11 +29,11 @@ fn TelemetryT(comptime P: type) type {
 
         disabled: bool,
 
-        run_mode: App.RunMode,
+        run_mode: Config.RunMode,
 
         const Self = @This();
 
-        pub fn init(app: *App, run_mode: App.RunMode) !Self {
+        pub fn init(app: *App, run_mode: Config.RunMode) !Self {
             const disabled = isDisabled();
             if (builtin.mode != .Debug and builtin.is_test == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
@@ -118,7 +119,7 @@ const NoopProvider = struct {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
-    pub fn send(_: NoopProvider, _: ?[]const u8, _: App.RunMode, _: Event) !void {}
+    pub fn send(_: NoopProvider, _: ?[]const u8, _: Config.RunMode, _: Event) !void {}
 };
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
@@ -134,7 +135,7 @@ test "telemetry: disabled by environment" {
             return .{};
         }
         fn deinit(_: @This()) void {}
-        pub fn send(_: @This(), _: ?[]const u8, _: App.RunMode, _: Event) !void {
+        pub fn send(_: @This(), _: ?[]const u8, _: Config.RunMode, _: Event) !void {
             unreachable;
         }
     };
@@ -179,7 +180,7 @@ test "telemetry: sends event to provider" {
 
 const MockProvider = struct {
     iid: ?[]const u8,
-    run_mode: ?App.RunMode,
+    run_mode: ?Config.RunMode,
     allocator: Allocator,
     events: std.ArrayListUnmanaged(Event),
 
@@ -194,7 +195,7 @@ const MockProvider = struct {
     fn deinit(self: *MockProvider) void {
         self.events.deinit(self.allocator);
     }
-    pub fn send(self: *MockProvider, iid: ?[]const u8, run_mode: App.RunMode, events: Event) !void {
+    pub fn send(self: *MockProvider, iid: ?[]const u8, run_mode: Config.RunMode, events: Event) !void {
         if (self.iid == null) {
             try testing.expectEqual(null, self.run_mode);
             self.iid = iid.?;
