@@ -754,7 +754,7 @@ pub const Script = struct {
             return;
         }
 
-         switch (self.mode) {
+        switch (self.mode) {
             .import_async => |ia| ia.callback(ia.data, error.FailedToLoad),
             .import => {
                 const entry = manager.imported_modules.getPtr(self.url).?;

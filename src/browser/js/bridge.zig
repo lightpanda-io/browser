@@ -92,7 +92,7 @@ pub fn Builder(comptime T: type) type {
             return entries;
         }
 
-        pub fn finalizer(comptime func: *const fn (self: *T, comptime shutdown: bool) void) Finalizer {
+        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool) void) Finalizer {
             return .{
                 .from_zig = struct {
                     fn wrap(ptr: *anyopaque) void {

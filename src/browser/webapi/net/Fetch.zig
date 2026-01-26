@@ -37,22 +37,26 @@ _url: []const u8,
 _buf: std.ArrayList(u8),
 _response: *Response,
 _resolver: js.PromiseResolver.Global,
+_owns_response: bool,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
+    const response = try Response.init(null, .{ .status = 0 }, page);
+    errdefer response.deinit(true);
 
     const resolver = page.js.local.?.createPromiseResolver();
 
-    const fetch = try page.arena.create(Fetch);
+    const fetch = try response._arena.create(Fetch);
     fetch.* = .{
         ._page = page,
         ._buf = .empty,
-        ._url = try page.arena.dupe(u8, request._url),
+        ._url = try response._arena.dupe(u8, request._url),
         ._resolver = try resolver.persist(),
-        ._response = try Response.init(null, .{ .status = 0 }, page),
+        ._response = response,
+        ._owns_response = true,
     };
 
     const http_client = page._session.browser.http_client;
@@ -74,26 +78,30 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .headers = headers,
         .resource_type = .fetch,
         .cookie_jar = &page._session.cookie_jar,
+        .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
+        .shutdown_callback = httpShutdownCallback,
     });
     return resolver.promise();
 }
 
-pub fn deinit(self: *Fetch) void {
-    if (self.transfer) |transfer| {
-        transfer.abort();
-        self.transfer = null;
+fn httpStartCallback(transfer: *Http.Transfer) !void {
+    const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
+    if (comptime IS_DEBUG) {
+        log.debug(.http, "request start", .{ .url = self._url, .source = "fetch" });
     }
+    self._response._transfer = transfer;
 }
 
 fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
 
+    const arena = self._response._arena;
     if (transfer.getContentLength()) |cl| {
-        try self._buf.ensureTotalCapacity(self._page.arena, cl);
+        try self._buf.ensureTotalCapacity(arena, cl);
     }
 
     const res = self._response;
@@ -108,12 +116,12 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     }
 
     res._status = header.status;
-    res._url = try self._page.arena.dupeZ(u8, std.mem.span(header.url));
+    res._url = try arena.dupeZ(u8, std.mem.span(header.url));
     res._is_redirected = header.redirect_count > 0;
 
     // Determine response type based on origin comparison
-    const page_origin = URL.getOrigin(self._page.call_arena, self._page.url) catch null;
-    const response_origin = URL.getOrigin(self._page.call_arena, res._url) catch null;
+    const page_origin = URL.getOrigin(arena, self._page.url) catch null;
+    const response_origin = URL.getOrigin(arena, res._url) catch null;
 
     if (page_origin) |po| {
         if (response_origin) |ro| {
@@ -139,17 +147,19 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
 
 fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
-    try self._buf.appendSlice(self._page.arena, data);
+    try self._buf.appendSlice(self._response._arena, data);
 }
 
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
-    self._response._body = self._buf.items;
+    var response = self._response;
+    response._transfer = null;
+    response._body = self._buf.items;
 
     log.info(.http, "request complete", .{
         .source = "fetch",
         .url = self._url,
-        .status = self._response._status,
+        .status = response._status,
         .len = self._buf.items.len,
     });
 
@@ -157,18 +167,44 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     self._page.js.localScope(&ls);
     defer ls.deinit();
 
-    return ls.toLocal(self._resolver).resolve("fetch done", self._response);
+    const js_val = try ls.local.zigValueToJs(self._response, .{});
+    self._owns_response = false;
+    return ls.toLocal(self._resolver).resolve("fetch done", js_val);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
-    self._response._type = .@"error"; // Set type to error for network failures
+
+    var response = self._response;
+    response._transfer = null;
+    // the response is only passed on v8 on success, if we're here, it's safe to
+    // clear this. (defer since `self is in the response's arena).
+
+    defer if (self._owns_response) {
+        response.deinit(err == error.Abort);
+        self._owns_response = false;
+    };
 
     var ls: js.Local.Scope = undefined;
     self._page.js.localScope(&ls);
     defer ls.deinit();
 
     ls.toLocal(self._resolver).reject("fetch error", @errorName(err));
+}
+
+fn httpShutdownCallback(ctx: *anyopaque) void {
+    const self: *Fetch = @ptrCast(@alignCast(ctx));
+    if (comptime IS_DEBUG) {
+        // should always be true
+        std.debug.assert(self._owns_response);
+    }
+
+    if (self._owns_response) {
+        var response = self._response;
+        response._transfer = null;
+        response.deinit(true);
+        self._owns_response = false;
+    }
 }
 
 const testing = @import("../../../testing.zig");

@@ -37,6 +37,8 @@ const XMLHttpRequestEventTarget = @import("webapi/net/XMLHttpRequestEventTarget.
 const Blob = @import("webapi/Blob.zig");
 const AbstractRange = @import("webapi/AbstractRange.zig");
 
+const Allocator = std.mem.Allocator;
+
 const IS_DEBUG = builtin.mode == .Debug;
 const assert = std.debug.assert;
 
@@ -344,9 +346,7 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
     return chain.get(4);
 }
 
-pub fn xhrEventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
+pub fn xhrEventTarget(_: *const Factory, allocator: Allocator, child: anytype) !*@TypeOf(child) {
     return try AutoPrototypeChain(
         &.{ EventTarget, XMLHttpRequestEventTarget, @TypeOf(child) },
     ).create(allocator, child);
