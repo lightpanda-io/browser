@@ -39,10 +39,10 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(allocator: std.mem.Allocator, app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    var http = try app.network.createHttp(allocator);
+    const http = try app.http.createClient(allocator);
     defer http.deinit();
 
-    var browser = try Browser.init(allocator, app, http.client);
+    var browser = try Browser.init(allocator, app, http);
     defer browser.deinit();
 
     var session = try browser.newSession();

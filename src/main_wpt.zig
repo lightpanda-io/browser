@@ -70,10 +70,10 @@ pub fn main() !void {
     var app = try lp.App.init(allocator, &config);
     defer app.deinit(allocator);
 
-    var http = try app.network.createHttp(allocator);
+    const http = try app.http.createClient(allocator);
     defer http.deinit();
 
-    var browser = try lp.Browser.init(allocator, app, http.client);
+    var browser = try lp.Browser.init(allocator, app, http);
     defer browser.deinit();
 
     // An arena for running each tests. Is reset after every test.

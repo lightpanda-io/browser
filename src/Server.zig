@@ -30,7 +30,8 @@ const log = @import("log.zig");
 const App = @import("App.zig");
 const Config = @import("Config.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
-const Http = App.Http;
+const Http = @import("http/Http.zig");
+const HttpClient = @import("http/Client.zig");
 const ThreadPool = @import("ThreadPool.zig");
 const LimitedAllocator = @import("LimitedAllocator.zig");
 
@@ -166,7 +167,7 @@ pub const Client = struct {
 
     allocator: Allocator,
     app: *App,
-    http: Http,
+    http: *HttpClient,
     json_version_response: []const u8,
     reader: Reader(true),
     socket: posix.socket_t,
@@ -205,7 +206,7 @@ pub const Client = struct {
         var reader = try Reader(true).init(allocator);
         errdefer reader.deinit();
 
-        var http = try app.network.createHttp(allocator);
+        const http = try app.http.createClient(allocator);
         errdefer http.deinit();
 
         return .{
@@ -233,25 +234,29 @@ pub const Client = struct {
     }
 
     fn run(self: *Client) void {
-        var http = &self.http;
-        http.addCDPClient(.{
+        const http = self.http;
+        http.cdp_client = .{
             .socket = self.socket,
             .ctx = self,
             .blocking_read_start = Client.blockingReadStart,
             .blocking_read = Client.blockingRead,
             .blocking_read_end = Client.blockingReadStop,
-        });
-        defer http.removeCDPClient();
+        };
+        defer http.cdp_client = null;
 
         self.httpLoop(http) catch |err| {
             log.err(.app, "CDP client loop", .{ .err = err });
         };
     }
 
-    fn httpLoop(self: *Client, http: anytype) !void {
+    fn httpLoop(self: *Client, http: *HttpClient) !void {
         lp.assert(self.mode == .http, "Client.httpLoop invalid mode", .{});
         while (true) {
-            if (http.poll(self.timeout_ms) != .cdp_socket) {
+            const status = http.tick(self.timeout_ms) catch |err| {
+                log.err(.app, "http tick", .{ .err = err });
+                return;
+            };
+            if (status != .cdp_socket) {
                 log.info(.app, "CDP timeout", .{});
                 return;
             }
@@ -268,7 +273,7 @@ pub const Client = struct {
         return self.cdpLoop(http);
     }
 
-    fn cdpLoop(self: *Client, http: anytype) !void {
+    fn cdpLoop(self: *Client, http: *HttpClient) !void {
         var cdp = &self.mode.cdp;
         var last_message = timestamp(.monotonic);
         var ms_remaining = self.timeout_ms;
@@ -283,7 +288,11 @@ pub const Client = struct {
                     ms_remaining = self.timeout_ms;
                 },
                 .no_page => {
-                    if (http.poll(ms_remaining) != .cdp_socket) {
+                    const status = http.tick(ms_remaining) catch |err| {
+                        log.err(.app, "http tick", .{ .err = err });
+                        return;
+                    };
+                    if (status != .cdp_socket) {
                         log.info(.app, "CDP timeout", .{});
                         return;
                     }
@@ -518,7 +527,7 @@ pub const Client = struct {
             break :blk res;
         };
 
-        self.mode = .{ .cdp = try CDP.init(self.allocator, self.app, &self.http, self) };
+        self.mode = .{ .cdp = try CDP.init(self.allocator, self.app, self.http, self) };
         return self.send(response);
     }
 

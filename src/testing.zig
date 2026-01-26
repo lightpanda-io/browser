@@ -39,6 +39,7 @@ pub fn reset() void {
 const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Config = @import("Config.zig");
+const Client = @import("http/Client.zig");
 const Page = @import("browser/Page.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
@@ -333,7 +334,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 }
 
 pub var test_app: *App = undefined;
-pub var test_http: App.Http = undefined;
+pub var test_http: *Client = undefined;
 pub var test_browser: Browser = undefined;
 pub var test_session: *Session = undefined;
 
@@ -468,10 +469,10 @@ test "tests:beforeAll" {
     test_app = try App.init(@import("root").tracking_allocator, &test_config);
     errdefer test_app.deinit(@import("root").tracking_allocator);
 
-    test_http = try test_app.network.createHttp(@import("root").tracking_allocator);
+    test_http = try test_app.http.createClient(@import("root").tracking_allocator);
     errdefer test_http.deinit();
 
-    test_browser = try Browser.init(@import("root").tracking_allocator, test_app, test_http.client);
+    test_browser = try Browser.init(@import("root").tracking_allocator, test_app, test_http);
     errdefer test_browser.deinit();
 
     test_session = try test_browser.newSession();

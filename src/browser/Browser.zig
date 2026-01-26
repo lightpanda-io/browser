@@ -24,10 +24,10 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const App = @import("../App.zig");
+const Http = @import("../http/Http.zig");
+const HttpClient = @import("../http/Client.zig");
 
 const ArenaPool = App.ArenaPool;
-const Http = App.Http;
-const HttpClient = Http.Client;
 const Notification = App.Notification;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;

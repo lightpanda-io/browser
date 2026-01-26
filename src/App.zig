@@ -27,14 +27,13 @@ const Platform = @import("browser/js/Platform.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
 pub const Http = @import("http/Http.zig");
-pub const Network = Http.Network;
 pub const ArenaPool = @import("ArenaPool.zig");
 pub const Notification = @import("Notification.zig");
 
 const App = @This();
 
 config: *const Config,
-network: Network,
+http: Http,
 platform: Platform,
 snapshot: Snapshot,
 telemetry: Telemetry,
@@ -49,8 +48,8 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.config = config;
 
-    app.network = try Network.init(allocator, config);
-    errdefer app.network.deinit();
+    app.http = try Http.init(allocator, config);
+    errdefer app.http.deinit();
 
     app.notification = try Notification.init(allocator, null);
     errdefer app.notification.deinit();
@@ -88,7 +87,7 @@ pub fn deinit(self: *App, allocator: Allocator) void {
     self.snapshot.deinit();
     self.platform.deinit();
     self.arena_pool.deinit();
-    self.network.deinit();
+    self.http.deinit();
 
     allocator.destroy(self);
 }

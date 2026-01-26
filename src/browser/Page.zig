@@ -28,6 +28,8 @@ const IS_DEBUG = builtin.mode == .Debug;
 const log = @import("../log.zig");
 
 const App = @import("../App.zig");
+const Http = @import("../http/Http.zig");
+const Client = @import("../http/Client.zig");
 const String = @import("../string.zig").String;
 
 const Mime = @import("Mime.zig");
@@ -59,7 +61,6 @@ const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 
-const Http = App.Http;
 const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -966,7 +967,7 @@ fn printWaitAnalysis(self: *Page) void {
         std.debug.print("\nactive requests: {d}\n", .{self._session.browser.http_client.active});
         var n_ = self._session.browser.http_client.handles.in_use.first;
         while (n_) |n| {
-            const handle: *Http.Client.Handle = @fieldParentPtr("node", n);
+            const handle: *Client.Handle = @fieldParentPtr("node", n);
             const transfer = Http.Transfer.fromEasy(handle.conn.easy) catch |err| {
                 std.debug.print(" - failed to load transfer: {any}\n", .{err});
                 break;
@@ -3079,7 +3080,7 @@ const RequestCookieOpts = struct {
     is_http: bool = true,
     is_navigation: bool = false,
 };
-pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
+pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Client.RequestCookie {
     return .{
         .jar = &self._session.cookie_jar,
         .origin = self.url,
