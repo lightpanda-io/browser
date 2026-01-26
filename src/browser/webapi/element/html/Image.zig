@@ -233,7 +233,7 @@ pub const Build = struct {
         return page.scheduler.add(
             args,
             dispatchLoadEvent,
-            25,
+            0,
             .{
                 .low_priority = false,
                 .name = "Image.Build.created",
@@ -250,10 +250,8 @@ pub const Build = struct {
         const self = element.as(Image);
         const image = self.asElement();
 
-        const src_changed_and_valid = std.mem.eql(u8, attr_name, "src") and
-            URL.isCompleteHTTPUrl(attr_value);
-
-        if (src_changed_and_valid) {
+        const src_changed = std.mem.eql(u8, attr_name, "src") and attr_value.len > 0;
+        if (src_changed) {
             // Have to do this since `Scheduler` only allow passing a single arg.
             const args = try page._factory.create(CallbackParams{
                 .page = page,
@@ -265,7 +263,7 @@ pub const Build = struct {
             try page.scheduler.add(
                 args,
                 dispatchLoadEvent,
-                25,
+                0,
                 .{
                     .low_priority = false,
                     .name = "Image.Build.attributeChange",
