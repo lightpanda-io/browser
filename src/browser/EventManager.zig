@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 const log = @import("../log.zig");
 const String = @import("../string.zig").String;
 
+const lp = @import("lightpanda");
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 
@@ -42,11 +43,26 @@ list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
 lookup: std.AutoHashMapUnmanaged(usize, *std.DoublyLinkedList),
 dispatch_depth: usize,
 deferred_removals: std.ArrayList(struct { list: *std.DoublyLinkedList, listener: *Listener }),
+/// Use this when a listener provided like this:
+///
+/// ```html
+/// <img onload="(() => { ... })()" />
+/// ```
+///
+/// Or:
+///
+/// ```js
+/// img.onload = () => { ... };
+/// ```
+inline_lookup: std.AutoHashMapUnmanaged(usize, js.Function.Global),
 
 pub fn init(page: *Page) EventManager {
+    lp.assert(@alignOf(EventTarget) == 8, "EventManager.init", .{ .event_target_alignment = @alignOf(EventTarget) });
+
     return .{
         .page = page,
         .lookup = .{},
+        .inline_lookup = .{},
         .arena = page.arena,
         .list_pool = std.heap.MemoryPool(std.DoublyLinkedList).init(page.arena),
         .listener_pool = std.heap.MemoryPool(Listener).init(page.arena),
@@ -66,6 +82,32 @@ pub const Callback = union(enum) {
     function: js.Function,
     object: js.Object,
 };
+
+/// Sets an inline event listener (`onload`, `onclick`, `onwheel` etc.);
+/// overrides the listener if there's already one.
+pub fn setInlineListener(
+    self: *EventManager,
+    event_target: *EventTarget,
+    event_type: Listener.Type,
+    listener_callback: js.Function.Global,
+) !void {
+    if (comptime IS_DEBUG) {
+        log.debug(.event, "EventManager.setInlineListener", .{ .event_target = event_target, .event_type = event_type });
+    }
+
+    const key = createLookupKey(event_target, event_type);
+    const gop = try self.inline_lookup.getOrPut(self.arena, key);
+    gop.value_ptr.* = listener_callback;
+}
+
+/// Returns the inline event listener by the `EventTarget` and event type.
+pub fn getInlineListener(
+    self: *const EventManager,
+    event_target: *EventTarget,
+    event_type: Listener.Type,
+) ?js.Function.Global {
+    return self.inline_lookup.get(createLookupKey(event_target, event_type));
+}
 
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
     if (comptime IS_DEBUG) {
@@ -442,6 +484,16 @@ fn findListener(list: *const std.DoublyLinkedList, typ: []const u8, callback: Ca
     return null;
 }
 
+/// Creates a lookup key to use with `inline_lookup`.
+inline fn createLookupKey(event_target: *EventTarget, event_type: Listener.Type) usize {
+    return @intFromPtr(event_target) >> 3 | (@as(u64, @intFromEnum(event_type)) << 57);
+}
+
+/// Returns listener type from `inline_lookup` key.
+inline fn getListenerType(key: usize) Listener.Type {
+    return @enumFromInt(key >> 57);
+}
+
 const Listener = struct {
     typ: String,
     once: bool,
@@ -451,6 +503,104 @@ const Listener = struct {
     signal: ?*@import("webapi/AbortSignal.zig") = null,
     node: std.DoublyLinkedList.Node,
     removed: bool = false,
+
+    const Type = enum(u7) {
+        abort,
+        animationcancel,
+        animationend,
+        animationiteration,
+        animationstart,
+        auxclick,
+        beforeinput,
+        beforematch,
+        beforetoggle,
+        blur,
+        cancel,
+        canplay,
+        canplaythrough,
+        change,
+        click,
+        close,
+        command,
+        contentvisibilityautostatechange,
+        contextlost,
+        contextmenu,
+        contextrestored,
+        copy,
+        cuechange,
+        cut,
+        dblclick,
+        drag,
+        dragend,
+        dragenter,
+        dragexit,
+        dragleave,
+        dragover,
+        dragstart,
+        drop,
+        durationchange,
+        emptied,
+        ended,
+        @"error",
+        focus,
+        formdata,
+        fullscreenchange,
+        fullscreenerror,
+        gotpointercapture,
+        input,
+        invalid,
+        keydown,
+        keypress,
+        keyup,
+        load,
+        loadeddata,
+        loadedmetadata,
+        loadstart,
+        lostpointercapture,
+        mousedown,
+        mousemove,
+        mouseout,
+        mouseover,
+        mouseup,
+        paste,
+        pause,
+        play,
+        playing,
+        pointercancel,
+        pointerdown,
+        pointerenter,
+        pointerleave,
+        pointermove,
+        pointerout,
+        pointerover,
+        pointerrawupdate,
+        pointerup,
+        progress,
+        ratechange,
+        reset,
+        resize,
+        scroll,
+        scrollend,
+        securitypolicyviolation,
+        seeked,
+        seeking,
+        select,
+        selectionchange,
+        selectstart,
+        slotchange,
+        stalled,
+        submit,
+        @"suspend",
+        timeupdate,
+        toggle,
+        transitioncancel,
+        transitionend,
+        transitionrun,
+        transitionstart,
+        volumechange,
+        waiting,
+        wheel,
+    };
 };
 
 const Function = union(enum) {
