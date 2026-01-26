@@ -76,10 +76,10 @@ pub fn deinit(self: *TryCatch) void {
 }
 
 pub const Caught = struct {
-    line: ?u32,
-    caught: bool,
-    stack: ?[]const u8,
-    exception: ?[]const u8,
+    line: ?u32 = null,
+    caught: bool = false,
+    stack: ?[]const u8 = null,
+    exception: ?[]const u8 = null,
 
     pub fn format(self: Caught, writer: *std.Io.Writer) !void {
         const separator = @import("../../log.zig").separator();
