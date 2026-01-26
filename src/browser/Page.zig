@@ -244,6 +244,14 @@ pub fn deinit(self: *Page) void {
 }
 
 fn reset(self: *Page, comptime initializing: bool) !void {
+    if (comptime IS_DEBUG) {
+        var it = self._arena_pool_leak_track.valueIterator();
+        while (it.next()) |value_ptr| {
+            log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+        }
+        self._arena_pool_leak_track.clearRetainingCapacity();
+    }
+
     if (comptime initializing == false) {
         // Removins the context triggers the linked inspector.
         // It seems to append a collect task to the message loop.
@@ -326,14 +334,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._undefined_custom_elements = .{};
 
     try self.registerBackgroundTasks();
-
-    if (comptime IS_DEBUG) {
-        var it = self._arena_pool_leak_track.valueIterator();
-        while (it.next()) |value_ptr| {
-            log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
-        }
-        self._arena_pool_leak_track.clearRetainingCapacity();
-    }
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
