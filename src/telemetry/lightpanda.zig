@@ -20,18 +20,21 @@ pub const LightPanda = struct {
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
+    http: Http,
     connection: Http.Connection,
     pending: std.DoublyLinkedList,
     mem_pool: std.heap.MemoryPool(LightPandaEvent),
 
-    pub fn init(app: *App) !LightPanda {
-        const connection = try app.http.newConnection();
+    pub fn init(allocator: Allocator, app: *App) !LightPanda {
+        var http = try app.network.createHttp(allocator);
+        errdefer http.deinit();
+
+        const connection = try http.newConnection();
         errdefer connection.deinit();
 
         try connection.setURL(URL);
         try connection.setMethod(.POST);
 
-        const allocator = app.allocator;
         return .{
             .cond = .{},
             .mutex = .{},
@@ -39,6 +42,7 @@ pub const LightPanda = struct {
             .thread = null,
             .running = true,
             .allocator = allocator,
+            .http = http,
             .connection = connection,
             .mem_pool = std.heap.MemoryPool(LightPandaEvent).init(allocator),
         };
@@ -54,6 +58,7 @@ pub const LightPanda = struct {
         }
         self.mem_pool.deinit();
         self.connection.deinit();
+        self.http.deinit();
     }
 
     pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: Config.RunMode, raw_event: telemetry.Event) !void {

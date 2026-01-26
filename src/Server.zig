@@ -28,34 +28,31 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("log.zig");
 const App = @import("App.zig");
+const Config = @import("Config.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
-
-const MAX_HTTP_REQUEST_SIZE = 4096;
-
-// max message size
-// +14 for max websocket payload overhead
-// +140 for the max control packet that might be interleaved in a message
-const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
+const Http = App.Http;
+const ThreadPool = @import("ThreadPool.zig");
+const LimitedAllocator = @import("LimitedAllocator.zig");
 
 const Server = @This();
+
 app: *App,
 shutdown: bool = false,
 allocator: Allocator,
-client: ?posix.socket_t,
 listener: ?posix.socket_t,
 json_version_response: []const u8,
+thread_pool: ThreadPool,
 
-pub fn init(app: *App, address: net.Address) !Server {
-    const allocator = app.allocator;
+pub fn init(allocator: Allocator, app: *App, address: net.Address) !Server {
     const json_version_response = try buildJSONVersionResponse(allocator, address);
     errdefer allocator.free(json_version_response);
 
     return .{
         .app = app,
-        .client = null,
         .listener = null,
         .allocator = allocator,
         .json_version_response = json_version_response,
+        .thread_pool = ThreadPool.init(allocator, app.config.maxConnections()),
     };
 }
 
@@ -81,12 +78,11 @@ pub fn stop(self: *Server) void {
 }
 
 pub fn deinit(self: *Server) void {
+    self.thread_pool.deinit();
     if (self.listener) |listener| {
         posix.close(listener);
         self.listener = null;
     }
-    // *if* server.run is running, we should really wait for it to return
-    // before existing from here.
     self.allocator.free(self.json_version_response);
 }
 
@@ -119,97 +115,47 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
             }
         };
 
-        self.client = socket;
-        defer if (self.client) |s| {
-            posix.close(s);
-            self.client = null;
-        };
-
-        if (log.enabled(.app, .info)) {
-            var client_address: std.net.Address = undefined;
-            var socklen: posix.socklen_t = @sizeOf(net.Address);
-            try std.posix.getsockname(socket, &client_address.any, &socklen);
-            log.info(.app, "client connected", .{ .ip = client_address });
-        }
-
-        self.readLoop(socket, timeout_ms) catch |err| {
-            log.err(.app, "CDP client loop", .{ .err = err });
+        self.thread_pool.spawn(handleConnection, .{ self, socket, timeout_ms }, shutdownConnection, .{socket}) catch |err| {
+            log.err(.app, "CDP spawn", .{ .err = err });
+            posix.close(socket);
         };
     }
 }
 
-fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
-    // This shouldn't be necessary, but the Client is HUGE (> 512KB) because
-    // it has a large read buffer. I don't know why, but v8 crashes if this
-    // is on the stack (and I assume it's related to its size).
-    const client = try self.allocator.create(Client);
-    defer self.allocator.destroy(client);
+fn shutdownConnection(socket: posix.socket_t) void {
+    posix.shutdown(socket, .recv) catch {};
+}
 
-    client.* = try Client.init(socket, self);
+fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
+    defer posix.close(socket);
+
+    var limited = LimitedAllocator.init(self.allocator, self.app.config.maxMemoryPerTab());
+    const client_allocator = limited.allocator();
+
+    // Client is HUGE (> 512KB) because it has a large read buffer.
+    // V8 crashes if this is on the stack (likely related to its size).
+    const client = client_allocator.create(Client) catch |err| {
+        log.err(.app, "CDP client create", .{ .err = err });
+        return;
+    };
+    defer client_allocator.destroy(client);
+
+    client.* = Client.init(
+        socket,
+        client_allocator,
+        self.app,
+        self.json_version_response,
+        timeout_ms,
+    ) catch |err| {
+        log.err(.app, "CDP client init", .{ .err = err });
+        return;
+    };
     defer client.deinit();
 
-    var http = &self.app.http;
-    http.addCDPClient(.{
-        .socket = socket,
-        .ctx = client,
-        .blocking_read_start = Client.blockingReadStart,
-        .blocking_read = Client.blockingRead,
-        .blocking_read_end = Client.blockingReadStop,
-    });
-    defer http.removeCDPClient();
-
-    lp.assert(client.mode == .http, "Server.readLoop invalid mode", .{});
-    while (true) {
-        if (http.poll(timeout_ms) != .cdp_socket) {
-            log.info(.app, "CDP timeout", .{});
-            return;
-        }
-
-        if (client.readSocket() == false) {
-            return;
-        }
-
-        if (client.mode == .cdp) {
-            break; // switch to our CDP loop
-        }
-    }
-
-    var cdp = &client.mode.cdp;
-    var last_message = timestamp(.monotonic);
-    var ms_remaining = timeout_ms;
-    while (true) {
-        switch (cdp.pageWait(ms_remaining)) {
-            .cdp_socket => {
-                if (client.readSocket() == false) {
-                    return;
-                }
-                last_message = timestamp(.monotonic);
-                ms_remaining = timeout_ms;
-            },
-            .no_page => {
-                if (http.poll(ms_remaining) != .cdp_socket) {
-                    log.info(.app, "CDP timeout", .{});
-                    return;
-                }
-                if (client.readSocket() == false) {
-                    return;
-                }
-                last_message = timestamp(.monotonic);
-                ms_remaining = timeout_ms;
-            },
-            .done => {
-                const elapsed = timestamp(.monotonic) - last_message;
-                if (elapsed > ms_remaining) {
-                    log.info(.app, "CDP timeout", .{});
-                    return;
-                }
-                ms_remaining -= @intCast(elapsed);
-            },
-            .navigate => unreachable, // must have been handled by the session
-        }
-    }
+    client.run();
 }
 
+// Handle exactly one TCP connection.
 pub const Client = struct {
     // The client is initially serving HTTP requests but, under normal circumstances
     // should eventually be upgraded to a websocket connections
@@ -218,11 +164,15 @@ pub const Client = struct {
         cdp: CDP,
     },
 
-    server: *Server,
+    allocator: Allocator,
+    app: *App,
+    http: Http,
+    json_version_response: []const u8,
     reader: Reader(true),
     socket: posix.socket_t,
     socket_flags: usize,
     send_arena: ArenaAllocator,
+    timeout_ms: u32,
 
     const EMPTY_PONG = [_]u8{ 138, 0 };
 
@@ -233,22 +183,42 @@ pub const Client = struct {
     // "private-use" close codes must be from 4000-49999
     const CLOSE_TIMEOUT = [_]u8{ 136, 2, 15, 160 }; // code: 4000
 
-    fn init(socket: posix.socket_t, server: *Server) !Client {
+    fn init(
+        socket: posix.socket_t,
+        allocator: Allocator,
+        app: *App,
+        json_version_response: []const u8,
+        timeout_ms: u32,
+    ) !Client {
+        if (log.enabled(.app, .info)) {
+            var client_address: std.net.Address = undefined;
+            var socklen: posix.socklen_t = @sizeOf(net.Address);
+            try std.posix.getsockname(socket, &client_address.any, &socklen);
+            log.info(.app, "client connected", .{ .ip = client_address });
+        }
+
         const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
         const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
         // we expect the socket to come to us as nonblocking
         lp.assert(socket_flags & nonblocking == nonblocking, "Client.init blocking", .{});
 
-        var reader = try Reader(true).init(server.allocator);
+        var reader = try Reader(true).init(allocator);
         errdefer reader.deinit();
+
+        var http = try app.network.createHttp(allocator);
+        errdefer http.deinit();
 
         return .{
             .socket = socket,
-            .server = server,
+            .allocator = allocator,
+            .app = app,
+            .http = http,
+            .json_version_response = json_version_response,
             .reader = reader,
             .mode = .{ .http = {} },
             .socket_flags = socket_flags,
-            .send_arena = ArenaAllocator.init(server.allocator),
+            .send_arena = ArenaAllocator.init(allocator),
+            .timeout_ms = timeout_ms,
         };
     }
 
@@ -259,6 +229,81 @@ pub const Client = struct {
         }
         self.reader.deinit();
         self.send_arena.deinit();
+        self.http.deinit();
+    }
+
+    fn run(self: *Client) void {
+        var http = &self.http;
+        http.addCDPClient(.{
+            .socket = self.socket,
+            .ctx = self,
+            .blocking_read_start = Client.blockingReadStart,
+            .blocking_read = Client.blockingRead,
+            .blocking_read_end = Client.blockingReadStop,
+        });
+        defer http.removeCDPClient();
+
+        self.httpLoop(http) catch |err| {
+            log.err(.app, "CDP client loop", .{ .err = err });
+        };
+    }
+
+    fn httpLoop(self: *Client, http: anytype) !void {
+        lp.assert(self.mode == .http, "Client.httpLoop invalid mode", .{});
+        while (true) {
+            if (http.poll(self.timeout_ms) != .cdp_socket) {
+                log.info(.app, "CDP timeout", .{});
+                return;
+            }
+
+            if (self.readSocket() == false) {
+                return;
+            }
+
+            if (self.mode == .cdp) {
+                break;
+            }
+        }
+
+        return self.cdpLoop(http);
+    }
+
+    fn cdpLoop(self: *Client, http: anytype) !void {
+        var cdp = &self.mode.cdp;
+        var last_message = timestamp(.monotonic);
+        var ms_remaining = self.timeout_ms;
+
+        while (true) {
+            switch (cdp.pageWait(ms_remaining)) {
+                .cdp_socket => {
+                    if (self.readSocket() == false) {
+                        return;
+                    }
+                    last_message = timestamp(.monotonic);
+                    ms_remaining = self.timeout_ms;
+                },
+                .no_page => {
+                    if (http.poll(ms_remaining) != .cdp_socket) {
+                        log.info(.app, "CDP timeout", .{});
+                        return;
+                    }
+                    if (self.readSocket() == false) {
+                        return;
+                    }
+                    last_message = timestamp(.monotonic);
+                    ms_remaining = self.timeout_ms;
+                },
+                .done => {
+                    const elapsed = timestamp(.monotonic) - last_message;
+                    if (elapsed > ms_remaining) {
+                        log.info(.app, "CDP timeout", .{});
+                        return;
+                    }
+                    ms_remaining -= @intCast(elapsed);
+                },
+                .navigate => unreachable, // must have been handled by the session
+            }
+        }
     }
 
     fn blockingReadStart(ctx: *anyopaque) bool {
@@ -315,7 +360,7 @@ pub const Client = struct {
         lp.assert(self.reader.pos == 0, "Client.HTTP pos", .{ .pos = self.reader.pos });
         const request = self.reader.buf[0..self.reader.len];
 
-        if (request.len > MAX_HTTP_REQUEST_SIZE) {
+        if (request.len > Config.MAX_HTTP_REQUEST_SIZE) {
             self.writeHTTPErrorResponse(413, "Request too large");
             return error.RequestTooLarge;
         }
@@ -368,7 +413,7 @@ pub const Client = struct {
         }
 
         if (std.mem.eql(u8, url, "/json/version")) {
-            try self.send(self.server.json_version_response);
+            try self.send(self.json_version_response);
             // Chromedp (a Go driver) does an http request to /json/version
             // then to / (websocket upgrade) using a different connection.
             // Since we only allow 1 connection at a time, the 2nd one (the
@@ -473,7 +518,7 @@ pub const Client = struct {
             break :blk res;
         };
 
-        self.mode = .{ .cdp = try CDP.init(self.server.app, self) };
+        self.mode = .{ .cdp = try CDP.init(self.allocator, self.app, &self.http, self) };
         return self.send(response);
     }
 
@@ -708,7 +753,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
                     if (message_len > 125) {
                         return error.ControlTooLarge;
                     }
-                } else if (message_len > MAX_MESSAGE_SIZE) {
+                } else if (message_len > Config.MAX_MESSAGE_SIZE) {
                     return error.TooLarge;
                 } else if (message_len > self.buf.len) {
                     const len = self.buf.len;
@@ -736,7 +781,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
 
                 if (is_continuation) {
                     const fragments = &(self.fragments orelse return error.InvalidContinuation);
-                    if (fragments.message.items.len + message_len > MAX_MESSAGE_SIZE) {
+                    if (fragments.message.items.len + message_len > Config.MAX_MESSAGE_SIZE) {
                         return error.TooLarge;
                     }
 

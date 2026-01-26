@@ -34,13 +34,13 @@ fn TelemetryT(comptime P: type) type {
 
         const Self = @This();
 
-        pub fn init(app: *App, run_mode: Config.RunMode) !Self {
+        pub fn init(allocator: Allocator, app: *App, run_mode: Config.RunMode) !Self {
             const disabled = isDisabled();
             if (builtin.mode != .Debug and builtin.is_test == false) {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
             }
 
-            const provider = try P.init(app);
+            const provider = try P.init(allocator, app);
             errdefer provider.deinit();
 
             return .{
@@ -142,7 +142,7 @@ pub const Event = union(enum) {
 };
 
 const NoopProvider = struct {
-    fn init(_: *App) !NoopProvider {
+    fn init(_: Allocator, _: *App) !NoopProvider {
         return .{};
     }
     fn deinit(_: NoopProvider) void {}
@@ -158,7 +158,7 @@ test "telemetry: disabled by environment" {
     defer _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
 
     const FailingProvider = struct {
-        fn init(_: *App) !@This() {
+        fn init(_: Allocator, _: *App) !@This() {
             return .{};
         }
         fn deinit(_: @This()) void {}
@@ -167,7 +167,7 @@ test "telemetry: disabled by environment" {
         }
     };
 
-    var telemetry = try TelemetryT(FailingProvider).init(undefined, .serve);
+    var telemetry = try TelemetryT(FailingProvider).init(std.testing.allocator, undefined, .serve);
     defer telemetry.deinit();
     telemetry.record(.{ .run = {} });
 }
@@ -191,7 +191,7 @@ test "telemetry: getOrCreateId" {
 }
 
 test "telemetry: sends event to provider" {
-    var telemetry = try TelemetryT(MockProvider).init(testing.test_app, .serve);
+    var telemetry = try TelemetryT(MockProvider).init(std.testing.allocator, testing.test_app, .serve);
     defer telemetry.deinit();
     const mock = &telemetry.provider;
 
@@ -211,12 +211,12 @@ const MockProvider = struct {
     allocator: Allocator,
     events: std.ArrayListUnmanaged(Event),
 
-    fn init(app: *App) !@This() {
+    fn init(allocator: Allocator, _: *App) !@This() {
         return .{
             .iid = null,
             .run_mode = null,
             .events = .{},
-            .allocator = app.allocator,
+            .allocator = allocator,
         };
     }
     fn deinit(self: *MockProvider) void {

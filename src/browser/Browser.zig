@@ -26,7 +26,8 @@ const log = @import("../log.zig");
 const App = @import("../App.zig");
 
 const ArenaPool = App.ArenaPool;
-const HttpClient = App.Http.Client;
+const Http = App.Http;
+const HttpClient = Http.Client;
 const Notification = App.Notification;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
@@ -40,35 +41,33 @@ const Browser = @This();
 
 env: js.Env,
 app: *App,
+http_client: *HttpClient,
 session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
-http_client: *HttpClient,
 call_arena: ArenaAllocator,
 page_arena: ArenaAllocator,
 session_arena: ArenaAllocator,
 transfer_arena: ArenaAllocator,
 notification: *Notification,
 
-pub fn init(app: *App) !Browser {
-    const allocator = app.allocator;
-
+pub fn init(allocator: Allocator, app: *App, http_client: *HttpClient) !Browser {
     var env = try js.Env.init(allocator, &app.platform, &app.snapshot);
     errdefer env.deinit();
 
     const notification = try Notification.init(allocator, app.notification);
-    app.http.client.notification = notification;
-    app.http.client.next_request_id = 0; // Should we track ids in CDP only?
+    http_client.notification = notification;
+    http_client.next_request_id = 0; // Should we track ids in CDP only?
     errdefer notification.deinit();
 
     return .{
         .app = app,
         .env = env,
+        .http_client = http_client,
         .session = null,
         .allocator = allocator,
         .notification = notification,
         .arena_pool = &app.arena_pool,
-        .http_client = app.http.client,
         .call_arena = ArenaAllocator.init(allocator),
         .page_arena = ArenaAllocator.init(allocator),
         .session_arena = ArenaAllocator.init(allocator),

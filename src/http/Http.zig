@@ -41,53 +41,23 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 // once for all http connections is a win.
 const Http = @This();
 
-config: *const Config,
+pub const Network = @import("Network.zig");
+
+network: *Network,
 client: *Client,
-ca_blob: ?c.curl_blob,
-arena: ArenaAllocator,
-user_agent: [:0]const u8,
-proxy_bearer_header: ?[:0]const u8,
 
-pub fn init(allocator: Allocator, config: *const Config) !Http {
-    try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
-    errdefer c.curl_global_cleanup();
-
-    if (comptime ENABLE_DEBUG) {
-        std.debug.print("curl version: {s}\n\n", .{c.curl_version()});
-    }
-
-    var arena = ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-
-    const user_agent = try config.userAgent(arena.allocator());
-
-    var proxy_bearer_header: ?[:0]const u8 = null;
-    if (config.proxyBearerToken()) |bt| {
-        proxy_bearer_header = try std.fmt.allocPrintSentinel(arena.allocator(), "Proxy-Authorization: Bearer {s}", .{bt}, 0);
-    }
-
-    var ca_blob: ?c.curl_blob = null;
-    if (config.tlsVerifyHost()) {
-        ca_blob = try loadCerts(allocator, arena.allocator());
-    }
-
-    var client = try Client.init(allocator, ca_blob, config);
+pub fn init(allocator: Allocator, network: *Network) !Http {
+    var client = try Client.init(allocator, network.ca_blob, network.config);
     errdefer client.deinit();
 
     return .{
-        .arena = arena,
+        .network = network,
         .client = client,
-        .ca_blob = ca_blob,
-        .config = config,
-        .user_agent = user_agent,
-        .proxy_bearer_header = proxy_bearer_header,
     };
 }
 
 pub fn deinit(self: *Http) void {
     self.client.deinit();
-    c.curl_global_cleanup();
-    self.arena.deinit();
 }
 
 pub fn poll(self: *Http, timeout_ms: u32) Client.PerformStatus {
@@ -107,11 +77,11 @@ pub fn removeCDPClient(self: *Http) void {
 }
 
 pub fn newConnection(self: *Http) !Connection {
-    return Connection.init(self.ca_blob, self.config, self.user_agent, self.proxy_bearer_header);
+    return Connection.init(self.network.ca_blob, self.network.config, self.network.user_agent, self.network.proxy_bearer_header);
 }
 
 pub fn newHeaders(self: *const Http) Headers {
-    return Headers.init(self.user_agent);
+    return Headers.init(self.network.user_agent);
 }
 
 pub const Connection = struct {
@@ -361,87 +331,6 @@ pub const Method = enum(u8) {
     HEAD = 4,
     OPTIONS = 5,
     PATCH = 6,
-};
-
-// TODO: on BSD / Linux, we could just read the PEM file directly.
-// This whole rescan + decode is really just needed for MacOS. On Linux
-// bundle.rescan does find the .pem file(s) which could be in a few different
-// places, so it's still useful, just not efficient.
-fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
-    var bundle: std.crypto.Certificate.Bundle = .{};
-    try bundle.rescan(allocator);
-    defer bundle.deinit(allocator);
-
-    const bytes = bundle.bytes.items;
-    if (bytes.len == 0) {
-        log.warn(.app, "No system certificates", .{});
-        return .{
-            .len = 0,
-            .flags = 0,
-            .data = bytes.ptr,
-        };
-    }
-
-    const encoder = std.base64.standard.Encoder;
-    var arr: std.ArrayListUnmanaged(u8) = .empty;
-
-    const encoded_size = encoder.calcSize(bytes.len);
-    const buffer_size = encoded_size +
-        (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
-        (encoded_size / 64) // newline per 64 characters
-    ;
-    try arr.ensureTotalCapacity(arena, buffer_size);
-    var writer = arr.writer(arena);
-
-    var it = bundle.map.valueIterator();
-    while (it.next()) |index| {
-        const cert = try std.crypto.Certificate.der.Element.parse(bytes, index.*);
-
-        try writer.writeAll("-----BEGIN CERTIFICATE-----\n");
-        var line_writer = LineWriter{ .inner = writer };
-        try encoder.encodeWriter(&line_writer, bytes[index.*..cert.slice.end]);
-        try writer.writeAll("\n-----END CERTIFICATE-----\n");
-    }
-
-    // Final encoding should not be larger than our initial size estimate
-    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estiate = buffer_size, .len = arr.items.len });
-
-    return .{
-        .len = arr.items.len,
-        .data = arr.items.ptr,
-        .flags = 0,
-    };
-}
-
-// Wraps lines @ 64 columns. A PEM is basically a base64 encoded DER (which is
-// what Zig has), with lines wrapped at 64 characters and with a basic header
-// and footer
-const LineWriter = struct {
-    col: usize = 0,
-    inner: std.ArrayListUnmanaged(u8).Writer,
-
-    pub fn writeAll(self: *LineWriter, data: []const u8) !void {
-        var writer = self.inner;
-
-        var col = self.col;
-        const len = 64 - col;
-
-        var remain = data;
-        if (remain.len > len) {
-            col = 0;
-            try writer.writeAll(data[0..len]);
-            try writer.writeByte('\n');
-            remain = data[len..];
-        }
-
-        while (remain.len > 64) {
-            try writer.writeAll(remain[0..64]);
-            try writer.writeByte('\n');
-            remain = data[len..];
-        }
-        try writer.writeAll(remain);
-        self.col = col + remain.len;
-    }
 };
 
 pub fn debugCallback(_: *c.CURL, msg_type: c.curl_infotype, raw: [*c]u8, len: usize, _: *anyopaque) callconv(.c) void {

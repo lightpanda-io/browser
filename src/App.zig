@@ -27,17 +27,17 @@ const Platform = @import("browser/js/Platform.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
 pub const Http = @import("http/Http.zig");
+pub const Network = Http.Network;
 pub const ArenaPool = @import("ArenaPool.zig");
 pub const Notification = @import("Notification.zig");
 
 const App = @This();
 
-http: Http,
 config: *const Config,
+network: Network,
 platform: Platform,
 snapshot: Snapshot,
 telemetry: Telemetry,
-allocator: Allocator,
 arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 notification: *Notification,
@@ -48,13 +48,12 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     errdefer allocator.destroy(app);
 
     app.config = config;
-    app.allocator = allocator;
+
+    app.network = try Network.init(allocator, config);
+    errdefer app.network.deinit();
 
     app.notification = try Notification.init(allocator, null);
     errdefer app.notification.deinit();
-
-    app.http = try Http.init(allocator, config);
-    errdefer app.http.deinit();
 
     app.platform = try Platform.init();
     errdefer app.platform.deinit();
@@ -64,7 +63,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
-    app.telemetry = try Telemetry.init(app, config.mode);
+    app.telemetry = try Telemetry.init(allocator, app, config.mode);
     errdefer app.telemetry.deinit();
 
     try app.telemetry.register(app.notification);
@@ -75,22 +74,21 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     return app;
 }
 
-pub fn deinit(self: *App) void {
+pub fn deinit(self: *App, allocator: Allocator) void {
     if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
         return;
     }
 
-    const allocator = self.allocator;
     if (self.app_dir_path) |app_dir_path| {
         allocator.free(app_dir_path);
         self.app_dir_path = null;
     }
     self.telemetry.deinit();
     self.notification.deinit();
-    self.http.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
     self.arena_pool.deinit();
+    self.network.deinit();
 
     allocator.destroy(self);
 }

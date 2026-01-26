@@ -168,6 +168,8 @@ pub fn deinit(self: *Client) void {
     self.abort();
     self.handles.deinit(self.allocator);
 
+    self.allocator.free(self.user_agent);
+
     _ = c.curl_multi_cleanup(self.multi);
 
     self.transfer_pool.deinit();

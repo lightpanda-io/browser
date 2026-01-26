@@ -68,9 +68,12 @@ pub fn main() !void {
         .exec_name = "lightpanda-wpt",
     };
     var app = try lp.App.init(allocator, &config);
-    defer app.deinit();
+    defer app.deinit(allocator);
 
-    var browser = try lp.Browser.init(app);
+    var http = try app.network.createHttp(allocator);
+    defer http.deinit();
+
+    var browser = try lp.Browser.init(allocator, app, http.client);
     defer browser.deinit();
 
     // An arena for running each tests. Is reset after every test.

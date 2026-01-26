@@ -26,6 +26,7 @@ const log = @import("../log.zig");
 const js = @import("../browser/js/js.zig");
 
 const App = @import("../App.zig");
+const Http = App.Http;
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 const Page = @import("../browser/Page.zig");
@@ -78,9 +79,8 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
         const Self = @This();
 
-        pub fn init(app: *App, client: TypeProvider.Client) !Self {
-            const allocator = app.allocator;
-            const browser = try Browser.init(app);
+        pub fn init(allocator: Allocator, app: *App, http: *Http, client: TypeProvider.Client) !Self {
+            const browser = try Browser.init(allocator, app, http.client);
             errdefer browser.deinit();
 
             return .{

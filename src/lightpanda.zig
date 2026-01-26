@@ -20,6 +20,7 @@ const std = @import("std");
 pub const App = @import("App.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
+pub const ThreadPool = @import("ThreadPool.zig");
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
@@ -37,8 +38,11 @@ pub const FetchOpts = struct {
     dump: dump.RootOpts,
     writer: ?*std.Io.Writer = null,
 };
-pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    var browser = try Browser.init(app);
+pub fn fetch(allocator: std.mem.Allocator, app: *App, url: [:0]const u8, opts: FetchOpts) !void {
+    var http = try app.network.createHttp(allocator);
+    defer http.deinit();
+
+    var browser = try Browser.init(allocator, app, http.client);
     defer browser.deinit();
 
     var session = try browser.newSession();

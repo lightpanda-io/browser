@@ -333,6 +333,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 }
 
 pub var test_app: *App = undefined;
+pub var test_http: App.Http = undefined;
 pub var test_browser: Browser = undefined;
 pub var test_session: *Session = undefined;
 
@@ -465,9 +466,12 @@ test "tests:beforeAll" {
     log.opts.format = .pretty;
 
     test_app = try App.init(@import("root").tracking_allocator, &test_config);
-    errdefer test_app.deinit();
+    errdefer test_app.deinit(@import("root").tracking_allocator);
 
-    test_browser = try Browser.init(test_app);
+    test_http = try test_app.network.createHttp(@import("root").tracking_allocator);
+    errdefer test_http.deinit();
+
+    test_browser = try Browser.init(@import("root").tracking_allocator, test_app, test_http.client);
     errdefer test_browser.deinit();
 
     test_session = try test_browser.newSession();
@@ -502,14 +506,16 @@ test "tests:afterAll" {
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
     test_browser.deinit();
-    test_app.deinit();
+    test_http.deinit();
+    test_app.deinit(@import("root").tracking_allocator);
 }
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(test_app, address);
+    const test_allocator = @import("root").tracking_allocator;
+    test_cdp_server = try Server.init(test_allocator, test_app, address);
 
-    var server = try Server.init(test_app, address);
+    var server = try Server.init(test_allocator, test_app, address);
     defer server.deinit();
     wg.finish();
 

@@ -30,6 +30,13 @@ pub const RunMode = enum {
     version,
 };
 
+pub const MAX_HTTP_REQUEST_SIZE = 4096;
+
+// max message size
+// +14 for max websocket payload overhead
+// +140 for the max control packet that might be interleaved in a message
+pub const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
+
 mode: Mode,
 exec_name: []const u8,
 
@@ -116,12 +123,26 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn maxConnections(self: *const Config) u16 {
+    return switch (self.mode) {
+        .serve => |opts| opts.max_connections,
+        else => unreachable,
+    };
+}
+
+pub fn maxMemoryPerTab(self: *const Config) usize {
+    return switch (self.mode) {
+        .serve => |opts| @intCast(opts.max_memory_per_tab),
+        else => unreachable,
+    };
+}
+
 pub fn userAgent(self: *const Config, allocator: Allocator) ![:0]const u8 {
     const base = "User-Agent: Lightpanda/1.0";
     if (self.userAgentSuffix()) |suffix| {
         return try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ base, suffix }, 0);
     }
-    return base;
+    return try allocator.dupeZ(u8, base);
 }
 
 pub const Mode = union(RunMode) {
