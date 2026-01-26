@@ -10,7 +10,6 @@ const log = @import("../../../../log.zig");
 
 const Image = @This();
 _proto: *HtmlElement,
-_on_load: ?js.Function.Global = null,
 
 pub fn constructor(w_: ?u32, h_: ?u32, page: *Page) !*Image {
     const node = try page.createElementNS(.html, "img", null);
@@ -37,12 +36,12 @@ pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
 }
 
-pub fn getOnLoad(self: *const Image) ?js.Function.Global {
-    return self._on_load;
+pub fn getOnLoad(self: *Image, page: *Page) ?js.Function.Global {
+    return page._event_manager.getInlineListener(self.asElement().asEventTarget(), .load);
 }
 
-pub fn setOnLoad(self: *Image, callback: js.Function.Global) void {
-    self._on_load = callback;
+pub fn setOnLoad(self: *Image, callback: js.Function.Global, page: *Page) !void {
+    return page._event_manager.setInlineListener(self.asElement().asEventTarget(), .load, callback);
 }
 
 pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
@@ -142,7 +141,7 @@ fn dispatchLoadEvent(raw: *anyopaque) !?u32 {
     const event = try Event.initTrusted("load", .{}, _page);
 
     // If onload provided, dispatch with it.
-    if (_img._on_load) |_on_load| {
+    if (_img.getOnLoad(_page)) |_on_load| {
         var ls: js.Local.Scope = undefined;
         _page.js.localScope(&ls);
         defer ls.deinit();
@@ -166,11 +165,7 @@ pub const Build = struct {
         const self = node.as(Image);
         const image = self.asElement();
         // Exit if src not set. We might want to check if src point to valid image.
-        const src = image.getAttributeSafe("src") orelse return;
-        // We can at least check if this is a valid URL.
-        if (!URL.isCompleteHTTPUrl(src)) {
-            return;
-        }
+        _ = image.getAttributeSafe("src") orelse return;
 
         // Set `onload` if provided.
         blk: {
@@ -182,7 +177,7 @@ pub const Build = struct {
                 break :blk;
             };
             // Set onload.
-            self._on_load = on_load_func;
+            try self.setOnLoad(on_load_func, page);
         }
 
         // Since src set, we should send dispatch operation to Scheduler.
