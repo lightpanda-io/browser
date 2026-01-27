@@ -33,6 +33,7 @@ pub const expectEqual = base.expectEqual;
 pub const expectError = base.expectError;
 pub const expectEqualSlices = base.expectEqualSlices;
 pub const pageTest = base.pageTest;
+pub const newString = base.newString;
 
 const Client = struct {
     allocator: Allocator,

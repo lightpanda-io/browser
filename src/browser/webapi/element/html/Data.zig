@@ -36,11 +36,11 @@ pub fn asNode(self: *Data) *Node {
 }
 
 pub fn getValue(self: *Data) []const u8 {
-    return self.asElement().getAttributeSafe("value") orelse "";
+    return self.asElement().getAttributeSafe(comptime .wrap("value")) orelse "";
 }
 
 pub fn setValue(self: *Data, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("value", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), page);
 }
 
 pub const JsApi = struct {

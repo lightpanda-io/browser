@@ -20,6 +20,7 @@ const std = @import("std");
 pub const v8 = @import("v8").c;
 
 const log = @import("../../log.zig");
+const string = @import("../../string.zig");
 
 pub const Env = @import("Env.zig");
 pub const bridge = @import("bridge.zig");
@@ -130,6 +131,7 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
         },
         .@"struct" => {
             switch (@TypeOf(value)) {
+                string.String => return isolate.initStringHandle(value.str()),
                 ArrayBuffer => {
                     const values = value.values;
                     const len = values.len;

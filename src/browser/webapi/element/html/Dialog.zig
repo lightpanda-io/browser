@@ -20,23 +20,23 @@ pub fn asNode(self: *Dialog) *Node {
 }
 
 pub fn getOpen(self: *const Dialog) bool {
-    return self.asConstElement().getAttributeSafe("open") != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("open")) != null;
 }
 
 pub fn setOpen(self: *Dialog, open: bool, page: *Page) !void {
     if (open) {
-        try self.asElement().setAttributeSafe("open", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("open"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("open", page);
+        try self.asElement().removeAttribute(comptime .wrap("open"), page);
     }
 }
 
 pub fn getReturnValue(self: *const Dialog) []const u8 {
-    return self.asConstElement().getAttributeSafe("returnvalue") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("returnvalue")) orelse "";
 }
 
 pub fn setReturnValue(self: *Dialog, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("returnvalue", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("returnvalue"), .wrap(value), page);
 }
 
 pub const JsApi = struct {

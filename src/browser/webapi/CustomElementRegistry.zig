@@ -188,9 +188,9 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
     // Invoke attributeChangedCallback for existing observed attributes
     var attr_it = custom.asElement().attributeIterator();
     while (attr_it.next()) |attr| {
-        const name = attr._name.str();
+        const name = attr._name;
         if (definition.isAttributeObserved(name)) {
-            custom.invokeAttributeChangedCallback(name, null, attr._value.str(), page);
+            custom.invokeAttributeChangedCallback(name, null, attr._value, page);
         }
     }
 

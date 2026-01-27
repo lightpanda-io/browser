@@ -40,7 +40,7 @@ pub fn asNode(self: *Anchor) *Node {
 
 pub fn getHref(self: *Anchor, page: *Page) ![]const u8 {
     const element = self.asElement();
-    const href = element.getAttributeSafe("href") orelse return "";
+    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return "";
     if (href.len == 0) {
         return "";
     }
@@ -48,15 +48,15 @@ pub fn getHref(self: *Anchor, page: *Page) ![]const u8 {
 }
 
 pub fn setHref(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("href", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), page);
 }
 
 pub fn getTarget(self: *Anchor) []const u8 {
-    return self.asElement().getAttributeSafe("target") orelse "";
+    return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
 }
 
 pub fn setTarget(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("target", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), page);
 }
 
 pub fn getOrigin(self: *Anchor, page: *Page) ![]const u8 {
@@ -167,19 +167,19 @@ pub fn setProtocol(self: *Anchor, value: []const u8, page: *Page) !void {
 }
 
 pub fn getType(self: *Anchor) []const u8 {
-    return self.asElement().getAttributeSafe("type") orelse "";
+    return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "";
 }
 
 pub fn setType(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("type", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
 }
 
 pub fn getName(self: *const Anchor) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
 pub fn setName(self: *Anchor, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("name", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
 }
 
 pub fn getText(self: *Anchor, page: *Page) ![:0]const u8 {
@@ -191,7 +191,7 @@ pub fn setText(self: *Anchor, value: []const u8, page: *Page) !void {
 }
 
 fn getResolvedHref(self: *Anchor, page: *Page) !?[:0]const u8 {
-    const href = self.asElement().getAttributeSafe("href") orelse return null;
+    const href = self.asElement().getAttributeSafe(comptime .wrap("href")) orelse return null;
     if (href.len == 0) {
         return null;
     }

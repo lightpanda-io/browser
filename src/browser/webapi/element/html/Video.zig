@@ -53,7 +53,7 @@ pub fn getVideoHeight(_: *const Video) u32 {
 
 pub fn getPoster(self: *const Video, page: *Page) ![]const u8 {
     const element = self.asConstElement();
-    const poster = element.getAttributeSafe("poster") orelse return "";
+    const poster = element.getAttributeSafe(comptime .wrap("poster")) orelse return "";
     if (poster.len == 0) {
         return "";
     }
@@ -63,7 +63,7 @@ pub fn getPoster(self: *const Video, page: *Page) ![]const u8 {
 }
 
 pub fn setPoster(self: *Video, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("poster", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("poster"), .wrap(value), page);
 }
 
 pub const JsApi = struct {

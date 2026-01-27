@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const log = @import("../../log.zig");
+const string = @import("../../string.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
@@ -291,6 +292,10 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                     const js_obj = try self.mapZigInstanceToJs(null, value);
                     return js_obj.toValue();
                 }
+            }
+            if (T == string.String or T == string.Global) {
+                // would have been handled by simpleZigValueToJs
+                unreachable;
             }
 
             // zig fmt: off
@@ -619,6 +624,19 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             };
             return try promise.persist();
         },
+        string.String => {
+            if (!js_val.isString()) {
+                return null;
+            }
+            return try self.valueToStringSSO(js_val, .{ .allocator = self.ctx.call_arena });
+        },
+        string.Global => {
+            if (!js_val.isString()) {
+                return null;
+            }
+            // Use arena for persistent strings
+            return .{ .str = try self.valueToStringSSO(js_val, .{ .allocator = self.ctx.arena }) };
+        },
         else => {
             if (!js_val.isObject()) {
                 return null;
@@ -927,6 +945,15 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
             }
         },
         .@"struct" => {
+            // Handle string.String and string.Global specially
+            if (T == string.String or T == string.Global) {
+                if (js_val.isString()) {
+                    return .{ .ok = {} };
+                }
+                // Anything can be coerced to a string
+                return .{ .coerce = {} };
+            }
+
             // We don't want to duplicate the code for this, so we call
             // the actual conversion function.
             const value = (try self.jsValueToStruct(T, js_val)) orelse {
@@ -1116,6 +1143,50 @@ fn _jsStringToZig(self: *const Local, comptime null_terminate: bool, str: anytyp
     std.debug.assert(n == len);
 
     return buf;
+}
+
+// Convert JS string to string.String with SSO
+pub fn valueToStringSSO(self: *const Local, js_val: js.Value, opts: ToStringOpts) !string.String {
+    const string_handle = v8.v8__Value__ToString(js_val.handle, self.handle) orelse {
+        return error.JsException;
+    };
+    return self.jsStringToStringSSO(string_handle, opts);
+}
+
+pub fn jsStringToStringSSO(self: *const Local, str: anytype, opts: ToStringOpts) !string.String {
+    const handle = if (@TypeOf(str) == js.String) str.handle else str;
+    const len: usize = @intCast(v8.v8__String__Utf8Length(handle, self.isolate.handle));
+
+    if (len <= 12) {
+        var content: [12]u8 = undefined;
+        const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(n == len);
+        }
+        // Weird that we do this _after_, but we have to..I've seen weird issues
+        // in ReleaseMode where v8 won't write to content if it starts off zero
+        // initiated
+        @memset(content[len..], 0);
+        return .{ .len = @intCast(len), .payload = .{ .content = content } };
+    }
+
+    const allocator = opts.allocator orelse self.call_arena;
+    const buf = try allocator.alloc(u8, len);
+    const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(n == len);
+    }
+
+    var prefix: [4]u8 = @splat(0);
+    @memcpy(&prefix, buf[0..4]);
+
+    return .{
+        .len = @intCast(len),
+        .payload = .{ .heap = .{
+            .prefix = prefix,
+            .ptr = buf.ptr,
+        } },
+    };
 }
 
 // == Promise Helpers ==

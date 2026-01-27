@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const String = @import("../../../../string.zig").String;
+
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 
@@ -98,7 +100,7 @@ pub fn getType(self: *const Input) []const u8 {
 pub fn setType(self: *Input, typ: []const u8, page: *Page) !void {
     // Setting the type property should update the attribute, which will trigger attributeChange
     const type_enum = Type.fromString(typ);
-    try self.asElement().setAttributeSafe("type", type_enum.toString(), page);
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(type_enum.toString()), page);
 }
 
 pub fn getValue(self: *const Input) []const u8 {
@@ -116,7 +118,7 @@ pub fn getDefaultValue(self: *const Input) []const u8 {
 }
 
 pub fn setDefaultValue(self: *Input, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("value", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), page);
 }
 
 pub fn getChecked(self: *const Input) bool {
@@ -147,52 +149,52 @@ pub fn getDefaultChecked(self: *const Input) bool {
 
 pub fn setDefaultChecked(self: *Input, checked: bool, page: *Page) !void {
     if (checked) {
-        try self.asElement().setAttributeSafe("checked", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("checked"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("checked", page);
+        try self.asElement().removeAttribute(comptime .wrap("checked"), page);
     }
 }
 
 pub fn getDisabled(self: *const Input) bool {
     // TODO: Also check for disabled fieldset ancestors
     // (but not if we're inside a <legend> of that fieldset)
-    return self.asConstElement().getAttributeSafe("disabled") != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Input, disabled: bool, page: *Page) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe("disabled", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("disabled", page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
     }
 }
 
 pub fn getName(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
 pub fn setName(self: *Input, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("name", name, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
 }
 
 pub fn getAccept(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe("accept") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("accept")) orelse "";
 }
 
 pub fn setAccept(self: *Input, accept: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("accept", accept, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("accept"), .wrap(accept), page);
 }
 
 pub fn getAlt(self: *const Input) []const u8 {
-    return self.asConstElement().getAttributeSafe("alt") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("alt")) orelse "";
 }
 
 pub fn setAlt(self: *Input, alt: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("alt", alt, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("alt"), .wrap(alt), page);
 }
 
 pub fn getMaxLength(self: *const Input) i32 {
-    const attr = self.asConstElement().getAttributeSafe("maxlength") orelse return -1;
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("maxlength")) orelse return -1;
     return std.fmt.parseInt(i32, attr, 10) catch -1;
 }
 
@@ -202,11 +204,11 @@ pub fn setMaxLength(self: *Input, max_length: i32, page: *Page) !void {
     }
     var buf: [32]u8 = undefined;
     const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
-    try self.asElement().setAttributeSafe("maxlength", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("maxlength"), .wrap(value), page);
 }
 
 pub fn getSize(self: *const Input) i32 {
-    const attr = self.asConstElement().getAttributeSafe("size") orelse return 20;
+    const attr = self.asConstElement().getAttributeSafe(comptime .wrap("size")) orelse return 20;
     const parsed = std.fmt.parseInt(i32, attr, 10) catch return 20;
     return if (parsed == 0) 20 else parsed;
 }
@@ -216,46 +218,46 @@ pub fn setSize(self: *Input, size: i32, page: *Page) !void {
         return error.ZeroNotAllowed;
     }
     if (size < 0) {
-        return self.asElement().setAttributeSafe("size", "20", page);
+        return self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap("20"), page);
     }
 
     var buf: [32]u8 = undefined;
     const value = std.fmt.bufPrint(&buf, "{d}", .{size}) catch unreachable;
-    try self.asElement().setAttributeSafe("size", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("size"), .wrap(value), page);
 }
 
 pub fn getSrc(self: *const Input, page: *Page) ![]const u8 {
-    const src = self.asConstElement().getAttributeSafe("src") orelse return "";
+    const src = self.asConstElement().getAttributeSafe(comptime .wrap("src")) orelse return "";
     // If attribute is explicitly set (even if empty), resolve it against the base URL
     return @import("../../URL.zig").resolve(page.call_arena, page.base(), src, .{});
 }
 
 pub fn setSrc(self: *Input, src: []const u8, page: *Page) !void {
     const trimmed = std.mem.trim(u8, src, &std.ascii.whitespace);
-    try self.asElement().setAttributeSafe("src", trimmed, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(trimmed), page);
 }
 
 pub fn getReadonly(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe("readonly") != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("readonly")) != null;
 }
 
 pub fn setReadonly(self: *Input, readonly: bool, page: *Page) !void {
     if (readonly) {
-        try self.asElement().setAttributeSafe("readonly", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("readonly"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("readonly", page);
+        try self.asElement().removeAttribute(comptime .wrap("readonly"), page);
     }
 }
 
 pub fn getRequired(self: *const Input) bool {
-    return self.asConstElement().getAttributeSafe("required") != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
 pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
     if (required) {
-        try self.asElement().setAttributeSafe("required", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("required", page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), page);
     }
 }
 
@@ -379,7 +381,7 @@ pub fn getForm(self: *Input, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe("form")) |form_id| {
+    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }
@@ -402,7 +404,7 @@ pub fn getForm(self: *Input, page: *Page) ?*Form {
 fn uncheckRadioGroup(self: *Input, page: *Page) !void {
     const element = self.asElement();
 
-    const name = element.getAttributeSafe("name") orelse return;
+    const name = element.getAttributeSafe(comptime .wrap("name")) orelse return;
     if (name.len == 0) {
         return;
     }
@@ -420,7 +422,7 @@ fn uncheckRadioGroup(self: *Input, page: *Page) !void {
             continue;
         }
 
-        const other_name = other_element.getAttributeSafe("name") orelse continue;
+        const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
         if (!std.mem.eql(u8, name, other_name)) {
             continue;
         }
@@ -481,14 +483,14 @@ pub const Build = struct {
         const element = self.asElement();
 
         // Store initial values from attributes
-        self._default_value = element.getAttributeSafe("value");
-        self._default_checked = element.getAttributeSafe("checked") != null;
+        self._default_value = element.getAttributeSafe(comptime .wrap("value"));
+        self._default_checked = element.getAttributeSafe(comptime .wrap("checked")) != null;
 
         // Current state starts equal to default
         self._value = self._default_value;
         self._checked = self._default_checked;
 
-        self._input_type = if (element.getAttributeSafe("type")) |type_attr|
+        self._input_type = if (element.getAttributeSafe(comptime .wrap("type"))) |type_attr|
             Type.fromString(type_attr)
         else
             .text;
@@ -499,12 +501,12 @@ pub const Build = struct {
         }
     }
 
-    pub fn attributeChange(element: *Element, name: []const u8, value: []const u8, page: *Page) !void {
-        const attribute = std.meta.stringToEnum(enum { type, value, checked }, name) orelse return;
+    pub fn attributeChange(element: *Element, name: String, value: String, page: *Page) !void {
+        const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
-            .type => self._input_type = Type.fromString(value),
-            .value => self._default_value = value,
+            .type => self._input_type = Type.fromString(value.str()),
+            .value => self._default_value = try page.arena.dupe(u8, value.str()),
             .checked => {
                 self._default_checked = true;
                 // Only update checked state if it hasn't been manually modified
@@ -519,8 +521,8 @@ pub const Build = struct {
         }
     }
 
-    pub fn attributeRemove(element: *Element, name: []const u8, _: *Page) !void {
-        const attribute = std.meta.stringToEnum(enum { type, value, checked }, name) orelse return;
+    pub fn attributeRemove(element: *Element, name: String, _: *Page) !void {
+        const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
             .type => self._input_type = .text,

@@ -74,7 +74,7 @@ pub fn getElementById(self: *DocumentFragment, id: []const u8) ?*Element {
 
     var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
     while (tw.next()) |el| {
-        if (el.getAttributeSafe("id")) |element_id| {
+        if (el.getAttributeSafe(comptime .wrap("id"))) |element_id| {
             if (std.mem.eql(u8, element_id, id)) {
                 return el;
             }

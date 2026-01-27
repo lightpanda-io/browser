@@ -144,7 +144,7 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
 
     const options = options_ orelse return element;
     if (options.is) |is_value| {
-        try element.setAttribute("is", is_value, page);
+        try element.setAttribute(comptime .wrap("is"), .wrap(is_value), page);
         try Element.Html.Custom.checkAndAttachBuiltIn(element, page);
     }
 
@@ -162,26 +162,26 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     return node.as(Element);
 }
 
-pub fn createAttribute(_: *const Document, name: []const u8, page: *Page) !?*Element.Attribute {
-    try Element.Attribute.validateAttributeName(name);
+pub fn createAttribute(_: *const Document, name: String.Global, page: *Page) !?*Element.Attribute {
+    try Element.Attribute.validateAttributeName(name.str);
     return page._factory.node(Element.Attribute{
         ._proto = undefined,
-        ._name = try page.dupeString(name),
-        ._value = "",
+        ._name = name.str,
+        ._value = String.empty,
         ._element = null,
     });
 }
 
-pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: []const u8, page: *Page) !?*Element.Attribute {
+pub fn createAttributeNS(_: *const Document, namespace: []const u8, name: String.Global, page: *Page) !?*Element.Attribute {
     if (std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml") == false) {
         log.warn(.not_implemented, "document.createAttributeNS", .{ .namespace = namespace });
     }
 
-    try Element.Attribute.validateAttributeName(name);
+    try Element.Attribute.validateAttributeName(name.str);
     return page._factory.node(Element.Attribute{
         ._proto = undefined,
-        ._name = try page.dupeString(name),
-        ._value = "",
+        ._name = name.str,
+        ._value = String.empty,
         ._element = null,
     });
 }
@@ -199,7 +199,7 @@ pub fn getElementById(self: *Document, id: []const u8, page: *Page) ?*Element {
     if (self._removed_ids.remove(id)) {
         var tw = @import("TreeWalker.zig").Full.Elements.init(self.asNode(), .{});
         while (tw.next()) |el| {
-            const element_id = el.getAttributeSafe("id") orelse continue;
+            const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse continue;
             if (std.mem.eql(u8, element_id, id)) {
                 // we ignore this error to keep getElementById easy to call
                 // if it really failed, then we're out of memory and nothing's
@@ -282,12 +282,12 @@ pub fn getSelection(self: *Document) *Selection {
     return &self._selection;
 }
 
-pub fn querySelector(self: *Document, input: []const u8, page: *Page) !?*Element {
-    return Selector.querySelector(self.asNode(), input, page);
+pub fn querySelector(self: *Document, input: String, page: *Page) !?*Element {
+    return Selector.querySelector(self.asNode(), input.str(), page);
 }
 
-pub fn querySelectorAll(self: *Document, input: []const u8, page: *Page) !*Selector.List {
-    return Selector.querySelectorAll(self.asNode(), input, page);
+pub fn querySelectorAll(self: *Document, input: String, page: *Page) !*Selector.List {
+    return Selector.querySelectorAll(self.asNode(), input.str(), page);
 }
 
 pub fn getImplementation(_: *const Document) DOMImplementation {

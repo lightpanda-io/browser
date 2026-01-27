@@ -176,6 +176,11 @@ pub fn print(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+const String = @import("string.zig").String;
+pub fn newString(str: []const u8) String {
+    return String.init(arena_allocator, str, .{}) catch unreachable;
+}
+
 pub const Random = struct {
     var instance: ?std.Random.DefaultPrng = null;
 

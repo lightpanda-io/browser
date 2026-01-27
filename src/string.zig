@@ -20,6 +20,8 @@ const std = @import("std");
 const js = @import("browser/js/js.zig");
 const Allocator = std.mem.Allocator;
 
+const M = @This();
+
 // German-string (small string optimization)
 pub const String = packed struct {
     len: i32,
@@ -34,6 +36,48 @@ pub const String = packed struct {
     pub const empty = String{ .len = 0, .payload = .{ .content = @splat(0) } };
     pub const deleted = String{ .len = tombstone, .payload = .{ .content = @splat(0) } };
 
+    // for packages that already have String imported, then can use String.Global
+    pub const Global = M.Global;
+
+    // Wraps an existing string. For strings with len <= 12, this can be done at
+    // comptime: comptime String.wrap("id");
+    // For strings with len > 12, this must be done at runtime even for a string
+    // literal. This is because, at comptime, we do not have a ptr for data and
+    // thus can't store it.
+    pub fn wrap(input: anytype) String {
+        if (@inComptime()) {
+            const l = input.len;
+            if (l > 12) {
+                @compileError("Comptime string must be <= 12 bytes (SSO only): " ++ input);
+            }
+
+            var content: [12]u8 = @splat(0);
+            @memcpy(content[0..l], input);
+            return .{ .len = @intCast(l), .payload = .{ .content = content } };
+        }
+
+        // Runtime path - handle both String and []const u8
+        if (@TypeOf(input) == String) {
+            return input;
+        }
+
+        const l = input.len;
+
+        if (l <= 12) {
+            var content: [12]u8 = @splat(0);
+            @memcpy(content[0..l], input);
+            return .{ .len = @intCast(l), .payload = .{ .content = content } };
+        }
+
+        return .{
+            .len = @intCast(l),
+            .payload = .{ .heap = .{
+                .prefix = input[0..4].*,
+                .ptr = input.ptr,
+            } },
+        };
+    }
+
     pub const InitOpts = struct {
         dupe: bool = true,
     };
@@ -47,13 +91,11 @@ pub const String = packed struct {
             @memcpy(content[0..l], input);
             return .{ .len = @intCast(l), .payload = .{ .content = content } };
         }
-        var prefix: [4]u8 = @splat(0);
-        @memcpy(&prefix, input[0..4]);
 
         return .{
             .len = @intCast(l),
             .payload = .{ .heap = .{
-                .prefix = prefix,
+                .prefix = input[0..4].*,
                 .ptr = (intern(input) orelse (if (opts.dupe) (try allocator.dupe(u8, input)) else input)).ptr,
             } },
         };
@@ -66,9 +108,8 @@ pub const String = packed struct {
         }
     }
 
-    pub fn fromJS(allocator: Allocator, js_obj: js.Object) !String {
-        const js_str = js_obj.toString();
-        return init(allocator, js_str, .{});
+    pub fn dupe(self: *const String, allocator: Allocator) !String {
+        return .init(allocator, self.str(), .{ .dupe = true });
     }
 
     pub fn str(self: *const String) []const u8 {
@@ -96,20 +137,22 @@ pub const String = packed struct {
     }
 
     pub fn eql(a: String, b: String) bool {
-        if (a.len != b.len or a.len < 0 or b.len < 0) {
+        if (@as(*const u64, @ptrCast(&a)).* != @as(*const u64, @ptrCast(&b)).*) {
             return false;
         }
 
-        if (a.len <= 12) {
+        const len = a.len;
+        if (len < 0 or b.len < 0) {
+            return false;
+        }
+
+        if (len <= 12) {
             return @reduce(.And, a.payload.content == b.payload.content);
         }
 
-        if (@reduce(.And, a.payload.heap.prefix == b.payload.heap.prefix) == false) {
-            return false;
-        }
-
-        const al: usize = @intCast(a.len);
-        const bl: usize = @intCast(a.len);
+        // a.len == b.len at this point
+        const al: usize = @intCast(len);
+        const bl: usize = @intCast(len);
         return std.mem.eql(u8, a.payload.heap.ptr[0..al], b.payload.heap.ptr[0..bl]);
     }
 
@@ -186,6 +229,13 @@ pub const String = packed struct {
         }
         return null;
     }
+};
+
+// Discriminatory type that signals the bridge to use arena instead of call_arena
+// Use this for strings that need to persist beyond the current call
+// The caller can unwrap and store just the underlying .str field
+pub const Global = struct {
+    str: String,
 };
 
 fn asUint(comptime string: anytype) std.meta.Int(

@@ -39,50 +39,50 @@ pub fn asNode(self: *Button) *Node {
 }
 
 pub fn getDisabled(self: *const Button) bool {
-    return self.asConstElement().getAttributeSafe("disabled") != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("disabled")) != null;
 }
 
 pub fn setDisabled(self: *Button, disabled: bool, page: *Page) !void {
     if (disabled) {
-        try self.asElement().setAttributeSafe("disabled", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("disabled"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("disabled", page);
+        try self.asElement().removeAttribute(comptime .wrap("disabled"), page);
     }
 }
 
 pub fn getName(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe("name") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("name")) orelse "";
 }
 
 pub fn setName(self: *Button, name: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("name", name, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(name), page);
 }
 
 pub fn getType(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe("type") orelse "submit";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("type")) orelse "submit";
 }
 
 pub fn setType(self: *Button, typ: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("type", typ, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(typ), page);
 }
 
 pub fn getValue(self: *const Button) []const u8 {
-    return self.asConstElement().getAttributeSafe("value") orelse "";
+    return self.asConstElement().getAttributeSafe(comptime .wrap("value")) orelse "";
 }
 
 pub fn setValue(self: *Button, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("value", value, page);
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(value), page);
 }
 
 pub fn getRequired(self: *const Button) bool {
-    return self.asConstElement().getAttributeSafe("required") != null;
+    return self.asConstElement().getAttributeSafe(comptime .wrap("required")) != null;
 }
 
 pub fn setRequired(self: *Button, required: bool, page: *Page) !void {
     if (required) {
-        try self.asElement().setAttributeSafe("required", "", page);
+        try self.asElement().setAttributeSafe(comptime .wrap("required"), .wrap(""), page);
     } else {
-        try self.asElement().removeAttribute("required", page);
+        try self.asElement().removeAttribute(comptime .wrap("required"), page);
     }
 }
 
@@ -90,7 +90,7 @@ pub fn getForm(self: *Button, page: *Page) ?*Form {
     const element = self.asElement();
 
     // If form attribute exists, ONLY use that (even if it references nothing)
-    if (element.getAttributeSafe("form")) |form_id| {
+    if (element.getAttributeSafe(comptime .wrap("form"))) |form_id| {
         if (page.document.getElementById(form_id, page)) |form_element| {
             return form_element.is(Form);
         }

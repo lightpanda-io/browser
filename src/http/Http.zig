@@ -271,17 +271,21 @@ pub const Header = struct {
 };
 
 pub const Headers = struct {
-    headers: *c.curl_slist,
+    headers: ?*c.curl_slist,
     cookies: ?[*c]const u8,
 
     pub fn init(user_agent: [:0]const u8) !Headers {
         const header_list = c.curl_slist_append(null, user_agent);
-        if (header_list == null) return error.OutOfMemory;
+        if (header_list == null) {
+            return error.OutOfMemory;
+        }
         return .{ .headers = header_list, .cookies = null };
     }
 
     pub fn deinit(self: *const Headers) void {
-        c.curl_slist_free_all(self.headers);
+        if (self.headers) |hdr| {
+            c.curl_slist_free_all(hdr);
+        }
     }
 
     pub fn add(self: *Headers, header: [*c]const u8) !void {

@@ -17,8 +17,9 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-
 const log = @import("../../log.zig");
+const String = @import("../../string.zig").String;
+
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const reflect = @import("../reflect.zig");
@@ -268,7 +269,7 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
         .document => {},
         .document_type => {},
         .document_fragment => {},
-        .attribute => |attr| try writer.writeAll(attr._value),
+        .attribute => |attr| try writer.writeAll(attr._value.str()),
     }
 }
 
@@ -297,7 +298,7 @@ pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
             }
             return frag.replaceChildren(&.{.{ .text = data }}, page);
         },
-        .attribute => |attr| return attr.setValue(data, page),
+        .attribute => |attr| return attr.setValue(.wrap(data), page),
     }
 }
 
@@ -313,7 +314,7 @@ pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
         .document => "#document",
         .document_type => |dt| dt.getName(),
         .document_fragment => "#document-fragment",
-        .attribute => |attr| attr._name,
+        .attribute => |attr| attr._name.str(),
     };
 }
 
@@ -559,7 +560,7 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, page: *Page
 pub fn getNodeValue(self: *const Node) ?[]const u8 {
     return switch (self._type) {
         .cdata => |c| c.getData(),
-        .attribute => |attr| attr._value,
+        .attribute => |attr| attr._value.str(),
         .element => null,
         .document => null,
         .document_type => null,
@@ -567,9 +568,9 @@ pub fn getNodeValue(self: *const Node) ?[]const u8 {
     };
 }
 
-pub fn setNodeValue(self: *const Node, value: ?[]const u8, page: *Page) !void {
+pub fn setNodeValue(self: *const Node, value: ?String, page: *Page) !void {
     switch (self._type) {
-        .cdata => |c| try c.setData(value, page),
+        .cdata => |c| try c.setData(if (value) |v| v.str() else null, page),
         .attribute => |attr| try attr.setValue(value, page),
         .element => {},
         .document => {},
@@ -910,7 +911,7 @@ pub const JsApi = struct {
                 return buf.written();
             },
             .cdata => |cdata| return cdata.getData(),
-            .attribute => |attr| return attr._value,
+            .attribute => |attr| return attr._value.str(),
             .document => return null,
             .document_type => return null,
             .document_fragment => return null,

@@ -111,7 +111,7 @@ pub fn getByName(self: *HTMLAllCollection, name: []const u8, page: *Page) ?*Elem
 
     while (tw.next()) |node| {
         if (node.is(Element)) |el| {
-            if (el.getAttributeSafe("name")) |attr_name| {
+            if (el.getAttributeSafe(comptime .wrap("name"))) |attr_name| {
                 if (std.mem.eql(u8, attr_name, name)) {
                     return el;
                 }

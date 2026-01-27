@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const String = @import("../../../string.zig").String;
 
 const Page = @import("../../Page.zig");
 
@@ -46,6 +47,7 @@ const ParseError = error{
     UnknownPseudoClass,
     InvalidTagSelector,
     InvalidSelector,
+    StringTooLarge,
 };
 
 pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]const Selector.Selector {
@@ -844,9 +846,10 @@ fn attribute(self: *Parser, arena: Allocator, page: *Page) !Selector.Attribute {
     _ = self.skipSpaces();
 
     const attr_name = try self.attributeName();
+
     // Normalize the name to lowercase for fast matching (consistent with Attribute.normalizeNameForLookup)
-    const normalized = try Attribute.normalizeNameForLookup(attr_name, page);
-    const name = try arena.dupe(u8, normalized);
+    const normalized = try Attribute.normalizeNameForLookup(.wrap(attr_name), page);
+    const name = try normalized.dupe(arena);
     var case_insensitive = false;
     _ = self.skipSpaces();
 

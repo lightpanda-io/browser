@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const String = @import("../../string.zig").String;
+
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const Element = @import("Element.zig");
@@ -25,13 +27,16 @@ const CustomElementDefinition = @This();
 
 name: []const u8,
 constructor: js.Function.Global,
+
+// TODO: Make this a Map<String>
 observed_attributes: std.StringHashMapUnmanaged(void) = .{},
+
 // For customized built-in elements, this is the element tag they extend (e.g., .button)
 // For autonomous custom elements, this is null
 extends: ?Element.Tag = null,
 
-pub fn isAttributeObserved(self: *const CustomElementDefinition, name: []const u8) bool {
-    return self.observed_attributes.contains(name);
+pub fn isAttributeObserved(self: *const CustomElementDefinition, name: String) bool {
+    return self.observed_attributes.contains(name.str());
 }
 
 pub fn isAutonomous(self: *const CustomElementDefinition) bool {

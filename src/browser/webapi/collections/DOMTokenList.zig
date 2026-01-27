@@ -18,8 +18,9 @@
 
 const std = @import("std");
 const log = @import("../../../log.zig");
-const js = @import("../../js/js.zig");
+const String = @import("../../../string.zig").String;
 
+const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 const GenericIterator = @import("iterator.zig").Entry;
@@ -31,7 +32,7 @@ pub const DOMTokenList = @This();
 // is that lists tend to be very short (often just 1 item).
 
 _element: *Element,
-_attribute_name: []const u8,
+_attribute_name: String,
 
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
@@ -159,7 +160,7 @@ pub fn getValue(self: *const DOMTokenList) []const u8 {
     return self._element.getAttributeSafe(self._attribute_name) orelse "";
 }
 
-pub fn setValue(self: *DOMTokenList, value: []const u8, page: *Page) !void {
+pub fn setValue(self: *DOMTokenList, value: String, page: *Page) !void {
     try self._element.setAttribute(self._attribute_name, value, page);
 }
 
@@ -226,7 +227,7 @@ fn validateToken(token: []const u8) !void {
 
 fn updateAttribute(self: *DOMTokenList, tokens: Lookup, page: *Page) !void {
     const joined = try std.mem.join(page.call_arena, " ", tokens.keys());
-    try self._element.setAttribute(self._attribute_name, joined, page);
+    try self._element.setAttribute(self._attribute_name, .wrap(joined), page);
 }
 
 const Iterator = struct {
