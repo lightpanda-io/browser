@@ -491,11 +491,6 @@ fn createLookupKey(event_target: *EventTarget, event_type: Listener.Type) usize 
     return ptr | (@as(u64, @intFromEnum(event_type)) << 57);
 }
 
-/// Returns listener type from `inline_lookup` key.
-inline fn getListenerType(key: usize) Listener.Type {
-    return @enumFromInt(key >> 57);
-}
-
 const Listener = struct {
     typ: String,
     once: bool,
