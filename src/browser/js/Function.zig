@@ -20,6 +20,8 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
+const log = @import("../../log.zig");
+
 const Allocator = std.mem.Allocator;
 
 const Function = @This();
@@ -69,25 +71,41 @@ pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Objec
 
 pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
-    return self._tryCallWithThis(T, self.getThis(), args, &caught, false);
+    return self._tryCallWithThis(T, self.getThis(), args, &caught) catch |err| {
+        log.warn(.js, "call caught", .{
+            .err = err,
+            .exception = caught.exception,
+            .line = caught.line orelse 0,
+            .stack = caught.stack orelse "???",
+        });
+        return err;
+    };
 }
 
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
-    return self._tryCallWithThis(T, this, args, &caught, false);
+    return self._tryCallWithThis(T, this, args, &caught) catch |err| {
+        log.warn(.js, "callWithThis caught", .{
+            .err = err,
+            .exception = caught.exception,
+            .line = caught.line orelse 0,
+            .stack = caught.stack orelse "???",
+        });
+        return err;
+    };
 }
 
 pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *js.TryCatch.Caught) !T {
     caught.* = .{};
-    return self._tryCallWithThis(T, self.getThis(), args, caught, true);
+    return self._tryCallWithThis(T, self.getThis(), args, caught);
 }
 
 pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
     caught.* = .{};
-    return self._tryCallWithThis(T, this, args, caught, true);
+    return self._tryCallWithThis(T, this, args, caught);
 }
 
-pub fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught, comptime need_caught: bool) !T {
+pub fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
     const local = self.local;
 
     // When we're calling a function from within JavaScript itself, this isn't
@@ -140,11 +158,7 @@ pub fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, 
     defer try_catch.deinit();
 
     const handle = v8.v8__Function__Call(self.handle, local.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
-        if (comptime need_caught) {
-            // relatively expensive, so if the caller knows caught won't be needed,
-            // we can leave it uninitialized.
-            caught.* = try_catch.caughtOrError(local.call_arena, error.JSExecCallback);
-        }
+        caught.* = try_catch.caughtOrError(local.call_arena, error.JSExecCallback);
         return error.JSExecCallback;
     };
 
