@@ -24,6 +24,7 @@ const Page = @import("../Page.zig");
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const ParsedNode = struct {
     node: *Node,
@@ -373,6 +374,17 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
     switch (node_or_text.toUnion()) {
         .node => |cpn| {
             const child = getNode(cpn);
+            if (child._parent) |previous_parent| {
+                // html5ever says this can't happen, but we might be screwing up
+                // the node on our side. We shouldn't be, but we're seeing this
+                // in the wild, and I'm not sure why. In debug, let's crash so
+                // we can try to figure it out. In release, let's disconnect
+                // the child first.
+                if (comptime IS_DEBUG) {
+                    unreachable;
+                }
+                self._page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
+            }
             try self.page.appendNew(parent, .{ .node = child });
         },
         .text => |txt| try self.page.appendNew(parent, .{ .text = txt }),
