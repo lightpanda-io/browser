@@ -319,7 +319,11 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
 
     if (header.contentType()) |ct| {
         self._response_mime = Mime.parse(ct) catch |e| {
-            log.info(.http, "invalid content type", .{.content_Type = ct, .err = e, .url = self._url,});
+            log.info(.http, "invalid content type", .{
+                .content_Type = ct,
+                .err = e,
+                .url = self._url,
+            });
             return false;
         };
     }
