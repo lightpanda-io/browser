@@ -5,6 +5,8 @@ const URL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Event = @import("../../Event.zig");
+const log = @import("../../../../log.zig");
 
 const Image = @This();
 _proto: *HtmlElement,
@@ -34,6 +36,14 @@ pub fn asNode(self: *Image) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getOnLoad(self: *Image, page: *Page) ?js.Function.Global {
+    return page._event_manager.getInlineListener(self.asElement().asEventTarget(), .load);
+}
+
+pub fn setOnLoad(self: *Image, callback: js.Function.Global, page: *Page) !void {
+    return page._event_manager.setInlineListener(self.asElement().asEventTarget(), .load, callback);
+}
+
 pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
     const element = self.asConstElement();
     const src = element.getAttributeSafe("src") orelse return "";
@@ -46,7 +56,7 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
 }
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe("src", value, page);
+    return self.asElement().setAttributeSafe("src", value, page);
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
@@ -107,12 +117,125 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(Image.constructor, .{});
+    pub const onload = bridge.accessor(Image.getOnLoad, Image.setOnLoad, .{});
     pub const src = bridge.accessor(Image.getSrc, Image.setSrc, .{});
     pub const alt = bridge.accessor(Image.getAlt, Image.setAlt, .{});
     pub const width = bridge.accessor(Image.getWidth, Image.setWidth, .{});
     pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{});
     pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{});
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
+};
+
+/// Argument passed to `dispatchLoadEvent`.
+const CallbackParams = struct { page: *Page, element: *Element };
+
+/// Callback passed to `Scheduler` to execute load listeners.
+fn dispatchLoadEvent(raw: *anyopaque) !?u32 {
+    const _args: *CallbackParams = @ptrCast(@alignCast(raw));
+    const _page = _args.page;
+    defer _page._factory.destroy(_args);
+
+    const _element = _args.element;
+    const _img = _element.as(Image);
+    const event_target = _element.asEventTarget();
+    const event = try Event.initTrusted("load", .{}, _page);
+
+    // If onload provided, dispatch with it.
+    if (_img.getOnLoad(_page)) |_on_load| {
+        var ls: js.Local.Scope = undefined;
+        _page.js.localScope(&ls);
+        defer ls.deinit();
+
+        try _page._event_manager.dispatchWithFunction(
+            event_target,
+            event,
+            _on_load.local(&ls.local),
+            .{ .context = "Image.onload" },
+        );
+        return null;
+    }
+
+    // Dispatch to addEventListener listeners.
+    try _page._event_manager.dispatch(event_target, event);
+    return null;
+}
+
+pub const Build = struct {
+    pub fn created(node: *Node, page: *Page) !void {
+        const self = node.as(Image);
+        const image = self.asElement();
+        // Exit if src not set. We might want to check if src point to valid image.
+        _ = image.getAttributeSafe("src") orelse return;
+
+        // Set `onload` if provided.
+        blk: {
+            // Exit if there's no `onload`.
+            const on_load_str = image.getAttributeSafe("onload") orelse break :blk;
+            // Derive function from string.
+            const on_load_func = page.js.stringToPersistedFunction(on_load_str) catch |err| {
+                log.err(.js, "Image.onload", .{ .err = err, .str = on_load_str });
+                break :blk;
+            };
+            // Set onload.
+            try self.setOnLoad(on_load_func, page);
+        }
+
+        // Since src set, we should send dispatch operation to Scheduler.
+        const args = try page._factory.create(CallbackParams{
+            .page = page,
+            .element = image,
+        });
+        errdefer page._factory.destroy(args);
+
+        // Execute it asynchronously; Chrome and FF seem to do like this.
+        // We may change the behavior if its inconsistent.
+        //
+        // I'm well aware that such scenario is possible:
+        // imageElement.onload = () => console.warn("HA HA HA overwritten!");
+        //
+        // this is allowed both in Chrome and FF. Honestly it makes the logic
+        // quite easier, which might be the reason.
+        return page.scheduler.add(
+            args,
+            dispatchLoadEvent,
+            0,
+            .{
+                .low_priority = false,
+                .name = "Image.Build.created",
+            },
+        );
+    }
+
+    pub fn attributeChange(
+        element: *Element,
+        attr_name: []const u8,
+        attr_value: []const u8,
+        page: *Page,
+    ) !void {
+        const self = element.as(Image);
+        const image = self.asElement();
+
+        const src_changed = std.mem.eql(u8, attr_name, "src") and attr_value.len > 0;
+        if (src_changed) {
+            // Have to do this since `Scheduler` only allow passing a single arg.
+            const args = try page._factory.create(CallbackParams{
+                .page = page,
+                .element = image,
+            });
+            errdefer page._factory.destroy(args);
+
+            // We don't actually fetch the media, here we fake the load call.
+            try page.scheduler.add(
+                args,
+                dispatchLoadEvent,
+                0,
+                .{
+                    .low_priority = false,
+                    .name = "Image.Build.attributeChange",
+                },
+            );
+        }
+    }
 };
 
 const testing = @import("../../../../testing.zig");
