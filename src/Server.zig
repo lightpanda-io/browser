@@ -33,7 +33,6 @@ const CDP = @import("cdp/cdp.zig").CDP;
 const Http = @import("http/Http.zig");
 const HttpClient = @import("http/Client.zig");
 const ThreadPool = @import("ThreadPool.zig");
-const LimitedAllocator = @import("LimitedAllocator.zig");
 
 const Server = @This();
 
@@ -130,20 +129,17 @@ fn shutdownConnection(socket: posix.socket_t) void {
 fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
     defer posix.close(socket);
 
-    var limited = LimitedAllocator.init(self.allocator, self.app.config.maxMemoryPerTab());
-    const client_allocator = limited.allocator();
-
     // Client is HUGE (> 512KB) because it has a large read buffer.
     // V8 crashes if this is on the stack (likely related to its size).
-    const client = client_allocator.create(Client) catch |err| {
+    const client = self.allocator.create(Client) catch |err| {
         log.err(.app, "CDP client create", .{ .err = err });
         return;
     };
-    defer client_allocator.destroy(client);
+    defer self.allocator.destroy(client);
 
     client.* = Client.init(
         socket,
-        client_allocator,
+        self.allocator,
         self.app,
         self.json_version_response,
         timeout_ms,

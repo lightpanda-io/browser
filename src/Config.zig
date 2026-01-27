@@ -130,13 +130,6 @@ pub fn maxConnections(self: *const Config) u16 {
     };
 }
 
-pub fn maxMemoryPerTab(self: *const Config) usize {
-    return switch (self.mode) {
-        .serve => |opts| @intCast(opts.max_memory_per_tab),
-        else => unreachable,
-    };
-}
-
 pub fn userAgent(self: *const Config, allocator: Allocator) ![:0]const u8 {
     const base = "User-Agent: Lightpanda/1.0";
     if (self.userAgentSuffix()) |suffix| {
@@ -158,7 +151,6 @@ pub const Serve = struct {
     timeout: u31 = 10,
     max_connections: u16 = 16,
     max_tabs_per_connection: u16 = 8,
-    max_memory_per_tab: u64 = 512 * 1024 * 1024,
     max_pending_connections: u16 = 128,
     common: Common = .{},
 };
@@ -447,19 +439,6 @@ fn parseServeArgs(
 
             serve.max_tabs_per_connection = std.fmt.parseInt(u16, str, 10) catch |err| {
                 log.fatal(.app, "invalid argument value", .{ .arg = "--max_tabs", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--max_tab_memory", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--max_tab_memory" });
-                return error.InvalidArgument;
-            };
-
-            serve.max_memory_per_tab = std.fmt.parseInt(u64, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--max_tab_memory", .err = err });
                 return error.InvalidArgument;
             };
             continue;
