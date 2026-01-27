@@ -75,9 +75,13 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
+    const arena = try page.getArena(.{ .debug = "MouseEvent" });
+    errdefer page.releaseArena(arena);
+
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(
+        arena,
         typ,
         MouseEvent{
             ._type = .generic,
@@ -97,6 +101,10 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
 
     Event.populatePrototypes(event, opts, false);
     return event;
+}
+
+pub fn deinit(self: *MouseEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *MouseEvent) *Event {
@@ -180,6 +188,8 @@ pub const JsApi = struct {
         pub const name = "MouseEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(MouseEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(MouseEvent.init, .{});

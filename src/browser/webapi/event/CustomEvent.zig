@@ -37,10 +37,13 @@ const CustomEventOptions = struct {
 const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
-    const arena = page.arena;
+    const arena = try page.getArena(.{ .debug = "CustomEvent" });
+    errdefer page.releaseArena(arena);
+
     const opts = opts_ orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         CustomEvent{
             ._arena = arena,
@@ -53,21 +56,23 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     return event;
 }
 
+pub fn deinit(self: *CustomEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
+}
+
 pub fn initCustomEvent(
     self: *CustomEvent,
     event_string: []const u8,
     bubbles: ?bool,
     cancelable: ?bool,
-    detail_: ?js.Value.Global,
-    page: *Page,
+    detail: ?js.Value.Global,
 ) !void {
     // This function can only be called after the constructor has called.
     // So we assume proto is initialized already by constructor.
-    self._proto._type_string = try String.init(page.arena, event_string, .{});
+    self._proto._type_string = try String.init(self._proto._arena, event_string, .{});
     self._proto._bubbles = bubbles orelse false;
     self._proto._cancelable = cancelable orelse false;
-    // Detail is stored separately.
-    self._detail = detail_;
+    self._detail = detail;
 }
 
 pub fn asEvent(self: *CustomEvent) *Event {
@@ -85,6 +90,8 @@ pub const JsApi = struct {
         pub const name = "CustomEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(CustomEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(CustomEvent.init, .{});

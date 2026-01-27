@@ -24,11 +24,14 @@ const EventTarget = @import("EventTarget.zig");
 const Node = @import("Node.zig");
 const String = @import("../../string.zig").String;
 
+const Allocator = std.mem.Allocator;
+
 pub const Event = @This();
 
 pub const _prototype_root = true;
 _type: Type,
-
+_page: *Page,
+_arena: Allocator,
 _bubbles: bool = false,
 _cancelable: bool = false,
 _composed: bool = false,
@@ -79,23 +82,32 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
 }
 
 fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*Event {
+    const arena = try page.getArena(.{ .debug = "Event" });
+    errdefer page.releaseArena(arena);
+
     const opts = opts_ orelse Options{};
 
     // Round to 2ms for privacy (browsers do this)
     const raw_timestamp = @import("../../datetime.zig").milliTimestamp(.monotonic);
     const time_stamp = (raw_timestamp / 2) * 2;
 
-    const event = try page._factory.create(Event{
+    const self = try arena.create(Event);
+    self.* = .{
+        ._page = page,
+        ._arena = arena,
         ._type = .generic,
         ._bubbles = opts.bubbles,
         ._time_stamp = time_stamp,
         ._cancelable = opts.cancelable,
         ._composed = opts.composed,
-        ._type_string = try String.init(page.arena, typ, .{}),
-    });
+        ._isTrusted = trusted,
+        ._type_string = try String.init(arena, typ, .{}),
+    };
+    return self;
+}
 
-    event._isTrusted = trusted;
-    return event;
+pub fn deinit(self: *Event, _: bool) void {
+    self._page.releaseArena(self._arena);
 }
 
 pub fn initEvent(
@@ -103,13 +115,12 @@ pub fn initEvent(
     event_string: []const u8,
     bubbles: ?bool,
     cancelable: ?bool,
-    page: *Page,
 ) !void {
     if (self._event_phase != .none) {
         return;
     }
 
-    self._type_string = try String.init(page.arena, event_string, .{});
+    self._type_string = try String.init(self._arena, event_string, .{});
     self._bubbles = bubbles orelse false;
     self._cancelable = cancelable orelse false;
     self._stop_propagation = false;
@@ -385,6 +396,8 @@ pub const JsApi = struct {
 
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(Event.deinit);
     };
 
     pub const constructor = bridge.constructor(Event.init, .{});

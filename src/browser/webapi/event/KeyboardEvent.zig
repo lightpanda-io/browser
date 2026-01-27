@@ -189,15 +189,19 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
 }
 
 fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page) !*KeyboardEvent {
+    const arena = try page.getArena(.{ .debug = "KeyboardEvent" });
+    errdefer page.releaseArena(arena);
+
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(
+        arena,
         typ,
         KeyboardEvent{
             ._proto = undefined,
-            ._key = try Key.fromString(page.arena, opts.key),
+            ._key = try Key.fromString(arena, opts.key),
             ._location = std.meta.intToEnum(Location, opts.location) catch return error.TypeError,
-            ._code = if (opts.code) |c| try page.dupeString(c) else "",
+            ._code = if (opts.code) |c| try arena.dupe(u8, c) else "",
             ._repeat = opts.repeat,
             ._is_composing = opts.isComposing,
             ._ctrl_key = opts.ctrlKey,
@@ -209,6 +213,10 @@ fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page)
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *KeyboardEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *KeyboardEvent) *Event {
@@ -251,8 +259,8 @@ pub fn getShiftKey(self: *const KeyboardEvent) bool {
     return self._shift_key;
 }
 
-pub fn getModifierState(self: *const KeyboardEvent, str: []const u8, page: *Page) !bool {
-    const key = try Key.fromString(page.arena, str);
+pub fn getModifierState(self: *KeyboardEvent, str: []const u8) !bool {
+    const key = try Key.fromString(self.asEvent()._arena, str);
 
     switch (key) {
         .Alt, .AltGraph => return self._alt_key,
@@ -274,6 +282,8 @@ pub const JsApi = struct {
         pub const name = "KeyboardEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(KeyboardEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(KeyboardEvent.init, .{});

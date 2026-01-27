@@ -45,9 +45,13 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
+    const arena = try page.getArena(.{ .debug = "UIEvent" });
+    errdefer page.releaseArena(arena);
+
     const opts = _opts orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         UIEvent{
             ._type = .generic,
@@ -59,6 +63,10 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
 
     Event.populatePrototypes(event, opts, false);
     return event;
+}
+
+pub fn deinit(self: *UIEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn as(self: *UIEvent, comptime T: type) *T {
@@ -105,6 +113,8 @@ pub const JsApi = struct {
         pub const name = "UIEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(UIEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(UIEvent.init, .{});

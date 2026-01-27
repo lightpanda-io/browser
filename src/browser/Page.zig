@@ -333,6 +333,10 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._customized_builtin_disconnected_callback_invoked = .{};
     self._undefined_custom_elements = .{};
 
+    if (comptime IS_DEBUG) {
+        self._arena_pool_leak_track = .{};
+    }
+
     try self.registerBackgroundTasks();
 }
 

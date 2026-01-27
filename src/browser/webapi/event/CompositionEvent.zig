@@ -33,15 +33,22 @@ const CompositionEventOptions = struct {
 const Options = Event.inheritOptions(CompositionEvent, CompositionEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
+    const arena = try page.getArena(.{ .debug = "CompositionEvent" });
+    errdefer page.releaseArena(arena);
+
     const opts = opts_ orelse Options{};
 
-    const event = try page._factory.event(typ, CompositionEvent{
+    const event = try page._factory.event(arena, typ, CompositionEvent{
         ._proto = undefined,
-        ._data = if (opts.data) |str| try page.dupeString(str) else "",
+        ._data = if (opts.data) |str| try arena.dupe(u8, str) else "",
     });
 
     Event.populatePrototypes(event, opts, false);
     return event;
+}
+
+pub fn deinit(self: *CompositionEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *CompositionEvent) *Event {
@@ -59,6 +66,8 @@ pub const JsApi = struct {
         pub const name = "CompositionEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(CompositionEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(CompositionEvent.init, .{});

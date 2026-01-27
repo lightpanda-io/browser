@@ -41,9 +41,13 @@ pub fn initTrusted(typ: []const u8, _opts: ?Options, page: *Page) !*PopStateEven
 }
 
 fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page) !*PopStateEvent {
+    const arena = try page.getArena(.{ .debug = "CustomEvPopStateEventent" });
+    errdefer page.releaseArena(arena);
+
     const opts = _opts orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         PopStateEvent{
             ._proto = undefined,
@@ -53,6 +57,10 @@ fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page)
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *PopStateEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *PopStateEvent) *Event {
@@ -76,6 +84,8 @@ pub const JsApi = struct {
         pub const name = "PopStateEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(PopStateEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(PopStateEvent.init, .{});

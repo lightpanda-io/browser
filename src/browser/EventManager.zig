@@ -136,12 +136,16 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
     event._dispatch_target = target; // Store original target for composedPath()
     var was_handled = false;
 
-    defer if (was_handled) {
-        var ls: js.Local.Scope = undefined;
-        self.page.js.localScope(&ls);
-        defer ls.deinit();
-        ls.local.runMicrotasks();
-    };
+    defer {
+        if (was_handled) {
+            var ls: js.Local.Scope = undefined;
+            self.page.js.localScope(&ls);
+            defer ls.deinit();
+            ls.local.runMicrotasks();
+        } else {
+            event.deinit(false);
+        }
+    }
 
     switch (target._type) {
         .node => |node| try self.dispatchNode(node, event, &was_handled),
@@ -181,26 +185,30 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
         event._dispatch_target = target; // Store original target for composedPath()
     }
 
-    var was_dispatched = false;
-    defer if (was_dispatched) {
-        var ls: js.Local.Scope = undefined;
-        self.page.js.localScope(&ls);
-        defer ls.deinit();
-        ls.local.runMicrotasks();
-    };
-
-    if (function_) |func| {
-        event._current_target = target;
-        if (func.callWithThis(void, target, .{event})) {
-            was_dispatched = true;
-        } else |err| {
-            // a non-JS error
-            log.warn(.event, opts.context, .{ .err = err });
+    var was_handled = false;
+    defer {
+        if (was_handled) {
+            var ls: js.Local.Scope = undefined;
+            self.page.js.localScope(&ls);
+            defer ls.deinit();
+            ls.local.runMicrotasks();
+        } else {
+            event.deinit(false);
         }
     }
 
+    if (function_) |func| {
+        const js_val = try func.local.zigValueToJs(event, .{});
+        was_handled = true;
+
+        event._current_target = target;
+        func.callWithThis(void, target, .{js_val}) catch |err| {
+            log.warn(.event, opts.context, .{ .err = err });
+        };
+    }
+
     const list = self.lookup.get(@intFromPtr(target)) orelse return;
-    try self.dispatchAll(list, target, event, &was_dispatched);
+    try self.dispatchAll(list, target, event, &was_handled);
 }
 
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool) !void {
@@ -364,7 +372,6 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             self.removeListener(list, listener);
         }
 
-        was_handled.* = true;
         event._current_target = current_target;
 
         // Compute adjusted target for shadow DOM retargeting (only if needed)
@@ -377,8 +384,11 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         page.js.localScope(&ls);
         defer ls.deinit();
 
+        const js_val = try ls.local.zigValueToJs(event, .{});
+        was_handled.* = true;
+
         switch (listener.function) {
-            .value => |value| try ls.toLocal(value).callWithThis(void, current_target, .{event}),
+            .value => |value| try ls.toLocal(value).callWithThis(void, current_target, .{js_val}),
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
                 try ls.local.eval(str, null);
@@ -386,7 +396,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             .object => |obj_global| {
                 const obj = ls.toLocal(obj_global);
                 if (try obj.getFunction("handleEvent")) |handleEvent| {
-                    try handleEvent.callWithThis(void, obj, .{event});
+                    try handleEvent.callWithThis(void, obj, .{js_val});
                 }
             },
         }

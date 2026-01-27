@@ -197,22 +197,21 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
             // dont' use js_obj.persist(), because we don't want to track this in
             // context.global_objects, we want to track it in context.identity_map.
             v8.v8__Global__New(isolate.handle, js_obj.handle, gop.value_ptr);
-            if (@hasDecl(JsApi.Meta, "finalizer")) {
-                if (comptime IS_DEBUG) {
-                    // You can normally return a "*Node" and we'll correctly
-                    // handle it as what it really is, e.g. an HTMLScriptElement.
-                    // But for finalizers, we can't do that. I think this
-                    // limitation will be OK - this auto-resolution is largely
-                    // limited to Node -> HtmlElement, none of which has finalizers
-                    std.debug.assert(resolved.class_id == JsApi.Meta.class_id);
-                }
 
+            if (@hasDecl(JsApi.Meta, "finalizer")) {
+                // It would be great if resolved knew the resolved type, but I
+                // can't figure out how to make that work, since it depends on
+                // the [runtime] `value.
+                // We need the resolved finalizer, which we have in resolved.
+                // The above if statement would be more clear as:
+                //    if (resolved.finalizer) |finalizer| {
+                // But that's a runtime check.
+                // Instead, we check if the base has finalizer. The assumption
+                // here is that if a resolve type has a finalizer, than the base
+                // should have a finalizer too.
                 try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), .init(value));
-                if (@hasDecl(JsApi.Meta, "weak")) {
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(JsApi.Meta.weak == true);
-                    }
-                    v8.v8__Global__SetWeakFinalizer(gop.value_ptr, resolved.ptr, JsApi.Meta.finalizer.from_v8, v8.kParameter);
+                if (resolved.weak) {
+                    v8.v8__Global__SetWeakFinalizer(gop.value_ptr, resolved.ptr, resolved.finalizer.?, v8.kParameter);
                 }
             }
             return js_obj;
@@ -1032,9 +1031,11 @@ fn jsUnsignedIntToZig(comptime T: type, max: comptime_int, maybe: u32) !T {
 // This function recursively walks the _type union field (if there is one) to
 // get the most specific class_id possible.
 const Resolved = struct {
+    weak: bool,
     ptr: *anyopaque,
     class_id: u16,
     prototype_chain: []const @import("TaggedOpaque.zig").PrototypeChainEntry,
+    finalizer: ?*const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void = null,
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
@@ -1062,10 +1063,13 @@ pub fn resolveValue(value: anytype) Resolved {
 }
 
 fn resolveT(comptime T: type, value: *anyopaque) Resolved {
+    const Meta = T.JsApi.Meta;
     return .{
         .ptr = value,
-        .class_id = T.JsApi.Meta.class_id,
-        .prototype_chain = &T.JsApi.Meta.prototype_chain,
+        .class_id = Meta.class_id,
+        .prototype_chain = &Meta.prototype_chain,
+        .weak = if (@hasDecl(Meta, "weak")) Meta.weak else false,
+        .finalizer = if (@hasDecl(Meta, "finalizer")) Meta.finalizer.from_v8 else null,
     };
 }
 

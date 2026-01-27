@@ -111,7 +111,8 @@ pub fn Builder(comptime T: type) type {
                         // to be possible between finalization and context shutdown,
                         // we need to be defensive).
                         // There _ARE_ alternatives to this. But this is simple.
-                        const ctx = self._page.js;
+                        const page = findPageField(T, self);
+                        const ctx = page.js;
                         if (!ctx.identity_map.contains(@intFromPtr(ptr))) {
                             return;
                         }
@@ -513,6 +514,17 @@ fn countFlattenedTypes(comptime Types: []const type) usize {
         c += if (@hasDecl(T, "registerTypes")) T.registerTypes().len else 1;
     }
     return c;
+}
+
+fn findPageField(comptime OriginalT: type, value: anytype) *Page {
+    const T = Struct(@TypeOf(value));
+    if (@hasField(T, "_page")) {
+        return value._page;
+    }
+    if (@hasField(T, "_proto") == false) {
+        @compileError("Expected to find a _page: *Page field on " ++ @typeName(OriginalT) ++ " or it's _proto chain");
+    }
+    return findPageField(OriginalT, value._proto);
 }
 
 //  T => T

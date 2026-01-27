@@ -46,20 +46,28 @@ pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent
 }
 
 fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*MessageEvent {
+    const arena = try page.getArena(.{ .debug = "MessageEvent" });
+    errdefer page.releaseArena(arena);
+
     const opts = opts_ orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         MessageEvent{
             ._proto = undefined,
             ._data = opts.data,
-            ._origin = if (opts.origin) |str| try page.arena.dupe(u8, str) else "",
+            ._origin = if (opts.origin) |str| try arena.dupe(u8, str) else "",
             ._source = opts.source,
         },
     );
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *MessageEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *MessageEvent) *Event {
@@ -85,6 +93,8 @@ pub const JsApi = struct {
         pub const name = "MessageEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(MessageEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(MessageEvent.init, .{});

@@ -31,7 +31,6 @@ _filename: []const u8 = "",
 _line_number: u32 = 0,
 _column_number: u32 = 0,
 _error: ?js.Value.Global = null,
-_arena: Allocator,
 
 pub const ErrorEventOptions = struct {
     message: ?[]const u8 = null,
@@ -52,13 +51,15 @@ pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
 }
 
 fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*ErrorEvent {
-    const arena = page.arena;
+    const arena = try page.getArena(.{ .debug = "ErrorEvent" });
+    errdefer page.releaseArena(arena);
+
     const opts = opts_ orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         ErrorEvent{
-            ._arena = arena,
             ._proto = undefined,
             ._message = if (opts.message) |str| try arena.dupe(u8, str) else "",
             ._filename = if (opts.filename) |str| try arena.dupe(u8, str) else "",
@@ -70,6 +71,10 @@ fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page)
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *ErrorEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *ErrorEvent) *Event {
@@ -103,6 +108,8 @@ pub const JsApi = struct {
         pub const name = "ErrorEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(ErrorEvent.deinit);
     };
 
     // Start API

@@ -53,12 +53,16 @@ fn initWithTrusted(
     trusted: bool,
     page: *Page,
 ) !*NavigationCurrentEntryChangeEvent {
+    const arena = try page.getArena(.{ .debug = "NavigationCurrentEntryChangeEvent" });
+    errdefer page.releaseArena(arena);
+
     const navigation_type = if (opts.navigationType) |nav_type_str|
         std.meta.stringToEnum(NavigationType, nav_type_str)
     else
         null;
 
     const event = try page._factory.event(
+        arena,
         typ,
         NavigationCurrentEntryChangeEvent{
             ._proto = undefined,
@@ -69,6 +73,10 @@ fn initWithTrusted(
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *NavigationCurrentEntryChangeEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *NavigationCurrentEntryChangeEvent) *Event {
@@ -90,6 +98,8 @@ pub const JsApi = struct {
         pub const name = "NavigationCurrentEntryChangeEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(NavigationCurrentEntryChangeEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(NavigationCurrentEntryChangeEvent.init, .{});
