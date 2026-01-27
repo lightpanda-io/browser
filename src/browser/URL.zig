@@ -77,8 +77,9 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     }
 
     // trailing space so that we always have space to append the null terminator
-    var out = try std.mem.join(allocator, "", &.{ normalized_base, "/", path, " " });
-    const end = out.len - 1;
+    // and so that we can compare the next two characters without needing to length check
+    var out = try std.mem.join(allocator, "", &.{ normalized_base, "/", path, "  " });
+    const end = out.len - 2;
 
     const path_marker = path_start + 1;
 
@@ -88,33 +89,39 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     var in_i: usize = 0;
     var out_i: usize = 0;
     while (in_i < end) {
-        if (std.mem.startsWith(u8, out[in_i..], "./")) {
-            in_i += 2;
-            continue;
-        }
-
-        if (std.mem.startsWith(u8, out[in_i..], "../")) {
-            lp.assert(out[out_i - 1] == '/', "URL.resolve", .{ .out = out });
-
-            if (out_i > path_marker) {
-                // go back before the /
-                out_i -= 2;
-                while (out_i > 1 and out[out_i - 1] != '/') {
-                    out_i -= 1;
-                }
-            } else {
-                // if out_i == path_marker, than we've reached the start of
-                // the path. We can't ../ any more. E.g.:
-                //    http://www.example.com/../hello.
-                // You might think that's an error, but, at least with
-                //     new URL('../hello', 'http://www.example.com/')
-                // it just ignores the extra ../
+        if (out[in_i] == '.' and (out_i == 0 or out[out_i - 1] == '/')) {
+            if (out[in_i + 1] == '/') { // always safe, because we added a whitespace
+                // /./
+                in_i += 2;
+                continue;
             }
-            in_i += 3;
-            continue;
+            if (out[in_i + 1] == '.' and out[in_i + 2] == '/') {  // always safe, because we added two whitespaces
+                // /../
+                if (out_i > path_marker) {
+                    // go back before the /
+                    out_i -= 2;
+                    while (out_i > 1 and out[out_i - 1] != '/') {
+                        out_i -= 1;
+                    }
+                } else {
+                    // if out_i == path_marker, than we've reached the start of
+                    // the path. We can't ../ any more. E.g.:
+                    //    http://www.example.com/../hello.
+                    // You might think that's an error, but, at least with
+                    //     new URL('../hello', 'http://www.example.com/')
+                    // it just ignores the extra ../
+                }
+                in_i += 3;
+                continue;
+            }
+            if (in_i == end - 1) {
+                // ignore trailing dot
+                break;
+            }
         }
 
-        out[out_i] = out[in_i];
+        const c = out[in_i];
+        out[out_i] = c;
         in_i += 1;
         out_i += 1;
     }
@@ -542,6 +549,21 @@ test "URL: resolve" {
     };
 
     const cases = [_]Case{
+        .{
+            .base = "https://example/dir",
+            .path = "abc../test",
+            .expected = "https://example/abc../test",
+        },
+        .{
+            .base = "https://example/dir",
+            .path = "abc.",
+            .expected = "https://example/abc.",
+        },
+        .{
+            .base = "https://example/dir",
+            .path = "abc/.",
+            .expected = "https://example/abc/",
+        },
         .{
             .base = "https://example/xyz/abc/123",
             .path = "something.js",
