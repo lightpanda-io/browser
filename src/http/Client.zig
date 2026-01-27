@@ -186,7 +186,7 @@ pub fn abort(self: *Client) void {
     while (n) |node| {
         n = node.next;
         const transfer: *Transfer = @fieldParentPtr("_node", node);
-        self.transfer_pool.destroy(transfer);
+        transfer.kill();
     }
     self.queue = .{};
 
@@ -392,6 +392,8 @@ fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror, comptime exe
 
     if (execute_callback) {
         transfer.req.error_callback(transfer.ctx, err);
+    } else if (transfer.req.shutdown_callback) |cb| {
+        cb(transfer.ctx);
     }
 }
 
@@ -781,6 +783,7 @@ pub const Request = struct {
     data_callback: *const fn (transfer: *Transfer, data: []const u8) anyerror!void,
     done_callback: *const fn (ctx: *anyopaque) anyerror!void,
     error_callback: *const fn (ctx: *anyopaque, err: anyerror) void,
+    shutdown_callback: ?*const fn (ctx: *anyopaque) void = null,
 
     const ResourceType = enum {
         document,
@@ -994,6 +997,9 @@ pub const Transfer = struct {
     fn kill(self: *Transfer) void {
         if (self._handle != null) {
             self.client.endTransfer(self);
+        }
+        if (self.req.shutdown_callback) |cb| {
+            cb(self.ctx);
         }
         self.deinit();
     }

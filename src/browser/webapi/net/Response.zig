@@ -18,10 +18,12 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
+const Http = @import("../../../http/Http.zig");
 
 const Page = @import("../../Page.zig");
 const Headers = @import("Headers.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
+
 const Allocator = std.mem.Allocator;
 
 const Response = @This();
@@ -34,6 +36,7 @@ pub const Type = enum {
     opaqueredirect,
 };
 
+_page: *Page,
 _status: u16,
 _arena: Allocator,
 _headers: *Headers,
@@ -42,6 +45,7 @@ _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
+_transfer: ?*Http.Transfer = null,
 
 const InitOpts = struct {
     status: u16 = 200,
@@ -50,14 +54,19 @@ const InitOpts = struct {
 };
 
 pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
+    const arena = try page.getArena(.{ .debug = "Response" });
+    errdefer page.releaseArena(arena);
+
     const opts = opts_ orelse InitOpts{};
 
     // Store empty string as empty string, not null
-    const body = if (body_) |b| try page.arena.dupe(u8, b) else null;
-    const status_text = if (opts.statusText) |st| try page.dupeString(st) else "";
+    const body = if (body_) |b| try arena.dupe(u8, b) else null;
+    const status_text = if (opts.statusText) |st| try arena.dupe(u8, st) else "";
 
-    return page._factory.create(Response{
-        ._arena = page.arena,
+    const self = try arena.create(Response);
+    self.* = .{
+        ._page = page,
+        ._arena = arena,
         ._status = opts.status,
         ._status_text = status_text,
         ._url = "",
@@ -65,7 +74,20 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
         ._type = .basic,
         ._is_redirected = false,
         ._headers = try Headers.init(opts.headers, page),
-    });
+    };
+    return self;
+}
+
+pub fn deinit(self: *Response, shutdown: bool) void {
+    if (self._transfer) |transfer| {
+        if (shutdown) {
+            transfer.terminate();
+        } else {
+            transfer.abort(error.Abort);
+        }
+        self._transfer = null;
+    }
+    self._page.releaseArena(self._arena);
 }
 
 pub fn getStatus(self: *const Response) u16 {
@@ -134,6 +156,8 @@ pub const JsApi = struct {
         pub const name = "Response";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(Response.deinit);
     };
 
     pub const constructor = bridge.constructor(Response.init, .{});

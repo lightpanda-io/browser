@@ -81,7 +81,7 @@ const ResponseType = enum {
 pub fn init(page: *Page) !*XMLHttpRequest {
     const arena = try page.getArena(.{ .debug = "XMLHttpRequest" });
     errdefer page.releaseArena(arena);
-    return page._factory.xhrEventTarget(XMLHttpRequest{
+    return page._factory.xhrEventTarget(arena, XMLHttpRequest{
         ._page = page,
         ._arena = arena,
         ._proto = undefined,
@@ -89,7 +89,7 @@ pub fn init(page: *Page) !*XMLHttpRequest {
     });
 }
 
-pub fn deinit(self: *XMLHttpRequest, comptime shutdown: bool) void {
+pub fn deinit(self: *XMLHttpRequest, shutdown: bool) void {
     if (self._transfer) |transfer| {
         if (shutdown) {
             transfer.terminate();
@@ -103,8 +103,33 @@ pub fn deinit(self: *XMLHttpRequest, comptime shutdown: bool) void {
     if (self._on_ready_state_change) |func| {
         page.js.release(func);
     }
+
+    {
+        const proto = self._proto;
+        if (proto._on_abort) |func| {
+            page.js.release(func);
+        }
+        if (proto._on_error) |func| {
+            page.js.release(func);
+        }
+        if (proto._on_load) |func| {
+            page.js.release(func);
+        }
+        if (proto._on_load_end) |func| {
+            page.js.release(func);
+        }
+        if (proto._on_load_start) |func| {
+            page.js.release(func);
+        }
+        if (proto._on_progress) |func| {
+            page.js.release(func);
+        }
+        if (proto._on_timeout) |func| {
+            page.js.release(func);
+        }
+    }
+
     page.releaseArena(self._arena);
-    page._factory.destroy(self);
 }
 
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {
@@ -161,7 +186,6 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     if (self._ready_state != .opened) {
         return error.InvalidStateError;
     }
-    self._page.js.strongRef(self);
 
     if (body_) |b| {
         if (self._method != .GET and self._method != .HEAD) {
@@ -319,7 +343,11 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
 
     if (header.contentType()) |ct| {
         self._response_mime = Mime.parse(ct) catch |e| {
-            log.info(.http, "invalid content type", .{.content_Type = ct, .err = e, .url = self._url,});
+            log.info(.http, "invalid content type", .{
+                .content_Type = ct,
+                .err = e,
+                .url = self._url,
+            });
             return false;
         };
     }
@@ -399,8 +427,6 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .total = loaded,
         .loaded = loaded,
     }, local, page);
-
-    page.js.weakRef(self);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -408,7 +434,6 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // http client will close it after an error, it isn't safe to keep around
     self._transfer = null;
     self.handleError(err);
-    self._page.js.weakRef(self);
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
@@ -417,7 +442,6 @@ pub fn abort(self: *XMLHttpRequest) void {
         transfer.abort(error.Abort);
         self._transfer = null;
     }
-    self._page.js.weakRef(self);
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
