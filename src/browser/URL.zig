@@ -87,13 +87,14 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     // an allocator, which is ok, because we expect allocator to be an arena.
     var in_i: usize = 0;
     var out_i: usize = 0;
+    var separator = false;
     while (in_i < end) {
-        if (std.mem.startsWith(u8, out[in_i..], "./")) {
+        if (separator and std.mem.startsWith(u8, out[in_i..], "./")) {
             in_i += 2;
             continue;
         }
 
-        if (std.mem.startsWith(u8, out[in_i..], "../")) {
+        if (separator and std.mem.startsWith(u8, out[in_i..], "../")) {
             lp.assert(out[out_i - 1] == '/', "URL.resolve", .{ .out = out });
 
             if (out_i > path_marker) {
@@ -114,9 +115,11 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
             continue;
         }
 
-        out[out_i] = out[in_i];
+        const c = out[in_i];
+        out[out_i] = c;
         in_i += 1;
         out_i += 1;
+        separator = c == '/';
     }
 
     // we always have an extra space
@@ -542,6 +545,11 @@ test "URL: resolve" {
     };
 
     const cases = [_]Case{
+        .{
+            .base = "https://example/dir",
+            .path = "abc../test",
+            .expected = "https://example/abc../test",
+        },
         .{
             .base = "https://example/xyz/abc/123",
             .path = "something.js",
