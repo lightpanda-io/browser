@@ -253,7 +253,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     }
 
     if (comptime initializing == false) {
-        // Removins the context triggers the linked inspector.
+        // Removing the context triggers the linked inspector.
         // It seems to append a collect task to the message loop.
         self._session.executor.removeContext();
 
@@ -262,10 +262,9 @@ fn reset(self: *Page, comptime initializing: bool) !void {
         // will run after the GC and we will use memory after free.
         self._session.browser.runMessageLoop();
 
-        // We force a garbage collection with lowMemoryNotification between
-        // page navigations to keep v8 memory usage as low as possible.
-        // Calling immediately after a runMessageLoop ensure
-        self._session.browser.env.lowMemoryNotification();
+        // We force a garbage collection between page navigations to keep v8
+        // memory usage as low as possible.
+        self._session.browser.env.memoryPressureNotification(.moderate);
 
         self._script_manager.shutdown = true;
         self._session.browser.http_client.abort();

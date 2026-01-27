@@ -100,7 +100,7 @@ pub fn closeSession(self: *Browser) void {
         session.deinit();
         self.session = null;
         _ = self.session_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
-        self.env.lowMemoryNotification();
+        self.env.memoryPressureNotification(.critical);
     }
 }
 
