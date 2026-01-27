@@ -324,7 +324,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
                     return if (comptime want_result) gop.value_ptr.* else {};
                 }
             } else {
-                // first time seing this
+                // first time seeing this
                 gop.value_ptr.* = .{};
             }
         }
@@ -618,6 +618,10 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
     const mod = try compileModule(local, source.src(), normalized_specifier);
     try self.postCompileModule(mod, normalized_specifier, local);
     entry.module = try mod.persist();
+    // Note: We don't instantiate/evaluate here - V8 will handle instantiation
+    // as part of the parent module's dependency chain. If there's a resolver
+    // waiting, it will be handled when the module is eventually evaluated
+    // (either as a top-level module or when accessed via dynamic import)
     return mod.handle;
 }
 
@@ -654,12 +658,14 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
 
     const promise = resolver.promise();
 
-    if (!gop.found_existing) {
+    if (!gop.found_existing or gop.value_ptr.module == null) {
+        // Either this is a completely new module, or it's an entry that was
+        // created (e.g., in postCompileModule) but not yet loaded
         // this module hasn't been seen before. This is the most
         // complicated path.
 
         // First, we'll setup a bare entry into our cache. This will
-        // prevent anyone one else from trying to asychronously load
+        // prevent anyone one else from trying to asynchronously load
         // it. Instead, they can just return our promise.
         gop.value_ptr.* = ModuleEntry{
             .module = null,
@@ -674,19 +680,18 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         };
 
         // For now, we're done. but this will be continued in
-        // `dynamicModuleSourceCallback`, once the source for the
-        // moduel is loaded.
+        // `dynamicModuleSourceCallback`, once the source for the module is loaded.
         return promise;
     }
 
     // So we have a module, but no async resolver. This can only
     // happen if the module was first synchronously loaded (Does that
-    // ever even happen?!) You'd think we cann just return the module
+    // ever even happen?!) You'd think we can just return the module
     // but no, we need to resolve the module namespace, and the
     // module could still be loading!
     // We need to do part of what the first case is going to do in
     // `dynamicModuleSourceCallback`, but we can skip some steps
-    // since the module is alrady loaded,
+    // since the module is already loaded,
     lp.assert(gop.value_ptr.module != null, "Context._dynamicModuleCallback has module", .{});
 
     // If the module hasn't been evaluated yet (it was only instantiated
