@@ -25,8 +25,9 @@ const Allocator = std.mem.Allocator;
 const TextDecoder = @This();
 
 _fatal: bool,
-_ignore_bom: bool,
+_page: *Page,
 _arena: Allocator,
+_ignore_bom: bool,
 _stream: std.ArrayListUnmanaged(u8),
 
 const Label = enum {
@@ -45,13 +46,23 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
         _ = std.meta.stringToEnum(Label, label) orelse return error.RangeError;
     }
 
+    const arena = try page.getArena(.{ .debug = "TextDecoder" });
+    errdefer page.releaseArena(arena);
+
     const opts = opts_ orelse InitOpts{};
-    return page._factory.create(TextDecoder{
-        ._arena = page.arena,
+    const self = try arena.create(TextDecoder);
+    self.* = .{
+        ._page = page,
+        ._arena = arena,
         ._stream = .empty,
         ._fatal = opts.fatal,
         ._ignore_bom = opts.ignoreBOM,
-    });
+    };
+    return self;
+}
+
+pub fn deinit(self: *TextDecoder, _: bool) void {
+    self._page.releaseArena(self._arena);
 }
 
 pub fn getEncoding(_: *const TextDecoder) []const u8 {
@@ -103,6 +114,8 @@ pub const JsApi = struct {
         pub const name = "TextDecoder";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(TextDecoder.deinit);
     };
 
     pub const constructor = bridge.constructor(TextDecoder.init, .{});

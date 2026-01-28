@@ -737,7 +737,10 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
 
     switch (self._parse_state) {
         .html => |buf| {
-            var parser = Parser.init(self.arena, self.document.asNode(), self);
+            const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
+            defer self.releaseArena(parse_arena);
+
+            var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(buf.items);
             self._script_manager.staticScriptsDone();
             if (self._script_manager.isDone()) {
@@ -749,7 +752,11 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         },
         .text => |*buf| {
             try buf.appendSlice(self.arena, "</pre></body></html>");
-            var parser = Parser.init(self.arena, self.document.asNode(), self);
+
+            const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
+            defer self.releaseArena(parse_arena);
+
+            var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(buf.items);
             self.documentIsComplete();
         },
