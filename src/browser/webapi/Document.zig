@@ -648,7 +648,10 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
     page._parse_mode = .document_write;
     defer page._parse_mode = previous_parse_mode;
 
-    var parser = Parser.init(page.call_arena, fragment_node, page);
+    const arena = try page.getArena(.{ .debug = "Document.write" });
+    defer page.releaseArena(arena);
+
+    var parser = Parser.init(arena, fragment_node, page);
     parser.parseFragment(html);
 
     // Extract children from wrapper HTML element (html5ever wraps fragments)
@@ -661,7 +664,7 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
 
     var it = if (first.is(Element.Html.Html) == null) fragment_node.childrenIterator() else first.childrenIterator();
     while (it.next()) |child| {
-        try children_to_insert.append(page.call_arena, child);
+        try children_to_insert.append(arena, child);
     }
 
     if (children_to_insert.items.len == 0) {
