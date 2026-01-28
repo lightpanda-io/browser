@@ -22,7 +22,6 @@ const builtin = @import("builtin");
 const log = @import("../log.zig");
 const String = @import("../string.zig").String;
 
-const lp = @import("lightpanda");
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
 

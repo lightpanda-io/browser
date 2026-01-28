@@ -48,10 +48,11 @@ pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMT
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
+
 /// Better to discriminate it since not directly a pointer int.
 ///
 /// See `calcAttrListenerKey` to obtain one.
-pub const AttrListenerKey = u64;
+const AttrListenerKey = u64;
 /// Use `getAttrListenerKey` to create a key.
 pub const AttrListenerLookup = std.AutoHashMapUnmanaged(AttrListenerKey, js.Function.Global);
 
