@@ -38,6 +38,7 @@ pub noinline fn crash(
                     \\
                     \\Lightpanda has crashed. Please report the issue:
                     \\https://github.com/lightpanda-io/browser/issues
+                    \\or let us know on discord: https://discord.gg/g24PtgD6
                     \\
                 ) catch abort();
 
