@@ -32,18 +32,25 @@ pub fn main() !void {
         wg.wait();
     }
     lp.log.opts.level = .warn;
-
-    var app = try lp.App.init(allocator, .{
-        .run_mode = .serve,
-        .tls_verify_host = false,
-        .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
-    });
-    defer app.deinit();
+    const config = lp.Config{
+        .mode = .{ .serve = .{
+            .common = .{
+                .tls_verify_host = false,
+                .user_agent_suffix = "internal-tester",
+            },
+        } },
+        .exec_name = "legacy-test",
+    };
+    var app = try lp.App.init(allocator, &config);
+    defer app.deinit(allocator);
 
     var test_arena = std.heap.ArenaAllocator.init(allocator);
     defer test_arena.deinit();
 
-    var browser = try lp.Browser.init(app);
+    const http = try app.http.createClient(allocator);
+    defer http.deinit();
+
+    var browser = try lp.Browser.init(allocator, app, http);
     defer browser.deinit();
 
     const session = try browser.newSession();

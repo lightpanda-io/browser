@@ -27,6 +27,7 @@ const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
 const Http = @import("../http/Http.zig");
+const Client = @import("../http/Client.zig");
 
 const Element = @import("webapi/Element.zig");
 
@@ -59,7 +60,7 @@ ready_scripts: std.DoublyLinkedList,
 
 shutdown: bool = false,
 
-client: *Http.Client,
+client: *Client,
 allocator: Allocator,
 buffer_pool: BufferPool,
 

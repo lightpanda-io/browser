@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const log = @import("../log.zig");
 const App = @import("../App.zig");
 const Http = @import("../http/Http.zig");
+const Config = @import("../Config.zig");
 const telemetry = @import("telemetry.zig");
 
 const URL = "https://telemetry.lightpanda.io";
@@ -23,14 +24,13 @@ pub const LightPanda = struct {
     pending: std.DoublyLinkedList,
     mem_pool: std.heap.MemoryPool(LightPandaEvent),
 
-    pub fn init(app: *App) !LightPanda {
+    pub fn init(allocator: Allocator, app: *App) !LightPanda {
         const connection = try app.http.newConnection();
         errdefer connection.deinit();
 
         try connection.setURL(URL);
         try connection.setMethod(.POST);
 
-        const allocator = app.allocator;
         return .{
             .cond = .{},
             .mutex = .{},
@@ -55,7 +55,7 @@ pub const LightPanda = struct {
         self.connection.deinit();
     }
 
-    pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: App.RunMode, raw_event: telemetry.Event) !void {
+    pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: Config.RunMode, raw_event: telemetry.Event) !void {
         const event = try self.mem_pool.create();
         event.* = .{
             .iid = iid,
@@ -130,7 +130,7 @@ pub const LightPanda = struct {
 
 const LightPandaEvent = struct {
     iid: ?[]const u8,
-    mode: App.RunMode,
+    mode: Config.RunMode,
     event: telemetry.Event,
     node: std.DoublyLinkedList.Node,
 
