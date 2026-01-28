@@ -249,18 +249,19 @@ pub fn deinit(self: *Page) void {
 }
 
 fn reset(self: *Page, comptime initializing: bool) !void {
-    if (comptime IS_DEBUG) {
-        var it = self._arena_pool_leak_track.valueIterator();
-        while (it.next()) |value_ptr| {
-            if (value_ptr.count > 0) {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner });
-            }
-        }
-        self._arena_pool_leak_track.clearRetainingCapacity();
-    }
-
     if (comptime initializing == false) {
         self._session.executor.removeContext();
+
+        // removing a context can trigger finalizers, so we can only check for
+        // a leak after the above.
+        if (comptime IS_DEBUG) {
+            var it = self._arena_pool_leak_track.valueIterator();
+            while (it.next()) |value_ptr| {
+                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+            }
+            self._arena_pool_leak_track.clearRetainingCapacity();
+        }
+
 
         // We force a garbage collection between page navigations to keep v8
         // memory usage as low as possible.
