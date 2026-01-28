@@ -37,6 +37,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 const Caller = @This();
 local: js.Local,
 prev_local: ?*const js.Local,
+prev_context: *Context,
 
 // Takes the raw v8 isolate and extracts the context from it.
 pub fn init(self: *Caller, v8_isolate: *v8.Isolate) void {
@@ -55,7 +56,9 @@ pub fn init(self: *Caller, v8_isolate: *v8.Isolate) void {
             .isolate = .{ .handle = v8_isolate },
         },
         .prev_local = ctx.local,
+        .prev_context = ctx.page.js,
     };
+    ctx.page.js = ctx;
     ctx.local = &self.local;
 }
 
@@ -81,6 +84,7 @@ pub fn deinit(self: *Caller) void {
 
     ctx.call_depth = call_depth;
     ctx.local = self.prev_local;
+    ctx.page.js = self.prev_context;
 }
 
 pub const CallOpts = struct {
