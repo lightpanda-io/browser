@@ -1235,3 +1235,8 @@ pub const Build = struct {
         return false;
     }
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: HTML.event_listeners" {
+    try testing.htmlRunner("element/html/event_listeners.html", .{});
+}
