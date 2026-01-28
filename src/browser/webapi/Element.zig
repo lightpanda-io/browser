@@ -48,6 +48,128 @@ pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMT
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
+/// Better to discriminate it since not directly a pointer int.
+///
+/// See `calcAttrListenerKey` to obtain one.
+pub const AttrListenerKey = u64;
+/// Use `getAttrListenerKey` to create a key.
+pub const AttrListenerLookup = std.AutoHashMapUnmanaged(AttrListenerKey, js.Function.Global);
+
+/// Enum of known event listeners; increasing the size of it (u7)
+/// can cause `AttrListenerKey` to behave incorrectly.
+pub const KnownListener = enum(u7) {
+    abort,
+    animationcancel,
+    animationend,
+    animationiteration,
+    animationstart,
+    auxclick,
+    beforeinput,
+    beforematch,
+    beforetoggle,
+    blur,
+    cancel,
+    canplay,
+    canplaythrough,
+    change,
+    click,
+    close,
+    command,
+    contentvisibilityautostatechange,
+    contextlost,
+    contextmenu,
+    contextrestored,
+    copy,
+    cuechange,
+    cut,
+    dblclick,
+    drag,
+    dragend,
+    dragenter,
+    dragexit,
+    dragleave,
+    dragover,
+    dragstart,
+    drop,
+    durationchange,
+    emptied,
+    ended,
+    @"error",
+    focus,
+    formdata,
+    fullscreenchange,
+    fullscreenerror,
+    gotpointercapture,
+    input,
+    invalid,
+    keydown,
+    keypress,
+    keyup,
+    load,
+    loadeddata,
+    loadedmetadata,
+    loadstart,
+    lostpointercapture,
+    mousedown,
+    mousemove,
+    mouseout,
+    mouseover,
+    mouseup,
+    paste,
+    pause,
+    play,
+    playing,
+    pointercancel,
+    pointerdown,
+    pointerenter,
+    pointerleave,
+    pointermove,
+    pointerout,
+    pointerover,
+    pointerrawupdate,
+    pointerup,
+    progress,
+    ratechange,
+    reset,
+    resize,
+    scroll,
+    scrollend,
+    securitypolicyviolation,
+    seeked,
+    seeking,
+    select,
+    selectionchange,
+    selectstart,
+    slotchange,
+    stalled,
+    submit,
+    @"suspend",
+    timeupdate,
+    toggle,
+    transitioncancel,
+    transitionend,
+    transitionrun,
+    transitionstart,
+    volumechange,
+    waiting,
+    wheel,
+};
+
+/// Calculates a lookup key (`AttrListenerKey`) to use with `AttrListenerLookup` for an element.
+/// NEVER use generated key to retrieve a pointer back. Portability is not guaranteed.
+pub fn calcAttrListenerKey(self: *Element, event_type: KnownListener) AttrListenerKey {
+    // We can use `Element` for the key too; `EventTarget` is strict about
+    // its size and alignment, though.
+    const target = self.asEventTarget();
+    // Check if we have 3 bits available from alignment of 8.
+    lp.assert(@alignOf(@TypeOf(target)) == 8, "createLookupKey: incorrect alignment", .{
+        .event_target_alignment = @alignOf(@TypeOf(target)),
+    });
+
+    const ptr = @intFromPtr(target) >> 3;
+    lp.assert(ptr < (1 << 57), "createLookupKey: pointer overflow", .{ .ptr = ptr });
+    return ptr | (@as(u64, @intFromEnum(event_type)) << 57);
+}
 
 pub const Namespace = enum(u8) {
     html,

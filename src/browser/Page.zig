@@ -102,6 +102,20 @@ _element_shadow_roots: Element.ShadowRootLookup = .{},
 _node_owner_documents: Node.OwnerDocumentLookup = .{},
 _element_assigned_slots: Element.AssignedSlotLookup = .{},
 
+/// Lazily-created inline event listeners (or listeners provided as attributes).
+/// Avoids bloating all elements with extra function fields for rare usage.
+///
+/// Use this when a listener provided like these:
+///
+/// ```html
+/// <img onload="(() => { ... })()" />
+/// ```
+///
+/// ```js
+/// img.onload = () => { ... };
+/// ```
+_element_attr_listeners: Element.AttrListenerLookup = .{},
+
 _script_manager: ScriptManager,
 
 // List of active MutationObservers
@@ -316,6 +330,9 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_shadow_roots = .{};
     self._node_owner_documents = .{};
     self._element_assigned_slots = .{};
+
+    self._element_attr_listeners = .{};
+
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
 
@@ -1132,6 +1149,35 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
         }
     }
     return null;
+}
+
+/// Sets an inline event listener (`onload`, `onclick`, `onwheel` etc.);
+/// overrides the listener if there's already one.
+pub fn setAttrListener(
+    self: *Page,
+    element: *Element,
+    listener_type: Element.KnownListener,
+    listener_callback: JS.Function.Global,
+) !void {
+    if (comptime IS_DEBUG) {
+        log.debug(.event, "Page.setAttrListener", .{
+            .element = element,
+            .listener_type = listener_type,
+        });
+    }
+
+    const key = element.calcAttrListenerKey(listener_type);
+    const gop = try self._element_attr_listeners.getOrPut(self.arena, key);
+    gop.value_ptr.* = listener_callback;
+}
+
+/// Returns the inline event listener by an element and listener type.
+pub fn getAttrListener(
+    self: *const Page,
+    element: *Element,
+    listener_type: Element.KnownListener,
+) ?JS.Function.Global {
+    return self._element_attr_listeners.get(element.calcAttrListenerKey(listener_type));
 }
 
 pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
@@ -2182,8 +2228,6 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
         if (has_on_prefix) {
             // Must be usable as function.
             const func = try self.js.stringToPersistedFunction(attr.value.slice());
-            const target = element.asEventTarget();
-            const event_manager = &self._event_manager;
 
             // Longest known listener kind is 32 bytes long.
             const remaining: u6 = @truncate(name.len -| 2);
@@ -2193,160 +2237,160 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
 
             switch (remaining) {
                 3 => if (@as(u24, @bitCast(unsafe[0..3].*)) == asUint("cut")) {
-                    try event_manager.setInlineListener(target, .cut, func);
+                    try self.setAttrListener(element, .cut, func);
                 },
                 4 => switch (@as(u32, @bitCast(unsafe[0..4].*))) {
-                    asUint("blur") => try event_manager.setInlineListener(target, .blur, func),
-                    asUint("copy") => try event_manager.setInlineListener(target, .copy, func),
-                    asUint("drag") => try event_manager.setInlineListener(target, .drag, func),
-                    asUint("drop") => try event_manager.setInlineListener(target, .drop, func),
-                    asUint("load") => try event_manager.setInlineListener(target, .load, func),
-                    asUint("play") => try event_manager.setInlineListener(target, .play, func),
+                    asUint("blur") => try self.setAttrListener(element, .blur, func),
+                    asUint("copy") => try self.setAttrListener(element, .copy, func),
+                    asUint("drag") => try self.setAttrListener(element, .drag, func),
+                    asUint("drop") => try self.setAttrListener(element, .drop, func),
+                    asUint("load") => try self.setAttrListener(element, .load, func),
+                    asUint("play") => try self.setAttrListener(element, .play, func),
                     else => {},
                 },
                 5 => switch (@as(u40, @bitCast(unsafe[0..5].*))) {
-                    asUint("abort") => try event_manager.setInlineListener(target, .abort, func),
-                    asUint("click") => try event_manager.setInlineListener(target, .click, func),
-                    asUint("close") => try event_manager.setInlineListener(target, .close, func),
-                    asUint("ended") => try event_manager.setInlineListener(target, .ended, func),
-                    asUint("error") => try event_manager.setInlineListener(target, .@"error", func),
-                    asUint("focus") => try event_manager.setInlineListener(target, .focus, func),
-                    asUint("input") => try event_manager.setInlineListener(target, .input, func),
-                    asUint("keyup") => try event_manager.setInlineListener(target, .keyup, func),
-                    asUint("paste") => try event_manager.setInlineListener(target, .paste, func),
-                    asUint("pause") => try event_manager.setInlineListener(target, .pause, func),
-                    asUint("reset") => try event_manager.setInlineListener(target, .reset, func),
-                    asUint("wheel") => try event_manager.setInlineListener(target, .wheel, func),
+                    asUint("abort") => try self.setAttrListener(element, .abort, func),
+                    asUint("click") => try self.setAttrListener(element, .click, func),
+                    asUint("close") => try self.setAttrListener(element, .close, func),
+                    asUint("ended") => try self.setAttrListener(element, .ended, func),
+                    asUint("error") => try self.setAttrListener(element, .@"error", func),
+                    asUint("focus") => try self.setAttrListener(element, .focus, func),
+                    asUint("input") => try self.setAttrListener(element, .input, func),
+                    asUint("keyup") => try self.setAttrListener(element, .keyup, func),
+                    asUint("paste") => try self.setAttrListener(element, .paste, func),
+                    asUint("pause") => try self.setAttrListener(element, .pause, func),
+                    asUint("reset") => try self.setAttrListener(element, .reset, func),
+                    asUint("wheel") => try self.setAttrListener(element, .wheel, func),
                     else => {},
                 },
                 6 => switch (@as(u48, @bitCast(unsafe[0..6].*))) {
-                    asUint("cancel") => try event_manager.setInlineListener(target, .cancel, func),
-                    asUint("change") => try event_manager.setInlineListener(target, .change, func),
-                    asUint("resize") => try event_manager.setInlineListener(target, .resize, func),
-                    asUint("scroll") => try event_manager.setInlineListener(target, .scroll, func),
-                    asUint("seeked") => try event_manager.setInlineListener(target, .seeked, func),
-                    asUint("select") => try event_manager.setInlineListener(target, .select, func),
-                    asUint("submit") => try event_manager.setInlineListener(target, .submit, func),
-                    asUint("toggle") => try event_manager.setInlineListener(target, .toggle, func),
+                    asUint("cancel") => try self.setAttrListener(element, .cancel, func),
+                    asUint("change") => try self.setAttrListener(element, .change, func),
+                    asUint("resize") => try self.setAttrListener(element, .resize, func),
+                    asUint("scroll") => try self.setAttrListener(element, .scroll, func),
+                    asUint("seeked") => try self.setAttrListener(element, .seeked, func),
+                    asUint("select") => try self.setAttrListener(element, .select, func),
+                    asUint("submit") => try self.setAttrListener(element, .submit, func),
+                    asUint("toggle") => try self.setAttrListener(element, .toggle, func),
                     else => {},
                 },
                 7 => switch (@as(u56, @bitCast(unsafe[0..7].*))) {
-                    asUint("canplay") => try event_manager.setInlineListener(target, .canplay, func),
-                    asUint("command") => try event_manager.setInlineListener(target, .command, func),
-                    asUint("dragend") => try event_manager.setInlineListener(target, .dragend, func),
-                    asUint("emptied") => try event_manager.setInlineListener(target, .emptied, func),
-                    asUint("invalid") => try event_manager.setInlineListener(target, .invalid, func),
-                    asUint("keydown") => try event_manager.setInlineListener(target, .keydown, func),
-                    asUint("mouseup") => try event_manager.setInlineListener(target, .mouseup, func),
-                    asUint("playing") => try event_manager.setInlineListener(target, .playing, func),
-                    asUint("seeking") => try event_manager.setInlineListener(target, .seeking, func),
-                    asUint("stalled") => try event_manager.setInlineListener(target, .stalled, func),
-                    asUint("suspend") => try event_manager.setInlineListener(target, .@"suspend", func),
-                    asUint("waiting") => try event_manager.setInlineListener(target, .waiting, func),
+                    asUint("canplay") => try self.setAttrListener(element, .canplay, func),
+                    asUint("command") => try self.setAttrListener(element, .command, func),
+                    asUint("dragend") => try self.setAttrListener(element, .dragend, func),
+                    asUint("emptied") => try self.setAttrListener(element, .emptied, func),
+                    asUint("invalid") => try self.setAttrListener(element, .invalid, func),
+                    asUint("keydown") => try self.setAttrListener(element, .keydown, func),
+                    asUint("mouseup") => try self.setAttrListener(element, .mouseup, func),
+                    asUint("playing") => try self.setAttrListener(element, .playing, func),
+                    asUint("seeking") => try self.setAttrListener(element, .seeking, func),
+                    asUint("stalled") => try self.setAttrListener(element, .stalled, func),
+                    asUint("suspend") => try self.setAttrListener(element, .@"suspend", func),
+                    asUint("waiting") => try self.setAttrListener(element, .waiting, func),
                     else => {},
                 },
                 8 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("auxclick") => try event_manager.setInlineListener(target, .auxclick, func),
-                    asUint("dblclick") => try event_manager.setInlineListener(target, .dblclick, func),
-                    asUint("dragexit") => try event_manager.setInlineListener(target, .dragexit, func),
-                    asUint("dragover") => try event_manager.setInlineListener(target, .dragover, func),
-                    asUint("formdata") => try event_manager.setInlineListener(target, .formdata, func),
-                    asUint("keypress") => try event_manager.setInlineListener(target, .keypress, func),
-                    asUint("mouseout") => try event_manager.setInlineListener(target, .mouseout, func),
-                    asUint("progress") => try event_manager.setInlineListener(target, .progress, func),
+                    asUint("auxclick") => try self.setAttrListener(element, .auxclick, func),
+                    asUint("dblclick") => try self.setAttrListener(element, .dblclick, func),
+                    asUint("dragexit") => try self.setAttrListener(element, .dragexit, func),
+                    asUint("dragover") => try self.setAttrListener(element, .dragover, func),
+                    asUint("formdata") => try self.setAttrListener(element, .formdata, func),
+                    asUint("keypress") => try self.setAttrListener(element, .keypress, func),
+                    asUint("mouseout") => try self.setAttrListener(element, .mouseout, func),
+                    asUint("progress") => try self.setAttrListener(element, .progress, func),
                     else => {},
                 },
                 // Won't fit to 64-bit integer; we do 2 checks.
                 9 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("cuechang") => if (unsafe[8] == 'e') try event_manager.setInlineListener(target, .cuechange, func),
-                    asUint("dragente") => if (unsafe[8] == 'r') try event_manager.setInlineListener(target, .dragenter, func),
-                    asUint("dragleav") => if (unsafe[8] == 'e') try event_manager.setInlineListener(target, .dragleave, func),
-                    asUint("dragstar") => if (unsafe[8] == 't') try event_manager.setInlineListener(target, .dragstart, func),
-                    asUint("loadstar") => if (unsafe[8] == 't') try event_manager.setInlineListener(target, .loadstart, func),
-                    asUint("mousedow") => if (unsafe[8] == 'n') try event_manager.setInlineListener(target, .mousedown, func),
-                    asUint("mousemov") => if (unsafe[8] == 'e') try event_manager.setInlineListener(target, .mousemove, func),
-                    asUint("mouseove") => if (unsafe[8] == 'r') try event_manager.setInlineListener(target, .mouseover, func),
-                    asUint("pointeru") => if (unsafe[8] == 'p') try event_manager.setInlineListener(target, .pointerup, func),
-                    asUint("scrollen") => if (unsafe[8] == 'd') try event_manager.setInlineListener(target, .scrollend, func),
+                    asUint("cuechang") => if (unsafe[8] == 'e') try self.setAttrListener(element, .cuechange, func),
+                    asUint("dragente") => if (unsafe[8] == 'r') try self.setAttrListener(element, .dragenter, func),
+                    asUint("dragleav") => if (unsafe[8] == 'e') try self.setAttrListener(element, .dragleave, func),
+                    asUint("dragstar") => if (unsafe[8] == 't') try self.setAttrListener(element, .dragstart, func),
+                    asUint("loadstar") => if (unsafe[8] == 't') try self.setAttrListener(element, .loadstart, func),
+                    asUint("mousedow") => if (unsafe[8] == 'n') try self.setAttrListener(element, .mousedown, func),
+                    asUint("mousemov") => if (unsafe[8] == 'e') try self.setAttrListener(element, .mousemove, func),
+                    asUint("mouseove") => if (unsafe[8] == 'r') try self.setAttrListener(element, .mouseover, func),
+                    asUint("pointeru") => if (unsafe[8] == 'p') try self.setAttrListener(element, .pointerup, func),
+                    asUint("scrollen") => if (unsafe[8] == 'd') try self.setAttrListener(element, .scrollend, func),
                     else => {},
                 },
                 10 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
                     asUint("loadedda") => if (asUint("ta") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try event_manager.setInlineListener(target, .loadeddata, func),
+                        try self.setAttrListener(element, .loadeddata, func),
                     asUint("pointero") => if (asUint("ut") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try event_manager.setInlineListener(target, .pointerout, func),
+                        try self.setAttrListener(element, .pointerout, func),
                     asUint("ratechan") => if (asUint("ge") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try event_manager.setInlineListener(target, .ratechange, func),
+                        try self.setAttrListener(element, .ratechange, func),
                     asUint("slotchan") => if (asUint("ge") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try event_manager.setInlineListener(target, .slotchange, func),
+                        try self.setAttrListener(element, .slotchange, func),
                     asUint("timeupda") => if (asUint("te") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try event_manager.setInlineListener(target, .timeupdate, func),
+                        try self.setAttrListener(element, .timeupdate, func),
                     else => {},
                 },
                 11 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
                     asUint("beforein") => if (asUint("put") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .beforeinput, func),
+                        try self.setAttrListener(element, .beforeinput, func),
                     asUint("beforema") => if (asUint("tch") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .beforematch, func),
+                        try self.setAttrListener(element, .beforematch, func),
                     asUint("contextl") => if (asUint("ost") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .contextlost, func),
+                        try self.setAttrListener(element, .contextlost, func),
                     asUint("contextm") => if (asUint("enu") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .contextmenu, func),
+                        try self.setAttrListener(element, .contextmenu, func),
                     asUint("pointerd") => if (asUint("own") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .pointerdown, func),
+                        try self.setAttrListener(element, .pointerdown, func),
                     asUint("pointerm") => if (asUint("ove") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .pointermove, func),
+                        try self.setAttrListener(element, .pointermove, func),
                     asUint("pointero") => if (asUint("ver") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .pointerover, func),
+                        try self.setAttrListener(element, .pointerover, func),
                     asUint("selectst") => if (asUint("art") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try event_manager.setInlineListener(target, .selectstart, func),
+                        try self.setAttrListener(element, .selectstart, func),
                     else => {},
                 },
                 12 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
                     asUint("animatio") => if (asUint("nend") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try event_manager.setInlineListener(target, .animationend, func),
+                        try self.setAttrListener(element, .animationend, func),
                     asUint("beforeto") => if (asUint("ggle") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try event_manager.setInlineListener(target, .beforetoggle, func),
+                        try self.setAttrListener(element, .beforetoggle, func),
                     asUint("pointere") => if (asUint("nter") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try event_manager.setInlineListener(target, .pointerenter, func),
+                        try self.setAttrListener(element, .pointerenter, func),
                     asUint("pointerl") => if (asUint("eave") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try event_manager.setInlineListener(target, .pointerleave, func),
+                        try self.setAttrListener(element, .pointerleave, func),
                     asUint("volumech") => if (asUint("ange") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try event_manager.setInlineListener(target, .volumechange, func),
+                        try self.setAttrListener(element, .volumechange, func),
                     else => {},
                 },
                 13 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
                     asUint("pointerc") => if (asUint("ancel") == @as(u40, @bitCast(unsafe[8..13].*)))
-                        try event_manager.setInlineListener(target, .pointercancel, func),
+                        try self.setAttrListener(element, .pointercancel, func),
                     asUint("transiti") => switch (@as(u40, @bitCast(unsafe[8..13].*))) {
-                        asUint("onend") => try event_manager.setInlineListener(target, .transitionend, func),
-                        asUint("onrun") => try event_manager.setInlineListener(target, .transitionrun, func),
+                        asUint("onend") => try self.setAttrListener(element, .transitionend, func),
+                        asUint("onrun") => try self.setAttrListener(element, .transitionrun, func),
                         else => {},
                     },
                     else => {},
                 },
                 14 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
                     asUint("animatio") => if (asUint("nstart") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try event_manager.setInlineListener(target, .animationstart, func),
+                        try self.setAttrListener(element, .animationstart, func),
                     asUint("canplayt") => if (asUint("hrough") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try event_manager.setInlineListener(target, .canplaythrough, func),
+                        try self.setAttrListener(element, .canplaythrough, func),
                     asUint("duration") => if (asUint("change") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try event_manager.setInlineListener(target, .durationchange, func),
+                        try self.setAttrListener(element, .durationchange, func),
                     asUint("loadedme") => if (asUint("tadata") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try event_manager.setInlineListener(target, .loadedmetadata, func),
+                        try self.setAttrListener(element, .loadedmetadata, func),
                     else => {},
                 },
                 15 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
                     asUint("animatio") => if (asUint("ncancel") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try event_manager.setInlineListener(target, .animationcancel, func),
+                        try self.setAttrListener(element, .animationcancel, func),
                     asUint("contextr") => if (asUint("estored") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try event_manager.setInlineListener(target, .contextrestored, func),
+                        try self.setAttrListener(element, .contextrestored, func),
                     asUint("fullscre") => if (asUint("enerror") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try event_manager.setInlineListener(target, .fullscreenerror, func),
+                        try self.setAttrListener(element, .fullscreenerror, func),
                     asUint("selectio") => if (asUint("nchange") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try event_manager.setInlineListener(target, .selectionchange, func),
+                        try self.setAttrListener(element, .selectionchange, func),
                     asUint("transiti") => if (asUint("onstart") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try event_manager.setInlineListener(target, .transitionstart, func),
+                        try self.setAttrListener(element, .transitionstart, func),
                     else => {},
                 },
                 // Can't switch on vector types.
@@ -2354,11 +2398,11 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
                     const as_vector: Vec16x8 = unsafe[0..16].*;
 
                     if (@reduce(.And, as_vector == @as(Vec16x8, "fullscreenchange".*))) {
-                        try event_manager.setInlineListener(target, .fullscreenchange, func);
+                        try self.setAttrListener(element, .fullscreenchange, func);
                     } else if (@reduce(.And, as_vector == @as(Vec16x8, "pointerrawupdate".*))) {
-                        try event_manager.setInlineListener(target, .pointerrawupdate, func);
+                        try self.setAttrListener(element, .pointerrawupdate, func);
                     } else if (@reduce(.And, as_vector == @as(Vec16x8, "transitioncancel".*))) {
-                        try event_manager.setInlineListener(target, .transitioncancel, func);
+                        try self.setAttrListener(element, .transitioncancel, func);
                     }
                 },
                 17 => {
@@ -2367,7 +2411,7 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
                     const dirty = @reduce(.And, as_vector == @as(Vec16x8, "gotpointercaptur".*)) and
                         unsafe[16] == 'e';
                     if (dirty) {
-                        try event_manager.setInlineListener(target, .gotpointercapture, func);
+                        try self.setAttrListener(element, .gotpointercapture, func);
                     }
                 },
                 18 => {
@@ -2376,12 +2420,12 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
                     const is_animationiteration = @reduce(.And, as_vector == @as(Vec16x8, "animationiterati".*)) and
                         asUint("on") == @as(u16, @bitCast(unsafe[16..18].*));
                     if (is_animationiteration) {
-                        try event_manager.setInlineListener(target, .animationiteration, func);
+                        try self.setAttrListener(element, .animationiteration, func);
                     } else {
                         const is_lostpointercapture = @reduce(.And, as_vector == @as(Vec16x8, "lostpointercaptu".*)) and
                             asUint("re") == @as(u16, @bitCast(unsafe[16..18].*));
                         if (is_lostpointercapture) {
-                            try event_manager.setInlineListener(target, .lostpointercapture, func);
+                            try self.setAttrListener(element, .lostpointercapture, func);
                         }
                     }
                 },
@@ -2391,14 +2435,14 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
                     const dirty = @reduce(.And, as_vector == @as(Vec16x8, "securitypolicyvi".*)) and
                         asUint("olation") == @as(u56, @bitCast(unsafe[16..23].*));
                     if (dirty) {
-                        try event_manager.setInlineListener(target, .securitypolicyviolation, func);
+                        try self.setAttrListener(element, .securitypolicyviolation, func);
                     }
                 },
                 32 => {
                     const as_vector: Vec32x8 = unsafe[0..32].*;
 
                     if (@reduce(.And, as_vector == @as(Vec32x8, "contentvisibilityautostatechange".*))) {
-                        try event_manager.setInlineListener(target, .contentvisibilityautostatechange, func);
+                        try self.setAttrListener(element, .contentvisibilityautostatechange, func);
                     }
                 },
                 else => {},
