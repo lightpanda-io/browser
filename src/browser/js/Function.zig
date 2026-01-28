@@ -72,12 +72,7 @@ pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Objec
 pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
     return self._tryCallWithThis(T, self.getThis(), args, &caught) catch |err| {
-        log.warn(.js, "call caught", .{
-            .err = err,
-            .exception = caught.exception,
-            .line = caught.line orelse 0,
-            .stack = caught.stack orelse "???",
-        });
+        log.warn(.js, "call caught", .{ .err = err, .caught = caught });
         return err;
     };
 }
@@ -85,27 +80,21 @@ pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
     return self._tryCallWithThis(T, this, args, &caught) catch |err| {
-        log.warn(.js, "callWithThis caught", .{
-            .err = err,
-            .exception = caught.exception,
-            .line = caught.line orelse 0,
-            .stack = caught.stack orelse "???",
-        });
+        log.warn(.js, "callWithThis caught", .{ .err = err, .caught = caught });
         return err;
     };
 }
 
 pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *js.TryCatch.Caught) !T {
-    caught.* = .{};
     return self._tryCallWithThis(T, self.getThis(), args, caught);
 }
 
 pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
-    caught.* = .{};
     return self._tryCallWithThis(T, this, args, caught);
 }
 
 pub fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
+    caught.* = .{};
     const local = self.local;
 
     // When we're calling a function from within JavaScript itself, this isn't
