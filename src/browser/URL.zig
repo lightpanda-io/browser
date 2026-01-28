@@ -95,7 +95,7 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
                 in_i += 2;
                 continue;
             }
-            if (out[in_i + 1] == '.' and out[in_i + 2] == '/') {  // always safe, because we added two whitespaces
+            if (out[in_i + 1] == '.' and out[in_i + 2] == '/') { // always safe, because we added two whitespaces
                 // /../
                 if (out_i > path_marker) {
                     // go back before the /

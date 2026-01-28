@@ -356,7 +356,7 @@ test "cdp Node: Registry register" {
     }
 
     {
-        const dom_node = (try doc.querySelector(.wrap ("p"), page)).?.asNode();
+        const dom_node = (try doc.querySelector(.wrap("p"), page)).?.asNode();
         const node = try registry.register(dom_node);
         const n1b = registry.lookup_by_id.get(2).?;
         const n1c = registry.lookup_by_node.get(node.dom).?;
@@ -400,18 +400,18 @@ test "cdp Node: search list" {
         defer page._session.removePage();
         var doc = page.window._document;
 
-        const s1 = try search_list.create((try doc.querySelectorAll(.wrap ("a"), page))._nodes);
+        const s1 = try search_list.create((try doc.querySelectorAll(.wrap("a"), page))._nodes);
         try testing.expectEqual("1", s1.name);
         try testing.expectEqualSlices(u32, &.{ 1, 2 }, s1.node_ids);
 
         try testing.expectEqual(2, registry.lookup_by_id.count());
         try testing.expectEqual(2, registry.lookup_by_node.count());
 
-        const s2 = try search_list.create((try doc.querySelectorAll(.wrap ("#a1"), page))._nodes);
+        const s2 = try search_list.create((try doc.querySelectorAll(.wrap("#a1"), page))._nodes);
         try testing.expectEqual("2", s2.name);
         try testing.expectEqualSlices(u32, &.{1}, s2.node_ids);
 
-        const s3 = try search_list.create((try doc.querySelectorAll(.wrap ("#a2"), page))._nodes);
+        const s3 = try search_list.create((try doc.querySelectorAll(.wrap("#a2"), page))._nodes);
         try testing.expectEqual("3", s3.name);
         try testing.expectEqualSlices(u32, &.{2}, s3.node_ids);
 
