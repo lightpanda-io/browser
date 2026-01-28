@@ -174,7 +174,10 @@ call_arena: Allocator,
 arena_pool: *ArenaPool,
 // In Debug, we use this to see if anything fails to release an arena back to
 // the pool.
-_arena_pool_leak_track: (if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, []const u8) else void),
+_arena_pool_leak_track: (if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, struct {
+    owner: []const u8,
+    count: usize,
+}) else void),
 
 window: *Window,
 document: *Document,
@@ -236,7 +239,9 @@ pub fn deinit(self: *Page) void {
     if (comptime IS_DEBUG) {
         var it = self._arena_pool_leak_track.valueIterator();
         while (it.next()) |value_ptr| {
-            log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+            if (value_ptr.count > 0) {
+                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner });
+            }
         }
     }
 
@@ -244,16 +249,19 @@ pub fn deinit(self: *Page) void {
 }
 
 fn reset(self: *Page, comptime initializing: bool) !void {
-    if (comptime IS_DEBUG) {
-        var it = self._arena_pool_leak_track.valueIterator();
-        while (it.next()) |value_ptr| {
-            log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
-        }
-        self._arena_pool_leak_track.clearRetainingCapacity();
-    }
-
     if (comptime initializing == false) {
         self._session.executor.removeContext();
+
+        // removing a context can trigger finalizers, so we can only check for
+        // a leak after the above.
+        if (comptime IS_DEBUG) {
+            var it = self._arena_pool_leak_track.valueIterator();
+            while (it.next()) |value_ptr| {
+                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+            }
+            self._arena_pool_leak_track.clearRetainingCapacity();
+        }
+
 
         // We force a garbage collection between page navigations to keep v8
         // memory usage as low as possible.
@@ -370,14 +378,23 @@ const GetArenaOpts = struct {
 pub fn getArena(self: *Page, comptime opts: GetArenaOpts) !Allocator {
     const allocator = try self.arena_pool.acquire();
     if (comptime IS_DEBUG) {
-        try self._arena_pool_leak_track.put(self.arena, @intFromPtr(allocator.ptr), opts.debug);
+        const gop = try self._arena_pool_leak_track.getOrPut(self.arena, @intFromPtr(allocator.ptr));
+        if (gop.found_existing) {
+            std.debug.assert(gop.value_ptr.count == 0);
+        }
+        gop.value_ptr.* = .{ .owner = opts.debug, .count = 1 };
     }
     return allocator;
 }
 
 pub fn releaseArena(self: *Page, allocator: Allocator) void {
     if (comptime IS_DEBUG) {
-        _ = self._arena_pool_leak_track.remove(@intFromPtr(allocator.ptr));
+        const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
+        if (found.count != 1) {
+            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count });
+            return;
+        }
+        found.count = 0;
     }
     return self.arena_pool.release(allocator);
 }
