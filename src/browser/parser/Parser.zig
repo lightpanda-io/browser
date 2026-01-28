@@ -383,7 +383,7 @@ fn _appendCallback(self: *Parser, parent: *Node, node_or_text: h5e.NodeOrText) !
                 if (comptime IS_DEBUG) {
                     unreachable;
                 }
-                self._page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
+                self.page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
             }
             try self.page.appendNew(parent, .{ .node = child });
         },
