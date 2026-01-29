@@ -32,7 +32,7 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget xz-utils ca-certificates gcc make git
+        sudo apt-get install -y wget xz-utils ca-certificates clang make git
 
     # Zig version used from the `minimum_zig_version` field in build.zig.zon
     - uses: mlugg/setup-zig@v2

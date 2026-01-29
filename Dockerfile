@@ -8,7 +8,8 @@ ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \
     apt-get install -yq xz-utils ca-certificates \
-        gcc make curl git
+        pkg-config libglib2.0-dev \
+        clang make curl git
 
 # Get Rust
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --profile minimal -y
