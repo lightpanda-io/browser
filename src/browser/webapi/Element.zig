@@ -643,7 +643,7 @@ pub fn setAttributeNS(
     self: *Element,
     maybe_namespace: ?[]const u8,
     qualified_name: []const u8,
-    value: []const u8,
+    value: String,
     page: *Page,
 ) !void {
     if (maybe_namespace) |namespace| {
@@ -656,7 +656,7 @@ pub fn setAttributeNS(
         qualified_name[idx + 1 ..]
     else
         qualified_name;
-    return self.setAttribute(.wrap(local_name), .wrap(value), page);
+    return self.setAttribute(.wrap(local_name), value, page);
 }
 
 pub fn setAttributeSafe(self: *Element, name: String, value: String, page: *Page) !void {
@@ -1533,6 +1533,11 @@ pub const JsApi = struct {
         return self.setAttribute(name, .wrap(try value.toString(.{ .allocator = page.call_arena })), page);
     }
 
+    pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .dom_exception = true });
+    fn _setAttributeNS(self: *Element, maybe_ns: ?[]const u8, qn: []const u8, value: js.Value, page: *Page) !void {
+        return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toString(.{ .allocator = page.call_arena })), page);
+    }
+
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
     pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{});
@@ -1547,7 +1552,6 @@ pub const JsApi = struct {
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
-    pub const setAttributeNS = bridge.function(Element.setAttributeNS, .{ .dom_exception = true });
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{});
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
     pub const toggleAttribute = bridge.function(Element.toggleAttribute, .{ .dom_exception = true });
