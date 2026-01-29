@@ -17,16 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const jsonStringify = std.json.Stringify;
 
 const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
 const DOMNode = @import("../browser/webapi/Node.zig");
-const URL = @import("../browser/URL.zig");
+
+const Node = @import("Node.zig");
 
 const AXNode = @This();
-const Node = @import("Node.zig");
 
 // Need a custom writer, because we can't just serialize the node as-is.
 // Sometimes we want to serializ the node without chidren, sometimes with just

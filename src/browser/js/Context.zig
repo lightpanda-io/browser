@@ -22,7 +22,6 @@ const log = @import("../../log.zig");
 
 const js = @import("js.zig");
 const bridge = @import("bridge.zig");
-const TaggedOpaque = @import("TaggedOpaque.zig");
 
 const Page = @import("../Page.zig");
 const ScriptManager = @import("../ScriptManager.zig");

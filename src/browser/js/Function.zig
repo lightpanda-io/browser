@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -21,8 +21,6 @@ const js = @import("js.zig");
 const v8 = js.v8;
 
 const log = @import("../../log.zig");
-
-const Allocator = std.mem.Allocator;
 
 const Function = @This();
 

@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -19,7 +19,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
