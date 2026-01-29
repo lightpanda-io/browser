@@ -1530,12 +1530,12 @@ pub const JsApi = struct {
 
     pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true });
     fn _setAttribute(self: *Element, name: String, value: js.Value, page: *Page) !void {
-        return self.setAttribute(name, .wrap(try value.toString(.{ .allocator = page.call_arena })), page);
+        return self.setAttribute(name, .wrap(try value.toStringSlice()), page);
     }
 
     pub const setAttributeNS = bridge.function(_setAttributeNS, .{ .dom_exception = true });
     fn _setAttributeNS(self: *Element, maybe_ns: ?[]const u8, qn: []const u8, value: js.Value, page: *Page) !void {
-        return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toString(.{ .allocator = page.call_arena })), page);
+        return self.setAttributeNS(maybe_ns, qn, .wrap(try value.toStringSlice()), page);
     }
 
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
