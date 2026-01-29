@@ -248,7 +248,7 @@
 }
 </script>
 
-<div id=legacy></a>
+<a id=legacy></a>
 <script id=legacy>
   {
     let a = document.getElementById('legacy').attributes;
@@ -264,5 +264,21 @@
     testing.expectEqual(undefined, a['other']);
     a[0].value = 'abc123';
     testing.expectEqual('abc123', a[0].value);
+  }
+</script>
+
+<div id="nsa"></div>
+<script id=non-string-attr>
+  {
+    let nsa = document.getElementById('nsa');
+
+    nsa.setAttribute('int', 1);
+    testing.expectEqual('1', nsa.getAttribute('int'));
+
+    nsa.setAttribute('obj', {});
+    testing.expectEqual('[object Object]', nsa.getAttribute('obj'));
+
+    nsa.setAttribute('arr', []);
+    testing.expectEqual('', nsa.getAttribute('arr'));
   }
 </script>

@@ -1528,6 +1528,11 @@ pub const JsApi = struct {
         return null;
     }
 
+    pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true });
+    fn _setAttribute(self: *Element, name: String, value: js.Value, page: *Page) !void {
+        return self.setAttribute(name, .wrap(try value.toString(.{ .allocator = page.call_arena })), page);
+    }
+
     pub const localName = bridge.accessor(Element.getLocalName, null, .{});
     pub const id = bridge.accessor(Element.getId, Element.setId, .{});
     pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{});
@@ -1542,7 +1547,6 @@ pub const JsApi = struct {
     pub const getAttribute = bridge.function(Element.getAttribute, .{});
     pub const getAttributeNS = bridge.function(Element.getAttributeNS, .{});
     pub const getAttributeNode = bridge.function(Element.getAttributeNode, .{});
-    pub const setAttribute = bridge.function(Element.setAttribute, .{ .dom_exception = true });
     pub const setAttributeNS = bridge.function(Element.setAttributeNS, .{ .dom_exception = true });
     pub const setAttributeNode = bridge.function(Element.setAttributeNode, .{});
     pub const removeAttribute = bridge.function(Element.removeAttribute, .{});
