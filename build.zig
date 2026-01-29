@@ -35,7 +35,7 @@ pub fn build(b: *Build) !void {
     opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
-    const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer");
+    const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
     const enable_csan = b.option(std.zig.SanitizeC, "csan", "Enable C Sanitizers");
 
     const lightpanda_module = blk: {
@@ -50,7 +50,7 @@ pub fn build(b: *Build) !void {
         });
         mod.addImport("lightpanda", mod); // allow circular "lightpanda" import
 
-        try addDependencies(b, mod, opts, prebuilt_v8_path);
+        try addDependencies(b, mod, opts, prebuilt_v8_path, enable_tsan);
 
         break :blk mod;
     };
@@ -170,7 +170,7 @@ pub fn build(b: *Build) !void {
     }
 }
 
-fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, prebuilt_v8_path: ?[]const u8) !void {
+fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, prebuilt_v8_path: ?[]const u8, is_tsan: bool) !void {
     mod.addImport("build_config", opts.createModule());
 
     const target = mod.resolved_target.?;
@@ -179,6 +179,8 @@ fn addDependencies(b: *Build, mod: *Build.Module, opts: *Build.Step.Options, pre
         .optimize = mod.optimize.?,
         .prebuilt_v8_path = prebuilt_v8_path,
         .cache_root = b.pathFromRoot(".lp-cache"),
+        .is_tsan = is_tsan,
+        .v8_enable_sandbox = is_tsan, // v8 contains a bug and cannot be compiled with tsan without a sandbox.
     };
 
     mod.addIncludePath(b.path("vendor/lightpanda"));

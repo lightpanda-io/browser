@@ -20,7 +20,7 @@ const std = @import("std");
 
 const TestHTTPServer = @This();
 
-shutdown: bool,
+shutdown: std.atomic.Value(bool),
 listener: ?std.net.Server,
 handler: Handler,
 
@@ -28,17 +28,23 @@ const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
 
 pub fn init(handler: Handler) TestHTTPServer {
     return .{
-        .shutdown = true,
+        .shutdown = .init(false),
         .listener = null,
         .handler = handler,
     };
 }
 
-pub fn deinit(self: *TestHTTPServer) void {
-    self.shutdown = true;
+pub fn stop(self: *TestHTTPServer) void {
+    self.shutdown.store(true, .release);
     if (self.listener) |*listener| {
-        listener.deinit();
+        // Close the socket to unblock accept(), but don't call deinit()
+        // which does memset and causes a data race with the running thread.
+        std.posix.close(listener.stream.handle);
     }
+}
+
+pub fn deinit(self: *TestHTTPServer) void {
+    self.listener = null;
 }
 
 pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
@@ -47,14 +53,19 @@ pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
     self.listener = try address.listen(.{ .reuse_address = true });
     var listener = &self.listener.?;
 
+    // Make listener nonblocking so accept() doesn't block indefinitely
+    _ = try std.posix.fcntl(listener.stream.handle, std.posix.F.SETFL, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })));
+
     wg.finish();
 
-    while (true) {
+    while (!self.shutdown.load(.acquire)) {
         const conn = listener.accept() catch |err| {
-            if (self.shutdown) {
-                return;
+            if (err == error.WouldBlock) {
+                std.Thread.sleep(10 * std.time.ns_per_ms);
+                continue;
             }
-            return err;
+            // Socket was closed in stop()
+            return;
         };
         const thrd = try std.Thread.spawn(.{}, handleConnection, .{ self, conn });
         thrd.detach();
