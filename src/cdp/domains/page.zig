@@ -190,8 +190,7 @@ fn createIsolatedWorld(cmd: anytype) !void {
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-    try world.createContext(page);
-    const js_context = &world.executor.context.?;
+    const js_context = try world.createContext(page);
 
     // Create the auxdata json for the contextCreated event
     // Calling contextCreated will assign a Id to the context and send the contextCreated event
@@ -292,7 +291,7 @@ pub fn pageRemove(bc: anytype) !void {
 
 pub fn pageCreated(bc: anytype, page: *Page) !void {
     for (bc.isolated_worlds.items) |*isolated_world| {
-        try isolated_world.createContext(page);
+        _ = try isolated_world.createContext(page);
     }
 }
 
@@ -375,7 +374,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
 
         var ls: js.Local.Scope = undefined;
-        (isolated_world.executor.context orelse continue).localScope(&ls);
+        (isolated_world.context orelse continue).localScope(&ls);
         defer ls.deinit();
 
         bc.inspector.contextCreated(

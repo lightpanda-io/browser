@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 
 const js = @import("js.zig");
+const Env = @import("Env.zig");
 const bridge = @import("bridge.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
@@ -38,6 +39,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 const Context = @This();
 
 id: usize,
+env: *Env,
 page: *Page,
 isolate: js.Isolate,
 
@@ -207,6 +209,7 @@ pub fn deinit(self: *Context) void {
         v8.v8__Context__Exit(ls.local.handle);
     }
     v8.v8__Global__Reset(&self.handle);
+    self.env.app.arena_pool.release(self.arena);
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
