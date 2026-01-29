@@ -53,7 +53,6 @@ arena: Allocator,
 // page and start another.
 transfer_arena: Allocator,
 
-executor: js.ExecutionWorld,
 cookie_jar: storage.Cookie.Jar,
 storage_shed: storage.Shed,
 
@@ -63,20 +62,16 @@ navigation: Navigation,
 page: ?*Page = null,
 
 pub fn init(self: *Session, browser: *Browser) !void {
-    var executor = try browser.env.newExecutionWorld();
-    errdefer executor.deinit();
-
     const allocator = browser.app.allocator;
     const session_allocator = browser.session_arena.allocator();
 
     self.* = .{
-        .browser = browser,
-        .executor = executor,
+        .history = .{},
+        .navigation = .{},
         .storage_shed = .{},
+        .browser = browser,
         .arena = session_allocator,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
-        .navigation = .{},
-        .history = .{},
         .transfer_arena = browser.transfer_arena.allocator(),
     };
 }
@@ -87,7 +82,6 @@ pub fn deinit(self: *Session) void {
     }
     self.cookie_jar.deinit();
     self.storage_shed.deinit(self.browser.app.allocator);
-    self.executor.deinit();
 }
 
 // NOTE: the caller is not the owner of the returned value,

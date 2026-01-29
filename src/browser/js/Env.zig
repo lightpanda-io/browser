@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
+const App = @import("../../App.zig");
 const log = @import("../../log.zig");
 
 const bridge = @import("bridge.zig");
@@ -28,13 +29,13 @@ const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
 const Snapshot = @import("Snapshot.zig");
 const Inspector = @import("Inspector.zig");
-const ExecutionWorld = @import("ExecutionWorld.zig");
 
+const Page = @import("../Page.zig");
 const Window = @import("../webapi/Window.zig");
 
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // The Env maps to a V8 isolate, which represents a isolated sandbox for
 // executing JavaScript. The Env is where we'll define our V8 <-> Zig bindings,
@@ -44,12 +45,14 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 // The `types` parameter is a tuple of Zig structures we want to bind to V8.
 const Env = @This();
 
-allocator: Allocator,
+app: *App,
 
 platform: *const Platform,
 
 // the global isolate
 isolate: js.Isolate,
+
+contexts: std.ArrayList(*js.Context),
 
 // just kept around because we need to free it on deinit
 isolate_params: *v8.CreateParams,
@@ -65,7 +68,10 @@ templates: []*const v8.FunctionTemplate,
 // Global template created once per isolate and reused across all contexts
 global_template: v8.Eternal,
 
-pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot) !Env {
+pub fn init(app: *App) !Env {
+    const allocator = app.allocator;
+    const snapshot = &app.snapshot;
+
     var params = try allocator.create(v8.CreateParams);
     errdefer allocator.destroy(params);
     v8.v8__Isolate__CreateParams__CONSTRUCT(params);
@@ -140,10 +146,11 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
     }
 
     return .{
+        .app = app,
         .context_id = 0,
+        .contexts = .empty,
         .isolate = isolate,
-        .platform = platform,
-        .allocator = allocator,
+        .platform = &app.platform,
         .templates = templates,
         .isolate_params = params,
         .eternal_function_templates = eternal_function_templates,
@@ -152,13 +159,94 @@ pub fn init(allocator: Allocator, platform: *const Platform, snapshot: *Snapshot
 }
 
 pub fn deinit(self: *Env) void {
-    self.allocator.free(self.templates);
-    self.allocator.free(self.eternal_function_templates);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.contexts.items.len == 0);
+    }
+    for (self.contexts.items) |ctx| {
+        ctx.deinit();
+    }
+
+    const allocator = self.app.allocator;
+    self.contexts.deinit(allocator);
+
+    allocator.free(self.templates);
+    allocator.free(self.eternal_function_templates);
 
     self.isolate.exit();
     self.isolate.deinit();
     v8.v8__ArrayBuffer__Allocator__DELETE(self.isolate_params.array_buffer_allocator.?);
-    self.allocator.destroy(self.isolate_params);
+    allocator.destroy(self.isolate_params);
+}
+
+pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
+    const context_arena = try self.app.arena_pool.acquire();
+    errdefer self.app.arena_pool.release(context_arena);
+
+    const isolate = self.isolate;
+    var hs: js.HandleScope = undefined;
+    hs.init(isolate);
+    defer hs.deinit();
+
+    // Get the global template that was created once per isolate
+    const global_template: *const v8.ObjectTemplate = @ptrCast(@alignCast(v8.v8__Eternal__Get(&self.global_template, isolate.handle).?));
+    const v8_context = v8.v8__Context__New(isolate.handle, global_template, null).?;
+
+    // Create the v8::Context and wrap it in a v8::Global
+    var context_global: v8.Global = undefined;
+    v8.v8__Global__New(isolate.handle, v8_context, &context_global);
+
+    // our window wrapped in a v8::Global
+    const global_obj = v8.v8__Context__Global(v8_context).?;
+    var global_global: v8.Global = undefined;
+    v8.v8__Global__New(isolate.handle, global_obj, &global_global);
+
+    if (enter) {
+        v8.v8__Context__Enter(v8_context);
+    }
+    errdefer if (enter) {
+        v8.v8__Context__Exit(v8_context);
+    };
+
+    const context_id = self.context_id;
+    self.context_id = context_id + 1;
+
+    const context = try context_arena.create(Context);
+    context.* = .{
+        .env = self,
+        .page = page,
+        .id = context_id,
+        .entered = enter,
+        .isolate = isolate,
+        .arena = context_arena,
+        .handle = context_global,
+        .templates = self.templates,
+        .script_manager = &page._script_manager,
+        .call_arena = page.call_arena,
+    };
+    try context.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
+
+    // Store a pointer to our context inside the v8 context so that, given
+    // a v8 context, we can get our context out
+    const data = isolate.initBigInt(@intFromPtr(context));
+    v8.v8__Context__SetEmbedderData(v8_context, 1, @ptrCast(data.handle));
+
+    try self.contexts.append(self.app.allocator, context);
+    return context;
+}
+
+pub fn destroyContext(self: *Env, context: *Context) void {
+    for (self.contexts.items, 0..) |ctx, i| {
+        if (ctx == context) {
+            _ = self.contexts.swapRemove(i);
+            break;
+        }
+    } else {
+        if (comptime IS_DEBUG) {
+            @panic("Tried to remove unknown context");
+        }
+    }
+    context.deinit();
+    self.isolate.notifyContextDisposed();
 }
 
 pub fn newInspector(self: *Env, arena: Allocator, ctx: anytype) !*Inspector {
@@ -181,13 +269,6 @@ pub fn pumpMessageLoop(self: *const Env) bool {
 
 pub fn runIdleTasks(self: *const Env) void {
     v8.v8__Platform__RunIdleTasks(self.platform.handle, self.isolate.handle, 1);
-}
-pub fn newExecutionWorld(self: *Env) !ExecutionWorld {
-    return .{
-        .env = self,
-        .context = null,
-        .context_arena = ArenaAllocator.init(self.allocator),
-    };
 }
 
 // V8 doesn't immediately free memory associated with

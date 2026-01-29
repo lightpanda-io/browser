@@ -288,7 +288,7 @@ fn resolveNode(cmd: anytype) !void {
             ls.?.deinit();
             ls = null;
 
-            const ctx = &(isolated_world.executor.context orelse return error.ContextNotFound);
+            const ctx = (isolated_world.context orelse return error.ContextNotFound);
             ls = undefined;
             ctx.localScope(&ls.?);
             if (ls.?.local.debugContextId() == context_id) {

@@ -244,7 +244,7 @@ pub fn deinit(self: *Page) void {
     }
 
     const session = self._session;
-    session.executor.removeContext();
+    session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
     session.browser.http_client.abort();
@@ -263,8 +263,10 @@ pub fn deinit(self: *Page) void {
 }
 
 fn reset(self: *Page, comptime initializing: bool) !void {
+    const browser = self._session.browser;
+
     if (comptime initializing == false) {
-        self._session.executor.removeContext();
+        browser.env.destroyContext(self.js);
 
         // removing a context can trigger finalizers, so we can only check for
         // a leak after the above.
@@ -276,15 +278,14 @@ fn reset(self: *Page, comptime initializing: bool) !void {
             self._arena_pool_leak_track.clearRetainingCapacity();
         }
 
-
         // We force a garbage collection between page navigations to keep v8
         // memory usage as low as possible.
-        self._session.browser.env.memoryPressureNotification(.moderate);
+        browser.env.memoryPressureNotification(.moderate);
 
         self._script_manager.shutdown = true;
-        self._session.browser.http_client.abort();
+        browser.http_client.abort();
         self._script_manager.deinit();
-        _ = self._session.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+        _ = browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
     }
 
     self._factory = Factory.init(self);
@@ -320,7 +321,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._script_manager = ScriptManager.init(self);
     errdefer self._script_manager.deinit();
 
-    self.js = try self._session.executor.createContext(self, true);
+    self.js = try browser.env.createContext(self, true);
     errdefer self.js.deinit();
 
     self._element_styles = .{};

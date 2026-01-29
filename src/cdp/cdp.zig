@@ -467,15 +467,13 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
-            var executor = try self.cdp.browser.env.newExecutionWorld();
-            errdefer executor.deinit();
-
             const owned_name = try self.arena.dupe(u8, world_name);
             const world = try self.isolated_worlds.addOne(self.arena);
 
             world.* = .{
+                .context = null,
                 .name = owned_name,
-                .executor = executor,
+                .env = &self.cdp.browser.env,
                 .grant_universal_access = grant_universal_access,
             };
 
@@ -746,15 +744,20 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 const IsolatedWorld = struct {
     name: []const u8,
-    executor: js.ExecutionWorld,
+    env: *js.Env,
+    context: ?*js.Context = null,
     grant_universal_access: bool,
 
     pub fn deinit(self: *IsolatedWorld) void {
-        self.executor.deinit();
+        if (self.context) |ctx| {
+            self.env.destroyContext(ctx);
+            self.context = null;
+        }
     }
     pub fn removeContext(self: *IsolatedWorld) !void {
-        if (self.executor.context == null) return error.NoIsolatedContextToRemove;
-        self.executor.removeContext();
+        const ctx = self.context orelse return error.NoIsolatedContextToRemove;
+        self.env.destroyContext(ctx);
+        self.context = null;
     }
 
     // The isolate world must share at least some of the state with the related page, specifically the DocumentHTML
@@ -762,19 +765,16 @@ const IsolatedWorld = struct {
     // We just created the world and the page. The page's state lives in the session, but is update on navigation.
     // This also means this pointer becomes invalid after removePage until a new page is created.
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
-    pub fn createContext(self: *IsolatedWorld, page: *Page) !void {
-        // if (self.executor.context != null) return error.Only1IsolatedContextSupported;
-        if (self.executor.context != null) {
+    pub fn createContext(self: *IsolatedWorld, page: *Page) !*js.Context {
+        if (self.context == null) {
+            self.context = try self.env.createContext(page, false);
+        } else {
             log.warn(.cdp, "not implemented", .{
                 .feature = "createContext: Not implemented second isolated context creation",
                 .info = "reuse existing context",
             });
-            return;
         }
-        _ = try self.executor.createContext(
-            page,
-            false,
-        );
+        return self.context.?;
     }
 };
 

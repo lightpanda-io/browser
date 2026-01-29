@@ -19,7 +19,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 

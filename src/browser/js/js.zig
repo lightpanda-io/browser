@@ -24,7 +24,6 @@ const string = @import("../../string.zig");
 
 pub const Env = @import("Env.zig");
 pub const bridge = @import("bridge.zig");
-pub const ExecutionWorld = @import("ExecutionWorld.zig");
 pub const Caller = @import("Caller.zig");
 pub const Context = @import("Context.zig");
 pub const Local = @import("Local.zig");

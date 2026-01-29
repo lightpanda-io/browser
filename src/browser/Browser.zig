@@ -53,7 +53,7 @@ notification: *Notification,
 pub fn init(app: *App) !Browser {
     const allocator = app.allocator;
 
-    var env = try js.Env.init(allocator, &app.platform, &app.snapshot);
+    var env = try js.Env.init(app);
     errdefer env.deinit();
 
     const notification = try Notification.init(allocator, app.notification);
