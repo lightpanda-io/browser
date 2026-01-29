@@ -32,16 +32,20 @@ const Config = @import("Config.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
 const Http = @import("http/Http.zig");
 const HttpClient = @import("http/Client.zig");
-const ThreadPool = @import("ThreadPool.zig");
 
 const Server = @This();
 
 app: *App,
-shutdown: bool = false,
+shutdown: std.atomic.Value(bool) = .init(false),
 allocator: Allocator,
 listener: ?posix.socket_t,
 json_version_response: []const u8,
-thread_pool: ThreadPool,
+
+// Thread management
+active_threads: std.atomic.Value(u32) = .init(0),
+clients: std.ArrayListUnmanaged(*Client) = .{},
+clients_mu: std.Thread.Mutex = .{},
+clients_pool: std.heap.MemoryPool(Client),
 
 pub fn init(allocator: Allocator, app: *App, address: net.Address) !Server {
     const json_version_response = try buildJSONVersionResponse(allocator, address);
@@ -52,15 +56,22 @@ pub fn init(allocator: Allocator, app: *App, address: net.Address) !Server {
         .listener = null,
         .allocator = allocator,
         .json_version_response = json_version_response,
-        .thread_pool = ThreadPool.init(allocator, app.config.maxConnections()),
+        .clients_pool = std.heap.MemoryPool(Client).init(allocator),
     };
 }
 
 /// Interrupts the server so that main can complete normally and call all defer handlers.
 pub fn stop(self: *Server) void {
-    if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
+    if (self.shutdown.swap(true, .monotonic)) {
         return;
     }
+
+    // Shutdown all active clients
+    self.clients_mu.lock();
+    for (self.clients.items) |client| {
+        client.stop();
+    }
+    self.clients_mu.unlock();
 
     // Linux and BSD/macOS handle canceling a socket blocked on accept differently.
     // For Linux, we use std.shutdown, which will cause accept to return error.SocketNotListening (EINVAL).
@@ -78,11 +89,13 @@ pub fn stop(self: *Server) void {
 }
 
 pub fn deinit(self: *Server) void {
-    self.thread_pool.deinit();
+    self.joinThreads();
     if (self.listener) |listener| {
         posix.close(listener);
         self.listener = null;
     }
+    self.clients.deinit(self.allocator);
+    self.clients_pool.deinit();
     self.allocator.free(self.json_version_response);
 }
 
@@ -100,7 +113,7 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
     try posix.listen(listener, 1);
 
     log.info(.app, "server running", .{ .address = address });
-    while (!@atomicLoad(bool, &self.shutdown, .monotonic)) {
+    while (!self.shutdown.load(.monotonic)) {
         const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
             switch (err) {
                 error.SocketNotListening, error.ConnectionAborted => {
@@ -115,15 +128,11 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
             }
         };
 
-        self.thread_pool.spawn(handleConnection, .{ self, socket, timeout_ms }, shutdownConnection, .{socket}) catch |err| {
+        self.spawnWorker(socket, timeout_ms) catch |err| {
             log.err(.app, "CDP spawn", .{ .err = err });
             posix.close(socket);
         };
     }
-}
-
-fn shutdownConnection(socket: posix.socket_t) void {
-    posix.shutdown(socket, .recv) catch {};
 }
 
 fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
@@ -131,11 +140,11 @@ fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void
 
     // Client is HUGE (> 512KB) because it has a large read buffer.
     // V8 crashes if this is on the stack (likely related to its size).
-    const client = self.allocator.create(Client) catch |err| {
+    const client = self.getClient() catch |err| {
         log.err(.app, "CDP client create", .{ .err = err });
         return;
     };
-    defer self.allocator.destroy(client);
+    defer self.releaseClient(client);
 
     client.* = Client.init(
         socket,
@@ -149,7 +158,65 @@ fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void
     };
     defer client.deinit();
 
-    client.run();
+    self.registerClient(client);
+    defer self.unregisterClient(client);
+
+    client.start();
+}
+
+fn getClient(self: *Server) !*Client {
+    self.clients_mu.lock();
+    defer self.clients_mu.unlock();
+    return self.clients_pool.create();
+}
+
+fn releaseClient(self: *Server, client: *Client) void {
+    self.clients_mu.lock();
+    defer self.clients_mu.unlock();
+    self.clients_pool.destroy(client);
+}
+
+fn registerClient(self: *Server, client: *Client) void {
+    self.clients_mu.lock();
+    defer self.clients_mu.unlock();
+    self.clients.append(self.allocator, client) catch {};
+}
+
+fn unregisterClient(self: *Server, client: *Client) void {
+    self.clients_mu.lock();
+    defer self.clients_mu.unlock();
+    for (self.clients.items, 0..) |c, i| {
+        if (c == client) {
+            _ = self.clients.swapRemove(i);
+            break;
+        }
+    }
+}
+
+fn spawnWorker(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
+    if (self.shutdown.load(.monotonic)) {
+        return error.ShuttingDown;
+    }
+
+    if (self.active_threads.load(.monotonic) >= self.app.config.maxConnections()) {
+        return error.MaxThreadsReached;
+    }
+
+    _ = self.active_threads.fetchAdd(1, .monotonic);
+    errdefer _ = self.active_threads.fetchSub(1, .monotonic);
+
+    _ = try std.Thread.spawn(.{}, runWorker, .{ self, socket, timeout_ms });
+}
+
+fn runWorker(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
+    defer _ = self.active_threads.fetchSub(1, .monotonic);
+    handleConnection(self, socket, timeout_ms);
+}
+
+fn joinThreads(self: *Server) void {
+    while (self.active_threads.load(.monotonic) > 0) {
+        std.Thread.sleep(10 * std.time.ns_per_ms);
+    }
 }
 
 // Handle exactly one TCP connection.
@@ -229,7 +296,7 @@ pub const Client = struct {
         self.http.deinit();
     }
 
-    fn run(self: *Client) void {
+    fn start(self: *Client) void {
         const http = self.http;
         http.cdp_client = .{
             .socket = self.socket,
@@ -243,6 +310,10 @@ pub const Client = struct {
         self.httpLoop(http) catch |err| {
             log.err(.app, "CDP client loop", .{ .err = err });
         };
+    }
+
+    fn stop(self: *Client) void {
+        posix.shutdown(self.socket, .recv) catch {};
     }
 
     fn httpLoop(self: *Client, http: *HttpClient) !void {

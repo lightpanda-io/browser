@@ -24,7 +24,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const App = @import("../App.zig");
-const Http = @import("../http/Http.zig");
 const HttpClient = @import("../http/Client.zig");
 
 const ArenaPool = App.ArenaPool;
@@ -40,8 +39,8 @@ const Session = @import("Session.zig");
 const Browser = @This();
 
 env: js.Env,
-app: *App,
 http_client: *HttpClient,
+user_agent: []const u8,
 session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
@@ -61,9 +60,9 @@ pub fn init(allocator: Allocator, app: *App, http_client: *HttpClient) !Browser 
     errdefer notification.deinit();
 
     return .{
-        .app = app,
         .env = env,
         .http_client = http_client,
+        .user_agent = app.http.user_agent,
         .session = null,
         .allocator = allocator,
         .notification = notification,
