@@ -27,16 +27,22 @@ func main() {
 	}
 
 	lookup :=
-		"const std = @import(\"std\");\n\n" +
+		"const std = @import(\"std\");\n" +
+			"const builtin = @import(\"builtin\");\n\n" +
 			"pub fn lookup(value: []const u8) bool {\n" +
 			"    return public_suffix_list.has(value);\n" +
 			"}\n"
 	fmt.Println(lookup)
 
-	fmt.Println("const public_suffix_list = std.StaticStringMap(void).initComptime([_]struct { []const u8, void }{")
+	fmt.Println("const public_suffix_list = std.StaticStringMap(void).initComptime(entries);\n")
+	fmt.Println("const entries: []const struct { []const u8, void } =")
+	fmt.Println("    if (builtin.is_test) &.{")
+	fmt.Println("        .{ \"api.gov.uk\", {} },")
+	fmt.Println("        .{ \"gov.uk\", {} },")
+	fmt.Println("    } else &.{")
 	for _, domain := range domains {
-		fmt.Printf(`    .{ "%s", {} },`, domain)
+		fmt.Printf(`        .{ "%s", {} },`, domain)
 		fmt.Println()
 	}
-	fmt.Println("});")
+	fmt.Println("    };")
 }
