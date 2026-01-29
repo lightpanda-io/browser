@@ -473,10 +473,10 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 if (ptr.child == u8) {
                     if (ptr.sentinel()) |s| {
                         if (comptime s == 0) {
-                            return self.valueToStringZ(js_val, .{});
+                            return try js_val.toStringSliceZ();
                         }
                     } else {
-                        return self.valueToString(js_val, .{});
+                        return try js_val.toStringSlice();
                     }
                 }
 
@@ -549,10 +549,8 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
         },
         .@"enum" => |e| {
             if (@hasDecl(T, "js_enum_from_string")) {
-                if (!js_val.isString()) {
-                    return error.InvalidArgument;
-                }
-                return std.meta.stringToEnum(T, try self.valueToString(js_val, .{})) orelse return error.InvalidArgument;
+                const js_str = js_val.isString() orelse return error.InvalidArgument;
+                return std.meta.stringToEnum(T, try js_str.toSlice()) orelse return error.InvalidArgument;
             }
             switch (@typeInfo(e.tag_type)) {
                 .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_val)),
@@ -625,17 +623,12 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             return try promise.persist();
         },
         string.String => {
-            if (!js_val.isString()) {
-                return null;
-            }
-            return try self.valueToStringSSO(js_val, .{ .allocator = self.ctx.call_arena });
+            const js_str = js_val.isString() orelse return null;
+            return try js_str.toSSO(false);
         },
         string.Global => {
-            if (!js_val.isString()) {
-                return null;
-            }
-            // Use arena for persistent strings
-            return .{ .str = try self.valueToStringSSO(js_val, .{ .allocator = self.ctx.arena }) };
+            const js_str = js_val.isString() orelse return null;
+            return try js_str.toSSO(true);
         },
         else => {
             if (!js_val.isObject()) {
@@ -883,7 +876,7 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                 }
 
                 if (ptr.child == u8) {
-                    if (js_val.isString()) {
+                    if (v8.v8__Value__IsString(js_val.handle)) {
                         return .{ .ok = {} };
                     }
                     // anything can be coerced into a string
@@ -931,10 +924,11 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                         if (js_arr.len() == arr.len) {
                             return .{ .ok = {} };
                         }
-                    } else if (js_val.isString() and arr.child == u8) {
-                        const str = try js_val.toString(self.local);
-                        if (str.lenUtf8(self.isolate) == arr.len) {
-                            return .{ .ok = {} };
+                    } else if (arr.child == u8) {
+                        if (js_val.isString()) |js_str| {
+                            if (js_str.lenUtf8(self.isolate) == arr.len) {
+                                return .{ .ok = {} };
+                            }
                         }
                     }
                     return .{ .invalid = {} };
@@ -947,7 +941,7 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
         .@"struct" => {
             // Handle string.String and string.Global specially
             if (T == string.String or T == string.Global) {
-                if (js_val.isString()) {
+                if (v8.v8__Value__IsString(js_val.handle)) {
                     return .{ .ok = {} };
                 }
                 // Anything can be coerced to a string
@@ -1080,113 +1074,20 @@ pub fn stackTrace(self: *const Local) !?[]const u8 {
     const frame_count = v8.v8__StackTrace__GetFrameCount(stack_trace_handle);
 
     if (v8.v8__StackTrace__CurrentScriptNameOrSourceURL__STATIC(isolate.handle)) |script| {
-        try writer.print("{s}<{s}>", .{ separator, try self.jsStringToZig(script, .{}) });
+        const stack = js.String{ .local = self, .handle = script };
+        try writer.print("{s}<{f}>", .{ separator, stack });
     }
 
     for (0..@intCast(frame_count)) |i| {
         const frame_handle = v8.v8__StackTrace__GetFrame(stack_trace_handle, isolate.handle, @intCast(i)).?;
         if (v8.v8__StackFrame__GetFunctionName(frame_handle)) |name| {
-            const script = try self.jsStringToZig(name, .{});
-            try writer.print("{s}{s}:{d}", .{ separator, script, v8.v8__StackFrame__GetLineNumber(frame_handle) });
+            const script = js.String{ .local = self, .handle = name };
+            try writer.print("{s}{f}:{d}", .{ separator, script, v8.v8__StackFrame__GetLineNumber(frame_handle) });
         } else {
             try writer.print("{s}<anonymous>:{d}", .{ separator, v8.v8__StackFrame__GetLineNumber(frame_handle) });
         }
     }
     return buf.items;
-}
-
-// == Stringifiers ==
-const ToStringOpts = struct {
-    allocator: ?Allocator = null,
-};
-pub fn valueToString(self: *const Local, js_val: js.Value, opts: ToStringOpts) ![]u8 {
-    return self.valueHandleToString(js_val.handle, opts);
-}
-pub fn valueToStringZ(self: *const Local, js_val: js.Value, opts: ToStringOpts) ![:0]u8 {
-    return self.valueHandleToStringZ(js_val.handle, opts);
-}
-
-pub fn valueHandleToString(self: *const Local, js_val: *const v8.Value, opts: ToStringOpts) ![]u8 {
-    return self._valueToString(false, js_val, opts);
-}
-pub fn valueHandleToStringZ(self: *const Local, js_val: *const v8.Value, opts: ToStringOpts) ![:0]u8 {
-    return self._valueToString(true, js_val, opts);
-}
-
-fn _valueToString(self: *const Local, comptime null_terminate: bool, value_handle: *const v8.Value, opts: ToStringOpts) !(if (null_terminate) [:0]u8 else []u8) {
-    var resolved_value_handle = value_handle;
-    if (v8.v8__Value__IsSymbol(value_handle)) {
-        const symbol_handle = v8.v8__Symbol__Description(@ptrCast(value_handle), self.isolate.handle).?;
-        resolved_value_handle = @ptrCast(symbol_handle);
-    }
-
-    const string_handle = v8.v8__Value__ToString(resolved_value_handle, self.handle) orelse {
-        return error.JsException;
-    };
-
-    return self._jsStringToZig(null_terminate, string_handle, opts);
-}
-
-pub fn jsStringToZig(self: *const Local, str: anytype, opts: ToStringOpts) ![]u8 {
-    return self._jsStringToZig(false, str, opts);
-}
-pub fn jsStringToZigZ(self: *const Local, str: anytype, opts: ToStringOpts) ![:0]u8 {
-    return self._jsStringToZig(true, str, opts);
-}
-fn _jsStringToZig(self: *const Local, comptime null_terminate: bool, str: anytype, opts: ToStringOpts) !(if (null_terminate) [:0]u8 else []u8) {
-    const handle = if (@TypeOf(str) == js.String) str.handle else str;
-
-    const len = v8.v8__String__Utf8Length(handle, self.isolate.handle);
-    const allocator = opts.allocator orelse self.call_arena;
-    const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(len), 0) else allocator.alloc(u8, @intCast(len)));
-    const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-    std.debug.assert(n == len);
-
-    return buf;
-}
-
-// Convert JS string to string.String with SSO
-pub fn valueToStringSSO(self: *const Local, js_val: js.Value, opts: ToStringOpts) !string.String {
-    const string_handle = v8.v8__Value__ToString(js_val.handle, self.handle) orelse {
-        return error.JsException;
-    };
-    return self.jsStringToStringSSO(string_handle, opts);
-}
-
-pub fn jsStringToStringSSO(self: *const Local, str: anytype, opts: ToStringOpts) !string.String {
-    const handle = if (@TypeOf(str) == js.String) str.handle else str;
-    const len: usize = @intCast(v8.v8__String__Utf8Length(handle, self.isolate.handle));
-
-    if (len <= 12) {
-        var content: [12]u8 = undefined;
-        const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-        if (comptime IS_DEBUG) {
-            std.debug.assert(n == len);
-        }
-        // Weird that we do this _after_, but we have to..I've seen weird issues
-        // in ReleaseMode where v8 won't write to content if it starts off zero
-        // initiated
-        @memset(content[len..], 0);
-        return .{ .len = @intCast(len), .payload = .{ .content = content } };
-    }
-
-    const allocator = opts.allocator orelse self.call_arena;
-    const buf = try allocator.alloc(u8, len);
-    const n = v8.v8__String__WriteUtf8(handle, self.isolate.handle, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
-    if (comptime IS_DEBUG) {
-        std.debug.assert(n == len);
-    }
-
-    var prefix: [4]u8 = @splat(0);
-    @memcpy(&prefix, buf[0..4]);
-
-    return .{
-        .len = @intCast(len),
-        .payload = .{ .heap = .{
-            .prefix = prefix,
-            .ptr = buf.ptr,
-        } },
-    };
 }
 
 // == Promise Helpers ==
@@ -1233,18 +1134,16 @@ fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnman
 
         if (js_val.isSymbol()) {
             const symbol_handle = v8.v8__Symbol__Description(@ptrCast(js_val.handle), self.isolate.handle).?;
-            const js_sym_str = try self.valueToString(.{ .local = self, .handle = symbol_handle }, .{});
-            return writer.print("{s} (symbol)", .{js_sym_str});
+            return writer.print("{f} (symbol)", .{js.String{ .local = self, .handle = @ptrCast(symbol_handle) }});
         }
-        const js_type = try self.jsStringToZig(js_val.typeOf(), .{});
-        const js_val_str = try self.valueToString(js_val, .{});
+        const js_val_str = try js_val.toStringSlice();
         if (js_val_str.len > 2000) {
             try writer.writeAll(js_val_str[0..2000]);
             try writer.writeAll(" ... (truncated)");
         } else {
             try writer.writeAll(js_val_str);
         }
-        return writer.print(" ({s})", .{js_type});
+        return writer.print(" ({f})", .{js_val.typeOf()});
     }
 
     const js_obj = js_val.toObject();
@@ -1266,7 +1165,7 @@ fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnman
     }
     const own_len = js_obj.getOwnPropertyNames().len();
     if (own_len == 0) {
-        const js_val_str = try self.valueToString(js_val, .{});
+        const js_val_str = try js_val.toStringSlice();
         if (js_val_str.len > 2000) {
             try writer.writeAll(js_val_str[0..2000]);
             return writer.writeAll(" ... (truncated)");
@@ -1281,10 +1180,11 @@ fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnman
             try writer.writeByte('\n');
         }
         const field_name = try names_arr.get(@intCast(i));
-        const name = try self.valueToString(field_name, .{});
+        const name = try field_name.toStringSlice();
         try writer.splatByteAll(' ', depth);
         try writer.writeAll(name);
         try writer.writeAll(": ");
+
         const field_val = try js_obj.get(name);
         try self._debugValue(field_val, seen, depth + 1, writer);
         if (i != len - 1) {

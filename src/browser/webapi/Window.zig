@@ -277,7 +277,7 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
 pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     const error_event = try ErrorEvent.initTrusted("error", .{
         .@"error" = try err.persist(),
-        .message = err.toString(.{}) catch "Unknown error",
+        .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
     }, page);

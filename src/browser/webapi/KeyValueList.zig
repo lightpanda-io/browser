@@ -68,12 +68,11 @@ pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?N
 
     while (try it.next()) |name| {
         const js_value = try js_obj.get(name);
-        const value = try js_value.toString(.{});
         const normalized = if (comptime normalizer) |n| n(name, page) else name;
 
         list._entries.appendAssumeCapacity(.{
             .name = try String.init(arena, normalized, .{}),
-            .value = try String.init(arena, value, .{}),
+            .value = try js_value.toSSOWithAlloc(arena),
         });
     }
 

@@ -49,8 +49,8 @@ pub fn init(opts_: ?InitOpts, page: *Page) !*URLSearchParams {
                 if (js_val.isObject()) {
                     break :blk try KeyValueList.fromJsObject(arena, js_val.toObject(), null, page);
                 }
-                if (js_val.isString()) {
-                    break :blk try paramsFromString(arena, try js_val.toString(.{ .allocator = arena }), &page.buf);
+                if (js_val.isString()) |js_str| {
+                    break :blk try paramsFromString(arena, try js_str.toSliceWithAlloc(arena), &page.buf);
                 }
                 return error.InvalidArgument;
             },

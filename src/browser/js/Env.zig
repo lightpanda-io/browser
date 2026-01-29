@@ -335,8 +335,7 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
 
     const value =
         if (v8.v8__PromiseRejectMessage__GetValue(&message_handle)) |v8_value|
-            // @HandleScope - no reason to create a js.Context here
-            local.valueHandleToString(v8_value, .{}) catch |err| @errorName(err)
+            js.Value.toStringSlice(.{ .local = &local, .handle = v8_value }) catch |err| @errorName(err)
         else
             "no value";
 

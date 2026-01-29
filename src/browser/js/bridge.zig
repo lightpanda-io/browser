@@ -422,7 +422,7 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.Prope
     hs.init(local.isolate);
     defer hs.deinit();
 
-    const property: []const u8 = local.valueHandleToString(@ptrCast(c_name.?), .{}) catch {
+    const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
         return 0;
     };
 
