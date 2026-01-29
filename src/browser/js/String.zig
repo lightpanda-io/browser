@@ -18,8 +18,10 @@
 
 const std = @import("std");
 const js = @import("js.zig");
+const SSO = @import("../../string.zig").String;
 
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const v8 = js.v8;
 
@@ -28,26 +30,82 @@ const String = @This();
 local: *const js.Local,
 handle: *const v8.String,
 
-pub const ToZigOpts = struct {
-    allocator: ?Allocator = null,
-};
-
-pub fn toZig(self: String, opts: ToZigOpts) ![]u8 {
-    return self._toZig(false, opts);
+pub fn toSlice(self: String) ![]u8 {
+    return self._toSlice(false, self.local.call_arena);
 }
-
-pub fn toZigZ(self: String, opts: ToZigOpts) ![:0]u8 {
-    return self._toZig(true, opts);
+pub fn toSliceZ(self: String) ![:0]u8 {
+    return self._toSlice(true, self.local.call_arena);
 }
+pub fn toSliceWithAlloc(self: String, allocator: Allocator) ![]u8 {
+    return self._toSlice(false, allocator);
+}
+fn _toSlice(self: String, comptime null_terminate: bool, allocator: Allocator) !(if (null_terminate) [:0]u8 else []u8) {
+    const local = self.local;
+    const handle = self.handle;
+    const isolate = local.isolate.handle;
 
-fn _toZig(self: String, comptime null_terminate: bool, opts: ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
-    const isolate = self.local.isolate.handle;
-    const allocator = opts.allocator orelse self.local.ctx.call_arena;
-    const len: u32 = @intCast(v8.v8__String__Utf8Length(self.handle, isolate));
-    const buf = if (null_terminate) try allocator.allocSentinel(u8, len, 0) else try allocator.alloc(u8, len);
+    const len = v8.v8__String__Utf8Length(handle, isolate);
+    const buf = try (if (comptime null_terminate) allocator.allocSentinel(u8, @intCast(len), 0) else allocator.alloc(u8, @intCast(len)));
+    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(n == len);
+    }
 
-    const options = v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8;
-    const n = v8.v8__String__WriteUtf8(self.handle, isolate, buf.ptr, buf.len, options);
-    std.debug.assert(n == len);
     return buf;
+}
+
+pub fn toSSO(self: String, comptime global: bool) !(if (global) SSO.Global else SSO) {
+    if (comptime global) {
+        return .{ .str = try self.toSSOWithAlloc(self.local.ctx.arena) };
+    }
+    return self.toSSOWithAlloc(self.local.call_arena);
+}
+pub fn toSSOWithAlloc(self: String, allocator: Allocator) !SSO {
+    const handle = self.handle;
+    const isolate = self.local.isolate.handle;
+
+    const len: usize = @intCast(v8.v8__String__Utf8Length(handle, isolate));
+
+    if (len <= 12) {
+        var content: [12]u8 = undefined;
+        const n = v8.v8__String__WriteUtf8(handle, isolate, &content[0], content.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+        if (comptime IS_DEBUG) {
+            std.debug.assert(n == len);
+        }
+        // Weird that we do this _after_, but we have to..I've seen weird issues
+        // in ReleaseMode where v8 won't write to content if it starts off zero
+        // initiated
+        @memset(content[len..], 0);
+        return .{ .len = @intCast(len), .payload = .{ .content = content } };
+    }
+
+    const buf = try allocator.alloc(u8, len);
+    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    if (comptime IS_DEBUG) {
+        std.debug.assert(n == len);
+    }
+
+    var prefix: [4]u8 = @splat(0);
+    @memcpy(&prefix, buf[0..4]);
+
+    return .{
+        .len = @intCast(len),
+        .payload = .{ .heap = .{
+            .prefix = prefix,
+            .ptr = buf.ptr,
+        } },
+    };
+}
+
+pub fn format(self: String, writer: *std.Io.Writer) !void {
+    const local = self.local;
+    const handle = self.handle;
+    const isolate = local.isolate.handle;
+
+    var small: [1024]u8 = undefined;
+    const len = v8.v8__String__Utf8Length(handle, isolate);
+    var buf = if (len < 1024) &small else local.call_arena.alloc(u8, @intCast(len)) catch return error.WriteFailed;
+
+    const n = v8.v8__String__WriteUtf8(handle, isolate, buf.ptr, buf.len, v8.NO_NULL_TERMINATION | v8.REPLACE_INVALID_UTF8);
+    return writer.writeAll(buf[0..n]);
 }

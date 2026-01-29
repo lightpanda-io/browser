@@ -116,7 +116,7 @@ pub fn throwIfAborted(self: *const AbortSignal, page: *Page) !ThrowIfAborted {
     if (self._aborted) {
         const exception = switch (self._reason) {
             .string => |str| local.throw(str),
-            .js_val => |js_val| local.throw(try local.toLocal(js_val).toString(.{ .allocator = page.call_arena })),
+            .js_val => |js_val| local.throw(try local.toLocal(js_val).toStringSlice()),
             .undefined => local.throw("AbortError"),
         };
         return .{ .exception = exception };

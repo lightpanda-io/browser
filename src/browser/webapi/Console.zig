@@ -146,7 +146,7 @@ const ValueWriter = struct {
         var buf: [32]u8 = undefined;
         for (self.values, 0..) |value, i| {
             const name = try std.fmt.bufPrint(&buf, "param.{d}", .{i});
-            try writer.write(name, try value.toString(.{}));
+            try writer.write(name, value);
         }
     }
 

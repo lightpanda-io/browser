@@ -201,8 +201,8 @@ pub const NameIterator = struct {
         }
         self.idx += 1;
 
-        const js_val_handle = v8.v8__Object__GetIndex(@ptrCast(self.handle), self.local.handle, idx) orelse return error.JsException;
-        const js_val = js.Value{ .local = self.local, .handle = js_val_handle };
-        return try self.local.valueToString(js_val, .{});
+        const local = self.local;
+        const js_val_handle = v8.v8__Object__GetIndex(@ptrCast(self.handle), local.handle, idx) orelse return error.JsException;
+        return try js.Value.toStringSlice(.{ .local = local, .handle = js_val_handle });
     }
 };

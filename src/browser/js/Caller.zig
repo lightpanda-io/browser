@@ -314,14 +314,14 @@ fn isInErrorSet(err: anyerror, comptime T: type) bool {
 }
 
 fn nameToString(self: *const Caller, comptime T: type, name: *const v8.Name) !T {
-    const v8_string = @as(*const v8.String, @ptrCast(name));
+    const handle = @as(*const v8.String, @ptrCast(name));
     if (T == string.String) {
-        return self.local.jsStringToStringSSO(v8_string, .{});
+        return js.String.toSSO(.{ .local = &self.local, .handle = handle }, false);
     }
     if (T == string.Global) {
-        return self.local.jsStringToStringSSO(v8_string, .{ .allocator = self.local.ctx.allocator });
+        return js.String.toSSO(.{ .local = &self.local, .handle = handle }, true);
     }
-    return try self.local.valueHandleToString(v8_string, .{});
+    return try js.String.toSlice(.{ .local = &self.local, .handle = handle });
 }
 
 fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror, info: anytype, comptime opts: CallOpts) void {

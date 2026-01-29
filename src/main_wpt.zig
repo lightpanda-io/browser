@@ -140,7 +140,7 @@ fn run(
         return err;
     };
 
-    return value.toString(.{ .allocator = arena });
+    return value.toStringSliceWithAlloc(arena);
 }
 
 const Writer = struct {

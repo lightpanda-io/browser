@@ -131,7 +131,7 @@ const Requests = struct {
 const Request = struct {
     handle: *const v8.ModuleRequest,
 
-    pub fn specifier(self: Request) *const v8.String {
-        return v8.v8__ModuleRequest__GetSpecifier(self.handle).?;
+    pub fn specifier(self: Request, local: *const js.Local) js.String {
+        return .{ .local = local, .handle = v8.v8__ModuleRequest__GetSpecifier(self.handle).? };
     }
 };

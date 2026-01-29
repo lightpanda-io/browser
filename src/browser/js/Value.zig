@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("js.zig");
+const SSO = @import("../../string.zig").String;
 
 const v8 = js.v8;
 
@@ -34,8 +35,12 @@ pub fn isObject(self: Value) bool {
     return v8.v8__Value__IsObject(self.handle);
 }
 
-pub fn isString(self: Value) bool {
-    return v8.v8__Value__IsString(self.handle);
+pub fn isString(self: Value) ?js.String {
+    const handle = self.handle;
+    if (!v8.v8__Value__IsString(handle)) {
+        return null;
+    }
+    return .{ .local = self.local, .handle = @ptrCast(handle) };
 }
 
 pub fn isArray(self: Value) bool {
@@ -204,35 +209,40 @@ pub fn toPromise(self: Value) js.Promise {
     };
 }
 
-pub fn toString(self: Value, opts: js.String.ToZigOpts) ![]u8 {
-    return self._toString(false, opts);
+pub fn toString(self: Value) !js.String {
+    const l = self.local;
+    const value_handle: *const v8.Value = blk: {
+        if (self.isSymbol()) {
+            break :blk @ptrCast(v8.v8__Symbol__Description(@ptrCast(self.handle), l.isolate.handle).?);
+        }
+        break :blk self.handle;
+    };
+
+    const str_handle = v8.v8__Value__ToString(value_handle, l.handle) orelse return error.JsException;
+    return .{ .local = self.local, .handle = str_handle };
 }
-pub fn toStringZ(self: Value, opts: js.String.ToZigOpts) ![:0]u8 {
-    return self._toString(true, opts);
+
+pub fn toSSO(self: Value, comptime global: bool) !(if (global) SSO.Global else SSO) {
+    return (try self.toString()).toSSO(global);
+}
+pub fn toSSOWithAlloc(self: Value, allocator: Allocator) !SSO {
+    return (try self.toString()).toSSOWithAlloc(allocator);
+}
+
+pub fn toStringSlice(self: Value) ![]u8 {
+    return (try self.toString()).toSlice();
+}
+pub fn toStringSliceZ(self: Value) ![:0]u8 {
+    return (try self.toString()).toSliceZ();
+}
+pub fn toStringSliceWithAlloc(self: Value, allocator: Allocator) ![]u8 {
+    return (try self.toString()).toSliceWithAlloc(allocator);
 }
 
 pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
-    const json_str_handle = v8.v8__JSON__Stringify(self.local.handle, self.handle, null) orelse return error.JsException;
-    return self.local.jsStringToZig(json_str_handle, .{ .allocator = allocator });
-}
-
-fn _toString(self: Value, comptime null_terminate: bool, opts: js.String.ToZigOpts) !(if (null_terminate) [:0]u8 else []u8) {
-    const l = self.local;
-
-    if (self.isSymbol()) {
-        const sym_handle = v8.v8__Symbol__Description(@ptrCast(self.handle), l.isolate.handle).?;
-        return _toString(.{ .handle = @ptrCast(sym_handle), .local = l }, null_terminate, opts);
-    }
-
-    const str_handle = v8.v8__Value__ToString(self.handle, l.handle) orelse {
-        return error.JsException;
-    };
-
-    const str = js.String{ .local = l, .handle = str_handle };
-    if (comptime null_terminate) {
-        return js.String.toZigZ(str, opts);
-    }
-    return js.String.toZig(str, opts);
+    const local = self.local;
+    const str_handle = v8.v8__JSON__Stringify(local.handle, self.handle, null) orelse return error.JsException;
+    return js.String.toSliceWithAlloc(.{ .local = local, .handle = str_handle }, allocator);
 }
 
 pub fn persist(self: Value) !Global {
@@ -296,8 +306,8 @@ pub fn format(self: Value, writer: *std.Io.Writer) !void {
     if (comptime IS_DEBUG) {
         return self.local.debugValue(self, writer);
     }
-    const str = self.toString(.{}) catch return error.WriteFailed;
-    return writer.writeAll(str);
+    const js_str = self.toString() catch return error.WriteFailed;
+    return js_str.format(writer);
 }
 
 pub const Temp = G(0);

@@ -276,7 +276,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
             self._arena_pool_leak_track.clearRetainingCapacity();
         }
 
-
         // We force a garbage collection between page navigations to keep v8
         // memory usage as low as possible.
         self._session.browser.env.memoryPressureNotification(.moderate);

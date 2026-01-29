@@ -357,9 +357,13 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
 
         // Some module-loading errors aren't handled by TryCatch. We need to
         // get the error from the module itself.
+        const message = blk: {
+            const e = mod.getException().toString() catch break :blk "???";
+            break :blk e.toSlice() catch "???";
+        };
         log.warn(.js, "evaluate module", .{
+            .message = message,
             .specifier = owned_url,
-            .message = mod.getException().toString(.{}) catch "???",
         });
         return error.EvaluationError;
     };
@@ -457,11 +461,11 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
     const request_len = requests.len();
     const script_manager = self.script_manager.?;
     for (0..request_len) |i| {
-        const specifier = try local.jsStringToZigZ(requests.get(i).specifier(), .{});
+        const specifier = requests.get(i).specifier(local);
         const normalized_specifier = try script_manager.resolveSpecifier(
             self.call_arena,
             url,
-            specifier,
+            try specifier.toSliceZ(),
         );
         const nested_gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
         if (!nested_gop.found_existing) {
@@ -494,14 +498,14 @@ fn resolveModuleCallback(
     _ = import_attributes;
 
     const self = fromC(c_context.?);
-    var local = js.Local{
+    const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
         .isolate = self.isolate,
         .call_arena = self.call_arena,
     };
 
-    const specifier = local.jsStringToZigZ(c_specifier.?, .{}) catch |err| {
+    const specifier = js.String.toSliceZ(.{ .local = &local, .handle = c_specifier.? }) catch |err| {
         log.err(.js, "resolve module", .{ .err = err });
         return null;
     };
@@ -527,19 +531,19 @@ pub fn dynamicModuleCallback(
     _ = import_attrs;
 
     const self = fromC(c_context.?);
-    var local = js.Local{
+    const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
         .call_arena = self.call_arena,
         .isolate = self.isolate,
     };
 
-    const resource = local.jsStringToZigZ(resource_name.?, .{}) catch |err| {
+    const resource = js.String.toSliceZ(.{ .local = &local, .handle = resource_name.? }) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
         return @constCast((local.rejectPromise("Out of memory") catch return null).handle);
     };
 
-    const specifier = local.jsStringToZigZ(v8_specifier.?, .{}) catch |err| {
+    const specifier = js.String.toSliceZ(.{ .local = &local, .handle = v8_specifier.? }) catch |err| {
         log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback2" });
         return @constCast((local.rejectPromise("Out of memory") catch return null).handle);
     };

@@ -46,12 +46,12 @@ pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
 
     const exception: ?[]const u8 = blk: {
         const handle = v8.v8__TryCatch__Exception(&self.handle) orelse break :blk null;
-        break :blk l.valueHandleToString(@ptrCast(handle), .{ .allocator = allocator }) catch |err| @errorName(err);
+        break :blk js.String.toSliceWithAlloc(.{ .local = l, .handle = @ptrCast(handle) }, allocator) catch |err| @errorName(err);
     };
 
     const stack: ?[]const u8 = blk: {
         const handle = v8.v8__TryCatch__StackTrace(&self.handle, l.handle) orelse break :blk null;
-        break :blk l.valueHandleToString(@ptrCast(handle), .{ .allocator = allocator }) catch |err| @errorName(err);
+        break :blk js.String.toSliceWithAlloc(.{ .local = l, .handle = @ptrCast(handle) }, allocator) catch |err| @errorName(err);
     };
 
     return .{

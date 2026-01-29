@@ -73,9 +73,8 @@ pub fn define(self: *CustomElementRegistry, name: []const u8, constructor: js.Fu
             var js_arr = observed_attrs.toArray();
             for (0..js_arr.len()) |i| {
                 const attr_val = js_arr.get(@intCast(i)) catch continue;
-                const attr_name = attr_val.toString(.{ .allocator = page.arena }) catch continue;
-                const owned_attr = page.dupeString(attr_name) catch continue;
-                definition.observed_attributes.put(page.arena, owned_attr, {}) catch continue;
+                const attr_name = attr_val.toStringSliceWithAlloc(page.arena) catch continue;
+                definition.observed_attributes.put(page.arena, attr_name, {}) catch continue;
             }
         }
     }
