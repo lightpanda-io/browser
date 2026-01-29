@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -21,6 +21,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
+const Config = @import("Config.zig");
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
@@ -29,61 +30,29 @@ pub const Http = @import("http/Http.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 pub const Notification = @import("Notification.zig");
 
-// Container for global state / objects that various parts of the system
-// might need.
 const App = @This();
 
+config: *const Config,
 http: Http,
-config: Config,
 platform: Platform,
 snapshot: Snapshot,
 telemetry: Telemetry,
-allocator: Allocator,
 arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 notification: *Notification,
 shutdown: bool = false,
 
-pub const RunMode = enum {
-    help,
-    fetch,
-    serve,
-    version,
-};
-
-pub const Config = struct {
-    run_mode: RunMode,
-    tls_verify_host: bool = true,
-    http_proxy: ?[:0]const u8 = null,
-    proxy_bearer_token: ?[:0]const u8 = null,
-    http_timeout_ms: ?u31 = null,
-    http_connect_timeout_ms: ?u31 = null,
-    http_max_host_open: ?u8 = null,
-    http_max_concurrent: ?u8 = null,
-    user_agent: [:0]const u8,
-};
-
-pub fn init(allocator: Allocator, config: Config) !*App {
+pub fn init(allocator: Allocator, config: *const Config) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
     app.config = config;
-    app.allocator = allocator;
+
+    app.http = try Http.init(allocator, config);
+    errdefer app.http.deinit();
 
     app.notification = try Notification.init(allocator, null);
     errdefer app.notification.deinit();
-
-    app.http = try Http.init(allocator, .{
-        .max_host_open = config.http_max_host_open orelse 4,
-        .max_concurrent = config.http_max_concurrent orelse 10,
-        .timeout_ms = config.http_timeout_ms orelse 5000,
-        .connect_timeout_ms = config.http_connect_timeout_ms orelse 0,
-        .http_proxy = config.http_proxy,
-        .tls_verify_host = config.tls_verify_host,
-        .proxy_bearer_token = config.proxy_bearer_token,
-        .user_agent = config.user_agent,
-    });
-    errdefer app.http.deinit();
 
     app.platform = try Platform.init();
     errdefer app.platform.deinit();
@@ -93,7 +62,7 @@ pub fn init(allocator: Allocator, config: Config) !*App {
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 
-    app.telemetry = try Telemetry.init(app, config.run_mode);
+    app.telemetry = try Telemetry.init(allocator, app, config.mode);
     errdefer app.telemetry.deinit();
 
     try app.telemetry.register(app.notification);
@@ -104,22 +73,21 @@ pub fn init(allocator: Allocator, config: Config) !*App {
     return app;
 }
 
-pub fn deinit(self: *App) void {
+pub fn deinit(self: *App, allocator: Allocator) void {
     if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
         return;
     }
 
-    const allocator = self.allocator;
     if (self.app_dir_path) |app_dir_path| {
         allocator.free(app_dir_path);
         self.app_dir_path = null;
     }
     self.telemetry.deinit();
     self.notification.deinit();
-    self.http.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
     self.arena_pool.deinit();
+    self.http.deinit();
 
     allocator.destroy(self);
 }

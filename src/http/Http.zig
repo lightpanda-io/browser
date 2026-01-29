@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -17,142 +17,126 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub const c = @cImport({
     @cInclude("curl/curl.h");
 });
 
-pub const ENABLE_DEBUG = false;
-pub const Client = @import("Client.zig");
-pub const Transfer = Client.Transfer;
-
+const Client = @import("Client.zig");
+const lp = @import("lightpanda");
+const Config = @import("../Config.zig");
 const log = @import("../log.zig");
 const errors = @import("errors.zig");
+pub const Transfer = Client.Transfer;
 
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
+pub const ENABLE_DEBUG = false;
 
-// Client.zig does the bulk of the work and is loosely tied to a browser Page.
-// But we still need something above Client.zig for the "utility" http stuff
-// we need to do, like telemetry. The most important thing we want from this
-// is to be able to share the ca_blob, which can be quite large - loading it
-// once for all http connections is a win.
 const Http = @This();
 
-opts: Opts,
-client: *Client,
+allocator: Allocator,
+config: *const Config,
 ca_blob: ?c.curl_blob,
-arena: ArenaAllocator,
+user_agent: [:0]const u8,
+proxy_bearer_header: ?[:0]const u8,
 
-pub fn init(allocator: Allocator, opts: Opts) !Http {
+pub fn init(allocator: Allocator, config: *const Config) !Http {
     try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
     errdefer c.curl_global_cleanup();
 
-    if (comptime ENABLE_DEBUG) {
-        std.debug.print("curl version: {s}\n\n", .{c.curl_version()});
-    }
+    const user_agent = try config.userAgent(allocator);
+    errdefer allocator.free(user_agent);
 
-    var arena = ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-
-    var adjusted_opts = opts;
-    if (opts.proxy_bearer_token) |bt| {
-        adjusted_opts.proxy_bearer_token = try std.fmt.allocPrintSentinel(arena.allocator(), "Proxy-Authorization: Bearer {s}", .{bt}, 0);
+    var proxy_bearer_header: ?[:0]const u8 = null;
+    if (config.proxyBearerToken()) |bt| {
+        proxy_bearer_header = try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{bt}, 0);
     }
+    errdefer if (proxy_bearer_header) |h| allocator.free(h);
 
     var ca_blob: ?c.curl_blob = null;
-    if (opts.tls_verify_host) {
-        ca_blob = try loadCerts(allocator, arena.allocator());
+    if (config.tlsVerifyHost()) {
+        ca_blob = try loadCerts(allocator);
     }
 
-    var client = try Client.init(allocator, ca_blob, adjusted_opts);
-    errdefer client.deinit();
-
     return .{
-        .arena = arena,
-        .client = client,
+        .allocator = allocator,
+        .config = config,
         .ca_blob = ca_blob,
-        .opts = adjusted_opts,
+        .user_agent = user_agent,
+        .proxy_bearer_header = proxy_bearer_header,
     };
 }
 
 pub fn deinit(self: *Http) void {
-    self.client.deinit();
+    if (self.ca_blob) |ca_blob| {
+        const data: [*]u8 = @ptrCast(ca_blob.data);
+        self.allocator.free(data[0..ca_blob.len]);
+    }
+    if (self.proxy_bearer_header) |h| self.allocator.free(h);
+    self.allocator.free(self.user_agent);
     c.curl_global_cleanup();
-    self.arena.deinit();
 }
 
-pub fn poll(self: *Http, timeout_ms: u32) Client.PerformStatus {
-    return self.client.tick(timeout_ms) catch |err| {
-        log.err(.app, "http poll", .{ .err = err });
-        return .normal;
-    };
-}
-
-pub fn addCDPClient(self: *Http, cdp_client: Client.CDPClient) void {
-    lp.assert(self.client.cdp_client == null, "Http addCDPClient existing", .{});
-    self.client.cdp_client = cdp_client;
-}
-
-pub fn removeCDPClient(self: *Http) void {
-    self.client.cdp_client = null;
+pub fn createClient(self: *Http, allocator: Allocator) !*Client {
+    return Client.init(allocator, self.ca_blob, self.config);
 }
 
 pub fn newConnection(self: *Http) !Connection {
-    return Connection.init(self.ca_blob, &self.opts);
+    return Connection.init(self.ca_blob, self.config, self.user_agent, self.proxy_bearer_header);
 }
 
-pub fn newHeaders(self: *const Http) Headers {
-    return Headers.init(self.opts.user_agent);
+pub fn newHeaders(self: *const Http) !Headers {
+    return Headers.init(self.user_agent);
 }
 
 pub const Connection = struct {
     easy: *c.CURL,
-    opts: Connection.Opts,
+    user_agent: [:0]const u8,
+    proxy_bearer_header: ?[:0]const u8,
 
-    const Opts = struct {
-        proxy_bearer_token: ?[:0]const u8,
+    pub fn init(
+        ca_blob_: ?c.curl_blob,
+        config: *const Config,
         user_agent: [:0]const u8,
-    };
-
-    // pointer to opts is not stable, don't hold a reference to it!
-    pub fn init(ca_blob_: ?c.curl_blob, opts: *const Http.Opts) !Connection {
+        proxy_bearer_header: ?[:0]const u8,
+    ) !Connection {
         const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
         errdefer _ = c.curl_easy_cleanup(easy);
 
         // timeouts
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(opts.timeout_ms))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(opts.connect_timeout_ms))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(config.httpTimeout()))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(config.httpConnectTimeout()))));
 
         // redirect behavior
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(opts.max_redirects))));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(config.httpMaxRedirects()))));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
 
         // proxy
-        if (opts.http_proxy) |proxy| {
+        const http_proxy = config.httpProxy();
+        if (http_proxy) |proxy| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
         }
 
         // tls
         if (ca_blob_) |ca_blob| {
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
-            if (opts.http_proxy != null) {
+            if (http_proxy != null) {
                 // Note, this can be difference for the proxy and for the main
                 // request. Might be something worth exposting as command
                 // line arguments at some point.
                 try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_CAINFO_BLOB, ca_blob));
             }
         } else {
-            lp.assert(opts.tls_verify_host == false, "Http.init tls_verify_host", .{});
+            lp.assert(config.tlsVerifyHost() == false, "Http.init tls_verify_host", .{});
 
             // Verify peer checks that the cert is signed by a CA, verify host makes sure the
             // cert contains the server name.
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
             try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
 
-            if (opts.http_proxy != null) {
+            if (http_proxy != null) {
                 // Note, this can be difference for the proxy and for the main
                 // request. Might be something worth exposting as command
                 // line arguments at some point.
@@ -180,10 +164,8 @@ pub const Connection = struct {
 
         return .{
             .easy = easy,
-            .opts = .{
-                .user_agent = opts.user_agent,
-                .proxy_bearer_token = opts.proxy_bearer_token,
-            },
+            .user_agent = user_agent,
+            .proxy_bearer_header = proxy_bearer_header,
         };
     }
 
@@ -237,7 +219,7 @@ pub const Connection = struct {
 
     // These are headers that may not be send to the users for inteception.
     pub fn secretHeaders(self: *const Connection, headers: *Headers) !void {
-        if (self.opts.proxy_bearer_token) |hdr| {
+        if (self.proxy_bearer_header) |hdr| {
             try headers.add(hdr);
         }
     }
@@ -245,7 +227,7 @@ pub const Connection = struct {
     pub fn request(self: *const Connection) !u16 {
         const easy = self.easy;
 
-        var header_list = try Headers.init(self.opts.user_agent);
+        var header_list = try Headers.init(self.user_agent);
         defer header_list.deinit();
         try self.secretHeaders(&header_list);
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
@@ -347,18 +329,6 @@ pub fn errorMCheck(code: c.CURLMcode) errors.Multi!void {
     return errors.fromMCode(code);
 }
 
-pub const Opts = struct {
-    timeout_ms: u31,
-    max_host_open: u8,
-    max_concurrent: u8,
-    connect_timeout_ms: u31,
-    max_redirects: u8 = 10,
-    tls_verify_host: bool = true,
-    http_proxy: ?[:0]const u8 = null,
-    proxy_bearer_token: ?[:0]const u8 = null,
-    user_agent: [:0]const u8,
-};
-
 pub const Method = enum(u8) {
     GET = 0,
     PUT = 1,
@@ -369,11 +339,22 @@ pub const Method = enum(u8) {
     PATCH = 6,
 };
 
+pub fn debugCallback(_: *c.CURL, msg_type: c.curl_infotype, raw: [*c]u8, len: usize, _: *anyopaque) callconv(.c) void {
+    const data = raw[0..len];
+    switch (msg_type) {
+        c.CURLINFO_TEXT => std.debug.print("libcurl [text]: {s}\n", .{data}),
+        c.CURLINFO_HEADER_OUT => std.debug.print("libcurl [req-h]: {s}\n", .{data}),
+        c.CURLINFO_HEADER_IN => std.debug.print("libcurl [res-h]: {s}\n", .{data}),
+        // c.CURLINFO_DATA_IN => std.debug.print("libcurl [res-b]: {s}\n", .{data}),
+        else => std.debug.print("libcurl ?? {d}\n", .{msg_type}),
+    }
+}
+
 // TODO: on BSD / Linux, we could just read the PEM file directly.
 // This whole rescan + decode is really just needed for MacOS. On Linux
 // bundle.rescan does find the .pem file(s) which could be in a few different
 // places, so it's still useful, just not efficient.
-fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
+fn loadCerts(allocator: Allocator) !c.curl_blob {
     var bundle: std.crypto.Certificate.Bundle = .{};
     try bundle.rescan(allocator);
     defer bundle.deinit(allocator);
@@ -396,8 +377,9 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
         (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
         (encoded_size / 64) // newline per 64 characters
     ;
-    try arr.ensureTotalCapacity(arena, buffer_size);
-    var writer = arr.writer(arena);
+    try arr.ensureTotalCapacity(allocator, buffer_size);
+    errdefer arr.deinit(allocator);
+    var writer = arr.writer(allocator);
 
     var it = bundle.map.valueIterator();
     while (it.next()) |index| {
@@ -410,11 +392,16 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
     }
 
     // Final encoding should not be larger than our initial size estimate
-    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estiate = buffer_size, .len = arr.items.len });
+    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estimate = buffer_size, .len = arr.items.len });
+
+    // Allocate exactly the size needed and copy the data
+    const result = try allocator.dupe(u8, arr.items);
+    // Free the original oversized allocation
+    arr.deinit(allocator);
 
     return .{
-        .len = arr.items.len,
-        .data = arr.items.ptr,
+        .len = result.len,
+        .data = result.ptr,
         .flags = 0,
     };
 }
@@ -449,14 +436,3 @@ const LineWriter = struct {
         self.col = col + remain.len;
     }
 };
-
-pub fn debugCallback(_: *c.CURL, msg_type: c.curl_infotype, raw: [*c]u8, len: usize, _: *anyopaque) callconv(.c) void {
-    const data = raw[0..len];
-    switch (msg_type) {
-        c.CURLINFO_TEXT => std.debug.print("libcurl [text]: {s}\n", .{data}),
-        c.CURLINFO_HEADER_OUT => std.debug.print("libcurl [req-h]: {s}\n", .{data}),
-        c.CURLINFO_HEADER_IN => std.debug.print("libcurl [res-h]: {s}\n", .{data}),
-        // c.CURLINFO_DATA_IN => std.debug.print("libcurl [res-b]: {s}\n", .{data}),
-        else => std.debug.print("libcurl ?? {d}\n", .{msg_type}),
-    }
-}

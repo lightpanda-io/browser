@@ -38,9 +38,11 @@ pub fn reset() void {
 
 const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
+const Config = @import("Config.zig");
+const Client = @import("http/Client.zig");
+const Page = @import("browser/Page.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
-const Page = @import("browser/Page.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -332,6 +334,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 }
 
 pub var test_app: *App = undefined;
+pub var test_http: *Client = undefined;
 pub var test_browser: Browser = undefined;
 pub var test_session: *Session = undefined;
 
@@ -449,18 +452,27 @@ const Server = @import("Server.zig");
 var test_cdp_server: ?Server = null;
 var test_http_server: ?TestHTTPServer = null;
 
+const test_config = Config{
+    .mode = .{ .serve = .{
+        .common = .{
+            .tls_verify_host = false,
+            .user_agent_suffix = "internal-tester",
+        },
+    } },
+    .exec_name = "test",
+};
+
 test "tests:beforeAll" {
     log.opts.level = .warn;
     log.opts.format = .pretty;
 
-    test_app = try App.init(@import("root").tracking_allocator, .{
-        .run_mode = .serve,
-        .tls_verify_host = false,
-        .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
-    });
-    errdefer test_app.deinit();
+    test_app = try App.init(@import("root").tracking_allocator, &test_config);
+    errdefer test_app.deinit(@import("root").tracking_allocator);
 
-    test_browser = try Browser.init(test_app);
+    test_http = try test_app.http.createClient(@import("root").tracking_allocator);
+    errdefer test_http.deinit();
+
+    test_browser = try Browser.init(@import("root").tracking_allocator, test_app, test_http);
     errdefer test_browser.deinit();
 
     test_session = try test_browser.newSession();
@@ -495,14 +507,16 @@ test "tests:afterAll" {
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
     test_browser.deinit();
-    test_app.deinit();
+    test_http.deinit();
+    test_app.deinit(@import("root").tracking_allocator);
 }
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(test_app, address);
+    const test_allocator = @import("root").tracking_allocator;
+    test_cdp_server = try Server.init(test_allocator, test_app, address);
 
-    var server = try Server.init(test_app, address);
+    var server = try Server.init(test_allocator, test_app, address);
     defer server.deinit();
     wg.finish();
 

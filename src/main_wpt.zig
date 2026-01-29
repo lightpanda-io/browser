@@ -58,14 +58,22 @@ pub fn main() !void {
     defer writer.deinit();
 
     lp.log.opts.level = .warn;
-    var app = try lp.App.init(allocator, .{
-        .run_mode = .serve,
-        .tls_verify_host = false,
-        .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
-    });
-    defer app.deinit();
+    const config = lp.Config{
+        .mode = .{ .serve = .{
+            .common = .{
+                .tls_verify_host = false,
+                .user_agent_suffix = "internal-tester",
+            },
+        } },
+        .exec_name = "lightpanda-wpt",
+    };
+    var app = try lp.App.init(allocator, &config);
+    defer app.deinit(allocator);
 
-    var browser = try lp.Browser.init(app);
+    const http = try app.http.createClient(allocator);
+    defer http.deinit();
+
+    var browser = try lp.Browser.init(allocator, app, http);
     defer browser.deinit();
 
     // An arena for running each tests. Is reset after every test.
