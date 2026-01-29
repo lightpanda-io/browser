@@ -19,8 +19,6 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
-const Page = @import("../Page.zig");
-
 const SubtleCrypto = @import("SubtleCrypto.zig");
 
 const Crypto = @This();

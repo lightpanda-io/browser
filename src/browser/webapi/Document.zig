@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -30,8 +30,6 @@ const Location = @import("Location.zig");
 const Parser = @import("../parser/Parser.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
-const NodeFilter = @import("NodeFilter.zig");
-const DocumentType = @import("DocumentType.zig");
 const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");

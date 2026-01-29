@@ -25,7 +25,6 @@ const Page = @import("../../browser/Page.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
 
-const v8 = js.v8;
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: anytype) !void {

@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -32,20 +32,6 @@ _id: []const u8,
 _key: []const u8,
 _url: ?[:0]const u8,
 _state: NavigationState,
-
-// fn asEventTarget(self: *NavigationHistoryEntry) *EventTarget {
-//     return self._proto.?.asEventTarget();
-// }
-
-// pub fn onRemovePage(self: *NavigationHistoryEntry) void {
-//     self._proto = null;
-// }
-
-// pub fn onNewPage(self: *NavigationHistoryEntry, page: *Page) !void {
-//     self._proto = try page._factory.eventTarget(
-//         NavigationHistoryEntryEventTarget{ ._proto = undefined },
-//     );
-// }
 
 pub fn id(self: *const NavigationHistoryEntry) []const u8 {
     return self._id;

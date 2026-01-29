@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -26,7 +26,6 @@ const Parser = @import("../parser/Parser.zig");
 const HTMLDocument = @import("HTMLDocument.zig");
 const XMLDocument = @import("XMLDocument.zig");
 const Document = @import("Document.zig");
-const ProcessingInstruction = @import("../webapi/cdata/ProcessingInstruction.zig");
 
 const DOMParser = @This();
 

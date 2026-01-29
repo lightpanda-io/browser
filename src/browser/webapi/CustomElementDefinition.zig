@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -20,7 +20,6 @@ const std = @import("std");
 const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
-const Page = @import("../Page.zig");
 const Element = @import("Element.zig");
 
 const CustomElementDefinition = @This();

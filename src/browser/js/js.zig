@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -19,7 +19,6 @@
 const std = @import("std");
 pub const v8 = @import("v8").c;
 
-const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
 pub const Env = @import("Env.zig");
@@ -33,7 +32,6 @@ pub const Platform = @import("Platform.zig");
 pub const Isolate = @import("Isolate.zig");
 pub const HandleScope = @import("HandleScope.zig");
 
-pub const Name = @import("Name.zig");
 pub const Value = @import("Value.zig");
 pub const Array = @import("Array.zig");
 pub const String = @import("String.zig");

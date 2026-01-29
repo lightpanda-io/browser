@@ -23,12 +23,10 @@ const string = @import("../../string.zig");
 const Page = @import("../Page.zig");
 
 const js = @import("js.zig");
-const bridge = @import("bridge.zig");
 const Context = @import("Context.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
 const v8 = js.v8;
-const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const CALL_ARENA_RETAIN = 1024 * 16;
