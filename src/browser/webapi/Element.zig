@@ -163,12 +163,12 @@ pub fn calcAttrListenerKey(self: *Element, event_type: KnownListener) AttrListen
     // its size and alignment, though.
     const target = self.asEventTarget();
     // Check if we have 3 bits available from alignment of 8.
-    lp.assert(@alignOf(@TypeOf(target)) == 8, "createLookupKey: incorrect alignment", .{
+    lp.assert(@alignOf(@TypeOf(target)) == 8, "calcAttrListenerKey: incorrect alignment", .{
         .event_target_alignment = @alignOf(@TypeOf(target)),
     });
 
     const ptr = @intFromPtr(target) >> 3;
-    lp.assert(ptr < (1 << 57), "createLookupKey: pointer overflow", .{ .ptr = ptr });
+    lp.assert(ptr < (1 << 57), "calcAttrListenerKey: pointer overflow", .{ .ptr = ptr });
     return ptr | (@as(u64, @intFromEnum(event_type)) << 57);
 }
 
