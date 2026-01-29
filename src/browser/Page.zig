@@ -2243,7 +2243,7 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
         // We may have found an event handler.
         if (has_on_prefix) {
             // Must be usable as function.
-            const func = try self.js.stringToPersistedFunction(attr.value.slice());
+            const func = self.js.stringToPersistedFunction(attr.value.slice()) catch continue;
 
             // Longest known listener kind is 32 bytes long.
             const remaining: u6 = @truncate(name.len -| 2);
