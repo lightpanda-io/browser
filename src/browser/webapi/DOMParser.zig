@@ -48,6 +48,9 @@ pub fn parseFromString(
         @"image/svg+xml",
     }, mime_type) orelse return error.NotSupported;
 
+    const arena = try page.getArena(.{ .debug = "DOMParser.parseFromString" });
+    defer page.releaseArena(arena);
+
     return switch (target_mime) {
         .@"text/html" => {
             // Create a new HTMLDocument
@@ -61,7 +64,7 @@ pub fn parseFromString(
             }
 
             // Parse HTML into the document
-            var parser = Parser.init(page.arena, doc.asNode(), page);
+            var parser = Parser.init(arena, doc.asNode(), page);
             parser.parse(normalized);
 
             if (parser.err) |pe| {
@@ -78,7 +81,7 @@ pub fn parseFromString(
 
             // Parse XML into XMLDocument.
             const doc_node = doc.asNode();
-            var parser = Parser.init(page.arena, doc_node, page);
+            var parser = Parser.init(arena, doc_node, page);
             parser.parseXML(html);
 
             if (parser.err) |pe| {

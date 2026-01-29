@@ -178,7 +178,7 @@ For **Debian/Ubuntu based Linux**:
 
 ```
 sudo apt install xz-utils ca-certificates \
-    clang make curl git
+    gcc make curl git
 ```
 You also need to [install Rust](https://rust-lang.org/tools/install/).
 

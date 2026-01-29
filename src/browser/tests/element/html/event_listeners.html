@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- Test inline event listeners set via HTML attributes -->
+<div id="attr-click" onclick="window.x = 1"></div>
+<div id="attr-load" onload="window.x = 1"></div>
+<div id="attr-error" onerror="window.x = 1"></div>
+<div id="attr-focus" onfocus="window.x = 1"></div>
+<div id="attr-blur" onblur="window.x = 1"></div>
+<div id="attr-keydown" onkeydown="window.x = 1"></div>
+<div id="attr-mousedown" onmousedown="window.x = 1"></div>
+<div id="attr-submit" onsubmit="window.x = 1"></div>
+<div id="attr-wheel" onwheel="window.x = 1"></div>
+<div id="attr-scroll" onscroll="window.x = 1"></div>
+<div id="attr-contextmenu" oncontextmenu="window.x = 1"></div>
+<div id="no-listeners"></div>
+
+<script id="attr_listener_returns_function">
+{
+    // Inline listeners set via HTML attributes should return a function
+    testing.expectEqual('function', typeof $('#attr-click').onclick);
+    testing.expectEqual('function', typeof $('#attr-load').onload);
+    testing.expectEqual('function', typeof $('#attr-error').onerror);
+    testing.expectEqual('function', typeof $('#attr-focus').onfocus);
+    testing.expectEqual('function', typeof $('#attr-blur').onblur);
+    testing.expectEqual('function', typeof $('#attr-keydown').onkeydown);
+    testing.expectEqual('function', typeof $('#attr-mousedown').onmousedown);
+    testing.expectEqual('function', typeof $('#attr-submit').onsubmit);
+    testing.expectEqual('function', typeof $('#attr-wheel').onwheel);
+    testing.expectEqual('function', typeof $('#attr-scroll').onscroll);
+    testing.expectEqual('function', typeof $('#attr-contextmenu').oncontextmenu);
+}
+</script>
+
+<script id="no_attr_listener_returns_null">
+{
+    // Elements without inline listeners should return null
+    const div = $('#no-listeners');
+    testing.expectEqual(null, div.onclick);
+    testing.expectEqual(null, div.onload);
+    testing.expectEqual(null, div.onerror);
+    testing.expectEqual(null, div.onfocus);
+    testing.expectEqual(null, div.onblur);
+    testing.expectEqual(null, div.onkeydown);
+    testing.expectEqual(null, div.onmousedown);
+    testing.expectEqual(null, div.onsubmit);
+    testing.expectEqual(null, div.onwheel);
+    testing.expectEqual(null, div.onscroll);
+    testing.expectEqual(null, div.oncontextmenu);
+}
+</script>
+
+<script id="js_setter_getter">
+{
+    // Test setting and getting listeners via JavaScript property
+    const div = document.createElement('div');
+
+    // Initially null
+    testing.expectEqual(null, div.onclick);
+    testing.expectEqual(null, div.onload);
+    testing.expectEqual(null, div.onerror);
+
+    // Set listeners
+    const clickHandler = () => {};
+    const loadHandler = () => {};
+    const errorHandler = () => {};
+
+    div.onclick = clickHandler;
+    div.onload = loadHandler;
+    div.onerror = errorHandler;
+
+    // Verify they can be retrieved and are functions
+    testing.expectEqual('function', typeof div.onclick);
+    testing.expectEqual('function', typeof div.onload);
+    testing.expectEqual('function', typeof div.onerror);
+}
+</script>
+
+<script id="js_listener_invoke">
+{
+    // Test that JS-set listeners can be invoked directly
+    const div = document.createElement('div');
+    window.jsInvokeResult = 0;
+
+    div.onclick = () => { window.jsInvokeResult = 100; };
+    div.onclick();
+    testing.expectEqual(100, window.jsInvokeResult);
+
+    div.onload = () => { window.jsInvokeResult = 200; };
+    div.onload();
+    testing.expectEqual(200, window.jsInvokeResult);
+
+    div.onfocus = () => { window.jsInvokeResult = 300; };
+    div.onfocus();
+    testing.expectEqual(300, window.jsInvokeResult);
+}
+</script>
+
+<script id="js_listener_invoke_with_return">
+{
+    // Test that JS-set listeners return values when invoked
+    const div = document.createElement('div');
+
+    div.onclick = () => { return 'click-result'; };
+    testing.expectEqual('click-result', div.onclick());
+
+    div.onload = () => { return 42; };
+    testing.expectEqual(42, div.onload());
+
+    div.onfocus = () => { return { key: 'value' }; };
+    testing.expectEqual('value', div.onfocus().key);
+}
+</script>
+
+<script id="js_listener_invoke_with_args">
+{
+    // Test that JS-set listeners can receive arguments when invoked
+    const div = document.createElement('div');
+
+    div.onclick = (a, b) => { return a + b; };
+    testing.expectEqual(15, div.onclick(10, 5));
+
+    div.onload = (msg) => { return 'Hello, ' + msg; };
+    testing.expectEqual('Hello, World', div.onload('World'));
+}
+</script>
+
+<script id="js_setter_override">
+{
+    // Test that setting a new listener overrides the old one
+    const div = document.createElement('div');
+
+    const first = () => { return 1; };
+    const second = () => { return 2; };
+
+    div.onclick = first;
+    testing.expectEqual('function', typeof div.onclick);
+    testing.expectEqual(1, div.onclick());
+
+    div.onclick = second;
+    testing.expectEqual('function', typeof div.onclick);
+    testing.expectEqual(2, div.onclick());
+}
+</script>
+
+<script id="different_event_types_independent">
+{
+    // Test that different event types are stored independently
+    const div = document.createElement('div');
+
+    const clickFn = () => {};
+    const focusFn = () => {};
+    const blurFn = () => {};
+
+    div.onclick = clickFn;
+    testing.expectEqual('function', typeof div.onclick);
+    testing.expectEqual(null, div.onfocus);
+    testing.expectEqual(null, div.onblur);
+
+    div.onfocus = focusFn;
+    testing.expectEqual('function', typeof div.onclick);
+    testing.expectEqual('function', typeof div.onfocus);
+    testing.expectEqual(null, div.onblur);
+
+    div.onblur = blurFn;
+    testing.expectEqual('function', typeof div.onclick);
+    testing.expectEqual('function', typeof div.onfocus);
+    testing.expectEqual('function', typeof div.onblur);
+}
+</script>
+
+<script id="keyboard_event_listeners">
+{
+    // Test keyboard event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.onkeydown);
+    testing.expectEqual(null, div.onkeyup);
+    testing.expectEqual(null, div.onkeypress);
+
+    div.onkeydown = () => {};
+    div.onkeyup = () => {};
+    div.onkeypress = () => {};
+
+    testing.expectEqual('function', typeof div.onkeydown);
+    testing.expectEqual('function', typeof div.onkeyup);
+    testing.expectEqual('function', typeof div.onkeypress);
+}
+</script>
+
+<script id="mouse_event_listeners">
+{
+    // Test mouse event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.onmousedown);
+    testing.expectEqual(null, div.onmouseup);
+    testing.expectEqual(null, div.onmousemove);
+    testing.expectEqual(null, div.onmouseover);
+    testing.expectEqual(null, div.onmouseout);
+    testing.expectEqual(null, div.ondblclick);
+
+    div.onmousedown = () => {};
+    div.onmouseup = () => {};
+    div.onmousemove = () => {};
+    div.onmouseover = () => {};
+    div.onmouseout = () => {};
+    div.ondblclick = () => {};
+
+    testing.expectEqual('function', typeof div.onmousedown);
+    testing.expectEqual('function', typeof div.onmouseup);
+    testing.expectEqual('function', typeof div.onmousemove);
+    testing.expectEqual('function', typeof div.onmouseover);
+    testing.expectEqual('function', typeof div.onmouseout);
+    testing.expectEqual('function', typeof div.ondblclick);
+}
+</script>
+
+<script id="pointer_event_listeners">
+{
+    // Test pointer event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.onpointerdown);
+    testing.expectEqual(null, div.onpointerup);
+    testing.expectEqual(null, div.onpointermove);
+    testing.expectEqual(null, div.onpointerover);
+    testing.expectEqual(null, div.onpointerout);
+    testing.expectEqual(null, div.onpointerenter);
+    testing.expectEqual(null, div.onpointerleave);
+    testing.expectEqual(null, div.onpointercancel);
+
+    div.onpointerdown = () => {};
+    div.onpointerup = () => {};
+    div.onpointermove = () => {};
+    div.onpointerover = () => {};
+    div.onpointerout = () => {};
+    div.onpointerenter = () => {};
+    div.onpointerleave = () => {};
+    div.onpointercancel = () => {};
+
+    testing.expectEqual('function', typeof div.onpointerdown);
+    testing.expectEqual('function', typeof div.onpointerup);
+    testing.expectEqual('function', typeof div.onpointermove);
+    testing.expectEqual('function', typeof div.onpointerover);
+    testing.expectEqual('function', typeof div.onpointerout);
+    testing.expectEqual('function', typeof div.onpointerenter);
+    testing.expectEqual('function', typeof div.onpointerleave);
+    testing.expectEqual('function', typeof div.onpointercancel);
+}
+</script>
+
+<script id="form_event_listeners">
+{
+    // Test form event listener getters/setters
+    const form = document.createElement('form');
+
+    testing.expectEqual(null, form.onsubmit);
+    testing.expectEqual(null, form.onreset);
+    testing.expectEqual(null, form.onchange);
+    testing.expectEqual(null, form.oninput);
+    testing.expectEqual(null, form.oninvalid);
+
+    form.onsubmit = () => {};
+    form.onreset = () => {};
+    form.onchange = () => {};
+    form.oninput = () => {};
+    form.oninvalid = () => {};
+
+    testing.expectEqual('function', typeof form.onsubmit);
+    testing.expectEqual('function', typeof form.onreset);
+    testing.expectEqual('function', typeof form.onchange);
+    testing.expectEqual('function', typeof form.oninput);
+    testing.expectEqual('function', typeof form.oninvalid);
+}
+</script>
+
+<script id="drag_event_listeners">
+{
+    // Test drag event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.ondrag);
+    testing.expectEqual(null, div.ondragstart);
+    testing.expectEqual(null, div.ondragend);
+    testing.expectEqual(null, div.ondragenter);
+    testing.expectEqual(null, div.ondragleave);
+    testing.expectEqual(null, div.ondragover);
+    testing.expectEqual(null, div.ondrop);
+
+    div.ondrag = () => {};
+    div.ondragstart = () => {};
+    div.ondragend = () => {};
+    div.ondragenter = () => {};
+    div.ondragleave = () => {};
+    div.ondragover = () => {};
+    div.ondrop = () => {};
+
+    testing.expectEqual('function', typeof div.ondrag);
+    testing.expectEqual('function', typeof div.ondragstart);
+    testing.expectEqual('function', typeof div.ondragend);
+    testing.expectEqual('function', typeof div.ondragenter);
+    testing.expectEqual('function', typeof div.ondragleave);
+    testing.expectEqual('function', typeof div.ondragover);
+    testing.expectEqual('function', typeof div.ondrop);
+}
+</script>
+
+<script id="clipboard_event_listeners">
+{
+    // Test clipboard event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.oncopy);
+    testing.expectEqual(null, div.oncut);
+    testing.expectEqual(null, div.onpaste);
+
+    div.oncopy = () => {};
+    div.oncut = () => {};
+    div.onpaste = () => {};
+
+    testing.expectEqual('function', typeof div.oncopy);
+    testing.expectEqual('function', typeof div.oncut);
+    testing.expectEqual('function', typeof div.onpaste);
+}
+</script>
+
+<script id="scroll_event_listeners">
+{
+    // Test scroll event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.onscroll);
+    testing.expectEqual(null, div.onscrollend);
+    testing.expectEqual(null, div.onresize);
+
+    div.onscroll = () => {};
+    div.onscrollend = () => {};
+    div.onresize = () => {};
+
+    testing.expectEqual('function', typeof div.onscroll);
+    testing.expectEqual('function', typeof div.onscrollend);
+    testing.expectEqual('function', typeof div.onresize);
+}
+</script>
+
+<script id="animation_event_listeners">
+{
+    // Test animation event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.onanimationstart);
+    testing.expectEqual(null, div.onanimationend);
+    testing.expectEqual(null, div.onanimationiteration);
+    testing.expectEqual(null, div.onanimationcancel);
+
+    div.onanimationstart = () => {};
+    div.onanimationend = () => {};
+    div.onanimationiteration = () => {};
+    div.onanimationcancel = () => {};
+
+    testing.expectEqual('function', typeof div.onanimationstart);
+    testing.expectEqual('function', typeof div.onanimationend);
+    testing.expectEqual('function', typeof div.onanimationiteration);
+    testing.expectEqual('function', typeof div.onanimationcancel);
+}
+</script>
+
+<script id="transition_event_listeners">
+{
+    // Test transition event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.ontransitionstart);
+    testing.expectEqual(null, div.ontransitionend);
+    testing.expectEqual(null, div.ontransitionrun);
+    testing.expectEqual(null, div.ontransitioncancel);
+
+    div.ontransitionstart = () => {};
+    div.ontransitionend = () => {};
+    div.ontransitionrun = () => {};
+    div.ontransitioncancel = () => {};
+
+    testing.expectEqual('function', typeof div.ontransitionstart);
+    testing.expectEqual('function', typeof div.ontransitionend);
+    testing.expectEqual('function', typeof div.ontransitionrun);
+    testing.expectEqual('function', typeof div.ontransitioncancel);
+}
+</script>
+
+<script id="misc_event_listeners">
+{
+    // Test miscellaneous event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.onwheel);
+    testing.expectEqual(null, div.ontoggle);
+    testing.expectEqual(null, div.oncontextmenu);
+    testing.expectEqual(null, div.onselect);
+    testing.expectEqual(null, div.onabort);
+    testing.expectEqual(null, div.oncancel);
+    testing.expectEqual(null, div.onclose);
+
+    div.onwheel = () => {};
+    div.ontoggle = () => {};
+    div.oncontextmenu = () => {};
+    div.onselect = () => {};
+    div.onabort = () => {};
+    div.oncancel = () => {};
+    div.onclose = () => {};
+
+    testing.expectEqual('function', typeof div.onwheel);
+    testing.expectEqual('function', typeof div.ontoggle);
+    testing.expectEqual('function', typeof div.oncontextmenu);
+    testing.expectEqual('function', typeof div.onselect);
+    testing.expectEqual('function', typeof div.onabort);
+    testing.expectEqual('function', typeof div.oncancel);
+    testing.expectEqual('function', typeof div.onclose);
+}
+</script>
+
+<script id="media_event_listeners">
+{
+    // Test media event listener getters/setters
+    const div = document.createElement('div');
+
+    testing.expectEqual(null, div.onplay);
+    testing.expectEqual(null, div.onpause);
+    testing.expectEqual(null, div.onplaying);
+    testing.expectEqual(null, div.onended);
+    testing.expectEqual(null, div.onvolumechange);
+    testing.expectEqual(null, div.onwaiting);
+    testing.expectEqual(null, div.onseeking);
+    testing.expectEqual(null, div.onseeked);
+    testing.expectEqual(null, div.ontimeupdate);
+    testing.expectEqual(null, div.onloadstart);
+    testing.expectEqual(null, div.onprogress);
+    testing.expectEqual(null, div.onstalled);
+    testing.expectEqual(null, div.onsuspend);
+    testing.expectEqual(null, div.oncanplay);
+    testing.expectEqual(null, div.oncanplaythrough);
+    testing.expectEqual(null, div.ondurationchange);
+    testing.expectEqual(null, div.onemptied);
+    testing.expectEqual(null, div.onloadeddata);
+    testing.expectEqual(null, div.onloadedmetadata);
+    testing.expectEqual(null, div.onratechange);
+
+    div.onplay = () => {};
+    div.onpause = () => {};
+    div.onplaying = () => {};
+    div.onended = () => {};
+    div.onvolumechange = () => {};
+    div.onwaiting = () => {};
+    div.onseeking = () => {};
+    div.onseeked = () => {};
+    div.ontimeupdate = () => {};
+    div.onloadstart = () => {};
+    div.onprogress = () => {};
+    div.onstalled = () => {};
+    div.onsuspend = () => {};
+    div.oncanplay = () => {};
+    div.oncanplaythrough = () => {};
+    div.ondurationchange = () => {};
+    div.onemptied = () => {};
+    div.onloadeddata = () => {};
+    div.onloadedmetadata = () => {};
+    div.onratechange = () => {};
+
+    testing.expectEqual('function', typeof div.onplay);
+    testing.expectEqual('function', typeof div.onpause);
+    testing.expectEqual('function', typeof div.onplaying);
+    testing.expectEqual('function', typeof div.onended);
+    testing.expectEqual('function', typeof div.onvolumechange);
+    testing.expectEqual('function', typeof div.onwaiting);
+    testing.expectEqual('function', typeof div.onseeking);
+    testing.expectEqual('function', typeof div.onseeked);
+    testing.expectEqual('function', typeof div.ontimeupdate);
+    testing.expectEqual('function', typeof div.onloadstart);
+    testing.expectEqual('function', typeof div.onprogress);
+    testing.expectEqual('function', typeof div.onstalled);
+    testing.expectEqual('function', typeof div.onsuspend);
+    testing.expectEqual('function', typeof div.oncanplay);
+    testing.expectEqual('function', typeof div.oncanplaythrough);
+    testing.expectEqual('function', typeof div.ondurationchange);
+    testing.expectEqual('function', typeof div.onemptied);
+    testing.expectEqual('function', typeof div.onloadeddata);
+    testing.expectEqual('function', typeof div.onloadedmetadata);
+    testing.expectEqual('function', typeof div.onratechange);
+}
+</script>

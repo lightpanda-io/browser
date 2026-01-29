@@ -424,6 +424,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // in progress before deinit.
             self.cdp.browser.env.runMicrotasks();
 
+            // resetContextGroup detach the inspector from all contexts.
+            // It append async tasks, so we make sure we run the message loop
+            // before deinit it.
+            self.inspector.resetContextGroup();
+            self.session.browser.runMessageLoop();
             self.inspector.deinit();
 
             // abort all intercepted requests before closing the sesion/page

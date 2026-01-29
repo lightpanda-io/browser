@@ -57,6 +57,16 @@ pub fn lowMemoryNotification(self: Isolate) void {
     v8.v8__Isolate__LowMemoryNotification(self.handle);
 }
 
+pub const MemoryPressureLevel = enum(u32) {
+    none = v8.kNone,
+    moderate = v8.kModerate,
+    critical = v8.kCritical,
+};
+
+pub fn memoryPressureNotification(self: Isolate, level: MemoryPressureLevel) void {
+    v8.v8__Isolate__MemoryPressureNotification(self.handle, @intFromEnum(level));
+}
+
 pub fn notifyContextDisposed(self: Isolate) void {
     _ = v8.v8__Isolate__ContextDisposedNotification(self.handle);
 }

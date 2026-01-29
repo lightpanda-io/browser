@@ -3,12 +3,12 @@ FROM debian:stable-slim
 ARG MINISIG=0.12
 ARG ZIG_MINISIG=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 ARG V8=14.0.365.4
-ARG ZIG_V8=v0.2.5
+ARG ZIG_V8=v0.2.6
 ARG TARGETPLATFORM
 
 RUN apt-get update -yq && \
     apt-get install -yq xz-utils ca-certificates \
-        clang make curl git
+        gcc make curl git
 
 # Get Rust
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --profile minimal -y
