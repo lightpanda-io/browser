@@ -76,10 +76,6 @@ pub fn defineOwnProperty(self: Object, name: []const u8, value: js.Value, attr: 
     }
 }
 
-pub fn toString(self: Object) ![]const u8 {
-    return self.local.ctx.valueToString(self.toValue(), .{});
-}
-
 pub fn toValue(self: Object) js.Value {
     return .{
         .local = self.local,

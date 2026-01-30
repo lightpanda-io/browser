@@ -46,12 +46,38 @@ pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
 
     const exception: ?[]const u8 = blk: {
         const handle = v8.v8__TryCatch__Exception(&self.handle) orelse break :blk null;
-        break :blk js.String.toSliceWithAlloc(.{ .local = l, .handle = @ptrCast(handle) }, allocator) catch |err| @errorName(err);
+        var js_val = js.Value{ .local = l, .handle = handle };
+
+        // If it's an Error object, try to get the message property
+        if (js_val.isObject()) {
+            const js_obj = js_val.toObject();
+            if (js_obj.has("message")) {
+                js_val = js_obj.get("message") catch break :blk null;
+            }
+        }
+
+        if (js_val.isString()) |js_str| {
+            break :blk js_str.toSliceWithAlloc(allocator) catch |err| @errorName(err);
+        }
+        break :blk null;
     };
 
     const stack: ?[]const u8 = blk: {
         const handle = v8.v8__TryCatch__StackTrace(&self.handle, l.handle) orelse break :blk null;
-        break :blk js.String.toSliceWithAlloc(.{ .local = l, .handle = @ptrCast(handle) }, allocator) catch |err| @errorName(err);
+        var js_val = js.Value{ .local = l, .handle = handle };
+
+        // If it's an Error object, try to get the stack property
+        if (js_val.isObject()) {
+            const js_obj = js_val.toObject();
+            if (js_obj.has("stack")) {
+                js_val = js_obj.get("stack") catch break :blk null;
+            }
+        }
+
+        if (js_val.isString()) |js_str| {
+            break :blk js_str.toSliceWithAlloc(allocator) catch |err| @errorName(err);
+        }
+        break :blk null;
     };
 
     return .{
