@@ -197,7 +197,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     const http_client = page._session.browser.http_client;
     var headers = try http_client.newHeaders();
     try self._request_headers.populateHttpHeader(page.call_arena, &headers);
-    try page.requestCookie(.{}).headersForRequest(self._arena, self._url, &headers);
+    try page.headersForRequest(self._arena, self._url, &headers);
 
     try http_client.request(.{
         .ctx = self,
