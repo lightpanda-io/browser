@@ -182,7 +182,7 @@ fn createTarget(cmd: anytype) !void {
         defer ls.deinit();
 
         const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
-        bc.inspector.contextCreated(
+        bc.inspector_session.inspector.contextCreated(
             &ls.local,
             "",
             "", // @ZIGDOM

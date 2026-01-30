@@ -189,17 +189,9 @@ fn createIsolatedWorld(cmd: anytype) !void {
 
     const world = try bc.createIsolatedWorld(params.worldName, params.grantUniveralAccess);
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
     const js_context = try world.createContext(page);
-
-    // Create the auxdata json for the contextCreated event
-    // Calling contextCreated will assign a Id to the context and send the contextCreated event
-    const aux_data = try std.fmt.allocPrint(cmd.arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{params.frameId});
-    var ls: js.Local.Scope = undefined;
-    js_context.localScope(&ls);
-    defer ls.deinit();
-
-    bc.inspector.contextCreated(&ls.local, world.name, "", aux_data, false);
-    return cmd.sendResult(.{ .executionContextId = ls.local.debugContextId() }, .{});
+    return cmd.sendResult(.{ .executionContextId = js_context.id }, .{});
 }
 
 fn navigate(cmd: anytype) !void {
@@ -359,7 +351,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         page.js.localScope(&ls);
         defer ls.deinit();
 
-        bc.inspector.contextCreated(
+        bc.inspector_session.inspector.contextCreated(
             &ls.local,
             "",
             try page.getOrigin(arena) orelse "",
@@ -376,7 +368,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         (isolated_world.context orelse continue).localScope(&ls);
         defer ls.deinit();
 
-        bc.inspector.contextCreated(
+        bc.inspector_session.inspector.contextCreated(
             &ls.local,
             isolated_world.name,
             "://",

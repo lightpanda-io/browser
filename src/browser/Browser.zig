@@ -50,10 +50,14 @@ session_arena: ArenaAllocator,
 transfer_arena: ArenaAllocator,
 notification: *Notification,
 
-pub fn init(app: *App) !Browser {
+const InitOpts = struct {
+    env: js.Env.InitOpts = .{},
+};
+
+pub fn init(app: *App, opts: InitOpts) !Browser {
     const allocator = app.allocator;
 
-    var env = try js.Env.init(app);
+    var env = try js.Env.init(app, opts.env);
     errdefer env.deinit();
 
     const notification = try Notification.init(allocator, app.notification);
