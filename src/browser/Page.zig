@@ -1202,9 +1202,10 @@ pub fn getAttrListener(
     const listeners = &self._element_attr_listeners;
     // Check if there's such attr listener.
     const key = element.calcAttrListenerKey(listener_type);
-    const listener = listeners.getPtr(key) orelse return null;
+    // `getEntry` saves us an additional lookup for removing in `raw` branch.
+    const entry = listeners.getEntry(key) orelse return null;
 
-    return switch (listener.*) {
+    return switch (entry.value_ptr.*) {
         // Fast path.
         .function => |function| function,
         // Lazy evaluation.
@@ -1218,8 +1219,7 @@ pub fn getAttrListener(
                     .err = err,
                 });
                 // We can remove this safely.
-                const result = listeners.remove(key);
-                lp.assert(result == true, "Page.getAttrListener: unexpected result", .{});
+                listeners.removeByPtr(entry.key_ptr);
                 // Remove invalid bytes.
                 self.arena.free(untrusted);
 
@@ -1229,7 +1229,7 @@ pub fn getAttrListener(
             // Now that we obtained a function; this has no use.
             self.arena.free(untrusted);
             // Cache the resulting function.
-            listener.* = .{ .function = function };
+            entry.value_ptr.* = .{ .function = function };
             return function;
         },
     };
