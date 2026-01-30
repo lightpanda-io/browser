@@ -276,7 +276,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
             self._arena_pool_leak_track.clearRetainingCapacity();
         }
 
-
         // We force a garbage collection between page navigations to keep v8
         // memory usage as low as possible.
         self._session.browser.env.memoryPressureNotification(.moderate);
@@ -1173,7 +1172,10 @@ pub fn setAttrListener(
     self: *Page,
     element: *Element,
     listener_type: Element.KnownListener,
-    listener_callback: JS.Function.Global,
+    /// This can be;
+    /// []const u8 or []u8 (memory will be duped anyway) or,
+    /// JS function (persisted).
+    raw_or_function: anytype,
 ) !void {
     if (comptime IS_DEBUG) {
         log.debug(.event, "Page.setAttrListener", .{
@@ -1184,16 +1186,53 @@ pub fn setAttrListener(
 
     const key = element.calcAttrListenerKey(listener_type);
     const gop = try self._element_attr_listeners.getOrPut(self.arena, key);
-    gop.value_ptr.* = listener_callback;
+    switch (@TypeOf(raw_or_function)) {
+        []const u8, []u8 => gop.value_ptr.* = .{ .raw = try self.arena.dupe(u8, raw_or_function) },
+        JS.Function.Global => gop.value_ptr.* = .{ .function = raw_or_function },
+        else => |T| @panic("setAttrListener: unknown type " ++ @typeName(T)),
+    }
 }
 
-/// Returns the inline event listener by an element and listener type.
+/// Returns the inline event listener function by an element and listener type.
 pub fn getAttrListener(
-    self: *const Page,
+    self: *Page,
     element: *Element,
     listener_type: Element.KnownListener,
 ) ?JS.Function.Global {
-    return self._element_attr_listeners.get(element.calcAttrListenerKey(listener_type));
+    const listeners = &self._element_attr_listeners;
+    // Check if there's such attr listener.
+    const key = element.calcAttrListenerKey(listener_type);
+    const listener = listeners.getPtr(key) orelse return null;
+
+    return switch (listener.*) {
+        // Fast path.
+        .function => |function| function,
+        // Lazy evaluation.
+        .raw => |untrusted| {
+            // First time access to this getter; try to compile as function and cache result.
+            const function = self.js.stringToPersistedFunction(untrusted) catch |err| {
+                // Not a valid expression; log this to find out if its something
+                // that we should be supporting.
+                log.warn(.unknown_prop, "Page.getAttrListener", .{
+                    .expression = untrusted,
+                    .err = err,
+                });
+                // We can remove this safely.
+                const result = listeners.remove(key);
+                lp.assert(result == true, "Page.getAttrListener: unexpected result", .{});
+                // Remove invalid bytes.
+                self.arena.free(untrusted);
+
+                return null;
+            };
+
+            // Now that we obtained a function; this has no use.
+            self.arena.free(untrusted);
+            // Cache the resulting function.
+            listener.* = .{ .function = function };
+            return function;
+        },
+    };
 }
 
 pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
@@ -2242,14 +2281,12 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
         const has_on_prefix = @as(u16, @bitCast([2]u8{ name.ptr[0], name.ptr[1 % name.len] })) == asUint("on");
         // We may have found an event handler.
         if (has_on_prefix) {
-            // Must be usable as function.
-            const func = self.js.stringToPersistedFunction(attr.value.slice()) catch continue;
-
             // Longest known listener kind is 32 bytes long.
             const remaining: u6 = @truncate(name.len -| 2);
             const unsafe = name.ptr + 2;
             const Vec16x8 = @Vector(16, u8);
             const Vec32x8 = @Vector(32, u8);
+            const func = attr.value.slice();
 
             switch (remaining) {
                 3 => if (@as(u24, @bitCast(unsafe[0..3].*)) == asUint("cut")) {

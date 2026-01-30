@@ -53,8 +53,15 @@ pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
 ///
 /// See `calcAttrListenerKey` to obtain one.
 const AttrListenerKey = u64;
+/// We lazily evaluate functions in order to not to create garbage.
+const AttrListener = union(enum(u1)) {
+    /// Raw bytes; this may or may not be a valid JS expression.
+    raw: []const u8,
+    /// A valid JS function; can be executed directly.
+    function: js.Function.Global,
+};
 /// Use `getAttrListenerKey` to create a key.
-pub const AttrListenerLookup = std.AutoHashMapUnmanaged(AttrListenerKey, js.Function.Global);
+pub const AttrListenerLookup = std.AutoHashMapUnmanaged(AttrListenerKey, AttrListener);
 
 /// Enum of known event listeners; increasing the size of it (u7)
 /// can cause `AttrListenerKey` to behave incorrectly.

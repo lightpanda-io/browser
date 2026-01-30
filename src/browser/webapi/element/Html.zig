@@ -339,30 +339,7 @@ fn getAttributeFunction(
     listener_type: Element.KnownListener,
     page: *Page,
 ) ?js.Function.Global {
-    const element = self.asElement();
-    // Check if we've already cached this.
-    if (page.getAttrListener(element, listener_type)) |cached_func| {
-        return cached_func;
-    }
-
-    // Not found in cache; parse from attribute list.
-    const js_expression = element.getAttributeSafe(.wrap(@tagName(listener_type))) orelse {
-        return null;
-    };
-
-    const callback = page.js.stringToPersistedFunction(js_expression) catch {
-        // Not a valid expression; log this to find out if its something
-        // that we should be supporting.
-        log.warn(.unknown_prop, "Html.getAttributeFunction", .{ .expression = js_expression });
-        return null;
-    };
-
-    // Cache the function for future calls.
-    page.setAttrListener(element, listener_type, callback) catch {
-        // This is fine :tm: we likely hit out of memory.
-    };
-
-    return callback;
+    return page.getAttrListener(self.asElement(), listener_type);
 }
 
 pub fn setOnAbort(self: *HtmlElement, callback: js.Function.Global, page: *Page) !void {
