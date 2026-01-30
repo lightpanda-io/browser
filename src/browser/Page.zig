@@ -234,6 +234,10 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
+    // This can release JS objects, so we need to do this while the js.Context
+    // is still around.
+    self.scheduler.deinit();
+
     {
         // some MicroTasks might be referencing the page, we need to drain it while
         // the page still exists
@@ -266,6 +270,8 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     const browser = self._session.browser;
 
     if (comptime initializing == false) {
+        self.scheduler.deinit();
+
         browser.env.destroyContext(self.js);
 
         // removing a context can trigger finalizers, so we can only check for
@@ -281,7 +287,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
         // We force a garbage collection between page navigations to keep v8
         // memory usage as low as possible.
         browser.env.memoryPressureNotification(.moderate);
-
         self._script_manager.shutdown = true;
         browser.http_client.abort();
         self._script_manager.deinit();

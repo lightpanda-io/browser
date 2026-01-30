@@ -47,9 +47,15 @@ pub fn init(allocator: std.mem.Allocator) Scheduler {
     };
 }
 
+pub fn deinit(self: *Scheduler) void {
+    finalizeTasks(&self.low_priority);
+    finalizeTasks(&self.high_priority);
+}
+
 const AddOpts = struct {
     name: []const u8 = "",
     low_priority: bool = false,
+    finalizer: ?Finalizer = null,
 };
 pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts: AddOpts) !void {
     if (comptime IS_DEBUG) {
@@ -63,6 +69,7 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
         .callback = cb,
         .sequence = seq,
         .name = opts.name,
+        .finalizer = opts.finalizer,
         .run_at = milliTimestamp(.monotonic) + run_in_ms,
     });
 }
@@ -105,12 +112,23 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
     return null;
 }
 
+fn finalizeTasks(queue: *Queue) void {
+    var it = queue.iterator();
+    while (it.next()) |t| {
+        if (t.finalizer) |func| {
+            func(t.ctx);
+        }
+    }
+}
+
 const Task = struct {
     run_at: u64,
     sequence: u64,
     ctx: *anyopaque,
     name: []const u8,
     callback: Callback,
+    finalizer: ?Finalizer,
 };
 
 const Callback = *const fn (ctx: *anyopaque) anyerror!?u32;
+const Finalizer = *const fn (ctx: *anyopaque) void;

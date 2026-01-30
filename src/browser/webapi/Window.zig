@@ -44,6 +44,8 @@ const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
 
+const Allocator = std.mem.Allocator;
+
 const Window = @This();
 
 _proto: *EventTarget,
@@ -353,18 +355,21 @@ pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]co
     _ = target_origin;
 
     // postMessage queues a task (not a microtask), so use the scheduler
-    const origin = try self._location.getOrigin(page);
-    const callback = try page._factory.create(PostMessageCallback{
-        .window = self,
-        .message = message,
-        .origin = try page.arena.dupe(u8, origin),
-        .page = page,
-    });
-    errdefer page._factory.destroy(callback);
+    const arena = try page.getArena(.{ .debug = "Window.schedule" });
+    errdefer page.releaseArena(arena);
 
+    const origin = try self._location.getOrigin(page);
+    const callback = try arena.create(PostMessageCallback);
+    callback.* = .{
+        .page = page,
+        .arena = arena,
+        .message = message,
+        .origin = try arena.dupe(u8, origin),
+    };
     try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
         .low_priority = false,
+        .finalizer = PostMessageCallback.cancelled,
     });
 }
 
@@ -508,13 +513,16 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
         return error.TooManyTimeout;
     }
 
+    const arena = try page.getArena(.{ .debug = "Window.schedule" });
+    errdefer page.releaseArena(arena);
+
     const timer_id = self._timer_id +% 1;
     self._timer_id = timer_id;
 
     const params = opts.params;
     var persisted_params: []js.Value.Temp = &.{};
     if (params.len > 0) {
-        persisted_params = try page.arena.dupe(js.Value.Temp, params);
+        persisted_params = try arena.dupe(js.Value.Temp, params);
     }
 
     const gop = try self._timers.getOrPut(page.arena, timer_id);
@@ -524,21 +532,23 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
     }
     errdefer _ = self._timers.remove(timer_id);
 
-    const callback = try page._factory.create(ScheduleCallback{
+    const callback = try arena.create(ScheduleCallback);
+    callback.* = .{
         .cb = cb,
         .page = page,
+        .arena = arena,
         .mode = opts.mode,
         .name = opts.name,
         .timer_id = timer_id,
         .params = persisted_params,
         .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
-    });
+    };
     gop.value_ptr.* = callback;
-    errdefer page._factory.destroy(callback);
 
     try page.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
         .name = opts.name,
         .low_priority = opts.low_priority,
+        .finalizer = ScheduleCallback.cancelled,
     });
 
     return timer_id;
@@ -556,13 +566,11 @@ const ScheduleCallback = struct {
 
     cb: js.Function.Temp,
 
-    page: *Page,
-
-    params: []const js.Value.Temp,
-
-    removed: bool = false,
-
     mode: Mode,
+    page: *Page,
+    arena: Allocator,
+    removed: bool = false,
+    params: []const js.Value.Temp,
 
     const Mode = enum {
         idle,
@@ -570,19 +578,26 @@ const ScheduleCallback = struct {
         animation_frame,
     };
 
+    fn cancelled(ctx: *anyopaque) void {
+        var self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
+        self.deinit();
+    }
+
     fn deinit(self: *ScheduleCallback) void {
         self.page.js.release(self.cb);
         for (self.params) |param| {
             self.page.js.release(param);
         }
-        self.page._factory.destroy(self);
+        self.page.releaseArena(self.arena);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
         const page = self.page;
+        const window = page.window;
+
         if (self.removed) {
-            _ = page.window._timers.remove(self.timer_id);
+            _ = window._timers.remove(self.timer_id);
             self.deinit();
             return null;
         }
@@ -599,7 +614,7 @@ const ScheduleCallback = struct {
                 };
             },
             .animation_frame => {
-                ls.toLocal(self.cb).call(void, .{page.window._performance.now()}) catch |err| {
+                ls.toLocal(self.cb).call(void, .{window._performance.now()}) catch |err| {
                     log.warn(.js, "window.RAF", .{ .name = self.name, .err = err });
                 };
             },
@@ -614,35 +629,43 @@ const ScheduleCallback = struct {
             return ms;
         }
         defer self.deinit();
-        _ = page.window._timers.remove(self.timer_id);
+        _ = window._timers.remove(self.timer_id);
         return null;
     }
 };
 
 const PostMessageCallback = struct {
-    window: *Window,
-    message: js.Value.Global,
-    origin: []const u8,
     page: *Page,
+    arena: Allocator,
+    origin: []const u8,
+    message: js.Value.Global,
 
     fn deinit(self: *PostMessageCallback) void {
-        self.page._factory.destroy(self);
+        self.page.releaseArena(self.arena);
+    }
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+        self.page.releaseArena(self.arena);
     }
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
 
+        const page = self.page;
+        const window = page.window;
+
         const message_event = try MessageEvent.initTrusted("message", .{
             .data = self.message,
             .origin = self.origin,
-            .source = self.window,
+            .source = window,
             .bubbles = false,
             .cancelable = false,
-        }, self.page);
+        }, page);
 
         const event = message_event.asEvent();
-        try self.page._event_manager.dispatch(self.window.asEventTarget(), event);
+        try page._event_manager.dispatch(window.asEventTarget(), event);
 
         return null;
     }
