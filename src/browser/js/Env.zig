@@ -68,7 +68,14 @@ templates: []*const v8.FunctionTemplate,
 // Global template created once per isolate and reused across all contexts
 global_template: v8.Eternal,
 
-pub fn init(app: *App) !Env {
+// Inspector associated with the Isolate. Exists when CDP is being used.
+inspector: ?*Inspector,
+
+pub const InitOpts = struct {
+    with_inspector: bool = false,
+};
+
+pub fn init(app: *App, opts: InitOpts) !Env {
     const allocator = app.allocator;
     const snapshot = &app.snapshot;
 
@@ -84,17 +91,18 @@ pub fn init(app: *App) !Env {
 
     var isolate = js.Isolate.init(params);
     errdefer isolate.deinit();
+    const isolate_handle = isolate.handle;
 
-    v8.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate.handle, Context.dynamicModuleCallback);
-    v8.v8__Isolate__SetPromiseRejectCallback(isolate.handle, promiseRejectCallback);
-    v8.v8__Isolate__SetMicrotasksPolicy(isolate.handle, v8.kExplicit);
-    v8.v8__Isolate__SetFatalErrorHandler(isolate.handle, fatalCallback);
-    v8.v8__Isolate__SetOOMErrorHandler(isolate.handle, oomCallback);
+    v8.v8__Isolate__SetHostImportModuleDynamicallyCallback(isolate_handle, Context.dynamicModuleCallback);
+    v8.v8__Isolate__SetPromiseRejectCallback(isolate_handle, promiseRejectCallback);
+    v8.v8__Isolate__SetMicrotasksPolicy(isolate_handle, v8.kExplicit);
+    v8.v8__Isolate__SetFatalErrorHandler(isolate_handle, fatalCallback);
+    v8.v8__Isolate__SetOOMErrorHandler(isolate_handle, oomCallback);
 
     isolate.enter();
     errdefer isolate.exit();
 
-    v8.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate.handle, Context.metaObjectCallback);
+    v8.v8__Isolate__SetHostInitializeImportMetaObjectCallback(isolate_handle, Context.metaObjectCallback);
 
     // Allocate arrays dynamically to avoid comptime dependency on JsApis.len
     const eternal_function_templates = try allocator.alloc(v8.Eternal, JsApis.len);
@@ -111,19 +119,19 @@ pub fn init(app: *App) !Env {
 
         inline for (JsApis, 0..) |JsApi, i| {
             JsApi.Meta.class_id = i;
-            const data = v8.v8__Isolate__GetDataFromSnapshotOnce(isolate.handle, snapshot.data_start + i);
+            const data = v8.v8__Isolate__GetDataFromSnapshotOnce(isolate_handle, snapshot.data_start + i);
             const function_handle: *const v8.FunctionTemplate = @ptrCast(data);
             // Make function template eternal
-            v8.v8__Eternal__New(isolate.handle, @ptrCast(function_handle), &eternal_function_templates[i]);
+            v8.v8__Eternal__New(isolate_handle, @ptrCast(function_handle), &eternal_function_templates[i]);
 
             // Extract the local handle from the global for easy access
-            const eternal_ptr = v8.v8__Eternal__Get(&eternal_function_templates[i], isolate.handle);
+            const eternal_ptr = v8.v8__Eternal__Get(&eternal_function_templates[i], isolate_handle);
             templates[i] = @ptrCast(@alignCast(eternal_ptr.?));
         }
 
         // Create global template once per isolate
-        const js_global = v8.v8__FunctionTemplate__New__DEFAULT(isolate.handle);
-        const window_name = v8.v8__String__NewFromUtf8(isolate.handle, "Window", v8.kNormal, 6);
+        const js_global = v8.v8__FunctionTemplate__New__DEFAULT(isolate_handle);
+        const window_name = v8.v8__String__NewFromUtf8(isolate_handle, "Window", v8.kNormal, 6);
         v8.v8__FunctionTemplate__SetClassName(js_global, window_name);
 
         // Find Window in JsApis by name (avoids circular import)
@@ -142,7 +150,12 @@ pub fn init(app: *App) !Env {
             .data = null,
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
-        v8.v8__Eternal__New(isolate.handle, @ptrCast(global_template_local), &global_eternal);
+        v8.v8__Eternal__New(isolate_handle, @ptrCast(global_template_local), &global_eternal);
+    }
+
+    var inspector: ?*js.Inspector = null;
+    if (opts.with_inspector) {
+        inspector = try Inspector.init(allocator, isolate_handle);
     }
 
     return .{
@@ -153,6 +166,7 @@ pub fn init(app: *App) !Env {
         .platform = &app.platform,
         .templates = templates,
         .isolate_params = params,
+        .inspector = inspector,
         .eternal_function_templates = eternal_function_templates,
         .global_template = global_eternal,
     };
@@ -167,6 +181,10 @@ pub fn deinit(self: *Env) void {
     }
 
     const allocator = self.app.allocator;
+    if (self.inspector) |i| {
+        i.deinit(allocator);
+    }
+
     self.contexts.deinit(allocator);
 
     allocator.free(self.templates);
@@ -220,8 +238,8 @@ pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
         .arena = context_arena,
         .handle = context_global,
         .templates = self.templates,
-        .script_manager = &page._script_manager,
         .call_arena = page.call_arena,
+        .script_manager = &page._script_manager,
     };
     try context.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
 
@@ -247,12 +265,6 @@ pub fn destroyContext(self: *Env, context: *Context) void {
     }
     context.deinit();
     self.isolate.notifyContextDisposed();
-}
-
-pub fn newInspector(self: *Env, arena: Allocator, ctx: anytype) !*Inspector {
-    const inspector = try arena.create(Inspector);
-    try Inspector.init(inspector, self.isolate.handle, ctx);
-    return inspector;
 }
 
 pub fn runMicrotasks(self: *const Env) void {

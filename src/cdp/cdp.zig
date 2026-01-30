@@ -80,7 +80,9 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
         pub fn init(app: *App, client: TypeProvider.Client) !Self {
             const allocator = app.allocator;
-            const browser = try Browser.init(app);
+            const browser = try Browser.init(app, .{
+                .env = .{ .with_inspector = true },
+            });
             errdefer browser.deinit();
 
             return .{
@@ -352,7 +354,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_registry: Node.Registry,
         node_search_list: Node.Search.List,
 
-        inspector: *js.Inspector,
+        inspector_session: *js.Inspector.Session,
         isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
 
         http_proxy_changed: bool = false,
@@ -381,7 +383,9 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const session = try cdp.browser.newSession();
             const arena = session.arena;
 
-            const inspector = try cdp.browser.env.newInspector(arena, self);
+            const browser = &cdp.browser;
+            const inspector_session = browser.env.inspector.?.startSession(self);
+            errdefer browser.env.inspector.?.stopSession();
 
             var registry = Node.Registry.init(allocator);
             errdefer registry.deinit();
@@ -400,7 +404,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .node_registry = registry,
                 .node_search_list = undefined,
                 .isolated_worlds = .empty,
-                .inspector = inspector,
+                .inspector_session = inspector_session,
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
                 .captured_responses = .empty,
@@ -409,27 +413,28 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
 
-            try cdp.browser.notification.register(.page_remove, self, onPageRemove);
-            try cdp.browser.notification.register(.page_created, self, onPageCreated);
-            try cdp.browser.notification.register(.page_navigate, self, onPageNavigate);
-            try cdp.browser.notification.register(.page_navigated, self, onPageNavigated);
+            try browser.notification.register(.page_remove, self, onPageRemove);
+            try browser.notification.register(.page_created, self, onPageCreated);
+            try browser.notification.register(.page_navigate, self, onPageNavigate);
+            try browser.notification.register(.page_navigated, self, onPageNavigated);
         }
 
         pub fn deinit(self: *Self) void {
             // safe to call even if never registered
             log.unregisterInterceptor();
             self.log_interceptor.deinit();
+            const browser = &self.cdp.browser;
 
             // Drain microtasks makes sure we don't have inspector's callback
             // in progress before deinit.
-            self.cdp.browser.env.runMicrotasks();
+            browser.env.runMicrotasks();
 
             // resetContextGroup detach the inspector from all contexts.
             // It append async tasks, so we make sure we run the message loop
             // before deinit it.
-            self.inspector.resetContextGroup();
-            self.session.browser.runMessageLoop();
-            self.inspector.deinit();
+            browser.env.inspector.?.resetContextGroup();
+            browser.runMessageLoop();
+            browser.env.inspector.?.stopSession();
 
             // abort all intercepted requests before closing the sesion/page
             // since some of these might callback into the page/scriptmanager
@@ -445,16 +450,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // If the session has a page, we need to clear it first. The page
             // context is always nested inside of the isolated world context,
             // so we need to shutdown the page one first.
-            self.cdp.browser.closeSession();
+            browser.closeSession();
 
             self.node_registry.deinit();
             self.node_search_list.deinit();
-            self.cdp.browser.notification.unregisterAll(self);
+            browser.notification.unregisterAll(self);
 
             if (self.http_proxy_changed) {
                 // has to be called after browser.closeSession, since it won't
                 // work if there are active connections.
-                self.cdp.browser.http_client.restoreOriginalProxy() catch |err| {
+                browser.http_client.restoreOriginalProxy() catch |err| {
                     log.warn(.http, "restoreOriginalProxy", .{ .err = err });
                 };
             }
@@ -650,9 +655,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn callInspector(self: *const Self, msg: []const u8) void {
-            self.inspector.send(msg);
-            // force running micro tasks after send input to the inspector.
-            self.cdp.browser.runMicrotasks();
+            self.inspector_session.send(msg);
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {
@@ -676,18 +679,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             sendInspectorMessage(@ptrCast(@alignCast(ctx)), msg) catch |err| {
                 log.err(.cdp, "send inspector event", .{ .err = err });
             };
-        }
-
-        // debugger events
-
-        pub fn onRunMessageLoopOnPause(_: *anyopaque, _: u32) void {
-            // onRunMessageLoopOnPause is called when a breakpoint is hit.
-            // Until quit pause, we must continue to run a nested message loop
-            // to interact with the the debugger ony (ie. Chrome DevTools).
-        }
-
-        pub fn onQuitMessageLoopOnPause(_: *anyopaque) void {
-            // Quit breakpoint pause.
         }
 
         // This is hacky x 2. First, we create the JSON payload by gluing our

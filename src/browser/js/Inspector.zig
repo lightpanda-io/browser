@@ -23,99 +23,76 @@ const v8 = js.v8;
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
 const Allocator = std.mem.Allocator;
-const RndGen = std.Random.DefaultPrng;
 
 const CONTEXT_GROUP_ID = 1;
 const CLIENT_TRUST_LEVEL = 1;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
+// Inspector exists for the lifetime of the Isolate/Env. 1 Isolate = 1 Inspector.
+// It combines the v8.Inspector and the v8.InspectorClientImpl. The v8.InspectorClientImpl
+// is our own implementation that fulfills the InspectorClient API, i.e. it's the
+// mechanism v8 provides to let us tweak how the inspector works. For example, it
+// Below, you'll find a few pub export fn v8_inspector__Client__IMPL__XYZ functions
+// which is our implementation of what the v8::Inspector requires of our Client
+// (not much at all)
 const Inspector = @This();
 
-handle: *v8.Inspector,
+unique_id: i64,
 isolate: *v8.Isolate,
-client: Client,
-channel: Channel,
-session: Session,
-rnd: RndGen = RndGen.init(0),
+handle: *v8.Inspector,
+client: *v8.InspectorClientImpl,
 default_context: ?v8.Global,
+session: ?Session,
 
-// We expect allocator to be an arena
-// Note: This initializes the pre-allocated inspector in-place
-pub fn init(self: *Inspector, isolate: *v8.Isolate, ctx: anytype) !void {
-    const ContextT = @TypeOf(ctx);
+pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
+    const self = try allocator.create(Inspector);
+    errdefer allocator.destroy(self);
 
-    const Container = switch (@typeInfo(ContextT)) {
-        .@"struct" => ContextT,
-        .pointer => |ptr| ptr.child,
-        .void => NoopInspector,
-        else => @compileError("invalid context type"),
-    };
-    // If necessary, turn a void context into something we can safely ptrCast
-    const safe_context: *anyopaque = if (ContextT == void) @ptrCast(@constCast(&{})) else ctx;
-
-    // Initialize the fields that callbacks need first
     self.* = .{
-        .handle = undefined,
+        .unique_id = 1,
+        .session = null,
         .isolate = isolate,
         .client = undefined,
-        .channel = undefined,
-        .rnd = RndGen.init(0),
+        .handle = undefined,
         .default_context = null,
-        .session = undefined,
     };
 
-    // Create client and set inspector data BEFORE creating the inspector
-    // because V8 will call generateUniqueId during inspector creation
-    const client = Client.init();
-    self.client = client;
-    client.setInspector(self);
+    self.client = v8.v8_inspector__Client__IMPL__CREATE();
+    errdefer v8.v8_inspector__Client__IMPL__DELETE(self.client);
+    v8.v8_inspector__Client__IMPL__SET_DATA(self.client, self);
 
-    // Now create the inspector - generateUniqueId will work because data is set
-    const handle = v8.v8_inspector__Inspector__Create(isolate, client.handle).?;
-    self.handle = handle;
+    self.handle = v8.v8_inspector__Inspector__Create(isolate, self.client).?;
+    errdefer v8.v8_inspector__Inspector__DELETE(self.handle);
 
-    // Create the channel
-    const channel = Channel.init(
-        safe_context,
-        Container.onInspectorResponse,
-        Container.onInspectorEvent,
-        Container.onRunMessageLoopOnPause,
-        Container.onQuitMessageLoopOnPause,
-        isolate,
-    );
-    self.channel = channel;
-    channel.setInspector(self);
-
-    // Create the session
-    const session_handle = v8.v8_inspector__Inspector__Connect(
-        handle,
-        CONTEXT_GROUP_ID,
-        channel.handle,
-        CLIENT_TRUST_LEVEL,
-    ).?;
-    self.session = .{ .handle = session_handle };
+    return self;
 }
 
-pub fn deinit(self: *const Inspector) void {
+pub fn deinit(self: *const Inspector, allocator: Allocator) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    self.session.deinit();
-    self.client.deinit();
-    self.channel.deinit();
+    if (self.session) |*s| {
+        s.deinit();
+    }
+    v8.v8_inspector__Client__IMPL__DELETE(self.client);
     v8.v8_inspector__Inspector__DELETE(self.handle);
+    allocator.destroy(self);
 }
 
-pub fn send(self: *const Inspector, msg: []const u8) void {
-    // Can't assume the main Context exists (with its HandleScope)
-    // available when doing this. Pages (and thus the HandleScope)
-    // comes and goes, but CDP can keep sending messages.
-    const isolate = self.isolate;
-    var temp_scope: v8.HandleScope = undefined;
-    v8.v8__HandleScope__CONSTRUCT(&temp_scope, isolate);
-    defer v8.v8__HandleScope__DESTRUCT(&temp_scope);
+pub fn startSession(self: *Inspector, ctx: anytype) *Session {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.session == null);
+    }
 
-    self.session.dispatchProtocolMessage(isolate, msg);
+    self.session = undefined;
+    Session.init(&self.session.?, self, ctx);
+    return &self.session.?;
+}
+
+pub fn stopSession(self: *Inspector) void {
+    self.session.?.deinit();
+    self.session = null;
 }
 
 // From CDP docs
@@ -161,51 +138,6 @@ pub fn resetContextGroup(self: *const Inspector) void {
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
     v8.v8_inspector__Inspector__ResetContextGroup(self.handle, CONTEXT_GROUP_ID);
-}
-
-// Retrieves the RemoteObject for a given value.
-// The value is loaded through the ExecutionWorld's mapZigInstanceToJs function,
-// just like a method return value. Therefore, if we've mapped this
-// value before, we'll get the existing js.Global(js.Object) and if not
-// we'll create it and track it for cleanup when the context ends.
-pub fn getRemoteObject(
-    self: *const Inspector,
-    local: *const js.Local,
-    group: []const u8,
-    value: anytype,
-) !RemoteObject {
-    const js_val = try local.zigValueToJs(value, .{});
-
-    // We do not want to expose this as a parameter for now
-    const generate_preview = false;
-    return self.session.wrapObject(
-        local.isolate.handle,
-        local.handle,
-        js_val.handle,
-        group,
-        generate_preview,
-    );
-}
-
-// Gets a value by object ID regardless of which context it is in.
-// Our TaggedOpaque stores the "resolved" ptr value (the most specific _type,
-// e.g. we store the ptr to the Div not the EventTarget). But, this is asking for
-// the pointer to the Node, so we need to use the same resolution mechanism which
-// is used when we're calling a function to turn the Div into a Node, which is
-// what TaggedOpaque.fromJS does.
-pub fn getNodePtr(self: *const Inspector, allocator: Allocator, object_id: []const u8, local: *js.Local) !*anyopaque {
-    // just to indicate that the caller is responsible for ensure there's a local environment
-    _ = local;
-    const unwrapped = try self.session.unwrapObject(allocator, object_id);
-    // The values context and groupId are not used here
-    const js_val = unwrapped.value;
-    if (!v8.v8__Value__IsObject(js_val)) {
-        return error.ObjectIdIsNotANode;
-    }
-
-    const Node = @import("../webapi/Node.zig");
-    // Cast to *const v8.Object for typeTaggedAnyOpaque
-    return TaggedOpaque.fromJS(*Node, @ptrCast(js_val)) catch return error.ObjectIdIsNotANode;
 }
 
 pub const RemoteObject = struct {
@@ -254,19 +186,108 @@ pub const RemoteObject = struct {
     }
 };
 
-const Session = struct {
+// Combines a v8::InspectorSession and a v8::InspectorChannelImpl. The
+// InspectorSession is for zig -> v8 (sending messages to the inspector). The
+// Channel is for v8 -> zig, getting events from the Inspector (that we'll pass
+// back ot some opaque context, i.e the CDP BrowserContext).
+// The channel callbacks are defined below, as:
+//   pub export fn v8_inspector__Channel__IMPL__XYZ
+pub const Session = struct {
+    inspector: *Inspector,
     handle: *v8.InspectorSession,
+    channel: *v8.InspectorChannelImpl,
 
-    fn deinit(self: Session) void {
-        v8.v8_inspector__Session__DELETE(self.handle);
+    // callbacks
+    ctx: *anyopaque,
+    onNotif: *const fn (ctx: *anyopaque, msg: []const u8) void,
+    onResp: *const fn (ctx: *anyopaque, call_id: u32, msg: []const u8) void,
+
+    fn init(self: *Session, inspector: *Inspector, ctx: anytype) void {
+        const Container = @typeInfo(@TypeOf(ctx)).pointer.child;
+
+        const channel = v8.v8_inspector__Channel__IMPL__CREATE(inspector.isolate);
+        const handle = v8.v8_inspector__Inspector__Connect(
+            inspector.handle,
+            CONTEXT_GROUP_ID,
+            channel,
+            CLIENT_TRUST_LEVEL,
+        ).?;
+        v8.v8_inspector__Channel__IMPL__SET_DATA(channel, self);
+
+        self.* = .{
+            .ctx = ctx,
+            .handle = handle,
+            .channel = channel,
+            .inspector = inspector,
+            .onResp = Container.onInspectorResponse,
+            .onNotif = Container.onInspectorEvent,
+        };
     }
 
-    fn dispatchProtocolMessage(self: Session, isolate: *v8.Isolate, msg: []const u8) void {
+    fn deinit(self: *const Session) void {
+        v8.v8_inspector__Session__DELETE(self.handle);
+        v8.v8_inspector__Channel__IMPL__DELETE(self.channel);
+    }
+
+    pub fn send(self: *const Session, msg: []const u8) void {
+        const isolate = self.inspector.isolate;
+        var hs: v8.HandleScope = undefined;
+        v8.v8__HandleScope__CONSTRUCT(&hs, isolate);
+        defer v8.v8__HandleScope__DESTRUCT(&hs);
+
         v8.v8_inspector__Session__dispatchProtocolMessage(
             self.handle,
             isolate,
             msg.ptr,
             msg.len,
+        );
+
+        v8.v8__Isolate__PerformMicrotaskCheckpoint(isolate);
+    }
+
+    // Gets a value by object ID regardless of which context it is in.
+    // Our TaggedOpaque stores the "resolved" ptr value (the most specific _type,
+    // e.g. we store the ptr to the Div not the EventTarget). But, this is asking for
+    // the pointer to the Node, so we need to use the same resolution mechanism which
+    // is used when we're calling a function to turn the Div into a Node, which is
+    // what TaggedOpaque.fromJS does.
+    pub fn getNodePtr(self: *const Session, allocator: Allocator, object_id: []const u8, local: *js.Local) !*anyopaque {
+        // just to indicate that the caller is responsible for ensuring there's a local environment
+        _ = local;
+
+        const unwrapped = try self.unwrapObject(allocator, object_id);
+        // The values context and groupId are not used here
+        const js_val = unwrapped.value;
+        if (!v8.v8__Value__IsObject(js_val)) {
+            return error.ObjectIdIsNotANode;
+        }
+
+        const Node = @import("../webapi/Node.zig");
+        // Cast to *const v8.Object for typeTaggedAnyOpaque
+        return TaggedOpaque.fromJS(*Node, @ptrCast(js_val)) catch return error.ObjectIdIsNotANode;
+    }
+
+    // Retrieves the RemoteObject for a given value.
+    // The value is loaded through the ExecutionWorld's mapZigInstanceToJs function,
+    // just like a method return value. Therefore, if we've mapped this
+    // value before, we'll get the existing js.Global(js.Object) and if not
+    // we'll create it and track it for cleanup when the context ends.
+    pub fn getRemoteObject(
+        self: *const Session,
+        local: *const js.Local,
+        group: []const u8,
+        value: anytype,
+    ) !RemoteObject {
+        const js_val = try local.zigValueToJs(value, .{});
+
+        // We do not want to expose this as a parameter for now
+        const generate_preview = false;
+        return self.wrapObject(
+            local.isolate.handle,
+            local.handle,
+            js_val.handle,
+            group,
+            generate_preview,
         );
     }
 
@@ -334,84 +355,6 @@ const UnwrappedObject = struct {
     object_group: ?[]const u8,
 };
 
-const Channel = struct {
-    handle: *v8.InspectorChannelImpl,
-
-    // callbacks
-    ctx: *anyopaque,
-    onNotif: onNotifFn = undefined,
-    onResp: onRespFn = undefined,
-    onRunMessageLoopOnPause: onRunMessageLoopOnPauseFn = undefined,
-    onQuitMessageLoopOnPause: onQuitMessageLoopOnPauseFn = undefined,
-
-    pub const onNotifFn = *const fn (ctx: *anyopaque, msg: []const u8) void;
-    pub const onRespFn = *const fn (ctx: *anyopaque, call_id: u32, msg: []const u8) void;
-    pub const onRunMessageLoopOnPauseFn = *const fn (ctx: *anyopaque, context_group_id: u32) void;
-    pub const onQuitMessageLoopOnPauseFn = *const fn (ctx: *anyopaque) void;
-
-    fn init(
-        ctx: *anyopaque,
-        onResp: onRespFn,
-        onNotif: onNotifFn,
-        onRunMessageLoopOnPause: onRunMessageLoopOnPauseFn,
-        onQuitMessageLoopOnPause: onQuitMessageLoopOnPauseFn,
-        isolate: *v8.Isolate,
-    ) Channel {
-        const handle = v8.v8_inspector__Channel__IMPL__CREATE(isolate);
-        return .{
-            .handle = handle,
-            .ctx = ctx,
-            .onResp = onResp,
-            .onNotif = onNotif,
-            .onRunMessageLoopOnPause = onRunMessageLoopOnPause,
-            .onQuitMessageLoopOnPause = onQuitMessageLoopOnPause,
-        };
-    }
-
-    fn deinit(self: Channel) void {
-        v8.v8_inspector__Channel__IMPL__DELETE(self.handle);
-    }
-
-    fn setInspector(self: Channel, inspector: *anyopaque) void {
-        v8.v8_inspector__Channel__IMPL__SET_DATA(self.handle, inspector);
-    }
-
-    fn resp(self: Channel, call_id: u32, msg: []const u8) void {
-        self.onResp(self.ctx, call_id, msg);
-    }
-
-    fn notif(self: Channel, msg: []const u8) void {
-        self.onNotif(self.ctx, msg);
-    }
-};
-
-const Client = struct {
-    handle: *v8.InspectorClientImpl,
-
-    fn init() Client {
-        return .{ .handle = v8.v8_inspector__Client__IMPL__CREATE() };
-    }
-
-    fn deinit(self: Client) void {
-        v8.v8_inspector__Client__IMPL__DELETE(self.handle);
-    }
-
-    fn setInspector(self: Client, inspector: *anyopaque) void {
-        v8.v8_inspector__Client__IMPL__SET_DATA(self.handle, inspector);
-    }
-};
-
-const NoopInspector = struct {
-    pub fn onInspectorResponse(_: *anyopaque, _: u32, _: []const u8) void {}
-    pub fn onInspectorEvent(_: *anyopaque, _: []const u8) void {}
-    pub fn onRunMessageLoopOnPause(_: *anyopaque, _: u32) void {}
-    pub fn onQuitMessageLoopOnPause(_: *anyopaque) void {}
-};
-
-fn fromData(data: *anyopaque) *Inspector {
-    return @ptrCast(@alignCast(data));
-}
-
 pub fn getTaggedOpaque(value: *const v8.Value) ?*TaggedOpaque {
     if (!v8.v8__Value__IsObject(value)) {
         return null;
@@ -437,24 +380,25 @@ pub export fn v8_inspector__Client__IMPL__generateUniqueId(
     data: *anyopaque,
 ) callconv(.c) i64 {
     const inspector: *Inspector = @ptrCast(@alignCast(data));
-    return inspector.rnd.random().int(i64);
+    const unique_id = inspector.unique_id + 1;
+    inspector.unique_id = unique_id;
+    return unique_id;
 }
 
 pub export fn v8_inspector__Client__IMPL__runMessageLoopOnPause(
     _: *v8.InspectorClientImpl,
     data: *anyopaque,
-    ctx_group_id: c_int,
+    context_group_id: c_int,
 ) callconv(.c) void {
-    const inspector: *Inspector = @ptrCast(@alignCast(data));
-    inspector.channel.onRunMessageLoopOnPause(inspector.channel.ctx, @intCast(ctx_group_id));
+    _ = data;
+    _ = context_group_id;
 }
 
 pub export fn v8_inspector__Client__IMPL__quitMessageLoopOnPause(
     _: *v8.InspectorClientImpl,
     data: *anyopaque,
 ) callconv(.c) void {
-    const inspector: *Inspector = @ptrCast(@alignCast(data));
-    inspector.channel.onQuitMessageLoopOnPause(inspector.channel.ctx);
+    _ = data;
 }
 
 pub export fn v8_inspector__Client__IMPL__runIfWaitingForDebugger(
@@ -493,8 +437,8 @@ pub export fn v8_inspector__Channel__IMPL__sendResponse(
     msg: [*c]u8,
     length: usize,
 ) callconv(.c) void {
-    const inspector: *Inspector = @ptrCast(@alignCast(data));
-    inspector.channel.resp(@as(u32, @intCast(call_id)), msg[0..length]);
+    const session: *Session = @ptrCast(@alignCast(data));
+    session.onResp(session.ctx, @intCast(call_id), msg[0..length]);
 }
 
 pub export fn v8_inspector__Channel__IMPL__sendNotification(
@@ -503,8 +447,8 @@ pub export fn v8_inspector__Channel__IMPL__sendNotification(
     msg: [*c]u8,
     length: usize,
 ) callconv(.c) void {
-    const inspector: *Inspector = @ptrCast(@alignCast(data));
-    inspector.channel.notif(msg[0..length]);
+    const session: *Session = @ptrCast(@alignCast(data));
+    session.onNotif(session.ctx, msg[0..length]);
 }
 
 pub export fn v8_inspector__Channel__IMPL__flushProtocolNotifications(

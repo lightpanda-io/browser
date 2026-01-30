@@ -305,7 +305,7 @@ fn resolveNode(cmd: anytype) !void {
 
     // node._node is a *DOMNode we need this to be able to find its most derived type e.g. Node -> Element -> HTMLElement
     // So we use the Node.Union when retrieve the value from the environment
-    const remote_object = try bc.inspector.getRemoteObject(
+    const remote_object = try bc.inspector_session.getRemoteObject(
         &ls.?.local,
         params.objectGroup orelse "",
         node.dom,
@@ -404,7 +404,7 @@ fn getNode(arena: Allocator, bc: anytype, node_id: ?Node.Id, backend_node_id: ?N
         defer ls.deinit();
 
         // Retrieve the object from which ever context it is in.
-        const parser_node = try bc.inspector.getNodePtr(arena, object_id_, &ls.local);
+        const parser_node = try bc.inspector_session.getNodePtr(arena, object_id_, &ls.local);
         return try bc.node_registry.register(@ptrCast(@alignCast(parser_node)));
     }
     return error.MissingParams;

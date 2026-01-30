@@ -37,7 +37,7 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    var browser = try Browser.init(app);
+    var browser = try Browser.init(app, .{});
     defer browser.deinit();
 
     var session = try browser.newSession();

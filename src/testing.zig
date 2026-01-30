@@ -460,7 +460,7 @@ test "tests:beforeAll" {
     });
     errdefer test_app.deinit();
 
-    test_browser = try Browser.init(test_app);
+    test_browser = try Browser.init(test_app, .{});
     errdefer test_browser.deinit();
 
     test_session = try test_browser.newSession();
