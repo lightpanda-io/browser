@@ -150,6 +150,11 @@ pub fn fromIsolate(isolate: js.Isolate) *Context {
 }
 
 pub fn deinit(self: *Context) void {
+    var page = self.page;
+    const prev_context = page.js;
+    page.js = self;
+    defer page.js = prev_context;
+
     {
         var it = self.identity_map.valueIterator();
         while (it.next()) |global| {
