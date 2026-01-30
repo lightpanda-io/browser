@@ -322,7 +322,13 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         if (cacheable) {
             gop = try self.module_cache.getOrPut(arena, url);
             if (gop.found_existing) {
-                if (gop.value_ptr.module != null) {
+                if (gop.value_ptr.module) |cache_mod| {
+                    if (gop.value_ptr.module_promise == null) {
+                        const mod = local.toLocal(cache_mod);
+                        if (mod.getStatus() == .kInstantiated) {
+                            return self.evaluateModule(want_result, mod, url, true);
+                        }
+                    }
                     return if (comptime want_result) gop.value_ptr.* else {};
                 }
             } else {
@@ -352,6 +358,10 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         return error.ModuleInstantiationError;
     }
 
+    return self.evaluateModule(want_result, mod, owned_url, cacheable);
+}
+
+fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
     const evaluated = mod.evaluate() catch {
         if (comptime IS_DEBUG) {
             std.debug.assert(mod.getStatus() == .kErrored);
@@ -365,7 +375,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         };
         log.warn(.js, "evaluate module", .{
             .message = message,
-            .specifier = owned_url,
+            .specifier = url,
         });
         return error.EvaluationError;
     };
@@ -374,24 +384,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
     // Must be a promise that gets returned here.
     lp.assert(evaluated.isPromise(), "Context.module non-promise", .{});
 
-    if (comptime !want_result) {
-        // avoid creating a bunch of persisted objects if it isn't
-        // cacheable and the caller doesn't care about results.
-        // This is pretty common, i.e. every <script type=module>
-        // within the html page.
-        if (!cacheable) {
-            return;
+    if (!cacheable) {
+        switch (comptime want_result) {
+            false => return,
+            true => unreachable,
         }
     }
 
-    // anyone who cares about the result, should also want it to
-    // be cached
-    if (comptime IS_DEBUG) {
-        std.debug.assert(cacheable);
-    }
-
     // entry has to have been created atop this function
-    const entry = self.module_cache.getPtr(owned_url).?;
+    const entry = self.module_cache.getPtr(url).?;
 
     // and the module must have been set after we compiled it
     lp.assert(entry.module != null, "Context.module with module", .{});
