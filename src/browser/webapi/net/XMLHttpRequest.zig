@@ -213,6 +213,8 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
     });
+
+    page.js.strongRef(self);
 }
 pub fn getReadyState(self: *const XMLHttpRequest) u32 {
     return @intFromEnum(self._ready_state);
@@ -427,6 +429,8 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
         .total = loaded,
         .loaded = loaded,
     }, local, page);
+
+    page.js.weakRef(self);
 }
 
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -434,6 +438,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // http client will close it after an error, it isn't safe to keep around
     self._transfer = null;
     self.handleError(err);
+    self._page.js.weakRef(self);
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
@@ -442,6 +447,7 @@ pub fn abort(self: *XMLHttpRequest) void {
         transfer.abort(error.Abort);
         self._transfer = null;
     }
+    self._page.js.weakRef(self);
 }
 
 fn handleError(self: *XMLHttpRequest, err: anyerror) void {
