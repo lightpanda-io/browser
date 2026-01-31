@@ -42,15 +42,23 @@ pub fn parseDimension(value: []const u8) ?f64 {
 /// https://drafts.csswg.org/cssom/#the-css.escape()-method
 pub fn escape(_: *const CSS, value: []const u8, page: *Page) ![]const u8 {
     if (value.len == 0) {
-        return error.InvalidCharacterError;
+        return "";
     }
 
     const first = value[0];
+    if (first == '-' and value.len == 1) {
+        return "\\-";
+    }
 
     // Count how many characters we need for the output
     var out_len: usize = escapeLen(true, first);
-    for (value[1..]) |c| {
-        out_len += escapeLen(false, c);
+    for (value[1..], 0..) |c, i| {
+        // Second char (i==0) is a digit and first is '-', needs hex escape
+        if (i == 0 and first == '-' and c >= '0' and c <= '9') {
+            out_len += 2 + hexDigitsNeeded(c);
+        } else {
+            out_len += escapeLen(false, c);
+        }
     }
 
     if (out_len == value.len) {
@@ -67,8 +75,13 @@ pub fn escape(_: *const CSS, value: []const u8, page: *Page) ![]const u8 {
         pos = 1;
     }
 
-    for (value[1..]) |c| {
-        if (!needsEscape(false, c)) {
+    for (value[1..], 0..) |c, i| {
+        // Second char (i==0) is a digit and first is '-', needs hex escape
+        if (i == 0 and first == '-' and c >= '0' and c <= '9') {
+            result[pos] = '\\';
+            const hex_str = std.fmt.bufPrint(result[pos + 1 ..], "{x} ", .{c}) catch unreachable;
+            pos += 1 + hex_str.len;
+        } else if (!needsEscape(false, c)) {
             result[pos] = c;
             pos += 1;
         } else {
@@ -103,9 +116,6 @@ fn escapeLen(comptime is_first: bool, c: u8) usize {
 fn needsEscape(comptime is_first: bool, c: u8) bool {
     if (comptime is_first) {
         if (c >= '0' and c <= '9') {
-            return true;
-        }
-        if (c == '-') {
             return true;
         }
     }
