@@ -20,8 +20,10 @@
   {
     testing.expectEqual('\\30 abc', CSS.escape('0abc'));
     testing.expectEqual('\\31 23', CSS.escape('123'));
-    testing.expectEqual('\\-test', CSS.escape('-test'));
-    testing.expectEqual('\\--test', CSS.escape('--test'));
+    testing.expectEqual('\\-', CSS.escape('-'));
+    testing.expectEqual('-test', CSS.escape('-test'));
+    testing.expectEqual('--test', CSS.escape('--test'));
+    testing.expectEqual('-\\33 ', CSS.escape('-3'));
   }
 </script>
 
