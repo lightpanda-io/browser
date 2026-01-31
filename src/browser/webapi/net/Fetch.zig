@@ -64,7 +64,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     if (request._headers) |h| {
         try h.populateHttpHeader(page.call_arena, &headers);
     }
-    try page.requestCookie(.{}).headersForRequest(page.arena, request._url, &headers);
+    try page.headersForRequest(page.arena, request._url, &headers);
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });

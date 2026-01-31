@@ -171,6 +171,9 @@ url: [:0]const u8,
 // If null the url must be used.
 base_url: ?[:0]const u8,
 
+// referer header cache.
+referer_header: ?[:0]const u8,
+
 // Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
 // guarantee - it's valid until someone else uses it.
 buf: [BUF_SIZE]u8,
@@ -299,6 +302,7 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self.version = 0;
     self.url = "about:blank";
     self.base_url = null;
+    self.referer_header = null;
 
     self.document = (try self._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
 
@@ -393,6 +397,32 @@ pub fn getTitle(self: *Page) !?[]const u8 {
 
 pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
     return try URL.getOrigin(allocator, self.url);
+}
+
+// Add comon headers for a request:
+// * cookies
+// * referer
+pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
+    try self.requestCookie(.{}).headersForRequest(temp, url, headers);
+
+    // Build the referer
+    const referer = blk: {
+        if (self.referer_header == null) {
+            // build the cache
+            if (std.mem.startsWith(u8, self.url, "http")) {
+                self.referer_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", self.url }, 0);
+            } else {
+                self.referer_header = "";
+            }
+        }
+
+        break :blk self.referer_header.?;
+    };
+
+    // If the referer is empty, ignore the header.
+    if (referer.len > 0) {
+        try headers.add(referer);
+    }
 }
 
 const GetArenaOpts = struct {

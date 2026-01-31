@@ -138,6 +138,12 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
+pub fn getHeaders(self: *ScriptManager, url: [:0]const u8) !Http.Headers {
+    var headers = try self.client.newHeaders();
+    try self.page.headersForRequest(self.page.arena, url, &headers);
+    return headers;
+}
+
 pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_element: *Element.Html.Script, comptime ctx: []const u8) !void {
     if (script_element._executed) {
         // If a script tag gets dynamically created and added to the dom:
@@ -252,14 +258,11 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             script.deinit(true);
         }
 
-        var headers = try self.client.newHeaders();
-        try page.requestCookie(.{}).headersForRequest(page.arena, url, &headers);
-
         try self.client.request(.{
             .url = url,
             .ctx = script,
             .method = .GET,
-            .headers = headers,
+            .headers = try self.getHeaders(url),
             .blocking = is_blocking,
             .cookie_jar = &page._session.cookie_jar,
             .resource_type = .script,
@@ -357,9 +360,6 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .manager = self,
     };
 
-    var headers = try self.client.newHeaders();
-    try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
-
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
         self.page.js.localScope(&ls);
@@ -377,7 +377,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .url = url,
         .ctx = script,
         .method = .GET,
-        .headers = headers,
+        .headers = try self.getHeaders(url),
         .cookie_jar = &self.page._session.cookie_jar,
         .resource_type = .script,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -452,9 +452,6 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         } },
     };
 
-    var headers = try self.client.newHeaders();
-    try self.page.requestCookie(.{}).headersForRequest(self.page.arena, url, &headers);
-
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
         self.page.js.localScope(&ls);
@@ -480,7 +477,7 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     try self.client.request(.{
         .url = url,
         .method = .GET,
-        .headers = headers,
+        .headers = try self.getHeaders(url),
         .ctx = script,
         .resource_type = .script,
         .cookie_jar = &self.page._session.cookie_jar,
