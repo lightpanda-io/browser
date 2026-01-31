@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const reflect = @import("../../reflect.zig");
+const log = @import("../../../log.zig");
 
 const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");

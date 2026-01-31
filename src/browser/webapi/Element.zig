@@ -53,8 +53,15 @@ pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
 ///
 /// See `calcAttrListenerKey` to obtain one.
 const AttrListenerKey = u64;
+/// We lazily evaluate functions in order to not to create garbage.
+const AttrListener = union(enum(u1)) {
+    /// Raw bytes; this may or may not be a valid JS expression.
+    raw: []const u8,
+    /// A valid JS function; can be executed directly.
+    function: js.Function.Global,
+};
 /// Use `getAttrListenerKey` to create a key.
-pub const AttrListenerLookup = std.AutoHashMapUnmanaged(AttrListenerKey, js.Function.Global);
+pub const AttrListenerLookup = std.AutoHashMapUnmanaged(AttrListenerKey, AttrListener);
 
 /// Enum of known event listeners; increasing the size of it (u7)
 /// can cause `AttrListenerKey` to behave incorrectly.
@@ -163,12 +170,12 @@ pub fn calcAttrListenerKey(self: *Element, event_type: KnownListener) AttrListen
     // its size and alignment, though.
     const target = self.asEventTarget();
     // Check if we have 3 bits available from alignment of 8.
-    lp.assert(@alignOf(@TypeOf(target)) == 8, "createLookupKey: incorrect alignment", .{
+    lp.assert(@alignOf(@TypeOf(target)) == 8, "calcAttrListenerKey: incorrect alignment", .{
         .event_target_alignment = @alignOf(@TypeOf(target)),
     });
 
     const ptr = @intFromPtr(target) >> 3;
-    lp.assert(ptr < (1 << 57), "createLookupKey: pointer overflow", .{ .ptr = ptr });
+    lp.assert(ptr < (1 << 57), "calcAttrListenerKey: pointer overflow", .{ .ptr = ptr });
     return ptr | (@as(u64, @intFromEnum(event_type)) << 57);
 }
 
