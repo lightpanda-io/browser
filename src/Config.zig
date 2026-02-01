@@ -57,6 +57,13 @@ pub fn tlsVerifyHost(self: *const Config) bool {
     };
 }
 
+pub fn obeyRobots(self: *const Config) bool {
+    return switch (self.mode) {
+        inline .serve, .fetch => |opts| opts.common.obey_robots,
+        else => unreachable,
+    };
+}
+
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch => |opts| opts.common.http_proxy,
@@ -158,6 +165,7 @@ pub const Fetch = struct {
 };
 
 pub const Common = struct {
+    obey_robots: bool = false,
     proxy_bearer_token: ?[:0]const u8 = null,
     http_proxy: ?[:0]const u8 = null,
     http_max_concurrent: ?u8 = null,
@@ -222,6 +230,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Disables host verification on all HTTP requests. This is an
         \\                advanced option which should only be set if you understand
         \\                and accept the risk of disabling host verification.
+        \\
+        \\--obey_robots
+        \\                Fetches and obeys the robots.txt (if available) of the web pages
+        \\                we make requests towards.
+        \\                Defaults to false.
         \\
         \\--http_proxy    The HTTP proxy to use for all HTTP requests.
         \\                A username:password can be included for basic authentication.
@@ -610,6 +623,11 @@ fn parseCommonArg(
 ) !bool {
     if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
         common.tls_verify_host = false;
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--obey_robots", opt)) {
+        common.obey_robots = true;
         return true;
     }
 

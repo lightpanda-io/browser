@@ -33,13 +33,80 @@ pub const Key = enum {
 pub const Robots = @This();
 pub const empty: Robots = .{ .rules = &.{} };
 
+pub const RobotStore = struct {
+    const RobotsEntry = union(enum) {
+        present: Robots,
+        absent,
+    };
+
+    pub const RobotsMap = std.HashMapUnmanaged([]const u8, RobotsEntry, struct {
+        const Context = @This();
+
+        pub fn hash(_: Context, value: []const u8) u32 {
+            var hasher = std.hash.Wyhash.init(value.len);
+            for (value) |c| {
+                std.hash.autoHash(&hasher, std.ascii.toLower(c));
+            }
+            return @truncate(hasher.final());
+        }
+
+        pub fn eql(_: Context, a: []const u8, b: []const u8) bool {
+            if (a.len != b.len) return false;
+            return std.ascii.eqlIgnoreCase(a, b);
+        }
+    }, 80);
+
+    allocator: std.mem.Allocator,
+    map: RobotsMap,
+
+    pub fn init(allocator: std.mem.Allocator) RobotStore {
+        return .{ .allocator = allocator, .map = .empty };
+    }
+
+    pub fn deinit(self: *RobotStore) void {
+        var iter = self.map.iterator();
+
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+
+            switch (entry.value_ptr.*) {
+                .present => |*robots| robots.deinit(self.allocator),
+                .absent => {},
+            }
+        }
+
+        self.map.deinit(self.allocator);
+    }
+
+    pub fn get(self: *RobotStore, url: []const u8) ?RobotsEntry {
+        return self.map.get(url);
+    }
+
+    pub fn robotsFromBytes(self: *RobotStore, user_agent: []const u8, bytes: []const u8) !Robots {
+        return try Robots.fromBytes(self.allocator, user_agent, bytes);
+    }
+
+    pub fn put(self: *RobotStore, url: []const u8, robots: Robots) !void {
+        const duped = try self.allocator.dupe(u8, url);
+        try self.map.put(self.allocator, duped, .{ .present = robots });
+    }
+
+    pub fn putAbsent(self: *RobotStore, url: []const u8) !void {
+        const duped = try self.allocator.dupe(u8, url);
+        try self.map.put(self.allocator, duped, .absent);
+    }
+};
+
 rules: []const Rule,
 
-const State = enum {
-    not_in_entry,
-    in_other_entry,
-    in_our_entry,
-    in_wildcard_entry,
+const State = struct {
+    entry: enum {
+        not_in_entry,
+        in_other_entry,
+        in_our_entry,
+        in_wildcard_entry,
+    },
+    has_rules: bool = false,
 };
 
 fn freeRulesInList(allocator: std.mem.Allocator, rules: []const Rule) void {
@@ -62,7 +129,7 @@ fn parseRulesWithUserAgent(
     var wildcard_rules: std.ArrayList(Rule) = .empty;
     defer wildcard_rules.deinit(allocator);
 
-    var state: State = .not_in_entry;
+    var state: State = .{ .entry = .not_in_entry, .has_rules = false };
 
     var iter = std.mem.splitScalar(u8, bytes, '\n');
     while (iter.next()) |line| {
@@ -78,7 +145,6 @@ fn parseRulesWithUserAgent(
             trimmed;
 
         if (true_line.len == 0) {
-            state = .not_in_entry;
             continue;
         }
 
@@ -94,55 +160,69 @@ fn parseRulesWithUserAgent(
         const value = std.mem.trim(u8, true_line[colon_idx + 1 ..], &std.ascii.whitespace);
 
         switch (key) {
-            .@"user-agent" => switch (state) {
-                .in_other_entry => {
-                    if (std.ascii.eqlIgnoreCase(user_agent, value)) {
-                        state = .in_our_entry;
-                    }
-                },
-                .in_our_entry => {},
-                .in_wildcard_entry => {
-                    if (std.ascii.eqlIgnoreCase(user_agent, value)) {
-                        state = .in_our_entry;
-                    }
-                },
-                .not_in_entry => {
-                    if (std.ascii.eqlIgnoreCase(user_agent, value)) {
-                        state = .in_our_entry;
-                    } else if (std.mem.eql(u8, "*", value)) {
-                        state = .in_wildcard_entry;
-                    } else {
-                        state = .in_other_entry;
-                    }
-                },
+            .@"user-agent" => {
+                if (state.has_rules) {
+                    state = .{ .entry = .not_in_entry, .has_rules = false };
+                }
+
+                switch (state.entry) {
+                    .in_other_entry => {
+                        if (std.ascii.eqlIgnoreCase(user_agent, value)) {
+                            state.entry = .in_our_entry;
+                        }
+                    },
+                    .in_our_entry => {},
+                    .in_wildcard_entry => {
+                        if (std.ascii.eqlIgnoreCase(user_agent, value)) {
+                            state.entry = .in_our_entry;
+                        }
+                    },
+                    .not_in_entry => {
+                        if (std.ascii.eqlIgnoreCase(user_agent, value)) {
+                            state.entry = .in_our_entry;
+                        } else if (std.mem.eql(u8, "*", value)) {
+                            state.entry = .in_wildcard_entry;
+                        } else {
+                            state.entry = .in_other_entry;
+                        }
+                    },
+                }
             },
-            .allow => switch (state) {
-                .in_our_entry => {
-                    const duped_value = try allocator.dupe(u8, value);
-                    errdefer allocator.free(duped_value);
-                    try rules.append(allocator, .{ .allow = duped_value });
-                },
-                .in_other_entry => {},
-                .in_wildcard_entry => {
-                    const duped_value = try allocator.dupe(u8, value);
-                    errdefer allocator.free(duped_value);
-                    try wildcard_rules.append(allocator, .{ .allow = duped_value });
-                },
-                .not_in_entry => return error.UnexpectedRule,
+            .allow => {
+                defer state.has_rules = true;
+
+                switch (state.entry) {
+                    .in_our_entry => {
+                        const duped_value = try allocator.dupe(u8, value);
+                        errdefer allocator.free(duped_value);
+                        try rules.append(allocator, .{ .allow = duped_value });
+                    },
+                    .in_other_entry => {},
+                    .in_wildcard_entry => {
+                        const duped_value = try allocator.dupe(u8, value);
+                        errdefer allocator.free(duped_value);
+                        try wildcard_rules.append(allocator, .{ .allow = duped_value });
+                    },
+                    .not_in_entry => return error.UnexpectedRule,
+                }
             },
-            .disallow => switch (state) {
-                .in_our_entry => {
-                    const duped_value = try allocator.dupe(u8, value);
-                    errdefer allocator.free(duped_value);
-                    try rules.append(allocator, .{ .disallow = duped_value });
-                },
-                .in_other_entry => {},
-                .in_wildcard_entry => {
-                    const duped_value = try allocator.dupe(u8, value);
-                    errdefer allocator.free(duped_value);
-                    try wildcard_rules.append(allocator, .{ .disallow = duped_value });
-                },
-                .not_in_entry => return error.UnexpectedRule,
+            .disallow => {
+                defer state.has_rules = true;
+
+                switch (state.entry) {
+                    .in_our_entry => {
+                        const duped_value = try allocator.dupe(u8, value);
+                        errdefer allocator.free(duped_value);
+                        try rules.append(allocator, .{ .disallow = duped_value });
+                    },
+                    .in_other_entry => {},
+                    .in_wildcard_entry => {
+                        const duped_value = try allocator.dupe(u8, value);
+                        errdefer allocator.free(duped_value);
+                        try wildcard_rules.append(allocator, .{ .disallow = duped_value });
+                    },
+                    .not_in_entry => return error.UnexpectedRule,
+                }
             },
         }
     }
@@ -736,4 +816,55 @@ test "Robots: isAllowed - Google's real robots.txt" {
     try std.testing.expect(twitterbot.isAllowed("/search") == true);
     try std.testing.expect(twitterbot.isAllowed("/groups") == false);
     try std.testing.expect(twitterbot.isAllowed("/m/") == false);
+}
+
+test "Robots: user-agent after rules starts new entry" {
+    const allocator = std.testing.allocator;
+
+    const file =
+        \\User-agent: Bot1
+        \\User-agent: Bot2
+        \\Disallow: /admin/
+        \\Allow: /public/
+        \\User-agent: Bot3
+        \\Disallow: /private/
+        \\
+    ;
+
+    var robots1 = try Robots.fromBytes(allocator, "Bot1", file);
+    defer robots1.deinit(allocator);
+    try std.testing.expect(robots1.isAllowed("/admin/") == false);
+    try std.testing.expect(robots1.isAllowed("/public/") == true);
+    try std.testing.expect(robots1.isAllowed("/private/") == true);
+
+    var robots2 = try Robots.fromBytes(allocator, "Bot2", file);
+    defer robots2.deinit(allocator);
+    try std.testing.expect(robots2.isAllowed("/admin/") == false);
+    try std.testing.expect(robots2.isAllowed("/public/") == true);
+    try std.testing.expect(robots2.isAllowed("/private/") == true);
+
+    var robots3 = try Robots.fromBytes(allocator, "Bot3", file);
+    defer robots3.deinit(allocator);
+    try std.testing.expect(robots3.isAllowed("/admin/") == true);
+    try std.testing.expect(robots3.isAllowed("/public/") == true);
+    try std.testing.expect(robots3.isAllowed("/private/") == false);
+}
+
+test "Robots: blank lines don't end entries" {
+    const allocator = std.testing.allocator;
+
+    const file =
+        \\User-agent: MyBot
+        \\Disallow: /admin/
+        \\
+        \\
+        \\Allow: /public/
+        \\
+    ;
+
+    var robots = try Robots.fromBytes(allocator, "MyBot", file);
+    defer robots.deinit(allocator);
+
+    try std.testing.expect(robots.isAllowed("/admin/") == false);
+    try std.testing.expect(robots.isAllowed("/public/") == true);
 }

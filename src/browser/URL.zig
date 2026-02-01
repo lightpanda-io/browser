@@ -502,8 +502,8 @@ pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []cons
     return buf.items[0 .. buf.items.len - 1 :0];
 }
 
-pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) !?[:0]const u8 {
-    const origin = try getOrigin(arena, url) orelse return null;
+pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
+    const origin = try getOrigin(arena, url) orelse return error.NoOrigin;
     return try std.fmt.allocPrintSentinel(
         arena,
         "{s}/robots.txt",
@@ -795,24 +795,24 @@ test "URL: getRobotsUrl" {
 
     {
         const url = try getRobotsUrl(arena, "https://www.lightpanda.io");
-        try testing.expectEqual("https://www.lightpanda.io/robots.txt", url.?);
+        try testing.expectEqual("https://www.lightpanda.io/robots.txt", url);
     }
 
     {
         const url = try getRobotsUrl(arena, "https://www.lightpanda.io/some/path");
-        try testing.expectString("https://www.lightpanda.io/robots.txt", url.?);
+        try testing.expectString("https://www.lightpanda.io/robots.txt", url);
     }
 
     {
         const url = try getRobotsUrl(arena, "https://www.lightpanda.io:8080/page");
-        try testing.expectString("https://www.lightpanda.io:8080/robots.txt", url.?);
+        try testing.expectString("https://www.lightpanda.io:8080/robots.txt", url);
     }
     {
         const url = try getRobotsUrl(arena, "http://example.com/deep/nested/path?query=value#fragment");
-        try testing.expectString("http://example.com/robots.txt", url.?);
+        try testing.expectString("http://example.com/robots.txt", url);
     }
     {
         const url = try getRobotsUrl(arena, "https://user:pass@example.com/page");
-        try testing.expectString("https://example.com/robots.txt", url.?);
+        try testing.expectString("https://example.com/robots.txt", url);
     }
 }

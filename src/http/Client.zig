@@ -27,6 +27,8 @@ const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
+const Robots = @import("../browser/Robots.zig");
+const RobotStore = Robots.RobotStore;
 
 const c = Http.c;
 const posix = std.posix;
@@ -217,6 +219,36 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 }
 
 pub fn request(self: *Client, req: Request) !void {
+    if (self.config.obeyRobots()) {
+        const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
+
+        // If we have this robots cached, we can take a fast path.
+        if (req.robots.get(robots_url)) |robot_entry| {
+            defer self.allocator.free(robots_url);
+
+            switch (robot_entry) {
+                // If we have a found robots entry, we check it.
+                .present => |robots| {
+                    const path = URL.getPathname(req.url);
+                    if (!robots.isAllowed(path)) {
+                        req.error_callback(req.ctx, error.RobotsBlocked);
+                        return;
+                    }
+                },
+                // Otherwise, we assume we won't find it again.
+                .absent => {},
+            }
+
+            return self.processRequest(req);
+        }
+
+        return self.fetchRobotsThenProcessRequest(robots_url, req);
+    }
+
+    return self.processRequest(req);
+}
+
+fn processRequest(self: *Client, req: Request) !void {
     const transfer = try self.makeTransfer(req);
 
     transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
@@ -244,6 +276,108 @@ pub fn request(self: *Client, req: Request) !void {
     if (try self.waitForInterceptedResponse(transfer)) {
         return self.process(transfer);
     }
+}
+
+const RobotsRequestContext = struct {
+    client: *Client,
+    req: Request,
+    robots_url: [:0]const u8,
+    buffer: std.ArrayList(u8),
+    status: u16 = 0,
+};
+
+fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: Request) !void {
+    const ctx = try self.allocator.create(RobotsRequestContext);
+    ctx.* = .{ .client = self, .req = req, .robots_url = robots_url, .buffer = .empty };
+
+    const headers = try self.newHeaders();
+
+    log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+    try self.processRequest(.{
+        .ctx = ctx,
+        .url = robots_url,
+        .method = .GET,
+        .headers = headers,
+        .blocking = false,
+        .cookie_jar = req.cookie_jar,
+        .notification = req.notification,
+        .robots = req.robots,
+        .resource_type = .fetch,
+        .header_callback = robotsHeaderCallback,
+        .data_callback = robotsDataCallback,
+        .done_callback = robotsDoneCallback,
+        .error_callback = robotsErrorCallback,
+    });
+}
+
+fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+
+    if (transfer.response_header) |hdr| {
+        log.debug(.browser, "robots status", .{ .status = hdr.status });
+        ctx.status = hdr.status;
+    }
+
+    if (transfer.getContentLength()) |cl| {
+        try ctx.buffer.ensureTotalCapacity(ctx.client.allocator, cl);
+    }
+
+    return true;
+}
+
+fn robotsDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+    try ctx.buffer.appendSlice(ctx.client.allocator, data);
+}
+
+fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
+    defer ctx.client.allocator.destroy(ctx);
+    defer ctx.buffer.deinit(ctx.client.allocator);
+    defer ctx.client.allocator.free(ctx.robots_url);
+
+    var allowed = true;
+
+    if (ctx.status >= 200 and ctx.status < 400 and ctx.buffer.items.len > 0) {
+        const robots = try ctx.req.robots.robotsFromBytes(
+            ctx.client.config.http_headers.user_agent,
+            ctx.buffer.items,
+        );
+
+        try ctx.req.robots.put(ctx.robots_url, robots);
+
+        const path = URL.getPathname(ctx.req.url);
+        allowed = robots.isAllowed(path);
+    }
+
+    // If not found, store as Not Found.
+    if (ctx.status == 404) {
+        log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
+        try ctx.req.robots.putAbsent(ctx.robots_url);
+    }
+
+    if (!allowed) {
+        log.warn(.http, "blocked by robots", .{ .url = ctx.req.url });
+        ctx.req.error_callback(ctx.req.ctx, error.RobotsBlocked);
+        return;
+    }
+
+    // Now process the original request
+    try ctx.client.processRequest(ctx.req);
+}
+
+fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
+    defer ctx.client.allocator.destroy(ctx);
+    defer ctx.buffer.deinit(ctx.client.allocator);
+    defer ctx.client.allocator.free(ctx.robots_url);
+
+    log.warn(.http, "robots fetch failed", .{ .err = err });
+
+    // On error, allow the request to proceed
+    ctx.client.processRequest(ctx.req) catch |e| {
+        ctx.req.error_callback(ctx.req.ctx, e);
+    };
 }
 
 fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
@@ -565,7 +699,7 @@ fn processMessages(self: *Client) !bool {
 
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
-         if (transfer._auth_challenge != null and transfer._tries < 10) {
+        if (transfer._auth_challenge != null and transfer._tries < 10) {
             var wait_for_interception = false;
             transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
             if (wait_for_interception) {
@@ -784,6 +918,7 @@ pub const Request = struct {
     headers: Http.Headers,
     body: ?[]const u8 = null,
     cookie_jar: *CookieJar,
+    robots: *RobotStore,
     resource_type: ResourceType,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
