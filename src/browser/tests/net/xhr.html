@@ -125,6 +125,26 @@
   })
 </script>
 
+<script id=xhr6>
+  const req6 = new XMLHttpRequest()
+  testing.async(async (restore) => {
+    await new Promise((resolve) => {
+      req6.onload = resolve;
+      req6.open('GET', 'http://127.0.0.1:9582/xhr/binary')
+      req6.responseType ='arraybuffer'
+      req6.send()
+    });
+
+    restore();
+    testing.expectEqual(200, req6.status);
+    testing.expectEqual('OK', req6.statusText);
+    testing.expectEqual(7, req6.response.byteLength);
+    testing.expectEqual([0, 0, 1, 2, 0, 0, 9], new Int32Array(req6.response));
+    testing.expectEqual('', typeof req6.response);
+    testing.expectEqual('arraybuffer', req6.responseType);
+  });
+</script>
+
 <script id=xhr_redirect>
   testing.async(async (restore) => {
     const req = new XMLHttpRequest();

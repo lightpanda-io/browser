@@ -558,6 +558,14 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
         });
     }
 
+    if (std.mem.eql(u8, path, "/xhr/binary")) {
+        return req.respond(&.{ 0, 0, 1, 2, 0, 0, 9 }, .{
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/octet-stream" },
+            },
+        });
+    }
+
     if (std.mem.startsWith(u8, path, "/src/browser/tests/")) {
         // strip off leading / so that it's relative to CWD
         return TestHTTPServer.sendFile(req, path[1..]);

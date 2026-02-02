@@ -69,12 +69,14 @@ const Response = union(ResponseType) {
     text: []const u8,
     json: js.Value.Global,
     document: *Node.Document,
+    arraybuffer: js.ArrayBuffer,
 };
 
 const ResponseType = enum {
     text,
     json,
     document,
+    arraybuffer,
     // TODO: other types to support
 };
 
@@ -302,6 +304,7 @@ pub fn getResponse(self: *XMLHttpRequest, page: *Page) !?Response {
             try page.parseHtmlAsChildren(document.asNode(), data);
             break :blk .{ .document = document };
         },
+        .arraybuffer => .{ .arraybuffer = .{ .values = data } },
     };
 
     self._response = res;
