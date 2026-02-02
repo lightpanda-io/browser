@@ -33,7 +33,6 @@ const String = @import("../string.zig").String;
 const Mime = @import("Mime.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
-const Scheduler = @import("Scheduler.zig");
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 
@@ -202,8 +201,6 @@ document: *Document,
 // DOM version used to invalidate cached state of "live" collections
 version: usize,
 
-scheduler: Scheduler,
-
 _req_id: ?usize = null,
 _navigated_options: ?NavigatedOpts = null,
 
@@ -237,10 +234,6 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-    // This can release JS objects, so we need to do this while the js.Context
-    // is still around.
-    self.scheduler.deinit();
-
     {
         // some MicroTasks might be referencing the page, we need to drain it while
         // the page still exists
@@ -273,8 +266,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     const browser = self._session.browser;
 
     if (comptime initializing == false) {
-        self.scheduler.deinit();
-
         browser.env.destroyContext(self.js);
 
         // removing a context can trigger finalizers, so we can only check for
@@ -297,7 +288,6 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     }
 
     self._factory = Factory.init(self);
-    self.scheduler = Scheduler.init(self.arena);
 
     self.version = 0;
     self.url = "about:blank";
@@ -379,7 +369,7 @@ fn registerBackgroundTasks(self: *Page) !void {
 
     const Browser = @import("Browser.zig");
 
-    try self.scheduler.add(self._session.browser, struct {
+    try self.js.scheduler.add(self._session.browser, struct {
         fn runMessageLoop(ctx: *anyopaque) !?u32 {
             const b: *Browser = @ptrCast(@alignCast(ctx));
             b.runMessageLoop();
@@ -891,8 +881,8 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
     var timer = try std.time.Timer.start();
     var ms_remaining = wait_ms;
 
-    var scheduler = &self.scheduler;
-    var http_client = self._session.browser.http_client;
+    const browser = self._session.browser;
+    var http_client = browser.http_client;
 
     // I'd like the page to know NOTHING about cdp_socket / CDP, but the
     // fact is that the behavior of wait changes depending on whether or
@@ -945,7 +935,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
                 // scheduler.run could trigger new http transfers, so do not
                 // store http_client.active BEFORE this call and then use
                 // it AFTER.
-                const ms_to_next_task = try scheduler.run();
+                const ms_to_next_task = try browser.runMacrotasks();
 
                 const http_active = http_client.active;
                 const total_network_activity = http_active + http_client.intercepted;
@@ -1081,16 +1071,16 @@ fn printWaitAnalysis(self: *Page) void {
 
     const now = milliTimestamp(.monotonic);
     {
-        std.debug.print("\nhigh_priority schedule: {d}\n", .{self.scheduler.high_priority.count()});
-        var it = self.scheduler.high_priority.iterator();
+        std.debug.print("\nhigh_priority schedule: {d}\n", .{self.js.scheduler.high_priority.count()});
+        var it = self.js.scheduler.high_priority.iterator();
         while (it.next()) |task| {
             std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.run_at - now });
         }
     }
 
     {
-        std.debug.print("\nlow_priority schedule: {d}\n", .{self.scheduler.low_priority.count()});
-        var it = self.scheduler.low_priority.iterator();
+        std.debug.print("\nlow_priority schedule: {d}\n", .{self.js.scheduler.low_priority.count()});
+        var it = self.js.scheduler.low_priority.iterator();
         while (it.next()) |task| {
             std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.run_at - now });
         }
@@ -1262,7 +1252,7 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
     }
     self._performance_delivery_scheduled = true;
 
-    return self.scheduler.add(
+    return self.js.scheduler.add(
         self,
         struct {
             fn run(_page: *anyopaque) anyerror!?u32 {

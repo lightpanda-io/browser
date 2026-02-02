@@ -65,7 +65,7 @@ pub fn postMessage(self: *MessagePort, message: js.Value.Global, page: *Page) !v
         .message = message,
     });
 
-    try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
+    try page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "MessagePort.postMessage",
         .low_priority = false,
     });

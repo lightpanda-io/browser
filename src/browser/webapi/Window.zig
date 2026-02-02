@@ -366,7 +366,7 @@ pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]co
         .message = message,
         .origin = try arena.dupe(u8, origin),
     };
-    try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
+    try page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
         .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
@@ -447,7 +447,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
     // We dispatch scroll event asynchronously after 10ms. So we can throttle
     // them.
-    try page.scheduler.add(
+    try page.js.scheduler.add(
         page,
         struct {
             fn dispatch(_page: *anyopaque) anyerror!?u32 {
@@ -471,7 +471,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
         .{ .low_priority = true },
     );
     // We dispatch scrollend event asynchronously after 20ms.
-    try page.scheduler.add(
+    try page.js.scheduler.add(
         page,
         struct {
             fn dispatch(_page: *anyopaque) anyerror!?u32 {
@@ -545,7 +545,7 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
     };
     gop.value_ptr.* = callback;
 
-    try page.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
+    try page.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
         .name = opts.name,
         .low_priority = opts.low_priority,
         .finalizer = ScheduleCallback.cancelled,

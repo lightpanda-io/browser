@@ -99,7 +99,7 @@ pub fn createTimeout(delay: u32, page: *Page) !*AbortSignal {
         .signal = try init(page),
     };
 
-    try page.scheduler.add(callback, TimeoutCallback.run, delay, .{
+    try page.js.scheduler.add(callback, TimeoutCallback.run, delay, .{
         .name = "AbortSignal.timeout",
     });
 

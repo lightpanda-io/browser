@@ -112,6 +112,10 @@ pub fn runMicrotasks(self: *const Browser) void {
     self.env.runMicrotasks();
 }
 
+pub fn runMacrotasks(self: *Browser) !?u64 {
+    return try self.env.runMacrotasks();
+}
+
 pub fn runMessageLoop(self: *const Browser) void {
     while (self.env.pumpMessageLoop()) {
         if (comptime IS_DEBUG) {
