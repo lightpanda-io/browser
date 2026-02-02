@@ -545,11 +545,19 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
     };
     gop.value_ptr.* = callback;
 
-    try page.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
-        .name = opts.name,
-        .low_priority = opts.low_priority,
-        .finalizer = ScheduleCallback.cancelled,
-    });
+    //try page.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
+    //    .name = opts.name,
+    //    .low_priority = opts.low_priority,
+    //    .finalizer = ScheduleCallback.cancelled,
+    //});
+
+    try page.scheduler.after(
+        .{ .priority = .high },
+        ScheduleCallback,
+        callback,
+        delay_ms,
+        ScheduleCallback.run,
+    );
 
     return timer_id;
 }
@@ -591,15 +599,14 @@ const ScheduleCallback = struct {
         self.page.releaseArena(self.arena);
     }
 
-    fn run(ctx: *anyopaque) !?u32 {
-        const self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
+    fn run(_: *Scheduler, self: *ScheduleCallback) !Scheduler.AfterAction {
         const page = self.page;
         const window = page.window;
 
         if (self.removed) {
             _ = window._timers.remove(self.timer_id);
             self.deinit();
-            return null;
+            return .dont_repeat;
         }
 
         var ls: js.Local.Scope = undefined;
@@ -626,11 +633,11 @@ const ScheduleCallback = struct {
         }
         ls.local.runMicrotasks();
         if (self.repeat_ms) |ms| {
-            return ms;
+            return .repeat(@intCast(ms));
         }
         defer self.deinit();
         _ = window._timers.remove(self.timer_id);
-        return null;
+        return .dont_repeat;
     }
 };
 
