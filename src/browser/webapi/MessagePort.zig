@@ -21,6 +21,7 @@ const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 
 const Page = @import("../Page.zig");
+const Scheduler = @import("../Scheduler.zig");
 const EventTarget = @import("EventTarget.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
 
@@ -65,10 +66,12 @@ pub fn postMessage(self: *MessagePort, message: js.Value.Global, page: *Page) !v
         .message = message,
     });
 
-    try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
-        .name = "MessagePort.postMessage",
-        .low_priority = false,
-    });
+    try page.scheduler.once(
+        .{ .name = "MessagePort.postMessage", .priority = .high },
+        PostMessageCallback,
+        callback,
+        PostMessageCallback.run,
+    );
 }
 
 pub fn start(self: *MessagePort) void {
@@ -113,13 +116,12 @@ const PostMessageCallback = struct {
         self.page._factory.destroy(self);
     }
 
-    fn run(ctx: *anyopaque) !?u32 {
-        const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+    fn run(_: *Scheduler, self: *PostMessageCallback) !void {
         defer self.deinit();
         const page = self.page;
 
         if (self.port._closed) {
-            return null;
+            return;
         }
 
         const event = MessageEvent.initTrusted("message", .{
@@ -128,7 +130,7 @@ const PostMessageCallback = struct {
             .source = null,
         }, page) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
-            return null;
+            return;
         };
 
         var ls: js.Local.Scope = undefined;
@@ -143,8 +145,6 @@ const PostMessageCallback = struct {
         ) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
         };
-
-        return null;
     }
 };
 

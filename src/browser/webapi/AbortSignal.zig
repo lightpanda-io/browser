@@ -21,6 +21,7 @@ const js = @import("../js/js.zig");
 const log = @import("../../log.zig");
 
 const Page = @import("../Page.zig");
+const Scheduler = @import("../Scheduler.zig");
 const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
 
@@ -99,9 +100,17 @@ pub fn createTimeout(delay: u32, page: *Page) !*AbortSignal {
         .signal = try init(page),
     };
 
-    try page.scheduler.add(callback, TimeoutCallback.run, delay, .{
-        .name = "AbortSignal.timeout",
-    });
+    //try page.scheduler.add(callback, TimeoutCallback.run, delay, .{
+    //    .name = "AbortSignal.timeout",
+    //});
+
+    try page.scheduler.after(
+        .{ .name = "AbortSignal.timeout", .priority = .high },
+        TimeoutCallback,
+        callback,
+        delay,
+        TimeoutCallback.run,
+    );
 
     return callback.signal;
 }
@@ -134,8 +143,7 @@ const TimeoutCallback = struct {
     page: *Page,
     signal: *AbortSignal,
 
-    fn run(ctx: *anyopaque) !?u32 {
-        const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
+    fn run(_: *Scheduler, self: *TimeoutCallback) !Scheduler.AfterAction {
         var ls: js.Local.Scope = undefined;
         self.page.js.localScope(&ls);
         defer ls.deinit();
@@ -143,7 +151,8 @@ const TimeoutCallback = struct {
         self.signal.abort(.{ .string = "TimeoutError" }, &ls.local, self.page) catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
-        return null;
+
+        return .dont_repeat;
     }
 };
 

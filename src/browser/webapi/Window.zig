@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 
 const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
+const Scheduler = @import("../Scheduler.zig");
 const Console = @import("Console.zig");
 const History = @import("History.zig");
 const Navigation = @import("navigation/Navigation.zig");
@@ -366,11 +367,19 @@ pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]co
         .message = message,
         .origin = try arena.dupe(u8, origin),
     };
-    try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
-        .name = "postMessage",
-        .low_priority = false,
-        .finalizer = PostMessageCallback.cancelled,
-    });
+
+    //try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
+    //    .name = "postMessage",
+    //    .low_priority = false,
+    //    .finalizer = PostMessageCallback.cancelled,
+    //});
+
+    return page.scheduler.once(
+        .{ .name = "postMessage", .priority = .high },
+        PostMessageCallback,
+        callback,
+        PostMessageCallback.run,
+    );
 }
 
 pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
@@ -447,16 +456,17 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
     // We dispatch scroll event asynchronously after 10ms. So we can throttle
     // them.
-    try page.scheduler.add(
+    try page.scheduler.once(
+        .{ .priority = .low },
+        Page,
         page,
         struct {
-            fn dispatch(_page: *anyopaque) anyerror!?u32 {
-                const p: *Page = @ptrCast(@alignCast(_page));
+            fn dispatch(_: *Scheduler, p: *Page) !void {
                 const pos = &p.window._scroll_pos;
                 // If the state isn't scroll, we can ignore safely to throttle
                 // the events.
                 if (pos.state != .scroll) {
-                    return null;
+                    return;
                 }
 
                 const event = try Event.initTrusted("scroll", .{ .bubbles = true }, p);
@@ -464,38 +474,37 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
                 pos.state = .end;
 
-                return null;
+                return;
             }
         }.dispatch,
-        10,
-        .{ .low_priority = true },
     );
+
     // We dispatch scrollend event asynchronously after 20ms.
-    try page.scheduler.add(
+    try page.scheduler.after(
+        .{ .priority = .low },
+        Page,
         page,
+        20,
         struct {
-            fn dispatch(_page: *anyopaque) anyerror!?u32 {
-                const p: *Page = @ptrCast(@alignCast(_page));
+            fn dispatch(_: *Scheduler, p: *Page) !Scheduler.AfterAction {
                 const pos = &p.window._scroll_pos;
                 // Dispatch only if the state is .end.
                 // If a scroll is pending, retry in 10ms.
                 // If the state is .end, the event has been dispatched, so
                 // ignore safely.
                 switch (pos.state) {
-                    .scroll => return 10,
+                    .scroll => return .repeat(10),
                     .end => {},
-                    .done => return null,
+                    .done => return .dont_repeat,
                 }
                 const event = try Event.initTrusted("scrollend", .{ .bubbles = true }, p);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .done;
 
-                return null;
+                return .dont_repeat;
             }
         }.dispatch,
-        20,
-        .{ .low_priority = true },
     );
 }
 
@@ -656,8 +665,7 @@ const PostMessageCallback = struct {
         self.page.releaseArena(self.arena);
     }
 
-    fn run(ctx: *anyopaque) !?u32 {
-        const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+    fn run(_: *Scheduler, self: *PostMessageCallback) !void {
         defer self.deinit();
 
         const page = self.page;
@@ -673,8 +681,6 @@ const PostMessageCallback = struct {
 
         const event = message_event.asEvent();
         try page._event_manager.dispatch(window.asEventTarget(), event);
-
-        return null;
     }
 };
 
