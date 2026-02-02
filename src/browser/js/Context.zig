@@ -322,7 +322,25 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         if (cacheable) {
             gop = try self.module_cache.getOrPut(arena, url);
             if (gop.found_existing) {
-                if (gop.value_ptr.module != null) {
+                if (gop.value_ptr.module) |cache_mod| {
+                    if (gop.value_ptr.module_promise == null) {
+                        // This an usual case, but it can happen if a module is
+                        // first asynchronously requested and then synchronously
+                        // requested as a child of some root import. In that case,
+                        // the module may not be instantiated yet (so we have to
+                        // do that). It might not be evaluated yet. So we have
+                        // to do that too. Evaluation is particularly important
+                        // as it sets up our cache entry's module_promise.
+                        // It appears that v8 handles potential double-instantiated
+                        // and double-evaluated modules safely. The 2nd instantiation
+                        // is a no-op, and the second evaluation returns the same
+                        // promise.
+                        const mod = local.toLocal(cache_mod);
+                        if (mod.getStatus() == .kUninstantiated and try mod.instantiate(resolveModuleCallback) == false) {
+                            return error.ModuleInstantiationError;
+                        }
+                        return self.evaluateModule(want_result, mod, url, true);
+                    }
                     return if (comptime want_result) gop.value_ptr.* else {};
                 }
             } else {
@@ -352,6 +370,10 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         return error.ModuleInstantiationError;
     }
 
+    return self.evaluateModule(want_result, mod, owned_url, cacheable);
+}
+
+fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
     const evaluated = mod.evaluate() catch {
         if (comptime IS_DEBUG) {
             std.debug.assert(mod.getStatus() == .kErrored);
@@ -365,7 +387,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         };
         log.warn(.js, "evaluate module", .{
             .message = message,
-            .specifier = owned_url,
+            .specifier = url,
         });
         return error.EvaluationError;
     };
@@ -374,24 +396,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
     // Must be a promise that gets returned here.
     lp.assert(evaluated.isPromise(), "Context.module non-promise", .{});
 
-    if (comptime !want_result) {
-        // avoid creating a bunch of persisted objects if it isn't
-        // cacheable and the caller doesn't care about results.
-        // This is pretty common, i.e. every <script type=module>
-        // within the html page.
-        if (!cacheable) {
-            return;
+    if (!cacheable) {
+        switch (comptime want_result) {
+            false => return,
+            true => unreachable,
         }
     }
 
-    // anyone who cares about the result, should also want it to
-    // be cached
-    if (comptime IS_DEBUG) {
-        std.debug.assert(cacheable);
-    }
-
     // entry has to have been created atop this function
-    const entry = self.module_cache.getPtr(owned_url).?;
+    const entry = self.module_cache.getPtr(url).?;
 
     // and the module must have been set after we compiled it
     lp.assert(entry.module != null, "Context.module with module", .{});
@@ -690,6 +703,9 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         return promise;
     }
 
+    // we might update the map, so we might need to re-fetch this.
+    var entry = gop.value_ptr;
+
     // So we have a module, but no async resolver. This can only
     // happen if the module was first synchronously loaded (Does that
     // ever even happen?!) You'd think we can just return the module
@@ -702,7 +718,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
 
     // If the module hasn't been evaluated yet (it was only instantiated
     // as a static import dependency), we need to evaluate it now.
-    if (gop.value_ptr.module_promise == null) {
+    if (entry.module_promise == null) {
         const mod = local.toLocal(gop.value_ptr.module.?);
         const status = mod.getStatus();
         if (status == .kEvaluated or status == .kEvaluating) {
@@ -711,7 +727,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
             const module_resolver = local.createPromiseResolver();
             module_resolver.resolve("resolve module", mod.getModuleNamespace());
             _ = try module_resolver.persist();
-            gop.value_ptr.module_promise = try module_resolver.promise().persist();
+            entry.module_promise = try module_resolver.promise().persist();
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
             const evaluated = mod.evaluate() catch {
@@ -722,18 +738,20 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
                 return promise;
             };
             lp.assert(evaluated.isPromise(), "Context._dynamicModuleCallback non-promise", .{});
-            gop.value_ptr.module_promise = try evaluated.toPromise().persist();
+            // mod.evaluate can invalidate or gop
+            entry = self.module_cache.getPtr(specifier).?;
+            entry.module_promise = try evaluated.toPromise().persist();
         }
     }
 
     // like before, we want to set this up so that if anything else
     // tries to load this module, it can just return our promise
     // since we're going to be doing all the work.
-    gop.value_ptr.resolver_promise = try promise.persist();
+    entry.resolver_promise = try promise.persist();
 
     // But we can skip direclty to `resolveDynamicModule` which is
     // what the above callback will eventually do.
-    self.resolveDynamicModule(state, gop.value_ptr.*, local);
+    self.resolveDynamicModule(state, entry.*, local);
     return promise;
 }
 
