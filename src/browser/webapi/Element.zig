@@ -1255,6 +1255,14 @@ pub fn scrollIntoViewIfNeeded(_: *const Element, center_if_needed: ?bool) void {
     _ = center_if_needed;
 }
 
+const ScrollIntoViewOpts = union {
+    align_to_top: bool,
+    obj: js.Object,
+};
+pub fn scrollIntoView(_: *const Element, opts: ?ScrollIntoViewOpts) void {
+    _ = opts;
+}
+
 pub fn format(self: *Element, writer: *std.Io.Writer) !void {
     try writer.writeByte('<');
     try writer.writeAll(self.getTagNameDump());
@@ -1597,6 +1605,7 @@ pub const JsApi = struct {
     pub const children = bridge.accessor(Element.getChildren, null, .{});
     pub const focus = bridge.function(Element.focus, .{});
     pub const blur = bridge.function(Element.blur, .{});
+    pub const scrollIntoView = bridge.function(Element.scrollIntoView, .{});
     pub const scrollIntoViewIfNeeded = bridge.function(Element.scrollIntoViewIfNeeded, .{});
 };
 
