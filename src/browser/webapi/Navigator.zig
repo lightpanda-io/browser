@@ -20,9 +20,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const PluginArray = @import("PluginArray.zig");
 
 const Navigator = @This();
 _pad: bool = false,
+_plugins: PluginArray = .{},
 
 pub const init: Navigator = .{};
 
@@ -94,6 +96,10 @@ pub fn javaEnabled(_: *const Navigator) bool {
 /// Returns whether the browser is controlled by automation (always false)
 pub fn getWebdriver(_: *const Navigator) bool {
     return false;
+}
+
+pub fn getPlugins(self: *Navigator) *PluginArray {
+    return &self._plugins;
 }
 
 pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
@@ -189,6 +195,7 @@ pub const JsApi = struct {
     pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
+    pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true });
 
