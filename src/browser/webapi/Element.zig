@@ -837,6 +837,31 @@ pub fn replaceChildren(self: *Element, nodes: []const Node.NodeOrText, page: *Pa
     }
 }
 
+pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
+    page.domChanged();
+
+    const ref_node = self.asNode();
+    const parent = ref_node._parent orelse return;
+
+    const parent_is_connected = parent.isConnected();
+
+    for (nodes) |node_or_text| {
+        const child = try node_or_text.toNode(page);
+        if (child._parent) |current_parent| {
+            page.removeNode(current_parent, child, .{ .will_be_reconnected = parent_is_connected });
+        }
+
+        try page.insertNodeRelative(
+            parent,
+            child,
+            .{ .before = ref_node },
+            .{ .child_already_connected = child.isConnected() },
+        );
+    }
+
+    page.removeNode(parent, ref_node, .{ .will_be_reconnected = false });
+}
+
 pub fn remove(self: *Element, page: *Page) void {
     page.domChanged();
     const node = self.asNode();
@@ -1579,6 +1604,7 @@ pub const JsApi = struct {
         return self.attachShadow(init.mode, page);
     }
     pub const replaceChildren = bridge.function(Element.replaceChildren, .{});
+    pub const replaceWith = bridge.function(Element.replaceWith, .{});
     pub const remove = bridge.function(Element.remove, .{});
     pub const append = bridge.function(Element.append, .{});
     pub const prepend = bridge.function(Element.prepend, .{});
