@@ -61,27 +61,42 @@ pub fn deinit(self: *Scheduler) void {
     }
 }
 
-/// Scheduled tasks must satisfy this interface.
-const ScheduleInterface = struct {
-    const T = type;
-
-    /// Must be implemented if scheduled with `Scheduler.once`.
-    fn onRun(ctx: *T, scheduler: *Scheduler) !void {
-        _ = ctx;
-        _ = scheduler;
-    }
-
-    /// Must be implemented if scheduled with `Scheduler.after`.
-    fn onReady(ctx: *T, scheduler: *Scheduler) !AfterAction {
-        _ = ctx;
-        _ = scheduler;
-    }
-
-    /// Optional, should be implemented if task needs to do some cleanup.
-    fn onFinalize(ctx: *T) void {
-        _ = ctx;
-    }
-};
+/// How to schedule a task 101:
+///
+/// If a task is being scheduled via `Scheduler.once`, the passed type must have
+/// `action` callback implemented. Here's the function signature:
+///
+/// ```zig
+/// pub fn action(scheduler: *Scheduler, context: *T) !void {
+///     // ...
+/// }
+/// ```
+///
+/// If a task is being scheduled via `Scheduled.afer` instead, the passed type
+/// must have `action` callback with this signature:
+///
+/// ```zig
+/// pub fn action(scheduler: *Scheduler, context: *T) !AfterAction {
+///     // ...
+///
+///     // Repeat this `action` after 200ms:
+///     return .repeat(200);
+///
+///     // Don't repeat the action.
+///     return .dont_repeat;
+/// }
+/// ```
+///
+/// Both variants can also have `finalize` callback:
+///
+/// ```zig
+/// pub fn finalize(context: *T) void {
+///     // ...
+/// }
+/// ```
+///
+/// The "finalizers" will be fired before `Scheduler` itself is deinitialized.
+pub const ScheduleInterface = struct {};
 
 pub const Priority = enum(u1) { low, high };
 
@@ -90,21 +105,6 @@ pub const ScheduleOptions = struct {
     prio: Priority,
 };
 
-// scheduler.once(
-//     .{ .name = "my-event", .priority = .high },
-//     MyType,
-//     &my_type,
-//     struct {
-//         fn action(my_type: *MyType, scheduler: *Scheduler) !void {
-//             // action taken logic...
-//         }
-//
-//         fn finalize(my_type: *MyType) void {
-//             // finalize logic...
-//         }
-//     },
-// );
-
 /// Schedules a task that'll be executed in the next run.
 pub fn once(
     self: *Scheduler,
@@ -112,7 +112,7 @@ pub fn once(
     /// Type of `ctx`.
     comptime T: type,
     ctx: *T,
-    /// See `Scheduler.ScheduleInterface` (private type) for reference.
+    /// See `Scheduler.ScheduleInterface` for reference.
     comptime Interface: anytype,
 ) !void {
     if (comptime IS_DEBUG) {
@@ -197,7 +197,7 @@ pub fn after(
     comptime T: type,
     ctx: *T,
     run_in_ms: u32,
-    /// See `Scheduler.ScheduleInterface` (private type) for reference.
+    /// See `Scheduler.ScheduleInterface` for reference.
     comptime Interface: anytype,
     // If an integer is returned, the task will be repeated after that much ms.
     // If null is returned, task won't be repeated.
