@@ -277,22 +277,24 @@ fn reset(self: *Page, comptime initializing: bool) !void {
 
         browser.env.destroyContext(self.js);
 
-        // removing a context can trigger finalizers, so we can only check for
-        // a leak after the above.
-        if (comptime IS_DEBUG) {
-            var it = self._arena_pool_leak_track.valueIterator();
-            while (it.next()) |value_ptr| {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
-            }
-            self._arena_pool_leak_track.clearRetainingCapacity();
-        }
-
         // We force a garbage collection between page navigations to keep v8
         // memory usage as low as possible.
         browser.env.memoryPressureNotification(.moderate);
         self._script_manager.shutdown = true;
         browser.http_client.abort();
         self._script_manager.deinit();
+
+        // destroying the context, and aborting the http_client can both cause
+        // resources to be freed. We need to check for a leak after we've finished
+        // all of our cleanup.
+        if (comptime IS_DEBUG) {
+            var it = self._arena_pool_leak_track.valueIterator();
+            while (it.next()) |value_ptr| {
+                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+            }
+            self._arena_pool_leak_track = .empty;
+        }
+
         _ = browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
     }
 
