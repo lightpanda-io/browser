@@ -548,19 +548,23 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
     };
     gop.value_ptr.* = callback;
 
-    //try page.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
-    //    .name = opts.name,
-    //    .low_priority = opts.low_priority,
-    //    .finalizer = ScheduleCallback.cancelled,
-    //});
-
-    try page.scheduler.after(
-        .{ .prio = .high },
-        ScheduleCallback,
-        callback,
-        delay_ms,
-        ScheduleCallback,
-    );
+    if (opts.low_priority) {
+        try page.scheduler.after(
+            .{ .prio = .low },
+            ScheduleCallback,
+            callback,
+            delay_ms,
+            ScheduleCallback,
+        );
+    } else {
+        try page.scheduler.after(
+            .{ .prio = .high },
+            ScheduleCallback,
+            callback,
+            delay_ms,
+            ScheduleCallback,
+        );
+    }
 
     return timer_id;
 }
