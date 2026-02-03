@@ -104,14 +104,20 @@ _element_assigned_slots: Element.AssignedSlotLookup = .{},
 /// Lazily-created inline event listeners (or listeners provided as attributes).
 /// Avoids bloating all elements with extra function fields for rare usage.
 ///
-/// Use this when a listener provided like these:
+/// Use this when a listener provided like this:
+///
+/// ```js
+/// img.onload = () => { ... };
+/// ```
+///
+/// Its also used as cache for such cases after lazy evaluation:
 ///
 /// ```html
 /// <img onload="(() => { ... })()" />
 /// ```
 ///
 /// ```js
-/// img.onload = () => { ... };
+/// img.setAttribute("onload", "(() => { ... })()");
 /// ```
 _element_attr_listeners: Element.AttrListenerLookup = .{},
 
