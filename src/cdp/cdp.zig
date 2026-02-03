@@ -76,6 +76,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // Used for processing notifications within a browser context.
         notification_arena: std.heap.ArenaAllocator,
 
+        page_arena: std.heap.ArenaAllocator,
+
+        browser_context_arena: std.heap.ArenaAllocator,
+
         const Self = @This();
 
         pub fn init(app: *App, client: TypeProvider.Client) !Self {
@@ -90,8 +94,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 .browser = browser,
                 .allocator = allocator,
                 .browser_context = null,
+                .page_arena = std.heap.ArenaAllocator.init(allocator),
                 .message_arena = std.heap.ArenaAllocator.init(allocator),
                 .notification_arena = std.heap.ArenaAllocator.init(allocator),
+                .browser_context_arena = std.heap.ArenaAllocator.init(allocator),
             };
         }
 
@@ -100,8 +106,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 bc.deinit();
             }
             self.browser.deinit();
+            self.page_arena.deinit();
             self.message_arena.deinit();
             self.notification_arena.deinit();
+            self.browser_context_arena.deinit();
         }
 
         pub fn handleMessage(self: *Self, msg: []const u8) bool {
@@ -323,8 +331,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // RELATION TO SESSION_ID
         session: *Session,
 
-        // Points to the session arena
+        // Tied to the lifetime of the BrowserContext
         arena: Allocator,
+
+        // Tied to the lifetime of 1 page rendered in the BrowserContext.
+        page_arena: Allocator,
 
         // From the parent's notification_arena.allocator(). Most of the CDP
         // code paths deal with a cmd which has its own arena (from the
@@ -355,12 +366,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         node_search_list: Node.Search.List,
 
         inspector_session: *js.Inspector.Session,
-        isolated_worlds: std.ArrayListUnmanaged(IsolatedWorld),
+        isolated_worlds: std.ArrayList(*IsolatedWorld),
 
         http_proxy_changed: bool = false,
 
         // Extra headers to add to all requests.
-        extra_headers: std.ArrayListUnmanaged([*c]const u8) = .empty,
+        extra_headers: std.ArrayList([*c]const u8) = .empty,
 
         intercept_state: InterceptState,
 
@@ -373,7 +384,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // ever streamed. So if CDP is the only thing that needs bodies in
         // memory for an arbitrary amount of time, then that's where we're going
         // to store the,
-        captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayListUnmanaged(u8)),
+        captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayList(u8)),
 
         const Self = @This();
 
@@ -381,7 +392,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const allocator = cdp.allocator;
 
             const session = try cdp.browser.newSession();
-            const arena = session.arena;
 
             const browser = &cdp.browser;
             const inspector_session = browser.env.inspector.?.startSession(self);
@@ -393,7 +403,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.* = .{
                 .id = id,
                 .cdp = cdp,
-                .arena = arena,
                 .target_id = null,
                 .session_id = null,
                 .session = session,
@@ -405,6 +414,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .node_search_list = undefined,
                 .isolated_worlds = .empty,
                 .inspector_session = inspector_session,
+                .page_arena = cdp.page_arena.allocator(),
+                .arena = cdp.browser_context_arena.allocator(),
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
                 .captured_responses = .empty,
@@ -442,7 +453,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 transfer.abort(error.ClientDisconnect);
             }
 
-            for (self.isolated_worlds.items) |*world| {
+            for (self.isolated_worlds.items) |world| {
                 world.deinit();
             }
             self.isolated_worlds.clearRetainingCapacity();
@@ -472,15 +483,20 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {
-            const owned_name = try self.arena.dupe(u8, world_name);
-            const world = try self.isolated_worlds.addOne(self.arena);
+            const browser = &self.cdp.browser;
+            const arena = try browser.arena_pool.acquire();
+            errdefer browser.arena_pool.release(arena);
 
+            const world = try arena.create(IsolatedWorld);
             world.* = .{
+                .arena = arena,
                 .context = null,
-                .name = owned_name,
-                .env = &self.cdp.browser.env,
+                .browser = browser,
+                .name = try arena.dupe(u8, world_name),
                 .grant_universal_access = grant_universal_access,
             };
+
+            try self.isolated_worlds.append(self.arena, world);
 
             return world;
         }
@@ -634,7 +650,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn onHttpResponseData(ctx: *anyopaque, msg: *const Notification.ResponseData) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
-            const arena = self.arena;
+            const arena = self.page_arena;
 
             const id = msg.transfer.id;
             const gop = try self.captured_responses.getOrPut(arena, id);
@@ -700,7 +716,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             // + 10 for the max websocket header
             const message_len = msg.len + session_id.len + 1 + field.len + 10;
 
-            var buf: std.ArrayListUnmanaged(u8) = .{};
+            var buf: std.ArrayList(u8) = .{};
             buf.ensureTotalCapacity(allocator, message_len) catch |err| {
                 log.err(.cdp, "inspector buffer", .{ .err = err });
                 return;
@@ -734,20 +750,23 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 /// Generally the client needs to resolve a node into the isolated world to be able to work with it.
 /// An object id is unique across all contexts, different object ids can refer to the same Node in different contexts.
 const IsolatedWorld = struct {
+    arena: Allocator,
+    browser: *Browser,
     name: []const u8,
-    env: *js.Env,
     context: ?*js.Context = null,
     grant_universal_access: bool,
 
     pub fn deinit(self: *IsolatedWorld) void {
         if (self.context) |ctx| {
-            self.env.destroyContext(ctx);
+            self.browser.env.destroyContext(ctx);
             self.context = null;
         }
+        self.browser.arena_pool.release(self.arena);
     }
+
     pub fn removeContext(self: *IsolatedWorld) !void {
         const ctx = self.context orelse return error.NoIsolatedContextToRemove;
-        self.env.destroyContext(ctx);
+        self.browser.env.destroyContext(ctx);
         self.context = null;
     }
 
@@ -758,7 +777,7 @@ const IsolatedWorld = struct {
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !*js.Context {
         if (self.context == null) {
-            self.context = try self.env.createContext(page, false);
+            self.context = try self.browser.env.createContext(page, false);
         } else {
             log.warn(.cdp, "not implemented", .{
                 .feature = "createContext: Not implemented second isolated context creation",

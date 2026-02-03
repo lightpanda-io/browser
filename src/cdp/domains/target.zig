@@ -283,7 +283,7 @@ fn closeTarget(cmd: anytype) !void {
     }
 
     bc.session.removePage();
-    for (bc.isolated_worlds.items) |*world| {
+    for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
     bc.isolated_worlds.clearRetainingCapacity();
