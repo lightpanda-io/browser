@@ -56,6 +56,7 @@ pub fn deinit(self: *ArenaPool) void {
 pub fn acquire(self: *ArenaPool) !Allocator {
     if (self.free_list) |entry| {
         self.free_list = entry.next;
+        self.free_list_len -= 1;
         return entry.arena.allocator();
     }
 
@@ -72,7 +73,8 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
     const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
     const entry: *Entry = @fieldParentPtr("arena", arena);
 
-    if (self.free_list_len == self.free_list_max) {
+    const free_list_len = self.free_list_len;
+    if (free_list_len == self.free_list_max) {
         arena.deinit();
         self.entry_pool.destroy(entry);
         return;
@@ -80,5 +82,6 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
 
     _ = arena.reset(.{ .retain_with_limit = self.retain_bytes });
     entry.next = self.free_list;
+    self.free_list_len = free_list_len + 1;
     self.free_list = entry;
 }
