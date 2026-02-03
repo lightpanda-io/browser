@@ -271,8 +271,15 @@ pub fn navigateInner(
     const committed = local.createPromiseResolver();
     const finished = local.createPromiseResolver();
 
-    const new_url = try URL.resolve(arena, page.url, url, .{});
+    var new_url = try URL.resolve(arena, page.url, url, .{});
     const is_same_document = URL.eqlDocument(new_url, page.url);
+
+    // In case of navigation to the same document, we force an url duplication.
+    // Keeping the same url generates a crash during WPT test navigate-history-push-same-url.html.
+    // When building a script's src, script's base and page url overlap.
+    if (is_same_document) {
+        new_url = try arena.dupeZ(u8, new_url);
+    }
 
     const previous = self.getCurrentEntry();
 
