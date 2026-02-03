@@ -240,6 +240,9 @@ pub fn unregisterAll(self: *Notification, receiver: *anyopaque) void {
 }
 
 pub fn dispatch(self: *Notification, comptime event: EventType, data: ArgType(event)) void {
+    if (self.listeners.count() == 0) {
+        return;
+    }
     const list = &@field(self.event_listeners, @tagName(event));
 
     var node = list.first;

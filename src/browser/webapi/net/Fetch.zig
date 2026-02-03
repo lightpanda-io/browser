@@ -78,6 +78,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .headers = headers,
         .resource_type = .fetch,
         .cookie_jar = &page._session.cookie_jar,
+        .notification = page._session.notification,
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,

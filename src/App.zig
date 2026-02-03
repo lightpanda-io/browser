@@ -27,7 +27,6 @@ const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 
 pub const Http = @import("http/Http.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
-pub const Notification = @import("Notification.zig");
 
 // Container for global state / objects that various parts of the system
 // might need.
@@ -41,7 +40,6 @@ telemetry: Telemetry,
 allocator: Allocator,
 arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
-notification: *Notification,
 shutdown: bool = false,
 
 pub const RunMode = enum {
@@ -69,9 +67,6 @@ pub fn init(allocator: Allocator, config: Config) !*App {
 
     app.config = config;
     app.allocator = allocator;
-
-    app.notification = try Notification.init(allocator);
-    errdefer app.notification.deinit();
 
     app.http = try Http.init(allocator, .{
         .max_host_open = config.http_max_host_open orelse 4,
@@ -113,7 +108,6 @@ pub fn deinit(self: *App) void {
         self.app_dir_path = null;
     }
     self.telemetry.deinit();
-    self.notification.deinit();
     self.http.deinit();
     self.snapshot.deinit();
     self.platform.deinit();

@@ -22,6 +22,7 @@ pub const Server = @import("Server.zig");
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
+pub const Notification = @import("Notification.zig");
 
 pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
@@ -38,9 +39,11 @@ pub const FetchOpts = struct {
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     var browser = try Browser.init(app, .{});
+    const notification = try Notification.init(app.allocator);
+    defer notification.deinit();
     defer browser.deinit();
 
-    var session = try browser.newSession();
+    var session = try browser.newSession(notification);
     const page = try session.createPage();
 
     // // Comment this out to get a profile of the JS code in v8/profile.json.

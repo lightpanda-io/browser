@@ -478,7 +478,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
         self.documentIsComplete();
 
-        self._session.browser.notification.dispatch(.page_navigate, &.{
+        self._session.notification.dispatch(.page_navigate, &.{
             .req_id = req_id,
             .opts = opts,
             .url = request_url,
@@ -486,12 +486,14 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         });
 
         // Record telemetry for navigation
-        self._session.browser.app.telemetry.record(.{ .navigate = .{
-            .tls = false, // about:blank is not TLS
-            .proxy = self._session.browser.app.config.http_proxy != null,
-        } });
+        self._session.browser.app.telemetry.record(.{
+            .navigate = .{
+                .tls = false, // about:blank is not TLS
+                .proxy = self._session.browser.app.config.http_proxy != null,
+            },
+        });
 
-        self._session.browser.notification.dispatch(.page_navigated, &.{
+        self._session.notification.dispatch(.page_navigated, &.{
             .req_id = req_id,
             .opts = .{
                 .cdp_id = opts.cdp_id,
@@ -526,7 +528,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
     // We dispatch page_navigate event before sending the request.
     // It ensures the event page_navigated is not dispatched before this one.
-    self._session.browser.notification.dispatch(.page_navigate, &.{
+    self._session.notification.dispatch(.page_navigate, &.{
         .req_id = req_id,
         .opts = opts,
         .url = self.url,
@@ -549,6 +551,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .body = opts.body,
         .cookie_jar = &self._session.cookie_jar,
         .resource_type = .document,
+        .notification = self._session.notification,
         .header_callback = pageHeaderDoneCallback,
         .data_callback = pageDataCallback,
         .done_callback = pageDoneCallback,
@@ -676,7 +679,7 @@ pub fn documentIsComplete(self: *Page) void {
         std.debug.assert(self._navigated_options != null);
     }
 
-    self._session.browser.notification.dispatch(.page_navigated, &.{
+    self._session.notification.dispatch(.page_navigated, &.{
         .req_id = self._req_id.?,
         .opts = self._navigated_options.?,
         .url = self.url,
@@ -1425,14 +1428,14 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 
 fn notifyNetworkIdle(self: *Page) void {
     lp.assert(self._notified_network_idle == .done, "Page.notifyNetworkIdle", .{});
-    self._session.browser.notification.dispatch(.page_network_idle, &.{
+    self._session.notification.dispatch(.page_network_idle, &.{
         .timestamp = timestamp(.monotonic),
     });
 }
 
 fn notifyNetworkAlmostIdle(self: *Page) void {
     lp.assert(self._notified_network_almost_idle == .done, "Page.notifyNetworkAlmostIdle", .{});
-    self._session.browser.notification.dispatch(.page_network_almost_idle, &.{
+    self._session.notification.dispatch(.page_network_almost_idle, &.{
         .timestamp = timestamp(.monotonic),
     });
 }

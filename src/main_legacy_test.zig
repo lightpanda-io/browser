@@ -44,9 +44,11 @@ pub fn main() !void {
     defer test_arena.deinit();
 
     var browser = try lp.Browser.init(app, .{});
+    const notification = try lp.Notification.init(app.allocator);
+    defer notification.deinit();
     defer browser.deinit();
 
-    const session = try browser.newSession();
+    const session = try browser.newSession(notification);
 
     var dir = try std.fs.cwd().openDir("src/browser/tests/legacy/", .{ .iterate = true, .no_follow = true });
     defer dir.close();
