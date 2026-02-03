@@ -381,13 +381,18 @@ fn registerBackgroundTasks(self: *Page) !void {
 
     const Browser = @import("Browser.zig");
 
-    try self.scheduler.add(self._session.browser, struct {
-        fn runMessageLoop(ctx: *anyopaque) !?u32 {
-            const b: *Browser = @ptrCast(@alignCast(ctx));
-            b.runMessageLoop();
-            return 250;
-        }
-    }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
+    return self.scheduler.after(
+        .{ .name = "runMessageLoop", .prio = .high },
+        Browser,
+        self._session.browser,
+        250,
+        struct {
+            pub fn action(_: *Scheduler, browser: *Browser) !Scheduler.AfterAction {
+                browser.runMessageLoop();
+                return .repeat(250);
+            }
+        },
+    );
 }
 
 pub fn getTitle(self: *Page) !?[]const u8 {
@@ -1258,25 +1263,22 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
     }
     self._performance_delivery_scheduled = true;
 
-    return self.scheduler.add(
+    return self.scheduler.once(
+        .{ .prio = .low },
+        Page,
         self,
         struct {
-            fn run(_page: *anyopaque) anyerror!?u32 {
-                const page: *Page = @ptrCast(@alignCast(_page));
+            pub fn action(_: *Scheduler, page: *Page) !void {
                 page._performance_delivery_scheduled = false;
 
-                // Dispatch performance observer events.
+                // Dispatch performance observers.
                 for (page._performance_observers.items) |observer| {
                     if (observer.hasRecords()) {
                         try observer.dispatch(page);
                     }
                 }
-
-                return null;
             }
-        }.run,
-        0,
-        .{ .low_priority = true },
+        },
     );
 }
 
