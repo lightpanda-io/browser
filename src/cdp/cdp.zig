@@ -760,10 +760,7 @@ const IsolatedWorld = struct {
     grant_universal_access: bool,
 
     pub fn deinit(self: *IsolatedWorld) void {
-        if (self.context) |ctx| {
-            self.browser.env.destroyContext(ctx);
-            self.context = null;
-        }
+        self.removeContext() catch {};
         self.browser.arena_pool.release(self.arena);
     }
 
