@@ -60,7 +60,7 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
     var env = try js.Env.init(app, opts.env);
     errdefer env.deinit();
 
-    const notification = try Notification.init(allocator, app.notification);
+    const notification = try Notification.init(allocator);
     app.http.client.notification = notification;
     app.http.client.next_request_id = 0; // Should we track ids in CDP only?
     errdefer notification.deinit();

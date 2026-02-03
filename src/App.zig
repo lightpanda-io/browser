@@ -70,7 +70,7 @@ pub fn init(allocator: Allocator, config: Config) !*App {
     app.config = config;
     app.allocator = allocator;
 
-    app.notification = try Notification.init(allocator, null);
+    app.notification = try Notification.init(allocator);
     errdefer app.notification.deinit();
 
     app.http = try Http.init(allocator, .{
@@ -95,8 +95,6 @@ pub fn init(allocator: Allocator, config: Config) !*App {
 
     app.telemetry = try Telemetry.init(app, config.run_mode);
     errdefer app.telemetry.deinit();
-
-    try app.telemetry.register(app.notification);
 
     app.arena_pool = ArenaPool.init(allocator);
     errdefer app.arena_pool.deinit();

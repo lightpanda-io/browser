@@ -485,6 +485,12 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
             .timestamp = timestamp(.monotonic),
         });
 
+        // Record telemetry for navigation
+        self._session.browser.app.telemetry.record(.{ .navigate = .{
+            .tls = false, // about:blank is not TLS
+            .proxy = self._session.browser.app.config.http_proxy != null,
+        } });
+
         self._session.browser.notification.dispatch(.page_navigated, &.{
             .req_id = req_id,
             .opts = .{
@@ -526,6 +532,12 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .url = self.url,
         .timestamp = timestamp(.monotonic),
     });
+
+    // Record telemetry for navigation
+    self._session.browser.app.telemetry.record(.{ .navigate = .{
+        .tls = std.ascii.startsWithIgnoreCase(self.url, "https://"),
+        .proxy = self._session.browser.app.config.http_proxy != null,
+    } });
 
     session.navigation._current_navigation_kind = opts.kind;
 

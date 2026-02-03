@@ -39,10 +39,9 @@ const List = std.DoublyLinkedList;
 // CDP code registers for the "network_bytes_sent" event, because it needs to
 // send messages to the client when this happens. Our HTTP client could then
 // emit a "network_bytes_sent" message. It would be easy, and it would work.
-// That is, it would work until the Telemetry code makes an HTTP request, and
-// because everything's just one big global, that gets picked up by the
-// registered CDP listener, and the telemetry network activity gets sent to the
-// CDP client.
+// That is, it would work until multiple CDP clients connect, and because
+// everything's just one big global, events from one CDP session would be sent
+// to all CDP clients.
 //
 // To avoid this, one way or another, we need scoping. We could still have
 // a global registry but every "register" and every "emit" has some type of
@@ -50,14 +49,10 @@ const List = std.DoublyLinkedList;
 // between components to share a common scope.
 //
 // Instead, the approach that we take is to have a notification instance per
-// scope. This makes some things harder, but we only plan on having 2
-// notification instances  at a given time: one in a Browser and one in the App.
-// What about something like Telemetry, which lives outside of a Browser but
-// still cares about Browser-events (like .page_navigate)? When the Browser
-// notification is created, a `notification_created` event is raised in the
-// App's notification, which Telemetry is registered for. This allows Telemetry
-// to register for events in the Browser notification. See the Telemetry's
-// register function.
+// CDP connection (BrowserContext). Each CDP connection has its own notification
+// that is shared across all Sessions (tabs) within that connection. This ensures
+// proper isolation between different CDP clients while allowing a single client
+// to receive events from all its tabs.
 const Notification = @This();
 // Every event type (which are hard-coded), has a list of Listeners.
 // When the event happens, we dispatch to those listener.
@@ -85,7 +80,6 @@ const EventListeners = struct {
     http_request_auth_required: List = .{},
     http_response_data: List = .{},
     http_response_header_done: List = .{},
-    notification_created: List = .{},
 };
 
 const Events = union(enum) {
@@ -102,7 +96,6 @@ const Events = union(enum) {
     http_request_done: *const RequestDone,
     http_response_data: *const ResponseData,
     http_response_header_done: *const ResponseHeaderDone,
-    notification_created: *Notification,
 };
 const EventType = std.meta.FieldEnum(Events);
 
@@ -162,12 +155,7 @@ pub const RequestFail = struct {
     err: anyerror,
 };
 
-pub fn init(allocator: Allocator, parent: ?*Notification) !*Notification {
-
-    // This is put on the heap because we want to raise a .notification_created
-    // event, so that, something like Telemetry, can receive the
-    // .page_navigate event on all notification instances. That can only work
-    // if we dispatch .notification_created with a *Notification.
+pub fn init(allocator: Allocator) !*Notification {
     const notification = try allocator.create(Notification);
     errdefer allocator.destroy(notification);
 
@@ -177,10 +165,6 @@ pub fn init(allocator: Allocator, parent: ?*Notification) !*Notification {
         .allocator = allocator,
         .mem_pool = std.heap.MemoryPool(Listener).init(allocator),
     };
-
-    if (parent) |pn| {
-        pn.dispatch(.notification_created, notification);
-    }
 
     return notification;
 }
@@ -313,7 +297,7 @@ const Listener = struct {
 
 const testing = std.testing;
 test "Notification" {
-    var notifier = try Notification.init(testing.allocator, null);
+    var notifier = try Notification.init(testing.allocator);
     defer notifier.deinit();
 
     // noop
