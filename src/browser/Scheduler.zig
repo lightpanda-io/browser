@@ -169,7 +169,7 @@ pub fn once(
     }
 }
 
-/// Action to be taken `after` callback being run.
+/// Action to be taken after callback being run.
 /// Don't manually create this, prefer such syntax:
 ///
 /// ```zig
@@ -199,9 +199,6 @@ pub fn after(
     run_in_ms: u32,
     /// See `Scheduler.ScheduleInterface` for reference.
     comptime Interface: anytype,
-    // If an integer is returned, the task will be repeated after that much ms.
-    // If null is returned, task won't be repeated.
-    //comptime callback: *const fn (scheduler: *Scheduler, ctx: *T) anyerror!AfterAction,
 ) !void {
     if (comptime IS_DEBUG) {
         log.debug(.scheduler, "Scheduler.after", .{
