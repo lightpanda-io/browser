@@ -76,8 +76,11 @@ pub fn CDPT(comptime TypeProvider: type) type {
         // Used for processing notifications within a browser context.
         notification_arena: std.heap.ArenaAllocator,
 
+        // Valid for 1 page navigation (what CDP calls a "renderer")
         page_arena: std.heap.ArenaAllocator,
 
+        // Valid for the entire lifetime of the BrowserContext. Should minimize
+        // (or altogether elimiate) our use of this.
         browser_context_arena: std.heap.ArenaAllocator,
 
         const Self = @This();
