@@ -167,7 +167,7 @@ fn close(cmd: anytype) !void {
     }
 
     bc.session.removePage();
-    for (bc.isolated_worlds.items) |*world| {
+    for (bc.isolated_worlds.items) |world| {
         world.deinit();
     }
     bc.isolated_worlds.clearRetainingCapacity();
@@ -275,15 +275,21 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
 
 pub fn pageRemove(bc: anytype) !void {
     // The main page is going to be removed, we need to remove contexts from other worlds first.
-    for (bc.isolated_worlds.items) |*isolated_world| {
+    for (bc.isolated_worlds.items) |isolated_world| {
         try isolated_world.removeContext();
     }
 }
 
 pub fn pageCreated(bc: anytype, page: *Page) !void {
-    for (bc.isolated_worlds.items) |*isolated_world| {
+    _ = bc.cdp.page_arena.reset(.{ .retain_with_limit = 1024 * 512 });
+
+    for (bc.isolated_worlds.items) |isolated_world| {
         _ = try isolated_world.createContext(page);
     }
+    // Only retain captured responses until a navigation event. In CDP term,
+    // this is called a "renderer" and the cache-duration can be controlled via
+    // the Network.configureDurableMessages message (which we don't support)
+    bc.captured_responses = .empty;
 }
 
 pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.PageNavigated) !void {
@@ -359,7 +365,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
             true,
         );
     }
-    for (bc.isolated_worlds.items) |*isolated_world| {
+    for (bc.isolated_worlds.items) |isolated_world| {
         const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
 
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event

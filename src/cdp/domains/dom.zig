@@ -284,7 +284,7 @@ fn resolveNode(cmd: anytype) !void {
             break :blk;
         }
         // not the default scope, check the other ones
-        for (bc.isolated_worlds.items) |*isolated_world| {
+        for (bc.isolated_worlds.items) |isolated_world| {
             ls.?.deinit();
             ls = null;
 
