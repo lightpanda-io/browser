@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
+const log = @import("../../../log.zig");
 const reflect = @import("../../reflect.zig");
 
 const Page = @import("../../Page.zig");
@@ -330,6 +331,40 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
         .clientY = 0,
     }, page);
     try page._event_manager.dispatch(self.asEventTarget(), event.asEvent());
+}
+
+fn getAttributeFunction(
+    self: *HtmlElement,
+    comptime listener_type: Element.KnownListener,
+    page: *Page,
+) ?js.Function.Global {
+    const element = self.asElement();
+    if (page.getAttrListener(element, listener_type)) |cached| {
+        return cached;
+    }
+
+    const attr = element.getAttributeSafe(.wrap(@tagName(listener_type))) orelse return null;
+    const callback = page.js.stringToPersistedFunction(attr) catch |err| {
+        // Not a valid expression; log this to find out if its something we should be supporting.
+        log.warn(.unknown_prop, "Page.getAttrListener", .{
+            .expression = attr,
+            .err = err,
+        });
+
+        return null;
+    };
+
+    page.setAttrListener(element, listener_type, callback) catch {
+        // This is fine :tm: We're out of memory for cache.
+        // I don't want to make all getters "!?" just because of this honestly.
+        log.warn(.app, "getAttributeFunction", .{
+            .element = element,
+            .listener_type = listener_type,
+            .callback = callback,
+        });
+    };
+
+    return callback;
 }
 
 pub fn setOnAbort(self: *HtmlElement, callback: js.Function.Global, page: *Page) !void {
