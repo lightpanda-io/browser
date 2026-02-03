@@ -207,23 +207,23 @@ scheduler: Scheduler,
 _req_id: ?usize = null,
 _navigated_options: ?NavigatedOpts = null,
 
-pub fn init(arena: Allocator, call_arena: Allocator, session: *Session) !*Page {
+pub fn init(self: *Page, session: *Session) !void {
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.init", .{});
     }
 
-    const page = try session.browser.allocator.create(Page);
-    page._session = session;
+    const browser = session.browser;
+    self._session = session;
 
-    page.arena = arena;
-    page.call_arena = call_arena;
-    page.arena_pool = session.browser.arena_pool;
+    self.arena_pool = browser.arena_pool;
+    self.arena = browser.page_arena.allocator();
+    self.call_arena = browser.call_arena.allocator();
+
     if (comptime IS_DEBUG) {
-        page._arena_pool_leak_track = .empty;
+        self._arena_pool_leak_track = .empty;
     }
 
-    try page.reset(true);
-    return page;
+    try self.reset(true);
 }
 
 pub fn deinit(self: *Page) void {
@@ -265,8 +265,6 @@ pub fn deinit(self: *Page) void {
             }
         }
     }
-
-    session.browser.allocator.destroy(self);
 }
 
 fn reset(self: *Page, comptime initializing: bool) !void {
@@ -290,7 +288,9 @@ fn reset(self: *Page, comptime initializing: bool) !void {
         if (comptime IS_DEBUG) {
             var it = self._arena_pool_leak_track.valueIterator();
             while (it.next()) |value_ptr| {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.* });
+                if (value_ptr.count > 0) {
+                    log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner });
+                }
             }
             self._arena_pool_leak_track = .empty;
         }
@@ -564,12 +564,6 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 // specifically for this type of lifetime.
 pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
     if (self.canScheduleNavigation(priority) == false) {
-        if (comptime IS_DEBUG) {
-            log.debug(.browser, "ignored navigation", .{
-                .target = request_url,
-                .reason = opts.reason,
-            });
-        }
         return;
     }
 
@@ -3353,6 +3347,11 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
             return;
         }
     }
+
+    if (self.canScheduleNavigation(.form) == false) {
+        return;
+    }
+
     const form_element = form.asElement();
 
     const FormData = @import("webapi/net/FormData.zig");

@@ -85,7 +85,7 @@ pub fn startSession(self: *Inspector, ctx: anytype) *Session {
         std.debug.assert(self.session == null);
     }
 
-    self.session = undefined;
+    self.session = @as(Session, undefined);
     Session.init(&self.session.?, self, ctx);
     return &self.session.?;
 }

@@ -59,13 +59,14 @@ storage_shed: storage.Shed,
 history: History,
 navigation: Navigation,
 
-page: ?*Page = null,
+page: ?Page,
 
 pub fn init(self: *Session, browser: *Browser) !void {
     const allocator = browser.app.allocator;
     const session_allocator = browser.session_arena.allocator();
 
     self.* = .{
+        .page = null,
         .history = .{},
         .navigation = .{},
         .storage_shed = .{},
@@ -89,11 +90,11 @@ pub fn deinit(self: *Session) void {
 pub fn createPage(self: *Session) !*Page {
     lp.assert(self.page == null, "Session.createPage - page not null", .{});
 
-    const page_arena = &self.browser.page_arena;
-    _ = page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+    _ = self.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
 
-    self.page = try Page.init(page_arena.allocator(), self.browser.call_arena.allocator(), self);
-    const page = self.page.?;
+    self.page = @as(Page, undefined);
+    const page = &self.page.?;
+    try Page.init(page, self);
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -124,7 +125,7 @@ pub fn removePage(self: *Session) void {
 }
 
 pub fn currentPage(self: *Session) ?*Page {
-    return self.page orelse return null;
+    return &(self.page orelse return null);
 }
 
 pub const WaitResult = enum {
@@ -136,7 +137,7 @@ pub const WaitResult = enum {
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
     while (true) {
-        const page = self.page orelse return .no_page;
+        const page = &(self.page orelse return .no_page);
         switch (page.wait(wait_ms)) {
             .navigate => self.processScheduledNavigation() catch return .done,
             else => |result| return result,
@@ -147,24 +148,32 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
 }
 
 fn processScheduledNavigation(self: *Session) !void {
-    const qn = self.page.?._queued_navigation.?;
-    defer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 8 * 1024 });
+    errdefer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 8 * 1024 });
+    const url, const opts = blk: {
+        const qn = self.page.?._queued_navigation.?;
+        // qn might not be safe to use after self.removePage is called, hence
+        // this block;
+        const url = qn.url;
+        const opts = qn.opts;
 
-    // This was already aborted on the page, but it would be pretty
-    // bad if old requests went to the new page, so let's make double sure
-    self.browser.http_client.abort();
-    self.removePage();
+        // This was already aborted on the page, but it would be pretty
+        // bad if old requests went to the new page, so let's make double sure
+        self.browser.http_client.abort();
+        self.removePage();
+
+        break :blk .{ url, opts };
+    };
 
     const page = self.createPage() catch |err| {
         log.err(.browser, "queued navigation page error", .{
             .err = err,
-            .url = qn.url,
+            .url = url,
         });
         return err;
     };
 
-    page.navigate(qn.url, qn.opts) catch |err| {
-        log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
+    page.navigate(url, opts) catch |err| {
+        log.err(.browser, "queued navigation error", .{ .err = err, .url = url });
         return err;
     };
 }
