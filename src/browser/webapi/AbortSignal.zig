@@ -100,16 +100,12 @@ pub fn createTimeout(delay: u32, page: *Page) !*AbortSignal {
         .signal = try init(page),
     };
 
-    //try page.scheduler.add(callback, TimeoutCallback.run, delay, .{
-    //    .name = "AbortSignal.timeout",
-    //});
-
     try page.scheduler.after(
-        .{ .name = "AbortSignal.timeout", .priority = .high },
+        .{ .name = "AbortSignal.timeout", .prio = .high },
         TimeoutCallback,
         callback,
         delay,
-        TimeoutCallback.run,
+        TimeoutCallback,
     );
 
     return callback.signal;
@@ -143,7 +139,7 @@ const TimeoutCallback = struct {
     page: *Page,
     signal: *AbortSignal,
 
-    fn run(_: *Scheduler, self: *TimeoutCallback) !Scheduler.AfterAction {
+    pub fn action(_: *Scheduler, self: *TimeoutCallback) !Scheduler.AfterAction {
         var ls: js.Local.Scope = undefined;
         self.page.js.localScope(&ls);
         defer ls.deinit();

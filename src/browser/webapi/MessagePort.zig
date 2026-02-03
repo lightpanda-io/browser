@@ -67,10 +67,10 @@ pub fn postMessage(self: *MessagePort, message: js.Value.Global, page: *Page) !v
     });
 
     try page.scheduler.once(
-        .{ .name = "MessagePort.postMessage", .priority = .high },
+        .{ .name = "MessagePort.postMessage", .prio = .high },
         PostMessageCallback,
         callback,
-        PostMessageCallback.run,
+        PostMessageCallback,
     );
 }
 
@@ -116,7 +116,7 @@ const PostMessageCallback = struct {
         self.page._factory.destroy(self);
     }
 
-    fn run(_: *Scheduler, self: *PostMessageCallback) !void {
+    pub fn action(_: *Scheduler, self: *PostMessageCallback) !void {
         defer self.deinit();
         const page = self.page;
 

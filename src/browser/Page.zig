@@ -380,16 +380,16 @@ fn registerBackgroundTasks(self: *Page) !void {
     const Browser = @import("Browser.zig");
 
     return self.scheduler.after(
-        .{ .name = "runMessageLoop", .priority = .high },
+        .{ .name = "runMessageLoop", .prio = .high },
         Browser,
         self._session.browser,
         250,
         struct {
-            fn runMessageLoop(_: *Scheduler, browser: *Browser) !Scheduler.AfterAction {
+            pub fn action(_: *Scheduler, browser: *Browser) !Scheduler.AfterAction {
                 browser.runMessageLoop();
                 return .repeat(250);
             }
-        }.runMessageLoop,
+        },
     );
 }
 
@@ -1268,11 +1268,11 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
     self._performance_delivery_scheduled = true;
 
     return self.scheduler.once(
-        .{ .priority = .low },
+        .{ .prio = .low },
         Page,
         self,
         struct {
-            fn run(_: *Scheduler, page: *Page) !void {
+            pub fn action(_: *Scheduler, page: *Page) !void {
                 page._performance_delivery_scheduled = false;
 
                 // Dispatch performance observers.
@@ -1282,7 +1282,7 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
                     }
                 }
             }
-        }.run,
+        },
     );
 }
 

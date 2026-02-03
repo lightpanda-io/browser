@@ -368,17 +368,11 @@ pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]co
         .origin = try arena.dupe(u8, origin),
     };
 
-    //try page.scheduler.add(callback, PostMessageCallback.run, 0, .{
-    //    .name = "postMessage",
-    //    .low_priority = false,
-    //    .finalizer = PostMessageCallback.cancelled,
-    //});
-
     return page.scheduler.once(
-        .{ .name = "postMessage", .priority = .high },
+        .{ .name = "postMessage", .prio = .high },
         PostMessageCallback,
         callback,
-        PostMessageCallback.run,
+        PostMessageCallback,
     );
 }
 
@@ -457,11 +451,11 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     // We dispatch scroll event asynchronously after 10ms. So we can throttle
     // them.
     try page.scheduler.once(
-        .{ .priority = .low },
+        .{ .prio = .low },
         Page,
         page,
         struct {
-            fn dispatch(_: *Scheduler, p: *Page) !void {
+            pub fn action(_: *Scheduler, p: *Page) !void {
                 const pos = &p.window._scroll_pos;
                 // If the state isn't scroll, we can ignore safely to throttle
                 // the events.
@@ -476,17 +470,17 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
                 return;
             }
-        }.dispatch,
+        },
     );
 
     // We dispatch scrollend event asynchronously after 20ms.
     try page.scheduler.after(
-        .{ .priority = .low },
+        .{ .prio = .low },
         Page,
         page,
         20,
         struct {
-            fn dispatch(_: *Scheduler, p: *Page) !Scheduler.AfterAction {
+            pub fn action(_: *Scheduler, p: *Page) !Scheduler.AfterAction {
                 const pos = &p.window._scroll_pos;
                 // Dispatch only if the state is .end.
                 // If a scroll is pending, retry in 10ms.
@@ -504,7 +498,7 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
 
                 return .dont_repeat;
             }
-        }.dispatch,
+        },
     );
 }
 
@@ -561,11 +555,11 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
     //});
 
     try page.scheduler.after(
-        .{ .priority = .high },
+        .{ .prio = .high },
         ScheduleCallback,
         callback,
         delay_ms,
-        ScheduleCallback.run,
+        ScheduleCallback,
     );
 
     return timer_id;
@@ -595,11 +589,6 @@ const ScheduleCallback = struct {
         animation_frame,
     };
 
-    fn cancelled(ctx: *anyopaque) void {
-        var self: *ScheduleCallback = @ptrCast(@alignCast(ctx));
-        self.deinit();
-    }
-
     fn deinit(self: *ScheduleCallback) void {
         self.page.js.release(self.cb);
         for (self.params) |param| {
@@ -608,7 +597,11 @@ const ScheduleCallback = struct {
         self.page.releaseArena(self.arena);
     }
 
-    fn run(_: *Scheduler, self: *ScheduleCallback) !Scheduler.AfterAction {
+    pub fn finalize(self: *ScheduleCallback) void {
+        self.deinit();
+    }
+
+    pub fn action(_: *Scheduler, self: *ScheduleCallback) !Scheduler.AfterAction {
         const page = self.page;
         const window = page.window;
 
@@ -660,12 +653,11 @@ const PostMessageCallback = struct {
         self.page.releaseArena(self.arena);
     }
 
-    fn cancelled(ctx: *anyopaque) void {
-        const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
+    pub fn finalize(self: *PostMessageCallback) void {
         self.page.releaseArena(self.arena);
     }
 
-    fn run(_: *Scheduler, self: *PostMessageCallback) !void {
+    pub fn action(_: *Scheduler, self: *PostMessageCallback) !void {
         defer self.deinit();
 
         const page = self.page;
