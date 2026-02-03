@@ -273,13 +273,14 @@ pub fn after(
 }
 
 pub fn run(self: *Scheduler) !?u64 {
-    self.runTasks(.low);
-    return self.runTasks(.high);
+    const now = milliTimestamp(.monotonic);
+
+    self.runTasks(.low, now);
+    return self.runTasks(.high, now);
 }
 
 /// Runs events of the desired tree.
-fn runTasks(self: *Scheduler, comptime prio: Priority) if (prio == .low) void else ?u64 {
-    const now = milliTimestamp(.monotonic);
+fn runTasks(self: *Scheduler, comptime prio: Priority, now: u64) if (prio == .low) void else ?u64 {
     const tree = if (comptime prio == .low) &self.low_priority else &self.high_priority;
 
     while (tree.peek()) |task| {
