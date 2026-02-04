@@ -122,6 +122,10 @@ script_manager: ?*ScriptManager,
 // Our macrotasks
 scheduler: Scheduler,
 
+// Prevents us from enqueuing a microtask for this context while we're shutting
+// down.
+shutting_down: bool = false,
+
 const ModuleEntry = struct {
     // Can be null if we're asynchrously loading the module, in
     // which case resolver_promise cannot be null.
@@ -154,12 +158,21 @@ pub fn fromIsolate(isolate: js.Isolate) *Context {
 }
 
 pub fn deinit(self: *Context) void {
-    var page = self.page;
-    const prev_context = page.js;
-    page.js = self;
-    defer page.js = prev_context;
+    defer self.env.app.arena_pool.release(self.arena);
 
-    // This can release JS objects
+    var hs: js.HandleScope = undefined;
+    const entered = self.enter(&hs);
+    defer entered.exit();
+
+    // We might have microtasks in the isolate that refence this context. The
+    // only option we have is to run them. But a microtask could queue another
+    // microtask, so we set the shutting_down flag, so that any such microtask
+    // will be a noop (this isn't automatic, when v8 calls our microtask callback
+    // the first thing we'll check is if self.shutting_down == true).
+    self.shutting_down = true;
+    self.env.runMicrotasks();
+
+    // can release objects
     self.scheduler.deinit();
 
     {
@@ -214,13 +227,10 @@ pub fn deinit(self: *Context) void {
     }
 
     if (self.entered) {
-        var ls: js.Local.Scope = undefined;
-        self.localScope(&ls);
-        defer ls.deinit();
-        v8.v8__Context__Exit(ls.local.handle);
+        v8.v8__Context__Exit(@ptrCast(v8.v8__Global__Get(&self.handle, self.isolate.handle)));
     }
+
     v8.v8__Global__Reset(&self.handle);
-    self.env.app.arena_pool.release(self.arena);
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
@@ -880,41 +890,90 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
     };
 }
 
-// Microtasks
+// Used to make temporarily enter and exit a context, updating and restoring
+// page.js:
+//    var hs: js.HandleScope = undefined;
+//    const entered = ctx.enter(&hs);
+//    defer entered.exit();
+pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
+    const isolate = self.isolate;
+    js.HandleScope.init(hs, isolate);
+
+    const page = self.page;
+    const original = page.js;
+    page.js = self;
+
+    const handle: *const v8.Context =  @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
+    v8.v8__Context__Enter(handle);
+    return .{.original = original, .handle = handle, .handle_scope = hs};
+}
+
+const Entered = struct {
+    // the context we should restore on the page
+    original: *Context,
+
+    // the handle of the entered context
+    handle: *const v8.Context,
+
+    handle_scope: *js.HandleScope,
+
+    pub fn exit(self: Entered) void {
+        self.original.page.js = self.original;
+        v8.v8__Context__Exit(self.handle);
+        self.handle_scope.deinit();
+    }
+};
+
 pub fn queueMutationDelivery(self: *Context) !void {
-    self.isolate.enqueueMicrotask(struct {
-        fn run(data: ?*anyopaque) callconv(.c) void {
-            const page: *Page = @ptrCast(@alignCast(data.?));
-            page.deliverMutations();
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            ctx.page.deliverMutations();
         }
-    }.run, self.page);
+    }.run);
 }
 
 pub fn queueIntersectionChecks(self: *Context) !void {
-    self.isolate.enqueueMicrotask(struct {
-        fn run(data: ?*anyopaque) callconv(.c) void {
-            const page: *Page = @ptrCast(@alignCast(data.?));
-            page.performScheduledIntersectionChecks();
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            ctx.page.performScheduledIntersectionChecks();
         }
-    }.run, self.page);
+    }.run);
 }
 
 pub fn queueIntersectionDelivery(self: *Context) !void {
-    self.isolate.enqueueMicrotask(struct {
-        fn run(data: ?*anyopaque) callconv(.c) void {
-            const page: *Page = @ptrCast(@alignCast(data.?));
-            page.deliverIntersections();
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            ctx.page.deliverIntersections();
         }
-    }.run, self.page);
+    }.run);
 }
 
 pub fn queueSlotchangeDelivery(self: *Context) !void {
+    self.enqueueMicrotask(struct {
+        fn run(ctx: *Context) void {
+            ctx.page.deliverSlotchangeEvents();
+        }
+    }.run);
+}
+
+// Helper for executing a Microtask on this Context. In V8, microtasks aren't
+// associated to a Context - they are just functions to execute in an Isolate.
+// But for these Context microtasks, we want to (a) make sure the context isn't
+// being shut down and (b) that it's entered.
+fn enqueueMicrotask(self: *Context, callback: anytype) void {
     self.isolate.enqueueMicrotask(struct {
         fn run(data: ?*anyopaque) callconv(.c) void {
-            const page: *Page = @ptrCast(@alignCast(data.?));
-            page.deliverSlotchangeEvents();
+            const ctx: *Context = @ptrCast(@alignCast(data.?));
+            if (ctx.shutting_down) {
+                return;
+            }
+
+            var hs: js.HandleScope = undefined;
+            const entered = ctx.enter(&hs);
+            defer entered.exit();
+            callback(ctx);
         }
-    }.run, self.page);
+    }.run, self);
 }
 
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {

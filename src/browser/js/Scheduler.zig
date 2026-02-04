@@ -74,9 +74,15 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
     });
 }
 
+
 pub fn run(self: *Scheduler) !?u64 {
     _ = try self.runQueue(&self.low_priority);
     return self.runQueue(&self.high_priority);
+}
+
+pub fn hasReadyTasks(self: *Scheduler) bool {
+    const now = milliTimestamp(.monotonic);
+    return queueuHasReadyTask(&self.low_priority, now) or queueuHasReadyTask(&self.high_priority, now);
 }
 
 fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
@@ -110,6 +116,11 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
         }
     }
     return null;
+}
+
+fn queueuHasReadyTask(queue: *Queue, now: u64) bool {
+    const task = queue.peek() orelse return false;
+    return task.run_at <= now;
 }
 
 fn finalizeTasks(queue: *Queue) void {
