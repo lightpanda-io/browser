@@ -19,8 +19,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const log = @import("../log.zig");
-const milliTimestamp = @import("../datetime.zig").milliTimestamp;
+const log = @import("../../log.zig");
+const milliTimestamp = @import("../../datetime.zig").milliTimestamp;
 
 const IS_DEBUG = builtin.mode == .Debug;
 

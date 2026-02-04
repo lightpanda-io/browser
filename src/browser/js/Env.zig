@@ -240,6 +240,7 @@ pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
         .templates = self.templates,
         .call_arena = page.call_arena,
         .script_manager = &page._script_manager,
+        .scheduler = .init(context_arena),
     };
     try context.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
 
@@ -269,6 +270,17 @@ pub fn destroyContext(self: *Env, context: *Context) void {
 
 pub fn runMicrotasks(self: *const Env) void {
     self.isolate.performMicrotasksCheckpoint();
+}
+
+pub fn runMacrotasks(self: *Env) !?u64 {
+    var ms_to_next_task: ?u64 = null;
+    for (self.contexts.items) |ctx| {
+        const ms = (try ctx.scheduler.run()) orelse continue;
+        if (ms_to_next_task == null or ms < ms_to_next_task.?) {
+            ms_to_next_task = ms;
+        }
+    }
+    return ms_to_next_task;
 }
 
 pub fn pumpMessageLoop(self: *const Env) bool {

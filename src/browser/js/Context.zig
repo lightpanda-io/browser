@@ -23,6 +23,7 @@ const log = @import("../../log.zig");
 const js = @import("js.zig");
 const Env = @import("Env.zig");
 const bridge = @import("bridge.zig");
+const Scheduler = @import("Scheduler.zig");
 
 const Page = @import("../Page.zig");
 const ScriptManager = @import("../ScriptManager.zig");
@@ -118,6 +119,9 @@ module_identifier: std.AutoHashMapUnmanaged(u32, [:0]const u8) = .empty,
 // the page's script manager
 script_manager: ?*ScriptManager,
 
+// Our macrotasks
+scheduler: Scheduler,
+
 const ModuleEntry = struct {
     // Can be null if we're asynchrously loading the module, in
     // which case resolver_promise cannot be null.
@@ -150,6 +154,14 @@ pub fn fromIsolate(isolate: js.Isolate) *Context {
 }
 
 pub fn deinit(self: *Context) void {
+    var page = self.page;
+    const prev_context = page.js;
+    page.js = self;
+    defer page.js = prev_context;
+
+    // This can release JS objects
+    self.scheduler.deinit();
+
     {
         var it = self.identity_map.valueIterator();
         while (it.next()) |global| {
