@@ -40,7 +40,6 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
-          mode: 'release'
 
       - name: v8 snapshot
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
@@ -83,7 +82,6 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
-          mode: 'release'
 
       - name: v8 snapshot
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
@@ -128,7 +126,6 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
-          mode: 'release'
 
       - name: v8 snapshot
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
@@ -171,7 +168,6 @@ jobs:
         with:
           os: ${{env.OS}}
           arch: ${{env.ARCH}}
-          mode: 'release'
 
       - name: v8 snapshot
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin

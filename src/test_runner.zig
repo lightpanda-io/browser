@@ -442,6 +442,7 @@ pub const TrackingAllocator = struct {
     allocated_bytes: usize = 0,
     allocation_count: usize = 0,
     reallocation_count: usize = 0,
+    mutex: std.Thread.Mutex = .{},
 
     const Stats = struct {
         allocated_bytes: usize,
@@ -479,6 +480,9 @@ pub const TrackingAllocator = struct {
         return_address: usize,
     ) ?[*]u8 {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         const result = self.parent_allocator.rawAlloc(len, alignment, return_address);
         self.allocation_count += 1;
         self.allocated_bytes += len;
@@ -493,6 +497,9 @@ pub const TrackingAllocator = struct {
         ra: usize,
     ) bool {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         const result = self.parent_allocator.rawResize(old_mem, alignment, new_len, ra);
         self.reallocation_count += 1; // TODO: only if result is not null?
         return result;
@@ -505,6 +512,9 @@ pub const TrackingAllocator = struct {
         ra: usize,
     ) void {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         self.parent_allocator.rawFree(old_mem, alignment, ra);
         self.free_count += 1;
     }
@@ -517,6 +527,9 @@ pub const TrackingAllocator = struct {
         ret_addr: usize,
     ) ?[*]u8 {
         const self: *TrackingAllocator = @ptrCast(@alignCast(ctx));
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         const result = self.parent_allocator.rawRemap(memory, alignment, new_len, ret_addr);
         self.reallocation_count += 1; // TODO: only if result is not null?
         return result;

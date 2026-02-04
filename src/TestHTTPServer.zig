@@ -20,7 +20,7 @@ const std = @import("std");
 
 const TestHTTPServer = @This();
 
-shutdown: bool,
+shutdown: std.atomic.Value(bool),
 listener: ?std.net.Server,
 handler: Handler,
 
@@ -28,16 +28,22 @@ const Handler = *const fn (req: *std.http.Server.Request) anyerror!void;
 
 pub fn init(handler: Handler) TestHTTPServer {
     return .{
-        .shutdown = true,
+        .shutdown = .init(true),
         .listener = null,
         .handler = handler,
     };
 }
 
 pub fn deinit(self: *TestHTTPServer) void {
-    self.shutdown = true;
+    self.listener = null;
+}
+
+pub fn stop(self: *TestHTTPServer) void {
+    self.shutdown.store(true, .release);
     if (self.listener) |*listener| {
-        listener.deinit();
+        // Use shutdown to unblock accept(). On Linux this causes accept to
+        // return error.SocketNotListening. close() alone doesn't interrupt accept().
+        std.posix.shutdown(listener.stream.handle, .recv) catch {};
     }
 }
 
@@ -46,12 +52,13 @@ pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
 
     self.listener = try address.listen(.{ .reuse_address = true });
     var listener = &self.listener.?;
+    self.shutdown.store(false, .release);
 
     wg.finish();
 
     while (true) {
         const conn = listener.accept() catch |err| {
-            if (self.shutdown) {
+            if (self.shutdown.load(.acquire) or err == error.SocketNotListening) {
                 return;
             }
             return err;

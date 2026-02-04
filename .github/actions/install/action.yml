@@ -22,6 +22,10 @@ inputs:
     description: 'cache dir to use'
     required: false
     default: '~/.cache'
+  debug:
+    description: 'enable v8 pre-built debug version, only available for linux x86_64'
+    required: false
+    default: 'false'
 
 runs:
   using: "composite"
@@ -47,17 +51,17 @@ runs:
         cache-name: cache-v8
       with:
         path: ${{ inputs.cache-dir }}/v8
-        key: libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}_${{ inputs.zig-v8 }}.a
+        key: libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}_${{ inputs.zig-v8 }}${{inputs.debug == 'true' && '_debug' || '' }}.a
 
     - if: ${{ steps.cache-v8.outputs.cache-hit != 'true' }}
       shell: bash
       run: |
         mkdir -p ${{ inputs.cache-dir }}/v8
 
-        wget -O ${{ inputs.cache-dir }}/v8/libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${{ inputs.zig-v8 }}/libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}.a
+        wget -O ${{ inputs.cache-dir }}/v8/libc_v8.a https://github.com/lightpanda-io/zig-v8-fork/releases/download/${{ inputs.zig-v8 }}/libc_v8_${{ inputs.v8 }}_${{ inputs.os }}_${{ inputs.arch }}${{inputs.debug == 'true' && '_debug' || '' }}.a
 
     - name: install v8
       shell: bash
       run: |
         mkdir -p v8
-        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/libc_v8.a
+        ln -s ${{ inputs.cache-dir }}/v8/libc_v8.a v8/libc_v8${{inputs.debug == 'true' && '_debug' || '' }}.a
