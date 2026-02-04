@@ -314,7 +314,7 @@ fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
     const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
 
     if (transfer.response_header) |hdr| {
-        log.debug(.browser, "robots status", .{ .status = hdr.status });
+        log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = ctx.robots_url });
         ctx.status = hdr.status;
     }
 
