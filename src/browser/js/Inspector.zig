@@ -128,8 +128,8 @@ pub fn contextCreated(
     }
 }
 
-pub fn contextDestroyed(self: *Inspector, local: *const js.Local) void {
-    v8.v8_inspector__Inspector__ContextDestroyed(self.handle, local.handle);
+pub fn contextDestroyed(self: *Inspector, context: *const v8.Context) void {
+    v8.v8_inspector__Inspector__ContextDestroyed(self.handle, context);
 }
 
 pub fn resetContextGroup(self: *const Inspector) void {
