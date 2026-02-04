@@ -234,6 +234,8 @@ fn parseRulesWithUserAgent(
         }
     }
 
+    // If we have rules for our specific User-Agent, we will use those rules.
+    // If we don't have any rules, we fallback to using the wildcard ("*") rules.
     if (rules.items.len > 0) {
         freeRulesInList(allocator, wildcard_rules.items);
         return try rules.toOwnedSlice(allocator);
