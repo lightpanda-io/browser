@@ -264,8 +264,17 @@ pub fn destroyContext(self: *Env, context: *Context) void {
             @panic("Tried to remove unknown context");
         }
     }
+
+    const isolate = self.isolate;
+    if (self.inspector) |inspector| {
+        var hs: js.HandleScope = undefined;
+        hs.init(isolate);
+        defer hs.deinit();
+        inspector.contextDestroyed(@ptrCast(v8.v8__Global__Get(&context.handle, isolate.handle)));
+    }
+
     context.deinit();
-    self.isolate.notifyContextDisposed();
+    isolate.notifyContextDisposed();
 }
 
 pub fn runMicrotasks(self: *const Env) void {
