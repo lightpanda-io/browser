@@ -489,7 +489,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         self._session.browser.app.telemetry.record(.{
             .navigate = .{
                 .tls = false, // about:blank is not TLS
-                .proxy = self._session.browser.app.config.http_proxy != null,
+                .proxy = self._session.browser.app.config.httpProxy() != null,
             },
         });
 
@@ -538,7 +538,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     // Record telemetry for navigation
     self._session.browser.app.telemetry.record(.{ .navigate = .{
         .tls = std.ascii.startsWithIgnoreCase(self.url, "https://"),
-        .proxy = self._session.browser.app.config.http_proxy != null,
+        .proxy = self._session.browser.app.config.httpProxy() != null,
     } });
 
     session.navigation._current_navigation_kind = opts.kind;

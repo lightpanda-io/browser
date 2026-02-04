@@ -58,11 +58,13 @@ pub fn main() !void {
     defer writer.deinit();
 
     lp.log.opts.level = .warn;
-    var app = try lp.App.init(allocator, .{
-        .run_mode = .serve,
-        .tls_verify_host = false,
-        .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
-    });
+    const config = try lp.Config.init(allocator, "lightpanda-wpt", .{ .serve = .{
+        .common = .{
+            .tls_verify_host = false,
+            .user_agent_suffix = "internal-tester",
+        },
+    } });
+    var app = try lp.App.init(allocator, &config);
     defer app.deinit();
 
     var browser = try lp.Browser.init(app, .{});

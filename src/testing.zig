@@ -38,10 +38,11 @@ pub fn reset() void {
 
 const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
+const Config = @import("Config.zig");
+const Page = @import("browser/Page.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
 const Notification = @import("Notification.zig");
-const Page = @import("browser/Page.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
 // can be useful when testing fields of an anytype an you don't know
@@ -451,15 +452,22 @@ const Server = @import("Server.zig");
 var test_cdp_server: ?Server = null;
 var test_http_server: ?TestHTTPServer = null;
 
+var test_config: Config = undefined;
+
 test "tests:beforeAll" {
     log.opts.level = .warn;
     log.opts.format = .pretty;
 
-    test_app = try App.init(@import("root").tracking_allocator, .{
-        .run_mode = .serve,
-        .tls_verify_host = false,
-        .user_agent = "User-Agent: Lightpanda/1.0 internal-tester",
-    });
+    const test_allocator = @import("root").tracking_allocator;
+
+    test_config = try Config.init(test_allocator, "test", .{ .serve = .{
+        .common = .{
+            .tls_verify_host = false,
+            .user_agent_suffix = "internal-tester",
+        },
+    } });
+
+    test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
     test_browser = try Browser.init(test_app, .{});
@@ -503,6 +511,7 @@ test "tests:afterAll" {
     test_notification.deinit();
     test_browser.deinit();
     test_app.deinit();
+    test_config.deinit(@import("root").tracking_allocator);
 }
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
