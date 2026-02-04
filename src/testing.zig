@@ -450,7 +450,9 @@ const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const Server = @import("Server.zig");
 var test_cdp_server: ?Server = null;
+var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
+var test_http_server_thread: ?std.Thread = null;
 
 var test_config: Config = undefined;
 
@@ -482,16 +484,10 @@ test "tests:beforeAll" {
     var wg: std.Thread.WaitGroup = .{};
     wg.startMany(2);
 
-    {
-        const thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
-        thread.detach();
-    }
+    test_cdp_server_thread = try std.Thread.spawn(.{}, serveCDP, .{&wg});
 
     test_http_server = TestHTTPServer.init(testHTTPHandler);
-    {
-        const thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
-        thread.detach();
-    }
+    test_http_server_thread = try std.Thread.spawn(.{}, TestHTTPServer.run, .{ &test_http_server.?, &wg });
 
     // need to wait for the servers to be listening, else tests will fail because
     // they aren't able to connect.
@@ -500,7 +496,20 @@ test "tests:beforeAll" {
 
 test "tests:afterAll" {
     if (test_cdp_server) |*server| {
+        server.stop();
+    }
+    if (test_cdp_server_thread) |thread| {
+        thread.join();
+    }
+    if (test_cdp_server) |*server| {
         server.deinit();
+    }
+
+    if (test_http_server) |*server| {
+        server.stop();
+    }
+    if (test_http_server_thread) |thread| {
+        thread.join();
     }
     if (test_http_server) |*server| {
         server.deinit();
@@ -518,8 +527,6 @@ fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
     test_cdp_server = try Server.init(test_app, address);
 
-    var server = try Server.init(test_app, address);
-    defer server.deinit();
     wg.finish();
 
     test_cdp_server.?.run(address, 5) catch |err| {
