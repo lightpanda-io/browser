@@ -8,6 +8,8 @@ const HtmlElement = @import("../Html.zig");
 const Event = @import("../../Event.zig");
 const log = @import("../../../../log.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Image = @This();
 _proto: *HtmlElement,
 
@@ -49,41 +51,6 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
-
-    const event_target = self.asNode().asEventTarget();
-
-    // Have to do this since `Scheduler` only allow passing a single arg.
-    const SetSrcCallback = struct {
-        page: *Page,
-        event_target: *@import("../../EventTarget.zig"),
-    };
-    const args = try page._factory.create(SetSrcCallback{
-        .page = page,
-        .event_target = event_target,
-    });
-    errdefer page._factory.destroy(args);
-
-    // We don't actually fetch the media, here we fake the load call.
-    try page.scheduler.add(
-        args,
-        struct {
-            fn wrap(raw: *anyopaque) anyerror!?u32 {
-                const _args: *SetSrcCallback = @ptrCast(@alignCast(raw));
-                const _page = _args.page;
-                defer _page._factory.destroy(_args);
-                // Dispatch.
-                const event = try Event.initTrusted("load", .{}, _page);
-                try _page._event_manager.dispatch(_args.event_target, event);
-
-                return null;
-            }
-        }.wrap,
-        25,
-        .{
-            .low_priority = false,
-            .name = "Image.setSrc",
-        },
-    );
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
@@ -152,39 +119,18 @@ pub const JsApi = struct {
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
 };
 
-/// Argument passed to `dispatchLoadEvent`.
-const CallbackParams = struct { page: *Page, element: *Element };
+pub const Build = struct {
+    pub fn created(node: *Node, page: *Page) !void {
+        const self = node.as(Image);
+        const image = self.asElement();
+        // Exit if src not set.
+        // TODO: We might want to check if src point to valid image.
+        _ = image.getAttributeSafe(comptime .wrap("src")) orelse return;
 
-/// Callback passed to `Scheduler` to execute load listeners.
-fn dispatchLoadEvent(raw: *anyopaque) !?u32 {
-    const _args: *CallbackParams = @ptrCast(@alignCast(raw));
-    const _page = _args.page;
-    defer _page._factory.destroy(_args);
-
-    const _element = _args.element;
-    const _img = _element.as(Image);
-    const event_target = _element.asEventTarget();
-    const event = try Event.initTrusted("load", .{}, _page);
-
-    // If onload provided, dispatch with it.
-    if (_img.getOnLoad(_page)) |_on_load| {
-        var ls: js.Local.Scope = undefined;
-        _page.js.localScope(&ls);
-        defer ls.deinit();
-
-        try _page._event_manager.dispatchWithFunction(
-            event_target,
-            event,
-            _on_load.local(&ls.local),
-            .{ .context = "Image.onload" },
-        );
-        return null;
+        // Push to `_to_load` to dispatch load event just before window load event.
+        return page._to_load.append(page.arena, image);
     }
-
-    // Dispatch to addEventListener listeners.
-    try _page._event_manager.dispatch(event_target, event);
-    return null;
-}
+};
 
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Image" {
