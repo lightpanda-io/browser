@@ -684,10 +684,6 @@ pub const Script = struct {
             });
         }
 
-        // If this isn't true, then we'll likely leak memory. If you don't
-        // set `CURLOPT_SUPPRESS_CONNECT_HEADERS` and CONNECT to a proxy, this
-        // will fail. This assertion exists to catch incorrect assumptions about
-        // how libcurl works, or about how we've configured it.
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.HeaderCallback", .{ .capacity = self.source.remote.capacity });
         var buffer = self.manager.buffer_pool.get();
         if (transfer.getContentLength()) |cl| {

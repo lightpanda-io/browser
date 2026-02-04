@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const lp = @import("lightpanda");
+
 const log = @import("../log.zig");
 const builtin = @import("builtin");
 
@@ -235,7 +237,7 @@ pub fn request(self: *Client, req: Request) !void {
     if (req.blocking == false) {
         // The request was interecepted, but it isn't a blocking request, so we
         // dont' need to block this call. The request will be unblocked
-        // asynchronously via eitehr continueTransfer or abortTransfer
+        // asynchronously via either continueTransfer or abortTransfer
         return;
     }
 
@@ -458,7 +460,7 @@ pub fn disableTlsVerify(self: *const Client) !void {
     }
 }
 
-fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) !void {
+fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!void {
     const conn = handle.conn;
     const easy = conn.easy;
     const req = &transfer.req;
@@ -563,7 +565,7 @@ fn processMessages(self: *Client) !bool {
 
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
-        if (transfer._auth_challenge != null and transfer._tries < 10) {
+         if (transfer._auth_challenge != null and transfer._tries < 10) {
             var wait_for_interception = false;
             transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
             if (wait_for_interception) {
@@ -572,16 +574,34 @@ fn processMessages(self: *Client) !bool {
                     log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
                 }
                 transfer._intercept_state = .pending;
+
+                // Wether or not this is a blocking request, we're not going
+                // to process it now. We can end the transfer, which will
+                // release the easy handle back into the pool. The transfer
+                // is still valid/alive (just has no handle).
+                self.endTransfer(transfer);
                 if (!transfer.req.blocking) {
-                    // the request is put on hold to be intercepted.
-                    // In this case we ignore callbacks for now.
-                    // Note: we don't deinit transfer on purpose: we want to keep
-                    // using it for the following request
-                    self.endTransfer(transfer);
+                    // In the case of an async request, we can just "forget"
+                    // about this transfer until it gets updated asynchronously
+                    // from some CDP command.
                     continue;
                 }
 
-                _ = try self.waitForInterceptedResponse(transfer);
+                // In the case of a sync request, we need to block until we
+                // get the CDP command for handling this case.
+                if (try self.waitForInterceptedResponse(transfer)) {
+                    // we've been asked to continue with the request
+                    // we can't process it here, since we're already inside
+                    // a process, so we need to queue it and wait for the
+                    // next tick (this is why it was safe to endTransfer
+                    // above, because even in the "blocking" path, we still
+                    // only process it on the next tick).
+                    self.queue.append(&transfer._node);
+                } else {
+                    // aborted, already cleaned up
+                }
+
+                continue;
             }
         }
 
@@ -887,10 +907,19 @@ pub const Transfer = struct {
     };
 
     pub fn reset(self: *Transfer) void {
+        // There's an assertion in ScriptManager that's failing. Seemingly because
+        // the headerCallback is being called multiple times. This shouldn't be
+        // possible (hence the assertion). Previously, this `reset` would set
+        // _header_done_called = false. That could have been how headerCallback
+        // was called multuple times (because _header_done_called is the guard
+        // against that, so resetting it would allow a 2nd call to headerCallback).
+        // But it should also be impossible for this to be true. So, I've added
+        // this assertion to try to narrow down what's going on.
+        lp.assert(self._header_done_called == false, "Transert.reset header_done_called", .{});
+
         self._redirecting = false;
         self._auth_challenge = null;
         self._notified_fail = false;
-        self._header_done_called = false;
         self.response_header = null;
         self.bytes_received = 0;
 
