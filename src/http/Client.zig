@@ -232,6 +232,7 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 pub fn request(self: *Client, req: Request) !void {
     if (self.config.obeyRobots()) {
         const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
+        errdefer self.allocator.free(robots_url);
 
         // If we have this robots cached, we can take a fast path.
         if (req.robots.get(robots_url)) |robot_entry| {
@@ -334,6 +335,9 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .done_callback = robotsDoneCallback,
             .error_callback = robotsErrorCallback,
         });
+    } else {
+        // Not using our own robots URL, only using the one from the first request.
+        self.allocator.free(robots_url);
     }
 
     try entry.value_ptr.append(self.allocator, req);
