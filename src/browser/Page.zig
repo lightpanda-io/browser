@@ -559,7 +559,6 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .headers = headers,
         .body = opts.body,
         .cookie_jar = &self._session.cookie_jar,
-        .robots = &self._session.browser.app.robots,
         .resource_type = .document,
         .notification = self._session.notification,
         .header_callback = pageHeaderDoneCallback,

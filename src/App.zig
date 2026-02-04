@@ -50,7 +50,9 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.config = config;
     app.allocator = allocator;
 
-    app.http = try Http.init(allocator, config);
+    app.robots = RobotStore.init(allocator);
+
+    app.http = try Http.init(allocator, &app.robots, config);
     errdefer app.http.deinit();
 
     app.platform = try Platform.init();
@@ -58,8 +60,6 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.snapshot = try Snapshot.load();
     errdefer app.snapshot.deinit();
-
-    app.robots = RobotStore.init(allocator);
 
     app.app_dir_path = getAndMakeAppDir(allocator);
 

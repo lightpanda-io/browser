@@ -87,6 +87,8 @@ queue: TransferQueue,
 // The main app allocator
 allocator: Allocator,
 
+// Reference to the App-owned Robot Store.
+robot_store: *RobotStore,
 // Queue of requests that depend on a robots.txt.
 // Allows us to fetch the robots.txt just once.
 pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
@@ -129,7 +131,7 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, config: *const Config) !*Client {
+pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, robot_store: *RobotStore, config: *const Config) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -153,6 +155,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, config: *const Config) 
         .multi = multi,
         .handles = handles,
         .allocator = allocator,
+        .robot_store = robot_store,
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
         .config = config,
@@ -235,7 +238,7 @@ pub fn request(self: *Client, req: Request) !void {
         errdefer self.allocator.free(robots_url);
 
         // If we have this robots cached, we can take a fast path.
-        if (req.robots.get(robots_url)) |robot_entry| {
+        if (self.robot_store.get(robots_url)) |robot_entry| {
             defer self.allocator.free(robots_url);
 
             switch (robot_entry) {
@@ -328,7 +331,6 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .blocking = false,
             .cookie_jar = req.cookie_jar,
             .notification = req.notification,
-            .robots = req.robots,
             .resource_type = .fetch,
             .header_callback = robotsHeaderCallback,
             .data_callback = robotsDataCallback,
@@ -370,18 +372,18 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
     var allowed = true;
 
     if (ctx.status >= 200 and ctx.status < 400 and ctx.buffer.items.len > 0) {
-        const robots = try ctx.req.robots.robotsFromBytes(
+        const robots = try ctx.client.robot_store.robotsFromBytes(
             ctx.client.config.http_headers.user_agent,
             ctx.buffer.items,
         );
 
-        try ctx.req.robots.put(ctx.robots_url, robots);
+        try ctx.client.robot_store.put(ctx.robots_url, robots);
 
         const path = URL.getPathname(ctx.req.url);
         allowed = robots.isAllowed(path);
     } else if (ctx.status == 404) {
         log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
-        try ctx.req.robots.putAbsent(ctx.robots_url);
+        try ctx.client.robot_store.putAbsent(ctx.robots_url);
     }
 
     const queued = ctx.client.pending_robots_queue.getPtr(ctx.robots_url) orelse unreachable;
@@ -960,7 +962,6 @@ pub const Request = struct {
     headers: Http.Headers,
     body: ?[]const u8 = null,
     cookie_jar: *CookieJar,
-    robots: *RobotStore,
     resource_type: ResourceType,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
