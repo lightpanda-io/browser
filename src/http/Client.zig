@@ -87,9 +87,6 @@ allocator: Allocator,
 // request. These wil come and go with each request.
 transfer_pool: std.heap.MemoryPool(Transfer),
 
-// To notify registered subscribers of events, the browser sets/nulls this for us.
-notification: ?*Notification = null,
-
 // only needed for CDP which can change the proxy and then restore it. When
 // restoring, this originally-configured value is what it goes to.
 http_proxy: ?[:0]const u8 = null,
@@ -218,12 +215,10 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 pub fn request(self: *Client, req: Request) !void {
     const transfer = try self.makeTransfer(req);
 
-    const notification = self.notification orelse return self.process(transfer);
-
-    notification.dispatch(.http_request_start, &.{ .transfer = transfer });
+    transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
     var wait_for_interception = false;
-    notification.dispatch(.http_request_intercept, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+    transfer.req.notification.dispatch(.http_request_intercept, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
     if (wait_for_interception == false) {
         // request not intercepted, process it normally
         return self.process(transfer);
@@ -371,7 +366,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
     return transfer;
 }
 
-fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror, comptime execute_callback: bool) void {
+fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: bool) void {
     // this shouldn't happen, we'll crash in debug mode. But in release, we'll
     // just noop this state.
     if (comptime IS_DEBUG) {
@@ -383,12 +378,10 @@ fn requestFailed(self: *Client, transfer: *Transfer, err: anyerror, comptime exe
 
     transfer._notified_fail = true;
 
-    if (self.notification) |notification| {
-        notification.dispatch(.http_request_fail, &.{
-            .transfer = transfer,
-            .err = err,
-        });
-    }
+    transfer.req.notification.dispatch(.http_request_fail, &.{
+        .transfer = transfer,
+        .err = err,
+    });
 
     if (execute_callback) {
         transfer.req.error_callback(transfer.ctx, err);
@@ -569,26 +562,24 @@ fn processMessages(self: *Client) !bool {
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
         if (transfer._auth_challenge != null and transfer._tries < 10) {
-            if (transfer.client.notification) |notification| {
-                var wait_for_interception = false;
-                notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
-                if (wait_for_interception) {
-                    self.intercepted += 1;
-                    if (comptime IS_DEBUG) {
-                        log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
-                    }
-                    transfer._intercept_state = .pending;
-                    if (!transfer.req.blocking) {
-                        // the request is put on hold to be intercepted.
-                        // In this case we ignore callbacks for now.
-                        // Note: we don't deinit transfer on purpose: we want to keep
-                        // using it for the following request
-                        self.endTransfer(transfer);
-                        continue;
-                    }
-
-                    _ = try self.waitForInterceptedResponse(transfer);
+            var wait_for_interception = false;
+            transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+            if (wait_for_interception) {
+                self.intercepted += 1;
+                if (comptime IS_DEBUG) {
+                    log.debug(.http, "wait for auth interception", .{ .intercepted = self.intercepted });
                 }
+                transfer._intercept_state = .pending;
+                if (!transfer.req.blocking) {
+                    // the request is put on hold to be intercepted.
+                    // In this case we ignore callbacks for now.
+                    // Note: we don't deinit transfer on purpose: we want to keep
+                    // using it for the following request
+                    self.endTransfer(transfer);
+                    continue;
+                }
+
+                _ = try self.waitForInterceptedResponse(transfer);
             }
         }
 
@@ -604,29 +595,27 @@ fn processMessages(self: *Client) !bool {
             if (!transfer._header_done_called) {
                 const proceed = transfer.headerDoneCallback(easy) catch |err| {
                     log.err(.http, "header_done_callback", .{ .err = err });
-                    self.requestFailed(transfer, err, true);
+                    requestFailed(transfer, err, true);
                     continue;
                 };
                 if (!proceed) {
-                    self.requestFailed(transfer, error.Abort, true);
+                    requestFailed(transfer, error.Abort, true);
                     break :blk;
                 }
             }
             transfer.req.done_callback(transfer.ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
-                self.requestFailed(transfer, err, true);
+                requestFailed(transfer, err, true);
                 continue;
             };
 
-            if (transfer.client.notification) |notification| {
-                notification.dispatch(.http_request_done, &.{
-                    .transfer = transfer,
-                });
-            }
+            transfer.req.notification.dispatch(.http_request_done, &.{
+                .transfer = transfer,
+            });
             processed = true;
         } else |err| {
-            self.requestFailed(transfer, err, true);
+            requestFailed(transfer, err, true);
         }
     }
     return processed;
@@ -767,6 +756,7 @@ pub const Request = struct {
     cookie_jar: *CookieJar,
     resource_type: ResourceType,
     credentials: ?[:0]const u8 = null,
+    notification: *Notification,
 
     // This is only relevant for intercepted requests. If a request is flagged
     // as blocking AND is intercepted, then it'll be up to us to wait until
@@ -977,7 +967,7 @@ pub const Transfer = struct {
     }
 
     pub fn abort(self: *Transfer, err: anyerror) void {
-        self.client.requestFailed(self, err, true);
+        requestFailed(self, err, true);
         if (self._handle != null) {
             self.client.endTransfer(self);
         }
@@ -985,7 +975,7 @@ pub const Transfer = struct {
     }
 
     pub fn terminate(self: *Transfer) void {
-        self.client.requestFailed(self, error.Shutdown, false);
+        requestFailed(self, error.Shutdown, false);
         if (self._handle != null) {
             self.client.endTransfer(self);
         }
@@ -1095,11 +1085,9 @@ pub const Transfer = struct {
             return err;
         };
 
-        if (transfer.client.notification) |notification| {
-            notification.dispatch(.http_response_header_done, &.{
-                .transfer = transfer,
-            });
-        }
+        transfer.req.notification.dispatch(.http_response_header_done, &.{
+            .transfer = transfer,
+        });
 
         return proceed;
     }
@@ -1249,12 +1237,10 @@ pub const Transfer = struct {
             return c.CURL_WRITEFUNC_ERROR;
         };
 
-        if (transfer.client.notification) |notification| {
-            notification.dispatch(.http_response_data, &.{
-                .data = chunk,
-                .transfer = transfer,
-            });
-        }
+        transfer.req.notification.dispatch(.http_response_data, &.{
+            .data = chunk,
+            .transfer = transfer,
+        });
 
         return @intCast(chunk_len);
     }

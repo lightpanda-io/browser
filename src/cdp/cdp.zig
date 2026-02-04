@@ -389,12 +389,18 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // to store the,
         captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayList(u8)),
 
+        notification: *Notification,
+
         const Self = @This();
 
         fn init(self: *Self, id: []const u8, cdp: *CDP_T) !void {
             const allocator = cdp.allocator;
 
-            const session = try cdp.browser.newSession();
+            // Create notification for this BrowserContext
+            const notification = try Notification.init(allocator);
+            errdefer notification.deinit();
+
+            const session = try cdp.browser.newSession(notification);
 
             const browser = &cdp.browser;
             const inspector_session = browser.env.inspector.?.startSession(self);
@@ -423,14 +429,15 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .intercept_state = try InterceptState.init(allocator),
                 .captured_responses = .empty,
                 .log_interceptor = LogInterceptor(Self).init(allocator, self),
+                .notification = notification,
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
             errdefer self.deinit();
 
-            try browser.notification.register(.page_remove, self, onPageRemove);
-            try browser.notification.register(.page_created, self, onPageCreated);
-            try browser.notification.register(.page_navigate, self, onPageNavigate);
-            try browser.notification.register(.page_navigated, self, onPageNavigated);
+            try notification.register(.page_remove, self, onPageRemove);
+            try notification.register(.page_created, self, onPageCreated);
+            try notification.register(.page_navigate, self, onPageNavigate);
+            try notification.register(.page_navigated, self, onPageNavigated);
         }
 
         pub fn deinit(self: *Self) void {
@@ -468,7 +475,8 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             self.node_registry.deinit();
             self.node_search_list.deinit();
-            browser.notification.unregisterAll(self);
+            self.notification.unregisterAll(self);
+            self.notification.deinit();
 
             if (self.http_proxy_changed) {
                 // has to be called after browser.closeSession, since it won't
@@ -538,43 +546,43 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn networkEnable(self: *Self) !void {
-            try self.cdp.browser.notification.register(.http_request_fail, self, onHttpRequestFail);
-            try self.cdp.browser.notification.register(.http_request_start, self, onHttpRequestStart);
-            try self.cdp.browser.notification.register(.http_request_done, self, onHttpRequestDone);
-            try self.cdp.browser.notification.register(.http_response_data, self, onHttpResponseData);
-            try self.cdp.browser.notification.register(.http_response_header_done, self, onHttpResponseHeadersDone);
+            try self.notification.register(.http_request_fail, self, onHttpRequestFail);
+            try self.notification.register(.http_request_start, self, onHttpRequestStart);
+            try self.notification.register(.http_request_done, self, onHttpRequestDone);
+            try self.notification.register(.http_response_data, self, onHttpResponseData);
+            try self.notification.register(.http_response_header_done, self, onHttpResponseHeadersDone);
         }
 
         pub fn networkDisable(self: *Self) void {
-            self.cdp.browser.notification.unregister(.http_request_fail, self);
-            self.cdp.browser.notification.unregister(.http_request_start, self);
-            self.cdp.browser.notification.unregister(.http_request_done, self);
-            self.cdp.browser.notification.unregister(.http_response_data, self);
-            self.cdp.browser.notification.unregister(.http_response_header_done, self);
+            self.notification.unregister(.http_request_fail, self);
+            self.notification.unregister(.http_request_start, self);
+            self.notification.unregister(.http_request_done, self);
+            self.notification.unregister(.http_response_data, self);
+            self.notification.unregister(.http_response_header_done, self);
         }
 
         pub fn fetchEnable(self: *Self, authRequests: bool) !void {
-            try self.cdp.browser.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
+            try self.notification.register(.http_request_intercept, self, onHttpRequestIntercept);
             if (authRequests) {
-                try self.cdp.browser.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
+                try self.notification.register(.http_request_auth_required, self, onHttpRequestAuthRequired);
             }
         }
 
         pub fn fetchDisable(self: *Self) void {
-            self.cdp.browser.notification.unregister(.http_request_intercept, self);
-            self.cdp.browser.notification.unregister(.http_request_auth_required, self);
+            self.notification.unregister(.http_request_intercept, self);
+            self.notification.unregister(.http_request_auth_required, self);
         }
 
         pub fn lifecycleEventsEnable(self: *Self) !void {
             self.page_life_cycle_events = true;
-            try self.cdp.browser.notification.register(.page_network_idle, self, onPageNetworkIdle);
-            try self.cdp.browser.notification.register(.page_network_almost_idle, self, onPageNetworkAlmostIdle);
+            try self.notification.register(.page_network_idle, self, onPageNetworkIdle);
+            try self.notification.register(.page_network_almost_idle, self, onPageNetworkAlmostIdle);
         }
 
         pub fn lifecycleEventsDisable(self: *Self) void {
             self.page_life_cycle_events = false;
-            self.cdp.browser.notification.unregister(.page_network_idle, self);
-            self.cdp.browser.notification.unregister(.page_network_almost_idle, self);
+            self.notification.unregister(.page_network_idle, self);
+            self.notification.unregister(.page_network_almost_idle, self);
         }
 
         pub fn logEnable(self: *Self) void {

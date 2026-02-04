@@ -209,6 +209,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .body = self._request_body,
         .cookie_jar = &page._session.cookie_jar,
         .resource_type = .xhr,
+        .notification = page._session.notification,
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
         .data_callback = httpDataCallback,

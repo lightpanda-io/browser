@@ -28,6 +28,7 @@ const History = @import("webapi/History.zig");
 
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
+const Notification = @import("../Notification.zig");
 
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
@@ -39,6 +40,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 const Session = @This();
 
 browser: *Browser,
+notification: *Notification,
 
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
@@ -61,7 +63,7 @@ navigation: Navigation,
 
 page: ?Page,
 
-pub fn init(self: *Session, browser: *Browser) !void {
+pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const session_allocator = browser.session_arena.allocator();
 
@@ -71,6 +73,7 @@ pub fn init(self: *Session, browser: *Browser) !void {
         .navigation = .{},
         .storage_shed = .{},
         .browser = browser,
+        .notification = notification,
         .arena = session_allocator,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
         .transfer_arena = browser.transfer_arena.allocator(),
@@ -104,14 +107,14 @@ pub fn createPage(self: *Session) !*Page {
     }
     // start JS env
     // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
-    self.browser.notification.dispatch(.page_created, page);
+    self.notification.dispatch(.page_created, page);
 
     return page;
 }
 
 pub fn removePage(self: *Session) void {
     // Inform CDP the page is going to be removed, allowing other worlds to remove themselves before the main one
-    self.browser.notification.dispatch(.page_remove, .{});
+    self.notification.dispatch(.page_remove, .{});
     lp.assert(self.page != null, "Session.removePage - page is null", .{});
 
     self.page.?.deinit();
@@ -137,10 +140,13 @@ pub const WaitResult = enum {
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
     while (true) {
-        const page = &(self.page orelse return .no_page);
-        switch (page.wait(wait_ms)) {
-            .navigate => self.processScheduledNavigation() catch return .done,
-            else => |result| return result,
+        if (self.page) |*page| {
+            switch (page.wait(wait_ms)) {
+                .navigate => self.processScheduledNavigation() catch return .done,
+                else => |result| return result,
+            }
+        } else {
+            return .no_page;
         }
         // if we've successfull navigated, we'll give the new page another
         // page.wait(wait_ms)
@@ -148,7 +154,7 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
 }
 
 fn processScheduledNavigation(self: *Session) !void {
-    errdefer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 8 * 1024 });
+    defer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 8 * 1024 });
     const url, const opts = blk: {
         const qn = self.page.?._queued_navigation.?;
         // qn might not be safe to use after self.removePage is called, hence

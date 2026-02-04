@@ -107,7 +107,10 @@ fn run(
     test_file: []const u8,
     err_out: *?[]const u8,
 ) ![]const u8 {
-    const session = try browser.newSession();
+    const notification = try lp.Notification.init(browser.allocator);
+    defer notification.deinit();
+
+    const session = try browser.newSession(notification);
     defer browser.closeSession();
 
     const page = try session.createPage();

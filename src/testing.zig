@@ -40,6 +40,7 @@ const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
+const Notification = @import("Notification.zig");
 const Page = @import("browser/Page.zig");
 
 // Merged std.testing.expectEqual and std.testing.expectString
@@ -333,6 +334,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 
 pub var test_app: *App = undefined;
 pub var test_browser: Browser = undefined;
+pub var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
 
 const WEB_API_TEST_ROOT = "src/browser/tests/";
@@ -463,7 +465,11 @@ test "tests:beforeAll" {
     test_browser = try Browser.init(test_app, .{});
     errdefer test_browser.deinit();
 
-    test_session = try test_browser.newSession();
+    // Create notification for testing
+    test_notification = try Notification.init(test_app.allocator);
+    errdefer test_notification.deinit();
+
+    test_session = try test_browser.newSession(test_notification);
 
     var wg: std.Thread.WaitGroup = .{};
     wg.startMany(2);
@@ -494,6 +500,7 @@ test "tests:afterAll" {
 
     @import("root").v8_peak_memory = test_browser.env.isolate.getHeapStatistics().total_physical_size;
 
+    test_notification.deinit();
     test_browser.deinit();
     test_app.deinit();
 }

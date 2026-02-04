@@ -27,11 +27,11 @@ const App = @import("../App.zig");
 
 const ArenaPool = App.ArenaPool;
 const HttpClient = App.Http.Client;
-const Notification = App.Notification;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Session = @import("Session.zig");
+const Notification = @import("../Notification.zig");
 
 // Browser is an instance of the browser.
 // You can create multiple browser instances.
@@ -48,7 +48,6 @@ call_arena: ArenaAllocator,
 page_arena: ArenaAllocator,
 session_arena: ArenaAllocator,
 transfer_arena: ArenaAllocator,
-notification: *Notification,
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
@@ -60,17 +59,11 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
     var env = try js.Env.init(app, opts.env);
     errdefer env.deinit();
 
-    const notification = try Notification.init(allocator, app.notification);
-    app.http.client.notification = notification;
-    app.http.client.next_request_id = 0; // Should we track ids in CDP only?
-    errdefer notification.deinit();
-
     return .{
         .app = app,
         .env = env,
         .session = null,
         .allocator = allocator,
-        .notification = notification,
         .arena_pool = &app.arena_pool,
         .http_client = app.http.client,
         .call_arena = ArenaAllocator.init(allocator),
@@ -87,15 +80,13 @@ pub fn deinit(self: *Browser) void {
     self.page_arena.deinit();
     self.session_arena.deinit();
     self.transfer_arena.deinit();
-    self.http_client.notification = null;
-    self.notification.deinit();
 }
 
-pub fn newSession(self: *Browser) !*Session {
+pub fn newSession(self: *Browser, notification: *Notification) !*Session {
     self.closeSession();
     self.session = @as(Session, undefined);
     const session = &self.session.?;
-    try Session.init(session, self);
+    try Session.init(session, self, notification);
     return session;
 }
 
