@@ -18,6 +18,8 @@
 
 const std = @import("std");
 const js = @import("js.zig");
+const builtin = @import("builtin");
+
 const v8 = js.v8;
 
 const App = @import("../../App.zig");
@@ -35,7 +37,7 @@ const Window = @import("../webapi/Window.zig");
 
 const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("builtin").mode == .Debug;
+const IS_DEBUG = builtin.mode == .Debug;
 
 // The Env maps to a V8 isolate, which represents a isolated sandbox for
 // executing JavaScript. The Env is where we'll define our V8 <-> Zig bindings,
@@ -284,6 +286,20 @@ pub fn runMicrotasks(self: *const Env) void {
 pub fn runMacrotasks(self: *Env) !?u64 {
     var ms_to_next_task: ?u64 = null;
     for (self.contexts.items) |ctx| {
+        if (comptime builtin.is_test == false) {
+            // I hate this comptime check as much as you do. But we have tests
+            // which rely on short execution before shutdown. In real world, it's
+            // underterministic whether a timer will or won't run before the
+            // page shutsdown. But for tests, we need to run them to their end.
+            if (ctx.scheduler.hasReadyTasks() == false) {
+                continue;
+            }
+        }
+
+        var hs: js.HandleScope = undefined;
+        const entered = ctx.enter(&hs);
+        defer entered.exit();
+
         const ms = (try ctx.scheduler.run()) orelse continue;
         if (ms_to_next_task == null or ms < ms_to_next_task.?) {
             ms_to_next_task = ms;

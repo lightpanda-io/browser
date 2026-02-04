@@ -234,15 +234,6 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
-    {
-        // some MicroTasks might be referencing the page, we need to drain it while
-        // the page still exists
-        var ls: JS.Local.Scope = undefined;
-        self.js.localScope(&ls);
-        defer ls.deinit();
-        ls.local.runMicrotasks();
-    }
-
     const session = self._session;
     session.browser.env.destroyContext(self.js);
 
