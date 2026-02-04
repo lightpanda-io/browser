@@ -56,7 +56,7 @@ jobs:
           debug: true
 
       - name: zig build test
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8_debug.a test
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8_debug.a -Dtsan=true test
 
   zig-test:
     name: zig test
