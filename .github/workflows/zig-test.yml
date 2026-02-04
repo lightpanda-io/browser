@@ -38,6 +38,26 @@ on:
   workflow_dispatch:
 
 jobs:
+  zig-test-debug:
+    name: zig test using v8 in debug mode
+    timeout-minutes: 15
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # fetch submodules recusively, to get zig-js-runtime submodules also.
+          submodules: recursive
+
+      - uses: ./.github/actions/install
+        with:
+          debug: true
+
+      - name: zig build test
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8_debug.a test
+
   zig-test:
     name: zig test
     timeout-minutes: 15
