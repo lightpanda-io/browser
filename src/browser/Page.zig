@@ -3144,7 +3144,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
     if (submit_opts.fire_event) {
         const submit_event = try Event.initTrusted("submit", .{ .bubbles = true, .cancelable = true }, self);
-        const onsubmit_handler = form.asHtmlElement().getOnSubmit(self);
+        const onsubmit_handler = try form.asHtmlElement().getOnSubmit(self);
 
         var ls: JS.Local.Scope = undefined;
         self.js.localScope(&ls);
