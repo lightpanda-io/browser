@@ -29,6 +29,7 @@ free_list_len: u16 = 0,
 free_list: ?*Entry = null,
 free_list_max: u16,
 entry_pool: std.heap.MemoryPool(Entry),
+mutex: std.Thread.Mutex,
 
 const Entry = struct {
     next: ?*Entry,
@@ -41,6 +42,7 @@ pub fn init(allocator: Allocator) ArenaPool {
         .free_list_max = 512, //  TODO make configurable
         .retain_bytes = 1024 * 16, // TODO make configurable
         .entry_pool = std.heap.MemoryPool(Entry).init(allocator),
+        .mutex = .{},
     };
 }
 
@@ -54,6 +56,9 @@ pub fn deinit(self: *ArenaPool) void {
 }
 
 pub fn acquire(self: *ArenaPool) !Allocator {
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
     if (self.free_list) |entry| {
         self.free_list = entry.next;
         self.free_list_len -= 1;
@@ -73,6 +78,12 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
     const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
     const entry: *Entry = @fieldParentPtr("arena", arena);
 
+    // Reset the arena before acquiring the lock to minimize lock hold time
+    _ = arena.reset(.{ .retain_with_limit = self.retain_bytes });
+
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
     const free_list_len = self.free_list_len;
     if (free_list_len == self.free_list_max) {
         arena.deinit();
@@ -80,7 +91,6 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
         return;
     }
 
-    _ = arena.reset(.{ .retain_with_limit = self.retain_bytes });
     entry.next = self.free_list;
     self.free_list_len = free_list_len + 1;
     self.free_list = entry;

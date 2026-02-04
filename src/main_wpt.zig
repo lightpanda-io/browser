@@ -67,7 +67,10 @@ pub fn main() !void {
     var app = try lp.App.init(allocator, &config);
     defer app.deinit();
 
-    var browser = try lp.Browser.init(app, .{});
+    const http_client = try app.http.createClient(allocator);
+    defer http_client.deinit();
+
+    var browser = try lp.Browser.init(app, .{ .http_client = http_client });
     defer browser.deinit();
 
     // An arena for running each tests. Is reset after every test.
@@ -109,7 +112,7 @@ fn run(
     test_file: []const u8,
     err_out: *?[]const u8,
 ) ![]const u8 {
-    const notification = try lp.Notification.init(browser.allocator);
+    const notification = try lp.Notification.init(browser.app.allocator);
     defer notification.deinit();
 
     const session = try browser.newSession(notification);

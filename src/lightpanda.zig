@@ -38,9 +38,12 @@ pub const FetchOpts = struct {
     dump: dump.RootOpts,
     writer: ?*std.Io.Writer = null,
 };
-pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    var browser = try Browser.init(app, .{});
-    const notification = try Notification.init(app.allocator);
+pub fn fetch(allocator: std.mem.Allocator, app: *App, url: [:0]const u8, opts: FetchOpts) !void {
+    const http_client = try app.http.createClient(allocator);
+    defer http_client.deinit();
+
+    var browser = try Browser.init(app, .{ .http_client = http_client });
+    const notification = try Notification.init(allocator);
     defer notification.deinit();
     defer browser.deinit();
 

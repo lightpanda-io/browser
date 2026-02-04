@@ -93,7 +93,7 @@ fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !vo
             };
 
             // _server is global to handle graceful shutdown.
-            var server = try lp.Server.init(app, address);
+            var server = try lp.Server.init(allocator, app, address);
             defer server.deinit();
 
             try sighandler.on(lp.Server.stop, .{&server});
@@ -123,7 +123,7 @@ fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !vo
                 fetch_opts.writer = &writer.interface;
             }
 
-            lp.fetch(app, url, fetch_opts) catch |err| {
+            lp.fetch(allocator, app, url, fetch_opts) catch |err| {
                 log.fatal(.app, "fetch error", .{ .err = err, .url = url });
                 return err;
             };

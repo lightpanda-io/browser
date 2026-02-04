@@ -85,7 +85,7 @@ const TestContext = struct {
             self.client = Client.init(self.arena.allocator());
             // Don't use the arena here. We want to detect leaks in CDP.
             // The arena is only for test-specific stuff
-            self.cdp_ = TestCDP.init(base.test_app, &self.client.?) catch unreachable;
+            self.cdp_ = TestCDP.init(base.test_app, base.test_http, &self.client.?) catch unreachable;
         }
         return &self.cdp_.?;
     }

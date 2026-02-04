@@ -56,9 +56,9 @@ pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
 
     wg.finish();
 
-    while (true) {
+    while (!self.shutdown.load(.acquire)) {
         const conn = listener.accept() catch |err| {
-            if (self.shutdown.load(.acquire) or err == error.SocketNotListening) {
+            if (err == error.SocketNotListening) {
                 return;
             }
             return err;
