@@ -284,6 +284,12 @@ const RobotsRequestContext = struct {
     robots_url: [:0]const u8,
     buffer: std.ArrayList(u8),
     status: u16 = 0,
+
+    pub fn deinit(self: *RobotsRequestContext) void {
+        self.client.allocator.free(self.robots_url);
+        self.buffer.deinit(self.client.allocator);
+        self.client.allocator.destroy(self);
+    }
 };
 
 fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: Request) !void {
@@ -332,9 +338,7 @@ fn robotsDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
 
 fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
     const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
-    defer ctx.client.allocator.destroy(ctx);
-    defer ctx.buffer.deinit(ctx.client.allocator);
-    defer ctx.client.allocator.free(ctx.robots_url);
+    defer ctx.deinit();
 
     var allowed = true;
 
@@ -348,10 +352,7 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
 
         const path = URL.getPathname(ctx.req.url);
         allowed = robots.isAllowed(path);
-    }
-
-    // If not found, store as Not Found.
-    if (ctx.status == 404) {
+    } else if (ctx.status == 404) {
         log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
         try ctx.req.robots.putAbsent(ctx.robots_url);
     }
@@ -368,9 +369,7 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
 
 fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
     const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
-    defer ctx.client.allocator.destroy(ctx);
-    defer ctx.buffer.deinit(ctx.client.allocator);
-    defer ctx.client.allocator.free(ctx.robots_url);
+    defer ctx.deinit();
 
     log.warn(.http, "robots fetch failed", .{ .err = err });
 
