@@ -335,7 +335,7 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
 
 fn getAttributeFunction(
     self: *HtmlElement,
-    comptime listener_type: Element.KnownListener,
+    listener_type: Element.KnownListener,
     page: *Page,
 ) ?js.Function.Global {
     const element = self.asElement();
