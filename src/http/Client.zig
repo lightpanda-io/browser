@@ -87,6 +87,10 @@ queue: TransferQueue,
 // The main app allocator
 allocator: Allocator,
 
+// Queue of requests that depend on a robots.txt.
+// Allows us to fetch the robots.txt just once.
+pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
+
 // Once we have a handle/easy to process a request with, we create a Transfer
 // which contains the Request as well as any state we need to process the
 // request. These wil come and go with each request.
@@ -165,6 +169,13 @@ pub fn deinit(self: *Client) void {
     _ = c.curl_multi_cleanup(self.multi);
 
     self.transfer_pool.deinit();
+
+    var robots_iter = self.pending_robots_queue.iterator();
+    while (robots_iter.next()) |entry| {
+        entry.value_ptr.deinit(self.allocator);
+    }
+    self.pending_robots_queue.deinit(self.allocator);
+
     self.allocator.destroy(self);
 }
 
@@ -254,7 +265,10 @@ fn processRequest(self: *Client, req: Request) !void {
     transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
     var wait_for_interception = false;
-    transfer.req.notification.dispatch(.http_request_intercept, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+    transfer.req.notification.dispatch(.http_request_intercept, &.{
+        .transfer = transfer,
+        .wait_for_interception = &wait_for_interception,
+    });
     if (wait_for_interception == false) {
         // request not intercepted, process it normally
         return self.process(transfer);
@@ -293,27 +307,36 @@ const RobotsRequestContext = struct {
 };
 
 fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: Request) !void {
-    const ctx = try self.allocator.create(RobotsRequestContext);
-    ctx.* = .{ .client = self, .req = req, .robots_url = robots_url, .buffer = .empty };
+    const entry = try self.pending_robots_queue.getOrPut(self.allocator, robots_url);
 
-    const headers = try self.newHeaders();
+    if (!entry.found_existing) {
+        // If we aren't already fetching this robots,
+        // we want to create a new queue for it and add this request into it.
+        entry.value_ptr.* = .empty;
 
-    log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
-    try self.processRequest(.{
-        .ctx = ctx,
-        .url = robots_url,
-        .method = .GET,
-        .headers = headers,
-        .blocking = false,
-        .cookie_jar = req.cookie_jar,
-        .notification = req.notification,
-        .robots = req.robots,
-        .resource_type = .fetch,
-        .header_callback = robotsHeaderCallback,
-        .data_callback = robotsDataCallback,
-        .done_callback = robotsDoneCallback,
-        .error_callback = robotsErrorCallback,
-    });
+        const ctx = try self.allocator.create(RobotsRequestContext);
+        ctx.* = .{ .client = self, .req = req, .robots_url = robots_url, .buffer = .empty };
+        const headers = try self.newHeaders();
+
+        log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+        try self.processRequest(.{
+            .ctx = ctx,
+            .url = robots_url,
+            .method = .GET,
+            .headers = headers,
+            .blocking = false,
+            .cookie_jar = req.cookie_jar,
+            .notification = req.notification,
+            .robots = req.robots,
+            .resource_type = .fetch,
+            .header_callback = robotsHeaderCallback,
+            .data_callback = robotsDataCallback,
+            .done_callback = robotsDoneCallback,
+            .error_callback = robotsErrorCallback,
+        });
+    }
+
+    try entry.value_ptr.append(self.allocator, req);
 }
 
 fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
@@ -357,14 +380,22 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
         try ctx.req.robots.putAbsent(ctx.robots_url);
     }
 
-    if (!allowed) {
-        log.warn(.http, "blocked by robots", .{ .url = ctx.req.url });
-        ctx.req.error_callback(ctx.req.ctx, error.RobotsBlocked);
-        return;
+    const queued = ctx.client.pending_robots_queue.getPtr(ctx.robots_url) orelse unreachable;
+    defer {
+        queued.deinit(ctx.client.allocator);
+        _ = ctx.client.pending_robots_queue.remove(ctx.robots_url);
     }
 
-    // Now process the original request
-    try ctx.client.processRequest(ctx.req);
+    for (queued.items) |queued_req| {
+        if (!allowed) {
+            log.warn(.http, "blocked by robots", .{ .url = queued_req.url });
+            queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
+        } else {
+            ctx.client.processRequest(queued_req) catch |e| {
+                queued_req.error_callback(queued_req.ctx, e);
+            };
+        }
+    }
 }
 
 fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
@@ -373,10 +404,18 @@ fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
 
     log.warn(.http, "robots fetch failed", .{ .err = err });
 
-    // On error, allow the request to proceed
-    ctx.client.processRequest(ctx.req) catch |e| {
-        ctx.req.error_callback(ctx.req.ctx, e);
-    };
+    const queued = ctx.client.pending_robots_queue.getPtr(ctx.robots_url) orelse unreachable;
+    defer {
+        queued.deinit(ctx.client.allocator);
+        _ = ctx.client.pending_robots_queue.remove(ctx.robots_url);
+    }
+
+    // On error, allow all queued requests to proceed
+    for (queued.items) |queued_req| {
+        ctx.client.processRequest(queued_req) catch |e| {
+            queued_req.error_callback(queued_req.ctx, e);
+        };
+    }
 }
 
 fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
