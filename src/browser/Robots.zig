@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const log = @import("../log.zig");
 
 pub const Rule = union(enum) {
     allow: []const u8,
@@ -203,7 +204,10 @@ fn parseRulesWithUserAgent(
                         errdefer allocator.free(duped_value);
                         try wildcard_rules.append(allocator, .{ .allow = duped_value });
                     },
-                    .not_in_entry => return error.UnexpectedRule,
+                    .not_in_entry => {
+                        log.warn(.browser, "robots unexpected rule", .{ .rule = "allow" });
+                        continue;
+                    },
                 }
             },
             .disallow => {
@@ -221,7 +225,10 @@ fn parseRulesWithUserAgent(
                         errdefer allocator.free(duped_value);
                         try wildcard_rules.append(allocator, .{ .disallow = duped_value });
                     },
-                    .not_in_entry => return error.UnexpectedRule,
+                    .not_in_entry => {
+                        log.warn(.browser, "robots unexpected rule", .{ .rule = "disallow" });
+                        continue;
+                    },
                 }
             },
         }
