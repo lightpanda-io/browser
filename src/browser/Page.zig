@@ -3279,12 +3279,12 @@ pub fn handleClick(self: *Page, target: *Node) !void {
             }, .anchor);
         },
         .input => |input| switch (input._input_type) {
-            .submit => return self.submitForm(element, input.getForm(self)),
+            .submit => return self.submitForm(element, input.getForm(self), .{}),
             else => self.window._document._active_element = element,
         },
         .button => |button| {
             if (std.mem.eql(u8, button.getType(), "submit")) {
-                return self.submitForm(element, button.getForm(self));
+                return self.submitForm(element, button.getForm(self), .{});
             }
         },
         .select, .textarea => self.window._document._active_element = element,
@@ -3314,7 +3314,7 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
 
     if (target.is(Element.Html.Input)) |input| {
         if (key == .Enter) {
-            return self.submitForm(input.asElement(), input.getForm(self));
+            return self.submitForm(input.asElement(), input.getForm(self), .{});
         }
 
         // Don't handle text input for radio/checkbox
@@ -3344,7 +3344,10 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
     }
 }
 
-pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form) !void {
+const SubmitFormOpts = struct {
+    fire_event: bool = true,
+};
+pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form, submit_opts: SubmitFormOpts) !void {
     const form = form_ orelse return;
 
     if (submitter_) |submitter| {
@@ -3358,6 +3361,27 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     }
 
     const form_element = form.asElement();
+
+    if (submit_opts.fire_event) {
+        const submit_event = try Event.initTrusted("submit", .{ .bubbles = true, .cancelable = true }, self);
+        const onsubmit_handler = form.asHtmlElement().getOnSubmit(self);
+
+        var ls: JS.Local.Scope = undefined;
+        self.js.localScope(&ls);
+        defer ls.deinit();
+
+        try self._event_manager.dispatchWithFunction(
+            form_element.asEventTarget(),
+            submit_event,
+            ls.toLocal(onsubmit_handler),
+            .{ .context = "form submit" },
+        );
+
+        // If the submit event was prevented, don't submit the form
+        if (submit_event._prevent_default) {
+            return;
+        }
+    }
 
     const FormData = @import("webapi/net/FormData.zig");
     // The submitter can be an input box (if enter was entered on the box)

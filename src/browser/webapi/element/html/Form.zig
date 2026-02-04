@@ -32,6 +32,9 @@ pub const TextArea = @import("TextArea.zig");
 const Form = @This();
 _proto: *HtmlElement,
 
+pub fn asHtmlElement(self: *Form) *HtmlElement {
+    return self._proto;
+}
 fn asConstElement(self: *const Form) *const Element {
     return self._proto._proto;
 }
@@ -88,7 +91,7 @@ pub fn getLength(self: *Form, page: *Page) !u32 {
 }
 
 pub fn submit(self: *Form, page: *Page) !void {
-    return page.submitForm(null, self);
+    return page.submitForm(null, self, .{ .fire_event = false });
 }
 
 pub const JsApi = struct {
