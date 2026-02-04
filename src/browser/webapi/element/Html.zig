@@ -337,32 +337,27 @@ fn getAttributeFunction(
     self: *HtmlElement,
     listener_type: Element.KnownListener,
     page: *Page,
-) ?js.Function.Global {
+) !?js.Function.Global {
     const element = self.asElement();
     if (page.getAttrListener(element, listener_type)) |cached| {
         return cached;
     }
 
     const attr = element.getAttributeSafe(.wrap(@tagName(listener_type))) orelse return null;
-    const callback = page.js.stringToPersistedFunction(attr) catch |err| {
-        // Not a valid expression; log this to find out if its something we should be supporting.
-        log.warn(.unknown_prop, "Page.getAttrListener", .{
-            .expression = attr,
-            .err = err,
-        });
+    const callback = page.js.stringToPersistedFunction(attr) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            // Not a valid expression; log this to find out if its something we should be supporting.
+            log.warn(.js, "Html.getAttributeFunction", .{
+                .expression = attr,
+                .err = err,
+            });
 
-        return null;
+            return null;
+        },
     };
 
-    page.setAttrListener(element, listener_type, callback) catch {
-        // This is fine :tm: We're out of memory for cache.
-        // I don't want to make all getters "!?" just because of this honestly.
-        log.warn(.app, "getAttributeFunction", .{
-            .element = element,
-            .listener_type = listener_type,
-            .callback = callback,
-        });
-    };
+    try page.setAttrListener(element, listener_type, callback);
 
     return callback;
 }
@@ -371,7 +366,7 @@ pub fn setOnAbort(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onabort, callback);
 }
 
-pub fn getOnAbort(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnAbort(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onabort, page);
 }
 
@@ -379,7 +374,7 @@ pub fn setOnAnimationCancel(self: *HtmlElement, callback: js.Function.Global, pa
     return page.setAttrListener(self.asElement(), .onanimationcancel, callback);
 }
 
-pub fn getOnAnimationCancel(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnAnimationCancel(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onanimationcancel, page);
 }
 
@@ -387,7 +382,7 @@ pub fn setOnAnimationEnd(self: *HtmlElement, callback: js.Function.Global, page:
     return page.setAttrListener(self.asElement(), .onanimationend, callback);
 }
 
-pub fn getOnAnimationEnd(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnAnimationEnd(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onanimationend, page);
 }
 
@@ -395,7 +390,7 @@ pub fn setOnAnimationIteration(self: *HtmlElement, callback: js.Function.Global,
     return page.setAttrListener(self.asElement(), .onanimationiteration, callback);
 }
 
-pub fn getOnAnimationIteration(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnAnimationIteration(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onanimationiteration, page);
 }
 
@@ -403,7 +398,7 @@ pub fn setOnAnimationStart(self: *HtmlElement, callback: js.Function.Global, pag
     return page.setAttrListener(self.asElement(), .onanimationstart, callback);
 }
 
-pub fn getOnAnimationStart(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnAnimationStart(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onanimationstart, page);
 }
 
@@ -411,7 +406,7 @@ pub fn setOnAuxClick(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .onauxclick, callback);
 }
 
-pub fn getOnAuxClick(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnAuxClick(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onauxclick, page);
 }
 
@@ -419,7 +414,7 @@ pub fn setOnBeforeInput(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .onbeforeinput, callback);
 }
 
-pub fn getOnBeforeInput(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnBeforeInput(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onbeforeinput, page);
 }
 
@@ -427,7 +422,7 @@ pub fn setOnBeforeMatch(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .onbeforematch, callback);
 }
 
-pub fn getOnBeforeMatch(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnBeforeMatch(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onbeforematch, page);
 }
 
@@ -435,7 +430,7 @@ pub fn setOnBeforeToggle(self: *HtmlElement, callback: js.Function.Global, page:
     return page.setAttrListener(self.asElement(), .onbeforetoggle, callback);
 }
 
-pub fn getOnBeforeToggle(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnBeforeToggle(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onbeforetoggle, page);
 }
 
@@ -443,7 +438,7 @@ pub fn setOnBlur(self: *HtmlElement, callback: js.Function.Global, page: *Page) 
     return page.setAttrListener(self.asElement(), .onblur, callback);
 }
 
-pub fn getOnBlur(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnBlur(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onblur, page);
 }
 
@@ -451,7 +446,7 @@ pub fn setOnCancel(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .oncancel, callback);
 }
 
-pub fn getOnCancel(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnCancel(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncancel, page);
 }
 
@@ -459,7 +454,7 @@ pub fn setOnCanPlay(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .oncanplay, callback);
 }
 
-pub fn getOnCanPlay(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnCanPlay(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncanplay, page);
 }
 
@@ -467,7 +462,7 @@ pub fn setOnCanPlayThrough(self: *HtmlElement, callback: js.Function.Global, pag
     return page.setAttrListener(self.asElement(), .oncanplaythrough, callback);
 }
 
-pub fn getOnCanPlayThrough(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnCanPlayThrough(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncanplaythrough, page);
 }
 
@@ -475,7 +470,7 @@ pub fn setOnChange(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .onchange, callback);
 }
 
-pub fn getOnChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onchange, page);
 }
 
@@ -483,7 +478,7 @@ pub fn setOnClick(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onclick, callback);
 }
 
-pub fn getOnClick(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnClick(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onclick, page);
 }
 
@@ -491,7 +486,7 @@ pub fn setOnClose(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onclose, callback);
 }
 
-pub fn getOnClose(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnClose(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onclose, page);
 }
 
@@ -499,7 +494,7 @@ pub fn setOnCommand(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .oncommand, callback);
 }
 
-pub fn getOnCommand(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnCommand(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncommand, page);
 }
 
@@ -507,7 +502,7 @@ pub fn setOnContentVisibilityAutoStateChange(self: *HtmlElement, callback: js.Fu
     return page.setAttrListener(self.asElement(), .oncontentvisibilityautostatechange, callback);
 }
 
-pub fn getOnContentVisibilityAutoStateChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnContentVisibilityAutoStateChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncontentvisibilityautostatechange, page);
 }
 
@@ -515,7 +510,7 @@ pub fn setOnContextLost(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .oncontextlost, callback);
 }
 
-pub fn getOnContextLost(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnContextLost(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncontextlost, page);
 }
 
@@ -523,7 +518,7 @@ pub fn setOnContextMenu(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .oncontextmenu, callback);
 }
 
-pub fn getOnContextMenu(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnContextMenu(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncontextmenu, page);
 }
 
@@ -531,7 +526,7 @@ pub fn setOnContextRestored(self: *HtmlElement, callback: js.Function.Global, pa
     return page.setAttrListener(self.asElement(), .oncontextrestored, callback);
 }
 
-pub fn getOnContextRestored(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnContextRestored(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncontextrestored, page);
 }
 
@@ -539,7 +534,7 @@ pub fn setOnCopy(self: *HtmlElement, callback: js.Function.Global, page: *Page) 
     return page.setAttrListener(self.asElement(), .oncopy, callback);
 }
 
-pub fn getOnCopy(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnCopy(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncopy, page);
 }
 
@@ -547,7 +542,7 @@ pub fn setOnCueChange(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .oncuechange, callback);
 }
 
-pub fn getOnCueChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnCueChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncuechange, page);
 }
 
@@ -555,7 +550,7 @@ pub fn setOnCut(self: *HtmlElement, callback: js.Function.Global, page: *Page) !
     return page.setAttrListener(self.asElement(), .oncut, callback);
 }
 
-pub fn getOnCut(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnCut(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oncut, page);
 }
 
@@ -563,7 +558,7 @@ pub fn setOnDblClick(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .ondblclick, callback);
 }
 
-pub fn getOnDblClick(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDblClick(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondblclick, page);
 }
 
@@ -571,7 +566,7 @@ pub fn setOnDrag(self: *HtmlElement, callback: js.Function.Global, page: *Page) 
     return page.setAttrListener(self.asElement(), .ondrag, callback);
 }
 
-pub fn getOnDrag(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDrag(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondrag, page);
 }
 
@@ -579,7 +574,7 @@ pub fn setOnDragEnd(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .ondragend, callback);
 }
 
-pub fn getOnDragEnd(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDragEnd(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondragend, page);
 }
 
@@ -587,7 +582,7 @@ pub fn setOnDragEnter(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .ondragenter, callback);
 }
 
-pub fn getOnDragEnter(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDragEnter(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondragenter, page);
 }
 
@@ -595,7 +590,7 @@ pub fn setOnDragExit(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .ondragexit, callback);
 }
 
-pub fn getOnDragExit(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDragExit(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondragexit, page);
 }
 
@@ -603,7 +598,7 @@ pub fn setOnDragLeave(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .ondragleave, callback);
 }
 
-pub fn getOnDragLeave(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDragLeave(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondragleave, page);
 }
 
@@ -611,7 +606,7 @@ pub fn setOnDragOver(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .ondragover, callback);
 }
 
-pub fn getOnDragOver(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDragOver(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondragover, page);
 }
 
@@ -619,7 +614,7 @@ pub fn setOnDragStart(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .ondragstart, callback);
 }
 
-pub fn getOnDragStart(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDragStart(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondragstart, page);
 }
 
@@ -627,7 +622,7 @@ pub fn setOnDrop(self: *HtmlElement, callback: js.Function.Global, page: *Page) 
     return page.setAttrListener(self.asElement(), .ondrop, callback);
 }
 
-pub fn getOnDrop(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDrop(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondrop, page);
 }
 
@@ -635,7 +630,7 @@ pub fn setOnDurationChange(self: *HtmlElement, callback: js.Function.Global, pag
     return page.setAttrListener(self.asElement(), .ondurationchange, callback);
 }
 
-pub fn getOnDurationChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnDurationChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ondurationchange, page);
 }
 
@@ -643,7 +638,7 @@ pub fn setOnEmptied(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onemptied, callback);
 }
 
-pub fn getOnEmptied(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnEmptied(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onemptied, page);
 }
 
@@ -651,7 +646,7 @@ pub fn setOnEnded(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onended, callback);
 }
 
-pub fn getOnEnded(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnEnded(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onended, page);
 }
 
@@ -659,7 +654,7 @@ pub fn setOnError(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onerror, callback);
 }
 
-pub fn getOnError(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnError(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onerror, page);
 }
 
@@ -667,7 +662,7 @@ pub fn setOnFocus(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onfocus, callback);
 }
 
-pub fn getOnFocus(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnFocus(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onfocus, page);
 }
 
@@ -675,7 +670,7 @@ pub fn setOnFormData(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .onformdata, callback);
 }
 
-pub fn getOnFormData(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnFormData(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onformdata, page);
 }
 
@@ -683,7 +678,7 @@ pub fn setOnFullscreenChange(self: *HtmlElement, callback: js.Function.Global, p
     return page.setAttrListener(self.asElement(), .onfullscreenchange, callback);
 }
 
-pub fn getOnFullscreenChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnFullscreenChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onfullscreenchange, page);
 }
 
@@ -691,7 +686,7 @@ pub fn setOnFullscreenError(self: *HtmlElement, callback: js.Function.Global, pa
     return page.setAttrListener(self.asElement(), .onfullscreenerror, callback);
 }
 
-pub fn getOnFullscreenError(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnFullscreenError(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onfullscreenerror, page);
 }
 
@@ -699,7 +694,7 @@ pub fn setOnGotPointerCapture(self: *HtmlElement, callback: js.Function.Global, 
     return page.setAttrListener(self.asElement(), .ongotpointercapture, callback);
 }
 
-pub fn getOnGotPointerCapture(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnGotPointerCapture(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ongotpointercapture, page);
 }
 
@@ -707,7 +702,7 @@ pub fn setOnInput(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .oninput, callback);
 }
 
-pub fn getOnInput(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnInput(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oninput, page);
 }
 
@@ -715,7 +710,7 @@ pub fn setOnInvalid(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .oninvalid, callback);
 }
 
-pub fn getOnInvalid(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnInvalid(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.oninvalid, page);
 }
 
@@ -723,7 +718,7 @@ pub fn setOnKeyDown(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onkeydown, callback);
 }
 
-pub fn getOnKeyDown(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnKeyDown(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onkeydown, page);
 }
 
@@ -731,7 +726,7 @@ pub fn setOnKeyPress(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .onkeypress, callback);
 }
 
-pub fn getOnKeyPress(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnKeyPress(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onkeypress, page);
 }
 
@@ -739,7 +734,7 @@ pub fn setOnKeyUp(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onkeyup, callback);
 }
 
-pub fn getOnKeyUp(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnKeyUp(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onkeyup, page);
 }
 
@@ -747,7 +742,7 @@ pub fn setOnLoad(self: *HtmlElement, callback: js.Function.Global, page: *Page) 
     return page.setAttrListener(self.asElement(), .onload, callback);
 }
 
-pub fn getOnLoad(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnLoad(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onload, page);
 }
 
@@ -755,7 +750,7 @@ pub fn setOnLoadedData(self: *HtmlElement, callback: js.Function.Global, page: *
     return page.setAttrListener(self.asElement(), .onloadeddata, callback);
 }
 
-pub fn getOnLoadedData(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnLoadedData(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onloadeddata, page);
 }
 
@@ -763,7 +758,7 @@ pub fn setOnLoadedMetadata(self: *HtmlElement, callback: js.Function.Global, pag
     return page.setAttrListener(self.asElement(), .onloadedmetadata, callback);
 }
 
-pub fn getOnLoadedMetadata(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnLoadedMetadata(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onloadedmetadata, page);
 }
 
@@ -771,7 +766,7 @@ pub fn setOnLoadStart(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .onloadstart, callback);
 }
 
-pub fn getOnLoadStart(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnLoadStart(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onloadstart, page);
 }
 
@@ -779,7 +774,7 @@ pub fn setOnLostPointerCapture(self: *HtmlElement, callback: js.Function.Global,
     return page.setAttrListener(self.asElement(), .onlostpointercapture, callback);
 }
 
-pub fn getOnLostPointerCapture(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnLostPointerCapture(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onlostpointercapture, page);
 }
 
@@ -787,7 +782,7 @@ pub fn setOnMouseDown(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .onmousedown, callback);
 }
 
-pub fn getOnMouseDown(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnMouseDown(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onmousedown, page);
 }
 
@@ -795,7 +790,7 @@ pub fn setOnMouseMove(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .onmousemove, callback);
 }
 
-pub fn getOnMouseMove(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnMouseMove(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onmousemove, page);
 }
 
@@ -803,7 +798,7 @@ pub fn setOnMouseOut(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .onmouseout, callback);
 }
 
-pub fn getOnMouseOut(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnMouseOut(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onmouseout, page);
 }
 
@@ -811,7 +806,7 @@ pub fn setOnMouseOver(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .onmouseover, callback);
 }
 
-pub fn getOnMouseOver(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnMouseOver(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onmouseover, page);
 }
 
@@ -819,7 +814,7 @@ pub fn setOnMouseUp(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onmouseup, callback);
 }
 
-pub fn getOnMouseUp(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnMouseUp(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onmouseup, page);
 }
 
@@ -827,7 +822,7 @@ pub fn setOnPaste(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onpaste, callback);
 }
 
-pub fn getOnPaste(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPaste(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpaste, page);
 }
 
@@ -835,7 +830,7 @@ pub fn setOnPause(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onpause, callback);
 }
 
-pub fn getOnPause(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPause(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpause, page);
 }
 
@@ -843,7 +838,7 @@ pub fn setOnPlay(self: *HtmlElement, callback: js.Function.Global, page: *Page) 
     return page.setAttrListener(self.asElement(), .onplay, callback);
 }
 
-pub fn getOnPlay(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPlay(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onplay, page);
 }
 
@@ -851,7 +846,7 @@ pub fn setOnPlaying(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onplaying, callback);
 }
 
-pub fn getOnPlaying(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPlaying(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onplaying, page);
 }
 
@@ -859,7 +854,7 @@ pub fn setOnPointerCancel(self: *HtmlElement, callback: js.Function.Global, page
     return page.setAttrListener(self.asElement(), .onpointercancel, callback);
 }
 
-pub fn getOnPointerCancel(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerCancel(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointercancel, page);
 }
 
@@ -867,7 +862,7 @@ pub fn setOnPointerDown(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .onpointerdown, callback);
 }
 
-pub fn getOnPointerDown(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerDown(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointerdown, page);
 }
 
@@ -875,7 +870,7 @@ pub fn setOnPointerEnter(self: *HtmlElement, callback: js.Function.Global, page:
     return page.setAttrListener(self.asElement(), .onpointerenter, callback);
 }
 
-pub fn getOnPointerEnter(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerEnter(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointerenter, page);
 }
 
@@ -883,7 +878,7 @@ pub fn setOnPointerLeave(self: *HtmlElement, callback: js.Function.Global, page:
     return page.setAttrListener(self.asElement(), .onpointerleave, callback);
 }
 
-pub fn getOnPointerLeave(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerLeave(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointerleave, page);
 }
 
@@ -891,7 +886,7 @@ pub fn setOnPointerMove(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .onpointermove, callback);
 }
 
-pub fn getOnPointerMove(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerMove(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointermove, page);
 }
 
@@ -899,7 +894,7 @@ pub fn setOnPointerOut(self: *HtmlElement, callback: js.Function.Global, page: *
     return page.setAttrListener(self.asElement(), .onpointerout, callback);
 }
 
-pub fn getOnPointerOut(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerOut(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointerout, page);
 }
 
@@ -907,7 +902,7 @@ pub fn setOnPointerOver(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .onpointerover, callback);
 }
 
-pub fn getOnPointerOver(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerOver(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointerover, page);
 }
 
@@ -915,7 +910,7 @@ pub fn setOnPointerRawUpdate(self: *HtmlElement, callback: js.Function.Global, p
     return page.setAttrListener(self.asElement(), .onpointerrawupdate, callback);
 }
 
-pub fn getOnPointerRawUpdate(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerRawUpdate(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointerrawupdate, page);
 }
 
@@ -923,7 +918,7 @@ pub fn setOnPointerUp(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .onpointerup, callback);
 }
 
-pub fn getOnPointerUp(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnPointerUp(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onpointerup, page);
 }
 
@@ -931,7 +926,7 @@ pub fn setOnProgress(self: *HtmlElement, callback: js.Function.Global, page: *Pa
     return page.setAttrListener(self.asElement(), .onprogress, callback);
 }
 
-pub fn getOnProgress(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnProgress(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onprogress, page);
 }
 
@@ -939,7 +934,7 @@ pub fn setOnRateChange(self: *HtmlElement, callback: js.Function.Global, page: *
     return page.setAttrListener(self.asElement(), .onratechange, callback);
 }
 
-pub fn getOnRateChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnRateChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onratechange, page);
 }
 
@@ -947,7 +942,7 @@ pub fn setOnReset(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onreset, callback);
 }
 
-pub fn getOnReset(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnReset(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onreset, page);
 }
 
@@ -955,7 +950,7 @@ pub fn setOnResize(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .onresize, callback);
 }
 
-pub fn getOnResize(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnResize(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onresize, page);
 }
 
@@ -963,7 +958,7 @@ pub fn setOnScroll(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .onscroll, callback);
 }
 
-pub fn getOnScroll(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnScroll(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onscroll, page);
 }
 
@@ -971,7 +966,7 @@ pub fn setOnScrollEnd(self: *HtmlElement, callback: js.Function.Global, page: *P
     return page.setAttrListener(self.asElement(), .onscrollend, callback);
 }
 
-pub fn getOnScrollEnd(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnScrollEnd(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onscrollend, page);
 }
 
@@ -979,7 +974,7 @@ pub fn setOnSecurityPolicyViolation(self: *HtmlElement, callback: js.Function.Gl
     return page.setAttrListener(self.asElement(), .onsecuritypolicyviolation, callback);
 }
 
-pub fn getOnSecurityPolicyViolation(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSecurityPolicyViolation(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onsecuritypolicyviolation, page);
 }
 
@@ -987,7 +982,7 @@ pub fn setOnSeeked(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .onseeked, callback);
 }
 
-pub fn getOnSeeked(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSeeked(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onseeked, page);
 }
 
@@ -995,7 +990,7 @@ pub fn setOnSeeking(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onseeking, callback);
 }
 
-pub fn getOnSeeking(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSeeking(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onseeking, page);
 }
 
@@ -1003,7 +998,7 @@ pub fn setOnSelect(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .onselect, callback);
 }
 
-pub fn getOnSelect(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSelect(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onselect, page);
 }
 
@@ -1011,7 +1006,7 @@ pub fn setOnSelectionChange(self: *HtmlElement, callback: js.Function.Global, pa
     return page.setAttrListener(self.asElement(), .onselectionchange, callback);
 }
 
-pub fn getOnSelectionChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSelectionChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onselectionchange, page);
 }
 
@@ -1019,7 +1014,7 @@ pub fn setOnSelectStart(self: *HtmlElement, callback: js.Function.Global, page: 
     return page.setAttrListener(self.asElement(), .onselectstart, callback);
 }
 
-pub fn getOnSelectStart(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSelectStart(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onselectstart, page);
 }
 
@@ -1027,7 +1022,7 @@ pub fn setOnSlotChange(self: *HtmlElement, callback: js.Function.Global, page: *
     return page.setAttrListener(self.asElement(), .onslotchange, callback);
 }
 
-pub fn getOnSlotChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSlotChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onslotchange, page);
 }
 
@@ -1035,7 +1030,7 @@ pub fn setOnStalled(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onstalled, callback);
 }
 
-pub fn getOnStalled(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnStalled(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onstalled, page);
 }
 
@@ -1043,7 +1038,7 @@ pub fn setOnSubmit(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .onsubmit, callback);
 }
 
-pub fn getOnSubmit(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSubmit(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onsubmit, page);
 }
 
@@ -1051,7 +1046,7 @@ pub fn setOnSuspend(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onsuspend, callback);
 }
 
-pub fn getOnSuspend(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnSuspend(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onsuspend, page);
 }
 
@@ -1059,7 +1054,7 @@ pub fn setOnTimeUpdate(self: *HtmlElement, callback: js.Function.Global, page: *
     return page.setAttrListener(self.asElement(), .ontimeupdate, callback);
 }
 
-pub fn getOnTimeUpdate(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnTimeUpdate(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ontimeupdate, page);
 }
 
@@ -1067,7 +1062,7 @@ pub fn setOnToggle(self: *HtmlElement, callback: js.Function.Global, page: *Page
     return page.setAttrListener(self.asElement(), .ontoggle, callback);
 }
 
-pub fn getOnToggle(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnToggle(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ontoggle, page);
 }
 
@@ -1075,7 +1070,7 @@ pub fn setOnTransitionCancel(self: *HtmlElement, callback: js.Function.Global, p
     return page.setAttrListener(self.asElement(), .ontransitioncancel, callback);
 }
 
-pub fn getOnTransitionCancel(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnTransitionCancel(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ontransitioncancel, page);
 }
 
@@ -1083,7 +1078,7 @@ pub fn setOnTransitionEnd(self: *HtmlElement, callback: js.Function.Global, page
     return page.setAttrListener(self.asElement(), .ontransitionend, callback);
 }
 
-pub fn getOnTransitionEnd(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnTransitionEnd(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ontransitionend, page);
 }
 
@@ -1091,7 +1086,7 @@ pub fn setOnTransitionRun(self: *HtmlElement, callback: js.Function.Global, page
     return page.setAttrListener(self.asElement(), .ontransitionrun, callback);
 }
 
-pub fn getOnTransitionRun(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnTransitionRun(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ontransitionrun, page);
 }
 
@@ -1099,7 +1094,7 @@ pub fn setOnTransitionStart(self: *HtmlElement, callback: js.Function.Global, pa
     return page.setAttrListener(self.asElement(), .ontransitionstart, callback);
 }
 
-pub fn getOnTransitionStart(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnTransitionStart(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.ontransitionstart, page);
 }
 
@@ -1107,7 +1102,7 @@ pub fn setOnVolumeChange(self: *HtmlElement, callback: js.Function.Global, page:
     return page.setAttrListener(self.asElement(), .onvolumechange, callback);
 }
 
-pub fn getOnVolumeChange(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnVolumeChange(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onvolumechange, page);
 }
 
@@ -1115,7 +1110,7 @@ pub fn setOnWaiting(self: *HtmlElement, callback: js.Function.Global, page: *Pag
     return page.setAttrListener(self.asElement(), .onwaiting, callback);
 }
 
-pub fn getOnWaiting(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnWaiting(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onwaiting, page);
 }
 
@@ -1123,7 +1118,7 @@ pub fn setOnWheel(self: *HtmlElement, callback: js.Function.Global, page: *Page)
     return page.setAttrListener(self.asElement(), .onwheel, callback);
 }
 
-pub fn getOnWheel(self: *HtmlElement, page: *Page) ?js.Function.Global {
+pub fn getOnWheel(self: *HtmlElement, page: *Page) !?js.Function.Global {
     return self.getAttributeFunction(.onwheel, page);
 }
 
