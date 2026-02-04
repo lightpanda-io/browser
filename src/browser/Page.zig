@@ -65,6 +65,9 @@ const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const WebApiURL = @import("webapi/URL.zig");
+const global_event_handlers = @import("webapi/global_event_handlers.zig");
+const GlobalEventHandlersLookup = global_event_handlers.Lookup;
+const GlobalEventHandler = global_event_handlers.Handler;
 
 var default_url = WebApiURL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
@@ -119,7 +122,7 @@ _element_assigned_slots: Element.AssignedSlotLookup = .{},
 /// ```js
 /// img.setAttribute("onload", "(() => { ... })()");
 /// ```
-_element_attr_listeners: Element.AttrListenerLookup = .{},
+_element_attr_listeners: GlobalEventHandlersLookup = .{},
 
 _script_manager: ScriptManager,
 
@@ -1215,7 +1218,7 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
 pub fn setAttrListener(
     self: *Page,
     element: *Element,
-    listener_type: Element.KnownListener,
+    listener_type: GlobalEventHandler,
     listener_callback: JS.Function.Global,
 ) !void {
     if (comptime IS_DEBUG) {
@@ -1225,7 +1228,7 @@ pub fn setAttrListener(
         });
     }
 
-    const key = element.calcAttrListenerKey(listener_type);
+    const key = global_event_handlers.calculateKey(element.asEventTarget(), listener_type);
     const gop = try self._element_attr_listeners.getOrPut(self.arena, key);
     gop.value_ptr.* = listener_callback;
 }
@@ -1234,9 +1237,10 @@ pub fn setAttrListener(
 pub fn getAttrListener(
     self: *const Page,
     element: *Element,
-    listener_type: Element.KnownListener,
+    listener_type: GlobalEventHandler,
 ) ?JS.Function.Global {
-    return self._element_attr_listeners.get(element.calcAttrListenerKey(listener_type));
+    const key = global_event_handlers.calculateKey(element.asEventTarget(), listener_type);
+    return self._element_attr_listeners.get(key);
 }
 
 pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {

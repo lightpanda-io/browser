@@ -21,6 +21,10 @@ const js = @import("../../js/js.zig");
 const reflect = @import("../../reflect.zig");
 const log = @import("../../../log.zig");
 
+const global_event_handlers = @import("../global_event_handlers.zig");
+const GlobalEventHandlersLookup = global_event_handlers.Lookup;
+const GlobalEventHandler = global_event_handlers.Handler;
+
 const Page = @import("../../Page.zig");
 const Node = @import("../Node.zig");
 const Element = @import("../Element.zig");
@@ -335,7 +339,7 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
 
 fn getAttributeFunction(
     self: *HtmlElement,
-    listener_type: Element.KnownListener,
+    listener_type: GlobalEventHandler,
     page: *Page,
 ) !?js.Function.Global {
     const element = self.asElement();
