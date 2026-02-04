@@ -29,7 +29,7 @@ _plugins: PluginArray = .{},
 pub const init: Navigator = .{};
 
 pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
-    return page._session.browser.app.http.user_agent;
+    return page._session.browser.app.config.http_headers.user_agent;
 }
 
 pub fn getAppName(_: *const Navigator) []const u8 {

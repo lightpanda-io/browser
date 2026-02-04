@@ -97,8 +97,7 @@ http_proxy: ?[:0]const u8 = null,
 // CDP.
 use_proxy: bool,
 
-// The complete user-agent header line
-user_agent: [:0]const u8,
+config: *const Config,
 
 cdp_client: ?CDPClient = null,
 
@@ -134,13 +133,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, config: *const Config) 
 
     try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, config.httpMaxHostOpen())));
 
-    const user_agent = try config.userAgent(allocator);
-    var proxy_bearer_header: ?[:0]const u8 = null;
-    if (config.proxyBearerToken()) |bt| {
-        proxy_bearer_header = try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{bt}, 0);
-    }
-
-    var handles = try Handles.init(allocator, client, ca_blob, config, user_agent, proxy_bearer_header);
+    var handles = try Handles.init(allocator, client, ca_blob, config);
     errdefer handles.deinit(allocator);
 
     const http_proxy = config.httpProxy();
@@ -154,7 +147,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, config: *const Config) 
         .allocator = allocator,
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
-        .user_agent = user_agent,
+        .config = config,
         .transfer_pool = transfer_pool,
     };
 
@@ -172,7 +165,7 @@ pub fn deinit(self: *Client) void {
 }
 
 pub fn newHeaders(self: *const Client) !Http.Headers {
-    return Http.Headers.init(self.user_agent);
+    return Http.Headers.init(self.config.http_headers.user_agent_header);
 }
 
 pub fn abort(self: *Client) void {
@@ -660,8 +653,6 @@ const Handles = struct {
         client: *Client,
         ca_blob: ?c.curl_blob,
         config: *const Config,
-        user_agent: [:0]const u8,
-        proxy_bearer_header: ?[:0]const u8,
     ) !Handles {
         const count: usize = config.httpMaxConcurrent();
         if (count == 0) return error.InvalidMaxConcurrent;
@@ -671,7 +662,7 @@ const Handles = struct {
 
         var available: HandleList = .{};
         for (0..count) |i| {
-            handles[i] = try Handle.init(client, ca_blob, config, user_agent, proxy_bearer_header);
+            handles[i] = try Handle.init(client, ca_blob, config);
             available.append(&handles[i].node);
         }
 
@@ -722,10 +713,8 @@ pub const Handle = struct {
         client: *Client,
         ca_blob: ?c.curl_blob,
         config: *const Config,
-        user_agent: [:0]const u8,
-        proxy_bearer_header: ?[:0]const u8,
     ) !Handle {
-        const conn = try Http.Connection.init(ca_blob, config, user_agent, proxy_bearer_header);
+        const conn = try Http.Connection.init(ca_blob, config);
         errdefer conn.deinit();
 
         const easy = conn.easy;

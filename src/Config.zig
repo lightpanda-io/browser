@@ -32,8 +32,23 @@ pub const RunMode = enum {
 
 mode: Mode,
 exec_name: []const u8,
+http_headers: HttpHeaders,
 
 const Config = @This();
+
+pub fn init(allocator: Allocator, exec_name: []const u8, mode: Mode) !Config {
+    var config = Config{
+        .mode = mode,
+        .exec_name = exec_name,
+        .http_headers = undefined,
+    };
+    config.http_headers = try HttpHeaders.init(allocator, &config);
+    return config;
+}
+
+pub fn deinit(self: *const Config, allocator: Allocator) void {
+    self.http_headers.deinit(allocator);
+}
 
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
@@ -52,7 +67,7 @@ pub fn httpProxy(self: *const Config) ?[:0]const u8 {
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch => |opts| opts.common.proxy_bearer_token,
-        else => unreachable,
+        .help, .version => null,
     };
 }
 
@@ -112,16 +127,8 @@ pub fn logFilterScopes(self: *const Config) ?[]const log.Scope {
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch => |opts| opts.common.user_agent_suffix,
-        else => unreachable,
+        .help, .version => null,
     };
-}
-
-pub fn userAgent(self: *const Config, allocator: Allocator) ![:0]const u8 {
-    const base = "User-Agent: Lightpanda/1.0";
-    if (self.userAgentSuffix()) |suffix| {
-        return try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ base, suffix }, 0);
-    }
-    return base;
 }
 
 pub const Mode = union(RunMode) {
@@ -162,6 +169,49 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
+};
+
+/// Pre-formatted HTTP headers for reuse across Http and Client.
+/// Must be initialized with an allocator that outlives all HTTP connections.
+pub const HttpHeaders = struct {
+    const user_agent_base: [:0]const u8 = "Lightpanda/1.0";
+
+    user_agent: [:0]const u8, // User agent value (e.g. "Lightpanda/1.0")
+    user_agent_header: [:0]const u8,
+
+    proxy_bearer_header: ?[:0]const u8,
+
+    pub fn init(allocator: Allocator, config: *const Config) !HttpHeaders {
+        const user_agent: [:0]const u8 = if (config.userAgentSuffix()) |suffix|
+            try std.fmt.allocPrintSentinel(allocator, "{s} {s}", .{ user_agent_base, suffix }, 0)
+        else
+            user_agent_base;
+        errdefer if (config.userAgentSuffix() != null) allocator.free(user_agent);
+
+        const user_agent_header = try std.fmt.allocPrintSentinel(allocator, "User-Agent: {s}", .{user_agent}, 0);
+        errdefer allocator.free(user_agent_header);
+
+        const proxy_bearer_header: ?[:0]const u8 = if (config.proxyBearerToken()) |token|
+            try std.fmt.allocPrintSentinel(allocator, "Proxy-Authorization: Bearer {s}", .{token}, 0)
+        else
+            null;
+
+        return .{
+            .user_agent = user_agent,
+            .user_agent_header = user_agent_header,
+            .proxy_bearer_header = proxy_bearer_header,
+        };
+    }
+
+    pub fn deinit(self: *const HttpHeaders, allocator: Allocator) void {
+        if (self.proxy_bearer_header) |hdr| {
+            allocator.free(hdr);
+        }
+        allocator.free(self.user_agent_header);
+        if (self.user_agent.ptr != user_agent_base.ptr) {
+            allocator.free(self.user_agent);
+        }
+    }
 };
 
 pub fn printUsageAndExit(self: *const Config, success: bool) void {
@@ -292,16 +342,12 @@ pub fn parseArgs(allocator: Allocator) !Config {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
-    const exec_name = std.fs.path.basename(args.next().?);
-
-    var config = Config{
-        .mode = .{ .help = false },
-        .exec_name = try allocator.dupe(u8, exec_name),
-    };
+    const exec_name = try allocator.dupe(u8, std.fs.path.basename(args.next().?));
 
     const mode_string = args.next() orelse "";
-    const mode = std.meta.stringToEnum(RunMode, mode_string) orelse blk: {
-        const inferred_mode = inferMode(mode_string) orelse return config;
+    const run_mode = std.meta.stringToEnum(RunMode, mode_string) orelse blk: {
+        const inferred_mode = inferMode(mode_string) orelse
+            return init(allocator, exec_name, .{ .help = false });
         // "command" wasn't a command but an option. We can't reset args, but
         // we can create a new one. Not great, but this fallback is temporary
         // as we transition to this command mode approach.
@@ -314,13 +360,15 @@ pub fn parseArgs(allocator: Allocator) !Config {
         break :blk inferred_mode;
     };
 
-    config.mode = switch (mode) {
+    const mode: Mode = switch (run_mode) {
         .help => .{ .help = true },
-        .serve => .{ .serve = parseServeArgs(allocator, &args) catch return config },
-        .fetch => .{ .fetch = parseFetchArgs(allocator, &args) catch return config },
+        .serve => .{ .serve = parseServeArgs(allocator, &args) catch
+            return init(allocator, exec_name, .{ .help = false }) },
+        .fetch => .{ .fetch = parseFetchArgs(allocator, &args) catch
+            return init(allocator, exec_name, .{ .help = false }) },
         .version => .{ .version = {} },
     };
-    return config;
+    return init(allocator, exec_name, mode);
 }
 
 fn inferMode(opt: []const u8) ?RunMode {

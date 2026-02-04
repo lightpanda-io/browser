@@ -452,21 +452,22 @@ const Server = @import("Server.zig");
 var test_cdp_server: ?Server = null;
 var test_http_server: ?TestHTTPServer = null;
 
-const test_config = Config{
-    .mode = .{ .serve = .{
-        .common = .{
-            .tls_verify_host = false,
-            .user_agent_suffix = "internal-tester",
-        },
-    } },
-    .exec_name = "test",
-};
+var test_config: Config = undefined;
 
 test "tests:beforeAll" {
     log.opts.level = .warn;
     log.opts.format = .pretty;
 
-    test_app = try App.init(@import("root").tracking_allocator, &test_config);
+    const test_allocator = @import("root").tracking_allocator;
+
+    test_config = try Config.init(test_allocator, "test", .{ .serve = .{
+        .common = .{
+            .tls_verify_host = false,
+            .user_agent_suffix = "internal-tester",
+        },
+    } });
+
+    test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
     test_browser = try Browser.init(test_app, .{});
@@ -510,6 +511,7 @@ test "tests:afterAll" {
     test_notification.deinit();
     test_browser.deinit();
     test_app.deinit();
+    test_config.deinit(@import("root").tracking_allocator);
 }
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {

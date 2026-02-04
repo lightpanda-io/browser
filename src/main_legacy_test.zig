@@ -32,15 +32,12 @@ pub fn main() !void {
         wg.wait();
     }
     lp.log.opts.level = .warn;
-    const config = lp.Config{
-        .mode = .{ .serve = .{
-            .common = .{
-                .tls_verify_host = false,
-                .user_agent_suffix = "internal-tester",
-            },
-        } },
-        .exec_name = "legacy-test",
-    };
+    const config = try lp.Config.init(allocator, "legacy-test", .{ .serve = .{
+        .common = .{
+            .tls_verify_host = false,
+            .user_agent_suffix = "internal-tester",
+        },
+    } });
     var app = try lp.App.init(allocator, &config);
     defer app.deinit();
 

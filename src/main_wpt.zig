@@ -58,15 +58,12 @@ pub fn main() !void {
     defer writer.deinit();
 
     lp.log.opts.level = .warn;
-    const config = lp.Config{
-        .mode = .{ .serve = .{
-            .common = .{
-                .tls_verify_host = false,
-                .user_agent_suffix = "internal-tester",
-            },
-        } },
-        .exec_name = "lightpanda-wpt",
-    };
+    const config = try lp.Config.init(allocator, "lightpanda-wpt", .{ .serve = .{
+        .common = .{
+            .tls_verify_host = false,
+            .user_agent_suffix = "internal-tester",
+        },
+    } });
     var app = try lp.App.init(allocator, &config);
     defer app.deinit();
 

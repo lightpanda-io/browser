@@ -45,8 +45,6 @@ config: *const Config,
 client: *Client,
 ca_blob: ?c.curl_blob,
 arena: ArenaAllocator,
-user_agent: [:0]const u8,
-proxy_bearer_header: ?[:0]const u8,
 
 pub fn init(allocator: Allocator, config: *const Config) !Http {
     try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
@@ -58,13 +56,6 @@ pub fn init(allocator: Allocator, config: *const Config) !Http {
 
     var arena = ArenaAllocator.init(allocator);
     errdefer arena.deinit();
-
-    const user_agent = try config.userAgent(arena.allocator());
-
-    var proxy_bearer_header: ?[:0]const u8 = null;
-    if (config.proxyBearerToken()) |bt| {
-        proxy_bearer_header = try std.fmt.allocPrintSentinel(arena.allocator(), "Proxy-Authorization: Bearer {s}", .{bt}, 0);
-    }
 
     var ca_blob: ?c.curl_blob = null;
     if (config.tlsVerifyHost()) {
@@ -79,8 +70,6 @@ pub fn init(allocator: Allocator, config: *const Config) !Http {
         .client = client,
         .ca_blob = ca_blob,
         .config = config,
-        .user_agent = user_agent,
-        .proxy_bearer_header = proxy_bearer_header,
     };
 }
 
@@ -107,23 +96,16 @@ pub fn removeCDPClient(self: *Http) void {
 }
 
 pub fn newConnection(self: *Http) !Connection {
-    return Connection.init(self.ca_blob, self.config, self.user_agent, self.proxy_bearer_header);
-}
-
-pub fn newHeaders(self: *const Http) Headers {
-    return Headers.init(self.user_agent);
+    return Connection.init(self.ca_blob, self.config);
 }
 
 pub const Connection = struct {
     easy: *c.CURL,
-    user_agent: [:0]const u8,
-    proxy_bearer_header: ?[:0]const u8,
+    http_headers: *const Config.HttpHeaders,
 
     pub fn init(
         ca_blob_: ?c.curl_blob,
         config: *const Config,
-        user_agent: [:0]const u8,
-        proxy_bearer_header: ?[:0]const u8,
     ) !Connection {
         const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
         errdefer _ = c.curl_easy_cleanup(easy);
@@ -188,8 +170,7 @@ pub const Connection = struct {
 
         return .{
             .easy = easy,
-            .user_agent = user_agent,
-            .proxy_bearer_header = proxy_bearer_header,
+            .http_headers = &config.http_headers,
         };
     }
 
@@ -243,7 +224,7 @@ pub const Connection = struct {
 
     // These are headers that may not be send to the users for inteception.
     pub fn secretHeaders(self: *const Connection, headers: *Headers) !void {
-        if (self.proxy_bearer_header) |hdr| {
+        if (self.http_headers.proxy_bearer_header) |hdr| {
             try headers.add(hdr);
         }
     }
@@ -251,7 +232,7 @@ pub const Connection = struct {
     pub fn request(self: *const Connection) !u16 {
         const easy = self.easy;
 
-        var header_list = try Headers.init(self.user_agent);
+        var header_list = try Headers.init(self.http_headers.user_agent_header);
         defer header_list.deinit();
         try self.secretHeaders(&header_list);
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
