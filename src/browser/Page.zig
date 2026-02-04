@@ -65,6 +65,9 @@ const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const WebApiURL = @import("webapi/URL.zig");
+const global_event_handlers = @import("webapi/global_event_handlers.zig");
+const GlobalEventHandlersLookup = global_event_handlers.Lookup;
+const GlobalEventHandler = global_event_handlers.Handler;
 
 var default_url = WebApiURL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
@@ -104,16 +107,22 @@ _element_assigned_slots: Element.AssignedSlotLookup = .{},
 /// Lazily-created inline event listeners (or listeners provided as attributes).
 /// Avoids bloating all elements with extra function fields for rare usage.
 ///
-/// Use this when a listener provided like these:
+/// Use this when a listener provided like this:
+///
+/// ```js
+/// img.onload = () => { ... };
+/// ```
+///
+/// Its also used as cache for such cases after lazy evaluation:
 ///
 /// ```html
 /// <img onload="(() => { ... })()" />
 /// ```
 ///
 /// ```js
-/// img.onload = () => { ... };
+/// img.setAttribute("onload", "(() => { ... })()");
 /// ```
-_element_attr_listeners: Element.AttrListenerLookup = .{},
+_element_attr_listeners: GlobalEventHandlersLookup = .{},
 
 _script_manager: ScriptManager,
 
@@ -1209,7 +1218,7 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
 pub fn setAttrListener(
     self: *Page,
     element: *Element,
-    listener_type: Element.KnownListener,
+    listener_type: GlobalEventHandler,
     listener_callback: JS.Function.Global,
 ) !void {
     if (comptime IS_DEBUG) {
@@ -1219,7 +1228,7 @@ pub fn setAttrListener(
         });
     }
 
-    const key = element.calcAttrListenerKey(listener_type);
+    const key = global_event_handlers.calculateKey(element.asEventTarget(), listener_type);
     const gop = try self._element_attr_listeners.getOrPut(self.arena, key);
     gop.value_ptr.* = listener_callback;
 }
@@ -1228,9 +1237,10 @@ pub fn setAttrListener(
 pub fn getAttrListener(
     self: *const Page,
     element: *Element,
-    listener_type: Element.KnownListener,
+    listener_type: GlobalEventHandler,
 ) ?JS.Function.Global {
-    return self._element_attr_listeners.get(element.calcAttrListenerKey(listener_type));
+    const key = global_event_handlers.calculateKey(element.asEventTarget(), listener_type);
+    return self._element_attr_listeners.get(key);
 }
 
 pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
@@ -2272,236 +2282,6 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
     }
     var attributes = try element.createAttributeList(self);
     while (list.next()) |attr| {
-        // Event handlers can be provided like attributes; here we check if there's such.
-        const name = attr.name.local;
-        lp.assert(name.len != 0, "populateElementAttributes: 0-length attr name", .{ .attr = attr });
-        // Idea here is to make this check as cheap as possible.
-        const has_on_prefix = @as(u16, @bitCast([2]u8{ name.ptr[0], name.ptr[1 % name.len] })) == asUint("on");
-        // We may have found an event handler.
-        if (has_on_prefix) {
-            // Must be usable as function.
-            const func = self.js.stringToPersistedFunction(attr.value.slice()) catch continue;
-
-            // Longest known listener kind is 32 bytes long.
-            const remaining: u6 = @truncate(name.len -| 2);
-            const unsafe = name.ptr + 2;
-            const Vec16x8 = @Vector(16, u8);
-            const Vec32x8 = @Vector(32, u8);
-
-            switch (remaining) {
-                3 => if (@as(u24, @bitCast(unsafe[0..3].*)) == asUint("cut")) {
-                    try self.setAttrListener(element, .cut, func);
-                },
-                4 => switch (@as(u32, @bitCast(unsafe[0..4].*))) {
-                    asUint("blur") => try self.setAttrListener(element, .blur, func),
-                    asUint("copy") => try self.setAttrListener(element, .copy, func),
-                    asUint("drag") => try self.setAttrListener(element, .drag, func),
-                    asUint("drop") => try self.setAttrListener(element, .drop, func),
-                    asUint("load") => try self.setAttrListener(element, .load, func),
-                    asUint("play") => try self.setAttrListener(element, .play, func),
-                    else => {},
-                },
-                5 => switch (@as(u40, @bitCast(unsafe[0..5].*))) {
-                    asUint("abort") => try self.setAttrListener(element, .abort, func),
-                    asUint("click") => try self.setAttrListener(element, .click, func),
-                    asUint("close") => try self.setAttrListener(element, .close, func),
-                    asUint("ended") => try self.setAttrListener(element, .ended, func),
-                    asUint("error") => try self.setAttrListener(element, .@"error", func),
-                    asUint("focus") => try self.setAttrListener(element, .focus, func),
-                    asUint("input") => try self.setAttrListener(element, .input, func),
-                    asUint("keyup") => try self.setAttrListener(element, .keyup, func),
-                    asUint("paste") => try self.setAttrListener(element, .paste, func),
-                    asUint("pause") => try self.setAttrListener(element, .pause, func),
-                    asUint("reset") => try self.setAttrListener(element, .reset, func),
-                    asUint("wheel") => try self.setAttrListener(element, .wheel, func),
-                    else => {},
-                },
-                6 => switch (@as(u48, @bitCast(unsafe[0..6].*))) {
-                    asUint("cancel") => try self.setAttrListener(element, .cancel, func),
-                    asUint("change") => try self.setAttrListener(element, .change, func),
-                    asUint("resize") => try self.setAttrListener(element, .resize, func),
-                    asUint("scroll") => try self.setAttrListener(element, .scroll, func),
-                    asUint("seeked") => try self.setAttrListener(element, .seeked, func),
-                    asUint("select") => try self.setAttrListener(element, .select, func),
-                    asUint("submit") => try self.setAttrListener(element, .submit, func),
-                    asUint("toggle") => try self.setAttrListener(element, .toggle, func),
-                    else => {},
-                },
-                7 => switch (@as(u56, @bitCast(unsafe[0..7].*))) {
-                    asUint("canplay") => try self.setAttrListener(element, .canplay, func),
-                    asUint("command") => try self.setAttrListener(element, .command, func),
-                    asUint("dragend") => try self.setAttrListener(element, .dragend, func),
-                    asUint("emptied") => try self.setAttrListener(element, .emptied, func),
-                    asUint("invalid") => try self.setAttrListener(element, .invalid, func),
-                    asUint("keydown") => try self.setAttrListener(element, .keydown, func),
-                    asUint("mouseup") => try self.setAttrListener(element, .mouseup, func),
-                    asUint("playing") => try self.setAttrListener(element, .playing, func),
-                    asUint("seeking") => try self.setAttrListener(element, .seeking, func),
-                    asUint("stalled") => try self.setAttrListener(element, .stalled, func),
-                    asUint("suspend") => try self.setAttrListener(element, .@"suspend", func),
-                    asUint("waiting") => try self.setAttrListener(element, .waiting, func),
-                    else => {},
-                },
-                8 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("auxclick") => try self.setAttrListener(element, .auxclick, func),
-                    asUint("dblclick") => try self.setAttrListener(element, .dblclick, func),
-                    asUint("dragexit") => try self.setAttrListener(element, .dragexit, func),
-                    asUint("dragover") => try self.setAttrListener(element, .dragover, func),
-                    asUint("formdata") => try self.setAttrListener(element, .formdata, func),
-                    asUint("keypress") => try self.setAttrListener(element, .keypress, func),
-                    asUint("mouseout") => try self.setAttrListener(element, .mouseout, func),
-                    asUint("progress") => try self.setAttrListener(element, .progress, func),
-                    else => {},
-                },
-                // Won't fit to 64-bit integer; we do 2 checks.
-                9 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("cuechang") => if (unsafe[8] == 'e') try self.setAttrListener(element, .cuechange, func),
-                    asUint("dragente") => if (unsafe[8] == 'r') try self.setAttrListener(element, .dragenter, func),
-                    asUint("dragleav") => if (unsafe[8] == 'e') try self.setAttrListener(element, .dragleave, func),
-                    asUint("dragstar") => if (unsafe[8] == 't') try self.setAttrListener(element, .dragstart, func),
-                    asUint("loadstar") => if (unsafe[8] == 't') try self.setAttrListener(element, .loadstart, func),
-                    asUint("mousedow") => if (unsafe[8] == 'n') try self.setAttrListener(element, .mousedown, func),
-                    asUint("mousemov") => if (unsafe[8] == 'e') try self.setAttrListener(element, .mousemove, func),
-                    asUint("mouseove") => if (unsafe[8] == 'r') try self.setAttrListener(element, .mouseover, func),
-                    asUint("pointeru") => if (unsafe[8] == 'p') try self.setAttrListener(element, .pointerup, func),
-                    asUint("scrollen") => if (unsafe[8] == 'd') try self.setAttrListener(element, .scrollend, func),
-                    else => {},
-                },
-                10 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("loadedda") => if (asUint("ta") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try self.setAttrListener(element, .loadeddata, func),
-                    asUint("pointero") => if (asUint("ut") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try self.setAttrListener(element, .pointerout, func),
-                    asUint("ratechan") => if (asUint("ge") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try self.setAttrListener(element, .ratechange, func),
-                    asUint("slotchan") => if (asUint("ge") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try self.setAttrListener(element, .slotchange, func),
-                    asUint("timeupda") => if (asUint("te") == @as(u16, @bitCast(unsafe[8..10].*)))
-                        try self.setAttrListener(element, .timeupdate, func),
-                    else => {},
-                },
-                11 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("beforein") => if (asUint("put") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .beforeinput, func),
-                    asUint("beforema") => if (asUint("tch") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .beforematch, func),
-                    asUint("contextl") => if (asUint("ost") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .contextlost, func),
-                    asUint("contextm") => if (asUint("enu") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .contextmenu, func),
-                    asUint("pointerd") => if (asUint("own") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .pointerdown, func),
-                    asUint("pointerm") => if (asUint("ove") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .pointermove, func),
-                    asUint("pointero") => if (asUint("ver") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .pointerover, func),
-                    asUint("selectst") => if (asUint("art") == @as(u24, @bitCast(unsafe[8..11].*)))
-                        try self.setAttrListener(element, .selectstart, func),
-                    else => {},
-                },
-                12 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("animatio") => if (asUint("nend") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try self.setAttrListener(element, .animationend, func),
-                    asUint("beforeto") => if (asUint("ggle") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try self.setAttrListener(element, .beforetoggle, func),
-                    asUint("pointere") => if (asUint("nter") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try self.setAttrListener(element, .pointerenter, func),
-                    asUint("pointerl") => if (asUint("eave") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try self.setAttrListener(element, .pointerleave, func),
-                    asUint("volumech") => if (asUint("ange") == @as(u32, @bitCast(unsafe[8..12].*)))
-                        try self.setAttrListener(element, .volumechange, func),
-                    else => {},
-                },
-                13 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("pointerc") => if (asUint("ancel") == @as(u40, @bitCast(unsafe[8..13].*)))
-                        try self.setAttrListener(element, .pointercancel, func),
-                    asUint("transiti") => switch (@as(u40, @bitCast(unsafe[8..13].*))) {
-                        asUint("onend") => try self.setAttrListener(element, .transitionend, func),
-                        asUint("onrun") => try self.setAttrListener(element, .transitionrun, func),
-                        else => {},
-                    },
-                    else => {},
-                },
-                14 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("animatio") => if (asUint("nstart") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try self.setAttrListener(element, .animationstart, func),
-                    asUint("canplayt") => if (asUint("hrough") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try self.setAttrListener(element, .canplaythrough, func),
-                    asUint("duration") => if (asUint("change") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try self.setAttrListener(element, .durationchange, func),
-                    asUint("loadedme") => if (asUint("tadata") == @as(u48, @bitCast(unsafe[8..14].*)))
-                        try self.setAttrListener(element, .loadedmetadata, func),
-                    else => {},
-                },
-                15 => switch (@as(u64, @bitCast(unsafe[0..8].*))) {
-                    asUint("animatio") => if (asUint("ncancel") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try self.setAttrListener(element, .animationcancel, func),
-                    asUint("contextr") => if (asUint("estored") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try self.setAttrListener(element, .contextrestored, func),
-                    asUint("fullscre") => if (asUint("enerror") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try self.setAttrListener(element, .fullscreenerror, func),
-                    asUint("selectio") => if (asUint("nchange") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try self.setAttrListener(element, .selectionchange, func),
-                    asUint("transiti") => if (asUint("onstart") == @as(u56, @bitCast(unsafe[8..15].*)))
-                        try self.setAttrListener(element, .transitionstart, func),
-                    else => {},
-                },
-                // Can't switch on vector types.
-                16 => {
-                    const as_vector: Vec16x8 = unsafe[0..16].*;
-
-                    if (@reduce(.And, as_vector == @as(Vec16x8, "fullscreenchange".*))) {
-                        try self.setAttrListener(element, .fullscreenchange, func);
-                    } else if (@reduce(.And, as_vector == @as(Vec16x8, "pointerrawupdate".*))) {
-                        try self.setAttrListener(element, .pointerrawupdate, func);
-                    } else if (@reduce(.And, as_vector == @as(Vec16x8, "transitioncancel".*))) {
-                        try self.setAttrListener(element, .transitioncancel, func);
-                    }
-                },
-                17 => {
-                    const as_vector: Vec16x8 = unsafe[0..16].*;
-
-                    const dirty = @reduce(.And, as_vector == @as(Vec16x8, "gotpointercaptur".*)) and
-                        unsafe[16] == 'e';
-                    if (dirty) {
-                        try self.setAttrListener(element, .gotpointercapture, func);
-                    }
-                },
-                18 => {
-                    const as_vector: Vec16x8 = unsafe[0..16].*;
-
-                    const is_animationiteration = @reduce(.And, as_vector == @as(Vec16x8, "animationiterati".*)) and
-                        asUint("on") == @as(u16, @bitCast(unsafe[16..18].*));
-                    if (is_animationiteration) {
-                        try self.setAttrListener(element, .animationiteration, func);
-                    } else {
-                        const is_lostpointercapture = @reduce(.And, as_vector == @as(Vec16x8, "lostpointercaptu".*)) and
-                            asUint("re") == @as(u16, @bitCast(unsafe[16..18].*));
-                        if (is_lostpointercapture) {
-                            try self.setAttrListener(element, .lostpointercapture, func);
-                        }
-                    }
-                },
-                23 => {
-                    const as_vector: Vec16x8 = unsafe[0..16].*;
-
-                    const dirty = @reduce(.And, as_vector == @as(Vec16x8, "securitypolicyvi".*)) and
-                        asUint("olation") == @as(u56, @bitCast(unsafe[16..23].*));
-                    if (dirty) {
-                        try self.setAttrListener(element, .securitypolicyviolation, func);
-                    }
-                },
-                32 => {
-                    const as_vector: Vec32x8 = unsafe[0..32].*;
-
-                    if (@reduce(.And, as_vector == @as(Vec32x8, "contentvisibilityautostatechange".*))) {
-                        try self.setAttrListener(element, .contentvisibilityautostatechange, func);
-                    }
-                },
-                else => {},
-            }
-        }
-
         try attributes.putNew(attr.name.local.slice(), attr.value.slice(), self);
     }
 }
@@ -3364,7 +3144,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
     if (submit_opts.fire_event) {
         const submit_event = try Event.initTrusted("submit", .{ .bubbles = true, .cancelable = true }, self);
-        const onsubmit_handler = form.asHtmlElement().getOnSubmit(self);
+        const onsubmit_handler = try form.asHtmlElement().getOnSubmit(self);
 
         var ls: JS.Local.Scope = undefined;
         self.js.localScope(&ls);
