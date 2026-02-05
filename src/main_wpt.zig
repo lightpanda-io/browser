@@ -64,6 +64,8 @@ pub fn main() !void {
             .user_agent_suffix = "internal-tester",
         },
     } });
+    defer config.deinit(allocator);
+
     var app = try lp.App.init(allocator, &config);
     defer app.deinit();
 
