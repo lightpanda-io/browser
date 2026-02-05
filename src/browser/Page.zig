@@ -757,7 +757,7 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         switch (mime.content_type) {
             .text_html => self._parse_state = .{ .html = .{} },
             .application_json, .text_javascript, .text_css, .text_plain => {
-                var arr: std.ArrayListUnmanaged(u8) = .empty;
+                var arr: std.ArrayList(u8) = .empty;
                 try arr.appendSlice(self.arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
                 self._parse_state = .{ .text = arr };
             },
@@ -2866,9 +2866,9 @@ const ParseState = union(enum) {
     pre,
     complete,
     err: anyerror,
-    html: std.ArrayListUnmanaged(u8),
-    text: std.ArrayListUnmanaged(u8),
-    raw: std.ArrayListUnmanaged(u8),
+    html: std.ArrayList(u8),
+    text: std.ArrayList(u8),
+    raw: std.ArrayList(u8),
     raw_done: []const u8,
 };
 

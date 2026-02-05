@@ -123,7 +123,7 @@ pub const Search = struct {
         search_id: u16 = 0,
         registry: *Registry,
         arena: std.heap.ArenaAllocator,
-        searches: std.ArrayListUnmanaged(Search) = .{},
+        searches: std.ArrayList(Search) = .{},
 
         pub fn init(allocator: Allocator, registry: *Registry) List {
             return .{

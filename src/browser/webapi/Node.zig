@@ -667,7 +667,7 @@ pub fn setData(self: *Node, data: []const u8, page: *Page) !void {
 }
 
 pub fn normalize(self: *Node, page: *Page) !void {
-    var buffer: std.ArrayListUnmanaged(u8) = .empty;
+    var buffer: std.ArrayList(u8) = .empty;
     return self._normalize(page.call_arena, &buffer, page);
 }
 
@@ -797,7 +797,7 @@ fn isNodeBefore(node1: *const Node, node2: *const Node) bool {
     return false;
 }
 
-fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayListUnmanaged(u8), page: *Page) !void {
+fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), page: *Page) !void {
     var it = self.childrenIterator();
     while (it.next()) |child| {
         try child._normalize(allocator, buffer, page);

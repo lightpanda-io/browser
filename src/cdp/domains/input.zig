@@ -120,7 +120,7 @@ fn insertText(cmd: anytype) !void {
 fn clickNavigate(cmd: anytype, uri: std.Uri) !void {
     const bc = cmd.browser_context.?;
 
-    var url_buf: std.ArrayListUnmanaged(u8) = .{};
+    var url_buf: std.ArrayList(u8) = .{};
     try uri.writeToStream(.{
         .scheme = true,
         .authentication = true,

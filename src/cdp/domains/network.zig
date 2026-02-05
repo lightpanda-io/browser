@@ -178,7 +178,7 @@ fn getCookies(cmd: anytype) !void {
     const page_url = if (bc.session.page) |page| page.url else null;
     const param_urls = params.urls orelse &[_][:0]const u8{page_url orelse return error.InvalidParams};
 
-    var urls = try std.ArrayListUnmanaged(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
+    var urls = try std.ArrayList(CdpStorage.PreparedUri).initCapacity(cmd.arena, param_urls.len);
     for (param_urls) |url| {
         urls.appendAssumeCapacity(.{
             .host = try Cookie.parseDomain(cmd.arena, url, null),

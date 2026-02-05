@@ -561,7 +561,7 @@ pub const Client = struct {
 
     pub fn sendJSONRaw(
         self: *Client,
-        buf: std.ArrayListUnmanaged(u8),
+        buf: std.ArrayList(u8),
     ) !void {
         // Dangerous API!. We assume the caller has reserved the first 10
         // bytes in `buf`.
@@ -883,7 +883,7 @@ fn growBuffer(allocator: Allocator, buf: []u8, required_capacity: usize) ![]u8 {
 
 const Fragments = struct {
     type: Message.Type,
-    message: std.ArrayListUnmanaged(u8),
+    message: std.ArrayList(u8),
 };
 
 const Message = struct {
@@ -907,7 +907,7 @@ const OpCode = enum(u8) {
     pong = 128 | 10,
 };
 
-fn fillWebsocketHeader(buf: std.ArrayListUnmanaged(u8)) []const u8 {
+fn fillWebsocketHeader(buf: std.ArrayList(u8)) []const u8 {
     // can't use buf[0..10] here, because the header length
     // is variable. If it's just 2 bytes, for example, we need the
     // framed message to be:
@@ -1342,7 +1342,7 @@ fn assertWebSocketMessage(expected: []const u8, input: []const u8) !void {
 }
 
 const MockCDP = struct {
-    messages: std.ArrayListUnmanaged([]const u8) = .{},
+    messages: std.ArrayList([]const u8) = .{},
 
     allocator: Allocator = testing.allocator,
 

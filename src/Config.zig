@@ -724,7 +724,7 @@ fn parseCommonArg(
             return true;
         };
 
-        var arr: std.ArrayListUnmanaged(log.Scope) = .empty;
+        var arr: std.ArrayList(log.Scope) = .empty;
 
         var it = std.mem.splitScalar(u8, str, ',');
         while (it.next()) |part| {

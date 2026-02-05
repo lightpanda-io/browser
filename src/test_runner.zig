@@ -57,7 +57,7 @@ const Runner = struct {
 
     // per-test arena, used for collecting substests
     arena: Allocator,
-    subtests: std.ArrayListUnmanaged([]const u8),
+    subtests: std.ArrayList([]const u8),
 
     fn init(allocator: Allocator, arena: Allocator, ta: *TrackingAllocator, env: Env) Runner {
         return .{

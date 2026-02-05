@@ -46,7 +46,7 @@ pub const Entry = struct {
 
 pub const KeyValueList = @This();
 
-_entries: std.ArrayListUnmanaged(Entry) = .empty,
+_entries: std.ArrayList(Entry) = .empty,
 
 pub const empty: KeyValueList = .{
     ._entries = .empty,
