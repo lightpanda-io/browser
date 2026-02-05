@@ -501,6 +501,10 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
                 return 0;
             }
 
+            if (std.mem.startsWith(u8, property, "jQuery")) {
+                return 0;
+            }
+
             if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
                 if (std.mem.eql(u8, property, "tagName")) {
                     // knockout does this, a lot.
