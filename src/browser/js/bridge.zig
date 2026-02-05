@@ -410,7 +410,7 @@ const Finalizer = struct {
     from_v8: *const fn (?*const v8.WeakCallbackInfo) callconv(.c) void,
 };
 
-pub fn unknownPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
     const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
     var caller: Caller = undefined;
     caller.init(v8_isolate);
@@ -469,6 +469,58 @@ pub fn unknownPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8.Prope
 
     // not intercepted
     return 0;
+}
+
+// Only used for debugging
+pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8.Name, ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+    if (comptime !IS_DEBUG) {
+        @compileError("unknownObjectPropertyCallback should only be used in debug builds");
+    }
+
+    return struct {
+        fn wrap(c_name: ?*const v8.Name, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+            const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+
+            var caller: Caller = undefined;
+            caller.init(v8_isolate);
+            defer caller.deinit();
+
+            const local = &caller.local;
+
+            var hs: js.HandleScope = undefined;
+            hs.init(local.isolate);
+            defer hs.deinit();
+
+            const property: []const u8 = js.String.toSlice(.{ .local = local, .handle = @ptrCast(c_name.?) }) catch {
+                return 0;
+            };
+
+            if (std.mem.startsWith(u8, property, "__")) {
+                // some frameworks will extend built-in types using a __ prefix
+                // these should always be safe to ignore.
+                return 0;
+            }
+
+            if (JsApi == @import("../webapi/cdata/Text.zig").JsApi or JsApi == @import("../webapi/cdata/Comment.zig").JsApi) {
+                if (std.mem.eql(u8, property, "tagName")) {
+                    // knockout does this, a lot.
+                    return 0;
+                }
+            }
+
+            const ignored = std.StaticStringMap(void).initComptime(.{});
+            if (!ignored.has(property)) {
+                log.debug(.unknown_prop, "unknown object property", .{
+                    .object = if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi),
+                    .info = "but the property can exist in pure JS",
+                    .stack = local.stackTrace() catch "???",
+                    .property = property,
+                });
+            }
+            // not intercepted
+            return 0;
+        }
+    }.wrap;
 }
 
 // Given a Type, returns the length of the prototype chain, including self

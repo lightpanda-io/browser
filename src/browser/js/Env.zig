@@ -142,7 +142,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
 
         const global_template_local = v8.v8__FunctionTemplate__InstanceTemplate(js_global).?;
         v8.v8__ObjectTemplate__SetNamedHandler(global_template_local, &.{
-            .getter = bridge.unknownPropertyCallback,
+            .getter = bridge.unknownWindowPropertyCallback,
             .setter = null,
             .query = null,
             .deleter = null,

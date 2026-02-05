@@ -261,6 +261,19 @@ pub fn create() !Snapshot {
     };
 }
 
+// Helper to check if a JsApi has a NamedIndexed handler
+fn hasNamedIndexedGetter(comptime JsApi: type) bool {
+    const declarations = @typeInfo(JsApi).@"struct".decls;
+    inline for (declarations) |d| {
+        const value = @field(JsApi, d.name);
+        const T = @TypeOf(value);
+        if (T == bridge.NamedIndexed) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Count total callbacks needed for external_references array
 fn countExternalReferences() comptime_int {
     @setEvalBranchQuota(100_000);
@@ -297,6 +310,15 @@ fn countExternalReferences() comptime_int {
                 count += 1; // getter
                 if (value.setter != null) count += 1;
                 if (value.deleter != null) count += 1;
+            }
+        }
+    }
+
+    // In debug mode, add unknown property callbacks for types without NamedIndexed
+    if (comptime IS_DEBUG) {
+        inline for (JsApis) |JsApi| {
+            if (!hasNamedIndexedGetter(JsApi)) {
+                count += 1;
             }
         }
     }
@@ -357,6 +379,16 @@ fn collectExternalReferences() [countExternalReferences()]isize {
         }
     }
 
+    // In debug mode, collect unknown property callbacks for types without NamedIndexed
+    if (comptime IS_DEBUG) {
+        inline for (JsApis) |JsApi| {
+            if (!hasNamedIndexedGetter(JsApi)) {
+                references[idx] = @bitCast(@intFromPtr(bridge.unknownObjectPropertyCallback(JsApi)));
+                idx += 1;
+            }
+        }
+    }
+
     return references;
 }
 
@@ -393,6 +425,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
     const instance = v8.v8__FunctionTemplate__InstanceTemplate(template);
 
     const declarations = @typeInfo(JsApi).@"struct".decls;
+    var has_named_index_getter = false;
 
     inline for (declarations) |d| {
         const name: [:0]const u8 = d.name;
@@ -453,6 +486,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
                 };
                 v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
+                has_named_index_getter = true;
             },
             bridge.Iterator => {
                 const function_template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.func).?);
@@ -489,6 +523,23 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
         const js_name = v8.v8__Symbol__GetToStringTag(isolate);
         const js_value = v8.v8__String__NewFromUtf8(isolate, JsApi.Meta.name.ptr, v8.kNormal, @intCast(JsApi.Meta.name.len));
         v8.v8__Template__Set(@ptrCast(instance), js_name, js_value, v8.ReadOnly + v8.DontDelete);
+    }
+
+    if (comptime IS_DEBUG) {
+        if (!has_named_index_getter) {
+            var configuration: v8.NamedPropertyHandlerConfiguration = .{
+                .getter = bridge.unknownObjectPropertyCallback(JsApi),
+                .setter = null,
+                .query = null,
+                .deleter = null,
+                .enumerator = null,
+                .definer = null,
+                .descriptor = null,
+                .data = null,
+                .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
+            };
+            v8.v8__ObjectTemplate__SetNamedHandler(instance, &configuration);
+        }
     }
 }
 
