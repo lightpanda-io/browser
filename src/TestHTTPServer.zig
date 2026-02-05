@@ -41,9 +41,10 @@ pub fn deinit(self: *TestHTTPServer) void {
 pub fn stop(self: *TestHTTPServer) void {
     self.shutdown.store(true, .release);
     if (self.listener) |*listener| {
-        // Use shutdown to unblock accept(). On Linux this causes accept to
-        // return error.SocketNotListening. close() alone doesn't interrupt accept().
-        std.posix.shutdown(listener.stream.handle, .recv) catch {};
+        switch (@import("builtin").target.os.tag) {
+            .linux => std.posix.shutdown(listener.stream.handle, .recv) catch {},
+            else => std.posix.close(listener.stream.handle),
+        }
     }
 }
 
