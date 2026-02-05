@@ -100,7 +100,6 @@ pub fn setInnerText(self: *Script, text: []const u8, page: *Page) !void {
     try self.asNode().setTextContent(text, page);
 }
 
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Script);
 
