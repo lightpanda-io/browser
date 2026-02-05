@@ -33,13 +33,36 @@ const Allocator = std.mem.Allocator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
+const EventKey = struct {
+    event_target: usize,
+    type_string: String,
+};
+
+const EventKeyContext = struct {
+    pub fn hash(_: @This(), key: EventKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(std.mem.asBytes(&key.event_target));
+        hasher.update(key.type_string.str());
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: EventKey, b: EventKey) bool {
+        return a.event_target == b.event_target and a.type_string.eql(b.type_string);
+    }
+};
+
 pub const EventManager = @This();
 
 page: *Page,
 arena: Allocator,
 listener_pool: std.heap.MemoryPool(Listener),
 list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
-lookup: std.AutoHashMapUnmanaged(usize, *std.DoublyLinkedList),
+lookup: std.HashMapUnmanaged(
+    EventKey,
+    *std.DoublyLinkedList,
+    EventKeyContext,
+    std.hash_map.default_max_load_percentage,
+),
 dispatch_depth: usize,
 deferred_removals: std.ArrayList(struct { list: *std.DoublyLinkedList, listener: *Listener }),
 
@@ -79,20 +102,24 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
         }
     }
 
-    const gop = try self.lookup.getOrPut(self.arena, @intFromPtr(target));
+    // Allocate the type string we'll use in both listener and key
+    const type_string = try String.init(self.arena, typ, .{});
+
+    const gop = try self.lookup.getOrPut(self.arena, .{
+        .type_string = type_string,
+        .event_target = @intFromPtr(target),
+    });
     if (gop.found_existing) {
         // check for duplicate callbacks already registered
         var node = gop.value_ptr.*.first;
         while (node) |n| {
             const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
-            if (listener.typ.eqlSlice(typ)) {
-                const is_duplicate = switch (callback) {
-                    .object => |obj| listener.function.eqlObject(obj),
-                    .function => |func| listener.function.eqlFunction(func),
-                };
-                if (is_duplicate and listener.capture == opts.capture) {
-                    return;
-                }
+            const is_duplicate = switch (callback) {
+                .object => |obj| listener.function.eqlObject(obj),
+                .function => |func| listener.function.eqlFunction(func),
+            };
+            if (is_duplicate and listener.capture == opts.capture) {
+                return;
             }
             node = n.next;
         }
@@ -114,15 +141,18 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
         .passive = opts.passive,
         .function = func,
         .signal = opts.signal,
-        .typ = try String.init(self.arena, typ, .{}),
+        .typ = type_string,
     };
     // append the listener to the list of listeners for this target
     gop.value_ptr.*.append(&listener.node);
 }
 
 pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
-    const list = self.lookup.get(@intFromPtr(target)) orelse return;
-    if (findListener(list, typ, callback, use_capture)) |listener| {
+    const list = self.lookup.get(.{
+        .type_string = .wrap(typ),
+        .event_target = @intFromPtr(target),
+    }) orelse return;
+    if (findListener(list, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
     }
 }
@@ -156,7 +186,10 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
         .screen_orientation,
         .generic,
         => {
-            const list = self.lookup.get(@intFromPtr(target)) orelse return;
+            const list = self.lookup.get(.{
+                .event_target = @intFromPtr(target),
+                .type_string = event._type_string,
+            }) orelse return;
             try self.dispatchAll(list, target, event, &was_handled);
         },
     }
@@ -199,7 +232,10 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
         }
     }
 
-    const list = self.lookup.get(@intFromPtr(target)) orelse return;
+    const list = self.lookup.get(.{
+        .event_target = @intFromPtr(target),
+        .type_string = event._type_string,
+    }) orelse return;
     try self.dispatchAll(list, target, event, &was_dispatched);
 }
 
@@ -267,7 +303,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     while (i > 1) {
         i -= 1;
         const current_target = path[i];
-        if (self.lookup.get(@intFromPtr(current_target))) |list| {
+        if (self.lookup.get(.{
+            .event_target = @intFromPtr(current_target),
+            .type_string = event._type_string,
+        })) |list| {
             try self.dispatchPhase(list, current_target, event, was_handled, true);
             if (event._stop_propagation) {
                 return;
@@ -278,7 +317,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     // Phase 2: At target
     event._event_phase = .at_target;
     const target_et = target.asEventTarget();
-    if (self.lookup.get(@intFromPtr(target_et))) |list| {
+    if (self.lookup.get(.{
+        .type_string = event._type_string,
+        .event_target = @intFromPtr(target_et),
+    })) |list| {
         try self.dispatchPhase(list, target_et, event, was_handled, null);
         if (event._stop_propagation) {
             return;
@@ -290,7 +332,10 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     if (event._bubbles) {
         event._event_phase = .bubbling_phase;
         for (path[1..]) |current_target| {
-            if (self.lookup.get(@intFromPtr(current_target))) |list| {
+            if (self.lookup.get(.{
+                .type_string = event._type_string,
+                .event_target = @intFromPtr(current_target),
+            })) |list| {
                 try self.dispatchPhase(list, current_target, event, was_handled, false);
                 if (event._stop_propagation) {
                     break;
@@ -302,7 +347,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
 
 fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime capture_only: ?bool) !void {
     const page = self.page;
-    const typ = event._type_string;
 
     // Track dispatch depth for deferred removal
     self.dispatch_depth += 1;
@@ -337,9 +381,6 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         node = n.next;
 
         // Skip non-matching listeners
-        if (!listener.typ.eql(typ)) {
-            continue;
-        }
         if (comptime capture_only) |capture| {
             if (listener.capture != capture) {
                 continue;
@@ -419,7 +460,7 @@ fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *L
     }
 }
 
-fn findListener(list: *const std.DoublyLinkedList, typ: []const u8, callback: Callback, capture: bool) ?*Listener {
+fn findListener(list: *const std.DoublyLinkedList, callback: Callback, capture: bool) ?*Listener {
     var node = list.first;
     while (node) |n| {
         node = n.next;
@@ -432,9 +473,6 @@ fn findListener(list: *const std.DoublyLinkedList, typ: []const u8, callback: Ca
             continue;
         }
         if (listener.capture != capture) {
-            continue;
-        }
-        if (!listener.typ.eqlSlice(typ)) {
             continue;
         }
         return listener;
