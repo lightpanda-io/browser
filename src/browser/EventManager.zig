@@ -34,20 +34,20 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
 const EventKey = struct {
-    element: usize,
+    event_target: usize,
     type_string: String,
 };
 
 const EventKeyContext = struct {
     pub fn hash(_: @This(), key: EventKey) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        hasher.update(std.mem.asBytes(&key.element));
+        hasher.update(std.mem.asBytes(&key.event_target));
         hasher.update(key.type_string.str());
         return hasher.final();
     }
 
     pub fn eql(_: @This(), a: EventKey, b: EventKey) bool {
-        return a.element == b.element and a.type_string.eql(b.type_string);
+        return a.event_target == b.event_target and a.type_string.eql(b.type_string);
     }
 };
 
@@ -106,8 +106,8 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
     const type_string = try String.init(self.arena, typ, .{});
 
     const gop = try self.lookup.getOrPut(self.arena, .{
-        .element = @intFromPtr(target),
         .type_string = type_string,
+        .event_target = @intFromPtr(target),
     });
     if (gop.found_existing) {
         // check for duplicate callbacks already registered
@@ -149,8 +149,8 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
 
 pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
     const list = self.lookup.get(.{
-        .element = @intFromPtr(target),
         .type_string = .wrap(typ),
+        .event_target = @intFromPtr(target),
     }) orelse return;
     if (findListener(list, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
@@ -187,7 +187,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
         .generic,
         => {
             const list = self.lookup.get(.{
-                .element = @intFromPtr(target),
+                .event_target = @intFromPtr(target),
                 .type_string = event._type_string,
             }) orelse return;
             try self.dispatchAll(list, target, event, &was_handled);
@@ -233,7 +233,7 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
     }
 
     const list = self.lookup.get(.{
-        .element = @intFromPtr(target),
+        .event_target = @intFromPtr(target),
         .type_string = event._type_string,
     }) orelse return;
     try self.dispatchAll(list, target, event, &was_dispatched);
@@ -304,7 +304,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
         i -= 1;
         const current_target = path[i];
         if (self.lookup.get(.{
-            .element = @intFromPtr(current_target),
+            .event_target = @intFromPtr(current_target),
             .type_string = event._type_string,
         })) |list| {
             try self.dispatchPhase(list, current_target, event, was_handled, true);
@@ -318,8 +318,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     event._event_phase = .at_target;
     const target_et = target.asEventTarget();
     if (self.lookup.get(.{
-        .element = @intFromPtr(target_et),
         .type_string = event._type_string,
+        .event_target = @intFromPtr(target_et),
     })) |list| {
         try self.dispatchPhase(list, target_et, event, was_handled, null);
         if (event._stop_propagation) {
@@ -333,8 +333,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
         event._event_phase = .bubbling_phase;
         for (path[1..]) |current_target| {
             if (self.lookup.get(.{
-                .element = @intFromPtr(current_target),
                 .type_string = event._type_string,
+                .event_target = @intFromPtr(current_target),
             })) |list| {
                 try self.dispatchPhase(list, current_target, event, was_handled, false);
                 if (event._stop_propagation) {
