@@ -244,6 +244,18 @@ pub fn weakRef(self: *Context, obj: anytype) void {
     v8.v8__Global__SetWeakFinalizer(global, obj, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
 }
 
+pub fn safeWeakRef(self: *Context, obj: anytype) void {
+    const global = self.identity_map.getPtr(@intFromPtr(obj)) orelse {
+        if (comptime IS_DEBUG) {
+            // should not be possible
+            std.debug.assert(false);
+        }
+        return;
+    };
+    v8.v8__Global__ClearWeak(global);
+    v8.v8__Global__SetWeakFinalizer(global, obj, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
+}
+
 pub fn strongRef(self: *Context, obj: anytype) void {
     const global = self.identity_map.getPtr(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
