@@ -31,7 +31,7 @@ const Http = @import("../http/Http.zig");
 const Element = @import("webapi/Element.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArrayList = std.ArrayList;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -634,7 +634,7 @@ pub const Script = struct {
 
     const Source = union(enum) {
         @"inline": []const u8,
-        remote: std.ArrayListUnmanaged(u8),
+        remote: std.ArrayList(u8),
 
         fn content(self: Source) []const u8 {
             return switch (self) {
@@ -900,7 +900,7 @@ const BufferPool = struct {
 
     const Container = struct {
         node: List.Node,
-        buf: std.ArrayListUnmanaged(u8),
+        buf: std.ArrayList(u8),
     };
 
     fn init(allocator: Allocator, max_concurrent_transfers: u8) BufferPool {
@@ -925,7 +925,7 @@ const BufferPool = struct {
         self.mem_pool.deinit();
     }
 
-    fn get(self: *BufferPool) std.ArrayListUnmanaged(u8) {
+    fn get(self: *BufferPool) std.ArrayList(u8) {
         const node = self.available.popFirst() orelse {
             // return a new buffer
             return .{};
@@ -937,7 +937,7 @@ const BufferPool = struct {
         return container.buf;
     }
 
-    fn release(self: *BufferPool, buffer: ArrayListUnmanaged(u8)) void {
+    fn release(self: *BufferPool, buffer: ArrayList(u8)) void {
         // create mutable copy
         var b = buffer;
 

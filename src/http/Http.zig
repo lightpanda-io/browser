@@ -364,7 +364,7 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
     }
 
     const encoder = std.base64.standard.Encoder;
-    var arr: std.ArrayListUnmanaged(u8) = .empty;
+    var arr: std.ArrayList(u8) = .empty;
 
     const encoded_size = encoder.calcSize(bytes.len);
     const buffer_size = encoded_size +
@@ -399,7 +399,7 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
 // and footer
 const LineWriter = struct {
     col: usize = 0,
-    inner: std.ArrayListUnmanaged(u8).Writer,
+    inner: std.ArrayList(u8).Writer,
 
     pub fn writeAll(self: *LineWriter, data: []const u8) !void {
         var writer = self.inner;

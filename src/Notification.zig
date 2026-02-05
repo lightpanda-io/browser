@@ -61,7 +61,7 @@ event_listeners: EventListeners,
 // list of listeners for a specified receiver
 // @intFromPtr(receiver) -> [listener1, listener2, ...]
 // Used when `unregisterAll` is called.
-listeners: std.AutoHashMapUnmanaged(usize, std.ArrayListUnmanaged(*Listener)),
+listeners: std.AutoHashMapUnmanaged(usize, std.ArrayList(*Listener)),
 
 allocator: Allocator,
 mem_pool: std.heap.MemoryPool(Listener),

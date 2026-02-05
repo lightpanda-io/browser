@@ -158,7 +158,7 @@ const Writer = struct {
     case_pass_count: usize = 0,
     case_fail_count: usize = 0,
     writer: std.fs.File.Writer,
-    cases: std.ArrayListUnmanaged(Case) = .{},
+    cases: std.ArrayList(Case) = .{},
 
     const Format = enum { json, text, summary, quiet };
 
@@ -337,7 +337,7 @@ fn parseArgs(arena: Allocator) !Command {
     const exec_name = args.next().?;
 
     var format = Writer.Format.text;
-    var filters: std.ArrayListUnmanaged([]const u8) = .{};
+    var filters: std.ArrayList([]const u8) = .{};
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {

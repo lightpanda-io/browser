@@ -28,7 +28,7 @@ _fatal: bool,
 _page: *Page,
 _arena: Allocator,
 _ignore_bom: bool,
-_stream: std.ArrayListUnmanaged(u8),
+_stream: std.ArrayList(u8),
 
 const Label = enum {
     utf8,

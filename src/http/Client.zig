@@ -565,7 +565,7 @@ fn processMessages(self: *Client) !bool {
 
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
-         if (transfer._auth_challenge != null and transfer._tries < 10) {
+        if (transfer._auth_challenge != null and transfer._tries < 10) {
             var wait_for_interception = false;
             transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
             if (wait_for_interception) {
@@ -764,7 +764,7 @@ pub const RequestCookie = struct {
     origin: [:0]const u8,
 
     pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
-        var arr: std.ArrayListUnmanaged(u8) = .{};
+        var arr: std.ArrayList(u8) = .{};
         try self.jar.forRequest(url, arr.writer(temp), .{
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
@@ -992,7 +992,7 @@ pub const Transfer = struct {
     pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Http.Header) !void {
         self.req.headers.deinit();
 
-        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        var buf: std.ArrayList(u8) = .empty;
         var new_headers = try self.client.newHeaders();
         for (headers) |hdr| {
             // safe to re-use this buffer, because Headers.add because curl copies
@@ -1077,7 +1077,7 @@ pub const Transfer = struct {
         const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
         transfer.url = url;
 
-        var cookies: std.ArrayListUnmanaged(u8) = .{};
+        var cookies: std.ArrayList(u8) = .{};
         try req.cookie_jar.forRequest(url, cookies.writer(arena), .{
             .is_http = true,
             .origin_url = url,

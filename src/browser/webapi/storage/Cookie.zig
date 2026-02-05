@@ -379,7 +379,7 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
 
 pub const Jar = struct {
     allocator: Allocator,
-    cookies: std.ArrayListUnmanaged(Cookie),
+    cookies: std.ArrayList(Cookie),
 
     pub fn init(allocator: Allocator) Jar {
         return .{
@@ -635,7 +635,7 @@ test "Jar: add" {
 test "Jar: forRequest" {
     const expectCookies = struct {
         fn expect(expected: []const u8, jar: *Jar, target_url: [:0]const u8, opts: Jar.LookupOpts) !void {
-            var arr: std.ArrayListUnmanaged(u8) = .empty;
+            var arr: std.ArrayList(u8) = .empty;
             defer arr.deinit(testing.allocator);
             try jar.forRequest(target_url, arr.writer(testing.allocator), opts);
             try testing.expectEqual(expected, arr.items);

@@ -182,7 +182,7 @@ const MockProvider = struct {
     iid: ?[]const u8,
     run_mode: ?Config.RunMode,
     allocator: Allocator,
-    events: std.ArrayListUnmanaged(Event),
+    events: std.ArrayList(Event),
 
     fn init(app: *App) !@This() {
         return .{
