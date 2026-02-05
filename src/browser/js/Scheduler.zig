@@ -74,7 +74,6 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
     });
 }
 
-
 pub fn run(self: *Scheduler) !?u64 {
     _ = try self.runQueue(&self.low_priority);
     return self.runQueue(&self.high_priority);

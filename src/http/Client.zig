@@ -565,7 +565,7 @@ fn processMessages(self: *Client) !bool {
 
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
-         if (transfer._auth_challenge != null and transfer._tries < 10) {
+        if (transfer._auth_challenge != null and transfer._tries < 10) {
             var wait_for_interception = false;
             transfer.req.notification.dispatch(.http_request_auth_required, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
             if (wait_for_interception) {

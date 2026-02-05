@@ -903,9 +903,9 @@ pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
     const original = page.js;
     page.js = self;
 
-    const handle: *const v8.Context =  @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
+    const handle: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
     v8.v8__Context__Enter(handle);
-    return .{.original = original, .handle = handle, .handle_scope = hs};
+    return .{ .original = original, .handle = handle, .handle_scope = hs };
 }
 
 const Entered = struct {
