@@ -5,6 +5,10 @@ const URL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Event = @import("../../Event.zig");
+const log = @import("../../../../log.zig");
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Image = @This();
 _proto: *HtmlElement,
@@ -113,6 +117,19 @@ pub const JsApi = struct {
     pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{});
     pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{});
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
+};
+
+pub const Build = struct {
+    pub fn created(node: *Node, page: *Page) !void {
+        const self = node.as(Image);
+        const image = self.asElement();
+        // Exit if src not set.
+        // TODO: We might want to check if src point to valid image.
+        _ = image.getAttributeSafe(comptime .wrap("src")) orelse return;
+
+        // Push to `_to_load` to dispatch load event just before window load event.
+        return page._to_load.append(page.arena, image);
+    }
 };
 
 const testing = @import("../../../../testing.zig");

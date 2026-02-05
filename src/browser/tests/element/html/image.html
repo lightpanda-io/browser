@@ -97,3 +97,62 @@
     testing.expectEqual('lazy', img.getAttribute('loading'));
 }
 </script>
+
+<script id="load-trigger-event">
+{
+  const img = document.createElement("img");
+  let count = 0;
+  img.addEventListener("load", ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
+    testing.expectEqual(true, count < 3);
+    count++;
+
+    testing.expectEqual(false, bubbles);
+    testing.expectEqual(false, cancelBubble);
+    testing.expectEqual(false, cancelable);
+    testing.expectEqual(false, composed);
+    testing.expectEqual(true, isTrusted);
+    testing.expectEqual(img, target);
+  });
+
+  for (let i = 0; i < 3; i++) {
+    img.src = "https://cdn.lightpanda.io/website/assets/images/docs/hn.png";
+    testing.expectEqual("https://cdn.lightpanda.io/website/assets/images/docs/hn.png", img.src);
+  }
+
+  // Make sure count is incremented asynchronously.
+  testing.expectEqual(0, count);
+}
+</script>
+
+<img
+  id="inline-img"
+  src="https://cdn.lightpanda.io/website/assets/images/docs/hn.png"
+  onload="(() => testing.expectEqual(true, true))()"
+/>
+
+<script id="inline-on-load">
+{
+  const img = document.getElementById("inline-img");
+  testing.expectEqual(true, img.onload instanceof Function);
+  // Also call inline to double check.
+  img.onload();
+
+  // Make sure ones attached with `addEventListener` also executed.
+  testing.async(async () => {
+    const result = await new Promise(resolve => {
+      img.addEventListener("load", ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
+        testing.expectEqual(false, bubbles);
+        testing.expectEqual(false, cancelBubble);
+        testing.expectEqual(false, cancelable);
+        testing.expectEqual(false, composed);
+        testing.expectEqual(true, isTrusted);
+        testing.expectEqual(img, target);
+
+        return resolve(true);
+      });
+    });
+
+    testing.expectEqual(true, result);
+  });
+}
+</script>

@@ -41,8 +41,10 @@ const Parser = @import("parser/Parser.zig");
 const URL = @import("URL.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
+const EventTarget = @import("webapi/EventTarget.zig");
 const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
+const HtmlElement = @import("webapi/element/Html.zig");
 const Window = @import("webapi/Window.zig");
 const Location = @import("webapi/Location.zig");
 const Document = @import("webapi/Document.zig");
@@ -123,6 +125,10 @@ _element_assigned_slots: Element.AssignedSlotLookup = .{},
 /// img.setAttribute("onload", "(() => { ... })()");
 /// ```
 _element_attr_listeners: GlobalEventHandlersLookup = .{},
+
+/// `load` events that'll be fired before window's `load` event.
+/// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
+_to_load: std.ArrayList(*Element) = .{},
 
 _script_manager: ScriptManager,
 
@@ -334,6 +340,8 @@ fn reset(self: *Page, comptime initializing: bool) !void {
     self._element_assigned_slots = .{};
 
     self._element_attr_listeners = .{};
+
+    self._to_load = .{};
 
     self._notified_network_idle = .init;
     self._notified_network_almost_idle = .init;
@@ -690,15 +698,34 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
-    // dispatch window.load event
     const event = try Event.initTrusted("load", .{}, self);
-    // this event is weird, it's dispatched directly on the window, but
-    // with the document as the target
 
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
 
+    // Dispatch `_to_load` events before window.load.
+    for (self._to_load.items) |element| {
+        const maybe_inline_listener = self.getAttrListener(element, .onload);
+
+        try self._event_manager.dispatchWithFunction(
+            element.asEventTarget(),
+            event,
+            ls.toLocal(maybe_inline_listener),
+            .{ .context = "Page dispatch load events" },
+        );
+
+        if (comptime IS_DEBUG) {
+            log.debug(.page, "load event for element", .{ .element = element });
+        }
+    }
+
+    // `_to_load` can be cleaned here.
+    self._to_load.clearAndFree(self.arena);
+
+    // Dispatch window.load event.
+    // This event is weird, it's dispatched directly on the window, but
+    // with the document as the target.
     event._target = self.document.asEventTarget();
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
