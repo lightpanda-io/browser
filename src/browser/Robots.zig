@@ -52,7 +52,6 @@ pub const RobotStore = struct {
         }
 
         pub fn eql(_: Context, a: []const u8, b: []const u8) bool {
-            if (a.len != b.len) return false;
             return std.ascii.eqlIgnoreCase(a, b);
         }
     }, 80);
