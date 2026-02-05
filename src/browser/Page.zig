@@ -698,8 +698,6 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
-    const event = try Event.initTrusted("load", .{}, self);
-
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
@@ -707,6 +705,7 @@ fn _documentIsComplete(self: *Page) !void {
     // Dispatch `_to_load` events before window.load.
     for (self._to_load.items) |element| {
         const maybe_inline_listener = self.getAttrListener(element, .onload);
+        const event = try Event.initTrusted("load", .{}, self);
 
         try self._event_manager.dispatchWithFunction(
             element.asEventTarget(),
@@ -724,6 +723,7 @@ fn _documentIsComplete(self: *Page) !void {
     self._to_load.clearAndFree(self.arena);
 
     // Dispatch window.load event.
+    const event = try Event.initTrusted("load", .{}, self);
     // This event is weird, it's dispatched directly on the window, but
     // with the document as the target.
     event._target = self.document.asEventTarget();
