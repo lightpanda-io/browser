@@ -121,6 +121,7 @@ pub const JsApi = struct {
         try self.asNode().getTextContent(&buf.writer);
         return buf.written();
     }
+    pub const text = bridge.accessor(_innerText, Script.setInnerText, .{});
 };
 
 pub const Build = struct {
