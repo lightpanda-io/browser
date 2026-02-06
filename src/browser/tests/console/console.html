@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="time">
+    // should not crash
+    console.time();
+    console.timeLog();
+    console.timeEnd();
+
+    console.time("test");
+    console.timeLog("test");
+    console.timeEnd("test");
+
+    testing.expectEqual(true, true);
+</script>
+
+<script id="count">
+    // should not crash
+    console.count();
+    console.count();
+    console.countReset();
+
+    console.count("test");
+    console.count("test");
+    console.countReset("test");
+
+    testing.expectEqual(true, true);
+</script>

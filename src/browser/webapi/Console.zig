@@ -185,3 +185,8 @@ pub const JsApi = struct {
     pub const timeLog = bridge.function(Console.timeLog, .{});
     pub const timeEnd = bridge.function(Console.timeEnd, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: Console" {
+    try testing.htmlRunner("console", .{});
+}
