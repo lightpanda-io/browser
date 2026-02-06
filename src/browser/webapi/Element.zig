@@ -722,8 +722,19 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
 
     const parent_is_connected = parent.isConnected();
 
+    // Detect if the ref_node must be removed (byt default) or kept.
+    // We kept it when ref_node is present into the nodes list.
+    var rm_ref_node = true;
+
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(page);
+
+        // If a child is the ref node. We keep it at its own current position.
+        if (child == ref_node) {
+            rm_ref_node = false;
+            continue;
+        }
+
         if (child._parent) |current_parent| {
             page.removeNode(current_parent, child, .{ .will_be_reconnected = parent_is_connected });
         }
@@ -736,7 +747,9 @@ pub fn replaceWith(self: *Element, nodes: []const Node.NodeOrText, page: *Page) 
         );
     }
 
-    page.removeNode(parent, ref_node, .{ .will_be_reconnected = false });
+    if (rm_ref_node) {
+        page.removeNode(parent, ref_node, .{ .will_be_reconnected = false });
+    }
 }
 
 pub fn remove(self: *Element, page: *Page) void {
