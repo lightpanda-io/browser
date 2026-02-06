@@ -515,7 +515,9 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, local: *const js.Local
 
     self._ready_state = state;
 
-    const event = try Event.initTrusted("readystatechange", .{}, page);
+    const event = try Event.initTrusted(.wrap("readystatechange"), .{}, page);
+    defer if (!event._v8_handoff) event.deinit(false);
+
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,

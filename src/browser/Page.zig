@@ -653,7 +653,8 @@ pub fn documentIsLoaded(self: *Page) void {
 }
 
 pub fn _documentIsLoaded(self: *Page) !void {
-    const event = try Event.initTrusted("DOMContentLoaded", .{ .bubbles = true }, self);
+    const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self);
+    defer if (!event._v8_handoff) event.deinit(false);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -704,7 +705,9 @@ fn _documentIsComplete(self: *Page) !void {
 
     // Dispatch `_to_load` events before window.load.
     for (self._to_load.items) |element| {
-        const event = try Event.initTrusted("load", .{}, self);
+        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+        defer if (!event._v8_handoff) event.deinit(false);
+
         // Dispatch inline event.
         blk: {
             const html_element = element.is(HtmlElement) orelse break :blk;
@@ -723,7 +726,8 @@ fn _documentIsComplete(self: *Page) !void {
     self._to_load.clearAndFree(self.arena);
 
     // Dispatch window.load event.
-    const event = try Event.initTrusted("load", .{}, self);
+    const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+    defer if (!event._v8_handoff) event.deinit(false);
     // This event is weird, it's dispatched directly on the window, but
     // with the document as the target.
     event._target = self.document.asEventTarget();
@@ -734,10 +738,11 @@ fn _documentIsComplete(self: *Page) !void {
         .{ .inject_target = false, .context = "page load" },
     );
 
-    const pageshow_event = try PageTransitionEvent.initTrusted("pageshow", .{}, self);
+    const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
+    defer if (!pageshow_event._v8_handoff) pageshow_event.deinit(false);
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
-        pageshow_event.asEvent(),
+        pageshow_event,
         ls.toLocal(self.window._on_pageshow),
         .{ .context = "page show" },
     );
@@ -1443,10 +1448,12 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
     self._slots_pending_slotchange.clearRetainingCapacity();
 
     for (slots) |slot| {
-        const event = Event.initTrusted("slotchange", .{ .bubbles = true }, self) catch |err| {
+        const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self) catch |err| {
             log.err(.page, "deliverSlotchange.init", .{ .err = err });
             continue;
         };
+        defer if (!event._v8_handoff) event.deinit(false);
+
         const target = slot.asNode().asEventTarget();
         _ = target.dispatchEvent(event, self) catch |err| {
             log.err(.page, "deliverSlotchange.dispatch", .{ .err = err });
@@ -3032,14 +3039,16 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
             .y = y,
         });
     }
-    const event = try @import("webapi/event/MouseEvent.zig").init("click", .{
+    const event = (try @import("webapi/event/MouseEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .clientX = x,
         .clientY = y,
-    }, self);
-    try self._event_manager.dispatch(target.asEventTarget(), event.asEvent());
+    }, self)).asEvent();
+
+    defer if (!event._v8_handoff) event.deinit(false);
+    try self._event_manager.dispatch(target.asEventTarget(), event);
 }
 
 // callback when the "click" event reaches the pages.
@@ -3091,6 +3100,9 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 }
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
+    const event = keyboard_event.asEvent();
+    defer if (!event._v8_handoff) event.deinit(false);
+
     const element = self.window._document._active_element orelse return;
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{
@@ -3099,7 +3111,7 @@ pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
             .key = keyboard_event._key,
         });
     }
-    try self._event_manager.dispatch(element.asEventTarget(), keyboard_event.asEvent());
+    try self._event_manager.dispatch(element.asEventTarget(), event);
 }
 
 pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
@@ -3161,7 +3173,9 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const form_element = form.asElement();
 
     if (submit_opts.fire_event) {
-        const submit_event = try Event.initTrusted("submit", .{ .bubbles = true, .cancelable = true }, self);
+        const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
+        defer if (!submit_event._v8_handoff) submit_event.deinit(false);
+
         const onsubmit_handler = try form.asHtmlElement().getOnSubmit(self);
 
         var ls: JS.Local.Scope = undefined;

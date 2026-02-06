@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -16,11 +16,15 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+
+const String = @import("../../../string.zig").String;
 const js = @import("../../js/js.zig");
 
 const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
 const Window = @import("../Window.zig");
+const Allocator = std.mem.Allocator;
 
 const MessageEvent = @This();
 
@@ -38,28 +42,38 @@ const MessageEventOptions = struct {
 const Options = Event.inheritOptions(MessageEvent, MessageEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
-    return initWithTrusted(typ, opts_, false, page);
+    const arena = try page.getArena(.{ .debug = "MessageEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, type_string, opts_, false, page);
 }
 
-pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*MessageEvent {
-    return initWithTrusted(typ, opts_, true, page);
+pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*MessageEvent {
+    const arena = try page.getArena(.{ .debug = "MessageEvent.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts_, true, page);
 }
 
-fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*MessageEvent {
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*MessageEvent {
     const opts = opts_ orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         MessageEvent{
             ._proto = undefined,
             ._data = opts.data,
-            ._origin = if (opts.origin) |str| try page.arena.dupe(u8, str) else "",
+            ._origin = if (opts.origin) |str| try arena.dupe(u8, str) else "",
             ._source = opts.source,
         },
     );
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *MessageEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *MessageEvent) *Event {
@@ -85,6 +99,8 @@ pub const JsApi = struct {
         pub const name = "MessageEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(MessageEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(MessageEvent.init, .{});

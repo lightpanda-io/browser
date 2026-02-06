@@ -84,7 +84,8 @@ identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 // Any type that is stored in the identity_map which has a finalizer declared
 // will have its finalizer stored here. This is only used when shutting down
 // if v8 hasn't called the finalizer directly itself.
-finalizer_callbacks: std.AutoHashMapUnmanaged(usize, FinalizerCallback) = .empty,
+finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
+finalizer_callback_pool: std.heap.MemoryPool(FinalizerCallback),
 
 // Some web APIs have to manage opaque values. Ideally, they use an
 // js.Object, but the js.Object has no lifetime guarantee beyond the
@@ -196,8 +197,9 @@ pub fn deinit(self: *Context) void {
     {
         var it = self.finalizer_callbacks.valueIterator();
         while (it.next()) |finalizer| {
-            finalizer.deinit();
+            finalizer.*.deinit();
         }
+        self.finalizer_callback_pool.deinit();
     }
 
     for (self.global_values.items) |*global| {
@@ -246,37 +248,37 @@ pub fn deinit(self: *Context) void {
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
-    const global = self.identity_map.getPtr(@intFromPtr(obj)) orelse {
+    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
         }
         return;
     };
-    v8.v8__Global__SetWeakFinalizer(global, obj, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
+    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
 }
 
 pub fn safeWeakRef(self: *Context, obj: anytype) void {
-    const global = self.identity_map.getPtr(@intFromPtr(obj)) orelse {
+    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
         }
         return;
     };
-    v8.v8__Global__ClearWeak(global);
-    v8.v8__Global__SetWeakFinalizer(global, obj, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
+    v8.v8__Global__ClearWeak(&fc.global);
+    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
 }
 
 pub fn strongRef(self: *Context, obj: anytype) void {
-    const global = self.identity_map.getPtr(@intFromPtr(obj)) orelse {
+    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
         }
         return;
     };
-    v8.v8__Global__ClearWeak(global);
+    v8.v8__Global__ClearWeak(&fc.global);
 }
 
 pub fn release(self: *Context, item: anytype) void {
@@ -294,12 +296,14 @@ pub fn release(self: *Context, item: anytype) void {
 
         // The item has been fianalized, remove it for the finalizer callback so that
         // we don't try to call it again on shutdown.
-        _ = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
+        const fc = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
             if (comptime IS_DEBUG) {
                 // should not be possible
                 std.debug.assert(false);
             }
+            return;
         };
+        self.finalizer_callback_pool.destroy(fc.value);
         return;
     }
 
@@ -1004,29 +1008,31 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     self.isolate.enqueueMicrotaskFunc(cb);
 }
 
+pub fn createFinalizerCallback(self: *Context, global: v8.Global, ptr: *anyopaque, finalizerFn: *const fn (ptr: *anyopaque) void) !*FinalizerCallback {
+    const fc = try self.finalizer_callback_pool.create();
+    fc.* = .{
+        .ctx = self,
+        .ptr = ptr,
+        .global = global,
+        .finalizerFn = finalizerFn,
+    };
+    return fc;
+}
+
 // == Misc ==
 // A type that has a finalizer can have its finalizer called one of two ways.
 // The first is from V8 via the WeakCallback we give to weakRef. But that isn't
 // guaranteed to fire, so we track this in ctx._finalizers and call them on
 // context shutdown.
-const FinalizerCallback = struct {
+pub const FinalizerCallback = struct {
+    ctx: *Context,
     ptr: *anyopaque,
+    global: v8.Global,
     finalizerFn: *const fn (ptr: *anyopaque) void,
 
-    pub fn init(ptr: anytype) FinalizerCallback {
-        const T = bridge.Struct(@TypeOf(ptr));
-        return .{
-            .ptr = ptr,
-            .finalizerFn = struct {
-                pub fn wrap(self: *anyopaque) void {
-                    T.JsApi.Meta.finalizer.from_zig(self);
-                }
-            }.wrap,
-        };
-    }
-
-    pub fn deinit(self: FinalizerCallback) void {
+    pub fn deinit(self: *FinalizerCallback) void {
         self.finalizerFn(self.ptr);
+        self.ctx.finalizer_callback_pool.destroy(self);
     }
 };
 

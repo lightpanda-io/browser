@@ -869,7 +869,7 @@ pub const Script = struct {
         const cb = cb_ orelse return;
 
         const Event = @import("webapi/Event.zig");
-        const event = Event.initTrusted(typ, .{}, page) catch |err| {
+        const event = Event.initTrusted(comptime .wrap(typ), .{}, page) catch |err| {
             log.warn(.js, "script internal callback", .{
                 .url = self.url,
                 .type = typ,
@@ -877,6 +877,7 @@ pub const Script = struct {
             });
             return;
         };
+        defer if (!event._v8_handoff) event.deinit(false);
 
         var caught: js.TryCatch.Caught = undefined;
         cb.tryCall(void, .{event}, &caught) catch {

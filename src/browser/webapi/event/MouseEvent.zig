@@ -17,11 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Event = @import("../Event.zig");
-const UIEvent = @import("UIEvent.zig");
-const EventTarget = @import("../EventTarget.zig");
+const String = @import("../../../string.zig").String;
 const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");
+
+const Event = @import("../Event.zig");
+const EventTarget = @import("../EventTarget.zig");
+
+const UIEvent = @import("UIEvent.zig");
 const PointerEvent = @import("PointerEvent.zig");
 
 const MouseEvent = @This();
@@ -75,10 +78,15 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
+    const arena = try page.getArena(.{ .debug = "MouseEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
+
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(
-        typ,
+        arena,
+        type_string,
         MouseEvent{
             ._type = .generic,
             ._proto = undefined,
@@ -97,6 +105,10 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
 
     Event.populatePrototypes(event, opts, false);
     return event;
+}
+
+pub fn deinit(self: *MouseEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *MouseEvent) *Event {
@@ -172,6 +184,8 @@ pub const JsApi = struct {
         pub const name = "MouseEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(MouseEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(MouseEvent.init, .{});
