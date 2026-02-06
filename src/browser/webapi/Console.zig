@@ -167,7 +167,6 @@ pub const JsApi = struct {
 
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const empty_with_no_proto = true;
     };
 
     pub const trace = bridge.function(Console.trace, .{});
@@ -185,3 +184,8 @@ pub const JsApi = struct {
     pub const timeLog = bridge.function(Console.timeLog, .{});
     pub const timeEnd = bridge.function(Console.timeEnd, .{});
 };
+
+const testing = @import("../../testing.zig");
+test "WebApi: Console" {
+    try testing.htmlRunner("console", .{});
+}
