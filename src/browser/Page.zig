@@ -1246,8 +1246,10 @@ pub fn setAttrListener(
         });
     }
 
-    const key = global_event_handlers.calculateKey(element.asEventTarget(), listener_type);
-    const gop = try self._element_attr_listeners.getOrPut(self.arena, key);
+    const gop = try self._element_attr_listeners.getOrPut(self.arena, .{
+        .target = element.asEventTarget(),
+        .handler = listener_type,
+    });
     gop.value_ptr.* = listener_callback;
 }
 
@@ -1257,8 +1259,10 @@ pub fn getAttrListener(
     element: *Element,
     listener_type: GlobalEventHandler,
 ) ?JS.Function.Global {
-    const key = global_event_handlers.calculateKey(element.asEventTarget(), listener_type);
-    return self._element_attr_listeners.get(key);
+    return self._element_attr_listeners.get(.{
+        .target = element.asEventTarget(),
+        .handler = listener_type,
+    });
 }
 
 pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
