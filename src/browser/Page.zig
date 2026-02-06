@@ -698,21 +698,30 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
+    // Should this be different for each?
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
 
     // Dispatch `_to_load` events before window.load.
     for (self._to_load.items) |element| {
-        const maybe_inline_listener = self.getAttrListener(element, .onload);
-        const event = try Event.initTrusted("load", .{}, self);
+        if (comptime IS_DEBUG) {
+            log.debug(.page, "load event for element", .{ .element = element });
+        }
 
-        try self._event_manager.dispatchWithFunction(
-            element.asEventTarget(),
-            event,
-            ls.toLocal(maybe_inline_listener),
-            .{ .context = "Page dispatch load events" },
-        );
+        const event = try Event.initTrusted("load", .{}, self);
+        // Dispatch inline event.
+        blk: {
+            const html_element = element.is(HtmlElement) orelse break :blk;
+
+            const listener = (try html_element.getOnLoad(self)) orelse break :blk;
+            ls.toLocal(listener).call(void, .{}) catch |err| {
+                log.warn(.event, "inline load event", .{ .element = element, .err = err });
+            };
+        }
+
+        // Dispatch events registered to event manager.
+        try self._event_manager.dispatch(element.asEventTarget(), event);
     }
 
     // `_to_load` can be cleaned here.
