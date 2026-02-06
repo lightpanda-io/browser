@@ -189,7 +189,7 @@ fn addDependencies(
         .prebuilt_v8_path = prebuilt_v8_path,
         .is_asan = is_asan,
         .is_tsan = is_tsan,
-        .v8_enable_sandbox = is_tsan,
+        .v8_enable_sandbox = is_tsan, // v8 contains a bug and cannot be compiled with tsan without a sandbox.
     };
 
     mod.addIncludePath(b.path("vendor/lightpanda"));

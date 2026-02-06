@@ -30,6 +30,13 @@ pub const RunMode = enum {
     version,
 };
 
+pub const MAX_HTTP_REQUEST_SIZE = 4096;
+
+// max message size
+// +14 for max websocket payload overhead
+// +140 for the max control packet that might be interleaved in a message
+pub const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
+
 mode: Mode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
@@ -131,6 +138,20 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn maxConnections(self: *const Config) u16 {
+    return switch (self.mode) {
+        .serve => |opts| opts.max_connections,
+        else => unreachable,
+    };
+}
+
+pub fn maxPendingConnections(self: *const Config) u31 {
+    return switch (self.mode) {
+        .serve => |opts| opts.max_pending_connections,
+        else => unreachable,
+    };
+}
+
 pub const Mode = union(RunMode) {
     help: bool, // false when being printed because of an error
     fetch: Fetch,
@@ -144,7 +165,6 @@ pub const Serve = struct {
     timeout: u31 = 10,
     max_connections: u16 = 16,
     max_tabs_per_connection: u16 = 8,
-    max_memory_per_tab: u64 = 512 * 1024 * 1024,
     max_pending_connections: u16 = 128,
     common: Common = .{},
 };
@@ -474,19 +494,6 @@ fn parseServeArgs(
 
             serve.max_tabs_per_connection = std.fmt.parseInt(u16, str, 10) catch |err| {
                 log.fatal(.app, "invalid argument value", .{ .arg = "--max_tabs", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--max_tab_memory", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--max_tab_memory" });
-                return error.InvalidArgument;
-            };
-
-            serve.max_memory_per_tab = std.fmt.parseInt(u64, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--max_tab_memory", .err = err });
                 return error.InvalidArgument;
             };
             continue;

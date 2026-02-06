@@ -49,7 +49,7 @@ const Opts = struct {
 
 pub var opts = Opts{};
 
-// synchronizes writes to the output
+// synchronizes access to _interceptor
 var out_lock: Thread.Mutex = .{};
 
 // synchronizes access to last_log
@@ -146,7 +146,14 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
     }
     out.flush() catch return;
 
-    const interceptor = _interceptor orelse return;
+    // Copy the interceptor under lock, then release before doing I/O
+    const interceptor = blk: {
+        out_lock.lock();
+        defer out_lock.unlock();
+        break :blk _interceptor orelse return;
+    };
+
+    // I/O operations happen without holding the lock to minimize contention
     if (interceptor.writer(interceptor.ctx, scope, level)) |iwriter| {
         try logLogfmt(scope, level, msg, data, iwriter);
         try iwriter.flush();
@@ -368,10 +375,14 @@ fn timestamp(comptime mode: datetime.TimestampMode) u64 {
 
 var _interceptor: ?Interceptor = null;
 pub fn registerInterceptor(interceptor: Interceptor) void {
+    out_lock.lock();
+    defer out_lock.unlock();
     _interceptor = interceptor;
 }
 
 pub fn unregisterInterceptor() void {
+    out_lock.lock();
+    defer out_lock.unlock();
     _interceptor = null;
 }
 

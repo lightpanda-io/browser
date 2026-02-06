@@ -38,11 +38,12 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 const Inspector = @This();
 
 unique_id: i64,
+allocator: Allocator,
 isolate: *v8.Isolate,
 handle: *v8.Inspector,
 client: *v8.InspectorClientImpl,
 default_context: ?v8.Global,
-session: ?Session,
+sessions: std.ArrayListUnmanaged(*Session),
 
 pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     const self = try allocator.create(Inspector);
@@ -50,7 +51,8 @@ pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
 
     self.* = .{
         .unique_id = 1,
-        .session = null,
+        .allocator = allocator,
+        .sessions = .empty,
         .isolate = isolate,
         .client = undefined,
         .handle = undefined,
@@ -67,32 +69,43 @@ pub fn init(allocator: Allocator, isolate: *v8.Isolate) !*Inspector {
     return self;
 }
 
-pub fn deinit(self: *const Inspector, allocator: Allocator) void {
+pub fn deinit(self: *Inspector, allocator: Allocator) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    if (self.session) |*s| {
-        s.deinit();
+    for (self.sessions.items) |session| {
+        session.deinit();
+        self.allocator.destroy(session);
     }
+    self.sessions.deinit(self.allocator);
+
     v8.v8_inspector__Client__IMPL__DELETE(self.client);
     v8.v8_inspector__Inspector__DELETE(self.handle);
     allocator.destroy(self);
 }
 
-pub fn startSession(self: *Inspector, ctx: anytype) *Session {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(self.session == null);
-    }
+pub fn startSession(self: *Inspector, ctx: anytype) !*Session {
+    const session = try self.allocator.create(Session);
+    errdefer self.allocator.destroy(session);
 
-    self.session = @as(Session, undefined);
-    Session.init(&self.session.?, self, ctx);
-    return &self.session.?;
+    Session.init(session, self, ctx);
+    try self.sessions.append(self.allocator, session);
+    return session;
 }
 
-pub fn stopSession(self: *Inspector) void {
-    self.session.?.deinit();
-    self.session = null;
+pub fn stopSession(self: *Inspector, session: *Session) void {
+    for (self.sessions.items, 0..) |s, i| {
+        if (s == session) {
+            _ = self.sessions.swapRemove(i);
+            session.deinit();
+            self.allocator.destroy(session);
+            return;
+        }
+    }
+    if (comptime IS_DEBUG) {
+        @panic("Tried to stop unknown inspector session");
+    }
 }
 
 // From CDP docs
