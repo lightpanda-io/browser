@@ -17,10 +17,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const String = @import("../../../string.zig").String;
+
+const js = @import("../../js/js.zig");
+const Page = @import("../../Page.zig");
+
 const Event = @import("../Event.zig");
 const UIEvent = @import("UIEvent.zig");
-const Page = @import("../../Page.zig");
-const js = @import("../../js/js.zig");
+const Allocator = std.mem.Allocator;
 
 const KeyboardEvent = @This();
 
@@ -180,24 +184,30 @@ const Options = Event.inheritOptions(
     KeyboardEventOptions,
 );
 
-pub fn initTrusted(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
-    return initWithTrusted(typ, _opts, true, page);
+pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*KeyboardEvent {
+    const arena = try page.getArena(.{ .debug = "KeyboardEvent.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, page);
 }
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*KeyboardEvent {
-    return initWithTrusted(typ, _opts, false, page);
+    const arena = try page.getArena(.{ .debug = "KeyboardEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, type_string, _opts, false, page);
 }
 
-fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page) !*KeyboardEvent {
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*KeyboardEvent {
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(
+        arena,
         typ,
         KeyboardEvent{
             ._proto = undefined,
-            ._key = try Key.fromString(page.arena, opts.key),
+            ._key = try Key.fromString(arena, opts.key),
             ._location = std.meta.intToEnum(Location, opts.location) catch return error.TypeError,
-            ._code = if (opts.code) |c| try page.dupeString(c) else "",
+            ._code = if (opts.code) |c| try arena.dupe(u8, c) else "",
             ._repeat = opts.repeat,
             ._is_composing = opts.isComposing,
             ._ctrl_key = opts.ctrlKey,
@@ -209,6 +219,10 @@ fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page)
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *KeyboardEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *KeyboardEvent) *Event {
@@ -251,8 +265,8 @@ pub fn getShiftKey(self: *const KeyboardEvent) bool {
     return self._shift_key;
 }
 
-pub fn getModifierState(self: *const KeyboardEvent, str: []const u8, page: *Page) !bool {
-    const key = try Key.fromString(page.arena, str);
+pub fn getModifierState(self: *const KeyboardEvent, str: []const u8) !bool {
+    const key = try Key.fromString(self._proto._proto._arena, str);
 
     switch (key) {
         .Alt, .AltGraph => return self._alt_key,
@@ -274,6 +288,8 @@ pub const JsApi = struct {
         pub const name = "KeyboardEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(KeyboardEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(KeyboardEvent.init, .{});

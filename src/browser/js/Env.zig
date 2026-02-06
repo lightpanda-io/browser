@@ -243,6 +243,7 @@ pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
         .call_arena = page.call_arena,
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
+        .finalizer_callback_pool = std.heap.MemoryPool(Context.FinalizerCallback).init(self.app.allocator),
     };
     try context.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
 

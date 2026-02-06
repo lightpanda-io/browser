@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const String = @import("../../../string.zig").String;
+
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
@@ -81,10 +83,14 @@ const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PointerEvent {
-    const opts = _opts orelse Options{};
+    const arena = try page.getArena(.{ .debug = "UIEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
 
+    const opts = _opts orelse Options{};
     const event = try page._factory.mouseEvent(
-        typ,
+        arena,
+        type_string,
         MouseEvent{
             ._type = .{ .pointer_event = undefined },
             ._proto = undefined,
@@ -118,6 +124,10 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PointerEvent {
 
     Event.populatePrototypes(event, opts, false);
     return event;
+}
+
+pub fn deinit(self: *PointerEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *PointerEvent) *Event {
@@ -179,6 +189,8 @@ pub const JsApi = struct {
         pub const name = "PointerEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(PointerEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(PointerEvent.init, .{});

@@ -61,7 +61,7 @@ fn dispatchKeyEvent(cmd: anytype) !void {
     const page = bc.session.currentPage() orelse return;
 
     const KeyboardEvent = @import("../../browser/webapi/event/KeyboardEvent.zig");
-    const keyboard_event = try KeyboardEvent.initTrusted("keydown", .{
+    const keyboard_event = try KeyboardEvent.initTrusted(comptime .wrap("keydown"), .{
         .key = params.key,
         .code = params.code,
         .altKey = params.modifiers & 1 == 1,
