@@ -43,16 +43,13 @@ pub fn main() !void {
     const main_arena = main_arena_instance.allocator();
     defer main_arena_instance.deinit();
 
-    var sighandler = SigHandler{ .arena = main_arena };
-    try sighandler.install();
-
-    run(gpa, main_arena, &sighandler) catch |err| {
+    run(gpa, main_arena) catch |err| {
         log.fatal(.app, "exit", .{ .err = err });
         std.posix.exit(1);
     };
 }
 
-fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !void {
+fn run(allocator: Allocator, main_arena: Allocator) !void {
     const args = try Config.parseArgs(main_arena);
     defer args.deinit(main_arena);
 
@@ -86,6 +83,9 @@ fn run(allocator: Allocator, main_arena: Allocator, sighandler: *SigHandler) !vo
 
     switch (args.mode) {
         .serve => |opts| {
+            var sighandler = SigHandler{ .arena = main_arena };
+            try sighandler.install();
+
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
             const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
