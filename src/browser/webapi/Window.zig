@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -421,6 +421,12 @@ pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
 }
 
+pub fn getOpener(_: *const Window) ?*Window {
+    // This should return a window-like object in specific conditions. Would be
+    // pretty complicated to properly support I think.
+    return null;
+}
+
 const ScrollToOpts = union(enum) {
     x: i32,
     opts: Opts,
@@ -749,6 +755,7 @@ pub const JsApi = struct {
     pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{ .cache = "pageYOffset" });
     pub const scrollTo = bridge.function(Window.scrollTo, .{});
     pub const scroll = bridge.function(Window.scrollTo, .{});
+    pub const opener = bridge.accessor(Window.getOpener, null, .{});
 };
 
 const testing = @import("../../testing.zig");
