@@ -2,9 +2,15 @@
 <body></body>
 <script src="../testing.js"></script>
 <script id=createElementNS>
-  const htmlDiv = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
-  testing.expectEqual('DIV', htmlDiv.tagName);
-  testing.expectEqual('http://www.w3.org/1999/xhtml', htmlDiv.namespaceURI);
+  const htmlDiv1 = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+  testing.expectEqual('DIV', htmlDiv1.tagName);
+  testing.expectEqual(true, htmlDiv1 instanceof HTMLDivElement);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', htmlDiv1.namespaceURI);
+
+  const htmlDiv2 = document.createElementNS('http://www.w3.org/1999/xhtml', 'DIV');
+  testing.expectEqual('DIV', htmlDiv2.tagName);
+  testing.expectEqual(true, htmlDiv2 instanceof HTMLDivElement);
+  testing.expectEqual('http://www.w3.org/1999/xhtml', htmlDiv2.namespaceURI);
 
   const svgRect = document.createElementNS('http://www.w3.org/2000/svg', 'RecT');
   testing.expectEqual('RecT', svgRect.tagName);
