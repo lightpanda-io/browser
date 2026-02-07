@@ -280,6 +280,7 @@ fn countExternalReferences() comptime_int {
 
     // +1 for the illegal constructor callback
     var count: comptime_int = 1;
+    var has_non_template_property: bool = false;
 
     inline for (JsApis) |JsApi| {
         // Constructor (only if explicit)
@@ -302,6 +303,10 @@ fn countExternalReferences() comptime_int {
                 if (value.setter != null) count += 1; // setter
             } else if (T == bridge.Function) {
                 count += 1;
+            } else if (T == bridge.Property) {
+                if (value.template == false) {
+                    has_non_template_property = true;
+                }
             } else if (T == bridge.Iterator) {
                 count += 1;
             } else if (T == bridge.Indexed) {
@@ -312,6 +317,10 @@ fn countExternalReferences() comptime_int {
                 if (value.deleter != null) count += 1;
             }
         }
+    }
+
+    if (has_non_template_property) {
+        count += 1;
     }
 
     // In debug mode, add unknown property callbacks for types without NamedIndexed
@@ -332,6 +341,8 @@ fn collectExternalReferences() [countExternalReferences()]isize {
 
     references[idx] = @bitCast(@intFromPtr(&illegalConstructorCallback));
     idx += 1;
+
+    var has_non_template_property = false;
 
     inline for (JsApis) |JsApi| {
         if (@hasDecl(JsApi, "constructor")) {
@@ -358,6 +369,10 @@ fn collectExternalReferences() [countExternalReferences()]isize {
             } else if (T == bridge.Function) {
                 references[idx] = @bitCast(@intFromPtr(value.func));
                 idx += 1;
+            } else if (T == bridge.Property) {
+                if (value.template == false) {
+                    has_non_template_property = true;
+                }
             } else if (T == bridge.Iterator) {
                 references[idx] = @bitCast(@intFromPtr(value.func));
                 idx += 1;
@@ -377,6 +392,11 @@ fn collectExternalReferences() [countExternalReferences()]isize {
                 }
             }
         }
+    }
+
+    if (has_non_template_property) {
+        references[idx] = @bitCast(@intFromPtr(&bridge.Property.getter));
+        idx += 1;
     }
 
     // In debug mode, collect unknown property callbacks for types without NamedIndexed
@@ -497,17 +517,24 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                 v8.v8__Template__Set(@ptrCast(target), js_name, @ptrCast(function_template), v8.None);
             },
             bridge.Property => {
-                // simpleZigValueToJs now returns raw handle directly
-                const js_value = switch (value) {
-                    .int => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
+                const js_value = switch (value.value) {
+                    inline .bool, .int => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
                 };
-
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                // apply it both to the type itself
-                v8.v8__Template__Set(@ptrCast(template), js_name, js_value, v8.ReadOnly + v8.DontDelete);
 
-                // and to instances of the type
-                v8.v8__Template__Set(@ptrCast(target), js_name, js_value, v8.ReadOnly + v8.DontDelete);
+                if (value.template == false) {
+                    // not defined on the template, only on the instance. This
+                    // is like an Accessor, but because the value is known at
+                    // compile time, we skip _a lot_ of code and quickly return
+                    // the hard-coded value
+                    const getter_callback = @constCast(v8.v8__FunctionTemplate__New__DEFAULT3(isolate, bridge.Property.getter, js_value));
+                    v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(target, js_name, getter_callback);
+                } else {
+                    // apply it both to the type itself
+                    v8.v8__Template__Set(@ptrCast(template), js_name, js_value, v8.ReadOnly + v8.DontDelete);
+                    // and to instances of the type
+                    v8.v8__Template__Set(@ptrCast(target), js_name, js_value, v8.ReadOnly + v8.DontDelete);
+                }
             },
             bridge.Constructor => {}, // already handled in generateConstructor
             else => {},

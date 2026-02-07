@@ -410,10 +410,10 @@ pub const JsApi = struct {
     pub const cancelBubble = bridge.accessor(Event.getCancelBubble, Event.setCancelBubble, .{});
 
     // Event phase constants
-    pub const NONE = bridge.property(@intFromEnum(EventPhase.none));
-    pub const CAPTURING_PHASE = bridge.property(@intFromEnum(EventPhase.capturing_phase));
-    pub const AT_TARGET = bridge.property(@intFromEnum(EventPhase.at_target));
-    pub const BUBBLING_PHASE = bridge.property(@intFromEnum(EventPhase.bubbling_phase));
+    pub const NONE = bridge.property(@intFromEnum(EventPhase.none), .{ .template = true });
+    pub const CAPTURING_PHASE = bridge.property(@intFromEnum(EventPhase.capturing_phase), .{ .template = true });
+    pub const AT_TARGET = bridge.property(@intFromEnum(EventPhase.at_target), .{ .template = true });
+    pub const BUBBLING_PHASE = bridge.property(@intFromEnum(EventPhase.bubbling_phase), .{ .template = true });
 };
 
 // tested in event_target

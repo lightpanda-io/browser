@@ -874,25 +874,25 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const ELEMENT_NODE = bridge.property(1);
-    pub const ATTRIBUTE_NODE = bridge.property(2);
-    pub const TEXT_NODE = bridge.property(3);
-    pub const CDATA_SECTION_NODE = bridge.property(4);
-    pub const ENTITY_REFERENCE_NODE = bridge.property(5);
-    pub const ENTITY_NODE = bridge.property(6);
-    pub const PROCESSING_INSTRUCTION_NODE = bridge.property(7);
-    pub const COMMENT_NODE = bridge.property(8);
-    pub const DOCUMENT_NODE = bridge.property(9);
-    pub const DOCUMENT_TYPE_NODE = bridge.property(10);
-    pub const DOCUMENT_FRAGMENT_NODE = bridge.property(11);
-    pub const NOTATION_NODE = bridge.property(12);
+    pub const ELEMENT_NODE = bridge.property(1, .{ .template = true });
+    pub const ATTRIBUTE_NODE = bridge.property(2, .{ .template = true });
+    pub const TEXT_NODE = bridge.property(3, .{ .template = true });
+    pub const CDATA_SECTION_NODE = bridge.property(4, .{ .template = true });
+    pub const ENTITY_REFERENCE_NODE = bridge.property(5, .{ .template = true });
+    pub const ENTITY_NODE = bridge.property(6, .{ .template = true });
+    pub const PROCESSING_INSTRUCTION_NODE = bridge.property(7, .{ .template = true });
+    pub const COMMENT_NODE = bridge.property(8, .{ .template = true });
+    pub const DOCUMENT_NODE = bridge.property(9, .{ .template = true });
+    pub const DOCUMENT_TYPE_NODE = bridge.property(10, .{ .template = true });
+    pub const DOCUMENT_FRAGMENT_NODE = bridge.property(11, .{ .template = true });
+    pub const NOTATION_NODE = bridge.property(12, .{ .template = true });
 
-    pub const DOCUMENT_POSITION_DISCONNECTED = bridge.property(0x01);
-    pub const DOCUMENT_POSITION_PRECEDING = bridge.property(0x02);
-    pub const DOCUMENT_POSITION_FOLLOWING = bridge.property(0x04);
-    pub const DOCUMENT_POSITION_CONTAINS = bridge.property(0x08);
-    pub const DOCUMENT_POSITION_CONTAINED_BY = bridge.property(0x10);
-    pub const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = bridge.property(0x20);
+    pub const DOCUMENT_POSITION_DISCONNECTED = bridge.property(0x01, .{ .template = true });
+    pub const DOCUMENT_POSITION_PRECEDING = bridge.property(0x02, .{ .template = true });
+    pub const DOCUMENT_POSITION_FOLLOWING = bridge.property(0x04, .{ .template = true });
+    pub const DOCUMENT_POSITION_CONTAINS = bridge.property(0x08, .{ .template = true });
+    pub const DOCUMENT_POSITION_CONTAINED_BY = bridge.property(0x10, .{ .template = true });
+    pub const DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC = bridge.property(0x20, .{ .template = true });
 
     pub const nodeName = bridge.accessor(struct {
         fn wrap(self: *const Node, page: *Page) []const u8 {

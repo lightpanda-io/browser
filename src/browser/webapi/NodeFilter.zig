@@ -90,21 +90,21 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const FILTER_ACCEPT = bridge.property(NodeFilter.FILTER_ACCEPT);
-    pub const FILTER_REJECT = bridge.property(NodeFilter.FILTER_REJECT);
-    pub const FILTER_SKIP = bridge.property(NodeFilter.FILTER_SKIP);
+    pub const FILTER_ACCEPT = bridge.property(NodeFilter.FILTER_ACCEPT, .{ .template = true });
+    pub const FILTER_REJECT = bridge.property(NodeFilter.FILTER_REJECT, .{ .template = true });
+    pub const FILTER_SKIP = bridge.property(NodeFilter.FILTER_SKIP, .{ .template = true });
 
-    pub const SHOW_ALL = bridge.property(NodeFilter.SHOW_ALL);
-    pub const SHOW_ELEMENT = bridge.property(NodeFilter.SHOW_ELEMENT);
-    pub const SHOW_ATTRIBUTE = bridge.property(NodeFilter.SHOW_ATTRIBUTE);
-    pub const SHOW_TEXT = bridge.property(NodeFilter.SHOW_TEXT);
-    pub const SHOW_CDATA_SECTION = bridge.property(NodeFilter.SHOW_CDATA_SECTION);
-    pub const SHOW_ENTITY_REFERENCE = bridge.property(NodeFilter.SHOW_ENTITY_REFERENCE);
-    pub const SHOW_ENTITY = bridge.property(NodeFilter.SHOW_ENTITY);
-    pub const SHOW_PROCESSING_INSTRUCTION = bridge.property(NodeFilter.SHOW_PROCESSING_INSTRUCTION);
-    pub const SHOW_COMMENT = bridge.property(NodeFilter.SHOW_COMMENT);
-    pub const SHOW_DOCUMENT = bridge.property(NodeFilter.SHOW_DOCUMENT);
-    pub const SHOW_DOCUMENT_TYPE = bridge.property(NodeFilter.SHOW_DOCUMENT_TYPE);
-    pub const SHOW_DOCUMENT_FRAGMENT = bridge.property(NodeFilter.SHOW_DOCUMENT_FRAGMENT);
-    pub const SHOW_NOTATION = bridge.property(NodeFilter.SHOW_NOTATION);
+    pub const SHOW_ALL = bridge.property(NodeFilter.SHOW_ALL, .{ .template = true });
+    pub const SHOW_ELEMENT = bridge.property(NodeFilter.SHOW_ELEMENT, .{ .template = true });
+    pub const SHOW_ATTRIBUTE = bridge.property(NodeFilter.SHOW_ATTRIBUTE, .{ .template = true });
+    pub const SHOW_TEXT = bridge.property(NodeFilter.SHOW_TEXT, .{ .template = true });
+    pub const SHOW_CDATA_SECTION = bridge.property(NodeFilter.SHOW_CDATA_SECTION, .{ .template = true });
+    pub const SHOW_ENTITY_REFERENCE = bridge.property(NodeFilter.SHOW_ENTITY_REFERENCE, .{ .template = true });
+    pub const SHOW_ENTITY = bridge.property(NodeFilter.SHOW_ENTITY, .{ .template = true });
+    pub const SHOW_PROCESSING_INSTRUCTION = bridge.property(NodeFilter.SHOW_PROCESSING_INSTRUCTION, .{ .template = true });
+    pub const SHOW_COMMENT = bridge.property(NodeFilter.SHOW_COMMENT, .{ .template = true });
+    pub const SHOW_DOCUMENT = bridge.property(NodeFilter.SHOW_DOCUMENT, .{ .template = true });
+    pub const SHOW_DOCUMENT_TYPE = bridge.property(NodeFilter.SHOW_DOCUMENT_TYPE, .{ .template = true });
+    pub const SHOW_DOCUMENT_FRAGMENT = bridge.property(NodeFilter.SHOW_DOCUMENT_FRAGMENT, .{ .template = true });
+    pub const SHOW_NOTATION = bridge.property(NodeFilter.SHOW_NOTATION, .{ .template = true });
 };
