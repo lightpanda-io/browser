@@ -16,10 +16,12 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const Event = @import("../Event.zig");
-const Window = @import("../Window.zig");
+const String = @import("../../../string.zig").String;
 const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");
+
+const Event = @import("../Event.zig");
+const Window = @import("../Window.zig");
 
 const UIEvent = @This();
 
@@ -45,10 +47,14 @@ pub const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
-    const opts = _opts orelse Options{};
+    const arena = try page.getArena(.{ .debug = "UIEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
 
+    const opts = _opts orelse Options{};
     const event = try page._factory.event(
-        typ,
+        arena,
+        type_string,
         UIEvent{
             ._type = .generic,
             ._proto = undefined,
@@ -59,6 +65,10 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*UIEvent {
 
     Event.populatePrototypes(event, opts, false);
     return event;
+}
+
+pub fn deinit(self: *UIEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn as(self: *UIEvent, comptime T: type) *T {
@@ -105,6 +115,8 @@ pub const JsApi = struct {
         pub const name = "UIEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(UIEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(UIEvent.init, .{});

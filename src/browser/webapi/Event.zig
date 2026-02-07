@@ -24,11 +24,14 @@ const EventTarget = @import("EventTarget.zig");
 const Node = @import("Node.zig");
 const String = @import("../../string.zig").String;
 
+const Allocator = std.mem.Allocator;
+
 pub const Event = @This();
 
 pub const _prototype_root = true;
 _type: Type,
-
+_page: *Page,
+_arena: Allocator,
 _bubbles: bool = false,
 _cancelable: bool = false,
 _composed: bool = false,
@@ -43,6 +46,12 @@ _event_phase: EventPhase = .none,
 _time_stamp: u64,
 _needs_retargeting: bool = false,
 _isTrusted: bool = false,
+
+// There's a period of time between creating an event and handing it off to v8
+// where things can fail. If it does fail, we need to deinit the event. This flag
+// when true, tells us the event is registered in the js.Contxt and thus, at
+// the very least, will be finalized on context shutdown.
+_v8_handoff: bool = false,
 
 pub const EventPhase = enum(u8) {
     none = 0,
@@ -70,31 +79,38 @@ pub const Options = struct {
     composed: bool = false,
 };
 
-pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
-    return initWithTrusted(typ, opts_, true, page);
-}
-
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
-    return initWithTrusted(typ, opts_, false, page);
+    const arena = try page.getArena(.{ .debug = "Event" });
+    errdefer page.releaseArena(arena);
+    const str = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, str, opts_, false, page);
 }
 
-fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*Event {
+pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
+    const arena = try page.getArena(.{ .debug = "Event.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts_, true, page);
+}
+
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*Event {
     const opts = opts_ orelse Options{};
 
     // Round to 2ms for privacy (browsers do this)
     const raw_timestamp = @import("../../datetime.zig").milliTimestamp(.monotonic);
     const time_stamp = (raw_timestamp / 2) * 2;
 
-    const event = try page._factory.create(Event{
+    const event = try arena.create(Event);
+    event.* = .{
+        ._page = page,
+        ._arena = arena,
         ._type = .generic,
         ._bubbles = opts.bubbles,
         ._time_stamp = time_stamp,
         ._cancelable = opts.cancelable,
         ._composed = opts.composed,
-        ._type_string = try String.init(page.arena, typ, .{}),
-    });
-
-    event._isTrusted = trusted;
+        ._type_string = typ,
+        ._isTrusted = trusted,
+    };
     return event;
 }
 
@@ -103,16 +119,20 @@ pub fn initEvent(
     event_string: []const u8,
     bubbles: ?bool,
     cancelable: ?bool,
-    page: *Page,
 ) !void {
     if (self._event_phase != .none) {
         return;
     }
 
-    self._type_string = try String.init(page.arena, event_string, .{});
+    self._type_string = try String.init(self._arena, event_string, .{});
     self._bubbles = bubbles orelse false;
     self._cancelable = cancelable orelse false;
     self._stop_propagation = false;
+}
+
+pub fn deinit(self: *Event, shutdown: bool) void {
+    _ = shutdown;
+    self._page.releaseArena(self._arena);
 }
 
 pub fn as(self: *Event, comptime T: type) *T {
@@ -385,6 +405,8 @@ pub const JsApi = struct {
 
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(Event.deinit);
     };
 
     pub const constructor = bridge.constructor(Event.init, .{});

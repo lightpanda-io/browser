@@ -767,7 +767,8 @@ pub fn focus(self: *Element, page: *Page) !void {
             return;
         }
 
-        const blur_event = try Event.initTrusted("blur", null, page);
+        const blur_event = try Event.initTrusted(comptime .wrap("blur"), null, page);
+        defer if (!blur_event._v8_handoff) blur_event.deinit(false);
         try page._event_manager.dispatch(old.asEventTarget(), blur_event);
     }
 
@@ -775,7 +776,8 @@ pub fn focus(self: *Element, page: *Page) !void {
         page.document._active_element = self;
     }
 
-    const focus_event = try Event.initTrusted("focus", null, page);
+    const focus_event = try Event.initTrusted(comptime .wrap("focus"), null, page);
+    defer if (!focus_event._v8_handoff) focus_event.deinit(false);
     try page._event_manager.dispatch(self.asEventTarget(), focus_event);
 }
 
@@ -785,7 +787,8 @@ pub fn blur(self: *Element, page: *Page) !void {
     page.document._active_element = null;
 
     const Event = @import("Event.zig");
-    const blur_event = try Event.initTrusted("blur", null, page);
+    const blur_event = try Event.initTrusted(comptime .wrap("blur"), null, page);
+    defer if (!blur_event._v8_handoff) blur_event.deinit(false);
     try page._event_manager.dispatch(self.asEventTarget(), blur_event);
 }
 

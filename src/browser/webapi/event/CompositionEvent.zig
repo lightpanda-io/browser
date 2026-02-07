@@ -15,11 +15,13 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+const std = @import("std");
+const String = @import("../../..//string.zig").String;
 
 const js = @import("../../js/js.zig");
-
 const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
+const Allocator = std.mem.Allocator;
 
 const CompositionEvent = @This();
 
@@ -33,15 +35,26 @@ const CompositionEventOptions = struct {
 const Options = Event.inheritOptions(CompositionEvent, CompositionEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
-    const opts = opts_ orelse Options{};
+    const arena = try page.getArena(.{ .debug = "CompositionEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
 
-    const event = try page._factory.event(typ, CompositionEvent{
-        ._proto = undefined,
-        ._data = if (opts.data) |str| try page.dupeString(str) else "",
-    });
+    const opts = opts_ orelse Options{};
+    const event = try page._factory.event(
+        arena,
+        type_string,
+        CompositionEvent{
+            ._proto = undefined,
+            ._data = if (opts.data) |str| try arena.dupe(u8, str) else "",
+        },
+    );
 
     Event.populatePrototypes(event, opts, false);
     return event;
+}
+
+pub fn deinit(self: *CompositionEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *CompositionEvent) *Event {
@@ -59,6 +72,8 @@ pub const JsApi = struct {
         pub const name = "CompositionEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(CompositionEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(CompositionEvent.init, .{});

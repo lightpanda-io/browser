@@ -17,11 +17,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const Event = @import("../Event.zig");
+const String = @import("../../../string.zig").String;
+
+const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+
+const Event = @import("../Event.zig");
 const NavigationHistoryEntry = @import("../navigation/NavigationHistoryEntry.zig");
 const NavigationType = @import("../navigation/root.zig").NavigationType;
-const js = @import("../../js/js.zig");
+const Allocator = std.mem.Allocator;
 
 const NavigationCurrentEntryChangeEvent = @This();
 
@@ -40,15 +44,21 @@ const Options = Event.inheritOptions(
 );
 
 pub fn init(typ: []const u8, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
-    return initWithTrusted(typ, opts, false, page);
+    const arena = try page.getArena(.{ .debug = "NavigationCurrentEntryChangeEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, type_string, opts, false, page);
 }
 
-pub fn initTrusted(typ: []const u8, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
-    return initWithTrusted(typ, opts, true, page);
+pub fn initTrusted(typ: String, opts: Options, page: *Page) !*NavigationCurrentEntryChangeEvent {
+    const arena = try page.getArena(.{ .debug = "NavigationCurrentEntryChangeEvent.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts, true, page);
 }
 
 fn initWithTrusted(
-    typ: []const u8,
+    arena: Allocator,
+    typ: String,
     opts: Options,
     trusted: bool,
     page: *Page,
@@ -59,6 +69,7 @@ fn initWithTrusted(
         null;
 
     const event = try page._factory.event(
+        arena,
         typ,
         NavigationCurrentEntryChangeEvent{
             ._proto = undefined,
@@ -69,6 +80,10 @@ fn initWithTrusted(
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *NavigationCurrentEntryChangeEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *NavigationCurrentEntryChangeEvent) *Event {
@@ -90,6 +105,8 @@ pub const JsApi = struct {
         pub const name = "NavigationCurrentEntryChangeEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(NavigationCurrentEntryChangeEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(NavigationCurrentEntryChangeEvent.init, .{});
