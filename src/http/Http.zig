@@ -30,6 +30,7 @@ pub const Transfer = Client.Transfer;
 
 const log = @import("../log.zig");
 const errors = @import("errors.zig");
+const RobotStore = @import("../browser/Robots.zig").RobotStore;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -46,7 +47,7 @@ client: *Client,
 ca_blob: ?c.curl_blob,
 arena: ArenaAllocator,
 
-pub fn init(allocator: Allocator, config: *const Config) !Http {
+pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Config) !Http {
     try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
     errdefer c.curl_global_cleanup();
 
@@ -62,7 +63,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Http {
         ca_blob = try loadCerts(allocator, arena.allocator());
     }
 
-    var client = try Client.init(allocator, ca_blob, config);
+    var client = try Client.init(allocator, ca_blob, robot_store, config);
     errdefer client.deinit();
 
     return .{
