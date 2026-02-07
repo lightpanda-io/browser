@@ -49,10 +49,10 @@ pub const JsApi = struct {
     };
 
     // Error code constants
-    pub const MEDIA_ERR_ABORTED = bridge.property(1);
-    pub const MEDIA_ERR_NETWORK = bridge.property(2);
-    pub const MEDIA_ERR_DECODE = bridge.property(3);
-    pub const MEDIA_ERR_SRC_NOT_SUPPORTED = bridge.property(4);
+    pub const MEDIA_ERR_ABORTED = bridge.property(1, .{ .template = true });
+    pub const MEDIA_ERR_NETWORK = bridge.property(2, .{ .template = true });
+    pub const MEDIA_ERR_DECODE = bridge.property(3, .{ .template = true });
+    pub const MEDIA_ERR_SRC_NOT_SUPPORTED = bridge.property(4, .{ .template = true });
 
     pub const code = bridge.accessor(MediaError.getCode, null, .{});
     pub const message = bridge.accessor(MediaError.getMessage, null, .{});

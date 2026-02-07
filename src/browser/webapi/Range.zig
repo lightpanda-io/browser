@@ -565,10 +565,10 @@ pub const JsApi = struct {
     };
 
     // Constants for compareBoundaryPoints
-    pub const START_TO_START = bridge.property(0);
-    pub const START_TO_END = bridge.property(1);
-    pub const END_TO_END = bridge.property(2);
-    pub const END_TO_START = bridge.property(3);
+    pub const START_TO_START = bridge.property(0, .{ .template = true });
+    pub const START_TO_END = bridge.property(1, .{ .template = true });
+    pub const END_TO_END = bridge.property(2, .{ .template = true });
+    pub const END_TO_START = bridge.property(3, .{ .template = true });
 
     pub const constructor = bridge.constructor(Range.init, .{});
     pub const setStart = bridge.function(Range.setStart, .{ .dom_exception = true });
