@@ -1047,7 +1047,7 @@ pub fn stopCpuProfiler(self: *Context) ![]const u8 {
     const title = self.isolate.initStringHandle("v8_cpu_profile");
     const handle = v8.v8__CpuProfiler__StopProfiling(self.cpu_profiler.?, title) orelse return error.NoProfiles;
     const string_handle = v8.v8__CpuProfile__Serialize(handle, self.isolate.handle) orelse return error.NoProfile;
-    return ls.local.jsStringToZig(string_handle, .{});
+    return (js.String{ .local = &ls.local, .handle = string_handle }).toSlice();
 }
 
 pub fn startHeapProfiler(self: *Context) void {
@@ -1079,7 +1079,7 @@ pub fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
         const string_handle = v8.v8__AllocationProfile__Serialize(profile, self.isolate.handle);
         v8.v8__HeapProfiler__StopSamplingHeapProfiler(self.heap_profiler.?);
         v8.v8__AllocationProfile__Delete(profile);
-        break :blk try ls.local.jsStringToZig(string_handle, .{});
+        break :blk try (js.String{ .local = &ls.local, .handle = string_handle.? }).toSlice();
     };
 
     const snapshot = blk: {
@@ -1087,7 +1087,7 @@ pub fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
         const string_handle = v8.v8__HeapSnapshot__Serialize(snapshot, self.isolate.handle);
         v8.v8__HeapProfiler__StopTrackingHeapObjects(self.heap_profiler.?);
         v8.v8__HeapSnapshot__Delete(snapshot);
-        break :blk try ls.local.jsStringToZig(string_handle, .{});
+        break :blk try (js.String{ .local = &ls.local, .handle = string_handle.? }).toSlice();
     };
 
     return .{ allocating, snapshot };
