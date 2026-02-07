@@ -783,7 +783,7 @@ pub const Request = struct {
     url: [:0]const u8,
     headers: Http.Headers,
     body: ?[]const u8 = null,
-    cookie_jar: *CookieJar,
+    cookie_jar: ?*CookieJar,
     resource_type: ResourceType,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
@@ -1057,13 +1057,15 @@ pub const Transfer = struct {
         const arena = transfer.arena.allocator();
 
         // retrieve cookies from the redirect's response.
-        var i: usize = 0;
-        while (true) {
-            const ct = getResponseHeader(easy, "set-cookie", i);
-            if (ct == null) break;
-            try req.cookie_jar.populateFromResponse(transfer.url, ct.?.value);
-            i += 1;
-            if (i >= ct.?.amount) break;
+        if (req.cookie_jar) |jar| {
+            var i: usize = 0;
+            while (true) {
+                const ct = getResponseHeader(easy, "set-cookie", i);
+                if (ct == null) break;
+                try jar.populateFromResponse(transfer.url, ct.?.value);
+                i += 1;
+                if (i >= ct.?.amount) break;
+            }
         }
 
         // set cookies for the following redirection's request.
@@ -1077,15 +1079,17 @@ pub const Transfer = struct {
         const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
         transfer.url = url;
 
-        var cookies: std.ArrayList(u8) = .{};
-        try req.cookie_jar.forRequest(url, cookies.writer(arena), .{
-            .is_http = true,
-            .origin_url = url,
-            // used to enforce samesite cookie rules
-            .is_navigation = req.resource_type == .document,
-        });
-        try cookies.append(arena, 0); //null terminate
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
+        if (req.cookie_jar) |jar| {
+            var cookies: std.ArrayList(u8) = .{};
+            try jar.forRequest(url, cookies.writer(arena), .{
+                .is_http = true,
+                .origin_url = url,
+                // used to enforce samesite cookie rules
+                .is_navigation = req.resource_type == .document,
+            });
+            try cookies.append(arena, 0); //null terminate
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
+        }
     }
 
     // headerDoneCallback is called once the headers have been read.
@@ -1107,16 +1111,18 @@ pub const Transfer = struct {
             @memcpy(hdr._content_type[0..len], value[0..len]);
         }
 
-        var i: usize = 0;
-        while (true) {
-            const ct = getResponseHeader(easy, "set-cookie", i);
-            if (ct == null) break;
-            transfer.req.cookie_jar.populateFromResponse(transfer.url, ct.?.value) catch |err| {
-                log.err(.http, "set cookie", .{ .err = err, .req = transfer });
-                return err;
-            };
-            i += 1;
-            if (i >= ct.?.amount) break;
+        if (transfer.req.cookie_jar) |jar| {
+            var i: usize = 0;
+            while (true) {
+                const ct = getResponseHeader(easy, "set-cookie", i);
+                if (ct == null) break;
+                jar.populateFromResponse(transfer.url, ct.?.value) catch |err| {
+                    log.err(.http, "set cookie", .{ .err = err, .req = transfer });
+                    return err;
+                };
+                i += 1;
+                if (i >= ct.?.amount) break;
+            }
         }
 
         const proceed = transfer.req.header_callback(transfer) catch |err| {
