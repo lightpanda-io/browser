@@ -15,6 +15,8 @@
   testing.expectEqual(window, document.defaultView);
   testing.expectEqual(false, document.hidden);
   testing.expectEqual("visible", document.visibilityState);
+  testing.expectEqual(false, document.prerendering);
+  testing.expectEqual(undefined, Document.prerendering);
 </script>
 
 <script id=headAndbody>
