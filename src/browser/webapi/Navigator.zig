@@ -102,6 +102,14 @@ pub fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
 }
 
+pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
+    return null;
+}
+
+pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
+    return true;
+}
+
 pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
     try validateProtocolHandlerScheme(scheme);
     try validateProtocolHandlerURL(url, page);
@@ -196,6 +204,8 @@ pub const JsApi = struct {
     pub const product = bridge.accessor(Navigator.getProduct, null, .{});
     pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
+    pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
+    pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true });
 

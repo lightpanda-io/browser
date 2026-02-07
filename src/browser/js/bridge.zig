@@ -437,10 +437,20 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
     }
 
     if (comptime IS_DEBUG) {
+        if (std.mem.startsWith(u8, property, "__")) {
+            // some frameworks will extend built-in types using a __ prefix
+            // these should always be safe to ignore.
+            return 0;
+        }
+
         const ignored = std.StaticStringMap(void).initComptime(.{
+            .{ "Deno", {} },
             .{ "process", {} },
             .{ "ShadyDOM", {} },
             .{ "ShadyCSS", {} },
+
+            // a lot of sites seem to like having their own window.config.
+            .{ "config", {} },
 
             .{ "litNonce", {} },
             .{ "litHtmlVersions", {} },
@@ -457,6 +467,8 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
             .{ "__google_recaptcha_client", {} },
 
             .{ "CLOSURE_FLAGS", {} },
+            .{ "__REACT_DEVTOOLS_GLOBAL_HOOK__", {} },
+            .{ "ApplePaySession", {} },
         });
         if (!ignored.has(property)) {
             log.debug(.unknown_prop, "unknown global property", .{
@@ -510,6 +522,17 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
                     // knockout does this, a lot.
                     return 0;
                 }
+            }
+
+            if (JsApi == @import("../webapi/element/Html.zig") or JsApi == @import("../webapi/Element.zig") or JsApi == @import("../webapi/element/html/Custom.zig")) {
+                // react ?
+                if (std.mem.eql(u8, property, "props")) return 0;
+                if (std.mem.eql(u8, property, "hydrated")) return 0;
+                if (std.mem.eql(u8, property, "isHydrated")) return 0;
+            }
+
+            if (JsApi == @import("../webapi/Console.zig")) {
+                if (std.mem.eql(u8, property, "firebug")) return 0;
             }
 
             const ignored = std.StaticStringMap(void).initComptime(.{});

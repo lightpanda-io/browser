@@ -100,6 +100,18 @@ pub fn setLoading(self: *Image, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("loading"), .wrap(value), page);
 }
 
+pub fn getNaturalWidth(_: *const Image) u32 {
+    // this is a valid response under a number of normal conditions, but could
+    // be used to detect the nature of Browser.
+    return 0;
+}
+
+pub fn getNaturalHeight(_: *const Image) u32 {
+    // this is a valid response under a number of normal conditions, but could
+    // be used to detect the nature of Browser.
+    return 0;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Image);
 
@@ -117,6 +129,8 @@ pub const JsApi = struct {
     pub const height = bridge.accessor(Image.getHeight, Image.setHeight, .{});
     pub const crossOrigin = bridge.accessor(Image.getCrossOrigin, Image.setCrossOrigin, .{});
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
+    pub const naturalWidth = bridge.accessor(Image.getNaturalWidth, null, .{});
+    pub const naturalHeight = bridge.accessor(Image.getNaturalHeight, null, .{});
 };
 
 pub const Build = struct {
