@@ -92,7 +92,7 @@ pub const Callback = union(enum) {
 
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
     if (comptime IS_DEBUG) {
-        log.debug(.event, "eventManager.register", .{ .type = typ, .capture = opts.capture, .once = opts.once, .target = target });
+        log.debug(.event, "eventManager.register", .{ .type = typ, .capture = opts.capture, .once = opts.once, .target = target.toString() });
     }
 
     // If a signal is provided and already aborted, don't register the listener
