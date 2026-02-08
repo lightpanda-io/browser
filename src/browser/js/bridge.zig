@@ -62,12 +62,13 @@ pub fn Builder(comptime T: type) type {
             return Callable.init(T, func, opts);
         }
 
-        pub fn property(value: anytype) Property {
-            switch (@typeInfo(@TypeOf(value))) {
-                .comptime_int, .int => return .{ .int = value },
-                else => {},
-            }
-            @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet");
+        pub fn property(value: anytype, opts: Property.Opts) Property {
+            // If you add strings to this, they might need to be internalized!
+            return switch (@typeInfo(@TypeOf(value))) {
+                .bool => Property.init(.{ .bool = value }, opts),
+                .comptime_int, .int => Property.init(.{ .int = value }, opts),
+                else => @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet"),
+            };
         }
 
         const PrototypeChainEntry = @import("TaggedOpaque.zig").PrototypeChainEntry;
@@ -398,8 +399,33 @@ pub const Callable = struct {
     }
 };
 
-pub const Property = union(enum) {
-    int: i64,
+pub const Property = struct {
+    value: Value,
+    template: bool,
+
+    // If you add strings to this, they might need to be internalized!
+    const Value = union(enum) {
+        int: i64,
+        bool: bool,
+    };
+
+    const Opts = struct {
+        template: bool,
+    };
+
+    fn init(value: Value, opts: Opts) Property {
+        return .{
+            .value = value,
+            .template = opts.template,
+        };
+    }
+
+    pub fn getter(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+        const value = v8.v8__FunctionCallbackInfo__Data(handle.?);
+        var rv: v8.ReturnValue = undefined;
+        v8.v8__FunctionCallbackInfo__GetReturnValue(handle.?, &rv);
+        v8.v8__ReturnValue__Set(rv, value);
+    }
 };
 
 const Finalizer = struct {

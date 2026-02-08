@@ -1004,6 +1004,7 @@ pub const JsApi = struct {
     pub const adoptedStyleSheets = bridge.accessor(Document.getAdoptedStyleSheets, Document.setAdoptedStyleSheets, .{});
     pub const hidden = bridge.accessor(Document.getHidden, null, .{});
     pub const visibilityState = bridge.accessor(Document.getVisibilityState, null, .{});
+    pub const prerendering = bridge.property(false, .{ .template = false });
 
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {

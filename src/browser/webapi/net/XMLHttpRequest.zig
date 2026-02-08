@@ -552,11 +552,11 @@ pub const JsApi = struct {
     };
 
     pub const constructor = bridge.constructor(XMLHttpRequest.init, .{});
-    pub const UNSENT = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.unsent));
-    pub const OPENED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.opened));
-    pub const HEADERS_RECEIVED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.headers_received));
-    pub const LOADING = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.loading));
-    pub const DONE = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.done));
+    pub const UNSENT = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.unsent), .{ .template = true });
+    pub const OPENED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.opened), .{ .template = true });
+    pub const HEADERS_RECEIVED = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.headers_received), .{ .template = true });
+    pub const LOADING = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.loading), .{ .template = true });
+    pub const DONE = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.done), .{ .template = true });
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
     pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{ .dom_exception = true });
