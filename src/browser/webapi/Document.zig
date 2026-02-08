@@ -125,14 +125,16 @@ const CreateElementOptions = struct {
 
 pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElementOptions, page: *Page) !*Element {
     try validateElementName(name);
-    const namespace: Element.Namespace = blk: {
+    const ns: Element.Namespace, const normalized_name = blk: {
         if (self._type == .html) {
-            break :blk .html;
+            break :blk .{ .html, std.ascii.lowerString(&page.buf, name) };
         }
         // Generic and XML documents create XML elements
-        break :blk .xml;
+        break :blk .{ .xml, name };
     };
-    const node = try page.createElementNS(namespace, name, null);
+    // HTML documents are case-insensitive - lowercase the tag name
+
+    const node = try page.createElementNS(ns, normalized_name, null);
     const element = node.as(Element);
 
     // Track owner document if it's not the main document
@@ -151,7 +153,9 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
 
 pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8, page: *Page) !*Element {
     try validateElementName(name);
-    const node = try page.createElementNS(Element.Namespace.parse(namespace), name, null);
+    const ns = Element.Namespace.parse(namespace);
+    const normalized_name = if (ns == .html) std.ascii.lowerString(&page.buf, name) else name;
+    const node = try page.createElementNS(ns, normalized_name, null);
 
     // Track owner document if it's not the main document
     if (self != page.document) {
