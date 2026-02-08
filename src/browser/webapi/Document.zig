@@ -796,6 +796,17 @@ pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
 }
 
+pub fn getHidden(_: *const Document) bool {
+    // it's hidden when, for example, the decive is locked, or user is on a
+    // a different tab.
+    return false;
+}
+
+pub fn getVisibilityState(_: *const Document) []const u8 {
+    // See getHidden above, possible options are "visible" or "hidden"
+    return "visible";
+}
+
 // Validates that nodes can be inserted into a Document, respecting Document constraints:
 // - At most one Element child
 // - At most one DocumentType child
@@ -991,6 +1002,8 @@ pub const JsApi = struct {
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});
     pub const childElementCount = bridge.accessor(Document.getChildElementCount, null, .{});
     pub const adoptedStyleSheets = bridge.accessor(Document.getAdoptedStyleSheets, Document.setAdoptedStyleSheets, .{});
+    pub const hidden = bridge.accessor(Document.getHidden, null, .{});
+    pub const visibilityState = bridge.accessor(Document.getVisibilityState, null, .{});
 
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {

@@ -13,6 +13,8 @@
   testing.expectEqual(undefined, document.getCurrentScript);
   testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/document/document.html", document.URL);
   testing.expectEqual(window, document.defaultView);
+  testing.expectEqual(false, document.hidden);
+  testing.expectEqual("visible", document.visibilityState);
 </script>
 
 <script id=headAndbody>
