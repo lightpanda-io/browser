@@ -713,10 +713,6 @@ fn _documentIsComplete(self: *Page) !void {
             ls.toLocal(maybe_inline_listener),
             .{ .context = "Page dispatch load events" },
         );
-
-        if (comptime IS_DEBUG) {
-            log.debug(.page, "load event for element", .{ .element = element });
-        }
     }
 
     // `_to_load` can be cleaned here.

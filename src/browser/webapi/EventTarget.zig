@@ -137,7 +137,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
 
 pub fn toString(self: *EventTarget) []const u8 {
     return switch (self._type) {
-        .node => |n| return n.className(),
+        .node => return "[object Node]",
         .generic => return "[object EventTarget]",
         .window => return "[object Window]",
         .xhr => return "[object XMLHttpRequestEventTarget]",

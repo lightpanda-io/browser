@@ -126,6 +126,8 @@ scheduler: Scheduler,
 // down.
 shutting_down: bool = false,
 
+unknown_properties: (if (IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (IS_DEBUG) .{} else {},
+
 const ModuleEntry = struct {
     // Can be null if we're asynchrously loading the module, in
     // which case resolver_promise cannot be null.
@@ -158,6 +160,16 @@ pub fn fromIsolate(isolate: js.Isolate) *Context {
 }
 
 pub fn deinit(self: *Context) void {
+    if (comptime IS_DEBUG) {
+        var it = self.unknown_properties.iterator();
+        while (it.next()) |kv| {
+            log.debug(.unknown_prop, "unknown property", .{
+                .property = kv.key_ptr.*,
+                .occurrences = kv.value_ptr.count,
+                .first_stack = kv.value_ptr.first_stack,
+            });
+        }
+    }
     defer self.env.app.arena_pool.release(self.arena);
 
     var hs: js.HandleScope = undefined;
@@ -1092,3 +1104,8 @@ pub fn stopHeapProfiler(self: *Context) !struct { []const u8, []const u8 } {
 
     return .{ allocating, snapshot };
 }
+
+const UnknownPropertyStat = struct {
+    count: usize,
+    first_stack: []const u8,
+};

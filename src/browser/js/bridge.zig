@@ -459,11 +459,8 @@ pub fn unknownWindowPropertyCallback(c_name: ?*const v8.Name, handle: ?*const v8
             .{ "CLOSURE_FLAGS", {} },
         });
         if (!ignored.has(property)) {
-            log.debug(.unknown_prop, "unknown global property", .{
-                .info = "but the property can exist in pure JS",
-                .stack = local.stackTrace() catch "???",
-                .property = property,
-            });
+            const key = std.fmt.bufPrint(&local.ctx.page.buf, "Window:{s}", .{property}) catch return 0;
+            logUnknownProperty(local, key) catch return 0;
         }
     }
 
@@ -514,17 +511,27 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
 
             const ignored = std.StaticStringMap(void).initComptime(.{});
             if (!ignored.has(property)) {
-                log.debug(.unknown_prop, "unknown object property", .{
-                    .object = if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi),
-                    .info = "but the property can exist in pure JS",
-                    .stack = local.stackTrace() catch "???",
-                    .property = property,
-                });
+                const key = std.fmt.bufPrint(&local.ctx.page.buf, "{s}:{s}", .{ if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi), property }) catch return 0;
+                logUnknownProperty(local, key) catch return 0;
             }
             // not intercepted
             return 0;
         }
     }.wrap;
+}
+
+fn logUnknownProperty(local: *const js.Local, key: []const u8) !void {
+    const ctx = local.ctx;
+    const gop = try ctx.unknown_properties.getOrPut(ctx.arena, key);
+    if (gop.found_existing) {
+        gop.value_ptr.count += 1;
+    } else {
+        gop.key_ptr.* = try ctx.arena.dupe(u8, key);
+        gop.value_ptr.* = .{
+            .count = 1,
+            .first_stack = try ctx.arena.dupe(u8, (try local.stackTrace()) orelse "???"),
+        };
+    }
 }
 
 // Given a Type, returns the length of the prototype chain, including self
