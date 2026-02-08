@@ -56,6 +56,7 @@ _response_type: ResponseType = .text,
 
 _ready_state: ReadyState = .unsent,
 _on_ready_state_change: ?js.Function.Temp = null,
+_with_credentials: bool = false,
 
 const ReadyState = enum(u8) {
     unsent = 0,
@@ -150,6 +151,17 @@ pub fn setOnReadyStateChange(self: *XMLHttpRequest, cb_: ?js.Function) !void {
     }
 }
 
+pub fn getWithCredentials(self: *const XMLHttpRequest) bool {
+    return self._with_credentials;
+}
+
+pub fn setWithCredentials(self: *XMLHttpRequest, value: bool) !void {
+    if (self._ready_state != .unsent and self._ready_state != .opened) {
+        return error.InvalidStateError;
+    }
+    self._with_credentials = value;
+}
+
 // TODO: this takes an optional 3 more parameters
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
@@ -198,8 +210,14 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     const page = self._page;
     const http_client = page._session.browser.http_client;
     var headers = try http_client.newHeaders();
+
+    // Only add cookies for same-origin or when withCredentials is true
+    const cookie_support = self._with_credentials or try page.isSameOrigin(self._url);
+
     try self._request_headers.populateHttpHeader(page.call_arena, &headers);
-    try page.headersForRequest(self._arena, self._url, &headers);
+    if (cookie_support) {
+        try page.headersForRequest(self._arena, self._url, &headers);
+    }
 
     try http_client.request(.{
         .ctx = self,
@@ -207,7 +225,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .method = self._method,
         .headers = headers,
         .body = self._request_body,
-        .cookie_jar = &page._session.cookie_jar,
+        .cookie_jar = if (cookie_support) &page._session.cookie_jar else null,
         .resource_type = .xhr,
         .notification = page._session.notification,
         .start_callback = httpStartCallback,
@@ -541,6 +559,7 @@ pub const JsApi = struct {
     pub const DONE = bridge.property(@intFromEnum(XMLHttpRequest.ReadyState.done));
 
     pub const onreadystatechange = bridge.accessor(XMLHttpRequest.getOnReadyStateChange, XMLHttpRequest.setOnReadyStateChange, .{});
+    pub const withCredentials = bridge.accessor(XMLHttpRequest.getWithCredentials, XMLHttpRequest.setWithCredentials, .{ .dom_exception = true });
     pub const open = bridge.function(XMLHttpRequest.open, .{});
     pub const send = bridge.function(XMLHttpRequest.send, .{ .dom_exception = true });
     pub const responseType = bridge.accessor(XMLHttpRequest.getResponseType, XMLHttpRequest.setResponseType, .{});

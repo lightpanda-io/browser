@@ -197,6 +197,7 @@ pub const Accessor = struct {
         cache: ?[]const u8 = null,
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
+        dom_exception: bool = false,
     };
 
     fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Opts) Accessor {
@@ -215,12 +216,14 @@ pub const Accessor = struct {
                     if (comptime opts.static) {
                         caller.function(T, getter, handle.?, .{
                             .cache = opts.cache,
+                            .dom_exception = opts.dom_exception,
                             .as_typed_array = opts.as_typed_array,
                             .null_as_undefined = opts.null_as_undefined,
                         });
                     } else {
                         caller.method(T, getter, handle.?, .{
                             .cache = opts.cache,
+                            .dom_exception = opts.dom_exception,
                             .as_typed_array = opts.as_typed_array,
                             .null_as_undefined = opts.null_as_undefined,
                         });
