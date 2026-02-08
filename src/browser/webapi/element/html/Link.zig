@@ -30,6 +30,9 @@ _proto: *HtmlElement,
 pub fn asElement(self: *Link) *Element {
     return self._proto._proto;
 }
+pub fn asConstElement(self: *const Link) *const Element {
+    return self._proto._proto;
+}
 pub fn asNode(self: *Link) *Node {
     return self.asElement().asNode();
 }
@@ -57,6 +60,14 @@ pub fn setRel(self: *Link, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("rel"), .wrap(value), page);
 }
 
+pub fn getAs(self: *const Link) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("as")) orelse "";
+}
+
+pub fn setAs(self: *Link, value: []const u8, page: *Page) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("as"), .wrap(value), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Link);
 
@@ -66,6 +77,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const as = bridge.accessor(Link.getAs, Link.setAs, .{});
     pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{});
     pub const href = bridge.accessor(Link.getHref, Link.setHref, .{});
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });

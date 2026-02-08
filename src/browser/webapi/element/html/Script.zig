@@ -76,6 +76,38 @@ pub fn setNonce(self: *Script, value: []const u8, page: *Page) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("nonce"), .wrap(value), page);
 }
 
+pub fn getCharset(self: *const Script) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("charset")) orelse "";
+}
+
+pub fn setCharset(self: *Script, value: []const u8, page: *Page) !void {
+    return self.asElement().setAttributeSafe(comptime .wrap("charset"), .wrap(value), page);
+}
+
+pub fn getAsync(self: *const Script) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("async")) != null;
+}
+
+pub fn setAsync(self: *Script, value: bool, page: *Page) !void {
+    if (value) {
+        try self.asElement().setAttributeSafe(comptime .wrap("async"), .wrap(""), page);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("async"), page);
+    }
+}
+
+pub fn getDefer(self: *const Script) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("defer")) != null;
+}
+
+pub fn setDefer(self: *Script, value: bool, page: *Page) !void {
+    if (value) {
+        try self.asElement().setAttributeSafe(comptime .wrap("defer"), .wrap(""), page);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("defer"), page);
+    }
+}
+
 pub fn getOnLoad(self: *const Script) ?js.Function.Global {
     return self._on_load;
 }
@@ -110,8 +142,11 @@ pub const JsApi = struct {
     };
 
     pub const src = bridge.accessor(Script.getSrc, Script.setSrc, .{});
+    pub const @"defer" = bridge.accessor(Script.getDefer, Script.setDefer, .{});
+    pub const async = bridge.accessor(Script.getAsync, Script.setAsync, .{});
     pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{});
     pub const nonce = bridge.accessor(Script.getNonce, Script.setNonce, .{});
+    pub const charset = bridge.accessor(Script.getCharset, Script.setCharset, .{});
     pub const onload = bridge.accessor(Script.getOnLoad, Script.setOnLoad, .{});
     pub const onerror = bridge.accessor(Script.getOnError, Script.setOnError, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
