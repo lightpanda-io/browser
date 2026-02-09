@@ -24,6 +24,8 @@ const Page = @import("../Page.zig");
 const Range = @import("Range.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const Node = @import("Node.zig");
+const Event = @import("Event.zig");
+const Document = @import("Document.zig");
 
 /// https://w3c.github.io/selection-api/
 const Selection = @This();
@@ -34,6 +36,12 @@ _range: ?*Range = null,
 _direction: SelectionDirection = .none,
 
 pub const init: Selection = .{};
+
+fn dispatchSelectionChangeEvent(page: *Page) !void {
+    const event = try Event.init("selectionchange", .{}, page);
+    defer if (!event._v8_handoff) event.deinit(false);
+    try page._event_manager.dispatch(page.document.asEventTarget(), event);
+}
 
 fn isInTree(self: *const Selection) bool {
     if (self._range == null) return false;
@@ -110,23 +118,26 @@ pub fn getType(self: *const Selection) []const u8 {
     return "Range";
 }
 
-pub fn addRange(self: *Selection, range: *Range) !void {
+pub fn addRange(self: *Selection, range: *Range, page: *Page) !void {
     if (self._range != null) return;
     self._range = range;
+    try dispatchSelectionChangeEvent(page);
 }
 
-pub fn removeRange(self: *Selection, range: *Range) !void {
+pub fn removeRange(self: *Selection, range: *Range, page: *Page) !void {
     if (self._range == range) {
         self._range = null;
+        try dispatchSelectionChangeEvent(page);
         return;
     } else {
         return error.NotFound;
     }
 }
 
-pub fn removeAllRanges(self: *Selection) void {
+pub fn removeAllRanges(self: *Selection, page: *Page) !void {
     self._range = null;
     self._direction = .none;
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn collapseToEnd(self: *Selection, page: *Page) !void {
@@ -142,6 +153,7 @@ pub fn collapseToEnd(self: *Selection, page: *Page) !void {
 
     self._range = new_range;
     self._direction = .none;
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn collapseToStart(self: *Selection, page: *Page) !void {
@@ -157,6 +169,7 @@ pub fn collapseToStart(self: *Selection, page: *Page) !void {
 
     self._range = new_range;
     self._direction = .none;
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
@@ -187,8 +200,8 @@ pub fn containsNode(self: *const Selection, node: *Node, partial: bool) !bool {
 
 pub fn deleteFromDocument(self: *Selection, page: *Page) !void {
     const range = self._range orelse return;
-
     try range.deleteContents(page);
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
@@ -230,6 +243,7 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
     }
 
     self._range = new_range;
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn getRangeAt(self: *Selection, index: u32) !*Range {
@@ -309,6 +323,7 @@ pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
 
     self._range = range;
     self._direction = .forward;
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn setBaseAndExtent(
@@ -355,11 +370,12 @@ pub fn setBaseAndExtent(
     }
 
     self._range = range;
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !void {
     const node = _node orelse {
-        self.removeAllRanges();
+        try self.removeAllRanges(page);
         return;
     };
 
@@ -376,6 +392,7 @@ pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !vo
 
     self._range = range;
     self._direction = .none;
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn toString(self: *const Selection, page: *Page) ![]const u8 {
