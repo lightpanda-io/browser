@@ -20,6 +20,8 @@ const std = @import("std");
 const js = @import("js.zig");
 const v8 = js.v8;
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Allocator = std.mem.Allocator;
 
 const TryCatch = @This();
@@ -32,8 +34,19 @@ pub fn init(self: *TryCatch, l: *const js.Local) void {
     v8.v8__TryCatch__CONSTRUCT(&self.handle, l.isolate.handle);
 }
 
+pub fn hasCaught(self: TryCatch) bool {
+    return v8.v8__TryCatch__HasCaught(&self.handle);
+}
+
+pub fn rethrow(self: *TryCatch) void {
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.hasCaught());
+    }
+    _ = v8.v8__TryCatch__ReThrow(&self.handle);
+}
+
 pub fn caught(self: TryCatch, allocator: Allocator) ?Caught {
-    if (!v8.v8__TryCatch__HasCaught(&self.handle)) {
+    if (self.hasCaught() == false) {
         return null;
     }
 

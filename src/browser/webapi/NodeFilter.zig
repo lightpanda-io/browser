@@ -67,7 +67,7 @@ pub const SHOW_NOTATION: u32 = 0x800;
 
 pub fn acceptNode(self: *const NodeFilter, node: *Node, local: *const js.Local) !i32 {
     const func = self._func orelse return FILTER_ACCEPT;
-    return local.toLocal(func).call(i32, .{node});
+    return local.toLocal(func).callRethrow(i32, .{node});
 }
 
 pub fn shouldShow(node: *const Node, what_to_show: u32) bool {
