@@ -25,6 +25,7 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
+const Event = @import("../../Event.zig");
 
 const TextArea = @This();
 
@@ -34,6 +35,26 @@ _value: ?[]const u8 = null,
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
+
+_on_selectionchange: ?js.Function.Global = null,
+
+pub fn getOnSelectionChange(self: *TextArea) ?js.Function.Global {
+    return self._on_selectionchange;
+}
+
+pub fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
+    if (listener) |listen| {
+        self._on_selectionchange = try listen.persistWithThis(self);
+    } else {
+        self._on_selectionchange = null;
+    }
+}
+
+fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
+    const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
+    defer if (!event._v8_handoff) event.deinit(false);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+}
 
 pub fn asElement(self: *TextArea) *Element {
     return self._proto._proto;
@@ -115,9 +136,9 @@ pub fn setRequired(self: *TextArea, required: bool, page: *Page) !void {
     }
 }
 
-pub fn select(self: *TextArea) !void {
+pub fn select(self: *TextArea, page: *Page) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
-    try self.setSelectionRange(0, len, null);
+    try self.setSelectionRange(0, len, null, page);
 }
 
 const HowSelected = union(enum) { partial: struct { u32, u32 }, full, none };
@@ -141,6 +162,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             self._selection_start = @intCast(new_value.len);
             self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
+            try self.dispatchSelectionChangeEvent(page);
         },
         .partial => |range| {
             // if the text area is partially selected, replace the selected content.
@@ -159,6 +181,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             self._selection_start = @intCast(new_pos);
             self._selection_end = @intCast(new_pos);
             self._selection_direction = .none;
+            try self.dispatchSelectionChangeEvent(page);
         },
         .none => {
             // if the text area is not selected, just insert at cursor.
@@ -177,19 +200,27 @@ pub fn getSelectionStart(self: *const TextArea) u32 {
     return self._selection_start;
 }
 
-pub fn setSelectionStart(self: *TextArea, value: u32) void {
+pub fn setSelectionStart(self: *TextArea, value: u32, page: *Page) !void {
     self._selection_start = value;
+    try self.dispatchSelectionChangeEvent(page);
 }
 
 pub fn getSelectionEnd(self: *const TextArea) u32 {
     return self._selection_end;
 }
 
-pub fn setSelectionEnd(self: *TextArea, value: u32) void {
+pub fn setSelectionEnd(self: *TextArea, value: u32, page: *Page) !void {
     self._selection_end = value;
+    try self.dispatchSelectionChangeEvent(page);
 }
 
-pub fn setSelectionRange(self: *TextArea, selection_start: u32, selection_end: u32, selection_dir: ?[]const u8) !void {
+pub fn setSelectionRange(
+    self: *TextArea,
+    selection_start: u32,
+    selection_end: u32,
+    selection_dir: ?[]const u8,
+    page: *Page,
+) !void {
     const direction = blk: {
         if (selection_dir) |sd| {
             break :blk std.meta.stringToEnum(Selection.SelectionDirection, sd) orelse .none;
@@ -215,6 +246,8 @@ pub fn setSelectionRange(self: *TextArea, selection_start: u32, selection_end: u
     self._selection_direction = direction;
     self._selection_start = start;
     self._selection_end = end;
+
+    try self.dispatchSelectionChangeEvent(page);
 }
 
 pub fn getForm(self: *TextArea, page: *Page) ?*Form {
@@ -250,6 +283,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const onselectionchange = bridge.accessor(TextArea.getOnSelectionChange, TextArea.setOnSelectionChange, .{});
     pub const value = bridge.accessor(TextArea.getValue, TextArea.setValue, .{});
     pub const defaultValue = bridge.accessor(TextArea.getDefaultValue, TextArea.setDefaultValue, .{});
     pub const disabled = bridge.accessor(TextArea.getDisabled, TextArea.setDisabled, .{});
