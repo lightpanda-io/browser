@@ -211,6 +211,7 @@ pub const Connection = struct {
             .HEAD => "HEAD",
             .OPTIONS => "OPTIONS",
             .PATCH => "PATCH",
+            .PROPFIND => "PROPFIND",
         };
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, m.ptr));
     }
@@ -342,6 +343,7 @@ pub const Method = enum(u8) {
     HEAD = 4,
     OPTIONS = 5,
     PATCH = 6,
+    PROPFIND = 7,
 };
 
 // TODO: on BSD / Linux, we could just read the PEM file directly.

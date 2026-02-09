@@ -130,3 +130,10 @@
     testing.expectEqual("you", request2.headers.get("target"));
   }
 </script>
+
+<script id=propfind>
+  {
+    const req = new Request('https://example.com/api', { method: 'propfind' });
+    testing.expectEqual('PROPFIND', req.method);
+  }
+</script>

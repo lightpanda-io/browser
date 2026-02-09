@@ -106,3 +106,17 @@
     testing.expectEqual(req5, target);
   })
 </script>
+
+<script id=xhr6 type=module>
+  const req5 = new XMLHttpRequest()
+  const promise5 = new Promise((resolve) => {
+    req5.onload = resolve;
+    req5.open('PROPFIND', 'http://127.0.0.1:9589/xhr')
+    req5.send('foo')
+  });
+
+  testing.async(promise5, () => {
+    testing.expectEqual(200, req5.status);
+    testing.expectEqual('OK', req5.statusText);
+    testing.expectEqual(true, req5.responseText.length > 65);
+  });
