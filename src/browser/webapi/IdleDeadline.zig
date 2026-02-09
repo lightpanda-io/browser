@@ -24,10 +24,6 @@ pub fn init() IdleDeadline {
     return .{};
 }
 
-pub fn getDidTimeout(_: *const IdleDeadline) bool {
-    return false;
-}
-
 pub fn timeRemaining(_: *const IdleDeadline) f64 {
     // Return a fixed 50ms.
     // This allows idle callbacks to perform work without complex
@@ -47,5 +43,5 @@ pub const JsApi = struct {
     };
 
     pub const timeRemaining = bridge.function(IdleDeadline.timeRemaining, .{});
-    pub const didTimeout = bridge.accessor(IdleDeadline.getDidTimeout, null, .{});
+    pub const didTimeout = bridge.property(false, .{ .template = false });
 };

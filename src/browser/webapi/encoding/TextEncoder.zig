@@ -26,10 +26,6 @@ pub fn init() TextEncoder {
     return .{};
 }
 
-pub fn getEncoding(_: *const TextEncoder) []const u8 {
-    return "utf-8";
-}
-
 pub fn encode(_: *const TextEncoder, v: []const u8) !js.TypedArray(u8) {
     if (!std.unicode.utf8ValidateSlice(v)) {
         return error.InvalidUtf8;
@@ -50,7 +46,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(TextEncoder.init, .{});
     pub const encode = bridge.function(TextEncoder.encode, .{ .as_typed_array = true });
-    pub const encoding = bridge.accessor(TextEncoder.getEncoding, null, .{});
+    pub const encoding = bridge.property("utf-8", .{ .template = false });
 };
 
 const testing = @import("../../../testing.zig");

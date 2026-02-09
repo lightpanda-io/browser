@@ -43,30 +43,6 @@ pub fn asEventTarget(self: *Screen) *EventTarget {
     return self._proto;
 }
 
-pub fn getWidth(_: *const Screen) u32 {
-    return 1920;
-}
-
-pub fn getHeight(_: *const Screen) u32 {
-    return 1080;
-}
-
-pub fn getAvailWidth(_: *const Screen) u32 {
-    return 1920;
-}
-
-pub fn getAvailHeight(_: *const Screen) u32 {
-    return 1040; // 40px reserved for taskbar/dock
-}
-
-pub fn getColorDepth(_: *const Screen) u32 {
-    return 24;
-}
-
-pub fn getPixelDepth(_: *const Screen) u32 {
-    return 24;
-}
-
 pub fn getOrientation(self: *Screen, page: *Page) !*Orientation {
     if (self._orientation) |orientation| {
         return orientation;
@@ -85,12 +61,12 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.accessor(Screen.getWidth, null, .{});
-    pub const height = bridge.accessor(Screen.getHeight, null, .{});
-    pub const availWidth = bridge.accessor(Screen.getAvailWidth, null, .{});
-    pub const availHeight = bridge.accessor(Screen.getAvailHeight, null, .{});
-    pub const colorDepth = bridge.accessor(Screen.getColorDepth, null, .{});
-    pub const pixelDepth = bridge.accessor(Screen.getPixelDepth, null, .{});
+    pub const width = bridge.property(1920, .{ .template = false });
+    pub const height = bridge.property(1080, .{ .template = false });
+    pub const availWidth = bridge.property(1920, .{ .template = false });
+    pub const availHeight = bridge.property(1040, .{ .template = false });
+    pub const colorDepth = bridge.property(24, .{ .template = false });
+    pub const pixelDepth = bridge.property(24, .{ .template = false });
     pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});
 };
 
@@ -107,14 +83,6 @@ pub const Orientation = struct {
         return self._proto;
     }
 
-    pub fn getAngle(_: *const Orientation) u32 {
-        return 0;
-    }
-
-    pub fn getType(_: *const Orientation) []const u8 {
-        return "landscape-primary";
-    }
-
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Orientation);
 
@@ -124,7 +92,7 @@ pub const Orientation = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const angle = bridge.accessor(Orientation.getAngle, null, .{});
-        pub const @"type" = bridge.accessor(Orientation.getType, null, .{});
+        pub const angle = bridge.property(0, .{ .template = false });
+        pub const @"type" = bridge.property("landscape-primary", .{ .template = false });
     };
 };

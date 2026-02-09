@@ -2,6 +2,8 @@
 <body></body>
 <script src="../testing.js"></script>
 <script id=createElement>
+  testing.expectEqual(1, document.createElement.length);
+
   const div1 = document.createElement('div');
   testing.expectEqual(true, div1 instanceof HTMLDivElement);
   testing.expectEqual("DIV", div1.tagName);

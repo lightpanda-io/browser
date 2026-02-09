@@ -25,6 +25,7 @@
 
 
 <script id=setTimeout>
+  testing.expectEqual(1, window.setTimeout.length);
   let wst2 = 1;
   window.setTimeout((a, b) => {
     wst2 = a + b;

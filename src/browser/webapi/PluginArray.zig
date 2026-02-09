@@ -26,9 +26,6 @@ const PluginArray = @This();
 
 _pad: bool = false,
 
-pub fn getLength(_: *const PluginArray) u32 {
-    return 0;
-}
 pub fn refresh(_: *const PluginArray) void {}
 pub fn getAtIndex(_: *const PluginArray, index: usize) ?*Plugin {
     _ = index;
@@ -64,7 +61,7 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const length = bridge.accessor(PluginArray.getLength, null, .{});
+    pub const length = bridge.property(0, .{ .template = false });
     pub const refresh = bridge.function(PluginArray.refresh, .{});
     pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, .{ .null_as_undefined = true });
