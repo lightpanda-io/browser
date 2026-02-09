@@ -314,11 +314,14 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
     const entry = try self.pending_robots_queue.getOrPut(self.allocator, robots_url);
 
     if (!entry.found_existing) {
+        errdefer self.allocator.free(robots_url);
+
         // If we aren't already fetching this robots,
         // we want to create a new queue for it and add this request into it.
         entry.value_ptr.* = .empty;
 
         const ctx = try self.allocator.create(RobotsRequestContext);
+        errdefer self.allocator.destroy(ctx);
         ctx.* = .{ .client = self, .req = req, .robots_url = robots_url, .buffer = .empty };
         const headers = try self.newHeaders();
 
@@ -336,6 +339,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .data_callback = robotsDataCallback,
             .done_callback = robotsDoneCallback,
             .error_callback = robotsErrorCallback,
+            .shutdown_callback = robotsShutdownCallback,
         });
     } else {
         // Not using our own robots URL, only using the one from the first request.
@@ -420,6 +424,18 @@ fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
             queued_req.error_callback(queued_req.ctx, e);
         };
     }
+}
+
+fn robotsShutdownCallback(ctx_ptr: *anyopaque) void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
+    defer ctx.deinit();
+
+    log.debug(.http, "robots fetch shutdown", .{});
+
+    var queued = ctx.client.pending_robots_queue.fetchRemove(
+        ctx.robots_url,
+    ) orelse @panic("Client.robotsErrorCallback empty queue");
+    defer queued.value.deinit(ctx.client.allocator);
 }
 
 fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
