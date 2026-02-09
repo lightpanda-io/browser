@@ -370,6 +370,11 @@ pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !vo
         return error.IndexSizeError;
     }
 
+    // If the node is not contained in the document, do not change the selection
+    if (!page.document.asNode().contains(node)) {
+        return;
+    }
+
     const range = try Range.init(page);
     try range.setStart(node, offset);
     try range.setEnd(node, offset);
@@ -416,7 +421,7 @@ pub const JsApi = struct {
     pub const removeRange = bridge.function(Selection.removeRange, .{ .dom_exception = true });
     pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
     pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
-    pub const setPosition = bridge.function(Selection.collapse, .{});
+    pub const setPosition = bridge.function(Selection.collapse, .{ .dom_exception = true });
     pub const toString = bridge.function(Selection.toString, .{});
 };
 
