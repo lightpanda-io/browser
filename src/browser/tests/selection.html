@@ -541,3 +541,97 @@
     testing.expectEqual(3, sel.focusOffset);
   }
 </script>
+
+<script id=selectionChangeEvent>
+  {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    
+    let eventCount = 0;
+    let lastEvent = null;
+    
+    document.addEventListener('selectionchange', (e) => {
+      eventCount++;
+      lastEvent = e;
+    });
+    
+    testing.expectEqual(0, eventCount);
+    
+    const p1 = document.getElementById("p1");
+    const textNode = p1.firstChild;
+    
+    // Test 1: collapse should fire event
+    sel.collapse(textNode, 5);
+    testing.expectEqual(1, eventCount);
+    testing.expectEqual('selectionchange', lastEvent.type);
+    testing.expectEqual(document, lastEvent.target);
+    testing.expectEqual(false, lastEvent.bubbles);
+    testing.expectEqual(false, lastEvent.cancelable);
+    
+    // Test 2: extend should fire event
+    sel.extend(textNode, 10);
+    testing.expectEqual(2, eventCount);
+    
+    // Test 3: collapseToStart should fire event
+    sel.collapseToStart();
+    testing.expectEqual(3, eventCount);
+    
+    // Test 4: collapseToEnd should fire event
+    eventCount = 0;
+    sel.removeAllRanges();
+    const range = document.createRange();
+    range.setStart(textNode, 4);
+    range.setEnd(textNode, 15);
+    sel.addRange(range);
+    sel.collapseToEnd();
+    testing.expectEqual(3, eventCount);
+    
+    // Test 5: addRange should fire event
+    eventCount = 0;
+    sel.removeAllRanges();
+    const newRange = document.createRange();
+    newRange.selectNodeContents(p1);
+    sel.addRange(newRange);
+    testing.expectEqual(2, eventCount);
+    
+    // Test 6: removeRange should fire event
+    eventCount = 0;
+    sel.removeRange(newRange);
+    testing.expectEqual(1, eventCount);
+    
+    // Test 7: removeAllRanges should fire event
+    sel.addRange(newRange);
+    eventCount = 0;
+    sel.removeAllRanges();
+    testing.expectEqual(1, eventCount);
+    
+    // Test 8: selectAllChildren should fire event
+    eventCount = 0;
+    const nested = document.getElementById("nested");
+    sel.selectAllChildren(nested);
+    testing.expectEqual(1, eventCount);
+    
+    // Test 9: setBaseAndExtent should fire event
+    eventCount = 0;
+    sel.setBaseAndExtent(textNode, 4, textNode, 15);
+    testing.expectEqual(1, eventCount);
+    
+    // Test 10: deleteFromDocument should fire event
+    sel.collapse(textNode, 5);
+    sel.extend(textNode, 10);
+    eventCount = 0;
+    sel.deleteFromDocument();
+    testing.expectEqual(1, eventCount);
+    
+    // Test 11: Event doesn't bubble
+    let bubbledToBody = false;
+    document.body.addEventListener('selectionchange', () => {
+      bubbledToBody = true;
+    });
+    
+    eventCount = 0;
+    sel.collapse(textNode, 7);
+    testing.expectEqual(1, eventCount);
+    testing.expectEqual(false, bubbledToBody);
+  }
+</script>
