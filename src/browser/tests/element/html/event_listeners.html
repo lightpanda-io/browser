@@ -488,3 +488,27 @@
     testing.expectEqual('function', typeof div.onratechange);
 }
 </script>
+
+<img src="https://cdn.lightpanda.io/website/assets/images/docs/hn.png" />
+
+<script id="document-element-load">
+{
+  let asyncBlockDispatched = false;
+  const docElement = document.documentElement;
+
+  testing.async(async () => {
+    const result = await new Promise(resolve => {
+    // We should get this fired at capturing phase when a resource loaded.
+      docElement.addEventListener("load", e => {
+        testing.expectEqual(e.eventPhase, Event.CAPTURING_PHASE);
+        return resolve(true);
+      }, true);
+    });
+
+    asyncBlockDispatched = true;
+    testing.expectEqual(true, result);
+  });
+
+  testing.eventually(() => testing.expectEqual(true, asyncBlockDispatched));
+}
+</script>
