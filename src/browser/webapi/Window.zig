@@ -373,9 +373,10 @@ pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
 }
 
 pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
-    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(input) catch return error.InvalidCharacterError;
+    const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
+    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(trimmed) catch return error.InvalidCharacterError;
     const decoded = try page.call_arena.alloc(u8, decoded_len);
-    std.base64.standard.Decoder.decode(decoded, input) catch return error.InvalidCharacterError;
+    std.base64.standard.Decoder.decode(decoded, trimmed) catch return error.InvalidCharacterError;
     return decoded;
 }
 

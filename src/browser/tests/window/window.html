@@ -52,6 +52,7 @@
 <script id=btoa>
   testing.expectEqual('SGVsbG8gV29ybGQh', btoa('Hello World!'));
   testing.expectEqual('', btoa(''));
+  testing.expectEqual('IA==', btoa(' '));
   testing.expectEqual('YQ==', btoa('a'));
   testing.expectEqual('YWI=', btoa('ab'));
   testing.expectEqual('YWJj', btoa('abc'));
@@ -62,6 +63,13 @@
 <script id=atob>
   testing.expectEqual('Hello World!', atob('SGVsbG8gV29ybGQh'));
   testing.expectEqual('', atob(''));
+
+  // atob must trim input
+  testing.expectEqual('', atob(' '));
+  testing.expectEqual(' ', atob('IA=='));
+  testing.expectEqual(' ', atob(' IA=='));
+  testing.expectEqual(' ', atob('IA== '));
+
   testing.expectEqual('a', atob('YQ=='));
   testing.expectEqual('ab', atob('YWI='));
   testing.expectEqual('abc', atob('YWJj'));
