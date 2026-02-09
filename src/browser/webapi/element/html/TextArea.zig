@@ -290,6 +290,12 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(TextArea.getName, TextArea.setName, .{});
     pub const required = bridge.accessor(TextArea.getRequired, TextArea.setRequired, .{});
     pub const form = bridge.accessor(TextArea.getForm, null, .{});
+    pub const select = bridge.function(TextArea.select, .{});
+
+    pub const selectionStart = bridge.accessor(TextArea.getSelectionStart, TextArea.setSelectionStart, .{});
+    pub const selectionEnd = bridge.accessor(TextArea.getSelectionEnd, TextArea.setSelectionEnd, .{});
+    pub const selectionDirection = bridge.accessor(TextArea.getSelectionDirection, null, .{});
+    pub const setSelectionRange = bridge.function(TextArea.setSelectionRange, .{ .dom_exception = true });
 };
 
 pub const Build = struct {
