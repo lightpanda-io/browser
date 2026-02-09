@@ -50,7 +50,7 @@ pub fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
     }
 }
 
-fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
+fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) anyerror!void {
     const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
     defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);

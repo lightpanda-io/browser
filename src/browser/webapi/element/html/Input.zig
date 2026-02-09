@@ -98,7 +98,7 @@ pub fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
     }
 }
 
-fn dispatchSelectionChangeEvent(self: *Input, page: *Page) !void {
+fn dispatchSelectionChangeEvent(self: *Input, page: *Page) anyerror!void {
     const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
     defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
