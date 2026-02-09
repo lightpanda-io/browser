@@ -539,6 +539,9 @@ fn parseMethod(method: []const u8) !Http.Method {
     if (std.ascii.eqlIgnoreCase(method, "put")) {
         return .PUT;
     }
+    if (std.ascii.eqlIgnoreCase(method, "propfind")) {
+        return .PROPFIND;
+    }
     return error.InvalidMethod;
 }
 

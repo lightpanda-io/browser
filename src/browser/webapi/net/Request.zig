@@ -108,7 +108,7 @@ pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
 }
 
 fn parseMethod(method: []const u8, page: *Page) !Http.Method {
-    if (method.len > "options".len) {
+    if (method.len > "propfind".len) {
         return error.InvalidMethod;
     }
 
@@ -122,6 +122,7 @@ fn parseMethod(method: []const u8, page: *Page) !Http.Method {
         .{ "patch", .PATCH },
         .{ "head", .HEAD },
         .{ "options", .OPTIONS },
+        .{ "propfind", .PROPFIND },
     });
     return method_lookup.get(lower) orelse return error.InvalidMethod;
 }
