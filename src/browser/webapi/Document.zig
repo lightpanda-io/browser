@@ -56,6 +56,20 @@ _script_created_parser: ?Parser.Streaming = null,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .init,
 
+_on_selectionchange: ?js.Function.Global = null,
+
+pub fn getOnSelectionChange(self: *Document) ?js.Function.Global {
+    return self._on_selectionchange;
+}
+
+pub fn setOnSelectionChange(self: *Document, listener: ?js.Function) !void {
+    if (listener) |listen| {
+        self._on_selectionchange = try listen.persistWithThis(self);
+    } else {
+        self._on_selectionchange = null;
+    }
+}
+
 pub const Type = union(enum) {
     generic,
     html: *HTMLDocument,
@@ -930,6 +944,7 @@ pub const JsApi = struct {
         });
     }
 
+    pub const onselectionchange = bridge.accessor(Document.getOnSelectionChange, Document.setOnSelectionChange, .{});
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
