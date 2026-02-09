@@ -110,8 +110,15 @@ pub fn getType(self: *const Selection) []const u8 {
     return "Range";
 }
 
-pub fn addRange(self: *Selection, range: *Range) !void {
+pub fn addRange(self: *Selection, range: *Range, page: *Page) !void {
     if (self._range != null) return;
+
+    // Only add the range if its root node is in the document associated with this selection
+    const start_node = range.asAbstractRange().getStartContainer();
+    if (!page.document.asNode().contains(start_node)) {
+        return;
+    }
+
     self._range = range;
 }
 
@@ -145,7 +152,7 @@ pub fn collapseToEnd(self: *Selection, page: *Page) !void {
 }
 
 pub fn collapseToStart(self: *Selection, page: *Page) !void {
-    const range = self._range orelse return;
+    const range = self._range orelse return error.InvalidStateError;
 
     const abstract = range.asAbstractRange();
     const first_node = abstract.getStartContainer();
@@ -409,7 +416,7 @@ pub const JsApi = struct {
     pub const addRange = bridge.function(Selection.addRange, .{});
     pub const collapse = bridge.function(Selection.collapse, .{ .dom_exception = true });
     pub const collapseToEnd = bridge.function(Selection.collapseToEnd, .{});
-    pub const collapseToStart = bridge.function(Selection.collapseToStart, .{});
+    pub const collapseToStart = bridge.function(Selection.collapseToStart, .{ .dom_exception = true });
     pub const containsNode = bridge.function(Selection.containsNode, .{});
     pub const deleteFromDocument = bridge.function(Selection.deleteFromDocument, .{});
     pub const empty = bridge.function(Selection.removeAllRanges, .{});
