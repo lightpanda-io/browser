@@ -122,14 +122,15 @@ const PostMessageCallback = struct {
             return null;
         }
 
-        const event = MessageEvent.initTrusted("message", .{
+        const event = (MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = self.message,
             .origin = "",
             .source = null,
         }, page) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
             return null;
-        };
+        }).asEvent();
+        defer if (!event._v8_handoff) event.deinit(false);
 
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);
@@ -137,7 +138,7 @@ const PostMessageCallback = struct {
 
         page._event_manager.dispatchWithFunction(
             self.port.asEventTarget(),
-            event.asEvent(),
+            event,
             ls.toLocal(self.port._on_message),
             .{ .context = "MessagePort message" },
         ) catch |err| {

@@ -277,7 +277,7 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
 }
 
 pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
-    const error_event = try ErrorEvent.initTrusted("error", .{
+    const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
         .@"error" = try err.persist(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
@@ -285,6 +285,7 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     }, page);
 
     const event = error_event.asEvent();
+    defer if (!event._v8_handoff) event.deinit(false);
 
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
@@ -443,7 +444,8 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                     return null;
                 }
 
-                const event = try Event.initTrusted("scroll", .{ .bubbles = true }, p);
+                const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, p);
+                defer if (!event._v8_handoff) event.deinit(false);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .end;
@@ -470,7 +472,8 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                     .end => {},
                     .done => return null,
                 }
-                const event = try Event.initTrusted("scrollend", .{ .bubbles = true }, p);
+                const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, p);
+                defer if (!event._v8_handoff) event.deinit(false);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .done;
@@ -640,15 +643,14 @@ const PostMessageCallback = struct {
         const page = self.page;
         const window = page.window;
 
-        const message_event = try MessageEvent.initTrusted("message", .{
+        const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = self.message,
             .origin = self.origin,
             .source = window,
             .bubbles = false,
             .cancelable = false,
-        }, page);
-
-        const event = message_event.asEvent();
+        }, page)).asEvent();
+        defer if (!event._v8_handoff) event.deinit(false);
         try page._event_manager.dispatch(window.asEventTarget(), event);
 
         return null;

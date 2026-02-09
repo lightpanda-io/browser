@@ -172,60 +172,42 @@ pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     return chain.get(1);
 }
 
-fn eventInit(typ: []const u8, value: anytype, page: *Page) !Event {
-    // Round to 2ms for privacy (browsers do this)
-    const raw_timestamp = @import("../datetime.zig").milliTimestamp(.monotonic);
-    const time_stamp = (raw_timestamp / 2) * 2;
-
-    return .{
-        ._type = unionInit(Event.Type, value),
-        ._type_string = try String.init(page.arena, typ, .{}),
-        ._time_stamp = time_stamp,
-    };
-}
-
 // this is a root object
-pub fn event(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
+pub fn event(self: *Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, @TypeOf(child) },
-    ).allocate(allocator);
+    ).allocate(arena);
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = try eventInit(typ, chain.get(1), self._page);
+    event_ptr.* = try self.eventInit(arena, typ, chain.get(1));
     chain.setLeaf(1, child);
 
     return chain.get(1);
 }
 
-pub fn uiEvent(self: *Factory, typ: []const u8, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
+pub fn uiEvent(self: *Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, @TypeOf(child) },
-    ).allocate(allocator);
+    ).allocate(arena);
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = try eventInit(typ, chain.get(1), self._page);
+    event_ptr.* = try self.eventInit(arena, typ, chain.get(1));
     chain.setMiddle(1, UIEvent.Type);
     chain.setLeaf(2, child);
 
     return chain.get(2);
 }
 
-pub fn mouseEvent(self: *Factory, typ: []const u8, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
+pub fn mouseEvent(self: *Factory, arena: Allocator, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, MouseEvent, @TypeOf(child) },
-    ).allocate(allocator);
+    ).allocate(arena);
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = try eventInit(typ, chain.get(1), self._page);
+    event_ptr.* = try self.eventInit(arena, typ, chain.get(1));
     chain.setMiddle(1, UIEvent.Type);
 
     // Set MouseEvent with all its fields
@@ -237,6 +219,20 @@ pub fn mouseEvent(self: *Factory, typ: []const u8, mouse: MouseEvent, child: any
     chain.setLeaf(3, child);
 
     return chain.get(3);
+}
+
+fn eventInit(self: *const Factory, arena: Allocator, typ: String, value: anytype) !Event {
+    // Round to 2ms for privacy (browsers do this)
+    const raw_timestamp = @import("../datetime.zig").milliTimestamp(.monotonic);
+    const time_stamp = (raw_timestamp / 2) * 2;
+
+    return .{
+        ._arena = arena,
+        ._page = self._page,
+        ._type = unionInit(Event.Type, value),
+        ._type_string = typ,
+        ._time_stamp = time_stamp,
+    };
 }
 
 pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {

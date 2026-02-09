@@ -57,15 +57,16 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
     };
 
     const progress = progress_ orelse Progress{};
-    const event = try ProgressEvent.initTrusted(
-        typ,
+    const event = (try ProgressEvent.initTrusted(
+        comptime .wrap(typ),
         .{ .total = progress.total, .loaded = progress.loaded },
         page,
-    );
+    )).asEvent();
+    defer if (!event._v8_handoff) event.deinit(false);
 
     return page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
-        event.asEvent(),
+        event,
         local.toLocal(@field(self, field)),
         .{ .context = "XHR " ++ typ },
     );

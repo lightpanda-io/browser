@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -17,9 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("../../js/js.zig");
+const String = @import("../../../string.zig").String;
 
+const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+
 const Event = @import("../Event.zig");
 const Allocator = std.mem.Allocator;
 
@@ -44,18 +46,23 @@ pub const ErrorEventOptions = struct {
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
 
 pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
-    return initWithTrusted(typ, opts_, false, page);
+    const arena = try page.getArena(.{ .debug = "ErrorEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, type_string, opts_, false, page);
 }
 
-pub fn initTrusted(typ: []const u8, opts_: ?Options, page: *Page) !*ErrorEvent {
-    return initWithTrusted(typ, opts_, true, page);
+pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*ErrorEvent {
+    const arena = try page.getArena(.{ .debug = "ErrorEvent.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, opts_, true, page);
 }
 
-fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page) !*ErrorEvent {
-    const arena = page.arena;
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*ErrorEvent {
     const opts = opts_ orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         ErrorEvent{
             ._arena = arena,
@@ -70,6 +77,10 @@ fn initWithTrusted(typ: []const u8, opts_: ?Options, trusted: bool, page: *Page)
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *ErrorEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *ErrorEvent) *Event {
@@ -103,6 +114,8 @@ pub const JsApi = struct {
         pub const name = "ErrorEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(ErrorEvent.deinit);
     };
 
     // Start API

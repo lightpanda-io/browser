@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -16,9 +16,14 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-const Event = @import("../Event.zig");
+const std = @import("std");
+const String = @import("../../../string.zig").String;
+
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+
+const Event = @import("../Event.zig");
+const Allocator = std.mem.Allocator;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/PopStateEvent
 const PopStateEvent = @This();
@@ -33,17 +38,23 @@ const PopStateEventOptions = struct {
 const Options = Event.inheritOptions(PopStateEvent, PopStateEventOptions);
 
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*PopStateEvent {
-    return initWithTrusted(typ, _opts, false, page);
+    const arena = try page.getArena(.{ .debug = "PopStateEvent" });
+    errdefer page.releaseArena(arena);
+    const type_string = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, type_string, _opts, false, page);
 }
 
-pub fn initTrusted(typ: []const u8, _opts: ?Options, page: *Page) !*PopStateEvent {
-    return initWithTrusted(typ, _opts, true, page);
+pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*PopStateEvent {
+    const arena = try page.getArena(.{ .debug = "PopStateEvent.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, page);
 }
 
-fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page) !*PopStateEvent {
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*PopStateEvent {
     const opts = _opts orelse Options{};
 
     const event = try page._factory.event(
+        arena,
         typ,
         PopStateEvent{
             ._proto = undefined,
@@ -53,6 +64,10 @@ fn initWithTrusted(typ: []const u8, _opts: ?Options, trusted: bool, page: *Page)
 
     Event.populatePrototypes(event, opts, trusted);
     return event;
+}
+
+pub fn deinit(self: *PopStateEvent, shutdown: bool) void {
+    self._proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *PopStateEvent) *Event {
@@ -76,6 +91,8 @@ pub const JsApi = struct {
         pub const name = "PopStateEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(PopStateEvent.deinit);
     };
 
     pub const constructor = bridge.constructor(PopStateEvent.init, .{});

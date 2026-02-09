@@ -46,6 +46,7 @@ pub fn dispatch(self: *NavigationEventTarget, event_type: DispatchType, page: *P
             .currententrychange => |cec| .{ cec.asEvent(), "_on_currententrychange" },
         };
     };
+    defer if (!event._v8_handoff) event.deinit(false);
 
     if (comptime IS_DEBUG) {
         if (page.js.local == null) {

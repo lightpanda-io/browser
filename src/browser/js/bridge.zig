@@ -115,20 +115,18 @@ pub fn Builder(comptime T: type) type {
                 .from_v8 = struct {
                     fn wrap(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
                         const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
-                        const self: *T = @ptrCast(@alignCast(ptr));
-                        // This is simply a requirement of any type that Finalizes:
-                        // It must have a _page: *Page field. We need it because
-                        // we need to check the item has already been cleared
-                        // (There are all types of weird timing issues that seem
-                        // to be possible between finalization and context shutdown,
-                        // we need to be defensive).
-                        // There _ARE_ alternatives to this. But this is simple.
-                        const ctx = self._page.js;
-                        if (!ctx.identity_map.contains(@intFromPtr(ptr))) {
-                            return;
+                        const fc: *Context.FinalizerCallback = @ptrCast(@alignCast(ptr));
+
+                        const ctx = fc.ctx;
+                        const value_ptr = fc.ptr;
+                        if (ctx.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
+                            func(@ptrCast(@alignCast(value_ptr)), false);
+                            ctx.release(value_ptr);
+                        } else {
+                            // A bit weird, but v8 _requires_ that we release it
+                            // If we don't. We'll 100% crash.
+                            v8.v8__Global__Reset(&fc.global);
                         }
-                        func(self, false);
-                        ctx.release(ptr);
                     }
                 }.wrap,
             };
