@@ -550,14 +550,14 @@ pub fn unknownObjectPropertyCallback(comptime JsApi: type) *const fn (?*const v8
                 }
             }
 
-            if (JsApi == @import("../webapi/element/Html.zig") or JsApi == @import("../webapi/Element.zig") or JsApi == @import("../webapi/element/html/Custom.zig")) {
+            if (JsApi == @import("../webapi/element/Html.zig").JsApi or JsApi == @import("../webapi/Element.zig").JsApi or JsApi == @import("../webapi/element/html/Custom.zig").JsApi) {
                 // react ?
                 if (std.mem.eql(u8, property, "props")) return 0;
                 if (std.mem.eql(u8, property, "hydrated")) return 0;
                 if (std.mem.eql(u8, property, "isHydrated")) return 0;
             }
 
-            if (JsApi == @import("../webapi/Console.zig")) {
+            if (JsApi == @import("../webapi/Console.zig").JsApi) {
                 if (std.mem.eql(u8, property, "firebug")) return 0;
             }
 

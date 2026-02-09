@@ -65,6 +65,10 @@ pub fn @"error"(_: *const Console, values: []js.Value, page: *Page) void {
     logger.warn(.js, "console.error", .{ValueWriter{ .page = page, .values = values, .include_stack = true }});
 }
 
+pub fn table(_: *const Console, data: js.Value, columns: ?js.Value) void {
+    logger.info(.js, "console.table", .{ .data = data, .columns = columns });
+}
+
 pub fn count(self: *Console, label_: ?[]const u8, page: *Page) !void {
     const label = label_ orelse "default";
     const gop = try self._counts.getOrPut(page.arena, label);
@@ -178,6 +182,7 @@ pub const JsApi = struct {
     pub const assert = bridge.function(Console.assert, .{});
     pub const @"error" = bridge.function(Console.@"error", .{});
     pub const exception = bridge.function(Console.@"error", .{});
+    pub const table = bridge.function(Console.table, .{});
     pub const count = bridge.function(Console.count, .{});
     pub const countReset = bridge.function(Console.countReset, .{});
     pub const time = bridge.function(Console.time, .{});
