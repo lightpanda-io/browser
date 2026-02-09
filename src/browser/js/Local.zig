@@ -206,7 +206,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 //    if (resolved.finalizer_from_v8) |finalizer| {
                 // But that's a runtime check.
                 // Instead, we check if the base has finalizer. The assumption
-                // here is that if a resolve type has a finalizer, than the base
+                // here is that if a resolve type has a finalizer, then the base
                 // should have a finalizer too.
                 const fc = try ctx.createFinalizerCallback(gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
                 {
