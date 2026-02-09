@@ -386,13 +386,12 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
         try ctx.client.robot_store.putAbsent(ctx.robots_url);
     }
 
-    const queued = ctx.client.pending_robots_queue.getPtr(ctx.robots_url) orelse unreachable;
-    defer {
-        queued.deinit(ctx.client.allocator);
-        _ = ctx.client.pending_robots_queue.remove(ctx.robots_url);
-    }
+    var queued = ctx.client.pending_robots_queue.fetchRemove(
+        ctx.robots_url,
+    ) orelse @panic("Client.robotsDoneCallbacke empty queue");
+    defer queued.value.deinit(ctx.client.allocator);
 
-    for (queued.items) |queued_req| {
+    for (queued.value.items) |queued_req| {
         if (!allowed) {
             log.warn(.http, "blocked by robots", .{ .url = queued_req.url });
             queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
@@ -410,14 +409,13 @@ fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
 
     log.warn(.http, "robots fetch failed", .{ .err = err });
 
-    const queued = ctx.client.pending_robots_queue.getPtr(ctx.robots_url) orelse unreachable;
-    defer {
-        queued.deinit(ctx.client.allocator);
-        _ = ctx.client.pending_robots_queue.remove(ctx.robots_url);
-    }
+    var queued = ctx.client.pending_robots_queue.fetchRemove(
+        ctx.robots_url,
+    ) orelse @panic("Client.robotsErrorCallback empty queue");
+    defer queued.value.deinit(ctx.client.allocator);
 
     // On error, allow all queued requests to proceed
-    for (queued.items) |queued_req| {
+    for (queued.value.items) |queued_req| {
         ctx.client.processRequest(queued_req) catch |e| {
             queued_req.error_callback(queued_req.ctx, e);
         };
