@@ -69,6 +69,7 @@ pub const OptGroup = @import("html/OptGroup.zig");
 pub const Option = @import("html/Option.zig");
 pub const Output = @import("html/Output.zig");
 pub const Paragraph = @import("html/Paragraph.zig");
+pub const Picture = @import("html/Picture.zig");
 pub const Param = @import("html/Param.zig");
 pub const Pre = @import("html/Pre.zig");
 pub const Progress = @import("html/Progress.zig");
@@ -145,6 +146,7 @@ pub const Type = union(enum) {
     option: *Option,
     output: *Output,
     p: *Paragraph,
+    picture: *Picture,
     param: *Param,
     pre: *Pre,
     progress: *Progress,
