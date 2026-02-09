@@ -103,6 +103,13 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
     return 10;
 }
 
+pub fn httpMaxResponseSize(self: *const Config) ?usize {
+    return switch (self.mode) {
+        inline .serve, .fetch => |opts| opts.common.http_max_response_size,
+        else => unreachable,
+    };
+}
+
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
         inline .serve, .fetch => |opts| opts.common.log_level,
@@ -164,6 +171,7 @@ pub const Common = struct {
     http_max_host_open: ?u8 = null,
     http_timeout: ?u31 = null,
     http_connect_timeout: ?u31 = null,
+    http_max_response_size: ?usize = null,
     tls_verify_host: bool = true,
     log_level: ?log.Level = null,
     log_format: ?log.Format = null,
@@ -248,6 +256,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                The maximum time, in milliseconds, the transfer is allowed
         \\                to complete. 0 means it never times out.
         \\                Defaults to 10000.
+        \\
+        \\--http_max_response_size
+        \\                Limits the acceptable response size for any request
+        \\                (e.g. XHR, fetch, script loading, ...).
+        \\                Defaults to no limit.
         \\
         \\--log_level     The log level: debug, info, warn, error or fatal.
         \\                Defaults to
@@ -678,6 +691,19 @@ fn parseCommonArg(
 
         common.http_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
             log.fatal(.app, "invalid argument value", .{ .arg = "--http_timeout", .err = err });
+            return error.InvalidArgument;
+        };
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--http_max_response_size", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_response_size" });
+            return error.InvalidArgument;
+        };
+
+        common.http_max_response_size = std.fmt.parseInt(usize, str, 10) catch |err| {
+            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_response_size", .err = err });
             return error.InvalidArgument;
         };
         return true;

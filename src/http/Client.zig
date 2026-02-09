@@ -366,17 +366,16 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .req = req,
         .ctx = req.ctx,
         .client = self,
+        .max_response_size = self.config.httpMaxResponseSize(),
     };
     return transfer;
 }
 
 fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: bool) void {
-    // this shouldn't happen, we'll crash in debug mode. But in release, we'll
-    // just noop this state.
-    if (comptime IS_DEBUG) {
-        std.debug.assert(transfer._notified_fail == false);
-    }
     if (transfer._notified_fail) {
+        // we can force a failed request within a callback, which will eventually
+        // result in this being called again in the more general loop. We do this
+        // because we can raise a more specific error inside a callback in some cases
         return;
     }
 
@@ -787,6 +786,7 @@ pub const Request = struct {
     resource_type: ResourceType,
     credentials: ?[:0]const u8 = null,
     notification: *Notification,
+    max_response_size: ?usize = null,
 
     // This is only relevant for intercepted requests. If a request is flagged
     // as blocking AND is intercepted, then it'll be up to us to wait until
@@ -876,6 +876,8 @@ pub const Transfer = struct {
     // total bytes received in the response, including the response status line,
     // the headers, and the [encoded] body.
     bytes_received: usize = 0,
+
+    max_response_size: ?usize = null,
 
     // We'll store the response header here
     response_header: ?ResponseHeader = null,
@@ -1125,6 +1127,14 @@ pub const Transfer = struct {
             }
         }
 
+        if (transfer.max_response_size) |max_size| {
+            if (transfer.getContentLength()) |cl| {
+                if (cl > max_size) {
+                    return error.ResponseTooLarge;
+                }
+            }
+        }
+
         const proceed = transfer.req.header_callback(transfer) catch |err| {
             log.err(.http, "header_callback", .{ .err = err, .req = transfer });
             return err;
@@ -1276,6 +1286,13 @@ pub const Transfer = struct {
         }
 
         transfer.bytes_received += chunk_len;
+        if (transfer.max_response_size) |max_size| {
+            if (transfer.bytes_received > max_size) {
+                requestFailed(transfer, error.ResponseTooLarge, true);
+                return -1;
+            }
+        }
+
         const chunk = buffer[0..chunk_len];
         transfer.req.data_callback(transfer, chunk) catch |err| {
             log.err(.http, "data_callback", .{ .err = err, .req = transfer });
