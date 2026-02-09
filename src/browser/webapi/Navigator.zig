@@ -32,16 +32,8 @@ pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
     return page._session.browser.app.config.http_headers.user_agent;
 }
 
-pub fn getAppName(_: *const Navigator) []const u8 {
-    return "Netscape";
-}
-
-pub fn getAppCodeName(_: *const Navigator) []const u8 {
-    return "Netscape";
-}
-
-pub fn getAppVersion(_: *const Navigator) []const u8 {
-    return "1.0";
+pub fn getLanguages(_: *const Navigator) [1][]const u8 {
+    return .{"en-US"};
 }
 
 pub fn getPlatform(_: *const Navigator) []const u8 {
@@ -54,60 +46,13 @@ pub fn getPlatform(_: *const Navigator) []const u8 {
     };
 }
 
-pub fn getLanguage(_: *const Navigator) []const u8 {
-    return "en-US";
-}
-
-pub fn getLanguages(_: *const Navigator) [1][]const u8 {
-    return .{"en-US"};
-}
-
-pub fn getOnLine(_: *const Navigator) bool {
-    return true;
-}
-
-pub fn getCookieEnabled(_: *const Navigator) bool {
-    return true;
-}
-
-pub fn getHardwareConcurrency(_: *const Navigator) u32 {
-    return 4;
-}
-
-pub fn getMaxTouchPoints(_: *const Navigator) u32 {
-    return 0;
-}
-
-/// Returns the vendor name
-pub fn getVendor(_: *const Navigator) []const u8 {
-    return "";
-}
-
-/// Returns the product name (typically "Gecko" for compatibility)
-pub fn getProduct(_: *const Navigator) []const u8 {
-    return "Gecko";
-}
-
 /// Returns whether Java is enabled (always false)
 pub fn javaEnabled(_: *const Navigator) bool {
     return false;
 }
 
-/// Returns whether the browser is controlled by automation (always false)
-pub fn getWebdriver(_: *const Navigator) bool {
-    return false;
-}
-
 pub fn getPlugins(self: *Navigator) *PluginArray {
     return &self._plugins;
-}
-
-pub fn getDoNotTrack(_: *const Navigator) ?[]const u8 {
-    return null;
-}
-
-pub fn getGlobalPrivacyControl(_: *const Navigator) bool {
-    return true;
 }
 
 pub fn registerProtocolHandler(_: *const Navigator, scheme: []const u8, url: [:0]const u8, page: *const Page) !void {
@@ -190,22 +135,22 @@ pub const JsApi = struct {
 
     // Read-only properties
     pub const userAgent = bridge.accessor(Navigator.getUserAgent, null, .{});
-    pub const appName = bridge.accessor(Navigator.getAppName, null, .{});
-    pub const appCodeName = bridge.accessor(Navigator.getAppCodeName, null, .{});
-    pub const appVersion = bridge.accessor(Navigator.getAppVersion, null, .{});
+    pub const appName = bridge.property("Netscape", .{ .template = false });
+    pub const appCodeName = bridge.property("Netscape", .{ .template = false });
+    pub const appVersion = bridge.property("1.0", .{ .template = false });
     pub const platform = bridge.accessor(Navigator.getPlatform, null, .{});
-    pub const language = bridge.accessor(Navigator.getLanguage, null, .{});
+    pub const language = bridge.property("en-US", .{ .template = false });
     pub const languages = bridge.accessor(Navigator.getLanguages, null, .{});
-    pub const onLine = bridge.accessor(Navigator.getOnLine, null, .{});
-    pub const cookieEnabled = bridge.accessor(Navigator.getCookieEnabled, null, .{});
-    pub const hardwareConcurrency = bridge.accessor(Navigator.getHardwareConcurrency, null, .{});
-    pub const maxTouchPoints = bridge.accessor(Navigator.getMaxTouchPoints, null, .{});
-    pub const vendor = bridge.accessor(Navigator.getVendor, null, .{});
-    pub const product = bridge.accessor(Navigator.getProduct, null, .{});
-    pub const webdriver = bridge.accessor(Navigator.getWebdriver, null, .{});
+    pub const onLine = bridge.property(true, .{ .template = false });
+    pub const cookieEnabled = bridge.property(true, .{ .template = false });
+    pub const hardwareConcurrency = bridge.property(4, .{ .template = false });
+    pub const maxTouchPoints = bridge.property(0, .{ .template = false });
+    pub const vendor = bridge.property("", .{ .template = false });
+    pub const product = bridge.property("Gecko", .{ .template = false });
+    pub const webdriver = bridge.property(false, .{ .template = false });
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
-    pub const doNotTrack = bridge.accessor(Navigator.getDoNotTrack, null, .{});
-    pub const globalPrivacyControl = bridge.accessor(Navigator.getGlobalPrivacyControl, null, .{});
+    pub const doNotTrack = bridge.property(null, .{ .template = false });
+    pub const globalPrivacyControl = bridge.property(true, .{ .template = false });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true });
 

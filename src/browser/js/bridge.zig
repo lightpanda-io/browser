@@ -63,12 +63,23 @@ pub fn Builder(comptime T: type) type {
         }
 
         pub fn property(value: anytype, opts: Property.Opts) Property {
-            // If you add strings to this, they might need to be internalized!
-            return switch (@typeInfo(@TypeOf(value))) {
-                .bool => Property.init(.{ .bool = value }, opts),
-                .comptime_int, .int => Property.init(.{ .int = value }, opts),
-                else => @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet"),
-            };
+            switch (@typeInfo(@TypeOf(value))) {
+                .bool => return Property.init(.{ .bool = value }, opts),
+                .null => return Property.init(.null, opts),
+                .comptime_int, .int => return Property.init(.{ .int = value }, opts),
+                .comptime_float, .float => return Property.init(.{ .float = value }, opts),
+                .pointer => |ptr| switch (ptr.size) {
+                    .one => {
+                        const one_info = @typeInfo(ptr.child);
+                        if (one_info == .array and one_info.array.child == u8) {
+                            return Property.init(.{ .string = value }, opts);
+                        }
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+            @compileError("Property for " ++ @typeName(@TypeOf(value)) ++ " hasn't been defined yet");
         }
 
         const PrototypeChainEntry = @import("TaggedOpaque.zig").PrototypeChainEntry;
@@ -150,6 +161,7 @@ pub const Constructor = struct {
 
 pub const Function = struct {
     static: bool,
+    arity: usize,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     const Opts = struct {
@@ -162,6 +174,7 @@ pub const Function = struct {
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Function {
         return .{
             .static = opts.static,
+            .arity = getArity(@TypeOf(func)),
             .func = struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                     const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
@@ -185,6 +198,22 @@ pub const Function = struct {
                 }
             }.wrap,
         };
+    }
+
+    fn getArity(comptime T: type) usize {
+        var count: usize = 0;
+        var params = @typeInfo(T).@"fn".params;
+        for (params[1..]) |p| { // start at 1, skip self
+            const PT = p.type.?;
+            if (PT == *Page or PT == *const Page) {
+                break;
+            }
+            if (@typeInfo(PT) == .optional) {
+                break;
+            }
+            count += 1;
+        }
+        return count;
     }
 };
 
@@ -403,10 +432,12 @@ pub const Property = struct {
     value: Value,
     template: bool,
 
-    // If you add strings to this, they might need to be internalized!
     const Value = union(enum) {
+        null,
         int: i64,
+        float: f64,
         bool: bool,
+        string: []const u8,
     };
 
     const Opts = struct {

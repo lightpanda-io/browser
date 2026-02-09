@@ -455,7 +455,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
         switch (definition) {
             bridge.Accessor => {
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
-                const getter_callback = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.getter).?);
+                const getter_callback = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.getter }).?);
                 if (value.setter == null) {
                     if (value.static) {
                         v8.v8__Template__SetAccessorProperty__DEFAULT(@ptrCast(template), js_name, getter_callback);
@@ -466,12 +466,12 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     if (comptime IS_DEBUG) {
                         std.debug.assert(value.static == false);
                     }
-                    const setter_callback = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.setter.?).?);
+                    const setter_callback = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.setter.? }).?);
                     v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT2(target, js_name, getter_callback, setter_callback);
                 }
             },
             bridge.Function => {
-                const function_template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.func).?);
+                const function_template = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.func, .length = value.arity }).?);
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                 if (value.static) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
@@ -509,7 +509,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                 has_named_index_getter = true;
             },
             bridge.Iterator => {
-                const function_template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, value.func).?);
+                const function_template = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.func }).?);
                 const js_name = if (value.async)
                     v8.v8__Symbol__GetAsyncIterator(isolate)
                 else
@@ -518,7 +518,8 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
             },
             bridge.Property => {
                 const js_value = switch (value.value) {
-                    inline .bool, .int => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
+                    .null => js.simpleZigValueToJs(.{ .handle = isolate }, null, true, false),
+                    inline .bool, .int, .float, .string => |v| js.simpleZigValueToJs(.{ .handle = isolate }, v, true, false),
                 };
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
 
@@ -527,7 +528,11 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     // is like an Accessor, but because the value is known at
                     // compile time, we skip _a lot_ of code and quickly return
                     // the hard-coded value
-                    const getter_callback = @constCast(v8.v8__FunctionTemplate__New__DEFAULT3(isolate, bridge.Property.getter, js_value));
+                    const getter_callback = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{
+                        .callback = bridge.Property.getter,
+                        .data = js_value,
+                        .side_effect_type = v8.kSideEffectType_HasSideEffectToReceiver,
+                    }));
                     v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(target, js_name, getter_callback);
                 } else {
                     // apply it both to the type itself

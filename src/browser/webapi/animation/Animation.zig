@@ -36,14 +36,6 @@ pub fn cancel(_: *Animation) void {}
 pub fn finish(_: *Animation) void {}
 pub fn reverse(_: *Animation) void {}
 
-pub fn getPlayState(_: *const Animation) []const u8 {
-    return "finished";
-}
-
-pub fn getPending(_: *const Animation) bool {
-    return false;
-}
-
 pub fn getFinished(self: *Animation, page: *Page) !js.Promise {
     if (self._finished_resolver == null) {
         const resolver = page.js.local.?.createPromiseResolver();
@@ -94,8 +86,8 @@ pub const JsApi = struct {
     pub const cancel = bridge.function(Animation.cancel, .{});
     pub const finish = bridge.function(Animation.finish, .{});
     pub const reverse = bridge.function(Animation.reverse, .{});
-    pub const playState = bridge.accessor(Animation.getPlayState, null, .{});
-    pub const pending = bridge.accessor(Animation.getPending, null, .{});
+    pub const playState = bridge.property("finished", .{ .template = false });
+    pub const pending = bridge.property(false, .{ .template = false });
     pub const finished = bridge.accessor(Animation.getFinished, null, .{});
     pub const ready = bridge.accessor(Animation.getReady, null, .{});
     pub const effect = bridge.accessor(Animation.getEffect, Animation.setEffect, .{});

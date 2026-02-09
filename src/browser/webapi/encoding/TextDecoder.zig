@@ -65,10 +65,6 @@ pub fn deinit(self: *TextDecoder, _: bool) void {
     self._page.releaseArena(self._arena);
 }
 
-pub fn getEncoding(_: *const TextDecoder) []const u8 {
-    return "utf-8";
-}
-
 pub fn getIgnoreBOM(self: *const TextDecoder) bool {
     return self._ignore_bom;
 }
@@ -120,7 +116,7 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(TextDecoder.init, .{});
     pub const decode = bridge.function(TextDecoder.decode, .{});
-    pub const encoding = bridge.accessor(TextDecoder.getEncoding, null, .{});
+    pub const encoding = bridge.property("utf-8", .{ .template = false });
     pub const fatal = bridge.accessor(TextDecoder.getFatal, null, .{});
     pub const ignoreBOM = bridge.accessor(TextDecoder.getIgnoreBOM, null, .{});
 };

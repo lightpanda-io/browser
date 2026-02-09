@@ -103,18 +103,6 @@ pub fn getContentType(self: *const Document) []const u8 {
     };
 }
 
-pub fn getCharacterSet(_: *const Document) []const u8 {
-    return "UTF-8";
-}
-
-pub fn getCompatMode(_: *const Document) []const u8 {
-    return "CSS1Compat";
-}
-
-pub fn getReferrer(_: *const Document) []const u8 {
-    return "";
-}
-
 pub fn getDomain(_: *const Document, page: *const Page) []const u8 {
     return URL.getHostname(page.url);
 }
@@ -951,11 +939,6 @@ pub const JsApi = struct {
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
-    pub const characterSet = bridge.accessor(Document.getCharacterSet, null, .{});
-    pub const charset = bridge.accessor(Document.getCharacterSet, null, .{});
-    pub const inputEncoding = bridge.accessor(Document.getCharacterSet, null, .{});
-    pub const compatMode = bridge.accessor(Document.getCompatMode, null, .{});
-    pub const referrer = bridge.accessor(Document.getReferrer, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, null, .{});
     pub const createElement = bridge.function(Document.createElement, .{ .dom_exception = true });
     pub const createElementNS = bridge.function(Document.createElementNS, .{ .dom_exception = true });
@@ -1004,14 +987,19 @@ pub const JsApi = struct {
     pub const adoptedStyleSheets = bridge.accessor(Document.getAdoptedStyleSheets, Document.setAdoptedStyleSheets, .{});
     pub const hidden = bridge.accessor(Document.getHidden, null, .{});
     pub const visibilityState = bridge.accessor(Document.getVisibilityState, null, .{});
-    pub const prerendering = bridge.property(false, .{ .template = false });
-
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {
             return page.window;
         }
     }.defaultView, null, .{ .cache = "defaultView" });
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
+
+    pub const prerendering = bridge.property(false, .{ .template = false });
+    pub const characterSet = bridge.property("UTF-8", .{ .template = false });
+    pub const charset = bridge.property("UTF-8", .{ .template = false });
+    pub const inputEncoding = bridge.property("UTF-8", .{ .template = false });
+    pub const compatMode = bridge.property("CSS1Compat", .{ .template = false });
+    pub const referrer = bridge.property("", .{ .template = false });
 };
 
 const testing = @import("../../testing.zig");

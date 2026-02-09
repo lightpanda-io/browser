@@ -341,14 +341,6 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     return CSSStyleProperties.init(element, true, page);
 }
 
-pub fn getIsSecureContext(_: *const Window) bool {
-    // Return false since we don't have secure-context-only APIs implemented
-    // (webcam, geolocation, clipboard, etc.)
-    // This is safer and could help avoid processing errors by hinting at
-    // sites not to try to access those features
-    return false;
-}
-
 pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]const u8, page: *Page) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
@@ -405,26 +397,12 @@ pub fn getFramesLength(self: *const Window) u32 {
     return ln;
 }
 
-pub fn getInnerWidth(_: *const Window) u32 {
-    return 1920;
-}
-
-pub fn getInnerHeight(_: *const Window) u32 {
-    return 1080;
-}
-
 pub fn getScrollX(self: *const Window) u32 {
     return self._scroll_pos.x;
 }
 
 pub fn getScrollY(self: *const Window) u32 {
     return self._scroll_pos.y;
-}
-
-pub fn getOpener(_: *const Window) ?*Window {
-    // This should return a window-like object in specific conditions. Would be
-    // pretty complicated to properly support I think.
-    return null;
 }
 
 const ScrollToOpts = union(enum) {
@@ -743,19 +721,28 @@ pub const JsApi = struct {
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
     pub const getSelection = bridge.function(Window.getSelection, .{});
-    pub const isSecureContext = bridge.accessor(Window.getIsSecureContext, null, .{});
+
     pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
     pub const index = bridge.indexed(Window.getFrame, .{ .null_as_undefined = true });
     pub const length = bridge.accessor(Window.getFramesLength, null, .{ .cache = "length" });
-    pub const innerWidth = bridge.accessor(Window.getInnerWidth, null, .{ .cache = "innerWidth" });
-    pub const innerHeight = bridge.accessor(Window.getInnerHeight, null, .{ .cache = "innerHeight" });
     pub const scrollX = bridge.accessor(Window.getScrollX, null, .{ .cache = "scrollX" });
     pub const scrollY = bridge.accessor(Window.getScrollY, null, .{ .cache = "scrollY" });
     pub const pageXOffset = bridge.accessor(Window.getScrollX, null, .{ .cache = "pageXOffset" });
     pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{ .cache = "pageYOffset" });
     pub const scrollTo = bridge.function(Window.scrollTo, .{});
     pub const scroll = bridge.function(Window.scrollTo, .{});
-    pub const opener = bridge.accessor(Window.getOpener, null, .{});
+
+    // Return false since we don't have secure-context-only APIs implemented
+    // (webcam, geolocation, clipboard, etc.)
+    // This is safer and could help avoid processing errors by hinting at
+    // sites not to try to access those features
+    pub const isSecureContext = bridge.property(false, .{ .template = false });
+
+    pub const innerWidth = bridge.property(1920, .{ .template = false });
+    pub const innerHeight = bridge.property(1080, .{ .template = false });
+    // This should return a window-like object in specific conditions. Would be
+    // pretty complicated to properly support I think.
+    pub const opener = bridge.property(null, .{ .template = false });
 };
 
 const testing = @import("../../testing.zig");
