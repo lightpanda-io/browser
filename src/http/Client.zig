@@ -436,6 +436,12 @@ fn robotsShutdownCallback(ctx_ptr: *anyopaque) void {
         ctx.robots_url,
     ) orelse @panic("Client.robotsErrorCallback empty queue");
     defer queued.value.deinit(ctx.client.allocator);
+
+    for (queued.value.items) |queued_req| {
+        if (queued_req.shutdown_callback) |shutdown_cb| {
+            shutdown_cb(queued_req.ctx);
+        }
+    }
 }
 
 fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
