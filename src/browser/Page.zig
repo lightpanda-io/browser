@@ -698,17 +698,12 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
-    // Should this be different for each?
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
 
     // Dispatch `_to_load` events before window.load.
     for (self._to_load.items) |element| {
-        if (comptime IS_DEBUG) {
-            log.debug(.page, "load event for element", .{ .element = element });
-        }
-
         const event = try Event.initTrusted("load", .{}, self);
         // Dispatch inline event.
         blk: {
