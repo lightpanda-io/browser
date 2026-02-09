@@ -2095,6 +2095,12 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         attribute_iterator,
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "address", .{}) catch unreachable, ._tag = .address },
                     ),
+                    asUint("picture") => return self.createHtmlElementT(
+                        Element.Html.Picture,
+                        namespace,
+                        attribute_iterator,
+                        .{ ._proto = undefined },
+                    ),
                     else => {},
                 },
                 8 => switch (@as(u64, @bitCast(name[0..8].*))) {

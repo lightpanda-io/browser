@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- <script id="createElement">
+{
+    const picture = document.createElement('picture');
+    testing.expectEqual('PICTURE', picture.tagName);
+    testing.expectEqual('[object HTMLPictureElement]', Object.prototype.toString.call(picture));
+}
+</script>
+
+<script id="constructor_type">
+{
+    const picture = document.createElement('picture');
+    testing.expectEqual(true, picture instanceof HTMLElement);
+    testing.expectEqual(true, picture instanceof Element);
+    testing.expectEqual(true, picture instanceof Node);
+}
+</script> -->
+
+<picture id="inline-picture">
+  <source media="(min-width: 800px)" srcset="large.jpg">
+  <source media="(min-width: 400px)" srcset="medium.jpg">
+  <img src="small.jpg" alt="Test image">
+</picture>
+
+<script id="inline_picture">
+{
+    const picture = document.getElementById('inline-picture');
+    testing.expectEqual('PICTURE', picture.tagName);
+    testing.expectEqual(3, picture.children.length);
+
+    const sources = picture.querySelectorAll('source');
+    testing.expectEqual(2, sources.length);
+
+    // const img = picture.querySelector('img');
+    // testing.expectEqual('IMG', img.tagName);
+}
+</script>
+
+<!-- <script id="appendChild">
+{
+    const picture = document.createElement('picture');
+    const source = document.createElement('source');
+    const img = document.createElement('img');
+
+    picture.appendChild(source);
+    picture.appendChild(img);
+
+    testing.expectEqual(2, picture.children.length);
+    testing.expectEqual('SOURCE', picture.children[0].tagName);
+    testing.expectEqual('IMG', picture.children[1].tagName);
+}
+</script>
+ -->
