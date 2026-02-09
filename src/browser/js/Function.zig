@@ -69,7 +69,15 @@ pub fn newInstance(self: *const Function, caught: *js.TryCatch.Caught) !js.Objec
 
 pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
-    return self._tryCallWithThis(T, self.getThis(), args, &caught) catch |err| {
+    return self._tryCallWithThis(T, self.getThis(), args, &caught, .{}) catch |err| {
+        log.warn(.js, "call caught", .{ .err = err, .caught = caught });
+        return err;
+    };
+}
+
+pub fn callRethrow(self: *const Function, comptime T: type, args: anytype) !T {
+    var caught: js.TryCatch.Caught = undefined;
+    return self._tryCallWithThis(T, self.getThis(), args, &caught, .{ .rethrow = true }) catch |err| {
         log.warn(.js, "call caught", .{ .err = err, .caught = caught });
         return err;
     };
@@ -77,21 +85,24 @@ pub fn call(self: *const Function, comptime T: type, args: anytype) !T {
 
 pub fn callWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype) !T {
     var caught: js.TryCatch.Caught = undefined;
-    return self._tryCallWithThis(T, this, args, &caught) catch |err| {
+    return self._tryCallWithThis(T, this, args, &caught, .{}) catch |err| {
         log.warn(.js, "callWithThis caught", .{ .err = err, .caught = caught });
         return err;
     };
 }
 
 pub fn tryCall(self: *const Function, comptime T: type, args: anytype, caught: *js.TryCatch.Caught) !T {
-    return self._tryCallWithThis(T, self.getThis(), args, caught);
+    return self._tryCallWithThis(T, self.getThis(), args, caught, .{});
 }
 
 pub fn tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
-    return self._tryCallWithThis(T, this, args, caught);
+    return self._tryCallWithThis(T, this, args, caught, .{});
 }
 
-pub fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught) !T {
+const CallOpts = struct {
+    rethrow: bool = false,
+};
+fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args: anytype, caught: *js.TryCatch.Caught, comptime opts: CallOpts) !T {
     caught.* = .{};
     const local = self.local;
 
@@ -145,6 +156,10 @@ pub fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, 
     defer try_catch.deinit();
 
     const handle = v8.v8__Function__Call(self.handle, local.handle, js_this.handle, @as(c_int, @intCast(js_args.len)), c_args) orelse {
+        if ((comptime opts.rethrow) and try_catch.hasCaught()) {
+            try_catch.rethrow();
+            return error.TryCatchRethrow;
+        }
         caught.* = try_catch.caughtOrError(local.call_arena, error.JSExecCallback);
         return error.JSExecCallback;
     };

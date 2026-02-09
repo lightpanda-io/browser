@@ -31,6 +31,7 @@ _what_to_show: u32,
 _filter: NodeFilter,
 _reference_node: *Node,
 _pointer_before_reference_node: bool,
+_active: bool = false,
 
 pub fn init(root: *Node, what_to_show: u32, filter: ?FilterOpts, page: *Page) !*DOMNodeIterator {
     const node_filter = try NodeFilter.init(filter);
@@ -64,6 +65,13 @@ pub fn getFilter(self: *const DOMNodeIterator) ?FilterOpts {
 }
 
 pub fn nextNode(self: *DOMNodeIterator, page: *Page) !?*Node {
+    if (self._active) {
+        return error.InvalidStateError;
+    }
+
+    self._active = true;
+    defer self._active = false;
+
     var node = self._reference_node;
     var before_node = self._pointer_before_reference_node;
 
@@ -95,6 +103,13 @@ pub fn nextNode(self: *DOMNodeIterator, page: *Page) !?*Node {
 }
 
 pub fn previousNode(self: *DOMNodeIterator, page: *Page) !?*Node {
+    if (self._active) {
+        return error.InvalidStateError;
+    }
+
+    self._active = true;
+    defer self._active = false;
+
     var node = self._reference_node;
     var before_node = self._pointer_before_reference_node;
 
@@ -117,6 +132,10 @@ pub fn previousNode(self: *DOMNodeIterator, page: *Page) !?*Node {
         node = prev.?;
         before_node = false;
     }
+}
+
+pub fn detach(_: *const DOMNodeIterator) void {
+    // no-op legacy
 }
 
 fn filterNode(self: *const DOMNodeIterator, node: *Node, page: *Page) !i32 {
@@ -181,6 +200,7 @@ pub const JsApi = struct {
     pub const whatToShow = bridge.accessor(DOMNodeIterator.getWhatToShow, null, .{});
     pub const filter = bridge.accessor(DOMNodeIterator.getFilter, null, .{});
 
-    pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{});
-    pub const previousNode = bridge.function(DOMNodeIterator.previousNode, .{});
+    pub const nextNode = bridge.function(DOMNodeIterator.nextNode, .{ .dom_exception = true });
+    pub const previousNode = bridge.function(DOMNodeIterator.previousNode, .{ .dom_exception = true });
+    pub const detach = bridge.function(DOMNodeIterator.detach, .{});
 };
