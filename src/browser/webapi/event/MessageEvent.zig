@@ -29,12 +29,12 @@ const Allocator = std.mem.Allocator;
 const MessageEvent = @This();
 
 _proto: *Event,
-_data: ?js.Value.Global = null,
+_data: ?js.Value.Temp = null,
 _origin: []const u8 = "",
 _source: ?*Window = null,
 
 const MessageEventOptions = struct {
-    data: ?js.Value.Global = null,
+    data: ?js.Value.Temp = null,
     origin: ?[]const u8 = null,
     source: ?*Window = null,
 };
@@ -73,14 +73,18 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
 }
 
 pub fn deinit(self: *MessageEvent, shutdown: bool) void {
-    self._proto.deinit(shutdown);
+    const proto = self._proto;
+    if (self._data) |d| {
+        proto._page.js.release(d);
+    }
+    proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *MessageEvent) *Event {
     return self._proto;
 }
 
-pub fn getData(self: *const MessageEvent) ?js.Value.Global {
+pub fn getData(self: *const MessageEvent) ?js.Value.Temp {
     return self._data;
 }
 

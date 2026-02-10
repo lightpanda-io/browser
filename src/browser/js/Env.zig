@@ -383,17 +383,13 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
         .call_arena = ctx.call_arena,
     };
 
-    const value =
-        if (v8.v8__PromiseRejectMessage__GetValue(&message_handle)) |v8_value|
-            js.Value.toStringSlice(.{ .local = &local, .handle = v8_value }) catch |err| @errorName(err)
-        else
-            "no value";
-
-    log.debug(.js, "unhandled rejection", .{
-        .value = value,
-        .stack = local.stackTrace() catch |err| @errorName(err) orelse "???",
-        .note = "This should be updated to call window.unhandledrejection",
-    });
+    const page = ctx.page;
+    page.window.unhandledPromiseRejection(.{
+        .local = &local,
+        .handle = &message_handle,
+    }, page) catch |err| {
+        log.warn(.browser, "unhandled rejection handler", .{ .err = err });
+    };
 }
 
 fn fatalCallback(c_location: [*c]const u8, c_message: [*c]const u8) callconv(.c) void {

@@ -114,3 +114,30 @@
   testing.expectEqual(24, screen.pixelDepth);
   testing.expectEqual(screen, window.screen);
 </script>
+
+<script id=unhandled_rejection>
+  {
+    let unhandledCalled = 0;
+    window.onunhandledrejection = function(e) {
+      testing.expectEqual(true, e instanceof PromiseRejectionEvent);
+      testing.expectEqual({x: 'Fail'}, e.reason);
+      testing.expectEqual('unhandledrejection', e.type);
+      testing.expectEqual(window, e.target);
+      testing.expectEqual(window, e.srcElement);
+      testing.expectEqual(window, e.currentTarget);
+      unhandledCalled += 1;
+    }
+
+    window.addEventListener('unhandledrejection', function(e) {
+      testing.expectEqual(true, e instanceof PromiseRejectionEvent);
+      testing.expectEqual({x: 'Fail'}, e.reason);
+      testing.expectEqual('unhandledrejection', e.type);
+      testing.expectEqual(window, e.target);
+      testing.expectEqual(window, e.srcElement);
+      testing.expectEqual(window, e.currentTarget);
+      unhandledCalled += 1;
+    });
+    Promise.reject({x: 'Fail'});
+    testing.eventually(() => testing.expectEqual(2, unhandledCalled));
+  }
+</script>

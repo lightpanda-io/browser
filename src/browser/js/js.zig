@@ -44,6 +44,7 @@ pub const BigInt = @import("BigInt.zig");
 pub const Number = @import("Number.zig");
 pub const Integer = @import("Integer.zig");
 pub const PromiseResolver = @import("PromiseResolver.zig");
+pub const PromiseRejection = @import("PromiseRejection.zig");
 
 const Allocator = std.mem.Allocator;
 

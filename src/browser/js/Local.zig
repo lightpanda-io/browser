@@ -323,6 +323,7 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 js.Value.Temp,
                 js.Object.Global,
                 js.Promise.Global,
+                js.Promise.Temp,
                 js.PromiseResolver.Global,
                 js.Module.Global => return .{ .local = self, .handle = @ptrCast(value.local(self).handle) },
                 else => {}
@@ -619,15 +620,19 @@ fn jsValueToStruct(self: *const Local, comptime T: type, js_val: js.Value) !?T {
             return try obj.persist();
         },
 
-        js.Promise.Global => {
+        js.Promise.Global, js.Promise.Temp => {
             if (!js_val.isPromise()) {
                 return null;
             }
-            const promise = js.Promise{
-                .ctx = self,
+            const js_promise = js.Promise{
+                .local = self,
                 .handle = @ptrCast(js_val.handle),
             };
-            return try promise.persist();
+            return switch (T) {
+                js.Promise.Temp => try js_promise.temp(),
+                js.Promise.Global => try js_promise.persist(),
+                else => unreachable,
+            };
         },
         string.String => {
             const js_str = js_val.isString() orelse return null;

@@ -32,7 +32,7 @@ _message: []const u8 = "",
 _filename: []const u8 = "",
 _line_number: u32 = 0,
 _column_number: u32 = 0,
-_error: ?js.Value.Global = null,
+_error: ?js.Value.Temp = null,
 _arena: Allocator,
 
 pub const ErrorEventOptions = struct {
@@ -40,7 +40,7 @@ pub const ErrorEventOptions = struct {
     filename: ?[]const u8 = null,
     lineno: u32 = 0,
     colno: u32 = 0,
-    @"error": ?js.Value.Global = null,
+    @"error": ?js.Value.Temp = null,
 };
 
 const Options = Event.inheritOptions(ErrorEvent, ErrorEventOptions);
@@ -80,7 +80,11 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
 }
 
 pub fn deinit(self: *ErrorEvent, shutdown: bool) void {
-    self._proto.deinit(shutdown);
+    const proto = self._proto;
+    if (self._error) |e| {
+        proto._page.js.release(e);
+    }
+    proto.deinit(shutdown);
 }
 
 pub fn asEvent(self: *ErrorEvent) *Event {
@@ -103,7 +107,7 @@ pub fn getColumnNumber(self: *const ErrorEvent) u32 {
     return self._column_number;
 }
 
-pub fn getError(self: *const ErrorEvent) ?js.Value.Global {
+pub fn getError(self: *const ErrorEvent) ?js.Value.Temp {
     return self._error;
 }
 

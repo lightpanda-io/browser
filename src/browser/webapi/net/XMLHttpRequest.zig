@@ -103,32 +103,33 @@ pub fn deinit(self: *XMLHttpRequest, shutdown: bool) void {
     }
 
     const page = self._page;
+    const js_ctx = page.js;
     if (self._on_ready_state_change) |func| {
-        page.js.release(func);
+        js_ctx.release(func);
     }
 
     {
         const proto = self._proto;
         if (proto._on_abort) |func| {
-            page.js.release(func);
+            js_ctx.release(func);
         }
         if (proto._on_error) |func| {
-            page.js.release(func);
+            js_ctx.release(func);
         }
         if (proto._on_load) |func| {
-            page.js.release(func);
+            js_ctx.release(func);
         }
         if (proto._on_load_end) |func| {
-            page.js.release(func);
+            js_ctx.release(func);
         }
         if (proto._on_load_start) |func| {
-            page.js.release(func);
+            js_ctx.release(func);
         }
         if (proto._on_progress) |func| {
-            page.js.release(func);
+            js_ctx.release(func);
         }
         if (proto._on_timeout) |func| {
-            page.js.release(func);
+            js_ctx.release(func);
         }
     }
 

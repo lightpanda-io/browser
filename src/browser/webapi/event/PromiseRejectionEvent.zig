@@ -15,7 +15,6 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 const std = @import("std");
 const String = @import("../../../string.zig").String;
 
@@ -24,20 +23,21 @@ const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
 const Allocator = std.mem.Allocator;
 
-const CustomEvent = @This();
+const PromiseRejectionEvent = @This();
 
 _proto: *Event,
-_detail: ?js.Value.Temp = null,
-_arena: Allocator,
+_reason: ?js.Value.Temp = null,
+_promise: ?js.Promise.Temp = null,
 
-const CustomEventOptions = struct {
-    detail: ?js.Value.Temp = null,
+const PromiseRejectionEventOptions = struct {
+    reason: ?js.Value.Temp = null,
+    promise: ?js.Promise.Temp = null,
 };
 
-const Options = Event.inheritOptions(CustomEvent, CustomEventOptions);
+const Options = Event.inheritOptions(PromiseRejectionEvent, PromiseRejectionEventOptions);
 
-pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
-    const arena = try page.getArena(.{ .debug = "CustomEvent" });
+pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEvent {
+    const arena = try page.getArena(.{ .debug = "PromiseRejectionEvent" });
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
 
@@ -45,10 +45,10 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     const event = try page._factory.event(
         arena,
         type_string,
-        CustomEvent{
-            ._arena = arena,
+        PromiseRejectionEvent{
             ._proto = undefined,
-            ._detail = opts.detail,
+            ._reason = opts.reason,
+            ._promise = opts.promise,
         },
     );
 
@@ -56,55 +56,47 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CustomEvent {
     return event;
 }
 
-pub fn initCustomEvent(
-    self: *CustomEvent,
-    event_string: []const u8,
-    bubbles: ?bool,
-    cancelable: ?bool,
-    detail_: ?js.Value.Temp,
-) !void {
-    // This function can only be called after the constructor has called.
-    // So we assume proto is initialized already by constructor.
-    self._proto._type_string = try String.init(self._proto._arena, event_string, .{});
-    self._proto._bubbles = bubbles orelse false;
-    self._proto._cancelable = cancelable orelse false;
-    // Detail is stored separately.
-    self._detail = detail_;
-}
-
-pub fn deinit(self: *CustomEvent, shutdown: bool) void {
+pub fn deinit(self: *PromiseRejectionEvent, shutdown: bool) void {
     const proto = self._proto;
-    if (self._detail) |d| {
-        proto._page.js.release(d);
+    const js_ctx = proto._page.js;
+    if (self._reason) |r| {
+        js_ctx.release(r);
+    }
+    if (self._promise) |p| {
+        js_ctx.release(p);
     }
     proto.deinit(shutdown);
 }
 
-pub fn asEvent(self: *CustomEvent) *Event {
+pub fn asEvent(self: *PromiseRejectionEvent) *Event {
     return self._proto;
 }
 
-pub fn getDetail(self: *const CustomEvent) ?js.Value.Temp {
-    return self._detail;
+pub fn getReason(self: *const PromiseRejectionEvent) ?js.Value.Temp {
+    return self._reason;
+}
+
+pub fn getPromise(self: *const PromiseRejectionEvent) ?js.Promise.Temp {
+    return self._promise;
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(CustomEvent);
+    pub const bridge = js.Bridge(PromiseRejectionEvent);
 
     pub const Meta = struct {
-        pub const name = "CustomEvent";
+        pub const name = "PromiseRejectionEvent";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const weak = true;
-        pub const finalizer = bridge.finalizer(CustomEvent.deinit);
+        pub const finalizer = bridge.finalizer(PromiseRejectionEvent.deinit);
     };
 
-    pub const constructor = bridge.constructor(CustomEvent.init, .{});
-    pub const detail = bridge.accessor(CustomEvent.getDetail, null, .{});
-    pub const initCustomEvent = bridge.function(CustomEvent.initCustomEvent, .{});
+    pub const constructor = bridge.constructor(PromiseRejectionEvent.init, .{});
+    pub const reason = bridge.accessor(PromiseRejectionEvent.getReason, null, .{});
+    pub const promise = bridge.accessor(PromiseRejectionEvent.getPromise, null, .{});
 };
 
 const testing = @import("../../../testing.zig");
-test "WebApi: CustomEvent" {
-    try testing.htmlRunner("event/custom_event.html", .{});
+test "WebApi: PromiseRejectionEvent" {
+    try testing.htmlRunner("event/promise_rejection.html", .{});
 }
