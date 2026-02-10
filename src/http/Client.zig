@@ -27,6 +27,8 @@ const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
+const Robots = @import("../browser/Robots.zig");
+const RobotStore = Robots.RobotStore;
 
 const c = Http.c;
 const posix = std.posix;
@@ -85,6 +87,12 @@ queue: TransferQueue,
 // The main app allocator
 allocator: Allocator,
 
+// Reference to the App-owned Robot Store.
+robot_store: *RobotStore,
+// Queue of requests that depend on a robots.txt.
+// Allows us to fetch the robots.txt just once.
+pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
+
 // Once we have a handle/easy to process a request with, we create a Transfer
 // which contains the Request as well as any state we need to process the
 // request. These wil come and go with each request.
@@ -123,7 +131,7 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, config: *const Config) !*Client {
+pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, robot_store: *RobotStore, config: *const Config) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -147,6 +155,7 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, config: *const Config) 
         .multi = multi,
         .handles = handles,
         .allocator = allocator,
+        .robot_store = robot_store,
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
         .config = config,
@@ -163,6 +172,13 @@ pub fn deinit(self: *Client) void {
     _ = c.curl_multi_cleanup(self.multi);
 
     self.transfer_pool.deinit();
+
+    var robots_iter = self.pending_robots_queue.iterator();
+    while (robots_iter.next()) |entry| {
+        entry.value_ptr.deinit(self.allocator);
+    }
+    self.pending_robots_queue.deinit(self.allocator);
+
     self.allocator.destroy(self);
 }
 
@@ -217,12 +233,46 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 }
 
 pub fn request(self: *Client, req: Request) !void {
+    if (self.config.obeyRobots()) {
+        const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
+        errdefer self.allocator.free(robots_url);
+
+        // If we have this robots cached, we can take a fast path.
+        if (self.robot_store.get(robots_url)) |robot_entry| {
+            defer self.allocator.free(robots_url);
+
+            switch (robot_entry) {
+                // If we have a found robots entry, we check it.
+                .present => |robots| {
+                    const path = URL.getPathname(req.url);
+                    if (!robots.isAllowed(path)) {
+                        req.error_callback(req.ctx, error.RobotsBlocked);
+                        return;
+                    }
+                },
+                // Otherwise, we assume we won't find it again.
+                .absent => {},
+            }
+
+            return self.processRequest(req);
+        }
+
+        return self.fetchRobotsThenProcessRequest(robots_url, req);
+    }
+
+    return self.processRequest(req);
+}
+
+fn processRequest(self: *Client, req: Request) !void {
     const transfer = try self.makeTransfer(req);
 
     transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });
 
     var wait_for_interception = false;
-    transfer.req.notification.dispatch(.http_request_intercept, &.{ .transfer = transfer, .wait_for_interception = &wait_for_interception });
+    transfer.req.notification.dispatch(.http_request_intercept, &.{
+        .transfer = transfer,
+        .wait_for_interception = &wait_for_interception,
+    });
     if (wait_for_interception == false) {
         // request not intercepted, process it normally
         return self.process(transfer);
@@ -243,6 +293,154 @@ pub fn request(self: *Client, req: Request) !void {
 
     if (try self.waitForInterceptedResponse(transfer)) {
         return self.process(transfer);
+    }
+}
+
+const RobotsRequestContext = struct {
+    client: *Client,
+    req: Request,
+    robots_url: [:0]const u8,
+    buffer: std.ArrayList(u8),
+    status: u16 = 0,
+
+    pub fn deinit(self: *RobotsRequestContext) void {
+        self.client.allocator.free(self.robots_url);
+        self.buffer.deinit(self.client.allocator);
+        self.client.allocator.destroy(self);
+    }
+};
+
+fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: Request) !void {
+    const entry = try self.pending_robots_queue.getOrPut(self.allocator, robots_url);
+
+    if (!entry.found_existing) {
+        errdefer self.allocator.free(robots_url);
+
+        // If we aren't already fetching this robots,
+        // we want to create a new queue for it and add this request into it.
+        entry.value_ptr.* = .empty;
+
+        const ctx = try self.allocator.create(RobotsRequestContext);
+        errdefer self.allocator.destroy(ctx);
+        ctx.* = .{ .client = self, .req = req, .robots_url = robots_url, .buffer = .empty };
+        const headers = try self.newHeaders();
+
+        log.debug(.browser, "fetching robots.txt", .{ .robots_url = robots_url });
+        try self.processRequest(.{
+            .ctx = ctx,
+            .url = robots_url,
+            .method = .GET,
+            .headers = headers,
+            .blocking = false,
+            .cookie_jar = req.cookie_jar,
+            .notification = req.notification,
+            .resource_type = .fetch,
+            .header_callback = robotsHeaderCallback,
+            .data_callback = robotsDataCallback,
+            .done_callback = robotsDoneCallback,
+            .error_callback = robotsErrorCallback,
+            .shutdown_callback = robotsShutdownCallback,
+        });
+    } else {
+        // Not using our own robots URL, only using the one from the first request.
+        self.allocator.free(robots_url);
+    }
+
+    try entry.value_ptr.append(self.allocator, req);
+}
+
+fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+
+    if (transfer.response_header) |hdr| {
+        log.debug(.browser, "robots status", .{ .status = hdr.status, .robots_url = ctx.robots_url });
+        ctx.status = hdr.status;
+    }
+
+    if (transfer.getContentLength()) |cl| {
+        try ctx.buffer.ensureTotalCapacity(ctx.client.allocator, cl);
+    }
+
+    return true;
+}
+
+fn robotsDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
+    try ctx.buffer.appendSlice(ctx.client.allocator, data);
+}
+
+fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
+    defer ctx.deinit();
+
+    var allowed = true;
+
+    if (ctx.status >= 200 and ctx.status < 400 and ctx.buffer.items.len > 0) {
+        const robots = try ctx.client.robot_store.robotsFromBytes(
+            ctx.client.config.http_headers.user_agent,
+            ctx.buffer.items,
+        );
+
+        try ctx.client.robot_store.put(ctx.robots_url, robots);
+
+        const path = URL.getPathname(ctx.req.url);
+        allowed = robots.isAllowed(path);
+    } else if (ctx.status == 404) {
+        log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
+        try ctx.client.robot_store.putAbsent(ctx.robots_url);
+    }
+
+    var queued = ctx.client.pending_robots_queue.fetchRemove(
+        ctx.robots_url,
+    ) orelse @panic("Client.robotsDoneCallbacke empty queue");
+    defer queued.value.deinit(ctx.client.allocator);
+
+    for (queued.value.items) |queued_req| {
+        if (!allowed) {
+            log.warn(.http, "blocked by robots", .{ .url = queued_req.url });
+            queued_req.error_callback(queued_req.ctx, error.RobotsBlocked);
+        } else {
+            ctx.client.processRequest(queued_req) catch |e| {
+                queued_req.error_callback(queued_req.ctx, e);
+            };
+        }
+    }
+}
+
+fn robotsErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
+    defer ctx.deinit();
+
+    log.warn(.http, "robots fetch failed", .{ .err = err });
+
+    var queued = ctx.client.pending_robots_queue.fetchRemove(
+        ctx.robots_url,
+    ) orelse @panic("Client.robotsErrorCallback empty queue");
+    defer queued.value.deinit(ctx.client.allocator);
+
+    // On error, allow all queued requests to proceed
+    for (queued.value.items) |queued_req| {
+        ctx.client.processRequest(queued_req) catch |e| {
+            queued_req.error_callback(queued_req.ctx, e);
+        };
+    }
+}
+
+fn robotsShutdownCallback(ctx_ptr: *anyopaque) void {
+    const ctx: *RobotsRequestContext = @ptrCast(@alignCast(ctx_ptr));
+    defer ctx.deinit();
+
+    log.debug(.http, "robots fetch shutdown", .{});
+
+    var queued = ctx.client.pending_robots_queue.fetchRemove(
+        ctx.robots_url,
+    ) orelse @panic("Client.robotsErrorCallback empty queue");
+    defer queued.value.deinit(ctx.client.allocator);
+
+    for (queued.value.items) |queued_req| {
+        if (queued_req.shutdown_callback) |shutdown_cb| {
+            shutdown_cb(queued_req.ctx);
+        }
     }
 }
 
