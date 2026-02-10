@@ -105,6 +105,7 @@ global_promise_resolvers: std.ArrayList(v8.Global) = .empty,
 // Temp variants stored in HashMaps for O(1) early cleanup.
 // Key is global.data_ptr.
 global_values_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+global_promises_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 global_functions_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 
 // Our module cache: normalized module specifier => module.
@@ -234,6 +235,13 @@ pub fn deinit(self: *Context) void {
     }
 
     {
+        var it = self.global_promises_temp.valueIterator();
+        while (it.next()) |global| {
+            v8.v8__Global__Reset(global);
+        }
+    }
+
+    {
         var it = self.global_functions_temp.valueIterator();
         while (it.next()) |global| {
             v8.v8__Global__Reset(global);
@@ -309,6 +317,7 @@ pub fn release(self: *Context, item: anytype) void {
 
     var map = switch (@TypeOf(item)) {
         js.Value.Temp => &self.global_values_temp,
+        js.Promise.Temp => &self.global_promises_temp,
         js.Function.Temp => &self.global_functions_temp,
         else => |T| @compileError("Context.release cannot be called with a " ++ @typeName(T)),
     };

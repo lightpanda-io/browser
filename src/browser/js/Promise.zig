@@ -47,25 +47,49 @@ pub fn thenAndCatch(self: Promise, on_fulfilled: js.Function, on_rejected: js.Fu
     }
     return error.PromiseChainFailed;
 }
+
 pub fn persist(self: Promise) !Global {
+    return self._persist(true);
+}
+
+pub fn temp(self: Promise) !Temp {
+    return self._persist(false);
+}
+
+fn _persist(self: *const Promise, comptime is_global: bool) !(if (is_global) Global else Temp) {
     var ctx = self.local.ctx;
+
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    try ctx.global_promises.append(ctx.arena, global);
+    if (comptime is_global) {
+        try ctx.global_promises.append(ctx.arena, global);
+    } else {
+        try ctx.global_promises_temp.put(ctx.arena, global.data_ptr, global);
+    }
     return .{ .handle = global };
 }
 
-pub const Global = struct {
-    handle: v8.Global,
+pub const Temp = G(0);
+pub const Global = G(1);
 
-    pub fn deinit(self: *Global) void {
-        v8.v8__Global__Reset(&self.handle);
-    }
+fn G(comptime discriminator: u8) type {
+    return struct {
+        handle: v8.Global,
 
-    pub fn local(self: *const Global, l: *const js.Local) Promise {
-        return .{
-            .local = l,
-            .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
-        };
-    }
-};
+        // makes the types different (G(0) != G(1)), without taking up space
+        comptime _: u8 = discriminator,
+
+        const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            v8.v8__Global__Reset(&self.handle);
+        }
+
+        pub fn local(self: *const Self, l: *const js.Local) Promise {
+            return .{
+                .local = l,
+                .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
+            };
+        }
+    };
+}

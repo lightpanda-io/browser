@@ -44,6 +44,8 @@ const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
 
+const IS_DEBUG = builtin.mode == .Debug;
+
 const Allocator = std.mem.Allocator;
 
 const Window = @This();
@@ -278,7 +280,7 @@ pub fn cancelIdleCallback(self: *Window, id: u32) void {
 
 pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
     const error_event = try ErrorEvent.initTrusted(comptime .wrap("error"), .{
-        .@"error" = try err.persist(),
+        .@"error" = try err.temp(),
         .message = err.toStringSlice() catch "Unknown error",
         .bubbles = false,
         .cancelable = true,
@@ -342,7 +344,7 @@ pub fn getComputedStyle(_: *const Window, element: *Element, pseudo_element: ?[]
     return CSSStyleProperties.init(element, true, page);
 }
 
-pub fn postMessage(self: *Window, message: js.Value.Global, target_origin: ?[]const u8, page: *Page) !void {
+pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]const u8, page: *Page) !void {
     // For now, we ignore targetOrigin checking and just dispatch the message
     // In a full implementation, we would validate the origin
     _ = target_origin;
@@ -487,6 +489,28 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     );
 }
 
+pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, page: *Page) !void {
+    if (comptime IS_DEBUG) {
+        log.debug(.js, "unhandled rejection", .{
+            .value = rejection.reason(),
+            .stack = rejection.local.stackTrace() catch |err| @errorName(err) orelse "???",
+        });
+    }
+
+    var event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
+        .reason = if (rejection.reason()) |r| try r.temp() else null,
+        .promise = try rejection.promise().temp(),
+    }, page)).asEvent();
+    defer if (!event._v8_handoff) event.deinit(false);
+
+    try page._event_manager.dispatchWithFunction(
+        self.asEventTarget(),
+        event,
+        rejection.local.toLocal(self._on_unhandled_rejection),
+        .{ .inject_target = true, .context = "window.unhandledrejection" },
+    );
+}
+
 const ScheduleOpts = struct {
     repeat: bool,
     params: []js.Value.Temp,
@@ -626,7 +650,7 @@ const PostMessageCallback = struct {
     page: *Page,
     arena: Allocator,
     origin: []const u8,
-    message: js.Value.Global,
+    message: js.Value.Temp,
 
     fn deinit(self: *PostMessageCallback) void {
         self.page.releaseArena(self.arena);

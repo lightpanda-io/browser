@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=project_rejection>
+  {
+    let e1 = new PromiseRejectionEvent("rejectionhandled");
+    testing.expectEqual(true, e1 instanceof PromiseRejectionEvent);
+    testing.expectEqual(true, e1 instanceof Event);
+
+    testing.expectEqual("rejectionhandled", e1.type);
+    testing.expectEqual(null, e1.reason);
+    testing.expectEqual(null, e1.promise);
+
+    let e2 = new PromiseRejectionEvent("rejectionhandled", {reason: ['tea']});
+    testing.expectEqual(true, e2 instanceof PromiseRejectionEvent);
+    testing.expectEqual(true, e2 instanceof Event);
+
+    testing.expectEqual("rejectionhandled", e2.type);
+    testing.expectEqual(['tea'], e2.reason);
+    testing.expectEqual(null, e2.promise);
+  }
+</script>
