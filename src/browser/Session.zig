@@ -135,14 +135,18 @@ pub const WaitResult = enum {
     done,
     no_page,
     cdp_socket,
-    navigate,
 };
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
     while (true) {
         if (self.page) |*page| {
             switch (page.wait(wait_ms)) {
-                .navigate => self.processScheduledNavigation() catch return .done,
+                .done => {
+                    if (page._queued_navigation == null) {
+                        return .done;
+                    }
+                    self.processScheduledNavigation() catch return .done;
+                },
                 else => |result| return result,
             }
         } else {
