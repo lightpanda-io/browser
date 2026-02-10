@@ -202,6 +202,13 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
     const range = self._range orelse return error.InvalidState;
     const offset = _offset orelse 0;
 
+    // If the node is not contained in the document, do not change the selection
+    if (!page.document.asNode().contains(node)) {
+        return;
+    }
+
+    if (node._type == .document_type) return error.InvalidNodeType;
+
     if (offset > node.getLength()) {
         return error.IndexSizeError;
     }
@@ -306,12 +313,17 @@ pub fn modify(
 }
 
 pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
-    if (parent._type == .document_type) return error.InvalidNodeTypeError;
+    if (parent._type == .document_type) return error.InvalidNodeType;
+
+    // If the node is not contained in the document, do not change the selection
+    if (!page.document.asNode().contains(parent)) {
+        return;
+    }
 
     const range = try Range.init(page);
     try range.setStart(parent, 0);
 
-    const child_count = parent.getLength();
+    const child_count = parent.getChildrenCount();
     try range.setEnd(parent, @intCast(child_count));
 
     self._range = range;
@@ -426,7 +438,7 @@ pub const JsApi = struct {
     pub const modify = bridge.function(Selection.modify, .{});
     pub const removeAllRanges = bridge.function(Selection.removeAllRanges, .{});
     pub const removeRange = bridge.function(Selection.removeRange, .{ .dom_exception = true });
-    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{});
+    pub const selectAllChildren = bridge.function(Selection.selectAllChildren, .{ .dom_exception = true });
     pub const setBaseAndExtent = bridge.function(Selection.setBaseAndExtent, .{ .dom_exception = true });
     pub const setPosition = bridge.function(Selection.collapse, .{ .dom_exception = true });
     pub const toString = bridge.function(Selection.toString, .{});
