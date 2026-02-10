@@ -1140,7 +1140,7 @@ pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Pag
 
     // Parse space-separated class names
     var class_names: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.tokenizeAny(u8, class_name, &std.ascii.whitespace);
+    var it = std.mem.tokenizeAny(u8, class_name, "\t\n\x0C\r ");
     while (it.next()) |name| {
         try class_names.append(arena, try page.dupeString(name));
     }
