@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=visual_viewport>
+  const vp = window.visualViewport;
+  testing.expectEqual(vp, window.visualViewport);
+  testing.expectEqual(0, vp.offsetLeft);
+  testing.expectEqual(0, vp.offsetTop);
+  testing.expectEqual(0, vp.pageLeft);
+  testing.expectEqual(0, vp.pageTop);
+  testing.expectEqual(1920, vp.width);
+  testing.expectEqual(1080, vp.height);
+  testing.expectEqual(1.0, vp.scale);
+</script>

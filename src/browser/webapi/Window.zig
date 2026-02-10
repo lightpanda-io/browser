@@ -29,6 +29,7 @@ const Crypto = @import("Crypto.zig");
 const CSS = @import("CSS.zig");
 const Navigator = @import("Navigator.zig");
 const Screen = @import("Screen.zig");
+const VisualViewport = @import("VisualViewport.zig");
 const Performance = @import("Performance.zig");
 const Document = @import("Document.zig");
 const Location = @import("Location.zig");
@@ -57,6 +58,7 @@ _crypto: Crypto = .init,
 _console: Console = .init,
 _navigator: Navigator = .init,
 _screen: *Screen,
+_visual_viewport: *VisualViewport,
 _performance: Performance,
 _storage_bucket: *storage.Bucket,
 _on_load: ?js.Function.Global = null,
@@ -108,6 +110,10 @@ pub fn getNavigator(self: *Window) *Navigator {
 
 pub fn getScreen(self: *Window) *Screen {
     return self._screen;
+}
+
+pub fn getVisualViewport(self: *const Window) *VisualViewport {
+    return self._visual_viewport;
 }
 
 pub fn getCrypto(self: *Window) *Crypto {
@@ -714,6 +720,7 @@ pub const JsApi = struct {
     pub const console = bridge.accessor(Window.getConsole, null, .{});
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
     pub const screen = bridge.accessor(Window.getScreen, null, .{});
+    pub const visualViewport = bridge.accessor(Window.getVisualViewport, null, .{});
     pub const performance = bridge.accessor(Window.getPerformance, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
