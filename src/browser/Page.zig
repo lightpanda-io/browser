@@ -969,7 +969,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
             },
             .html, .complete => {
                 if (self._queued_navigation != null) {
-                    return .navigate;
+                    return .done;
                 }
 
                 // The HTML page was parsed. We now either have JS scripts to
