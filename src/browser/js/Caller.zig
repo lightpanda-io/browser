@@ -86,7 +86,6 @@ pub fn deinit(self: *Caller) void {
 }
 
 pub const CallOpts = struct {
-    cache: ?[]const u8 = null,
     dom_exception: bool = false,
     null_as_undefined: bool = false,
     as_typed_array: bool = false,
