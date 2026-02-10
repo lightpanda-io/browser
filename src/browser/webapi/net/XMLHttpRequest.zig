@@ -233,6 +233,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
         .data_callback = httpDataCallback,
         .done_callback = httpDoneCallback,
         .error_callback = httpErrorCallback,
+        .shutdown_callback = httpShutdownCallback,
     });
 
     page.js.strongRef(self);
@@ -461,6 +462,11 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._transfer = null;
     self.handleError(err);
     self._page.js.weakRef(self);
+}
+
+fn httpShutdownCallback(ctx: *anyopaque) void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
+    self._transfer = null;
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
