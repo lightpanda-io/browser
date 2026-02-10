@@ -184,6 +184,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void 
         .navigation,
         .screen,
         .screen_orientation,
+        .visual_viewport,
         .generic,
         => {
             const list = self.lookup.get(.{

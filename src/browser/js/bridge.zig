@@ -912,6 +912,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/Blob.zig"),
     @import("../webapi/File.zig"),
     @import("../webapi/Screen.zig"),
+    @import("../webapi/VisualViewport.zig"),
     @import("../webapi/PerformanceObserver.zig"),
     @import("../webapi/navigation/Navigation.zig"),
     @import("../webapi/navigation/NavigationEventTarget.zig"),

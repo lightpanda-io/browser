@@ -42,6 +42,7 @@ pub const Type = union(enum) {
     navigation: *@import("navigation/NavigationEventTarget.zig"),
     screen: *@import("Screen.zig"),
     screen_orientation: *@import("Screen.zig").Orientation,
+    visual_viewport: *@import("VisualViewport.zig"),
 };
 
 pub fn init(page: *Page) !*EventTarget {
@@ -132,6 +133,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .navigation => writer.writeAll("<Navigation>"),
         .screen => writer.writeAll("<Screen>"),
         .screen_orientation => writer.writeAll("<ScreenOrientation>"),
+        .visual_viewport => writer.writeAll("<VisualViewport>"),
     };
 }
 
@@ -148,6 +150,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .navigation => return "[object Navigation]",
         .screen => return "[object Screen]",
         .screen_orientation => return "[object ScreenOrientation]",
+        .visual_viewport => return "[object VisualViewport]",
     };
 }
 
