@@ -266,6 +266,7 @@ pub const Accessor = struct {
                     defer caller.deinit();
 
                     caller.method(T, setter, handle.?, .{
+                        .dom_exception = opts.dom_exception,
                         .as_typed_array = opts.as_typed_array,
                         .null_as_undefined = opts.null_as_undefined,
                     });

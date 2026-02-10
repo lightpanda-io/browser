@@ -108,8 +108,13 @@ pub fn getValue(self: *const Input) []const u8 {
 }
 
 pub fn setValue(self: *Input, value: []const u8, page: *Page) !void {
-    // This should _not_ call setAttribute. It updates the default state only
-    const owned = try page.dupeString(value);
+    // File inputs cannot have their value set programmatically for security reasons
+    if (self._input_type == .file) {
+        return error.InvalidStateError;
+    }
+    // This should _not_ call setAttribute. It updates the current state only
+    const sanitized = try self.sanitizeValue(value, page);
+    const owned = try page.dupeString(sanitized);
     self._value = owned;
 }
 
@@ -401,6 +406,53 @@ pub fn getForm(self: *Input, page: *Page) ?*Form {
     return null;
 }
 
+/// Sanitize the value according to the current input type
+fn sanitizeValue(self: *Input, value: []const u8, page: *Page) ![]const u8 {
+    switch (self._input_type) {
+        .text, .search, .tel, .password, .url, .email => {
+            var i: usize = 0;
+            const result = try page.call_arena.alloc(u8, value.len);
+            for (value) |c| {
+                if (c != '\r' and c != '\n') {
+                    result[i] = c;
+                    i += 1;
+                }
+            }
+            const sanitized = result[0..i];
+            return switch (self._input_type) {
+                .url, .email => std.mem.trim(u8, sanitized, &std.ascii.whitespace),
+                else => sanitized,
+            };
+        },
+        .date, .time, .@"datetime-local", .month, .week => {
+            // TODO, we should sanitize this, but lack the necessary functions
+            // datetime.zig could handle date and time, but not the other three
+            // for now, allow al values.
+            return value;
+        },
+        .number => {
+            _ = std.fmt.parseFloat(f64, value) catch return "";
+            return value;
+        },
+        .range => {
+            // Range: default to "50" if invalid
+            _ = std.fmt.parseFloat(f64, value) catch return "50";
+            return value;
+        },
+        .color => {
+            if (value.len == 7 and value[0] == '#') {
+                for (value[1..]) |c| {
+                    if (!std.ascii.isHex(c)) return "#000000";
+                }
+                return value;
+            }
+            return "#000000";
+        },
+        .file => return "", // File: always empty
+        .checkbox, .radio, .submit, .image, .reset, .button, .hidden => return value, // no sanitization
+    }
+}
+
 fn uncheckRadioGroup(self: *Input, page: *Page) !void {
     const element = self.asElement();
 
@@ -454,7 +506,7 @@ pub const JsApi = struct {
     };
 
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{});
-    pub const value = bridge.accessor(Input.getValue, Input.setValue, .{});
+    pub const value = bridge.accessor(Input.getValue, Input.setValue, .{ .dom_exception = true });
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{});
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
     pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, Input.setDefaultChecked, .{});
@@ -505,7 +557,17 @@ pub const Build = struct {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
-            .type => self._input_type = Type.fromString(value.str()),
+            .type => {
+                self._input_type = Type.fromString(value.str());
+                // Sanitize the current value according to the new type
+                if (self._value) |current_value| {
+                    self._value = try self.sanitizeValue(current_value, page);
+                    // Apply default value for checkbox/radio if value is now empty
+                    if (self._value.?.len == 0 and (self._input_type == .checkbox or self._input_type == .radio)) {
+                        self._value = "on";
+                    }
+                }
+            },
             .value => self._default_value = try page.arena.dupe(u8, value.str()),
             .checked => {
                 self._default_checked = true;
