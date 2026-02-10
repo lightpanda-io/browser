@@ -125,7 +125,14 @@ jobs:
       MAX_MEMORY: 26000 # 26MB (KB)
       MAX_AVG_DURATION: 17
       LIGHTPANDA_DISABLE_TELEMETRY: true
-      CG: /sys/fs/cgroup/lpd_${{ github.run_id }}_${{ github.run_attempt }}
+
+      # How to give cgroups access to the user actions-runner on the host:
+      # $ sudo apt install cgroup-tools
+      # $ sudo chmod o+w /sys/fs/cgroup/cgroup.procs
+      # $ sudo mkdir -p /sys/fs/cgroup/actions-runner
+      # $ sudo chown -R actions-runner:actions-runner /sys/fs/cgroup/actions-runner
+      CG_ROOT: /sys/fs/cgroup
+      CG: actions-runner/lpd_${{ github.run_id }}_${{ github.run_attempt }}
 
     # use a self host runner.
     runs-on: lpd-bench-hetzner
@@ -158,14 +165,8 @@ jobs:
             exit 1
           fi
 
-          sudo mkdir -p $CG
-
-          if [[ -f /sys/fs/cgroup/cgroup.subtree_control ]]; then
-            echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control >/dev/null 2>&1 || true
-          fi
-
-          ./lightpanda serve & echo $! > LPD.pid
-          cat LPD.pid | sudo tee $CG/cgroup.procs >/dev/null
+          mkdir -p $CG_ROOT/$CG
+          cgexec -g memory:$CG ./lightpanda serve & echo $! > LPD.pid
 
           sleep 2
 
@@ -183,15 +184,18 @@ jobs:
           while kill -0 $PID 2>/dev/null; do
             sleep 1
           done
-          if [ ! -f $CG/memory.peak ]; then
+          if [ ! -f $CG_ROOT/$CG/memory.peak ]; then
             echo "memory.peak not available in $CG"
             exit 1
           fi
-          PEAK_BYTES=$(cat $CG/memory.peak)
+          PEAK_BYTES=$(cat $CG_ROOT/$CG/memory.peak)
           PEAK_KB=$((PEAK_BYTES / 1024))
           echo "memory.peak_bytes=$PEAK_BYTES"
           echo "memory.peak_kb=$PEAK_KB"
           test "$PEAK_KB" -le "$MAX_MEMORY"
+
+      - name: cleanup cgroup
+        run: rmdir $CG_ROOT/$CG
 
       - name: duration regression
         run: |
