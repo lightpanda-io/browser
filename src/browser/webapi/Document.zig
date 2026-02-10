@@ -991,7 +991,7 @@ pub const JsApi = struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {
             return page.window;
         }
-    }.defaultView, null, .{ .cache = "defaultView" });
+    }.defaultView, null, .{});
     pub const hasFocus = bridge.function(Document.hasFocus, .{});
 
     pub const prerendering = bridge.property(false, .{ .template = false });

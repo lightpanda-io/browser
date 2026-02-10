@@ -683,23 +683,23 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const top = bridge.accessor(Window.getWindow, null, .{ .cache = "top" });
-    pub const self = bridge.accessor(Window.getWindow, null, .{ .cache = "self" });
-    pub const window = bridge.accessor(Window.getWindow, null, .{ .cache = "window" });
-    pub const parent = bridge.accessor(Window.getWindow, null, .{ .cache = "parent" });
-    pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = "console" });
-    pub const navigator = bridge.accessor(Window.getNavigator, null, .{ .cache = "navigator" });
-    pub const screen = bridge.accessor(Window.getScreen, null, .{ .cache = "screen" });
-    pub const performance = bridge.accessor(Window.getPerformance, null, .{ .cache = "performance" });
-    pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{ .cache = "localStorage" });
-    pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{ .cache = "sessionStorage" });
-    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = "document" });
+    pub const top = bridge.accessor(Window.getWindow, null, .{});
+    pub const self = bridge.accessor(Window.getWindow, null, .{});
+    pub const window = bridge.accessor(Window.getWindow, null, .{});
+    pub const parent = bridge.accessor(Window.getWindow, null, .{});
+    pub const console = bridge.accessor(Window.getConsole, null, .{});
+    pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
+    pub const screen = bridge.accessor(Window.getScreen, null, .{});
+    pub const performance = bridge.accessor(Window.getPerformance, null, .{});
+    pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
+    pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
+    pub const document = bridge.accessor(Window.getDocument, null, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{});
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
-    pub const crypto = bridge.accessor(Window.getCrypto, null, .{ .cache = "crypto" });
-    pub const CSS = bridge.accessor(Window.getCSS, null, .{ .cache = "CSS" });
-    pub const customElements = bridge.accessor(Window.getCustomElements, null, .{ .cache = "customElements" });
+    pub const crypto = bridge.accessor(Window.getCrypto, null, .{});
+    pub const CSS = bridge.accessor(Window.getCSS, null, .{});
+    pub const customElements = bridge.accessor(Window.getCustomElements, null, .{});
     pub const onload = bridge.accessor(Window.getOnLoad, Window.setOnLoad, .{});
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
@@ -725,13 +725,13 @@ pub const JsApi = struct {
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
     pub const getSelection = bridge.function(Window.getSelection, .{});
 
-    pub const frames = bridge.accessor(Window.getWindow, null, .{ .cache = "frames" });
+    pub const frames = bridge.accessor(Window.getWindow, null, .{});
     pub const index = bridge.indexed(Window.getFrame, .{ .null_as_undefined = true });
-    pub const length = bridge.accessor(Window.getFramesLength, null, .{ .cache = "length" });
-    pub const scrollX = bridge.accessor(Window.getScrollX, null, .{ .cache = "scrollX" });
-    pub const scrollY = bridge.accessor(Window.getScrollY, null, .{ .cache = "scrollY" });
-    pub const pageXOffset = bridge.accessor(Window.getScrollX, null, .{ .cache = "pageXOffset" });
-    pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{ .cache = "pageYOffset" });
+    pub const length = bridge.accessor(Window.getFramesLength, null, .{});
+    pub const scrollX = bridge.accessor(Window.getScrollX, null, .{});
+    pub const scrollY = bridge.accessor(Window.getScrollY, null, .{});
+    pub const pageXOffset = bridge.accessor(Window.getScrollX, null, .{});
+    pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{});
     pub const scrollTo = bridge.function(Window.scrollTo, .{});
     pub const scroll = bridge.function(Window.scrollTo, .{});
 
