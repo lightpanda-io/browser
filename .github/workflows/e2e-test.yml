@@ -122,9 +122,10 @@ jobs:
     needs: zig-build-release
 
     env:
-      MAX_MEMORY: 26000
+      MAX_MEMORY: 26000 # 26MB (KB)
       MAX_AVG_DURATION: 17
       LIGHTPANDA_DISABLE_TELEMETRY: true
+      CG: /sys/fs/cgroup/lpd_${{ github.run_id }}_${{ github.run_attempt }}
 
     # use a self host runner.
     runs-on: lpd-bench-hetzner
@@ -150,12 +151,27 @@ jobs:
           go run ws/main.go & echo $! > WS.pid
           sleep 2
 
+      - name: run lightpanda in cgroup
+        run: |
+          if [ ! -f /sys/fs/cgroup/cgroup.controllers ]; then
+            echo "cgroup v2 not available: /sys/fs/cgroup/cgroup.controllers missing"
+            exit 1
+          fi
+
+          sudo mkdir -p $CG
+
+          if [[ -f /sys/fs/cgroup/cgroup.subtree_control ]]; then
+            echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control >/dev/null 2>&1 || true
+          fi
+
+          ./lightpanda serve & echo $! > LPD.pid
+          cat LPD.pid | sudo tee $CG/cgroup.procs >/dev/null
+
+          sleep 2
+
       - name: run puppeteer
         run: |
-          ./lightpanda serve & echo $! > LPD.pid
-          sleep 2
           RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
-          cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
           kill `cat LPD.pid`
 
       - name: puppeteer result
@@ -163,9 +179,19 @@ jobs:
 
       - name: memory regression
         run: |
-          export LPD_VmHWM=`cat LPD.VmHWM`
-          echo "Peak resident set size: $LPD_VmHWM"
-          test "$LPD_VmHWM" -le "$MAX_MEMORY"
+          PID=$(cat LPD.pid)
+          while kill -0 $PID 2>/dev/null; do
+            sleep 1
+          done
+          if [ ! -f $CG/memory.peak ]; then
+            echo "memory.peak not available in $CG"
+            exit 1
+          fi
+          PEAK_BYTES=$(cat $CG/memory.peak)
+          PEAK_KB=$((PEAK_BYTES / 1024))
+          echo "memory.peak_bytes=$PEAK_BYTES"
+          echo "memory.peak_kb=$PEAK_KB"
+          test "$PEAK_KB" -le "$MAX_MEMORY"
 
       - name: duration regression
         run: |
@@ -177,8 +203,8 @@ jobs:
         run: |
           export AVG_DURATION=`cat puppeteer.out|grep 'avg run'|sed 's/avg run duration (ms) //'`
           export TOTAL_DURATION=`cat puppeteer.out|grep 'total duration'|sed 's/total duration (ms) //'`
-          export LPD_VmHWM=`cat LPD.VmHWM`
-          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM}}" > bench.json
+          export LPD_MEM_PEAK_KB=$(( $(cat $CG/memory.peak) / 1024 ))
+          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_MEM_PEAK_KB}}" > bench.json
           cat bench.json
 
       - name: run hyperfine
