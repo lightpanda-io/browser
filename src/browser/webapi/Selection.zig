@@ -202,6 +202,13 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
     const range = self._range orelse return error.InvalidState;
     const offset = _offset orelse 0;
 
+    // If the node is not contained in the document, do not change the selection
+    if (!page.document.asNode().contains(node)) {
+        return;
+    }
+
+    if (node._type == .document_type) return error.InvalidNodeType;
+
     if (offset > node.getLength()) {
         return error.IndexSizeError;
     }
