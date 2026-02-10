@@ -78,7 +78,7 @@ docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly
 ### Dump a URL
 
 ```console
-./lightpanda fetch --dump https://lightpanda.io
+./lightpanda fetch --obey_robots --dump https://lightpanda.io
 ```
 ```console
 info(browser): GET https://lightpanda.io/ http.Status.ok
@@ -90,7 +90,7 @@ info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeE
 ### Start a CDP server
 
 ```console
-./lightpanda serve --host 127.0.0.1 --port 9222
+./lightpanda serve --obey_robots --host 127.0.0.1 --port 9222
 ```
 ```console
 info(websocket): starting blocking worker to listen on 127.0.0.1:9222
@@ -156,6 +156,7 @@ Here are the key features we have implemented:
 - [x] Custom HTTP headers
 - [x] Proxy support
 - [x] Network interception
+- [x] Respect `robots.txt` with option `--obey_robots`
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
