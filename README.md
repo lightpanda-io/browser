@@ -78,23 +78,49 @@ docker run -d --name lightpanda -p 9222:9222 lightpanda/browser:nightly
 ### Dump a URL
 
 ```console
-./lightpanda fetch --obey_robots --dump https://lightpanda.io
+./lightpanda fetch --obey_robots --log_format pretty  --log_level info https://demo-browser.lightpanda.io/campfire-commerce/
 ```
 ```console
-info(browser): GET https://lightpanda.io/ http.Status.ok
-info(browser): fetch script https://api.website.lightpanda.io/js/script.js: http.Status.ok
-info(browser): eval remote https://api.website.lightpanda.io/js/script.js: TypeError: Cannot read properties of undefined (reading 'pushState')
+INFO  telemetry : telemetry status . . . . . . . . . . . . .  [+0ms]
+      disabled = false
+
+INFO  page : navigate . . . . . . . . . . . . . . . . . . . . [+6ms]
+      url = https://demo-browser.lightpanda.io/campfire-commerce/
+      method = GET
+      reason = address_bar
+      body = false
+      req_id = 1
+
+INFO  browser : executing script . . . . . . . . . . . . . .  [+118ms]
+      src = https://demo-browser.lightpanda.io/campfire-commerce/script.js
+      kind = javascript
+      cacheable = true
+
+INFO  http : request complete . . . . . . . . . . . . . . . . [+140ms]
+      source = xhr
+      url = https://demo-browser.lightpanda.io/campfire-commerce/json/product.json
+      status = 200
+      len = 4770
+
+INFO  http : request complete . . . . . . . . . . . . . . . . [+141ms]
+      source = fetch
+      url = https://demo-browser.lightpanda.io/campfire-commerce/json/reviews.json
+      status = 200
+      len = 1615
 <!DOCTYPE html>
 ```
 
 ### Start a CDP server
 
 ```console
-./lightpanda serve --obey_robots --host 127.0.0.1 --port 9222
+./lightpanda serve --obey_robots --log_format pretty  --log_level info --host 127.0.0.1 --port 9222
 ```
 ```console
-info(websocket): starting blocking worker to listen on 127.0.0.1:9222
-info(server): accepting new conn...
+INFO  telemetry : telemetry status . . . . . . . . . . . . .  [+0ms]
+      disabled = false
+
+INFO  app : server running . . . . . . . . . . . . . . . . .  [+0ms]
+      address = 127.0.0.1:9222
 ```
 
 Once the CDP server started, you can run a Puppeteer script by configuring the
@@ -115,7 +141,7 @@ const context = await browser.createBrowserContext();
 const page = await context.newPage();
 
 // Dump all the links from the page.
-await page.goto('https://wikipedia.com/');
+await page.goto('https://demo-browser.lightpanda.io/amiibo/', {waitUntil: "networkidle0"});
 
 const links = await page.evaluate(() => {
   return Array.from(document.querySelectorAll('a')).map(row => {
