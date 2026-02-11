@@ -329,14 +329,15 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
         else => {},
     }
 
-    const event = try @import("../event/MouseEvent.zig").init("click", .{
+    const event = (try @import("../event/MouseEvent.zig").init("click", .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .clientX = 0,
         .clientY = 0,
-    }, page);
-    try page._event_manager.dispatch(self.asEventTarget(), event.asEvent());
+    }, page)).asEvent();
+    defer if (!event._v8_handoff) event.deinit(false);
+    try page._event_manager.dispatch(self.asEventTarget(), event);
 }
 
 fn getAttributeFunction(

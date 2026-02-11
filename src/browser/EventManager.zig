@@ -329,13 +329,36 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     // Phase 2: At target
     event._event_phase = .at_target;
     const target_et = target.asEventTarget();
-    if (self.lookup.get(.{
-        .type_string = event._type_string,
-        .event_target = @intFromPtr(target_et),
-    })) |list| {
-        try self.dispatchPhase(list, target_et, event, was_handled, null);
-        if (event._stop_propagation) {
-            return;
+
+    blk: {
+        // Get inline handler (e.g., onclick property) for this target
+        if (self.getInlineHandler(target_et, event)) |inline_handler| {
+            was_handled.* = true;
+            event._current_target = target_et;
+
+            var ls: js.Local.Scope = undefined;
+            self.page.js.localScope(&ls);
+            defer ls.deinit();
+
+            try ls.toLocal(inline_handler).callWithThis(void, target_et, .{event});
+
+            if (event._stop_propagation) {
+                return;
+            }
+
+            if (event._stop_immediate_propagation) {
+                break :blk;
+            }
+        }
+
+        if (self.lookup.get(.{
+            .type_string = event._type_string,
+            .event_target = @intFromPtr(target_et),
+        })) |list| {
+            try self.dispatchPhase(list, target_et, event, was_handled, null);
+            if (event._stop_propagation) {
+                return;
+            }
         }
     }
 
@@ -458,6 +481,20 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
 //  Non-Node dispatching (XHR, Window without propagation)
 fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool) !void {
     return self.dispatchPhase(list, current_target, event, was_handled, null);
+}
+
+fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?js.Function.Global {
+    const global_event_handlers = @import("webapi/global_event_handlers.zig");
+    const handler_type = global_event_handlers.fromEventType(event._type_string.str()) orelse return null;
+
+    // Look up the inline handler for this target
+    const Element = @import("webapi/Element.zig");
+    const element = switch (target._type) {
+        .node => |n| n.is(Element) orelse return null,
+        else => return null,
+    };
+
+    return self.page.getAttrListener(element, handler_type);
 }
 
 fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *Listener) void {
