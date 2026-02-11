@@ -97,6 +97,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
         pub const weak = true;
         pub const finalizer = bridge.finalizer(CustomEvent.deinit);
+        pub const enumerable = false;
     };
 
     pub const constructor = bridge.constructor(CustomEvent.init, .{});
