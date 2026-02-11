@@ -83,10 +83,7 @@ imported_modules: std.StringHashMapUnmanaged(ImportedModule),
 // importmap contains resolved urls.
 importmap: std.StringHashMapUnmanaged([:0]const u8),
 
-pub fn init(page: *Page) ScriptManager {
-    // page isn't fully initialized, we can setup our reference, but that's it.
-    const browser = page._session.browser;
-    const allocator = browser.allocator;
+pub fn init(allocator: Allocator, http_client: *Http.Client, page: *Page) ScriptManager {
     return .{
         .page = page,
         .async_scripts = .{},
@@ -96,7 +93,7 @@ pub fn init(page: *Page) ScriptManager {
         .is_evaluating = false,
         .allocator = allocator,
         .imported_modules = .empty,
-        .client = browser.http_client,
+        .client = http_client,
         .static_scripts_done = false,
         .buffer_pool = BufferPool.init(allocator, 5),
         .script_pool = std.heap.MemoryPool(Script).init(allocator),

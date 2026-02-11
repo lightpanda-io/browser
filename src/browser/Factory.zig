@@ -43,7 +43,9 @@ const IS_DEBUG = builtin.mode == .Debug;
 const assert = std.debug.assert;
 
 const Factory = @This();
+
 _page: *Page,
+_arena: Allocator,
 _slab: SlabAllocator,
 
 fn PrototypeChain(comptime types: []const type) type {
@@ -149,10 +151,11 @@ fn AutoPrototypeChain(comptime types: []const type) type {
     };
 }
 
-pub fn init(page: *Page) Factory {
+pub fn init(arena: Allocator, page: *Page) Factory {
     return .{
         ._page = page,
-        ._slab = SlabAllocator.init(page.arena, 128),
+        ._arena = arena,
+        ._slab = SlabAllocator.init(arena, 128),
     };
 }
 
@@ -329,7 +332,7 @@ pub fn svgElement(self: *Factory, tag_name: []const u8, child: anytype) !*@TypeO
     chain.setMiddle(2, Element.Type);
 
     // will never allocate, can't fail
-    const tag_name_str = String.init(self._page.arena, tag_name, .{}) catch unreachable;
+    const tag_name_str = String.init(self._arena, tag_name, .{}) catch unreachable;
 
     // Manually set Element.Svg with the tag_name
     chain.set(3, .{

@@ -83,7 +83,7 @@ _session: *Session,
 
 _event_manager: EventManager,
 
-_parse_mode: enum { document, fragment, document_write },
+_parse_mode: enum { document, fragment, document_write } = .document,
 
 // See Attribute.List for what this is. TL;DR: proper DOM Attribute Nodes are
 // fat yet rarely needed. We only create them on-demand, but still need proper
@@ -91,21 +91,21 @@ _parse_mode: enum { document, fragment, document_write },
 // a look here. We don't store this in the Element or Attribute.List.Entry
 // because that would require additional space per element / Attribute.List.Entry
 // even thoug we'll create very few (if any) actual *Attributes.
-_attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute),
+_attribute_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute) = .empty,
 
 // Same as _atlribute_lookup, but instead of individual attributes, this is for
 // the return of elements.attributes.
-_attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap),
+_attribute_named_node_map_lookup: std.AutoHashMapUnmanaged(usize, *Element.Attribute.NamedNodeMap) = .empty,
 
 // Lazily-created style, classList, and dataset objects. Only stored for elements
 // that actually access these features via JavaScript, saving 24 bytes per element.
-_element_styles: Element.StyleLookup = .{},
-_element_datasets: Element.DatasetLookup = .{},
-_element_class_lists: Element.ClassListLookup = .{},
-_element_rel_lists: Element.RelListLookup = .{},
-_element_shadow_roots: Element.ShadowRootLookup = .{},
-_node_owner_documents: Node.OwnerDocumentLookup = .{},
-_element_assigned_slots: Element.AssignedSlotLookup = .{},
+_element_styles: Element.StyleLookup = .empty,
+_element_datasets: Element.DatasetLookup = .empty,
+_element_class_lists: Element.ClassListLookup = .empty,
+_element_rel_lists: Element.RelListLookup = .empty,
+_element_shadow_roots: Element.ShadowRootLookup = .empty,
+_node_owner_documents: Node.OwnerDocumentLookup = .empty,
+_element_assigned_slots: Element.AssignedSlotLookup = .empty,
 
 /// Lazily-created inline event listeners (or listeners provided as attributes).
 /// Avoids bloating all elements with extra function fields for rare usage.
@@ -125,7 +125,7 @@ _element_assigned_slots: Element.AssignedSlotLookup = .{},
 /// ```js
 /// img.setAttribute("onload", "(() => { ... })()");
 /// ```
-_element_attr_listeners: GlobalEventHandlersLookup = .{},
+_element_attr_listeners: GlobalEventHandlersLookup = .empty,
 
 /// `load` events that'll be fired before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
@@ -167,9 +167,9 @@ _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
 // for heap allocations and managing WebAPI objects
 _factory: Factory,
 
-_load_state: LoadState,
+_load_state: LoadState = .waiting,
 
-_parse_state: ParseState,
+_parse_state: ParseState = .pre,
 
 _notified_network_idle: IdleNotification = .init,
 _notified_network_almost_idle: IdleNotification = .init,
@@ -179,19 +179,19 @@ _notified_network_almost_idle: IdleNotification = .init,
 _queued_navigation: ?QueuedNavigation = null,
 
 // The URL of the current page
-url: [:0]const u8,
+url: [:0]const u8 = "about:blank",
 
 // The base url specifies the base URL used to resolve the relative urls.
 // It is set by a <base> tag.
 // If null the url must be used.
-base_url: ?[:0]const u8,
+base_url: ?[:0]const u8 = null,
 
 // referer header cache.
-referer_header: ?[:0]const u8,
+referer_header: ?[:0]const u8 = null,
 
 // Arbitrary buffer. Need to temporarily lowercase a value? Use this. No lifetime
 // guarantee - it's valid until someone else uses it.
-buf: [BUF_SIZE]u8,
+buf: [BUF_SIZE]u8 = undefined,
 
 // access to the JavaScript engine
 js: *JS.Context,
@@ -209,13 +209,13 @@ arena_pool: *ArenaPool,
 _arena_pool_leak_track: (if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, struct {
     owner: []const u8,
     count: usize,
-}) else void),
+}) else void) = if (IS_DEBUG) .empty else {},
 
 window: *Window,
 document: *Document,
 
 // DOM version used to invalidate cached state of "live" collections
-version: usize,
+version: usize = 0,
 
 _req_id: ?usize = null,
 _navigated_options: ?NavigatedOpts = null,
@@ -224,19 +224,59 @@ pub fn init(self: *Page, session: *Session) !void {
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.init", .{});
     }
-
     const browser = session.browser;
-    self._session = session;
+    const page_arena = browser.page_arena.allocator();
+    errdefer _ = browser.page_arena.reset(.free_all);
 
-    self.arena_pool = browser.arena_pool;
-    self.arena = browser.page_arena.allocator();
-    self.call_arena = browser.call_arena.allocator();
+    var factory = Factory.init(page_arena, self);
 
-    if (comptime IS_DEBUG) {
-        self._arena_pool_leak_track = .empty;
+    const document = (try factory.document(Node.Document.HTMLDocument{
+        ._proto = undefined,
+    })).asDocument();
+
+    self.* = .{
+        .js = undefined,
+        .arena = page_arena,
+        .document = document,
+        .window = undefined,
+        .arena_pool = browser.arena_pool,
+        .call_arena = browser.call_arena.allocator(),
+        ._session = session,
+        ._factory = factory,
+        ._script_manager = undefined,
+        ._event_manager = EventManager.init(page_arena, self),
+    };
+
+    self.window = try factory.eventTarget(Window{
+        ._proto = undefined,
+        ._document = self.document,
+        ._location = &default_location,
+        ._performance = Performance.init(),
+        ._screen = try factory.eventTarget(Screen{
+            ._proto = undefined,
+            ._orientation = null,
+        }),
+        ._visual_viewport = try factory.eventTarget(VisualViewport{
+            ._proto = undefined,
+        }),
+    });
+
+    self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
+    errdefer self._script_manager.deinit();
+
+    self.js = try browser.env.createContext(self, true);
+    errdefer self.js.deinit();
+
+    if (comptime builtin.is_test == false) {
+        // HTML test runner manually calls these as necessary
+        try self.js.scheduler.add(session.browser, struct {
+            fn runMessageLoop(ctx: *anyopaque) !?u32 {
+                const b: *@import("Browser.zig") = @ptrCast(@alignCast(ctx));
+                b.runMessageLoop();
+                return 250;
+            }
+        }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
     }
-
-    try self.reset(true);
 }
 
 pub fn deinit(self: *Page) void {
@@ -267,128 +307,8 @@ pub fn deinit(self: *Page) void {
     }
 }
 
-fn reset(self: *Page, comptime initializing: bool) !void {
-    const browser = self._session.browser;
-
-    if (comptime initializing == false) {
-        browser.env.destroyContext(self.js);
-
-        // We force a garbage collection between page navigations to keep v8
-        // memory usage as low as possible.
-        browser.env.memoryPressureNotification(.moderate);
-        self._script_manager.shutdown = true;
-        browser.http_client.abort();
-        self._script_manager.deinit();
-
-        // destroying the context, and aborting the http_client can both cause
-        // resources to be freed. We need to check for a leak after we've finished
-        // all of our cleanup.
-        if (comptime IS_DEBUG) {
-            var it = self._arena_pool_leak_track.valueIterator();
-            while (it.next()) |value_ptr| {
-                if (value_ptr.count > 0) {
-                    log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner });
-                }
-            }
-            self._arena_pool_leak_track = .empty;
-        }
-
-        _ = browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
-    }
-
-    self._factory = Factory.init(self);
-
-    self.version = 0;
-    self.url = "about:blank";
-    self.base_url = null;
-    self.referer_header = null;
-
-    self.document = (try self._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
-
-    const storage_bucket = try self._factory.create(storage.Bucket{});
-    const screen = try Screen.init(self);
-    const visual_viewport = try VisualViewport.init(self);
-    self.window = try self._factory.eventTarget(Window{
-        ._document = self.document,
-        ._storage_bucket = storage_bucket,
-        ._performance = Performance.init(),
-        ._proto = undefined,
-        ._location = &default_location,
-        ._screen = screen,
-        ._visual_viewport = visual_viewport,
-    });
-    self.window._document = self.document;
-    self.window._location = &default_location;
-
-    self._parse_state = .pre;
-    self._load_state = .waiting;
-    self._queued_navigation = null;
-    self._parse_mode = .document;
-    self._attribute_lookup = .empty;
-    self._attribute_named_node_map_lookup = .empty;
-    self._event_manager = EventManager.init(self);
-
-    self._script_manager = ScriptManager.init(self);
-    errdefer self._script_manager.deinit();
-
-    self.js = try browser.env.createContext(self, true);
-    errdefer self.js.deinit();
-
-    self._element_styles = .{};
-    self._element_datasets = .{};
-    self._element_class_lists = .{};
-    self._element_rel_lists = .{};
-    self._element_shadow_roots = .{};
-    self._node_owner_documents = .{};
-    self._element_assigned_slots = .{};
-
-    self._element_attr_listeners = .{};
-
-    self._to_load = .{};
-
-    self._notified_network_idle = .init;
-    self._notified_network_almost_idle = .init;
-
-    self._performance_observers = .{};
-    self._mutation_observers = .{};
-    self._mutation_delivery_scheduled = false;
-    self._mutation_delivery_depth = 0;
-    self._intersection_observers = .{};
-    self._intersection_check_scheduled = false;
-    self._intersection_delivery_scheduled = false;
-    self._slots_pending_slotchange = .{};
-    self._slotchange_delivery_scheduled = false;
-    self._customized_builtin_definitions = .{};
-    self._customized_builtin_connected_callback_invoked = .{};
-    self._customized_builtin_disconnected_callback_invoked = .{};
-    self._undefined_custom_elements = .{};
-
-    if (comptime IS_DEBUG) {
-        self._arena_pool_leak_track = .{};
-    }
-
-    try self.registerBackgroundTasks();
-}
-
 pub fn base(self: *const Page) [:0]const u8 {
     return self.base_url orelse self.url;
-}
-
-fn registerBackgroundTasks(self: *Page) !void {
-    if (comptime builtin.is_test) {
-        // HTML test runner manually calls these as necessary
-        return;
-    }
-
-    const Browser = @import("Browser.zig");
-
-    try self.js.scheduler.add(self._session.browser, struct {
-        fn runMessageLoop(ctx: *anyopaque) !?u32 {
-            const b: *Browser = @ptrCast(@alignCast(ctx));
-            b.runMessageLoop();
-            return 250;
-        }
-    }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
 }
 
 pub fn getTitle(self: *Page) !?[]const u8 {
@@ -461,12 +381,8 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
 }
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
+    lp.assert(self._load_state == .waiting, "page.renavigate", .{});
     const session = self._session;
-    if (self._parse_state != .pre or self._load_state != .waiting) {
-        // it's possible for navigate to be called multiple times on the
-        // same page (via CDP). We want to reset the page between each call.
-        try self.reset(false);
-    }
     self._load_state = .parsing;
 
     const req_id = self._session.browser.http_client.nextReqId();

@@ -60,7 +60,7 @@ _navigator: Navigator = .init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
-_storage_bucket: *storage.Bucket,
+_storage_bucket: storage.Bucket = .{},
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
@@ -128,11 +128,11 @@ pub fn getPerformance(self: *Window) *Performance {
     return &self._performance;
 }
 
-pub fn getLocalStorage(self: *const Window) *storage.Lookup {
+pub fn getLocalStorage(self: *Window) *storage.Lookup {
     return &self._storage_bucket.local;
 }
 
-pub fn getSessionStorage(self: *const Window) *storage.Lookup {
+pub fn getSessionStorage(self: *Window) *storage.Lookup {
     return &self._storage_bucket.session;
 }
 
