@@ -34,6 +34,7 @@ pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u
 pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page: *Page) !*Document {
     const document = (try page._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
     document._ready_state = .complete;
+    document._url = "about:blank";
 
     {
         const doctype = try page._factory.node(DocumentType{
@@ -67,6 +68,7 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page:
 pub fn createDocument(_: *const DOMImplementation, namespace_: ?[]const u8, qualified_name: ?[]const u8, doctype: ?*DocumentType, page: *Page) !*Document {
     // Create XML Document
     const document = (try page._factory.document(Node.Document.XMLDocument{ ._proto = undefined })).asDocument();
+    document._url = "about:blank";
 
     // Append doctype if provided
     if (doctype) |dt| {

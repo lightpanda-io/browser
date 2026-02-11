@@ -255,7 +255,7 @@ pub fn childNodes(self: *const Node, page: *Page) !*collections.ChildNodes {
 
 pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!void {
     switch (self._type) {
-        .element => {
+        .element, .document_fragment => {
             var it = self.childrenIterator();
             while (it.next()) |child| {
                 // ignore comments and processing instructions.
@@ -268,7 +268,6 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
         .cdata => |c| try writer.writeAll(c.getData()),
         .document => {},
         .document_type => {},
-        .document_fragment => {},
         .attribute => |attr| try writer.writeAll(attr._value.str()),
     }
 }
@@ -912,16 +911,15 @@ pub const JsApi = struct {
     fn _textContext(self: *Node, page: *const Page) !?[]const u8 {
         // cdata and attributes can return value directly, avoiding the copy
         switch (self._type) {
-            .element => |el| {
+            .element, .document_fragment => {
                 var buf = std.Io.Writer.Allocating.init(page.call_arena);
-                try el.asNode().getTextContent(&buf.writer);
+                try self.getTextContent(&buf.writer);
                 return buf.written();
             },
             .cdata => |cdata| return cdata.getData(),
             .attribute => |attr| return attr._value.str(),
             .document => return null,
             .document_type => return null,
-            .document_fragment => return null,
         }
     }
 
