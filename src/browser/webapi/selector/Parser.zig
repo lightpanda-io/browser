@@ -49,29 +49,71 @@ const ParseError = error{
     StringTooLarge,
 };
 
+// CSS Syntax preprocessing: normalize line endings (CRLF → LF, CR → LF)
+// https://drafts.csswg.org/css-syntax/#input-preprocessing
+fn preprocessInput(arena: Allocator, input: []const u8) ![]const u8 {
+    var i = std.mem.indexOfScalar(u8, input, '\r') orelse return input;
+
+    var result = try std.ArrayList(u8).initCapacity(arena, input.len);
+    result.appendSliceAssumeCapacity(input[0..i]);
+
+    while (i < input.len) {
+        const c = input[i];
+        if (c == '\r') {
+            result.appendAssumeCapacity('\n');
+            i += 1;
+            if (i < input.len and input[i] == '\n') {
+                i += 1;
+            }
+        } else {
+            result.appendAssumeCapacity(c);
+            i += 1;
+        }
+    }
+
+    return result.items;
+}
+
 pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]const Selector.Selector {
+    // Preprocess input to normalize line endings
+    const preprocessed = try preprocessInput(arena, input);
+
     var selectors: std.ArrayList(Selector.Selector) = .empty;
 
-    var remaining = input;
+    var remaining = preprocessed;
     while (true) {
         const trimmed = std.mem.trimLeft(u8, remaining, &std.ascii.whitespace);
         if (trimmed.len == 0) break;
 
         var comma_pos: usize = trimmed.len;
         var depth: usize = 0;
-        for (trimmed, 0..) |c, i| {
+        var i: usize = 0;
+        while (i < trimmed.len) {
+            const c = trimmed[i];
             switch (c) {
-                '(' => depth += 1,
+                '\\' => {
+                    // Skip escape sequence (backslash + next character)
+                    i += 1;
+                    if (i < trimmed.len) i += 1;
+                },
+                '(' => {
+                    depth += 1;
+                    i += 1;
+                },
                 ')' => {
                     if (depth > 0) depth -= 1;
+                    i += 1;
                 },
                 ',' => {
                     if (depth == 0) {
                         comma_pos = i;
                         break;
                     }
+                    i += 1;
                 },
-                else => {},
+                else => {
+                    i += 1;
+                },
             }
         }
 

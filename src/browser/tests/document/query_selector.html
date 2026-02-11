@@ -294,3 +294,12 @@
   testing.expectEqual('Non-ASCII class 1', document.querySelector('div.café').textContent);
   testing.expectEqual('Non-ASCII ID 1', document.querySelector('span#niño').textContent);
 </script>
+
+<span id=".,:!">Punctuation test</span>
+
+<script id=escapedPunctuation>
+{
+  // Test escaped punctuation in ID selectors
+  testing.expectEqual('Punctuation test', document.querySelector('#\\.\\,\\:\\!').textContent);
+}
+</script>
