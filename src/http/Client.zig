@@ -375,19 +375,36 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
 
     var allowed = true;
 
-    if (ctx.status >= 200 and ctx.status < 400 and ctx.buffer.items.len > 0) {
-        const robots = try ctx.client.robot_store.robotsFromBytes(
-            ctx.client.config.http_headers.user_agent,
-            ctx.buffer.items,
-        );
+    switch (ctx.status) {
+        200 => {
+            if (ctx.buffer.items.len > 0) {
+                const robots: ?Robots = ctx.client.robot_store.robotsFromBytes(
+                    ctx.client.config.http_headers.user_agent,
+                    ctx.buffer.items,
+                ) catch blk: {
+                    log.warn(.browser, "failed to parse robots", .{ .robots_url = ctx.robots_url });
+                    // If we fail to parse, we just insert it as absent and ignore.
+                    try ctx.client.robot_store.putAbsent(ctx.robots_url);
+                    break :blk null;
+                };
 
-        try ctx.client.robot_store.put(ctx.robots_url, robots);
-
-        const path = URL.getPathname(ctx.req.url);
-        allowed = robots.isAllowed(path);
-    } else if (ctx.status == 404) {
-        log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
-        try ctx.client.robot_store.putAbsent(ctx.robots_url);
+                if (robots) |r| {
+                    try ctx.client.robot_store.put(ctx.robots_url, r);
+                    const path = URL.getPathname(ctx.req.url);
+                    allowed = r.isAllowed(path);
+                }
+            }
+        },
+        404 => {
+            log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
+            // If we get a 404, we just insert it as absent.
+            try ctx.client.robot_store.putAbsent(ctx.robots_url);
+        },
+        else => {
+            log.debug(.http, "unexpected status on robots", .{ .url = ctx.robots_url, .status = ctx.status });
+            // If we get an unexpected status, we just insert as absent.
+            try ctx.client.robot_store.putAbsent(ctx.robots_url);
+        },
     }
 
     var queued = ctx.client.pending_robots_queue.fetchRemove(
