@@ -23,13 +23,47 @@ const js = @import("../js/js.zig");
 
 const EventTarget = @import("EventTarget.zig");
 
-/// Better to discriminate it since not directly a pointer int.
-///
-/// See `calculateKey` to obtain one.
-const Key = u64;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
-/// Use `calculateKey` to create a key.
-pub const Lookup = std.AutoHashMapUnmanaged(Key, js.Function.Global);
+const Key = struct {
+    target: *EventTarget,
+    handler: Handler,
+
+    /// Fuses `target` pointer and `handler` enum; used at hashing.
+    /// NEVER use a fusion to retrieve a pointer back. Portability is not guaranteed.
+    /// See `Context.hash`.
+    fn fuse(self: *const Key) u64 {
+        // Check if we have 3 bits available from alignment of 8.
+        if (comptime IS_DEBUG) {
+            lp.assert(@alignOf(EventTarget) == 8, "Key.fuse: incorrect alignment", .{
+                .event_target_alignment = @alignOf(EventTarget),
+            });
+        }
+
+        const ptr = @intFromPtr(self.target) >> 3;
+        if (comptime IS_DEBUG) {
+            lp.assert(ptr < (1 << 57), "Key.fuse: pointer overflow", .{ .ptr = ptr });
+        }
+        return ptr | (@as(u64, @intFromEnum(self.handler)) << 57);
+    }
+};
+
+const Context = struct {
+    pub fn hash(_: @This(), key: Key) u64 {
+        return std.hash.int(key.fuse());
+    }
+
+    pub fn eql(_: @This(), a: Key, b: Key) bool {
+        return a.fuse() == b.fuse();
+    }
+};
+
+pub const Lookup = std.HashMapUnmanaged(
+    Key,
+    js.Function.Global,
+    Context,
+    std.hash_map.default_max_load_percentage,
+);
 
 /// Enum of known event listeners; increasing the size of it (u7)
 /// can cause `Key` to behave incorrectly.
@@ -130,16 +164,3 @@ pub const Handler = enum(u7) {
     onwaiting,
     onwheel,
 };
-
-/// Calculates a lookup key to use with lookup for event target.
-/// NEVER use generated key to retrieve a pointer back. Portability is not guaranteed.
-pub fn calculateKey(event_target: *EventTarget, handler_type: Handler) Key {
-    // Check if we have 3 bits available from alignment of 8.
-    lp.assert(@alignOf(EventTarget) == 8, "calculateKey: incorrect alignment", .{
-        .event_target_alignment = @alignOf(EventTarget),
-    });
-
-    const ptr = @intFromPtr(event_target) >> 3;
-    lp.assert(ptr < (1 << 57), "calculateKey: pointer overflow", .{ .ptr = ptr });
-    return ptr | (@as(Key, @intFromEnum(handler_type)) << 57);
-}
