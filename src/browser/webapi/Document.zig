@@ -44,6 +44,7 @@ const Document = @This();
 _type: Type,
 _proto: *Node,
 _location: ?*Location = null,
+_url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 _ready_state: ReadyState = .loading,
 _current_script: ?*Element.Html.Script = null,
 _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
@@ -105,8 +106,8 @@ pub fn asEventTarget(self: *Document) *@import("EventTarget.zig") {
     return self._proto.asEventTarget();
 }
 
-pub fn getURL(_: *const Document, page: *const Page) [:0]const u8 {
-    return page.url;
+pub fn getURL(self: *const Document, page: *const Page) [:0]const u8 {
+    return self._url orelse page.url;
 }
 
 pub fn getContentType(self: *const Document) []const u8 {
@@ -131,8 +132,8 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
         if (self._type == .html) {
             break :blk .{ .html, std.ascii.lowerString(&page.buf, name) };
         }
-        // Generic and XML documents create XML elements
-        break :blk .{ .xml, name };
+        // Generic and XML documents create elements with null namespace
+        break :blk .{ .null, name };
     };
     // HTML documents are case-insensitive - lowercase the tag name
 
