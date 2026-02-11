@@ -710,18 +710,6 @@ fn _documentIsComplete(self: *Page) !void {
     for (self._to_load.items) |element| {
         const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
         defer if (!event._v8_handoff) event.deinit(false);
-
-        // Dispatch inline event.
-        blk: {
-            const html_element = element.is(HtmlElement) orelse break :blk;
-
-            const listener = (try html_element.getOnLoad(self)) orelse break :blk;
-            ls.toLocal(listener).call(void, .{}) catch |err| {
-                log.warn(.event, "inline load event", .{ .element = element, .err = err });
-            };
-        }
-
-        // Dispatch events registered to event manager.
         try self._event_manager.dispatch(element.asEventTarget(), event);
     }
 

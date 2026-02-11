@@ -164,3 +164,24 @@ pub const Handler = enum(u7) {
     onwaiting,
     onwheel,
 };
+
+const typeToHandler = std.StaticStringMap(Handler).initComptime(blk: {
+    const fields = std.meta.fields(Handler);
+    var entries: [fields.len]struct { []const u8, Handler } = undefined;
+    for (fields, 0..) |field, i| {
+        entries[i] = .{ field.name[2..], @enumFromInt(field.value) };
+    }
+    break :blk entries;
+});
+
+pub fn fromEventType(typ: []const u8) ?Handler {
+    return typeToHandler.get(typ);
+}
+
+const testing = @import("../../testing.zig");
+test "GlobalEventHandlers: fromEventType" {
+    try testing.expectEqual(.onabort, fromEventType("abort"));
+    try testing.expectEqual(.onselect, fromEventType("select"));
+    try testing.expectEqual(null, fromEventType(""));
+    try testing.expectEqual(null, fromEventType("unknown"));
+}

@@ -635,3 +635,130 @@
   // https://github.com/lightpanda-io/browser/pull/1316
   testing.expectError('TypeError', () => MessageEvent(''));
 </script>
+
+<div id=inline_parent><div id=inline_child></div></div>
+<script id=inlineHandlerReceivesEvent>
+  // Test that inline onclick handler receives the event object
+  {
+    const inline_child = $('#inline_child');
+    let receivedType = null;
+    let receivedTarget = null;
+    let receivedCurrentTarget = null;
+
+    inline_child.onclick = function(e) {
+      // Capture values DURING handler execution
+      receivedType = e.type;
+      receivedTarget = e.target;
+      receivedCurrentTarget = e.currentTarget;
+    };
+
+    inline_child.click();
+
+    testing.expectEqual('click', receivedType);
+    testing.expectEqual(inline_child, receivedTarget);
+    testing.expectEqual(inline_child, receivedCurrentTarget);
+  }
+</script>
+
+<div id=inline_order_parent><div id=inline_order_child></div></div>
+<script id=inlineHandlerOrder>
+  // Test that inline handler executes in proper order with addEventListener
+  {
+    const inline_order_child = $('#inline_order_child');
+    const inline_order_parent = $('#inline_order_parent');
+    const order = [];
+
+    // Capture listener on parent
+    inline_order_parent.addEventListener('click', () => order.push('parent-capture'), true);
+
+    // Inline handler on child (should execute at target phase)
+    inline_order_child.onclick = () => order.push('child-onclick');
+
+    // addEventListener on child (should execute at target phase, after onclick)
+    inline_order_child.addEventListener('click', () => order.push('child-listener'));
+
+    // Bubble listener on parent
+    inline_order_parent.addEventListener('click', () => order.push('parent-bubble'));
+
+    inline_order_child.click();
+
+    // Expected order: capture, then onclick, then addEventListener, then bubble
+    testing.expectEqual('parent-capture', order[0]);
+    testing.expectEqual('child-onclick', order[1]);
+    testing.expectEqual('child-listener', order[2]);
+    testing.expectEqual('parent-bubble', order[3]);
+    testing.expectEqual(4, order.length);
+  }
+</script>
+
+<div id=inline_prevent><div id=inline_prevent_child></div></div>
+<script id=inlineHandlerPreventDefault>
+  // Test that inline handler can preventDefault and it affects addEventListener listeners
+  {
+    const inline_prevent_child = $('#inline_prevent_child');
+    let preventDefaultCalled = false;
+    let listenerSawPrevented = false;
+
+    inline_prevent_child.onclick = function(e) {
+      e.preventDefault();
+      preventDefaultCalled = true;
+    };
+
+    inline_prevent_child.addEventListener('click', (e) => {
+      listenerSawPrevented = e.defaultPrevented;
+    });
+
+    const result = inline_prevent_child.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true
+    }));
+
+    testing.expectEqual(true, preventDefaultCalled);
+    testing.expectEqual(true, listenerSawPrevented);
+    testing.expectEqual(false, result); // dispatchEvent returns false when prevented
+  }
+</script>
+
+<div id=inline_stop_parent><div id=inline_stop_child></div></div>
+<script id=inlineHandlerStopPropagation>
+  // Test that inline handler can stopPropagation
+  {
+    const inline_stop_child = $('#inline_stop_child');
+    const inline_stop_parent = $('#inline_stop_parent');
+    let childCalled = false;
+    let parentCalled = false;
+
+    inline_stop_child.onclick = function(e) {
+      childCalled = true;
+      e.stopPropagation();
+    };
+
+    inline_stop_parent.addEventListener('click', () => {
+      parentCalled = true;
+    });
+
+    inline_stop_child.click();
+
+    testing.expectEqual(true, childCalled);
+    testing.expectEqual(false, parentCalled); // Should not bubble to parent
+  }
+</script>
+
+<div id=inline_replace_test></div>
+<script id=inlineHandlerReplacement>
+  // Test that setting onclick property replaces previous handler
+  {
+    const inline_replace_test = $('#inline_replace_test');
+    let calls = [];
+
+    inline_replace_test.onclick = () => calls.push('first');
+    inline_replace_test.click();
+
+    inline_replace_test.onclick = () => calls.push('second');
+    inline_replace_test.click();
+
+    testing.expectEqual('first', calls[0]);
+    testing.expectEqual('second', calls[1]);
+    testing.expectEqual(2, calls.length);
+  }
+</script>
