@@ -270,3 +270,27 @@
   testing.expectEqual('rect', document.querySelector('svg g rect').tagName);
 }
 </script>
+
+<script id=special>
+  testing.expectEqual(null, document.querySelector('\\'));
+
+  testing.expectEqual(null, document.querySelector('div\\'));
+  testing.expectEqual(null, document.querySelector('.test-class\\'));
+  testing.expectEqual(null, document.querySelector('#byId\\'));
+</script>
+
+<div class="café">Non-ASCII class 1</div>
+<div class="日本語">Non-ASCII class 2</div>
+<span id="niño">Non-ASCII ID 1</span>
+<p id="🎨">Non-ASCII ID 2</p>
+
+<script id=nonAsciiSelectors>
+  testing.expectEqual('Non-ASCII class 1', document.querySelector('.café').textContent);
+  testing.expectEqual('Non-ASCII class 2', document.querySelector('.日本語').textContent);
+
+  testing.expectEqual('Non-ASCII ID 1', document.querySelector('#niño').textContent);
+  testing.expectEqual('Non-ASCII ID 2', document.querySelector('#🎨').textContent);
+
+  testing.expectEqual('Non-ASCII class 1', document.querySelector('div.café').textContent);
+  testing.expectEqual('Non-ASCII ID 1', document.querySelector('span#niño').textContent);
+</script>

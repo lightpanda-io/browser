@@ -237,8 +237,9 @@ fn parsePart(self: *Parser, arena: Allocator, page: *Page) !Part {
         },
         '[' => .{ .attribute = try self.attribute(arena, page) },
         ':' => .{ .pseudo_class = try self.pseudoClass(arena, page) },
-        'a'...'z', 'A'...'Z', '_' => blk: {
-            const tag_name = try self.tag();
+        'a'...'z', 'A'...'Z', '_', '\\', 0x80...0xFF => blk: {
+            // Use parseIdentifier for full escape support
+            const tag_name = try self.parseIdentifier(arena, error.InvalidTagSelector);
             if (tag_name.len > 256) {
                 return error.InvalidTagSelector;
             }
