@@ -183,6 +183,44 @@
 }
 </script>
 
+<script id="selectionchange_event">
+  {
+    const input = document.createElement('input');
+    input.value = 'Hello World';
+    document.body.appendChild(input);
+
+    let eventCount = 0;
+    let lastEvent = null;
+    
+    input.addEventListener('selectionchange', (e) => {
+      eventCount++;
+      lastEvent = e;
+    });
+    
+    testing.expectEqual(0, eventCount);
+    
+    input.setSelectionRange(0, 5);
+    input.select();
+    input.selectionStart = 3;
+    input.selectionEnd = 8;
+
+    let bubbledToBody = false;
+    document.body.addEventListener('selectionchange', () => {
+      bubbledToBody = true;
+    });
+    input.setSelectionRange(1, 4);
+
+    testing.eventually(() => {
+      testing.expectEqual(5, eventCount);
+      testing.expectEqual('selectionchange', lastEvent.type);
+      testing.expectEqual(input, lastEvent.target);
+      testing.expectEqual(true, lastEvent.bubbles);
+      testing.expectEqual(false, lastEvent.cancelable);
+      testing.expectEqual(true, bubbledToBody);
+    });
+  }
+</script>
+
 <!-- <script id="defaultChecked">
   testing.expectEqual(true, $('#check1').defaultChecked)
   testing.expectEqual(false, $('#check2').defaultChecked)

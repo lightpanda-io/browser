@@ -157,7 +157,18 @@ pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callba
     }
 }
 
-pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) !void {
+// Dispatching can be recursive from the compiler's point of view, so we need to
+// give it an explicit error set so that other parts of the code can use and
+// inferred error.
+const DispatchError = error{
+    OutOfMemory,
+    StringTooLarge,
+    JSExecCallback,
+    CompilationError,
+    ExecutionError,
+    JsException,
+};
+pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!void {
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }

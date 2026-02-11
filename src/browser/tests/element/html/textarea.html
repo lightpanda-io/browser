@@ -229,3 +229,41 @@
     testing.expectEqual('some content', clone.value)
   }
 </script>
+
+<script id="selectionchange_event">
+  {
+    const textarea = document.createElement('textarea');
+    textarea.value = 'Hello World';
+    document.body.appendChild(textarea);
+    
+    let eventCount = 0;
+    let lastEvent = null;
+    
+    textarea.addEventListener('selectionchange', (e) => {
+      eventCount++;
+      lastEvent = e;
+    });
+    
+    testing.expectEqual(0, eventCount);
+    
+    textarea.setSelectionRange(0, 5);
+    textarea.select();
+    textarea.selectionStart = 3;
+    textarea.selectionEnd = 8;
+    
+    let bubbledToBody = false;
+    document.body.addEventListener('selectionchange', () => {
+      bubbledToBody = true;
+    });
+    textarea.setSelectionRange(1, 4);
+    
+    testing.eventually(() => {
+      testing.expectEqual(5, eventCount);
+      testing.expectEqual('selectionchange', lastEvent.type);
+      testing.expectEqual(textarea, lastEvent.target);
+      testing.expectEqual(true, lastEvent.bubbles);
+      testing.expectEqual(false, lastEvent.cancelable);
+      testing.expectEqual(true, bubbledToBody);
+    });
+  }
+</script>

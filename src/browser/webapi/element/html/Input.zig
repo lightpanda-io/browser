@@ -27,6 +27,7 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 const Form = @import("Form.zig");
 const Selection = @import("../../Selection.zig");
+const Event = @import("../../Event.zig");
 
 const Input = @This();
 
@@ -82,6 +83,26 @@ _indeterminate: bool = false,
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
 _selection_direction: Selection.SelectionDirection = .none,
+
+_on_selectionchange: ?js.Function.Global = null,
+
+pub fn getOnSelectionChange(self: *Input) ?js.Function.Global {
+    return self._on_selectionchange;
+}
+
+pub fn setOnSelectionChange(self: *Input, listener: ?js.Function) !void {
+    if (listener) |listen| {
+        self._on_selectionchange = try listen.persistWithThis(self);
+    } else {
+        self._on_selectionchange = null;
+    }
+}
+
+fn dispatchSelectionChangeEvent(self: *Input, page: *Page) !void {
+    const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
+    defer if (!event._v8_handoff) event.deinit(false);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+}
 
 pub fn asElement(self: *Input) *Element {
     return self._proto._proto;
@@ -266,9 +287,9 @@ pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
     }
 }
 
-pub fn select(self: *Input) !void {
+pub fn select(self: *Input, page: *Page) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
-    try self.setSelectionRange(0, len, null);
+    try self.setSelectionRange(0, len, null, page);
 }
 
 fn selectionAvailable(self: *const Input) bool {
@@ -300,6 +321,7 @@ pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
             self._selection_start = @intCast(new_value.len);
             self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
+            try self.dispatchSelectionChangeEvent(page);
         },
         .partial => |range| {
             // if the input is partially selected, replace the selected content.
@@ -318,6 +340,7 @@ pub fn innerInsert(self: *Input, str: []const u8, page: *Page) !void {
             self._selection_start = @intCast(new_pos);
             self._selection_end = @intCast(new_pos);
             self._selection_direction = .none;
+            try self.dispatchSelectionChangeEvent(page);
         },
         .none => {
             // if the input is not selected, just insert at cursor.
@@ -337,9 +360,10 @@ pub fn getSelectionStart(self: *const Input) !?u32 {
     return self._selection_start;
 }
 
-pub fn setSelectionStart(self: *Input, value: u32) !void {
+pub fn setSelectionStart(self: *Input, value: u32, page: *Page) !void {
     if (!self.selectionAvailable()) return error.InvalidStateError;
     self._selection_start = value;
+    try self.dispatchSelectionChangeEvent(page);
 }
 
 pub fn getSelectionEnd(self: *const Input) !?u32 {
@@ -347,12 +371,19 @@ pub fn getSelectionEnd(self: *const Input) !?u32 {
     return self._selection_end;
 }
 
-pub fn setSelectionEnd(self: *Input, value: u32) !void {
+pub fn setSelectionEnd(self: *Input, value: u32, page: *Page) !void {
     if (!self.selectionAvailable()) return error.InvalidStateError;
     self._selection_end = value;
+    try self.dispatchSelectionChangeEvent(page);
 }
 
-pub fn setSelectionRange(self: *Input, selection_start: u32, selection_end: u32, selection_dir: ?[]const u8) !void {
+pub fn setSelectionRange(
+    self: *Input,
+    selection_start: u32,
+    selection_end: u32,
+    selection_dir: ?[]const u8,
+    page: *Page,
+) !void {
     if (!self.selectionAvailable()) return error.InvalidStateError;
 
     const direction = blk: {
@@ -380,6 +411,8 @@ pub fn setSelectionRange(self: *Input, selection_start: u32, selection_end: u32,
     self._selection_direction = direction;
     self._selection_start = start;
     self._selection_end = end;
+
+    try self.dispatchSelectionChangeEvent(page);
 }
 
 pub fn getForm(self: *Input, page: *Page) ?*Form {
@@ -505,6 +538,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{});
     pub const value = bridge.accessor(Input.getValue, Input.setValue, .{ .dom_exception = true });
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{});

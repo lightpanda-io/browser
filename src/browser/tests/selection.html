@@ -541,3 +541,55 @@
     testing.expectEqual(3, sel.focusOffset);
   }
 </script>
+
+<script id=selectionChangeEvent>
+  {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+
+    let eventCount = 0;
+    let lastEvent = null;
+
+    document.addEventListener('selectionchange', (e) => {
+      eventCount++;
+      lastEvent = e;
+    });
+
+    const p1 = document.getElementById("p1");
+    const textNode = p1.firstChild;
+    const nested = document.getElementById("nested");
+
+    sel.collapse(textNode, 5);
+    sel.extend(textNode, 10);
+    sel.collapseToStart();
+    sel.collapseToEnd();
+
+    sel.removeAllRanges();
+    const range = document.createRange();
+    range.setStart(textNode, 4);
+    range.setEnd(textNode, 15);
+    sel.addRange(range);
+
+    sel.removeRange(range);
+
+    const newRange = document.createRange();
+    newRange.selectNodeContents(p1);
+    sel.addRange(newRange);
+    sel.removeAllRanges();
+
+    sel.selectAllChildren(nested);
+    sel.setBaseAndExtent(textNode, 4, textNode, 15);
+
+    sel.collapse(textNode, 5);
+    sel.extend(textNode, 10);
+    sel.deleteFromDocument();
+
+    testing.eventually(() => {
+      testing.expectEqual(14, eventCount);
+      testing.expectEqual('selectionchange', lastEvent.type);
+      testing.expectEqual(document, lastEvent.target);
+      testing.expectEqual(false, lastEvent.bubbles);
+      testing.expectEqual(false, lastEvent.cancelable);
+    });
+  }
+</script>
