@@ -121,7 +121,7 @@ fn freeRulesInList(allocator: std.mem.Allocator, rules: []const Rule) void {
 fn parseRulesWithUserAgent(
     allocator: std.mem.Allocator,
     user_agent: []const u8,
-    bytes: []const u8,
+    raw_bytes: []const u8,
 ) ![]const Rule {
     var rules: std.ArrayList(Rule) = .empty;
     defer rules.deinit(allocator);
@@ -130,6 +130,15 @@ fn parseRulesWithUserAgent(
     defer wildcard_rules.deinit(allocator);
 
     var state: State = .{ .entry = .not_in_entry, .has_rules = false };
+
+    // https://en.wikipedia.org/wiki/Byte_order_mark
+    const UTF8_BOM: []const u8 = &.{ 0xEF, 0xBB, 0xBF };
+
+    // Strip UTF8 BOM
+    const bytes = if (std.mem.startsWith(u8, raw_bytes, UTF8_BOM))
+        raw_bytes[3..]
+    else
+        raw_bytes;
 
     var iter = std.mem.splitScalar(u8, bytes, '\n');
     while (iter.next()) |line| {
@@ -144,19 +153,16 @@ fn parseRulesWithUserAgent(
         else
             trimmed;
 
-        if (true_line.len == 0) {
-            continue;
-        }
+        if (true_line.len == 0) continue;
 
-        const colon_idx = std.mem.indexOfScalar(u8, true_line, ':') orelse return error.MissingColon;
+        const colon_idx = std.mem.indexOfScalar(u8, true_line, ':') orelse {
+            log.warn(.browser, "robots line missing colon", .{ .line = line });
+            continue;
+        };
         const key_str = try std.ascii.allocLowerString(allocator, true_line[0..colon_idx]);
         defer allocator.free(key_str);
 
-        const key = std.meta.stringToEnum(Key, key_str) orelse {
-            // log.warn(.browser, "robots key", .{ .key = key_str });
-            continue;
-        };
-
+        const key = std.meta.stringToEnum(Key, key_str) orelse continue;
         const value = std.mem.trim(u8, true_line[colon_idx + 1 ..], &std.ascii.whitespace);
 
         switch (key) {
