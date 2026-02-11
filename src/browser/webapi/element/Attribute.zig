@@ -94,12 +94,9 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "Attr";
-        // we _never_ hold a reference to this, so the JS layer doesn't need to
-        // persist the value. It can pass it to QuickJS and let it fully manage it
-        // (TODO: we probably _should_ hold a refernece, because calling getAttributeNode
-        // on the same element + name should return the same instance)
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const enumerable = false;
     };
 
     pub const name = bridge.accessor(Attribute.getName, null, .{});

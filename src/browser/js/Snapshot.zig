@@ -202,12 +202,16 @@ pub fn create() !Snapshot {
                     const name = JsApi.Meta.name;
                     const illegal_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                     var maybe_result2: v8.MaybeBool = undefined;
-                    v8.v8__Object__Set(global_obj, context, illegal_class_name, func, &maybe_result2);
+                    v8.v8__Object__DefineOwnProperty(global_obj, context, illegal_class_name, func, 0, &maybe_result2);
                 } else {
                     const name = JsApi.Meta.name;
                     const v8_class_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
                     var maybe_result: v8.MaybeBool = undefined;
-                    v8.v8__Object__Set(global_obj, context, v8_class_name, func, &maybe_result);
+                    var properties: v8.PropertyAttribute = v8.None;
+                    if (@hasDecl(JsApi.Meta, "enumerable") and JsApi.Meta.enumerable == false) {
+                        properties |= v8.DontEnum;
+                    }
+                    v8.v8__Object__DefineOwnProperty(global_obj, context, v8_class_name, func, properties, &maybe_result);
                 }
             }
         }

@@ -233,6 +233,7 @@ pub const JsApi = struct {
         pub const name = "DocumentFragment";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const enumerable = false;
     };
 
     pub const constructor = bridge.constructor(DocumentFragment.init, .{});

@@ -879,6 +879,7 @@ pub const JsApi = struct {
         pub const name = "Node";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const enumerable = false;
     };
 
     pub const ELEMENT_NODE = bridge.property(1, .{ .template = true });
