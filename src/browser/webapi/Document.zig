@@ -950,6 +950,7 @@ pub const JsApi = struct {
     pub const URL = bridge.accessor(Document.getURL, null, .{});
     pub const documentURI = bridge.accessor(Document.getURL, null, .{});
     pub const documentElement = bridge.accessor(Document.getDocumentElement, null, .{});
+    pub const scrollingElement = bridge.accessor(Document.getDocumentElement, null, .{});
     pub const children = bridge.accessor(Document.getChildren, null, .{});
     pub const readyState = bridge.accessor(Document.getReadyState, null, .{});
     pub const implementation = bridge.accessor(Document.getImplementation, null, .{});
