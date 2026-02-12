@@ -66,13 +66,13 @@ lookup: std.HashMapUnmanaged(
 dispatch_depth: usize,
 deferred_removals: std.ArrayList(struct { list: *std.DoublyLinkedList, listener: *Listener }),
 
-pub fn init(page: *Page) EventManager {
+pub fn init(arena: Allocator, page: *Page) EventManager {
     return .{
         .page = page,
         .lookup = .{},
-        .arena = page.arena,
-        .list_pool = std.heap.MemoryPool(std.DoublyLinkedList).init(page.arena),
-        .listener_pool = std.heap.MemoryPool(Listener).init(page.arena),
+        .arena = arena,
+        .list_pool = .init(arena),
+        .listener_pool = .init(arena),
         .dispatch_depth = 0,
         .deferred_removals = .{},
     };

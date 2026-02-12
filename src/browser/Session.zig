@@ -127,6 +127,23 @@ pub fn removePage(self: *Session) void {
     }
 }
 
+pub fn replacePage(self: *Session) !*Page {
+    if (comptime IS_DEBUG) {
+        log.debug(.browser, "replace page", .{});
+    }
+
+    lp.assert(self.page != null, "Session.replacePage null page", .{});
+    self.page.?.deinit();
+
+    _ = self.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
+    self.browser.env.memoryPressureNotification(.moderate);
+
+    self.page = @as(Page, undefined);
+    const page = &self.page.?;
+    try Page.init(page, self);
+    return page;
+}
+
 pub fn currentPage(self: *Session) ?*Page {
     return &(self.page orelse return null);
 }

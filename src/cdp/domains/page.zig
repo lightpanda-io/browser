@@ -213,7 +213,12 @@ fn navigate(cmd: anytype) !void {
         return error.SessionIdNotLoaded;
     }
 
-    var page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const session = bc.session;
+    var page = session.currentPage() orelse return error.PageNotLoaded;
+
+    if (page._load_state != .waiting) {
+        page = try session.replacePage();
+    }
 
     try page.navigate(params.url, .{
         .reason = .address_bar,

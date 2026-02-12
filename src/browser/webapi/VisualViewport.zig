@@ -25,12 +25,6 @@ const VisualViewport = @This();
 
 _proto: *EventTarget,
 
-pub fn init(page: *Page) !*VisualViewport {
-    return page._factory.eventTarget(VisualViewport{
-        ._proto = undefined,
-    });
-}
-
 pub fn asEventTarget(self: *VisualViewport) *EventTarget {
     return self._proto;
 }

@@ -32,13 +32,6 @@ const Screen = @This();
 _proto: *EventTarget,
 _orientation: ?*Orientation = null,
 
-pub fn init(page: *Page) !*Screen {
-    return page._factory.eventTarget(Screen{
-        ._proto = undefined,
-        ._orientation = null,
-    });
-}
-
 pub fn asEventTarget(self: *Screen) *EventTarget {
     return self._proto;
 }
