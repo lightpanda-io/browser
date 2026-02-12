@@ -93,6 +93,29 @@
 }
 </script>
 
+<script id=replace_errors>
+{
+  const div = document.createElement('div');
+  div.className = 'foo bar';
+
+  testing.withError((err) => {
+    testing.expectEqual('SyntaxError', err.name);
+  }, () => div.classList.replace('', 'baz'));
+
+  testing.withError((err) => {
+    testing.expectEqual('SyntaxError', err.name);
+  }, () => div.classList.replace('foo', ''));
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => div.classList.replace('foo bar', 'baz'));
+
+  testing.withError((err) => {
+    testing.expectEqual('InvalidCharacterError', err.name);
+  }, () => div.classList.replace('foo', 'bar baz'));
+}
+</script>
+
 <script id=item>
 {
   const div = document.createElement('div');
@@ -163,6 +186,29 @@
   testing.expectEqual('test1 test2', div.classList.value);
   testing.expectEqual('test1 test2', div.className);
   testing.expectEqual(2, div.classList.length);
+}
+</script>
+
+<script id=classList_assignment>
+{
+  const div = document.createElement('div');
+
+  // Direct assignment should work (equivalent to classList.value = ...)
+  div.classList = 'foo bar baz';
+  testing.expectEqual('foo bar baz', div.className);
+  testing.expectEqual(3, div.classList.length);
+  testing.expectEqual(true, div.classList.contains('foo'));
+
+  // Assigning again should replace
+  div.classList = 'qux';
+  testing.expectEqual('qux', div.className);
+  testing.expectEqual(1, div.classList.length);
+  testing.expectEqual(false, div.classList.contains('foo'));
+
+  // Empty assignment
+  div.classList = '';
+  testing.expectEqual('', div.className);
+  testing.expectEqual(0, div.classList.length);
 }
 </script>
 

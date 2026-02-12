@@ -674,6 +674,11 @@ pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
     return gop.value_ptr.*;
 }
 
+pub fn setClassList(self: *Element, value: String, page: *Page) !void {
+    const class_list = try self.getClassList(page);
+    try class_list.setValue(value, page);
+}
+
 pub fn getRelList(self: *Element, page: *Page) !*collections.DOMTokenList {
     const gop = try page._element_rel_lists.getOrPut(page.arena, self);
     if (!gop.found_existing) {
@@ -1449,7 +1454,7 @@ pub const JsApi = struct {
     pub const slot = bridge.accessor(Element.getSlot, Element.setSlot, .{});
     pub const dir = bridge.accessor(Element.getDir, Element.setDir, .{});
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
-    pub const classList = bridge.accessor(Element.getClassList, null, .{});
+    pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{});
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
     pub const style = bridge.accessor(Element.getStyle, null, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});

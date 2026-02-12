@@ -138,21 +138,59 @@ pub fn toggle(self: *DOMTokenList, token: []const u8, force: ?bool, page: *Page)
 }
 
 pub fn replace(self: *DOMTokenList, old_token: []const u8, new_token: []const u8, page: *Page) !bool {
-    try validateToken(old_token);
-    try validateToken(new_token);
+    // Validate in spec order: both empty first, then both whitespace
+    if (old_token.len == 0 or new_token.len == 0) {
+        return error.SyntaxError;
+    }
+    if (std.mem.indexOfAny(u8, old_token, WHITESPACE) != null) {
+        return error.InvalidCharacterError;
+    }
+    if (std.mem.indexOfAny(u8, new_token, WHITESPACE) != null) {
+        return error.InvalidCharacterError;
+    }
 
     var lookup = try self.getTokens(page);
-    if (lookup.contains(new_token)) {
-        if (std.mem.eql(u8, new_token, old_token) == false) {
-            _ = lookup.orderedRemove(old_token);
-            try self.updateAttribute(lookup, page);
-        }
+
+    // Check if old_token exists
+    if (!lookup.contains(old_token)) {
+        return false;
+    }
+
+    // If replacing with the same token, still need to trigger mutation
+    if (std.mem.eql(u8, new_token, old_token)) {
+        try self.updateAttribute(lookup, page);
         return true;
     }
 
-    const key_ptr = lookup.getKeyPtr(old_token) orelse return false;
-    key_ptr.* = new_token;
-    try self.updateAttribute(lookup, page);
+    const allocator = page.call_arena;
+    // Build new token list preserving order but replacing old with new
+    var new_tokens = try std.ArrayList([]const u8).initCapacity(allocator, lookup.count());
+    var replaced_old = false;
+
+    for (lookup.keys()) |token| {
+        if (std.mem.eql(u8, token, old_token) and !replaced_old) {
+            new_tokens.appendAssumeCapacity(new_token);
+            replaced_old = true;
+        } else if (std.mem.eql(u8, token, old_token)) {
+            // Subsequent occurrences of old_token: skip (remove duplicates)
+            continue;
+        } else if (std.mem.eql(u8, token, new_token) and replaced_old) {
+            // Occurrence of new_token AFTER replacement: skip (remove duplicate)
+            continue;
+        } else {
+            // Any other token (including new_token before replacement): keep it
+            new_tokens.appendAssumeCapacity(token);
+        }
+    }
+
+    // Rebuild lookup
+    var new_lookup: Lookup = .empty;
+    try new_lookup.ensureTotalCapacity(allocator, new_tokens.items.len);
+    for (new_tokens.items) |token| {
+        try new_lookup.put(allocator, token, {});
+    }
+
+    try self.updateAttribute(new_lookup, page);
     return true;
 }
 
@@ -226,8 +264,16 @@ fn validateToken(token: []const u8) !void {
 }
 
 fn updateAttribute(self: *DOMTokenList, tokens: Lookup, page: *Page) !void {
-    const joined = try std.mem.join(page.call_arena, " ", tokens.keys());
-    try self._element.setAttribute(self._attribute_name, .wrap(joined), page);
+    if (tokens.count() > 0) {
+        const joined = try std.mem.join(page.call_arena, " ", tokens.keys());
+        return self._element.setAttribute(self._attribute_name, .wrap(joined), page);
+    }
+
+    // Only remove attribute if it didn't exist before (was null)
+    // If it existed (even as ""), set it to "" to preserve its existence
+    if (self._element.hasAttributeSafe(self._attribute_name)) {
+        try self._element.setAttribute(self._attribute_name, .wrap(""), page);
+    }
 }
 
 const Iterator = struct {
