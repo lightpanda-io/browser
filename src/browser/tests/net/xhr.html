@@ -222,3 +222,33 @@
     testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
   });
 </script>
+
+<script id=xhr_abort_callback>
+  testing.async(async (restore) => {
+    const req = new XMLHttpRequest();
+    let abortFired = false;
+    let errorFired = false;
+    let loadEndFired = false;
+
+    await new Promise((resolve) => {
+      req.onabort = () => { abortFired = true; };
+      req.onerror = () => { errorFired = true; };
+      req.onloadend = () => {
+        loadEndFired = true;
+        resolve();
+      };
+
+      req.open('GET', 'http://127.0.0.1:9582/xhr');
+      req.onreadystatechange = (e) => {
+        req.abort();
+      }
+      req.send();
+    });
+
+    restore();
+    testing.expectEqual(true, abortFired);
+    testing.expectEqual(true, errorFired);
+    testing.expectEqual(true, loadEndFired);
+    testing.expectEqual(XMLHttpRequest.UNSENT, req.readyState);
+  });
+</script>
