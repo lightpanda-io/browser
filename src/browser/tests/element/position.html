@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="test1">Test Element</div>
+<div id="test2">Another Element</div>
+
+<script id="clientDimensions">
+{
+  const test1 = $('#test1');
+
+  // clientWidth/Height - default is 5px in dummy layout
+  testing.expectEqual('number', typeof test1.clientWidth);
+  testing.expectEqual('number', typeof test1.clientHeight);
+  testing.expectTrue(test1.clientWidth >= 0);
+  testing.expectTrue(test1.clientHeight >= 0);
+
+  // clientTop/Left should be 0 (no borders in dummy layout)
+  testing.expectEqual(0, test1.clientTop);
+  testing.expectEqual(0, test1.clientLeft);
+}
+</script>
+
+<script id="scrollDimensions">
+{
+  const test1 = $('#test1');
+
+  // In dummy layout, scroll dimensions equal client dimensions (no overflow)
+  testing.expectEqual(test1.clientWidth, test1.scrollWidth);
+  testing.expectEqual(test1.clientHeight, test1.scrollHeight);
+}
+</script>
+
+<script id="scrollPosition">
+{
+  const test1 = $('#test1');
+
+  // Initial scroll position should be 0
+  testing.expectEqual(0, test1.scrollTop);
+  testing.expectEqual(0, test1.scrollLeft);
+
+  // Setting scroll position
+  test1.scrollTop = 50;
+  testing.expectEqual(50, test1.scrollTop);
+
+  test1.scrollLeft = 25;
+  testing.expectEqual(25, test1.scrollLeft);
+
+  // Negative values should be clamped to 0
+  test1.scrollTop = -10;
+  testing.expectEqual(0, test1.scrollTop);
+
+  test1.scrollLeft = -5;
+  testing.expectEqual(0, test1.scrollLeft);
+
+  // Each element has independent scroll position
+  const test2 = $('#test2');
+  testing.expectEqual(0, test2.scrollTop);
+  testing.expectEqual(0, test2.scrollLeft);
+
+  test2.scrollTop = 100;
+  testing.expectEqual(100, test2.scrollTop);
+  testing.expectEqual(0, test1.scrollTop); // test1 should still be 0
+}
+</script>
+
+<script id="offsetDimensions">
+{
+  const test1 = $('#test1');
+
+  // offsetWidth/Height should be numbers
+  testing.expectEqual('number', typeof test1.offsetWidth);
+  testing.expectEqual('number', typeof test1.offsetHeight);
+  testing.expectTrue(test1.offsetWidth >= 0);
+  testing.expectTrue(test1.offsetHeight >= 0);
+
+  // Should equal client dimensions
+  testing.expectEqual(test1.clientWidth, test1.offsetWidth);
+  testing.expectEqual(test1.clientHeight, test1.offsetHeight);
+}
+</script>
+
+<script id="offsetPosition">
+{
+  const test1 = $('#test1');
+  const test2 = $('#test2');
+
+  // offsetTop/Left should be calculated from tree position
+  // These values are based on the heuristic layout engine
+  const top1 = test1.offsetTop;
+  const left1 = test1.offsetLeft;
+  const top2 = test2.offsetTop;
+  const left2 = test2.offsetLeft;
+
+  // Position values should be numbers
+  testing.expectEqual('number', typeof top1);
+  testing.expectEqual('number', typeof left1);
+  testing.expectEqual('number', typeof top2);
+  testing.expectEqual('number', typeof left2);
+
+  // Siblings should have different positions (either different x or y)
+  testing.expectTrue(top1 !== top2 || left1 !== left2);
+}
+</script>
+
+<script id="offsetVsBounding">
+{
+  const test1 = $('#test1');
+
+  // offsetTop/Left should match getBoundingClientRect
+  const rect = test1.getBoundingClientRect();
+  testing.expectEqual(rect.y, test1.offsetTop);
+  testing.expectEqual(rect.x, test1.offsetLeft);
+  testing.expectEqual(rect.width, test1.offsetWidth);
+  testing.expectEqual(rect.height, test1.offsetHeight);
+}
+</script>
