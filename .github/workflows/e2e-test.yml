@@ -217,7 +217,7 @@ jobs:
           export TOTAL_DURATION=`cat puppeteer.out|grep 'total duration'|sed 's/total duration (ms) //'`
           export LPD_VmHWM=`cat LPD.VmHWM`
           export LPD_CG_PEAK_KB=$(( $(cat $CG/memory.peak) / 1024 ))
-          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM},\"cg_mem_peak\":${LPD_MEM_CG_KB}}" > bench.json
+          echo "{\"duration_total\":${TOTAL_DURATION},\"duration_avg\":${AVG_DURATION},\"mem_peak\":${LPD_VmHWM},\"cg_mem_peak\":${LPD_CG_PEAK_KB}}" > bench.json
           cat bench.json
 
       - name: run hyperfine
