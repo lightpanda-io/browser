@@ -122,7 +122,8 @@ jobs:
     needs: zig-build-release
 
     env:
-      MAX_MEMORY: 26000 # 26MB (KB)
+      MAX_VmHWM: 26000 # 26MB (KB)
+      MAX_CG_PEAK: 6000 # 6MB (KB)
       MAX_AVG_DURATION: 17
       LIGHTPANDA_DISABLE_TELEMETRY: true
 
@@ -173,12 +174,13 @@ jobs:
       - name: run puppeteer
         run: |
           RUNS=100 npm run bench-puppeteer-cdp > puppeteer.out || exit 1
+          cat /proc/`cat LPD.pid`/status |grep VmHWM|grep -oP '\d+' > LPD.VmHWM
           kill `cat LPD.pid`
 
       - name: puppeteer result
         run: cat puppeteer.out
 
-      - name: memory regression
+      - name: cgroup memory regression
         run: |
           PID=$(cat LPD.pid)
           while kill -0 $PID 2>/dev/null; do
@@ -192,7 +194,13 @@ jobs:
           PEAK_KB=$((PEAK_BYTES / 1024))
           echo "memory.peak_bytes=$PEAK_BYTES"
           echo "memory.peak_kb=$PEAK_KB"
-          test "$PEAK_KB" -le "$MAX_MEMORY"
+          test "$PEAK_KB" -le "$MAX_CG_PEAK"
+
+      - name: virtual memory regression
+        run: |
+          export LPD_VmHWM=`cat LPD.VmHWM`
+          echo "Peak resident set size: $LPD_VmHWM"
+          test "$LPD_VmHWM" -le "$MAX_VmHWM"
 
       - name: cleanup cgroup
         run: rmdir $CG_ROOT/$CG
