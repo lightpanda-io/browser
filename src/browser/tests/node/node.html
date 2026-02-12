@@ -210,3 +210,16 @@
   testing.expectEqual('HTMLDivElement', disconnectedChild.getRootNode().__proto__.constructor.name);
   testing.expectEqual('HTMLDivElement', disconnectedChild.getRootNode({ composed: true }).__proto__.constructor.name);
 </script>
+
+<div id=contains><div id=other></div></div>
+<script id=contains>
+  {
+    const d1 = $('#contains');
+    const d2 = $('#other');
+    testing.expectEqual(false, d1.contains(null));
+    testing.expectEqual(true, d1.contains(d1));
+    testing.expectEqual(false, d2.contains(d1));
+    testing.expectEqual(true, d1.contains(d2));
+    testing.expectEqual(false, d1.contains(p1));
+  }
+</script>
