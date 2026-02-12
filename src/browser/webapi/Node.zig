@@ -413,7 +413,9 @@ pub fn getRootNode(self: *Node, opts_: ?GetRootNodeOpts) *Node {
     return root;
 }
 
-pub fn contains(self: *const Node, child: *const Node) bool {
+pub fn contains(self: *const Node, child_: ?*const Node) bool {
+    const child = child_ orelse return false;
+
     if (self == child) {
         // yes, this is correct
         return true;
