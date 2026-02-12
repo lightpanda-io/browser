@@ -1092,6 +1092,8 @@ pub const Transfer = struct {
     // the headers, and the [encoded] body.
     bytes_received: usize = 0,
 
+    aborted: bool = false,
+
     max_response_size: ?usize = null,
 
     // We'll store the response header here
@@ -1224,10 +1226,18 @@ pub const Transfer = struct {
 
     pub fn abort(self: *Transfer, err: anyerror) void {
         requestFailed(self, err, true);
-        if (self._handle != null) {
-            self.client.endTransfer(self);
+        if (self._handle == null) {
+            self.deinit();
+            return;
         }
-        self.deinit();
+
+        // abort can be called from a libcurl callback, e.g. we get data, we
+        // do the header done callback, the client aborts.
+        // libcurl doesn't support re-entrant calls. We can't remove the
+        // handle from the multi during a callback. Instead, we flag this as
+        // aborted, which will signal the callbacks to stop processing the
+        // transfer
+        self.aborted = true;
     }
 
     pub fn terminate(self: *Transfer) void {
@@ -1359,7 +1369,7 @@ pub const Transfer = struct {
             .transfer = transfer,
         });
 
-        return proceed;
+        return proceed and transfer.aborted == false;
     }
 
     // headerCallback is called by curl on each request's header line read.
@@ -1518,6 +1528,10 @@ pub const Transfer = struct {
             .data = chunk,
             .transfer = transfer,
         });
+
+        if (transfer.aborted) {
+            return -1;
+        }
 
         return @intCast(chunk_len);
     }
