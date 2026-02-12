@@ -249,6 +249,23 @@ pub fn getElementsByTagName(self: *Document, tag_name: []const u8, page: *Page) 
     return .{ .tag_name = collections.NodeLive(.tag_name).init(self.asNode(), filter, page) };
 }
 
+pub fn getElementsByTagNameNS(self: *Document, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
+    if (local_name.len > 256) {
+        return error.InvalidTagName;
+    }
+
+    // Parse namespace - "*" means wildcard (null), null means Element.Namespace.null
+    const ns: ?Element.Namespace = if (namespace) |ns_str|
+        if (std.mem.eql(u8, ns_str, "*")) null else Element.Namespace.parse(ns_str)
+    else
+        Element.Namespace.null;
+
+    return collections.NodeLive(.tag_name_ns).init(self.asNode(), .{
+        .namespace = ns,
+        .local_name = try String.init(page.arena, local_name, .{}),
+    }, page);
+}
+
 pub fn getElementsByClassName(self: *Document, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
     const arena = page.arena;
 
@@ -914,7 +931,8 @@ fn validateElementName(name: []const u8) !void {
         const is_valid = (c >= 'a' and c <= 'z') or
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or
-            c == '_' or c == '-' or c == '.' or c == ':';
+            c == '_' or c == '-' or c == '.' or c == ':' or
+            c >= 128; // Allow non-ASCII UTF-8
 
         if (!is_valid) {
             return error.InvalidCharacterError;
@@ -984,6 +1002,7 @@ pub const JsApi = struct {
     pub const querySelector = bridge.function(Document.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});
+    pub const getElementsByTagNameNS = bridge.function(Document.getElementsByTagNameNS, .{});
     pub const getSelection = bridge.function(Document.getSelection, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
     pub const getElementsByName = bridge.function(Document.getElementsByName, .{});

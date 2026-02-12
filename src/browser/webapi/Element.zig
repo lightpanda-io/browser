@@ -1135,6 +1135,23 @@ pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !
     return .{ .tag_name = collections.NodeLive(.tag_name).init(self.asNode(), filter, page) };
 }
 
+pub fn getElementsByTagNameNS(self: *Element, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
+    if (local_name.len > 256) {
+        return error.InvalidTagName;
+    }
+
+    // Parse namespace - "*" means wildcard (null), null means Namespace.null
+    const ns: ?Namespace = if (namespace) |ns_str|
+        if (std.mem.eql(u8, ns_str, "*")) null else Namespace.parse(ns_str)
+    else
+        Namespace.null;
+
+    return collections.NodeLive(.tag_name_ns).init(self.asNode(), .{
+        .namespace = ns,
+        .local_name = try String.init(page.arena, local_name, .{}),
+    }, page);
+}
+
 pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
     const arena = page.arena;
 
@@ -1531,6 +1548,7 @@ pub const JsApi = struct {
     pub const getClientRects = bridge.function(Element.getClientRects, .{});
     pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
+    pub const getElementsByTagNameNS = bridge.function(Element.getElementsByTagNameNS, .{});
     pub const getElementsByClassName = bridge.function(Element.getElementsByClassName, .{});
     pub const children = bridge.accessor(Element.getChildren, null, .{});
     pub const focus = bridge.function(Element.focus, .{});

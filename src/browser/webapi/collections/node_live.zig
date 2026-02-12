@@ -33,6 +33,7 @@ const Form = @import("../element/html/Form.zig");
 const Mode = enum {
     tag,
     tag_name,
+    tag_name_ns,
     class_name,
     name,
     all_elements,
@@ -44,9 +45,15 @@ const Mode = enum {
     form,
 };
 
+pub const TagNameNsFilter = struct {
+    namespace: ?Element.Namespace, // null means wildcard "*"
+    local_name: String,
+};
+
 const Filters = union(Mode) {
     tag: Element.Tag,
     tag_name: String,
+    tag_name_ns: TagNameNsFilter,
     class_name: [][]const u8,
     name: []const u8,
     all_elements,
@@ -83,7 +90,7 @@ const Filters = union(Mode) {
 pub fn NodeLive(comptime mode: Mode) type {
     const Filter = Filters.TypeOf(mode);
     const TW = switch (mode) {
-        .tag, .tag_name, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
+        .tag, .tag_name, .tag_name_ns, .class_name, .name, .all_elements, .links, .anchors, .form => TreeWalker.FullExcludeSelf,
         .child_elements, .child_tag, .selected_options => TreeWalker.Children,
     };
     return struct {
@@ -222,6 +229,18 @@ pub fn NodeLive(comptime mode: Mode) type {
                     const element_tag = el.getTagNameLower();
                     return std.mem.eql(u8, element_tag, self._filter.str());
                 },
+                .tag_name_ns => {
+                    const el = node.is(Element) orelse return false;
+                    if (self._filter.namespace) |ns| {
+                        if (el._namespace != ns) return false;
+                    }
+                    // ok, namespace matches, check local name
+                    if (self._filter.local_name.eql(comptime .wrap("*"))) {
+                        // wildcard, match-all
+                        return true;
+                    }
+                    return self._filter.local_name.eqlSlice(el.getLocalName());
+                },
                 .class_name => {
                     if (self._filter.len == 0) {
                         return false;
@@ -328,6 +347,7 @@ pub fn NodeLive(comptime mode: Mode) type {
                 .name => return page._factory.create(NodeList{ .data = .{ .name = self } }),
                 .tag => HTMLCollection{ ._data = .{ .tag = self } },
                 .tag_name => HTMLCollection{ ._data = .{ .tag_name = self } },
+                .tag_name_ns => HTMLCollection{ ._data = .{ .tag_name_ns = self } },
                 .class_name => HTMLCollection{ ._data = .{ .class_name = self } },
                 .all_elements => HTMLCollection{ ._data = .{ .all_elements = self } },
                 .child_elements => HTMLCollection{ ._data = .{ .child_elements = self } },

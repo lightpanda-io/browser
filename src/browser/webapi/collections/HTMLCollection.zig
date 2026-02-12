@@ -27,6 +27,7 @@ const NodeLive = @import("node_live.zig").NodeLive;
 const Mode = enum {
     tag,
     tag_name,
+    tag_name_ns,
     class_name,
     all_elements,
     child_elements,
@@ -42,6 +43,7 @@ const HTMLCollection = @This();
 _data: union(Mode) {
     tag: NodeLive(.tag),
     tag_name: NodeLive(.tag_name),
+    tag_name_ns: NodeLive(.tag_name_ns),
     class_name: NodeLive(.class_name),
     all_elements: NodeLive(.all_elements),
     child_elements: NodeLive(.child_elements),
@@ -76,6 +78,7 @@ pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
         .tw = switch (self._data) {
             .tag => |*impl| .{ .tag = impl._tw.clone() },
             .tag_name => |*impl| .{ .tag_name = impl._tw.clone() },
+            .tag_name_ns => |*impl| .{ .tag_name_ns = impl._tw.clone() },
             .class_name => |*impl| .{ .class_name = impl._tw.clone() },
             .all_elements => |*impl| .{ .all_elements = impl._tw.clone() },
             .child_elements => |*impl| .{ .child_elements = impl._tw.clone() },
@@ -94,6 +97,7 @@ pub const Iterator = GenericIterator(struct {
     tw: union(Mode) {
         tag: TreeWalker.FullExcludeSelf,
         tag_name: TreeWalker.FullExcludeSelf,
+        tag_name_ns: TreeWalker.FullExcludeSelf,
         class_name: TreeWalker.FullExcludeSelf,
         all_elements: TreeWalker.FullExcludeSelf,
         child_elements: TreeWalker.Children,
@@ -108,6 +112,7 @@ pub const Iterator = GenericIterator(struct {
         return switch (self.list._data) {
             .tag => |*impl| impl.nextTw(&self.tw.tag),
             .tag_name => |*impl| impl.nextTw(&self.tw.tag_name),
+            .tag_name_ns => |*impl| impl.nextTw(&self.tw.tag_name_ns),
             .class_name => |*impl| impl.nextTw(&self.tw.class_name),
             .all_elements => |*impl| impl.nextTw(&self.tw.all_elements),
             .child_elements => |*impl| impl.nextTw(&self.tw.child_elements),
