@@ -51,7 +51,7 @@ pub fn main() !void {
 
     const cmd = try parseArgs(runner_arena);
 
-    var it = try TestIterator.init(allocator, WPT_DIR, cmd.filters);
+    var it = try TestIterator.init(allocator, cmd.url, cmd.filters);
     defer it.deinit();
 
     var writer = try Writer.init(allocator, cmd.format);
@@ -332,7 +332,7 @@ fn parseArgs(arena: Allocator) !Command {
         \\  --json           result is formatted in JSON.
         \\  --summary        print a summary result. Incompatible w/ --json or --quiet
         \\  --quiet          No output. Incompatible w/ --json or --summary
-        \\  --url            wpt webserver address, default http://web-platform.test:8000/
+        \\  --url            wpt webserver address, default http://web-platform.test:8000
         \\
     ;
 
@@ -343,7 +343,7 @@ fn parseArgs(arena: Allocator) !Command {
 
     var format = Writer.Format.text;
     var filters: std.ArrayList([]const u8) = .{};
-    var url: []const u8 = "http://web-platform.test:8000/";
+    var url: []const u8 = "http://web-platform.test:8000";
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
@@ -370,69 +370,136 @@ fn parseArgs(arena: Allocator) !Command {
 }
 
 const TestIterator = struct {
-    dir: Dir,
-    walker: Dir.Walker,
+    _idx: usize = 0,
+    manifest: Manifest,
     filters: [][]const u8,
-    read_arena: ArenaAllocator,
+    arena: ArenaAllocator,
 
     const Dir = std.fs.Dir;
 
-    fn init(allocator: Allocator, root: []const u8, filters: [][]const u8) !TestIterator {
-        var dir = try std.fs.cwd().openDir(root, .{ .iterate = true, .no_follow = true });
-        errdefer dir.close();
+    const Manifest = struct {
+        testharness: [][]const u8,
+    };
+
+    // Browse the Manifest JSON structure to collect the urls.
+    // Example:
+    // { "FileAPI": { "Blob-methods-from-detached-frame.html": [] }
+    // We expect  "FileAPI/Blob-methods-from-detached-frame.html"
+    fn collectURLs(allocator: Allocator, obj: std.json.ObjectMap, urls: *std.ArrayList([]const u8), prefix: []const u8) !void {
+        var it = obj.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const val = entry.value_ptr.*;
+
+            switch (val) {
+                .object => |child_obj| {
+                    // Directory node: recurse with extended prefix
+                    const new_prefix = blk: {
+                        if (prefix.len == 0) {
+                            break :blk key;
+                        }
+                        break :blk try std.fmt.allocPrint(
+                            allocator,
+                            "{s}/{s}",
+                            .{ prefix, key },
+                        );
+                    };
+                    try collectURLs(allocator, child_obj, urls, new_prefix);
+                },
+                .array => |arr| {
+                    // Leaf node: arr[0] is hash, arr[1..] are [url, metadata] pairs
+                    if (arr.items.len < 2) continue;
+
+                    for (arr.items[1..]) |variant| {
+                        const pair = switch (variant) {
+                            .array => |a| a,
+                            else => continue,
+                        };
+                        if (pair.items.len < 2) continue;
+
+                        const url = switch (pair.items[0]) {
+                            .string => |s| s,
+                            .null => blk: {
+                                if (prefix.len == 0) {
+                                    break :blk key;
+                                }
+                                break :blk try std.fmt.allocPrint(
+                                    allocator,
+                                    "{s}/{s}",
+                                    .{ prefix, key },
+                                );
+                            },
+                            else => continue,
+                        };
+                        try urls.append(allocator, url);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn fetchManifest(arena: Allocator, base: []const u8) !Manifest {
+        var resp = std.io.Writer.Allocating.init(arena);
+
+        var client: std.http.Client = .{ .allocator = arena };
+        defer client.deinit();
+
+        const res = try client.fetch(.{
+            .response_writer = &resp.writer,
+            .location = .{
+                .url = try std.mem.concat(arena, u8, &.{ base, "/MANIFEST.json" }),
+            },
+        });
+
+        if (res.status != std.http.Status.ok) {
+            return error.InvalidStatusCode;
+        }
+
+        const RawManifest = struct { items: struct {
+            testharness: std.json.Value,
+        } };
+
+        const rawmanifest = try std.json.parseFromSliceLeaky(
+            RawManifest,
+            arena,
+            resp.written(),
+            .{ .ignore_unknown_fields = true },
+        );
+
+        var urls: std.ArrayList([]const u8) = .empty;
+        switch (rawmanifest.items.testharness) {
+            .object => |obj| try collectURLs(arena, obj, &urls, ""),
+            else => return error.InvalidManifest,
+        }
 
         return .{
-            .dir = dir,
+            .testharness = urls.items,
+        };
+    }
+
+    fn init(allocator: Allocator, baseurl: []const u8, filters: [][]const u8) !TestIterator {
+        var arena = ArenaAllocator.init(allocator);
+
+        return .{
+            .manifest = try fetchManifest(arena.allocator(), baseurl),
             .filters = filters,
-            .walker = try dir.walk(allocator),
-            .read_arena = ArenaAllocator.init(allocator),
+            .arena = arena,
         };
     }
 
     fn deinit(self: *TestIterator) void {
-        self.walker.deinit();
-        self.dir.close();
-        self.read_arena.deinit();
+        self.arena.deinit();
     }
 
     fn next(self: *TestIterator) !?[]const u8 {
-        NEXT: while (try self.walker.next()) |entry| {
-            if (entry.kind != .file) {
-                continue;
-            }
+        outer: while (self._idx < self.manifest.testharness.len) {
+            const path = self.manifest.testharness[self._idx];
+            defer self._idx += 1;
 
-            if (std.mem.startsWith(u8, entry.path, "resources/")) {
-                // resources for running the tests themselves, not actual tests
-                continue;
-            }
-
-            if (!std.mem.endsWith(u8, entry.basename, ".html") and !std.mem.endsWith(u8, entry.basename, ".htm")) {
-                continue;
-            }
-
-            const path = entry.path;
             for (self.filters) |filter| {
                 if (std.mem.indexOf(u8, path, filter) == null) {
-                    continue :NEXT;
-                }
-            }
-
-            {
-                defer _ = self.read_arena.reset(.retain_capacity);
-                // We need to read the file's content to see if there's a
-                // "testharness.js" in it. If there isn't, it isn't a test.
-                // Shame we have to do this.
-
-                const arena = self.read_arena.allocator();
-                const full_path = try std.fs.path.join(arena, &.{ WPT_DIR, path });
-                const file = try std.fs.cwd().openFile(full_path, .{});
-                defer file.close();
-                const html = try file.readToEndAlloc(arena, 128 * 1024);
-
-                if (std.mem.indexOf(u8, html, "testharness.js") == null) {
-                    // This isn't a test. A lot of files are helpers/content for tests to
-                    // make use of.
-                    continue :NEXT;
+                    continue :outer;
                 }
             }
 
