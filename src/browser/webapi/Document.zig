@@ -219,47 +219,16 @@ pub fn getElementById(self: *Document, id: []const u8, page: *Page) ?*Element {
     return null;
 }
 
-const GetElementsByTagNameResult = union(enum) {
-    tag: collections.NodeLive(.tag),
-    tag_name: collections.NodeLive(.tag_name),
-    all_elements: collections.NodeLive(.all_elements),
-};
-pub fn getElementsByTagName(self: *Document, tag_name: []const u8, page: *Page) !GetElementsByTagNameResult {
-    if (tag_name.len > 256) {
-        // 256 seems generous.
-        return error.InvalidTagName;
-    }
+pub fn getElementsByTagName(self: *Document, tag_name: []const u8, page: *Page) !Node.GetElementsByTagNameResult {
+    return self.asNode().getElementsByTagName(tag_name, page);
+}
 
-    if (std.mem.eql(u8, tag_name, "*")) {
-        return .{
-            .all_elements = collections.NodeLive(.all_elements).init(self.asNode(), {}, page),
-        };
-    }
-
-    const lower = std.ascii.lowerString(&page.buf, tag_name);
-    if (Node.Element.Tag.parseForMatch(lower)) |known| {
-        // optimized for known tag names, comparis
-        return .{
-            .tag = collections.NodeLive(.tag).init(self.asNode(), known, page),
-        };
-    }
-
-    const arena = page.arena;
-    const filter = try String.init(arena, lower, .{});
-    return .{ .tag_name = collections.NodeLive(.tag_name).init(self.asNode(), filter, page) };
+pub fn getElementsByTagNameNS(self: *Document, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
+    return self.asNode().getElementsByTagNameNS(namespace, local_name, page);
 }
 
 pub fn getElementsByClassName(self: *Document, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
-    const arena = page.arena;
-
-    // Parse space-separated class names
-    var class_names: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.tokenizeAny(u8, class_name, "\t\n\x0C\r ");
-    while (it.next()) |name| {
-        try class_names.append(arena, try page.dupeString(name));
-    }
-
-    return collections.NodeLive(.class_name).init(self.asNode(), class_names.items, page);
+    return self.asNode().getElementsByClassName(class_name, page);
 }
 
 pub fn getElementsByName(self: *Document, name: []const u8, page: *Page) !collections.NodeLive(.name) {
@@ -914,7 +883,8 @@ fn validateElementName(name: []const u8) !void {
         const is_valid = (c >= 'a' and c <= 'z') or
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or
-            c == '_' or c == '-' or c == '.' or c == ':';
+            c == '_' or c == '-' or c == '.' or c == ':' or
+            c >= 128; // Allow non-ASCII UTF-8
 
         if (!is_valid) {
             return error.InvalidCharacterError;
@@ -984,6 +954,7 @@ pub const JsApi = struct {
     pub const querySelector = bridge.function(Document.querySelector, .{ .dom_exception = true });
     pub const querySelectorAll = bridge.function(Document.querySelectorAll, .{ .dom_exception = true });
     pub const getElementsByTagName = bridge.function(Document.getElementsByTagName, .{});
+    pub const getElementsByTagNameNS = bridge.function(Document.getElementsByTagNameNS, .{});
     pub const getSelection = bridge.function(Document.getSelection, .{});
     pub const getElementsByClassName = bridge.function(Document.getElementsByClassName, .{});
     pub const getElementsByName = bridge.function(Document.getElementsByName, .{});

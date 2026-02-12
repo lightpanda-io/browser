@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<div id="container" xmlns="http://www.w3.org/1999/xhtml">
+  <div id="div1">div1</div>
+  <p id="p1">p1</p>
+  <div id="div2">div2</div>
+</div>
+
+<svg id="svgContainer" xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <circle id="circle1" cx="50" cy="50" r="40"/>
+  <rect id="rect1" x="10" y="10" width="30" height="30"/>
+  <circle id="circle2" cx="25" cy="25" r="10"/>
+</svg>
+
+<div id="mixed">
+  <div id="htmlDiv" xmlns="http://www.w3.org/1999/xhtml">HTML div</div>
+  <svg xmlns="http://www.w3.org/2000/svg">
+    <circle id="svgCircle" cx="10" cy="10" r="5"/>
+  </svg>
+</div>
+
+<script id=basic>
+{
+  const htmlNS = "http://www.w3.org/1999/xhtml";
+  const svgNS = "http://www.w3.org/2000/svg";
+
+  // Test HTML namespace
+  const htmlDivs = document.getElementsByTagNameNS(htmlNS, 'div');
+  testing.expectEqual(true, htmlDivs instanceof HTMLCollection);
+  testing.expectEqual(5, htmlDivs.length); // container, div1, div2, mixed, htmlDiv
+
+  const htmlPs = document.getElementsByTagNameNS(htmlNS, 'p');
+  testing.expectEqual(1, htmlPs.length);
+  testing.expectEqual('p1', htmlPs[0].id);
+}
+</script>
+
+<script id=svgNamespace>
+{
+  const svgNS = "http://www.w3.org/2000/svg";
+
+  const circles = document.getElementsByTagNameNS(svgNS, 'circle');
+  testing.expectEqual(3, circles.length); // circle1, circle2, svgCircle
+  testing.expectEqual('circle1', circles[0].id);
+  testing.expectEqual('circle2', circles[1].id);
+  testing.expectEqual('svgCircle', circles[2].id);
+
+  const rects = document.getElementsByTagNameNS(svgNS, 'rect');
+  testing.expectEqual(1, rects.length);
+  testing.expectEqual('rect1', rects[0].id);
+}
+</script>
+
+<script id=nullNamespace>
+{
+  // Null namespace should match elements with null namespace
+  const nullNsElements = document.getElementsByTagNameNS(null, 'div');
+  testing.expectEqual(0, nullNsElements.length); // Our divs are in HTML namespace
+}
+</script>
+
+<script id=wildcardNamespace>
+{
+  // Wildcard namespace "*" should match all namespaces
+  const allDivs = document.getElementsByTagNameNS('*', 'div');
+  testing.expectEqual(5, allDivs.length); // All divs regardless of namespace
+}
+</script>
+
+<script id=wildcardLocalName>
+{
+  const htmlNS = "http://www.w3.org/1999/xhtml";
+
+  // Wildcard local name should match all elements in that namespace
+  const allHtmlElements = document.getElementsByTagNameNS(htmlNS, '*');
+  testing.expectEqual(true, allHtmlElements.length > 0);
+}
+</script>
+
+<script id=caseSensitive>
+{
+  const htmlNS = "http://www.w3.org/1999/xhtml";
+
+  // getElementsByTagNameNS is case-sensitive for local names
+  const lowerDivs = document.getElementsByTagNameNS(htmlNS, 'div');
+  const upperDivs = document.getElementsByTagNameNS(htmlNS, 'DIV');
+
+  testing.expectEqual(5, lowerDivs.length);
+  testing.expectEqual(0, upperDivs.length); // Should be 0 because it's case-sensitive
+}
+</script>
+
+<script id=unknownNamespace>
+{
+  // Unknown namespace should still work
+  const unknownNs = document.getElementsByTagNameNS('http://example.com/unknown', 'div');
+  testing.expectEqual(0, unknownNs.length);
+}
+</script>
+
+<script id=emptyResult>
+{
+  const htmlNS = "http://www.w3.org/1999/xhtml";
+  const svgNS = "http://www.w3.org/2000/svg";
+
+  testing.expectEqual(0, document.getElementsByTagNameNS(htmlNS, 'nonexistent').length);
+  testing.expectEqual(0, document.getElementsByTagNameNS(svgNS, 'nonexistent').length);
+}
+</script>
+
+<script id=elementMethod>
+{
+  const htmlNS = "http://www.w3.org/1999/xhtml";
+  const container = document.getElementById('container');
+
+  // getElementsByTagNameNS on element should only search descendants
+  const divsInContainer = container.getElementsByTagNameNS(htmlNS, 'div');
+  testing.expectEqual(2, divsInContainer.length); // div1, div2 (not container itself)
+  testing.expectEqual('div1', divsInContainer[0].id);
+  testing.expectEqual('div2', divsInContainer[1].id);
+}
+</script>

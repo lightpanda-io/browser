@@ -1105,47 +1105,16 @@ fn calculateSiblingPosition(node: *Node) f64 {
     return position * 5.0; // 5px per node
 }
 
-const GetElementsByTagNameResult = union(enum) {
-    tag: collections.NodeLive(.tag),
-    tag_name: collections.NodeLive(.tag_name),
-    all_elements: collections.NodeLive(.all_elements),
-};
-pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !GetElementsByTagNameResult {
-    if (tag_name.len > 256) {
-        // 256 seems generous.
-        return error.InvalidTagName;
-    }
+pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !Node.GetElementsByTagNameResult {
+    return self.asNode().getElementsByTagName(tag_name, page);
+}
 
-    if (std.mem.eql(u8, tag_name, "*")) {
-        return .{
-            .all_elements = collections.NodeLive(.all_elements).init(self.asNode(), {}, page),
-        };
-    }
-
-    const lower = std.ascii.lowerString(&page.buf, tag_name);
-    if (Tag.parseForMatch(lower)) |known| {
-        // optimized for known tag names
-        return .{
-            .tag = collections.NodeLive(.tag).init(self.asNode(), known, page),
-        };
-    }
-
-    const arena = page.arena;
-    const filter = try String.init(arena, lower, .{});
-    return .{ .tag_name = collections.NodeLive(.tag_name).init(self.asNode(), filter, page) };
+pub fn getElementsByTagNameNS(self: *Element, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
+    return self.asNode().getElementsByTagNameNS(namespace, local_name, page);
 }
 
 pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
-    const arena = page.arena;
-
-    // Parse space-separated class names
-    var class_names: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.tokenizeAny(u8, class_name, "\t\n\x0C\r ");
-    while (it.next()) |name| {
-        try class_names.append(arena, try page.dupeString(name));
-    }
-
-    return collections.NodeLive(.class_name).init(self.asNode(), class_names.items, page);
+    return self.asNode().getElementsByClassName(class_name, page);
 }
 
 pub fn clone(self: *Element, deep: bool, page: *Page) !*Node {
@@ -1531,6 +1500,7 @@ pub const JsApi = struct {
     pub const getClientRects = bridge.function(Element.getClientRects, .{});
     pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
+    pub const getElementsByTagNameNS = bridge.function(Element.getElementsByTagNameNS, .{});
     pub const getElementsByClassName = bridge.function(Element.getElementsByClassName, .{});
     pub const children = bridge.accessor(Element.getChildren, null, .{});
     pub const focus = bridge.function(Element.focus, .{});
