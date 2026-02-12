@@ -111,6 +111,10 @@ config: *const Config,
 
 cdp_client: ?CDPClient = null,
 
+// keep track of when curl_multi_perform is happening so that we can avoid
+// recursive calls into curl (which it will fail)
+performing: bool = false,
+
 // libcurl can monitor arbitrary sockets, this lets us use libcurl to poll
 // both HTTP data as well as messages from an CDP connection.
 // Furthermore, we have some tension between blocking scripts and request
@@ -735,7 +739,12 @@ pub const PerformStatus = enum {
 fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
     const multi = self.multi;
     var running: c_int = undefined;
-    try errorMCheck(c.curl_multi_perform(multi, &running));
+
+    {
+        self.performing = true;
+        defer self.performing = false;
+        try errorMCheck(c.curl_multi_perform(multi, &running));
+    }
 
     // We're potentially going to block for a while until we get data. Process
     // whatever messages we have waiting ahead of time.
@@ -1231,13 +1240,22 @@ pub const Transfer = struct {
             return;
         }
 
-        // abort can be called from a libcurl callback, e.g. we get data, we
-        // do the header done callback, the client aborts.
-        // libcurl doesn't support re-entrant calls. We can't remove the
-        // handle from the multi during a callback. Instead, we flag this as
-        // aborted, which will signal the callbacks to stop processing the
-        // transfer
-        self.aborted = true;
+        const client = self.client;
+        if (client.performing) {
+            // We're currently in a curl_multi_perform. We cannot call endTransfer
+            // as that calls curl_multi_remove_handle, and you can't do that
+            // from a curl callback. Instead, we flag this transfer and all of
+            // our callbacks will check for this flag and abort the transfer for
+            // us
+            self.aborted = true;
+            return;
+        }
+
+        if (self._handle != null) {
+            client.endTransfer(self);
+        }
+        self.deinit();
+
     }
 
     pub fn terminate(self: *Transfer) void {
