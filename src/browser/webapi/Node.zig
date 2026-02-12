@@ -845,6 +845,69 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), pag
     }
 }
 
+pub const GetElementsByTagNameResult = union(enum) {
+    tag: collections.NodeLive(.tag),
+    tag_name: collections.NodeLive(.tag_name),
+    all_elements: collections.NodeLive(.all_elements),
+};
+// Not exposed in the WebAPI, but used by both Element and Document
+pub fn getElementsByTagName(self: *Node, tag_name: []const u8, page: *Page) !GetElementsByTagNameResult {
+    if (tag_name.len > 256) {
+        // 256 seems generous.
+        return error.InvalidTagName;
+    }
+
+    if (std.mem.eql(u8, tag_name, "*")) {
+        return .{
+            .all_elements = collections.NodeLive(.all_elements).init(self, {}, page),
+        };
+    }
+
+    const lower = std.ascii.lowerString(&page.buf, tag_name);
+    if (Node.Element.Tag.parseForMatch(lower)) |known| {
+        // optimized for known tag names, comparis
+        return .{
+            .tag = collections.NodeLive(.tag).init(self, known, page),
+        };
+    }
+
+    const arena = page.arena;
+    const filter = try String.init(arena, lower, .{});
+    return .{ .tag_name = collections.NodeLive(.tag_name).init(self, filter, page) };
+}
+
+// Not exposed in the WebAPI, but used by both Element and Document
+pub fn getElementsByTagNameNS(self: *Node, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
+    if (local_name.len > 256) {
+        return error.InvalidTagName;
+    }
+
+    // Parse namespace - "*" means wildcard (null), null means Element.Namespace.null
+    const ns: ?Element.Namespace = if (namespace) |ns_str|
+        if (std.mem.eql(u8, ns_str, "*")) null else Element.Namespace.parse(ns_str)
+    else
+        Element.Namespace.null;
+
+    return collections.NodeLive(.tag_name_ns).init(self, .{
+        .namespace = ns,
+        .local_name = try String.init(page.arena, local_name, .{}),
+    }, page);
+}
+
+// Not exposed in the WebAPI, but used by both Element and Document
+pub fn getElementsByClassName(self: *Node, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
+    const arena = page.arena;
+
+    // Parse space-separated class names
+    var class_names: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.tokenizeAny(u8, class_name, "\t\n\x0C\r ");
+    while (it.next()) |name| {
+        try class_names.append(arena, try page.dupeString(name));
+    }
+
+    return collections.NodeLive(.class_name).init(self, class_names.items, page);
+}
+
 // Writes a JSON representation of the node and its children
 pub fn jsonStringify(self: *const Node, writer: *std.json.Stringify) !void {
     // stupid json api requires this to be const,

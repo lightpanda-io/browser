@@ -1105,64 +1105,16 @@ fn calculateSiblingPosition(node: *Node) f64 {
     return position * 5.0; // 5px per node
 }
 
-const GetElementsByTagNameResult = union(enum) {
-    tag: collections.NodeLive(.tag),
-    tag_name: collections.NodeLive(.tag_name),
-    all_elements: collections.NodeLive(.all_elements),
-};
-pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !GetElementsByTagNameResult {
-    if (tag_name.len > 256) {
-        // 256 seems generous.
-        return error.InvalidTagName;
-    }
-
-    if (std.mem.eql(u8, tag_name, "*")) {
-        return .{
-            .all_elements = collections.NodeLive(.all_elements).init(self.asNode(), {}, page),
-        };
-    }
-
-    const lower = std.ascii.lowerString(&page.buf, tag_name);
-    if (Tag.parseForMatch(lower)) |known| {
-        // optimized for known tag names
-        return .{
-            .tag = collections.NodeLive(.tag).init(self.asNode(), known, page),
-        };
-    }
-
-    const arena = page.arena;
-    const filter = try String.init(arena, lower, .{});
-    return .{ .tag_name = collections.NodeLive(.tag_name).init(self.asNode(), filter, page) };
+pub fn getElementsByTagName(self: *Element, tag_name: []const u8, page: *Page) !Node.GetElementsByTagNameResult {
+    return self.asNode().getElementsByTagName(tag_name, page);
 }
 
 pub fn getElementsByTagNameNS(self: *Element, namespace: ?[]const u8, local_name: []const u8, page: *Page) !collections.NodeLive(.tag_name_ns) {
-    if (local_name.len > 256) {
-        return error.InvalidTagName;
-    }
-
-    // Parse namespace - "*" means wildcard (null), null means Namespace.null
-    const ns: ?Namespace = if (namespace) |ns_str|
-        if (std.mem.eql(u8, ns_str, "*")) null else Namespace.parse(ns_str)
-    else
-        Namespace.null;
-
-    return collections.NodeLive(.tag_name_ns).init(self.asNode(), .{
-        .namespace = ns,
-        .local_name = try String.init(page.arena, local_name, .{}),
-    }, page);
+    return self.asNode().getElementsByTagNameNS(namespace, local_name, page);
 }
 
 pub fn getElementsByClassName(self: *Element, class_name: []const u8, page: *Page) !collections.NodeLive(.class_name) {
-    const arena = page.arena;
-
-    // Parse space-separated class names
-    var class_names: std.ArrayList([]const u8) = .empty;
-    var it = std.mem.tokenizeAny(u8, class_name, "\t\n\x0C\r ");
-    while (it.next()) |name| {
-        try class_names.append(arena, try page.dupeString(name));
-    }
-
-    return collections.NodeLive(.class_name).init(self.asNode(), class_names.items, page);
+    return self.asNode().getElementsByClassName(class_name, page);
 }
 
 pub fn clone(self: *Element, deep: bool, page: *Page) !*Node {
