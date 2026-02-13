@@ -145,6 +145,13 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn dnsServers(self: *const Config) ?[:0]const u8 {
+    return switch (self.mode) {
+        inline .serve, .fetch => |opts| opts.common.dns_servers,
+        .help, .version => null,
+    };
+}
+
 pub const Mode = union(RunMode) {
     help: bool, // false when being printed because of an error
     fetch: Fetch,
@@ -185,6 +192,7 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
+    dns_servers: ?[:0]const u8 = null,
 };
 
 /// Pre-formatted HTTP headers for reuse across Http and Client.
@@ -291,6 +299,10 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--user_agent_suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
+        \\
+        \\--dns_servers
+        \\                Comma separated list of IPs DNS servers
+        \\                eg. 8.8.8.8,8.8.4.4
         \\
     ;
 
@@ -793,6 +805,21 @@ fn parseCommonArg(
             }
         }
         common.user_agent_suffix = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--dns_servers", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--dns_servers" });
+            return error.InvalidArgument;
+        };
+        for (str) |c| {
+            if (!std.ascii.isPrint(c)) {
+                log.fatal(.app, "not printable character", .{ .arg = "--dns_servers" });
+                return error.InvalidArgument;
+            }
+        }
+        common.dns_servers = try allocator.dupeZ(u8, str);
         return true;
     }
 

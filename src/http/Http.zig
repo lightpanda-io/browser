@@ -152,6 +152,11 @@ pub const Connection = struct {
             }
         }
 
+        // dns
+        if (config.dnsServers()) |dns| {
+            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_DNS_SERVERS, dns.ptr));
+        }
+
         // compression, don't remove this. CloudFront will send gzip content
         // even if we don't support it, and then it won't be decompressed.
         // empty string means: use whatever's available
