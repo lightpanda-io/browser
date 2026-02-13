@@ -333,6 +333,13 @@ zig build wpt -- Node-childNodes.html
 
 `wpt` command accepts `--summary` and `--json` options modifying output.
 
+:warning: Running the whole test suite will take a long time. In this case, it's useful to build in `releaseFast` mode to make tests faster.
+
+```
+zig build -Doptimize=ReleaseFast wpt
+```
+
+
 ## Contributing
 
 Lightpanda accepts pull requests through GitHub.
