@@ -49,6 +49,12 @@ pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTok
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
 
+pub const ScrollPosition = struct {
+    x: u32 = 0,
+    y: u32 = 0,
+};
+pub const ScrollPositionLookup = std.AutoHashMapUnmanaged(*Element, ScrollPosition);
+
 pub const Namespace = enum(u8) {
     html,
     svg,
@@ -1027,6 +1033,82 @@ pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
     return ptr[0..1];
 }
 
+pub fn getScrollTop(self: *Element, page: *Page) u32 {
+    const pos = page._element_scroll_positions.get(self) orelse return 0;
+    return pos.y;
+}
+
+pub fn setScrollTop(self: *Element, value: i32, page: *Page) !void {
+    const gop = try page._element_scroll_positions.getOrPut(page.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    gop.value_ptr.y = @intCast(@max(0, value));
+}
+
+pub fn getScrollLeft(self: *Element, page: *Page) u32 {
+    const pos = page._element_scroll_positions.get(self) orelse return 0;
+    return pos.x;
+}
+
+pub fn setScrollLeft(self: *Element, value: i32, page: *Page) !void {
+    const gop = try page._element_scroll_positions.getOrPut(page.arena, self);
+    if (!gop.found_existing) {
+        gop.value_ptr.* = .{};
+    }
+    gop.value_ptr.x = @intCast(@max(0, value));
+}
+
+pub fn getScrollHeight(self: *Element, page: *Page) !f64 {
+    // In our dummy layout engine, content doesn't overflow
+    return self.getClientHeight(page);
+}
+
+pub fn getScrollWidth(self: *Element, page: *Page) !f64 {
+    // In our dummy layout engine, content doesn't overflow
+    return self.getClientWidth(page);
+}
+
+pub fn getOffsetHeight(self: *Element, page: *Page) !f64 {
+    if (!try self.checkVisibility(page)) {
+        return 0.0;
+    }
+    const dims = try self.getElementDimensions(page);
+    return dims.height;
+}
+
+pub fn getOffsetWidth(self: *Element, page: *Page) !f64 {
+    if (!try self.checkVisibility(page)) {
+        return 0.0;
+    }
+    const dims = try self.getElementDimensions(page);
+    return dims.width;
+}
+
+pub fn getOffsetTop(self: *Element, page: *Page) !f64 {
+    if (!try self.checkVisibility(page)) {
+        return 0.0;
+    }
+    return calculateDocumentPosition(self.asNode());
+}
+
+pub fn getOffsetLeft(self: *Element, page: *Page) !f64 {
+    if (!try self.checkVisibility(page)) {
+        return 0.0;
+    }
+    return calculateSiblingPosition(self.asNode());
+}
+
+pub fn getClientTop(_: *Element) f64 {
+    // Border width - in our dummy layout, we don't apply borders to layout
+    return 0.0;
+}
+
+pub fn getClientLeft(_: *Element) f64 {
+    // Border width - in our dummy layout, we don't apply borders to layout
+    return 0.0;
+}
+
 // Calculates document position by counting all nodes that appear before this one
 // in tree order, but only traversing the "left side" of the tree.
 //
@@ -1502,6 +1584,16 @@ pub const JsApi = struct {
     pub const checkVisibility = bridge.function(Element.checkVisibility, .{});
     pub const clientWidth = bridge.accessor(Element.getClientWidth, null, .{});
     pub const clientHeight = bridge.accessor(Element.getClientHeight, null, .{});
+    pub const clientTop = bridge.accessor(Element.getClientTop, null, .{});
+    pub const clientLeft = bridge.accessor(Element.getClientLeft, null, .{});
+    pub const scrollTop = bridge.accessor(Element.getScrollTop, Element.setScrollTop, .{});
+    pub const scrollLeft = bridge.accessor(Element.getScrollLeft, Element.setScrollLeft, .{});
+    pub const scrollHeight = bridge.accessor(Element.getScrollHeight, null, .{});
+    pub const scrollWidth = bridge.accessor(Element.getScrollWidth, null, .{});
+    pub const offsetTop = bridge.accessor(Element.getOffsetTop, null, .{});
+    pub const offsetLeft = bridge.accessor(Element.getOffsetLeft, null, .{});
+    pub const offsetWidth = bridge.accessor(Element.getOffsetWidth, null, .{});
+    pub const offsetHeight = bridge.accessor(Element.getOffsetHeight, null, .{});
     pub const getClientRects = bridge.function(Element.getClientRects, .{});
     pub const getBoundingClientRect = bridge.function(Element.getBoundingClientRect, .{});
     pub const getElementsByTagName = bridge.function(Element.getElementsByTagName, .{});
