@@ -122,7 +122,7 @@ fn parseRulesWithUserAgent(
     allocator: std.mem.Allocator,
     user_agent: []const u8,
     raw_bytes: []const u8,
-) ![]const Rule {
+) ![]Rule {
     var rules: std.ArrayList(Rule) = .empty;
     defer rules.deinit(allocator);
 
@@ -252,6 +252,39 @@ fn parseRulesWithUserAgent(
 
 pub fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
     const rules = try parseRulesWithUserAgent(allocator, user_agent, bytes);
+
+    // sort by order once.
+    std.mem.sort(Rule, rules, {}, struct {
+        fn lessThan(_: void, a: Rule, b: Rule) bool {
+            const a_len = switch (a) {
+                .allow => |p| p.len,
+                .disallow => |p| p.len,
+            };
+
+            const b_len = switch (b) {
+                .allow => |p| p.len,
+                .disallow => |p| p.len,
+            };
+
+            // Sort by length first.
+            if (a_len != b_len) {
+                return a_len > b_len;
+            }
+
+            // Otherwise, allow should beat disallow.
+            const a_is_allow = switch (a) {
+                .allow => true,
+                .disallow => false,
+            };
+            const b_is_allow = switch (b) {
+                .allow => true,
+                .disallow => false,
+            };
+
+            return a_is_allow and !b_is_allow;
+        }
+    }.lessThan);
+
     return .{ .rules = rules };
 }
 
@@ -309,37 +342,19 @@ fn matchPattern(pattern: []const u8, path: []const u8) ?usize {
 }
 
 pub fn isAllowed(self: *const Robots, path: []const u8) bool {
-    const rules = self.rules;
-
-    var longest_match_len: usize = 0;
-    var is_allowed_result = true;
-
-    for (rules) |rule| {
+    for (self.rules) |rule| {
         switch (rule) {
             .allow => |pattern| {
-                if (matchPattern(pattern, path)) |len| {
-                    // Longest or Last Wins.
-                    if (len >= longest_match_len) {
-                        longest_match_len = len;
-                        is_allowed_result = true;
-                    }
-                }
+                if (matchPattern(pattern, path) != null) return true;
             },
             .disallow => |pattern| {
                 if (pattern.len == 0) continue;
-
-                if (matchPattern(pattern, path)) |len| {
-                    // Longest or Last Wins.
-                    if (len >= longest_match_len) {
-                        longest_match_len = len;
-                        is_allowed_result = false;
-                    }
-                }
+                if (matchPattern(pattern, path) != null) return false;
             },
         }
     }
 
-    return is_allowed_result;
+    return true;
 }
 
 test "Robots: simple robots.txt" {
@@ -675,7 +690,7 @@ test "Robots: isAllowed - complex real-world example" {
     try std.testing.expect(robots.isAllowed("/cgi-bin/script.sh") == true);
 }
 
-test "Robots: isAllowed - order doesn't matter for same length" {
+test "Robots: isAllowed - order doesn't matter + allow wins" {
     const allocator = std.testing.allocator;
 
     var robots = try Robots.fromBytes(allocator, "Bot",
@@ -687,7 +702,7 @@ test "Robots: isAllowed - order doesn't matter for same length" {
     );
     defer robots.deinit(allocator);
 
-    try std.testing.expect(robots.isAllowed("/page") == false);
+    try std.testing.expect(robots.isAllowed("/page") == true);
 }
 
 test "Robots: isAllowed - empty file uses wildcard defaults" {
