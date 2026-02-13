@@ -743,11 +743,11 @@
   // range1 start is before range2 start
   testing.expectEqual(-1, range1.compareBoundaryPoints(Range.START_TO_START, range2));
 
-  // range1 start is before range2 end
-  testing.expectEqual(-1, range1.compareBoundaryPoints(Range.START_TO_END, range2));
-
   // range1 end is after range2 start
-  testing.expectEqual(1, range1.compareBoundaryPoints(Range.END_TO_START, range2));
+  testing.expectEqual(1, range1.compareBoundaryPoints(Range.START_TO_END, range2));
+
+  // range1 start is before range2 end
+  testing.expectEqual(-1, range1.compareBoundaryPoints(Range.END_TO_START, range2));
 
   // range1 end is before range2 end
   testing.expectEqual(-1, range1.compareBoundaryPoints(Range.END_TO_END, range2));
@@ -767,11 +767,11 @@
   testing.expectEqual(0, range.compareBoundaryPoints(Range.START_TO_START, range));
   testing.expectEqual(0, range.compareBoundaryPoints(Range.END_TO_END, range));
 
-  // Start is before end
-  testing.expectEqual(-1, range.compareBoundaryPoints(Range.START_TO_END, range));
-
   // End is after start
-  testing.expectEqual(1, range.compareBoundaryPoints(Range.END_TO_START, range));
+  testing.expectEqual(1, range.compareBoundaryPoints(Range.START_TO_END, range));
+
+  // Start is before end
+  testing.expectEqual(-1, range.compareBoundaryPoints(Range.END_TO_START, range));
 }
 </script>
 
