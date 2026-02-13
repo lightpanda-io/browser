@@ -22,8 +22,6 @@ const lp = @import("lightpanda");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const WPT_DIR = "tests/wpt";
-
 // use in custom panic handler
 var current_test: ?[]const u8 = null;
 
@@ -366,13 +364,11 @@ const TestIterator = struct {
     filters: [][]const u8,
     arena: ArenaAllocator,
 
-    const Dir = std.fs.Dir;
-
     const Manifest = struct {
         testharness: [][]const u8,
     };
 
-    // Browse the Manifest JSON structure to collect the urls.
+    // Browse the MANIFEST.json structure to collect the urls.
     // Example:
     // { "FileAPI": { "Blob-methods-from-detached-frame.html": [] }
     // We expect  "FileAPI/Blob-methods-from-detached-frame.html"
@@ -430,6 +426,8 @@ const TestIterator = struct {
         }
     }
 
+    // Connect to the wpt HTTP server, download and parse the MANIFEST.json
+    // file. This file contains a list of all the WPT tests to run.
     fn fetchManifest(arena: Allocator, base: []const u8) !Manifest {
         var resp = std.io.Writer.Allocating.init(arena);
 
@@ -469,6 +467,7 @@ const TestIterator = struct {
         };
     }
 
+    // init fetch and parse the MANIFEST.json file. The WPT server must run.
     fn init(allocator: Allocator, baseurl: []const u8, filters: [][]const u8) !TestIterator {
         var arena = ArenaAllocator.init(allocator);
 
