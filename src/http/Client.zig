@@ -1255,7 +1255,6 @@ pub const Transfer = struct {
             client.endTransfer(self);
         }
         self.deinit();
-
     }
 
     pub fn terminate(self: *Transfer) void {
