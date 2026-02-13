@@ -1,6 +1,3 @@
-[submodule "tests/wpt"]
-	path = tests/wpt
-	url = https://github.com/lightpanda-io/wpt
 [submodule "vendor/nghttp2"]
 	path = vendor/nghttp2
 	url = https://github.com/nghttp2/nghttp2.git
