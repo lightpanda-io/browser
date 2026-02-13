@@ -37,6 +37,10 @@ pub fn init(page: *Page) !*Range {
 }
 
 pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
+    if (node._type == .document_type) {
+        return error.InvalidNodeType;
+    }
+
     if (offset > node.getLength()) {
         return error.IndexSizeError;
     }
@@ -54,6 +58,10 @@ pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
 }
 
 pub fn setEnd(self: *Range, node: *Node, offset: u32) !void {
+    if (node._type == .document_type) {
+        return error.InvalidNodeType;
+    }
+
     // Validate offset
     if (offset > node.getLength()) {
         return error.IndexSizeError;
@@ -178,15 +186,19 @@ pub fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *co
 }
 
 pub fn comparePoint(self: *const Range, node: *Node, offset: u32) !i16 {
-    if (offset > node.getLength()) {
-        return error.IndexSizeError;
-    }
-
     // Check if node is in a different tree than the range
     const node_root = node.getRootNode(null);
     const start_root = self._proto._start_container.getRootNode(null);
     if (node_root != start_root) {
         return error.WrongDocument;
+    }
+
+    if (node._type == .document_type) {
+        return error.InvalidNodeType;
+    }
+
+    if (offset > node.getLength()) {
+        return error.IndexSizeError;
     }
 
     // Compare point with start boundary
