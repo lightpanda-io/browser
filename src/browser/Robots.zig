@@ -220,12 +220,16 @@ fn parseRulesWithUserAgent(
 
                 switch (state.entry) {
                     .in_our_entry => {
+                        if (value.len == 0) continue;
+
                         const duped_value = try allocator.dupe(u8, value);
                         errdefer allocator.free(duped_value);
                         try rules.append(allocator, .{ .disallow = duped_value });
                     },
                     .in_other_entry => {},
                     .in_wildcard_entry => {
+                        if (value.len == 0) continue;
+
                         const duped_value = try allocator.dupe(u8, value);
                         errdefer allocator.free(duped_value);
                         try wildcard_rules.append(allocator, .{ .disallow = duped_value });
@@ -348,7 +352,6 @@ pub fn isAllowed(self: *const Robots, path: []const u8) bool {
                 if (matchPattern(pattern, path) != null) return true;
             },
             .disallow => |pattern| {
-                if (pattern.len == 0) continue;
                 if (matchPattern(pattern, path) != null) return false;
             },
         }
