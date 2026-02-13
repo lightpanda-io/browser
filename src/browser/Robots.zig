@@ -86,11 +86,22 @@ pub const RobotStore = struct {
         const Context = @This();
 
         pub fn hash(_: Context, value: []const u8) u32 {
-            var hasher = std.hash.Wyhash.init(value.len);
-            for (value) |c| {
-                std.hash.autoHash(&hasher, std.ascii.toLower(c));
+            var key = value;
+            var buf: [128]u8 = undefined;
+            var h = std.hash.Wyhash.init(value.len);
+
+            while (key.len >= 128) {
+                const lower = std.ascii.lowerString(buf[0..], key[0..128]);
+                h.update(lower);
+                key = key[128..];
             }
-            return @truncate(hasher.final());
+
+            if (key.len > 0) {
+                const lower = std.ascii.lowerString(buf[0..key.len], key);
+                h.update(lower);
+            }
+
+            return @truncate(h.final());
         }
 
         pub fn eql(_: Context, a: []const u8, b: []const u8) bool {
