@@ -150,10 +150,10 @@ pub fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *co
             source_range._proto._start_offset,
         ),
         1 => AbstractRange.compareBoundaryPoints( // START_TO_END
-            self._proto._start_container,
-            self._proto._start_offset,
-            source_range._proto._end_container,
-            source_range._proto._end_offset,
+            self._proto._end_container,
+            self._proto._end_offset,
+            source_range._proto._start_container,
+            source_range._proto._start_offset,
         ),
         2 => AbstractRange.compareBoundaryPoints( // END_TO_END
             self._proto._end_container,
@@ -162,10 +162,10 @@ pub fn compareBoundaryPoints(self: *const Range, how_raw: i32, source_range: *co
             source_range._proto._end_offset,
         ),
         3 => AbstractRange.compareBoundaryPoints( // END_TO_START
-            self._proto._end_container,
-            self._proto._end_offset,
-            source_range._proto._start_container,
-            source_range._proto._start_offset,
+            self._proto._start_container,
+            self._proto._start_offset,
+            source_range._proto._end_container,
+            source_range._proto._end_offset,
         ),
         else => unreachable,
     };
