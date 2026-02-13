@@ -181,11 +181,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     .subtype = if (@hasDecl(JsApi.Meta, "subtype")) JsApi.Meta.subype else .node,
                 };
 
-                // Skip setting internal field for the global object (Window)
-                // Window accessors get the instance from context.page.window instead
-                // if (resolved.class_id != @import("../webapi/Window.zig").JsApi.Meta.class_id) {
-                v8.v8__Object__SetInternalField(js_obj.handle, 0, isolate.createExternal(tao));
-                // }
+                v8.v8__Object__SetAlignedPointerInInternalField(js_obj.handle, 0, tao);
             } else {
                 // If the struct is empty, we don't need to do all
                 // the TOA stuff and setting the internal data.
