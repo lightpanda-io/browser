@@ -37,6 +37,10 @@ pub fn init(page: *Page) !*Range {
 }
 
 pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
+    if (node._type == .document_type) {
+        return error.InvalidNodeType;
+    }
+
     if (offset > node.getLength()) {
         return error.IndexSizeError;
     }
@@ -54,6 +58,10 @@ pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
 }
 
 pub fn setEnd(self: *Range, node: *Node, offset: u32) !void {
+    if (node._type == .document_type) {
+        return error.InvalidNodeType;
+    }
+
     // Validate offset
     if (offset > node.getLength()) {
         return error.IndexSizeError;
