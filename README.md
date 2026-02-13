@@ -298,6 +298,8 @@ Clone the repository with the `fork` branch.
 git clone -b fork --depth=1 git@github.com:lightpanda-io/wpt.git
 ```
 
+Enter into the `wpt/` dir.
+
 Install custom domains in your `/etc/hosts`
 ```
 ./wpt make-hosts-file | sudo tee -a /etc/hosts
@@ -311,23 +313,25 @@ Use the [WPT's setup guide](https://web-platform-tests.org/running-tests/from-lo
 
 #### Run WPT test suite
 
-First start the WPT's HTTP server
+First start the WPT's HTTP server from your `wpt/` clone dir.
 
 ```
 ./wpt serve
 ```
 
-To run all the tests:
+In Lightpanda, you can now run all the tests:
 
 ```
-make wpt
+zig build wpt
 ```
 
 Or one specific test:
 
 ```
-make wpt Node-childNodes.html
+zig build wpt -- Node-childNodes.html
 ```
+
+`wpt` command accepts `--summary` and `--json` options modifying output.
 
 ## Contributing
 
