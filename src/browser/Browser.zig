@@ -44,10 +44,6 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: *HttpClient,
-call_arena: ArenaAllocator,
-page_arena: ArenaAllocator,
-session_arena: ArenaAllocator,
-transfer_arena: ArenaAllocator,
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
@@ -66,20 +62,12 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = app.http.client,
-        .call_arena = ArenaAllocator.init(allocator),
-        .page_arena = ArenaAllocator.init(allocator),
-        .session_arena = ArenaAllocator.init(allocator),
-        .transfer_arena = ArenaAllocator.init(allocator),
     };
 }
 
 pub fn deinit(self: *Browser) void {
     self.closeSession();
     self.env.deinit();
-    self.call_arena.deinit();
-    self.page_arena.deinit();
-    self.session_arena.deinit();
-    self.transfer_arena.deinit();
 }
 
 pub fn newSession(self: *Browser, notification: *Notification) !*Session {
@@ -94,7 +82,6 @@ pub fn closeSession(self: *Browser) void {
     if (self.session) |*session| {
         session.deinit();
         self.session = null;
-        _ = self.session_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
         self.env.memoryPressureNotification(.critical);
     }
 }

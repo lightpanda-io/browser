@@ -225,8 +225,12 @@ pub fn init(self: *Page, session: *Session) !void {
         log.debug(.page, "page.init", .{});
     }
     const browser = session.browser;
-    const page_arena = browser.page_arena.allocator();
-    errdefer _ = browser.page_arena.reset(.free_all);
+    const arena_pool = browser.arena_pool;
+    const page_arena = try arena_pool.acquire();
+    errdefer arena_pool.release(page_arena);
+
+    const call_arena = try arena_pool.acquire();
+    errdefer arena_pool.release(call_arena);
 
     var factory = Factory.init(page_arena, self);
 
@@ -239,8 +243,8 @@ pub fn init(self: *Page, session: *Session) !void {
         .arena = page_arena,
         .document = document,
         .window = undefined,
-        .arena_pool = browser.arena_pool,
-        .call_arena = browser.call_arena.allocator(),
+        .arena_pool = arena_pool,
+        .call_arena = call_arena,
         ._session = session,
         ._factory = factory,
         ._script_manager = undefined,
@@ -305,6 +309,9 @@ pub fn deinit(self: *Page) void {
             }
         }
     }
+
+    self.arena_pool.release(self.call_arena);
+    self.arena_pool.release(self.arena);
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
@@ -807,7 +814,7 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
 // why would we want to) and requires the body to live until the transfer
 // is complete.
 fn clearTransferArena(self: *Page) void {
-    _ = self._session.browser.transfer_arena.reset(.{ .retain_with_limit = 4 * 1024 });
+    self.arena_pool.reset(self._session.transfer_arena, 4 * 1024);
 }
 
 pub fn wait(self: *Page, wait_ms: u32) Session.WaitResult {

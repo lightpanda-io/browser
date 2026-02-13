@@ -85,3 +85,8 @@ pub fn release(self: *ArenaPool, allocator: Allocator) void {
     self.free_list_len = free_list_len + 1;
     self.free_list = entry;
 }
+
+pub fn reset(_: *const ArenaPool, allocator: Allocator, retain: usize) void {
+    const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
+    _ = arena.reset(.{ .retain_with_limit = retain });
+}

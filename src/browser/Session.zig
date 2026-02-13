@@ -65,18 +65,22 @@ page: ?Page,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
-    const session_allocator = browser.session_arena.allocator();
+    const arena = try browser.arena_pool.acquire();
+    errdefer browser.arena_pool.release(arena);
+
+    const transfer_arena = try browser.arena_pool.acquire();
+    errdefer browser.arena_pool.release(transfer_arena);
 
     self.* = .{
         .page = null,
+        .arena = arena,
         .history = .{},
         .navigation = .{},
         .storage_shed = .{},
         .browser = browser,
         .notification = notification,
-        .arena = session_allocator,
+        .transfer_arena = transfer_arena,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
-        .transfer_arena = browser.transfer_arena.allocator(),
     };
 }
 
@@ -84,16 +88,18 @@ pub fn deinit(self: *Session) void {
     if (self.page != null) {
         self.removePage();
     }
+    const browser = self.browser;
+
     self.cookie_jar.deinit();
-    self.storage_shed.deinit(self.browser.app.allocator);
+    self.storage_shed.deinit(browser.app.allocator);
+    browser.arena_pool.release(self.transfer_arena);
+    browser.arena_pool.release(self.arena);
 }
 
 // NOTE: the caller is not the owner of the returned value,
 // the pointer on Page is just returned as a convenience
 pub fn createPage(self: *Session) !*Page {
     lp.assert(self.page == null, "Session.createPage - page not null", .{});
-
-    _ = self.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
@@ -134,8 +140,6 @@ pub fn replacePage(self: *Session) !*Page {
 
     lp.assert(self.page != null, "Session.replacePage null page", .{});
     self.page.?.deinit();
-
-    _ = self.browser.page_arena.reset(.{ .retain_with_limit = 1 * 1024 * 1024 });
     self.browser.env.memoryPressureNotification(.moderate);
 
     self.page = @as(Page, undefined);
@@ -175,7 +179,7 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
 }
 
 fn processScheduledNavigation(self: *Session) !void {
-    defer _ = self.browser.transfer_arena.reset(.{ .retain_with_limit = 8 * 1024 });
+    defer self.browser.arena_pool.reset(self.transfer_arena, 4 * 1024);
     const url, const opts = blk: {
         const qn = self.page.?._queued_navigation.?;
         // qn might not be safe to use after self.removePage is called, hence
