@@ -28,6 +28,7 @@ const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
+const Element = @import("webapi/Element.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -254,20 +255,27 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool) !void {
     const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
+    const page = self.page;
+    const activation_state = ActivationState.create(event, target, page);
+
     // Defer runs even on early return - ensures event phase is reset
     // and default actions execute (unless prevented)
     defer {
         event._event_phase = .none;
+        // Handle checkbox/radio activation rollback or commit
+        if (activation_state) |state| {
+            state.restore(event, page);
+        }
 
         // Execute default action if not prevented
         if (event._prevent_default) {
             // can't return in a defer (╯°□°)╯︵ ┻━┻
-        } else if (event._type_string.eqlSlice("click")) {
-            self.page.handleClick(target) catch |err| {
+        } else if (event._type_string.eql(comptime .wrap("click"))) {
+            page.handleClick(target) catch |err| {
                 log.warn(.event, "page.click", .{ .err = err });
             };
-        } else if (event._type_string.eqlSlice("keydown")) {
-            self.page.handleKeydown(target, event) catch |err| {
+        } else if (event._type_string.eql(comptime .wrap("keydown"))) {
+            page.handleKeydown(target, event) catch |err| {
                 log.warn(.event, "page.keydown", .{ .err = err });
             };
         }
@@ -302,7 +310,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     // Even though the window isn't part of the DOM, events always propagate
     // through it in the capture phase (unless we stopped at a shadow boundary)
     if (path_len < path_buffer.len) {
-        path_buffer[path_len] = self.page.window.asEventTarget();
+        path_buffer[path_len] = page.window.asEventTarget();
         path_len += 1;
     }
 
@@ -488,7 +496,6 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     const handler_type = global_event_handlers.fromEventType(event._type_string.str()) orelse return null;
 
     // Look up the inline handler for this target
-    const Element = @import("webapi/Element.zig");
     const element = switch (target._type) {
         .node => |n| n.is(Element) orelse return null,
         else => return null,
@@ -612,3 +619,144 @@ fn isAncestorOrSelf(ancestor: *Node, node: *Node) bool {
 
     return false;
 }
+
+// Handles the default action for clicking on input checked/radio. Maybe this
+// could be generalized if needed, but I'm not sure. This wasn't obvious to me
+// but when an input is clicked, it's important to think about both the intent
+// and the actual result. Imagine you have an unchecked checkbox. When clicked,
+// the checkbox immediately becomes checked, and event handlers see this "checked"
+// intent. But a listener can preventDefault() in which case the check we did at
+// the start will be undone.
+// This is a bit more complicated for radio buttons, as the checking/unchecking
+// and the rollback can impact a different radio input. So if you "check" a radio
+// the intent is that it becomes checked and whatever was checked before becomes
+// unchecked, so that if you have to rollback (because of a preventDefault())
+// then both inputs have to revert to their original values.
+const ActivationState = struct {
+    old_checked: bool,
+    input: *Element.Html.Input,
+    previously_checked_radio: ?*Input,
+
+    const Input = Element.Html.Input;
+
+    fn create(event: *const Event, target: *Node, page: *Page) ? ActivationState {
+        if (event._type_string.eql(comptime .wrap("click")) == false) {
+            return null;
+        }
+
+        const input = target.is(Element.Html.Input) orelse return null;
+        if (input._input_type != .checkbox and input._input_type != .radio) {
+            return null;
+        }
+
+        const old_checked = input._checked;
+        var previously_checked_radio: ?*Element.Html.Input = null;
+
+        // For radio buttons, find the currently checked radio in the group
+        if (input._input_type == .radio and !old_checked) {
+            previously_checked_radio = try findCheckedRadioInGroup(input, page);
+        }
+
+        // Toggle checkbox or check radio (which unchecks others in group)
+        const new_checked = if (input._input_type == .checkbox) !old_checked else true;
+        try input.setChecked(new_checked, page);
+
+        return .{
+            .input = input,
+            .old_checked = old_checked,
+            .previously_checked_radio = previously_checked_radio,
+        };
+    }
+
+    fn restore(self: *const ActivationState, event: *const Event, page: *Page) void {
+        const input = self.input;
+        if (event._prevent_default) {
+            // Rollback: restore previous state
+            input._checked = self.old_checked;
+            input._checked_dirty = true;
+            if (self.previously_checked_radio) |prev_radio| {
+                prev_radio._checked = true;
+                prev_radio._checked_dirty = true;
+            }
+            return;
+        }
+
+        // Commit: fire input and change events only if state actually changed
+        // For checkboxes, state always changes. For radios, only if was unchecked.
+        const state_changed = (input._input_type == .checkbox) or !self.old_checked;
+        if (state_changed) {
+            fireEvent(page, input, "input") catch |err| {
+                log.warn(.event, "input event", .{ .err = err });
+            };
+            fireEvent(page, input, "change") catch |err| {
+                log.warn(.event, "change event", .{ .err = err });
+            };
+        }
+    }
+
+    fn findCheckedRadioInGroup(input: *Input, page: *Page) !?*Input {
+        const elem = input.asElement();
+
+        const name = elem.getAttributeSafe(comptime .wrap("name")) orelse return null;
+        if (name.len == 0) {
+            return null;
+        }
+
+        const form = input.getForm(page);
+
+        // Walk from the root of the tree containing this element
+        // This handles both document-attached and orphaned elements
+        const root = elem.asNode().getRootNode(null);
+
+        const TreeWalker = @import("webapi/TreeWalker.zig");
+        var walker = TreeWalker.Full.init(root, .{});
+
+        while (walker.next()) |node| {
+            const other_element = node.is(Element) orelse continue;
+            const other_input = other_element.is(Input) orelse continue;
+
+            if (other_input._input_type != .radio) {
+                continue;
+            }
+
+            // Skip the input we're checking from
+            if (other_input == input) {
+                continue;
+            }
+
+            const other_name = other_element.getAttributeSafe(comptime .wrap("name")) orelse continue;
+            if (!std.mem.eql(u8, name, other_name)) {
+                continue;
+            }
+
+            // Check if same form context
+          const other_form = other_input.getForm(page);
+          if (form) |f| {
+              const of = other_form orelse continue;
+              if (f != of) {
+                continue; // Different forms
+              }
+          } else if (other_form != null) {
+              continue; // form is null but other has a form
+          }
+
+            if (other_input._checked) {
+                return other_input;
+            }
+        }
+
+        return null;
+    }
+
+    // Fire input or change event
+    fn fireEvent(page: *Page, input: *Input, comptime typ: []const u8) !void {
+        const event = try Event.initTrusted(comptime .wrap(typ), .{
+            .bubbles = true,
+            .cancelable = false,
+        }, page);
+        defer if (!event._v8_handoff) event.deinit(false);
+
+        const target = input.asElement().asEventTarget();
+        try page._event_manager.dispatch(target, event);
+    }
+};

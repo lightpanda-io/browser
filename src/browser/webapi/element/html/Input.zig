@@ -496,12 +496,21 @@ fn uncheckRadioGroup(self: *Input, page: *Page) !void {
 
     const my_form = self.getForm(page);
 
+    // Walk from the root of the tree containing this element
+    // This handles both document-attached and orphaned elements
+    const root = element.asNode().getRootNode(null);
+
     const TreeWalker = @import("../../TreeWalker.zig");
-    var walker = TreeWalker.Full.init(page.document.asNode(), .{});
+    var walker = TreeWalker.Full.init(root, .{});
 
     while (walker.next()) |node| {
         const other_element = node.is(Element) orelse continue;
         const other_input = other_element.is(Input) orelse continue;
+
+        // Skip self
+        if (other_input == self) {
+            continue;
+        }
 
         if (other_input._input_type != .radio) {
             continue;
@@ -651,5 +660,6 @@ pub const Build = struct {
 const testing = @import("../../../../testing.zig");
 test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input.html", .{});
+    try testing.htmlRunner("element/html/input_click.html", .{});
     try testing.htmlRunner("element/html/input_radio.html", .{});
 }

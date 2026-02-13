@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<!-- Checkbox click tests -->
+<input id="checkbox1" type="checkbox">
+<input id="checkbox2" type="checkbox" checked>
+<input id="checkbox_disabled" type="checkbox" disabled>
+
+<!-- Radio click tests -->
+<input id="radio1" type="radio" name="clickgroup" checked>
+<input id="radio2" type="radio" name="clickgroup">
+<input id="radio3" type="radio" name="clickgroup">
+<input id="radio_disabled" type="radio" name="clickgroup" disabled>
+
+<script id="checkbox_click_toggles">
+  {
+    const cb = $('#checkbox1');
+    testing.expectEqual(false, cb.checked);
+
+    cb.click();
+    testing.expectEqual(true, cb.checked);
+
+    cb.click();
+    testing.expectEqual(false, cb.checked);
+  }
+</script>
+
+<script id="checkbox_click_preventDefault_reverts">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    testing.expectEqual(false, cb.checked);
+
+    cb.addEventListener('click', (e) => {
+      testing.expectEqual(true, cb.checked, 'checkbox should be checked during click handler');
+      e.preventDefault();
+    });
+
+    cb.click();
+    testing.expectEqual(false, cb.checked, 'checkbox should revert after preventDefault');
+  }
+</script>
+
+<script id="checkbox_click_events_order">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    document.body.appendChild(cb);
+
+    const events = [];
+
+    cb.addEventListener('click', () => events.push('click'));
+    cb.addEventListener('input', () => events.push('input'));
+    cb.addEventListener('change', () => events.push('change'));
+
+    cb.click();
+
+    testing.expectEqual(3, events.length);
+    testing.expectEqual('click', events[0]);
+    testing.expectEqual('input', events[1]);
+    testing.expectEqual('change', events[2]);
+
+    document.body.removeChild(cb);
+  }
+</script>
+
+<script id="checkbox_click_preventDefault_no_input_change">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    document.body.appendChild(cb);
+
+    const events = [];
+
+    cb.addEventListener('click', (e) => {
+      events.push('click');
+      e.preventDefault();
+    });
+    cb.addEventListener('input', () => events.push('input'));
+    cb.addEventListener('change', () => events.push('change'));
+
+    cb.click();
+
+    testing.expectEqual(1, events.length, 'only click event should fire');
+    testing.expectEqual('click', events[0]);
+
+    document.body.removeChild(cb);
+  }
+</script>
+
+<script id="checkbox_click_state_visible_in_handler">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = true;
+
+    cb.addEventListener('click', (e) => {
+      testing.expectEqual(false, cb.checked, 'should see toggled state in handler');
+      e.preventDefault();
+      testing.expectEqual(false, cb.checked, 'should still be toggled after preventDefault in handler');
+    });
+
+    cb.click();
+    testing.expectEqual(true, cb.checked, 'should revert to original state after handler completes');
+  }
+</script>
+
+<script id="radio_click_checks_clicked">
+  {
+    const r1 = $('#radio1');
+    const r2 = $('#radio2');
+
+    testing.expectEqual(true, r1.checked);
+    testing.expectEqual(false, r2.checked);
+
+    r2.click();
+    testing.expectEqual(false, r1.checked);
+    testing.expectEqual(true, r2.checked);
+  }
+</script>
+
+<script id="radio_click_preventDefault_reverts">
+  {
+    const r1 = document.createElement('input');
+    r1.type = 'radio';
+    r1.name = 'testgroup';
+    r1.checked = true;
+
+    const r2 = document.createElement('input');
+    r2.type = 'radio';
+    r2.name = 'testgroup';
+
+    document.body.appendChild(r1);
+    document.body.appendChild(r2);
+
+    r2.addEventListener('click', (e) => {
+      testing.expectEqual(false, r1.checked, 'r1 should be unchecked during click handler');
+      testing.expectEqual(true, r2.checked, 'r2 should be checked during click handler');
+      e.preventDefault();
+    });
+
+    r2.click();
+
+    testing.expectEqual(true, r1.checked, 'r1 should be restored after preventDefault');
+    testing.expectEqual(false, r2.checked, 'r2 should revert after preventDefault');
+
+    document.body.removeChild(r1);
+    document.body.removeChild(r2);
+  }
+</script>
+
+<script id="radio_click_events_order">
+  {
+    const r = document.createElement('input');
+    r.type = 'radio';
+    r.name = 'eventtest';
+    document.body.appendChild(r);
+
+    const events = [];
+
+    r.addEventListener('click', () => events.push('click'));
+    r.addEventListener('input', () => events.push('input'));
+    r.addEventListener('change', () => events.push('change'));
+
+    r.click();
+
+    testing.expectEqual(3, events.length);
+    testing.expectEqual('click', events[0]);
+    testing.expectEqual('input', events[1]);
+    testing.expectEqual('change', events[2]);
+
+    document.body.removeChild(r);
+  }
+</script>
+
+<script id="radio_click_already_checked_no_events">
+  {
+    const r = document.createElement('input');
+    r.type = 'radio';
+    r.name = 'alreadytest';
+    r.checked = true;
+    document.body.appendChild(r);
+
+    const events = [];
+
+    r.addEventListener('click', () => events.push('click'));
+    r.addEventListener('input', () => events.push('input'));
+    r.addEventListener('change', () => events.push('change'));
+
+    r.click();
+
+    testing.expectEqual(1, events.length, 'only click event should fire for already-checked radio');
+    testing.expectEqual('click', events[0]);
+
+    document.body.removeChild(r);
+  }
+</script>
+
+<script id="disabled_checkbox_no_click">
+  {
+    const cb = $('#checkbox_disabled');
+    const events = [];
+
+    cb.addEventListener('click', () => events.push('click'));
+    cb.addEventListener('input', () => events.push('input'));
+    cb.addEventListener('change', () => events.push('change'));
+
+    cb.click();
+
+    testing.expectEqual(0, events.length, 'disabled checkbox should not fire any events');
+  }
+</script>
+
+<script id="disabled_radio_no_click">
+  {
+    const r = $('#radio_disabled');
+    const events = [];
+
+    r.addEventListener('click', () => events.push('click'));
+    r.addEventListener('input', () => events.push('input'));
+    r.addEventListener('change', () => events.push('change'));
+
+    r.click();
+
+    testing.expectEqual(0, events.length, 'disabled radio should not fire any events');
+  }
+</script>
+
+<script id="input_and_change_are_trusted">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    document.body.appendChild(cb);
+
+    let inputEvent = null;
+    let changeEvent = null;
+
+    cb.addEventListener('input', (e) => inputEvent = e);
+    cb.addEventListener('change', (e) => changeEvent = e);
+
+    cb.click();
+
+    testing.expectEqual(true, inputEvent.isTrusted, 'input event should be trusted');
+    testing.expectEqual(true, inputEvent.bubbles, 'input event should bubble');
+    testing.expectEqual(false, inputEvent.cancelable, 'input event should not be cancelable');
+
+    testing.expectEqual(true, changeEvent.isTrusted, 'change event should be trusted');
+    testing.expectEqual(true, changeEvent.bubbles, 'change event should bubble');
+    testing.expectEqual(false, changeEvent.cancelable, 'change event should not be cancelable');
+
+    document.body.removeChild(cb);
+  }
+</script>
+
+<script id="multiple_radios_click_sequence">
+  {
+    const r1 = $('#radio1');
+    const r2 = $('#radio2');
+    const r3 = $('#radio3');
+
+    // Reset to known state
+    r1.checked = true;
+
+    testing.expectEqual(true, r1.checked);
+    testing.expectEqual(false, r2.checked);
+    testing.expectEqual(false, r3.checked);
+
+    r2.click();
+    testing.expectEqual(false, r1.checked);
+    testing.expectEqual(true, r2.checked);
+    testing.expectEqual(false, r3.checked);
+
+    r3.click();
+    testing.expectEqual(false, r1.checked);
+    testing.expectEqual(false, r2.checked);
+    testing.expectEqual(true, r3.checked);
+
+    r1.click();
+    testing.expectEqual(true, r1.checked);
+    testing.expectEqual(false, r2.checked);
+    testing.expectEqual(false, r3.checked);
+  }
+</script>
