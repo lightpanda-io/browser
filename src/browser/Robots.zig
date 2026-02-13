@@ -355,51 +355,76 @@ fn matchPattern(compiled: CompiledPattern, path: []const u8) bool {
             const pattern = compiled.pattern;
             const exact_match = pattern[pattern.len - 1] == '$';
             const inner_pattern = if (exact_match) pattern[0 .. pattern.len - 1] else pattern;
-            return matchPatternRecursive(inner_pattern, path, exact_match);
+            return matchInnerPattern(inner_pattern, path, exact_match);
         },
     }
 }
 
-fn matchPatternRecursive(pattern: []const u8, path: []const u8, exact_match: bool) bool {
-    if (pattern.len == 0) return true;
+fn matchInnerPattern(pattern: []const u8, path: []const u8, exact_match: bool) bool {
+    var pattern_idx: usize = 0;
+    var path_idx: usize = 0;
 
-    const star_pos = std.mem.indexOfScalar(u8, pattern, '*') orelse {
-        if (exact_match) {
-            // If we end in '$', we must be exactly equal.
-            return std.mem.eql(u8, path, pattern);
-        } else {
-            // Otherwise, we are just a prefix.
-            return std.mem.startsWith(u8, path, pattern);
+    var star_pattern_idx: ?usize = null;
+    var star_path_idx: ?usize = null;
+
+    while (pattern_idx < pattern.len or path_idx < path.len) {
+        // 1: If pattern is consumed and we are doing prefix match, we matched.
+        if (pattern_idx >= pattern.len and !exact_match) {
+            return true;
         }
-    };
 
-    // Ensure the prefix before the '*' matches.
-    if (!std.mem.startsWith(u8, path, pattern[0..star_pos])) {
+        // 2: Current character is a wildcard
+        if (pattern_idx < pattern.len and pattern[pattern_idx] == '*') {
+            star_pattern_idx = pattern_idx;
+            star_path_idx = path_idx;
+            pattern_idx += 1;
+            continue;
+        }
+
+        // 3: Characters match, advance both heads.
+        if (pattern_idx < pattern.len and path_idx < path.len and pattern[pattern_idx] == path[path_idx]) {
+            pattern_idx += 1;
+            path_idx += 1;
+            continue;
+        }
+
+        // 4: we have a previous wildcard, backtrack and try matching more.
+        if (star_pattern_idx) |star_p_idx| {
+            // if we have exhausted the path,
+            // we know we haven't matched.
+            if (star_path_idx.? > path.len) {
+                return false;
+            }
+
+            pattern_idx = star_p_idx + 1;
+            path_idx = star_path_idx.?;
+            star_path_idx.? += 1;
+            continue;
+        }
+
+        // Fallthrough: No match and no backtracking.
         return false;
     }
 
-    const suffix_pattern = pattern[star_pos + 1 ..];
-    if (suffix_pattern.len == 0) return true;
-
-    var i: usize = star_pos;
-    while (i <= path.len) : (i += 1) {
-        if (matchPatternRecursive(suffix_pattern, path[i..], exact_match)) {
-            return true;
-        }
+    // Handle trailing widlcards that can match 0 characters.
+    while (pattern_idx < pattern.len and pattern[pattern_idx] == '*') {
+        pattern_idx += 1;
     }
 
-    return false;
+    if (exact_match) {
+        // Both must be fully consumed.
+        return pattern_idx == pattern.len and path_idx == path.len;
+    }
+
+    // For prefix match, pattern must be completed.
+    return pattern_idx == pattern.len;
 }
 
 pub fn isAllowed(self: *const Robots, path: []const u8) bool {
     for (self.rules) |rule| {
         switch (rule) {
-            .allow => |compiled| {
-                if (matchPattern(compiled, path)) return true;
-            },
-            .disallow => |compiled| {
-                if (matchPattern(compiled, path)) return false;
-            },
+            .allow => |compiled| if (matchPattern(compiled, path)) return true,
+            .disallow => |compiled| if (matchPattern(compiled, path)) return false,
         }
     }
 
