@@ -639,7 +639,7 @@ const ActivationState = struct {
 
     const Input = Element.Html.Input;
 
-    fn create(event: *const Event, target: *Node, page: *Page) ? ActivationState {
+    fn create(event: *const Event, target: *Node, page: *Page) ?ActivationState {
         if (event._type_string.eql(comptime .wrap("click")) == false) {
             return null;
         }
@@ -730,15 +730,15 @@ const ActivationState = struct {
             }
 
             // Check if same form context
-          const other_form = other_input.getForm(page);
-          if (form) |f| {
-              const of = other_form orelse continue;
-              if (f != of) {
-                continue; // Different forms
-              }
-          } else if (other_form != null) {
-              continue; // form is null but other has a form
-          }
+            const other_form = other_input.getForm(page);
+            if (form) |f| {
+                const of = other_form orelse continue;
+                if (f != of) {
+                    continue; // Different forms
+                }
+            } else if (other_form != null) {
+                continue; // form is null but other has a form
+            }
 
             if (other_input._checked) {
                 return other_input;
