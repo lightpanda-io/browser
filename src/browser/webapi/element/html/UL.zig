@@ -35,7 +35,7 @@ pub const JsApi = struct {
     pub const bridge = js.Bridge(UL);
 
     pub const Meta = struct {
-        pub const name = "HTMLULElement";
+        pub const name = "HTMLUListElement";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };

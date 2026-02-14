@@ -1575,10 +1575,10 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "dd", .{}) catch unreachable, ._tag = .dd },
                     ),
                     asUint("dl") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.DList,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "dl", .{}) catch unreachable, ._tag = .dl },
+                        .{ ._proto = undefined },
                     ),
                     asUint("dt") => return self.createHtmlElementT(
                         Element.Html.Generic,
