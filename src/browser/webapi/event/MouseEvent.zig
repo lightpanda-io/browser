@@ -40,6 +40,7 @@ pub const MouseButton = enum(u8) {
 pub const Type = union(enum) {
     generic,
     pointer_event: *PointerEvent,
+    wheel_event: *@import("WheelEvent.zig"),
 };
 
 _type: Type,
@@ -123,6 +124,7 @@ pub fn is(self: *MouseEvent, comptime T: type) ?*T {
     switch (self._type) {
         .generic => return if (T == MouseEvent) self else null,
         .pointer_event => |e| return if (T == PointerEvent) e else null,
+        .wheel_event => |e| return if (T == @import("WheelEvent.zig")) e else null,
     }
     return null;
 }

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=default>
+  let event = new WheelEvent('wheel');
+  testing.expectEqual('wheel', event.type);
+  testing.expectEqual(true, event instanceof WheelEvent);
+  testing.expectEqual(true, event instanceof MouseEvent);
+  testing.expectEqual(true, event instanceof UIEvent);
+  testing.expectEqual(0, event.deltaX);
+  testing.expectEqual(0, event.deltaY);
+  testing.expectEqual(0, event.deltaZ);
+  testing.expectEqual(0, event.deltaMode);
+</script>
+
+<script id=parameters>
+  let wheelEvent = new WheelEvent('wheel', {
+    deltaX: 10,
+    deltaY: 20,
+    deltaMode: WheelEvent.DOM_DELTA_LINE
+  });
+  testing.expectEqual(10, wheelEvent.deltaX);
+  testing.expectEqual(20, wheelEvent.deltaY);
+  testing.expectEqual(1, wheelEvent.deltaMode);
+</script>
+
+<script id=constants>
+  testing.expectEqual(0, WheelEvent.DOM_DELTA_PIXEL);
+  testing.expectEqual(1, WheelEvent.DOM_DELTA_LINE);
+  testing.expectEqual(2, WheelEvent.DOM_DELTA_PAGE);
+</script>
