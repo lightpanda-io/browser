@@ -53,6 +53,10 @@ pub fn length(self: *NodeList, page: *Page) !u32 {
     };
 }
 
+pub fn indexedGet(self: *NodeList, index: usize, page: *Page) !*Node {
+    return try self.getAtIndex(index, page) orelse return error.NotHandled;
+}
+
 pub fn getAtIndex(self: *NodeList, index: usize, page: *Page) !?*Node {
     return switch (self.data) {
         .child_nodes => |impl| impl.getAtIndex(index, page),
@@ -121,7 +125,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(NodeList.length, null, .{});
-    pub const @"[]" = bridge.indexed(NodeList.getAtIndex, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(NodeList.indexedGet, .{ .null_as_undefined = true });
     pub const item = bridge.function(NodeList.getAtIndex, .{});
     pub const keys = bridge.function(NodeList.keys, .{});
     pub const values = bridge.function(NodeList.values, .{});

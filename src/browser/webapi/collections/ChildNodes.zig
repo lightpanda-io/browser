@@ -30,18 +30,18 @@ _last_index: usize,
 _last_length: ?u32,
 _last_node: ?*std.DoublyLinkedList.Node,
 _cached_version: usize,
-_children: ?*Node.Children,
+_node: *Node,
 
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
 pub const EntryIterator = GenericIterator(Iterator, null);
 
-pub fn init(children: ?*Node.Children, page: *Page) !*ChildNodes {
+pub fn init(node: *Node, page: *Page) !*ChildNodes {
     return page._factory.create(ChildNodes{
+        ._node = node,
         ._last_index = 0,
         ._last_node = null,
         ._last_length = null,
-        ._children = children,
         ._cached_version = page.version,
     });
 }
@@ -52,7 +52,7 @@ pub fn length(self: *ChildNodes, page: *Page) !u32 {
             return cached_length;
         }
     }
-    const children = self._children orelse return 0;
+    const children = self._node._children orelse return 0;
 
     // O(N)
     const len = children.len();
@@ -86,7 +86,7 @@ pub fn getAtIndex(self: *ChildNodes, index: usize, page: *Page) !?*Node {
 }
 
 pub fn first(self: *const ChildNodes) ?*std.DoublyLinkedList.Node {
-    return &(self._children orelse return null).first()._child_link;
+    return &(self._node._children orelse return null).first()._child_link;
 }
 
 pub fn keys(self: *ChildNodes, page: *Page) !*KeyIterator {

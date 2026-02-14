@@ -22,6 +22,8 @@
   testing.expectEqual(undefined, children[-1]);
 
   testing.expectEqual(['p1', 'p2'], Array.from(children).map((n) => n.id));
+
+  testing.expectEqual(false, 10 in children);
 </script>
 
 <script id=values>
