@@ -324,19 +324,38 @@ pub fn createRange(_: *const Document, page: *Page) !*Range {
 
 pub fn createEvent(_: *const Document, event_type: []const u8, page: *Page) !*@import("Event.zig") {
     const Event = @import("Event.zig");
+    if (event_type.len > 100) {
+        return error.NotSupported;
+    }
+    const normalized = std.ascii.lowerString(&page.buf, event_type);
 
-    if (std.ascii.eqlIgnoreCase(event_type, "event") or std.ascii.eqlIgnoreCase(event_type, "events") or std.ascii.eqlIgnoreCase(event_type, "htmlevents")) {
+    if (std.mem.eql(u8, normalized, "event") or std.mem.eql(u8, normalized, "events") or std.mem.eql(u8, normalized, "htmlevents")) {
         return Event.init("", null, page);
     }
 
-    if (std.ascii.eqlIgnoreCase(event_type, "customevent") or std.ascii.eqlIgnoreCase(event_type, "customevents")) {
+    if (std.mem.eql(u8, normalized, "customevent") or std.mem.eql(u8, normalized, "customevents")) {
         const CustomEvent = @import("event/CustomEvent.zig");
-        const custom_event = try CustomEvent.init("", null, page);
-        return custom_event.asEvent();
+        return (try CustomEvent.init("", null, page)).asEvent();
     }
 
-    if (std.ascii.eqlIgnoreCase(event_type, "messageevent")) {
-        return error.NotSupported;
+    if (std.mem.eql(u8, normalized, "keyboardevent")) {
+        const KeyboardEvent = @import("event/KeyboardEvent.zig");
+        return (try KeyboardEvent.init("", null, page)).asEvent();
+    }
+
+    if (std.mem.eql(u8, normalized, "mouseevent") or std.mem.eql(u8, normalized, "mouseevents")) {
+        const MouseEvent = @import("event/MouseEvent.zig");
+        return (try MouseEvent.init("", null, page)).asEvent();
+    }
+
+    if (std.mem.eql(u8, normalized, "messageevent")) {
+        const MessageEvent = @import("event/MessageEvent.zig");
+        return (try MessageEvent.init("", null, page)).asEvent();
+    }
+
+    if (std.mem.eql(u8, normalized, "uievent") or std.mem.eql(u8, normalized, "uievents")) {
+        const UIEvent = @import("event/UIEvent.zig");
+        return (try UIEvent.init("", null, page)).asEvent();
     }
 
     return error.NotSupported;
