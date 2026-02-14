@@ -38,11 +38,11 @@ pub fn Builder(comptime T: type) type {
             return Constructor.init(T, func, opts);
         }
 
-        pub fn accessor(comptime getter: anytype, comptime setter: anytype, comptime opts: Accessor.Opts) Accessor {
+        pub fn accessor(comptime getter: anytype, comptime setter: anytype, comptime opts: Caller.Function.Opts) Accessor {
             return Accessor.init(T, getter, setter, opts);
         }
 
-        pub fn function(comptime func: anytype, comptime opts: Function.Opts) Function {
+        pub fn function(comptime func: anytype, comptime opts: Caller.Function.Opts) Function {
             return Function.init(T, func, opts);
         }
 
@@ -162,37 +162,13 @@ pub const Function = struct {
     arity: usize,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
-    const Opts = struct {
-        static: bool = false,
-        dom_exception: bool = false,
-        as_typed_array: bool = false,
-        null_as_undefined: bool = false,
-    };
-
-    fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Function {
+    fn init(comptime T: type, comptime func: anytype, comptime opts: Caller.Function.Opts) Function {
         return .{
             .static = opts.static,
             .arity = getArity(@TypeOf(func)),
             .func = struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    caller.init(v8_isolate);
-                    defer caller.deinit();
-
-                    if (comptime opts.static) {
-                        caller.function(T, func, handle.?, .{
-                            .dom_exception = opts.dom_exception,
-                            .as_typed_array = opts.as_typed_array,
-                            .null_as_undefined = opts.null_as_undefined,
-                        });
-                    } else {
-                        caller.method(T, func, handle.?, .{
-                            .dom_exception = opts.dom_exception,
-                            .as_typed_array = opts.as_typed_array,
-                            .null_as_undefined = opts.null_as_undefined,
-                        });
-                    }
+                    Caller.Function.call(T, handle.?, func, opts);
                 }
             }.wrap,
         };
@@ -220,14 +196,7 @@ pub const Accessor = struct {
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
 
-    const Opts = struct {
-        static: bool = false,
-        as_typed_array: bool = false,
-        null_as_undefined: bool = false,
-        dom_exception: bool = false,
-    };
-
-    fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Opts) Accessor {
+    fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Caller.Function.Opts) Accessor {
         var accessor = Accessor{
             .static = opts.static,
         };
@@ -235,24 +204,7 @@ pub const Accessor = struct {
         if (@typeInfo(@TypeOf(getter)) != .null) {
             accessor.getter = struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    caller.init(v8_isolate);
-                    defer caller.deinit();
-
-                    if (comptime opts.static) {
-                        caller.function(T, getter, handle.?, .{
-                            .dom_exception = opts.dom_exception,
-                            .as_typed_array = opts.as_typed_array,
-                            .null_as_undefined = opts.null_as_undefined,
-                        });
-                    } else {
-                        caller.method(T, getter, handle.?, .{
-                            .dom_exception = opts.dom_exception,
-                            .as_typed_array = opts.as_typed_array,
-                            .null_as_undefined = opts.null_as_undefined,
-                        });
-                    }
+                    Caller.Function.call(T, handle.?, getter, opts);
                 }
             }.wrap;
         }
@@ -260,16 +212,7 @@ pub const Accessor = struct {
         if (@typeInfo(@TypeOf(setter)) != .null) {
             accessor.setter = struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    caller.init(v8_isolate);
-                    defer caller.deinit();
-
-                    caller.method(T, setter, handle.?, .{
-                        .dom_exception = opts.dom_exception,
-                        .as_typed_array = opts.as_typed_array,
-                        .null_as_undefined = opts.null_as_undefined,
-                    });
+                    Caller.Function.call(T, handle.?, setter, opts);
                 }
             }.wrap;
         }
@@ -390,11 +333,9 @@ pub const Iterator = struct {
             .async = opts.async,
             .func = struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                    const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                    var caller: Caller = undefined;
-                    caller.init(v8_isolate);
-                    defer caller.deinit();
-                    caller.method(T, struct_or_func, handle.?, .{});
+                    return Caller.Function.call(T, handle.?, struct_or_func, .{
+                        .null_as_undefined = opts.null_as_undefined,
+                    });
                 }
             }.wrap,
         };
@@ -411,12 +352,7 @@ pub const Callable = struct {
     fn init(comptime T: type, comptime func: anytype, comptime opts: Opts) Callable {
         return .{ .func = struct {
             fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-                const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
-                var caller: Caller = undefined;
-                caller.init(v8_isolate);
-                defer caller.deinit();
-
-                caller.method(T, func, handle.?, .{
+                Caller.Function.call(T, handle.?, func, .{
                     .null_as_undefined = opts.null_as_undefined,
                 });
             }
