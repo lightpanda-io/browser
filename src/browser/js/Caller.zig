@@ -23,6 +23,7 @@ const string = @import("../../string.zig");
 const Page = @import("../Page.zig");
 
 const js = @import("js.zig");
+const Local = @import("Local.zig");
 const Context = @import("Context.zig");
 const TaggedOpaque = @import("TaggedOpaque.zig");
 
@@ -33,23 +34,20 @@ const CALL_ARENA_RETAIN = 1024 * 16;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Caller = @This();
-local: js.Local,
+local: Local,
 prev_local: ?*const js.Local,
 prev_context: *Context,
 
 // Takes the raw v8 isolate and extracts the context from it.
 pub fn init(self: *Caller, v8_isolate: *v8.Isolate) void {
-    const v8_context_handle = v8.v8__Isolate__GetCurrentContext(v8_isolate);
-
-    const embedder_data = v8.v8__Context__GetEmbedderData(v8_context_handle, 1);
-    var lossless: bool = undefined;
-    const ctx: *Context = @ptrFromInt(v8.v8__BigInt__Uint64Value(embedder_data, &lossless));
+    const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate).?;
+    const ctx = Context.fromC(v8_context);
 
     ctx.call_depth += 1;
     self.* = Caller{
         .local = .{
             .ctx = ctx,
-            .handle = v8_context_handle.?,
+            .handle = v8_context,
             .call_arena = ctx.call_arena,
             .isolate = .{ .handle = v8_isolate },
         },
@@ -92,25 +90,28 @@ pub const CallOpts = struct {
 };
 
 pub fn constructor(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
+    const local = &self.local;
+
     var hs: js.HandleScope = undefined;
-    hs.init(self.local.isolate);
+    hs.init(local.isolate);
     defer hs.deinit();
 
     const info = FunctionCallbackInfo{ .handle = handle };
 
     if (!info.isConstructCall()) {
-        self.handleError(T, @TypeOf(func), error.InvalidArgument, info, opts);
+        handleError(T, @TypeOf(func), local, error.InvalidArgument, info, opts);
         return;
     }
 
     self._constructor(func, info) catch |err| {
-        self.handleError(T, @TypeOf(func), err, info, opts);
+        handleError(T, @TypeOf(func), local, err, info, opts);
     };
 }
 
 fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo) !void {
     const F = @TypeOf(func);
-    const args = try self.getArgs(F, 0, info);
+    const local = &self.local;
+    const args = try getArgs(F, 0, local, info);
     const res = @call(.auto, func, args);
 
     const ReturnType = @typeInfo(F).@"fn".return_type orelse {
@@ -118,12 +119,12 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo) !void 
     };
 
     const new_this_handle = info.getThis();
-    var this = js.Object{ .local = &self.local, .handle = new_this_handle };
+    var this = js.Object{ .local = local, .handle = new_this_handle };
     if (@typeInfo(ReturnType) == .error_union) {
         const non_error_res = res catch |err| return err;
-        this = try self.local.mapZigInstanceToJs(new_this_handle, non_error_res);
+        this = try local.mapZigInstanceToJs(new_this_handle, non_error_res);
     } else {
-        this = try self.local.mapZigInstanceToJs(new_this_handle, res);
+        this = try local.mapZigInstanceToJs(new_this_handle, res);
     }
 
     // If we got back a different object (existing wrapper), copy the prototype
@@ -140,144 +141,115 @@ fn _constructor(self: *Caller, func: anytype, info: FunctionCallbackInfo) !void 
     info.getReturnValue().set(this.handle);
 }
 
-pub fn method(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
-    var hs: js.HandleScope = undefined;
-    hs.init(self.local.isolate);
-    defer hs.deinit();
-
-    const info = FunctionCallbackInfo{ .handle = handle };
-    self._method(T, func, info, opts) catch |err| {
-        self.handleError(T, @TypeOf(func), err, info, opts);
-    };
-}
-
-fn _method(self: *Caller, comptime T: type, func: anytype, info: FunctionCallbackInfo, comptime opts: CallOpts) !void {
-    const F = @TypeOf(func);
-    var args = try self.getArgs(F, 1, info);
-
-    const js_this = info.getThis();
-    @field(args, "0") = try TaggedOpaque.fromJS(*T, js_this);
-
-    const res = @call(.auto, func, args);
-
-    const mapped = try self.local.zigValueToJs(res, opts);
-    const return_value = info.getReturnValue();
-    return_value.set(mapped);
-}
-
-pub fn function(self: *Caller, comptime T: type, func: anytype, handle: *const v8.FunctionCallbackInfo, comptime opts: CallOpts) void {
-    var hs: js.HandleScope = undefined;
-    hs.init(self.local.isolate);
-    defer hs.deinit();
-
-    const info = FunctionCallbackInfo{ .handle = handle };
-    self._function(func, info, opts) catch |err| {
-        self.handleError(T, @TypeOf(func), err, info, opts);
-    };
-}
-
-fn _function(self: *Caller, func: anytype, info: FunctionCallbackInfo, comptime opts: CallOpts) !void {
-    const F = @TypeOf(func);
-    const args = try self.getArgs(F, 0, info);
-    const res = @call(.auto, func, args);
-    info.getReturnValue().set(try self.local.zigValueToJs(res, opts));
-}
-
 pub fn getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    const local = &self.local;
+
     var hs: js.HandleScope = undefined;
-    hs.init(self.local.isolate);
+    hs.init(local.isolate);
     defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
-    return self._getIndex(T, func, idx, info, opts) catch |err| {
-        self.handleError(T, @TypeOf(func), err, info, opts);
+    return _getIndex(T, local, func, idx, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info, opts);
         // not intercepted
         return 0;
     };
 }
 
-fn _getIndex(self: *Caller, comptime T: type, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getIndex(comptime T: type, local: *const Local, func: anytype, idx: u32, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
     const F = @TypeOf(func);
-    var args = try self.getArgs(F, 2, info);
+    var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
     @field(args, "1") = idx;
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = local.ctx.page;
+    }
     const ret = @call(.auto, func, args);
-    return self.handleIndexedReturn(T, F, true, ret, info, opts);
+    return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
 pub fn getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    const local = &self.local;
+
     var hs: js.HandleScope = undefined;
-    hs.init(self.local.isolate);
+    hs.init(local.isolate);
     defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
-    return self._getNamedIndex(T, func, name, info, opts) catch |err| {
-        self.handleError(T, @TypeOf(func), err, info, opts);
+    return _getNamedIndex(T, local, func, name, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info, opts);
         // not intercepted
         return 0;
     };
 }
 
-fn _getNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _getNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
     const F = @TypeOf(func);
-    var args = try self.getArgs(F, 2, info);
+    var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-    @field(args, "1") = try self.nameToString(@TypeOf(args.@"1"), name);
+    @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
+    if (@typeInfo(F).@"fn".params.len == 3) {
+        @field(args, "2") = local.ctx.page;
+    }
     const ret = @call(.auto, func, args);
-    return self.handleIndexedReturn(T, F, true, ret, info, opts);
+    return handleIndexedReturn(T, F, true, local, ret, info, opts);
 }
 
 pub fn setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: *const v8.Value, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    const local = &self.local;
+
     var hs: js.HandleScope = undefined;
-    hs.init(self.local.isolate);
+    hs.init(local.isolate);
     defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
-    return self._setNamedIndex(T, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
-        self.handleError(T, @TypeOf(func), err, info, opts);
+    return _setNamedIndex(T, local, func, name, .{ .local = &self.local, .handle = js_value }, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info, opts);
         // not intercepted
         return 0;
     };
 }
 
-fn _setNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _setNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, js_value: js.Value, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-    @field(args, "1") = try self.nameToString(@TypeOf(args.@"1"), name);
-    @field(args, "2") = try self.local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
+    @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
+    @field(args, "2") = try local.jsValueToZig(@TypeOf(@field(args, "2")), js_value);
     if (@typeInfo(F).@"fn".params.len == 4) {
-        @field(args, "3") = self.local.ctx.page;
+        @field(args, "3") = local.ctx.page;
     }
     const ret = @call(.auto, func, args);
-    return self.handleIndexedReturn(T, F, false, ret, info, opts);
+    return handleIndexedReturn(T, F, false, local, ret, info, opts);
 }
 
 pub fn deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    const local = &self.local;
+
     var hs: js.HandleScope = undefined;
-    hs.init(self.local.isolate);
+    hs.init(local.isolate);
     defer hs.deinit();
 
     const info = PropertyCallbackInfo{ .handle = handle };
-    return self._deleteNamedIndex(T, func, name, info, opts) catch |err| {
-        self.handleError(T, @TypeOf(func), err, info, opts);
+    return _deleteNamedIndex(T, local, func, name, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info, opts);
         return 0;
     };
 }
 
-fn _deleteNamedIndex(self: *Caller, comptime T: type, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name: *const v8.Name, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
     const F = @TypeOf(func);
     var args: ParameterTypes(F) = undefined;
     @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
-    @field(args, "1") = try self.nameToString(@TypeOf(args.@"1"), name);
+    @field(args, "1") = try nameToString(local, @TypeOf(args.@"1"), name);
     if (@typeInfo(F).@"fn".params.len == 3) {
-        @field(args, "2") = self.local.ctx.page;
+        @field(args, "2") = local.ctx.page;
     }
     const ret = @call(.auto, func, args);
-    return self.handleIndexedReturn(T, F, false, ret, info, opts);
+    return handleIndexedReturn(T, F, false, local, ret, info, opts);
 }
 
-fn handleIndexedReturn(self: *Caller, comptime T: type, comptime F: type, comptime getter: bool, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+fn handleIndexedReturn(comptime T: type, comptime F: type, comptime getter: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
     // need to unwrap this error immediately for when opts.null_as_undefined == true
     // and we need to compare it to null;
     const non_error_ret = switch (@typeInfo(@TypeOf(ret))) {
@@ -292,7 +264,7 @@ fn handleIndexedReturn(self: *Caller, comptime T: type, comptime F: type, compti
                         return 0;
                     }
                 }
-                self.handleError(T, F, err, info, opts);
+                handleError(T, F, local, err, info, opts);
                 // not intercepted
                 return 0;
             };
@@ -301,7 +273,7 @@ fn handleIndexedReturn(self: *Caller, comptime T: type, comptime F: type, compti
     };
 
     if (comptime getter) {
-        info.getReturnValue().set(try self.local.zigValueToJs(non_error_ret, opts));
+        info.getReturnValue().set(try local.zigValueToJs(non_error_ret, opts));
     }
     // intercepted
     return 1;
@@ -314,23 +286,23 @@ fn isInErrorSet(err: anyerror, comptime T: type) bool {
     return false;
 }
 
-fn nameToString(self: *const Caller, comptime T: type, name: *const v8.Name) !T {
+fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T {
     const handle = @as(*const v8.String, @ptrCast(name));
     if (T == string.String) {
-        return js.String.toSSO(.{ .local = &self.local, .handle = handle }, false);
+        return js.String.toSSO(.{ .local = local, .handle = handle }, false);
     }
     if (T == string.Global) {
-        return js.String.toSSO(.{ .local = &self.local, .handle = handle }, true);
+        return js.String.toSSO(.{ .local = local, .handle = handle }, true);
     }
-    return try js.String.toSlice(.{ .local = &self.local, .handle = handle });
+    return try js.String.toSlice(.{ .local = local, .handle = handle });
 }
 
-fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror, info: anytype, comptime opts: CallOpts) void {
-    const isolate = self.local.isolate;
+fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype, comptime opts: CallOpts) void {
+    const isolate = local.isolate;
 
     if (comptime @import("builtin").mode == .Debug and @TypeOf(info) == FunctionCallbackInfo) {
         if (log.enabled(.js, .warn)) {
-            self.logFunctionCallError(@typeName(T), @typeName(F), err, info);
+            logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
         }
     }
 
@@ -343,7 +315,7 @@ fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror,
             if (comptime opts.dom_exception) {
                 const DOMException = @import("../webapi/DOMException.zig");
                 if (DOMException.fromError(err)) |ex| {
-                    const value = self.local.zigValueToJs(ex, .{}) catch break :blk isolate.createError("internal error");
+                    const value = local.zigValueToJs(ex, .{}) catch break :blk isolate.createError("internal error");
                     break :blk value.handle;
                 }
             }
@@ -355,120 +327,20 @@ fn handleError(self: *Caller, comptime T: type, comptime F: type, err: anyerror,
     info.getReturnValue().setValueHandle(js_exception);
 }
 
-// If we call a method in javascript: cat.lives('nine');
-//
-// Then we'd expect a Zig function with 2 parameters: a self and the string.
-// In this case, offset == 1. Offset is always 1 for setters or methods.
-//
-// Offset is always 0 for constructors.
-//
-// For constructors, setters and methods, we can further increase offset + 1
-// if the first parameter is an instance of Page.
-//
-// Finally, if the JS function is called with _more_ parameters and
-// the last parameter in Zig is an array, we'll try to slurp the additional
-// parameters into the array.
-fn getArgs(self: *const Caller, comptime F: type, comptime offset: usize, info: anytype) !ParameterTypes(F) {
-    const local = &self.local;
-    var args: ParameterTypes(F) = undefined;
-
-    const params = @typeInfo(F).@"fn".params[offset..];
-    // Except for the constructor, the first parameter is always `self`
-    // This isn't something we'll bind from JS, so skip it.
-    const params_to_map = blk: {
-        if (params.len == 0) {
-            return args;
-        }
-
-        // If the last parameter is the Page, set it, and exclude it
-        // from our params slice, because we don't want to bind it to
-        // a JS argument
-        if (comptime isPage(params[params.len - 1].type.?)) {
-            @field(args, tupleFieldName(params.len - 1 + offset)) = local.ctx.page;
-            break :blk params[0 .. params.len - 1];
-        }
-
-        // we have neither a Page nor a JsObject. All params must be
-        // bound to a JavaScript value.
-        break :blk params;
-    };
-
-    if (params_to_map.len == 0) {
-        return args;
-    }
-
-    const js_parameter_count = info.length();
-    const last_js_parameter = params_to_map.len - 1;
-    var is_variadic = false;
-
-    {
-        // This is going to get complicated. If the last Zig parameter
-        // is a slice AND the corresponding javascript parameter is
-        // NOT an an array, then we'll treat it as a variadic.
-
-        const last_parameter_type = params_to_map[params_to_map.len - 1].type.?;
-        const last_parameter_type_info = @typeInfo(last_parameter_type);
-        if (last_parameter_type_info == .pointer and last_parameter_type_info.pointer.size == .slice) {
-            const slice_type = last_parameter_type_info.pointer.child;
-            const corresponding_js_value = info.getArg(@intCast(last_js_parameter), local);
-            if (corresponding_js_value.isArray() == false and corresponding_js_value.isTypedArray() == false and slice_type != u8) {
-                is_variadic = true;
-                if (js_parameter_count == 0) {
-                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
-                } else if (js_parameter_count >= params_to_map.len) {
-                    const arr = try local.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
-                    for (arr, last_js_parameter..) |*a, i| {
-                        a.* = try local.jsValueToZig(slice_type, info.getArg(@intCast(i), local));
-                    }
-                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
-                } else {
-                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
-                }
-            }
-        }
-    }
-
-    inline for (params_to_map, 0..) |param, i| {
-        const field_index = comptime i + offset;
-        if (comptime i == params_to_map.len - 1) {
-            if (is_variadic) {
-                break;
-            }
-        }
-
-        if (comptime isPage(param.type.?)) {
-            @compileError("Page must be the last parameter (or 2nd last if there's a JsThis): " ++ @typeName(F));
-        } else if (i >= js_parameter_count) {
-            if (@typeInfo(param.type.?) != .optional) {
-                return error.InvalidArgument;
-            }
-            @field(args, tupleFieldName(field_index)) = null;
-        } else {
-            const js_val = info.getArg(@intCast(i), local);
-            @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch {
-                return error.InvalidArgument;
-            };
-        }
-    }
-
-    return args;
-}
-
 // This is extracted to speed up compilation. When left inlined in handleError,
 // this can add as much as 10 seconds of compilation time.
-fn logFunctionCallError(self: *Caller, type_name: []const u8, func: []const u8, err: anyerror, info: FunctionCallbackInfo) void {
-    const args_dump = self.serializeFunctionArgs(info) catch "failed to serialize args";
+fn logFunctionCallError(local: *const Local, type_name: []const u8, func: []const u8, err: anyerror, info: FunctionCallbackInfo) void {
+    const args_dump = serializeFunctionArgs(local, info) catch "failed to serialize args";
     log.info(.js, "function call error", .{
         .type = type_name,
         .func = func,
         .err = err,
         .args = args_dump,
-        .stack = self.local.stackTrace() catch |err1| @errorName(err1),
+        .stack = local.stackTrace() catch |err1| @errorName(err1),
     });
 }
 
-fn serializeFunctionArgs(self: *Caller, info: FunctionCallbackInfo) ![]const u8 {
-    const local = &self.local;
+fn serializeFunctionArgs(local: *const Local, info: FunctionCallbackInfo) ![]const u8 {
     var buf = std.Io.Writer.Allocating.init(local.call_arena);
 
     const separator = log.separator();
@@ -585,3 +457,148 @@ const ReturnValue = struct {
         v8.v8__ReturnValue__Set(self.handle, handle);
     }
 };
+
+pub const Function = struct {
+    pub const Opts = struct {
+        static: bool = false,
+        dom_exception: bool = false,
+        as_typed_array: bool = false,
+        null_as_undefined: bool = false,
+    };
+
+    pub fn call(comptime T: type, info_handle: *const v8.FunctionCallbackInfo, func: anytype, comptime opts: Opts) void {
+        const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(info_handle).?;
+
+        var caller: Caller = undefined;
+        caller.init(v8_isolate);
+        defer caller.deinit();
+        const info = FunctionCallbackInfo{ .handle = info_handle };
+        _call(T, &caller.local, info, func, opts) catch |err| {
+            handleError(T, @TypeOf(func), &caller.local, err, info, .{
+                .dom_exception = opts.dom_exception,
+                .as_typed_array = opts.as_typed_array,
+                .null_as_undefined = opts.null_as_undefined,
+            });
+        };
+    }
+
+    pub fn _call(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) !void {
+        var hs: js.HandleScope = undefined;
+        hs.init(local.isolate);
+        defer hs.deinit();
+
+        const F = @TypeOf(func);
+        var args: ParameterTypes(F) = undefined;
+        if (comptime opts.static) {
+            args = try getArgs(F, 0, local, info);
+        } else {
+            args = try getArgs(F, 1, local, info);
+            @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+        }
+        const res = @call(.auto, func, args);
+        const js_value = try local.zigValueToJs(res, .{
+            .dom_exception = opts.dom_exception,
+            .as_typed_array = opts.as_typed_array,
+            .null_as_undefined = opts.null_as_undefined,
+        });
+        info.getReturnValue().set(js_value);
+    }
+};
+
+// If we call a method in javascript: cat.lives('nine');
+//
+// Then we'd expect a Zig function with 2 parameters: a self and the string.
+// In this case, offset == 1. Offset is always 1 for setters or methods.
+//
+// Offset is always 0 for constructors.
+//
+// For constructors, setters and methods, we can further increase offset + 1
+// if the first parameter is an instance of Page.
+//
+// Finally, if the JS function is called with _more_ parameters and
+// the last parameter in Zig is an array, we'll try to slurp the additional
+// parameters into the array.
+fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: FunctionCallbackInfo) !ParameterTypes(F) {
+    var args: ParameterTypes(F) = undefined;
+
+    const params = @typeInfo(F).@"fn".params[offset..];
+    // Except for the constructor, the first parameter is always `self`
+    // This isn't something we'll bind from JS, so skip it.
+    const params_to_map = blk: {
+        if (params.len == 0) {
+            return args;
+        }
+
+        // If the last parameter is the Page, set it, and exclude it
+        // from our params slice, because we don't want to bind it to
+        // a JS argument
+        if (comptime isPage(params[params.len - 1].type.?)) {
+            @field(args, tupleFieldName(params.len - 1 + offset)) = local.ctx.page;
+            break :blk params[0 .. params.len - 1];
+        }
+
+        // we have neither a Page nor a JsObject. All params must be
+        // bound to a JavaScript value.
+        break :blk params;
+    };
+
+    if (params_to_map.len == 0) {
+        return args;
+    }
+
+    const js_parameter_count = info.length();
+    const last_js_parameter = params_to_map.len - 1;
+    var is_variadic = false;
+
+    {
+        // This is going to get complicated. If the last Zig parameter
+        // is a slice AND the corresponding javascript parameter is
+        // NOT an an array, then we'll treat it as a variadic.
+
+        const last_parameter_type = params_to_map[params_to_map.len - 1].type.?;
+        const last_parameter_type_info = @typeInfo(last_parameter_type);
+        if (last_parameter_type_info == .pointer and last_parameter_type_info.pointer.size == .slice) {
+            const slice_type = last_parameter_type_info.pointer.child;
+            const corresponding_js_value = info.getArg(@intCast(last_js_parameter), local);
+            if (corresponding_js_value.isArray() == false and corresponding_js_value.isTypedArray() == false and slice_type != u8) {
+                is_variadic = true;
+                if (js_parameter_count == 0) {
+                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
+                } else if (js_parameter_count >= params_to_map.len) {
+                    const arr = try local.call_arena.alloc(last_parameter_type_info.pointer.child, js_parameter_count - params_to_map.len + 1);
+                    for (arr, last_js_parameter..) |*a, i| {
+                        a.* = try local.jsValueToZig(slice_type, info.getArg(@intCast(i), local));
+                    }
+                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = arr;
+                } else {
+                    @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
+                }
+            }
+        }
+    }
+
+    inline for (params_to_map, 0..) |param, i| {
+        const field_index = comptime i + offset;
+        if (comptime i == params_to_map.len - 1) {
+            if (is_variadic) {
+                break;
+            }
+        }
+
+        if (comptime isPage(param.type.?)) {
+            @compileError("Page must be the last parameter (or 2nd last if there's a JsThis): " ++ @typeName(F));
+        } else if (i >= js_parameter_count) {
+            if (@typeInfo(param.type.?) != .optional) {
+                return error.InvalidArgument;
+            }
+            @field(args, tupleFieldName(field_index)) = null;
+        } else {
+            const js_val = info.getArg(@intCast(i), local);
+            @field(args, tupleFieldName(field_index)) = local.jsValueToZig(param.type.?, js_val) catch {
+                return error.InvalidArgument;
+            };
+        }
+    }
+
+    return args;
+}

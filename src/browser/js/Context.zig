@@ -148,7 +148,7 @@ const ModuleEntry = struct {
     resolver_promise: ?js.Promise.Global = null,
 };
 
-fn fromC(c_context: *const v8.Context) *Context {
+pub fn fromC(c_context: *const v8.Context) *Context {
     const data = v8.v8__Context__GetEmbedderData(c_context, 1).?;
     const big_int = js.BigInt{ .handle = @ptrCast(data) };
     return @ptrFromInt(big_int.getUint64());
