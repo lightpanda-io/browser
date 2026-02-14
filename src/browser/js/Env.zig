@@ -78,6 +78,14 @@ pub const InitOpts = struct {
 };
 
 pub fn init(app: *App, opts: InitOpts) !Env {
+    if (comptime IS_DEBUG) {
+        comptime {
+            // V8 requirement for any data using SetAlignedPointerInInternalField
+            const a = @alignOf(@import("TaggedOpaque.zig"));
+            std.debug.assert(a >= 2 and a % 2 == 0);
+        }
+    }
+
     const allocator = app.allocator;
     const snapshot = &app.snapshot;
 

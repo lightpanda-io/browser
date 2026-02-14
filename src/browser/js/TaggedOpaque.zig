@@ -133,8 +133,8 @@ pub fn fromJS(comptime R: type, js_obj_handle: *const v8.Object) !R {
         @compileError("unknown Zig type: " ++ @typeName(R));
     }
 
-    const internal_field_handle = v8.v8__Object__GetInternalField(js_obj_handle, 0).?;
-    const tao: *TaggedOpaque = @ptrCast(@alignCast(v8.v8__External__Value(internal_field_handle)));
+    const tao_ptr = v8.v8__Object__GetAlignedPointerFromInternalField(js_obj_handle, 0).?;
+    const tao: *TaggedOpaque = @ptrCast(@alignCast(tao_ptr));
     const expected_type_index = bridge.JsApiLookup.getId(JsApi);
 
     const prototype_chain = tao.prototype_chain[0..tao.prototype_len];
