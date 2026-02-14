@@ -42,6 +42,7 @@ pub const DataList = @import("html/DataList.zig");
 pub const Dialog = @import("html/Dialog.zig");
 pub const Directory = @import("html/Directory.zig");
 pub const Div = @import("html/Div.zig");
+pub const DList = @import("html/DList.zig");
 pub const Embed = @import("html/Embed.zig");
 pub const FieldSet = @import("html/FieldSet.zig");
 pub const Font = @import("html/Font.zig");
@@ -119,6 +120,7 @@ pub const Type = union(enum) {
     dialog: *Dialog,
     directory: *Directory,
     div: *Div,
+    dl: *DList,
     embed: *Embed,
     fieldset: *FieldSet,
     font: *Font,

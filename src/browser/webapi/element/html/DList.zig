@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -21,21 +21,21 @@ const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
-const OL = @This();
+const DList = @This();
 _proto: *HtmlElement,
 
-pub fn asElement(self: *OL) *Element {
+pub fn asElement(self: *DList) *Element {
     return self._proto._proto;
 }
-pub fn asNode(self: *OL) *Node {
+pub fn asNode(self: *DList) *Node {
     return self.asElement().asNode();
 }
 
 pub const JsApi = struct {
-    pub const bridge = js.Bridge(OL);
+    pub const bridge = js.Bridge(DList);
 
     pub const Meta = struct {
-        pub const name = "HTMLOListElement";
+        pub const name = "HTMLDListElement";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
