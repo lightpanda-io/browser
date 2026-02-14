@@ -557,6 +557,7 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     try transfer.fulfill(status, headers, body);
     if (!transfer.req.blocking) {
         transfer.deinit();
+        return;
     }
     transfer._intercept_state = .fulfilled;
 }
@@ -1143,7 +1144,7 @@ pub const Transfer = struct {
         // against that, so resetting it would allow a 2nd call to headerCallback).
         // But it should also be impossible for this to be true. So, I've added
         // this assertion to try to narrow down what's going on.
-        lp.assert(self._header_done_called == false, "Transert.reset header_done_called", .{});
+        lp.assert(self._header_done_called == false, "Transfer.reset header_done_called", .{});
 
         self._redirecting = false;
         self._auth_challenge = null;
@@ -1340,9 +1341,7 @@ pub const Transfer = struct {
     // It can be called either on dataCallback or once the request for those
     // w/o body.
     fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !bool {
-        if (comptime IS_DEBUG) {
-            std.debug.assert(transfer._header_done_called == false);
-        }
+        lp.assert(transfer._header_done_called == false, "Transfer.headerDoneCallback", .{});
         defer transfer._header_done_called = true;
 
         try transfer.buildResponseHeader(easy);
@@ -1608,6 +1607,7 @@ pub const Transfer = struct {
             }
         }
 
+        lp.assert(transfer._header_done_called == false, "Transfer.fulfill header_done_called", .{});
         if (try req.header_callback(transfer) == false) {
             transfer.abort(error.Abort);
             return;

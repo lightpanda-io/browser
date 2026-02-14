@@ -617,6 +617,7 @@ pub const Script = struct {
     node: std.DoublyLinkedList.Node,
     script_element: ?*Element.Html.Script,
     manager: *ScriptManager,
+    header_callback_called: bool = false,
 
     const Kind = enum {
         module,
@@ -681,7 +682,15 @@ pub const Script = struct {
             });
         }
 
-        lp.assert(self.source.remote.capacity == 0, "ScriptManager.HeaderCallback", .{ .capacity = self.source.remote.capacity });
+        {
+            // temp debug, trying to figure out why the next assert sometimes
+            // fails. Is the buffer just corrupt or is headerCallback really
+            // being called twice?
+            lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{});
+            self.header_callback_called = true;
+        }
+
+        lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });
         var buffer = self.manager.buffer_pool.get();
         if (transfer.getContentLength()) |cl| {
             try buffer.ensureTotalCapacity(self.manager.allocator, cl);
@@ -894,7 +903,7 @@ const BufferPool = struct {
     max_concurrent_transfers: u8,
     mem_pool: std.heap.MemoryPool(Container),
 
-    const List = std.DoublyLinkedList;
+    const List = std.SinglyLinkedList;
 
     const Container = struct {
         node: List.Node,
@@ -953,7 +962,7 @@ const BufferPool = struct {
         b.clearRetainingCapacity();
         container.* = .{ .buf = b, .node = .{} };
         self.count += 1;
-        self.available.append(&container.node);
+        self.available.prepend(&container.node);
     }
 };
 
