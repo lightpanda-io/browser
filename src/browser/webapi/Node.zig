@@ -249,8 +249,8 @@ pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {
     return child;
 }
 
-pub fn childNodes(self: *const Node, page: *Page) !*collections.ChildNodes {
-    return collections.ChildNodes.init(self._children, page);
+pub fn childNodes(self: *Node, page: *Page) !*collections.ChildNodes {
+    return collections.ChildNodes.init(self, page);
 }
 
 pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!void {
