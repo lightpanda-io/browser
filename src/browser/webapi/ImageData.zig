@@ -108,7 +108,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const constructor = bridge.constructor(ImageData.constructor, .{});
+    pub const constructor = bridge.constructor(ImageData.constructor, .{ .dom_exception = true });
 
     pub const width = bridge.accessor(ImageData.getWidth, null, .{});
     pub const height = bridge.accessor(ImageData.getHeight, null, .{});
