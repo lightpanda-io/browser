@@ -65,13 +65,13 @@ pub fn getAtIndex(self: *ChildNodes, index: usize, page: *Page) !?*Node {
 
     var current = self._last_index;
     var node: ?*std.DoublyLinkedList.Node = null;
-    if (index <= current) {
+    if (index < current) {
         current = 0;
         node = self.first() orelse return null;
     } else {
         node = self._last_node orelse self.first() orelse return null;
     }
-    defer self._last_index = current + 1;
+    defer self._last_index = current;
 
     while (node) |n| {
         if (index == current) {
