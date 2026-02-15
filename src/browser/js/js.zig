@@ -77,11 +77,14 @@ pub const ArrayBuffer = struct {
     }
 };
 
-/// `mutable` indicates bytes are not copied by `simpleZigValueToJs`;
-/// instead, `BackingStore` takes ownership of already allocated `values`.
-pub fn Uint8ClampedArray(comptime state: enum(u1) { immutable, mutable }) type {
+/// `ref` indicates bytes are not copied by `simpleZigValueToJs`;
+/// instead, `values` references an already allocated memory. Note that
+/// this variant assumes memory is (de)allocated by an arena allocator.
+///
+/// `copy` behaves the same as `TypedArray(T)`.
+pub fn Uint8ClampedArray(comptime state: enum(u1) { ref, copy }) type {
     return struct {
-        values: if (state == .mutable) []u8 else []const u8,
+        values: if (state == .ref) []u8 else []const u8,
     };
 }
 
@@ -202,7 +205,7 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                     // but this can never be valid.
                     @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
                 },
-                Uint8ClampedArray(.mutable) => {
+                Uint8ClampedArray(.ref) => {
                     const values = value.values;
                     const len = values.len;
                     var array_buffer: *const v8.ArrayBuffer = undefined;
