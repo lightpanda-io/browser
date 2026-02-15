@@ -77,6 +77,17 @@ pub const ArrayBuffer = struct {
     }
 };
 
+/// `ref` indicates bytes are not copied by `simpleZigValueToJs`;
+/// instead, `values` references an already allocated memory. Note that
+/// this variant assumes memory is (de)allocated by an arena allocator.
+///
+/// `copy` behaves the same as `TypedArray(T)`.
+pub fn Uint8ClampedArray(comptime state: enum(u1) { ref, copy }) type {
+    return struct {
+        values: if (state == .ref) []u8 else []const u8,
+    };
+}
+
 pub const Exception = struct {
     local: *const Local,
     handle: *const v8.Value,
@@ -193,6 +204,40 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                     // We normally don't fail in this function unless fail == true
                     // but this can never be valid.
                     @compileError("Invalid TypeArray type: " ++ @typeName(value_type));
+                },
+                Uint8ClampedArray(.ref) => {
+                    const values = value.values;
+                    const len = values.len;
+                    var array_buffer: *const v8.ArrayBuffer = undefined;
+                    if (len == 0) {
+                        array_buffer = v8.v8__ArrayBuffer__New(isolate.handle, 0).?;
+                    } else {
+                        // `deleter` cannot be null.
+                        const empty_deleter = struct {
+                            fn deleter(_: ?*anyopaque, _: usize, _: ?*anyopaque) callconv(.c) void {}
+                        }.deleter;
+                        const backing_store = v8.v8__ArrayBuffer__NewBackingStore2(values.ptr, len, empty_deleter, null);
+                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                        // Attach store to array buffer.
+                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                    }
+                    return @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, len));
+                },
+                Uint8ClampedArray(.copy) => {
+                    const values = value.values;
+                    const len = values.len;
+                    var array_buffer: *const v8.ArrayBuffer = undefined;
+                    if (len == 0) {
+                        array_buffer = v8.v8__ArrayBuffer__New(isolate.handle, 0).?;
+                    } else {
+                        const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                        const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
+                        @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
+                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                        // Attach store to array buffer.
+                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                    }
+                    return @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, len));
                 },
                 inline String, BigInt, Integer, Number, Value, Object => return value.handle,
                 else => {},
