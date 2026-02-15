@@ -1,4 +1,4 @@
-// Copyright (C) 2023-2025  Lightpanda (Selecy SAS)
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
 //
 // Francis Bouvier <francis@lightpanda.io>
 // Pierre Tachoire <pierre@lightpanda.io>
@@ -19,22 +19,24 @@
 const js = @import("js.zig");
 const v8 = js.v8;
 
-const HandleScope = @This();
+const Private = @This();
 
-handle: v8.HandleScope,
+// Unlike most types, we always store the Private as a Global. It makes more
+// sense for this type given how it's used.
+handle: v8.Global,
 
-// V8 takes an address of the value that's passed in, so it needs to be stable.
-// We can't create the v8.HandleScope here, pass it to v8 and then return the
-// value, as v8 will then have taken the address of the function-scopped (and no
-// longer valid) local.
-pub fn init(self: *HandleScope, isolate: js.Isolate) void {
-    self.initWithIsolateHandle(isolate.handle);
+pub fn init(isolate: *v8.Isolate, name: []const u8) Private {
+    const v8_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
+    const private_handle = v8.v8__Private__New(isolate, v8_name);
+
+    var global: v8.Global = undefined;
+    v8.v8__Global__New(isolate, private_handle, &global);
+
+    return .{
+        .handle = global,
+    };
 }
 
-pub fn initWithIsolateHandle(self: *HandleScope, isolate: *v8.Isolate) void {
-    v8.v8__HandleScope__CONSTRUCT(&self.handle, isolate);
-}
-
-pub fn deinit(self: *HandleScope) void {
-    v8.v8__HandleScope__DESTRUCT(&self.handle);
+pub fn deinit(self: *Private) void {
+    v8.v8__Global__Reset(&self.handle);
 }

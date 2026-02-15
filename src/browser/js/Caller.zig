@@ -41,15 +41,17 @@ prev_context: *Context,
 // Takes the raw v8 isolate and extracts the context from it.
 pub fn init(self: *Caller, v8_isolate: *v8.Isolate) void {
     const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate).?;
-    const ctx = Context.fromC(v8_context);
+    initWithContext(self, Context.fromC(v8_context), v8_context);
+}
 
+fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) void {
     ctx.call_depth += 1;
     self.* = Caller{
         .local = .{
             .ctx = ctx,
             .handle = v8_context,
             .call_arena = ctx.call_arena,
-            .isolate = .{ .handle = v8_isolate },
+            .isolate = ctx.isolate,
         },
         .prev_local = ctx.local,
         .prev_context = ctx.page.js,
@@ -464,29 +466,72 @@ pub const Function = struct {
         dom_exception: bool = false,
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
+        cache: ?Caching = null,
+
+        // We support two ways to cache a value directly into a v8::Object. The
+        // difference between the two is like the difference between a Map
+        // and a Struct.
+        // 1 - Using the object's private state with a v8::Private key. Think of
+        //     this as a HashMap. It takes no memory if the cache isn't used
+        //     but has overhead when used.
+        // 2 - (TODO) Using the object's internal fields. Think of this as
+        //     adding a field to the struct. It's fast, but the space is reserved
+        //     upfront for _every_ instance, whether we use it or not.
+        //
+        // Consider `window.document`, (1) we have relatively few Window objects,
+        // (2) They all have a document and (3) The document is accessed _a lot_.
+        // An internal field makes sense.
+        //
+        // Consider `node.childNodes`, (1) we can have 20K+ node objects, (2)
+        // 95% of nodes will never have their .childNodes access by JavaScript.
+        // Private map lookup makes sense.
+        const Caching = union(enum) {
+            private: []const u8,
+            // TODO internal_field: u8,
+        };
     };
 
     pub fn call(comptime T: type, info_handle: *const v8.FunctionCallbackInfo, func: anytype, comptime opts: Opts) void {
         const v8_isolate = v8.v8__FunctionCallbackInfo__GetIsolate(info_handle).?;
+        const v8_context = v8.v8__Isolate__GetCurrentContext(v8_isolate).?;
+
+        const ctx = Context.fromC(v8_context);
+        const info = FunctionCallbackInfo{ .handle = info_handle };
+
+        var hs: js.HandleScope = undefined;
+        hs.initWithIsolateHandle(v8_isolate);
+        defer hs.deinit();
+
+        var cache_state: CacheState = undefined;
+        if (comptime opts.cache) |cache| {
+            // This API is a bit weird. On
+            if (respondFromCache(cache, ctx, v8_context, info, &cache_state)) {
+                // Value was fetched from the cache and returned already
+                return;
+            } else {
+                // Cache miss: cache_state will have been populated
+            }
+        }
 
         var caller: Caller = undefined;
-        caller.init(v8_isolate);
+        caller.initWithContext(ctx, v8_context);
         defer caller.deinit();
-        const info = FunctionCallbackInfo{ .handle = info_handle };
-        _call(T, &caller.local, info, func, opts) catch |err| {
+
+        const js_value = _call(T, &caller.local, info, func, opts) catch |err| {
             handleError(T, @TypeOf(func), &caller.local, err, info, .{
                 .dom_exception = opts.dom_exception,
                 .as_typed_array = opts.as_typed_array,
                 .null_as_undefined = opts.null_as_undefined,
             });
+            return;
         };
+
+        if (comptime opts.cache) |cache| {
+            cache_state.save(cache, js_value);
+        }
     }
 
-    pub fn _call(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) !void {
-        var hs: js.HandleScope = undefined;
-        hs.init(local.isolate);
-        defer hs.deinit();
-
+    fn _call(comptime T: type, local: *const Local, info: FunctionCallbackInfo, func: anytype, comptime opts: Opts) !js.Value {
         const F = @TypeOf(func);
         var args: ParameterTypes(F) = undefined;
         if (comptime opts.static) {
@@ -502,7 +547,68 @@ pub const Function = struct {
             .null_as_undefined = opts.null_as_undefined,
         });
         info.getReturnValue().set(js_value);
+        return js_value;
     }
+
+    // We can cache a value directly into the v8::Object so that our callback to fetch a property
+    // can be fast. Generally, think of it like this:
+    //   fn callback(handle: *const v8.FunctionCallbackInfo) callconv(.c) void {
+    //       const js_obj = info.getThis();
+    //       const cached_value = js_obj.getFromCache("Nodes.childNodes");
+    //       info.returnValue().set(cached_value);
+    //   }
+    //
+    // That above pseudocode snippet is largely what this respondFromCache is doing.
+    // But on miss, it's also setting the `cache_state` with all of the data it
+    // got checking the cache, so that, once we get the value from our Zig code,
+    // it's quick to store in the v8::Object for subsequent calls.
+    fn respondFromCache(comptime cache: Opts.Caching, ctx: *Context, v8_context: *const v8.Context, info: FunctionCallbackInfo, cache_state: *CacheState) bool {
+        const js_this = info.getThis();
+        const return_value = info.getReturnValue();
+
+        switch (cache) {
+            .private => |private_symbol| {
+                const global_handle = &@field(ctx.env.private_symbols, private_symbol).handle;
+                const private_key: *const v8.Private = v8.v8__Global__Get(global_handle, ctx.isolate.handle).?;
+                if (v8.v8__Object__GetPrivate(js_this, v8_context, private_key)) |cached| {
+                    // This means we can't cache "undefined", since we can't tell
+                    // the difference between a (a) undefined == not in the cache
+                    // and (b) undefined == the cache value.  If this becomes
+                    // important, we can check HasPrivate first. But that requires
+                    // calling HasPrivate then GetPrivate.
+                    if (!v8.v8__Value__IsUndefined(cached)) {
+                        return_value.set(cached);
+                        return true;
+                    }
+                }
+
+                // store this so that we can quickly save the result into the cache
+                cache_state.* = .{
+                    .js_this = js_this,
+                    .v8_context = v8_context,
+                    .mode = .{ .private = private_key },
+                };
+            },
+        }
+
+        // cache miss
+        return false;
+    }
+
+    const CacheState = struct {
+        js_this: *const v8.Object,
+        v8_context: *const v8.Context,
+        mode: union(enum) {
+            private: *const v8.Private,
+        },
+
+        pub fn save(self: *const CacheState, comptime cache: Opts.Caching, js_value: js.Value) void {
+            if (comptime cache == .private) {
+                var out: v8.MaybeBool = undefined;
+                v8.v8__Object__SetPrivate(self.js_this, self.v8_context, self.mode.private, js_value.handle, &out);
+            }
+        }
+    };
 };
 
 // If we call a method in javascript: cat.lives('nine');

@@ -73,6 +73,10 @@ global_template: v8.Eternal,
 // Inspector associated with the Isolate. Exists when CDP is being used.
 inspector: ?*Inspector,
 
+// We can store data in a v8::Object's Private data bag. The keys are v8::Private
+// which an be created once per isolaet.
+private_symbols: PrivateSymbols,
+
 pub const InitOpts = struct {
     with_inspector: bool = false,
 };
@@ -122,6 +126,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     errdefer allocator.free(templates);
 
     var global_eternal: v8.Eternal = undefined;
+    var private_symbols: PrivateSymbols = undefined;
     {
         var temp_scope: js.HandleScope = undefined;
         temp_scope.init(isolate);
@@ -161,6 +166,8 @@ pub fn init(app: *App, opts: InitOpts) !Env {
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
         v8.v8__Eternal__New(isolate_handle, @ptrCast(global_template_local), &global_eternal);
+
+        private_symbols = PrivateSymbols.init(isolate_handle);
     }
 
     var inspector: ?*js.Inspector = null;
@@ -177,8 +184,9 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         .templates = templates,
         .isolate_params = params,
         .inspector = inspector,
-        .eternal_function_templates = eternal_function_templates,
         .global_template = global_eternal,
+        .private_symbols = private_symbols,
+        .eternal_function_templates = eternal_function_templates,
     };
 }
 
@@ -199,6 +207,7 @@ pub fn deinit(self: *Env) void {
 
     allocator.free(self.templates);
     allocator.free(self.eternal_function_templates);
+    self.private_symbols.deinit();
 
     self.isolate.exit();
     self.isolate.deinit();
@@ -413,3 +422,19 @@ fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callcon
     log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
 }
+
+const PrivateSymbols = struct {
+    const Private = @import("Private.zig");
+
+    child_nodes: Private,
+
+    fn init(isolate: *v8.Isolate) PrivateSymbols {
+        return .{
+            .child_nodes = Private.init(isolate, "child_nodes"),
+        };
+    }
+
+    fn deinit(self: *PrivateSymbols) void {
+        self.child_nodes.deinit();
+    }
+};

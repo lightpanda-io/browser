@@ -996,7 +996,7 @@ pub const JsApi = struct {
     pub const parentNode = bridge.accessor(Node.parentNode, null, .{});
     pub const parentElement = bridge.accessor(Node.parentElement, null, .{});
     pub const appendChild = bridge.function(Node.appendChild, .{ .dom_exception = true });
-    pub const childNodes = bridge.accessor(Node.childNodes, null, .{});
+    pub const childNodes = bridge.accessor(Node.childNodes, null, .{ .cache = .{ .private = "child_nodes" } });
     pub const isConnected = bridge.accessor(Node.isConnected, null, .{});
     pub const ownerDocument = bridge.accessor(Node.ownerDocument, null, .{});
     pub const hasChildNodes = bridge.function(Node.hasChildNodes, .{});

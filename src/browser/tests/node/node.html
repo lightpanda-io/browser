@@ -223,3 +223,15 @@
     testing.expectEqual(false, d1.contains(p1));
   }
 </script>
+
+<script id=childNodes>
+  {
+    const d1 = $('#contains');
+    testing.expectEqual(true, d1.childNodes === d1.childNodes)
+
+    let c1 = d1.childNodes;
+    d1.removeChild(c1[0])
+    testing.expectEqual(0, c1.length);
+    testing.expectEqual(0, d1.childNodes.length);
+  }
+</script>
