@@ -223,6 +223,22 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                     }
                     return @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, len));
                 },
+                Uint8ClampedArray(.copy) => {
+                    const values = value.values;
+                    const len = values.len;
+                    var array_buffer: *const v8.ArrayBuffer = undefined;
+                    if (len == 0) {
+                        array_buffer = v8.v8__ArrayBuffer__New(isolate.handle, 0).?;
+                    } else {
+                        const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
+                        const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
+                        @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
+                        const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
+                        // Attach store to array buffer.
+                        array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
+                    }
+                    return @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, len));
+                },
                 inline String, BigInt, Integer, Number, Value, Object => return value.handle,
                 else => {},
             }
