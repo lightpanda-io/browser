@@ -469,20 +469,20 @@ pub const Function = struct {
         cache: ?Caching = null,
 
         // We support two ways to cache a value directly into a v8::Object. The
-        // difference between the two is like the difference between a Struct
-        // and a Map.
+        // difference between the two is like the difference between a Map
+        // and a Struct.
         // 1 - Using the object's private state with a v8::Private key. Think of
         //     this as a HashMap. It takes no memory if the cache isn't used
-        //     but has overhead.
+        //     but has overhead when used.
         // 2 - (TODO) Using the object's internal fields. Think of this as
         //     adding a field to the struct. It's fast, but the space is reserved
-        //     upfront for _every_ instance.
+        //     upfront for _every_ instance, whether we use it or not.
         //
         // Consider `window.document`, (1) we have relatively few Window objects,
         // (2) They all have a document and (3) The document is accessed _a lot_.
         // An internal field makes sense.
         //
-        // Consider `node.childNodes`, (1) we can have 10K+ node objects, (2)
+        // Consider `node.childNodes`, (1) we can have 20K+ node objects, (2)
         // 95% of nodes will never have their .childNodes access by JavaScript.
         // Private map lookup makes sense.
         const Caching = union(enum) {
@@ -556,16 +556,12 @@ pub const Function = struct {
     //       const js_obj = info.getThis();
     //       const cached_value = js_obj.getFromCache("Nodes.childNodes");
     //       info.returnValue().set(cached_value);
-    // }
+    //   }
     //
     // That above pseudocode snippet is largely what this respondFromCache is doing.
-    // But that's just part of it, because the value might not be in the v8::Object
-    // If it isn't, we need to load it normally and then we need to set it in the
-    // object for subsequent calls. In respondFromCache we do some of the work
-    // we need to set the value on a miss. That's what CacheState captures - since
-    // we've done all the work in respondFromCache to set things up, we can store
-    // those variables in cache_state so that, on miss, storing the value back into
-    // the v8::Object is simple/fast.
+    // But on miss, it's also setting the `cache_state` with all of the data it
+    // got checking the cache, so that, once we get the value from our Zig code,
+    // it's quick to store in the v8::Object for subsequent calls.
     fn respondFromCache(comptime cache: Opts.Caching, ctx: *Context, v8_context: *const v8.Context, info: FunctionCallbackInfo, cache_state: *CacheState) bool {
         const js_this = info.getThis();
         const return_value = info.getReturnValue();
@@ -577,7 +573,7 @@ pub const Function = struct {
                 if (v8.v8__Object__GetPrivate(js_this, v8_context, private_key)) |cached| {
                     // This means we can't cache "undefined", since we can't tell
                     // the difference between a (a) undefined == not in the cache
-                    // and (b) undefined is the cache value.  If this becomes
+                    // and (b) undefined == the cache value.  If this becomes
                     // important, we can check HasPrivate first. But that requires
                     // calling HasPrivate then GetPrivate.
                     if (!v8.v8__Value__IsUndefined(cached)) {
