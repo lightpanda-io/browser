@@ -154,7 +154,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         .img => {
             try writer.writeAll("![");
             if (el.getAttributeSafe(comptime .wrap("alt"))) |alt| {
-                try writer.writeAll(alt);
+                try escapeMarkdown(writer, alt);
             }
             try writer.writeAll("](");
             if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
@@ -243,6 +243,18 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!
         return;
     }
 
+    // Check for pure whitespace
+    const is_all_whitespace = for (text) |c| {
+        if (!std.ascii.isWhitespace(c)) break false;
+    } else true;
+
+    if (is_all_whitespace) {
+        if (!state.last_char_was_newline) {
+            try writer.writeByte(' ');
+        }
+        return;
+    }
+
     // Collapse whitespace
     var it = std.mem.tokenizeAny(u8, text, " \t\n\r");
     var first = true;
@@ -261,7 +273,7 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!
             try writer.writeByte(' ');
         }
 
-        try writer.writeAll(word);
+        try escapeMarkdown(writer, word);
         state.last_char_was_newline = false;
         first = false;
     }
@@ -274,9 +286,101 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!
     }
 }
 
+fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
+    // Escaping: \ ` * _ { } [ ] ( ) # + - . ! | < >
+    for (text) |c| {
+        switch (c) {
+            '\\',
+            '`',
+            '*',
+            '_',
+            '{',
+            '}',
+            '[',
+            ']',
+            '(',
+            ')',
+            '#',
+            '+',
+            '-',
+            '.',
+            '!',
+            '|',
+            '<',
+            '>',
+            => {
+                try writer.writeByte('\\');
+                try writer.writeByte(c);
+            },
+            else => try writer.writeByte(c),
+        }
+    }
+}
+
 fn writeIndentation(level: usize, writer: *std.Io.Writer) anyerror!void {
     var i: usize = 0;
     while (i < level) : (i += 1) {
         try writer.writeAll("  ");
     }
+}
+
+test "markdown: basic" {
+    const testing = @import("../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    const div = try doc.createElement("div", null, page);
+    try div.asNode().setTextContent("Hello world", page);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{}, &aw.writer, page);
+
+    try testing.expectString("Hello world\n", aw.written());
+}
+
+test "markdown: whitespace" {
+    const testing = @import("../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    const div = try doc.createElement("div", null, page);
+
+    const s1 = try doc.createElement("span", null, page);
+    try s1.asNode().setTextContent("A", page);
+    const s2 = try doc.createElement("span", null, page);
+    try s2.asNode().setTextContent("B", page);
+
+    _ = try div.asNode().appendChild(s1.asNode(), page);
+    // Add text node with space
+    const txt = try page.createTextNode(" ");
+    _ = try div.asNode().appendChild(txt, page);
+    _ = try div.asNode().appendChild(s2.asNode(), page);
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{}, &aw.writer, page);
+
+    try testing.expectString("A B\n", aw.written());
+}
+
+test "markdown: escaping" {
+    const testing = @import("../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    const div = try doc.createElement("div", null, page);
+
+    const p = try doc.createElement("p", null, page);
+    try p.asNode().setTextContent("# Not a header", page);
+    _ = try div.asNode().appendChild(p.asNode(), page);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{}, &aw.writer, page);
+
+    try testing.expectString("\n\\# Not a header\n", aw.written());
 }
