@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=constructor-basic>
+  {
+    const img = new ImageData(10, 20);
+    testing.expectEqual(10, img.width);
+    testing.expectEqual(20, img.height);
+    testing.expectEqual("srgb", img.colorSpace);
+    testing.expectEqual("rgba-unorm8", img.pixelFormat);
+  }
+</script>
+
+<script id=data-property>
+  {
+    const img = new ImageData(2, 3);
+    const data = img.data;
+    testing.expectEqual(true, data instanceof Uint8ClampedArray);
+    // 2 * 3 * 4 (RGBA) = 24 bytes
+    testing.expectEqual(24, data.length);
+  }
+</script>
+
+<script id=data-initialized-to-zero>
+  {
+    const img = new ImageData(2, 2);
+    const data = img.data;
+    for (let i = 0; i < data.length; i++) {
+      testing.expectEqual(0, data[i]);
+    }
+  }
+</script>
+
+<script id=data-mutability>
+  {
+    const img = new ImageData(1, 1);
+    const data = img.data;
+    // Set pixel to red (RGBA)
+    data[0] = 255;
+    data[1] = 0;
+    data[2] = 0;
+    data[3] = 255;
+
+    // Read back through the same accessor
+    const data2 = img.data;
+    testing.expectEqual(255, data2[0]);
+    testing.expectEqual(0, data2[1]);
+    testing.expectEqual(0, data2[2]);
+    testing.expectEqual(255, data2[3]);
+  }
+</script>
+
+<script id=constructor-with-settings>
+  {
+    const img = new ImageData(5, 5, { colorSpace: "srgb" });
+    testing.expectEqual(5, img.width);
+    testing.expectEqual(5, img.height);
+    testing.expectEqual("srgb", img.colorSpace);
+  }
+</script>
+
+<script id=constructor-invalid-colorspace>
+  testing.expectError("TypeError", () => {
+    new ImageData(5, 5, { colorSpace: "display-p3" });
+  });
+</script>
+
+<script id=single-pixel>
+  {
+    const img = new ImageData(1, 1);
+    testing.expectEqual(4, img.data.length);
+    testing.expectEqual(1, img.width);
+    testing.expectEqual(1, img.height);
+  }
+</script>
