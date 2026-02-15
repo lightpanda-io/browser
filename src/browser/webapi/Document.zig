@@ -358,6 +358,16 @@ pub fn createEvent(_: *const Document, event_type: []const u8, page: *Page) !*@i
         return (try UIEvent.init("", null, page)).asEvent();
     }
 
+    if (std.mem.eql(u8, normalized, "focusevent") or std.mem.eql(u8, normalized, "focusevents")) {
+        const FocusEvent = @import("event/FocusEvent.zig");
+        return (try FocusEvent.init("", null, page)).asEvent();
+    }
+
+    if (std.mem.eql(u8, normalized, "textevent") or std.mem.eql(u8, normalized, "textevents")) {
+        const TextEvent = @import("event/TextEvent.zig");
+        return (try TextEvent.init("", null, page)).asEvent();
+    }
+
     return error.NotSupported;
 }
 

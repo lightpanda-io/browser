@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<script id=default>
+  let event = new FocusEvent('focus');
+  testing.expectEqual('focus', event.type);
+  testing.expectEqual(true, event instanceof FocusEvent);
+  testing.expectEqual(true, event instanceof UIEvent);
+  testing.expectEqual(true, event instanceof Event);
+  testing.expectEqual(null, event.relatedTarget);
+</script>
+
+<script id=parameters>
+  let div = document.createElement('div');
+  let focusEvent = new FocusEvent('blur', { relatedTarget: div });
+  testing.expectEqual(div, focusEvent.relatedTarget);
+</script>
+
+<script id=createEvent>
+  let evt = document.createEvent('focusevent');
+  testing.expectEqual(true, evt instanceof FocusEvent);
+  testing.expectEqual(true, evt instanceof UIEvent);
+</script>
