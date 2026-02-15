@@ -111,6 +111,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = 5000,
+                .dump_markdown = opts.dump_markdown,
                 .dump = .{
                     .strip = opts.strip,
                     .with_base = opts.withbase,
@@ -119,7 +120,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             var stdout = std.fs.File.stdout();
             var writer = stdout.writer(&.{});
-            if (opts.dump) {
+            if (opts.dump or opts.dump_markdown) {
                 fetch_opts.writer = &writer.interface;
             }
 
