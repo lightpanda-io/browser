@@ -9,4 +9,13 @@
 
   l2.href = '/over/9000';
   testing.expectEqual('http://127.0.0.1:9582/over/9000', l2.href);
+
+  l2.crossOrigin = 'nope';
+  testing.expectEqual('anonymous', l2.crossOrigin);
+
+  l2.crossOrigin = 'use-Credentials';
+  testing.expectEqual('use-credentials', l2.crossOrigin);
+
+  l2.crossOrigin = '';
+  testing.expectEqual('anonymous', l2.crossOrigin);
 </script>
