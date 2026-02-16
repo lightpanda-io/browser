@@ -799,6 +799,14 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Page = @ptrCast(@alignCast(ctx));
     self.clearTransferArena();
     self._parse_state = .{ .err = err };
+
+    // Dispatch a navigated event to indicate the end of the navigation.
+    self._session.notification.dispatch(.page_navigated, &.{
+        .req_id = self._req_id.?,
+        .opts = self._navigated_options.?,
+        .url = self.url,
+        .timestamp = timestamp(.monotonic),
+    });
 }
 
 // The transfer arena is useful and interesting, but has a weird lifetime.
