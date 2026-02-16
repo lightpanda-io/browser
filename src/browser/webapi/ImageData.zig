@@ -67,10 +67,6 @@ pub fn constructor(
     }
 
     const size = width * height * 4;
-    //const mem = try page.arena.alloc(u8, size);
-    //// Zero-init since debug mode fills w/ char 170.
-    //@memset(mem, 0);
-
     return page._factory.create(ImageData{
         ._width = width,
         ._height = height,
