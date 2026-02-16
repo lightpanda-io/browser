@@ -382,7 +382,7 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!
 }
 
 fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
-    // Escaping: \ ` * _ { } [ ] ( ) # + - . ! | < >
+    // Escaping: \ ` * _ { } [ ] ( ) # + - ! | < >
     for (text) |c| {
         switch (c) {
             '\\',
@@ -398,7 +398,6 @@ fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
             '#',
             '+',
             '-',
-            '.',
             '!',
             '|',
             '<',
