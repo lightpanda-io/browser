@@ -163,10 +163,14 @@ pub const Serve = struct {
     common: Common = .{},
 };
 
+pub const DumpFormat = enum {
+    html,
+    markdown,
+};
+
 pub const Fetch = struct {
     url: [:0]const u8,
-    html: bool = false,
-    markdown: bool = false,
+    dump_mode: ?DumpFormat = null,
     common: Common = .{},
     withbase: bool = false,
     strip: dump.Opts.Strip = .{},
@@ -303,16 +307,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\fetch command
         \\Fetches the specified URL
-        \\Example: {s} fetch --html https://lightpanda.io/
+        \\Example: {s} fetch --dump html https://lightpanda.io/
         \\
         \\Options:
-        \\--html          Dumps document to stdout as HTML.
-        \\                Defaults to false.
-        \\
-        \\--dump          Alias for --html (deprecated).
-        \\
-        \\--markdown      Dumps document to stdout as Markdown.
-        \\                Defaults to false.
+        \\--dump          Dumps document to stdout.
+        \\                Argument must be 'html' or 'markdown'.
+        \\                Defaults to no dump.
         \\
         \\--strip_mode    Comma separated list of tag groups to remove from dump
         \\                the dump. e.g. --strip_mode js,css
@@ -412,15 +412,7 @@ fn inferMode(opt: []const u8) ?RunMode {
         return .fetch;
     }
 
-    if (std.mem.eql(u8, opt, "--html")) {
-        return .fetch;
-    }
-
     if (std.mem.eql(u8, opt, "--dump")) {
-        return .fetch;
-    }
-
-    if (std.mem.eql(u8, opt, "--markdown")) {
         return .fetch;
     }
 
@@ -560,21 +552,23 @@ fn parseFetchArgs(
     allocator: Allocator,
     args: *std.process.ArgIterator,
 ) !Fetch {
-    var fetch_html: bool = false;
-    var fetch_markdown: bool = false;
+    var dump_mode: ?DumpFormat = null;
     var withbase: bool = false;
     var url: ?[:0]const u8 = null;
     var common: Common = .{};
     var strip: dump.Opts.Strip = .{};
 
     while (args.next()) |opt| {
-        if (std.mem.eql(u8, "--html", opt) or std.mem.eql(u8, "--dump", opt)) {
-            fetch_html = true;
-            continue;
-        }
+        if (std.mem.eql(u8, "--dump", opt)) {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = "--dump" });
+                return error.InvalidArgument;
+            };
 
-        if (std.mem.eql(u8, "--markdown", opt)) {
-            fetch_markdown = true;
+            dump_mode = std.meta.stringToEnum(DumpFormat, str) orelse {
+                log.fatal(.app, "invalid option choice", .{ .arg = "--dump", .value = str });
+                return error.InvalidArgument;
+            };
             continue;
         }
 
@@ -641,8 +635,7 @@ fn parseFetchArgs(
 
     return .{
         .url = url.?,
-        .html = fetch_html,
-        .markdown = fetch_markdown,
+        .dump_mode = dump_mode,
         .strip = strip,
         .common = common,
         .withbase = withbase,

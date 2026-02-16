@@ -37,7 +37,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     dump: dump.RootOpts,
-    markdown: bool = false,
+    dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
@@ -96,10 +96,11 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     _ = session.wait(opts.wait_ms);
 
     const writer = opts.writer orelse return;
-    if (opts.markdown) {
-        try markdown.dump(page.window._document.asNode(), .{}, writer, page);
-    } else {
-        try dump.root(page.window._document, opts.dump, writer, page);
+    if (opts.dump_mode) |mode| {
+        switch (mode) {
+            .html => try dump.root(page.window._document, opts.dump, writer, page),
+            .markdown => try markdown.dump(page.window._document.asNode(), .{}, writer, page),
+        }
     }
     try writer.flush();
 }
