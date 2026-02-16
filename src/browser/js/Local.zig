@@ -306,6 +306,14 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 js.Value => return value,
                 js.Exception => return .{ .local = self, .handle = isolate.throwException(value.handle) },
 
+                js.ArrayBufferRef(.Int8), js.ArrayBufferRef(.Uint8), js.ArrayBufferRef(.Uint8Clamped),
+                js.ArrayBufferRef(.Int16), js.ArrayBufferRef(.Uint16),
+                js.ArrayBufferRef(.Int32), js.ArrayBufferRef(.Uint32),
+                js.ArrayBufferRef(.Float16), js.ArrayBufferRef(.Float32), js.ArrayBufferRef(.Float64),
+                => {
+                    return .{ .local = self, .handle = value.internal };
+                },
+
                 inline
                 js.Function,
                 js.Object,
