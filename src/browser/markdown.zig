@@ -141,6 +141,10 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             try writer.writeAll("*");
             state.last_char_was_newline = false;
         },
+        .s, .del => {
+            try writer.writeAll("~~");
+            state.last_char_was_newline = false;
+        },
         .hr => {
             try writer.writeAll("---\n");
             state.last_char_was_newline = true;
@@ -167,6 +171,19 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         .anchor => {
             try writer.writeByte('[');
             state.last_char_was_newline = false;
+        },
+        .input => {
+            if (el.getAttributeSafe(comptime .wrap("type"))) |t| {
+                if (std.mem.eql(u8, t, "checkbox")) {
+                    if (el.hasAttributeSafe(comptime .wrap("checked"))) {
+                        try writer.writeAll("[x] ");
+                    } else {
+                        try writer.writeAll("[ ] ");
+                    }
+                    state.last_char_was_newline = false;
+                }
+            }
+            return; // Void element
         },
         else => {},
     }
@@ -207,6 +224,10 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         },
         .i, .em => {
             try writer.writeAll("*");
+            state.last_char_was_newline = false;
+        },
+        .s, .del => {
+            try writer.writeAll("~~");
             state.last_char_was_newline = false;
         },
         .blockquote => {
@@ -383,4 +404,47 @@ test "markdown: escaping" {
     try dump(div.asNode(), .{}, &aw.writer, page);
 
     try testing.expectString("\n\\# Not a header\n", aw.written());
+}
+
+test "markdown: strikethrough" {
+    const testing = @import("../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    const div = try doc.createElement("div", null, page);
+
+    const s = try doc.createElement("s", null, page);
+    try s.asNode().setTextContent("deleted", page);
+    _ = try div.asNode().appendChild(s.asNode(), page);
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{}, &aw.writer, page);
+
+    try testing.expectString("~~deleted~~\n", aw.written());
+}
+
+test "markdown: task list" {
+    const testing = @import("../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    const div = try doc.createElement("div", null, page);
+
+    const input1 = try doc.createElement("input", null, page);
+    try input1.setAttributeSafe(comptime .wrap("type"), .wrap("checkbox"), page);
+    try input1.setAttributeSafe(comptime .wrap("checked"), .wrap(""), page);
+    _ = try div.asNode().appendChild(input1.asNode(), page);
+
+    const input2 = try doc.createElement("input", null, page);
+    try input2.setAttributeSafe(comptime .wrap("type"), .wrap("checkbox"), page);
+    _ = try div.asNode().appendChild(input2.asNode(), page);
+
+    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{}, &aw.writer, page);
+
+    try testing.expectString("[x] [ ] \n", aw.written());
 }
