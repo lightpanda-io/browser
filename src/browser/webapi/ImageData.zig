@@ -29,8 +29,7 @@ const Page = @import("../Page.zig");
 const ImageData = @This();
 _width: u32,
 _height: u32,
-/// Can be mutated from both Zig and JS ends; see `js.Uint8ClampedArray(.ref)`.
-_data: []u8,
+_data: js.ArrayBufferRef(.Uint8Clamped),
 
 pub const ConstructorSettings = struct {
     /// Specifies the color space of the image data.
@@ -68,14 +67,14 @@ pub fn constructor(
     }
 
     const size = width * height * 4;
-    const mem = try page.arena.alloc(u8, size);
-    // Zero-init since debug mode fills w/ char 170.
-    @memset(mem, 0);
+    //const mem = try page.arena.alloc(u8, size);
+    //// Zero-init since debug mode fills w/ char 170.
+    //@memset(mem, 0);
 
     return page._factory.create(ImageData{
         ._width = width,
         ._height = height,
-        ._data = mem,
+        ._data = page.js.createTypedArray(.Uint8Clamped, size),
     });
 }
 
@@ -95,8 +94,8 @@ pub fn getColorSpace(_: *const ImageData) String {
     return comptime .wrap("srgb");
 }
 
-pub fn getData(self: *const ImageData) js.Uint8ClampedArray(.ref) {
-    return .{ .values = self._data };
+pub fn getData(self: *const ImageData) js.ArrayBufferRef(.Uint8Clamped) {
+    return self._data;
 }
 
 pub const JsApi = struct {
