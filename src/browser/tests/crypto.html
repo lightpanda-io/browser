@@ -16,44 +16,44 @@
     isRandom(ti8a)
   }
 
-  // {
-  //   let tu16a = new Uint16Array(100)
-  //   testing.expectEqual(tu16a, crypto.getRandomValues(tu16a))
-  //   isRandom(tu16a)
+  {
+    let tu16a = new Uint16Array(100)
+    testing.expectEqual(tu16a, crypto.getRandomValues(tu16a))
+    isRandom(tu16a)
 
-  //   let ti16a = new Int16Array(100)
-  //   testing.expectEqual(ti16a, crypto.getRandomValues(ti16a))
-  //   isRandom(ti16a)
-  // }
+    let ti16a = new Int16Array(100)
+    testing.expectEqual(ti16a, crypto.getRandomValues(ti16a))
+    isRandom(ti16a)
+  }
 
-  // {
-  //   let tu32a = new Uint32Array(100)
-  //   testing.expectEqual(tu32a, crypto.getRandomValues(tu32a))
-  //   isRandom(tu32a)
+  {
+    let tu32a = new Uint32Array(100)
+    testing.expectEqual(tu32a, crypto.getRandomValues(tu32a))
+    isRandom(tu32a)
 
-  //   let ti32a = new Int32Array(100)
-  //   testing.expectEqual(ti32a, crypto.getRandomValues(ti32a))
-  //   isRandom(ti32a)
-  // }
+    let ti32a = new Int32Array(100)
+    testing.expectEqual(ti32a, crypto.getRandomValues(ti32a))
+    isRandom(ti32a)
+  }
 
-  // {
-  //   let tu64a = new BigUint64Array(100)
-  //   testing.expectEqual(tu64a, crypto.getRandomValues(tu64a))
-  //   isRandom(tu64a)
+  {
+    let tu64a = new BigUint64Array(100)
+    testing.expectEqual(tu64a, crypto.getRandomValues(tu64a))
+    isRandom(tu64a)
 
-  //   let ti64a = new BigInt64Array(100)
-  //   testing.expectEqual(ti64a, crypto.getRandomValues(ti64a))
-  //   isRandom(ti64a)
-  // }
+    let ti64a = new BigInt64Array(100)
+    testing.expectEqual(ti64a, crypto.getRandomValues(ti64a))
+    isRandom(ti64a)
+  }
 </script>
 
-<!-- <script id="randomUUID">
+<script id="randomUUID">
   const uuid = crypto.randomUUID();
   testing.expectEqual('string', typeof uuid);
   testing.expectEqual(36, uuid.length);
   const regex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   testing.expectEqual(true, regex.test(uuid));
-</script> -->
+</script>
 
 <script id=SubtleCrypto>
   testing.expectEqual(true, crypto.subtle instanceof SubtleCrypto);
@@ -117,5 +117,18 @@
     );
 
     testing.expectEqual(16, sharedKey.byteLength);
+  });
+</script>
+
+<script id="digest">
+  testing.async(async () => {
+    async function hash(algo, data) {
+      const buffer = await window.crypto.subtle.digest(algo, new TextEncoder().encode(data));
+      return [...new Uint8Array(buffer)].map(x => x.toString(16).padStart(2, '0')).join('');
+    }
+    testing.expectEqual("a6a1e3375239f215f09a156df29c17c7d1ac6722", await hash('sha-1', 'over 9000'));
+    testing.expectEqual("1bc375bb92459685194dda18a4b835f4e2972ec1bde6d9ab3db53fcc584a6580", await hash('sha-256', 'over 9000'));
+    testing.expectEqual("a4260d64c2eea9fd30c1f895c5e48a26d817e19d3a700b61b3ce665864ff4b8e012bd357d345aa614c5f642dab865ea1", await hash('sha-384', 'over 9000'));
+    testing.expectEqual("6cad17e6f3f76680d6dd18ed043b75b4f6e1aa1d08b917294942e882fb6466c3510948c34af8b903ed0725b582b3b39c0e485ae2c1b7dfdb192ee38b79c782b6", await hash('sha-512', 'over 9000'));
   });
 </script>

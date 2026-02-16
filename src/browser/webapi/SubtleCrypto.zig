@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 
 const crypto = @import("../../crypto.zig");
+const DOMException = @import("DOMException.zig");
 
 const Page = @import("../Page.zig");
 const js = @import("../js/js.zig");
@@ -218,6 +219,35 @@ pub fn verify(
     };
 }
 
+pub fn digest(_: *const SubtleCrypto, algorithm: []const u8, data: js.TypedArray(u8), page: *Page) !js.Promise {
+    const local = page.js.local.?;
+    if (algorithm.len > 10) {
+        return local.rejectPromise(DOMException.fromError(error.NotSupported));
+    }
+    const normalized = std.ascii.lowerString(&page.buf, algorithm);
+    if (std.mem.eql(u8, normalized, "sha-1")) {
+        const Sha1 = std.crypto.hash.Sha1;
+        Sha1.hash(data.values, page.buf[0..Sha1.digest_length], .{});
+        return local.resolvePromise(js.ArrayBuffer{ .values = page.buf[0..Sha1.digest_length] });
+    }
+    if (std.mem.eql(u8, normalized, "sha-256")) {
+        const Sha256 = std.crypto.hash.sha2.Sha256;
+        Sha256.hash(data.values, page.buf[0..Sha256.digest_length], .{});
+        return local.resolvePromise(js.ArrayBuffer{ .values = page.buf[0..Sha256.digest_length] });
+    }
+    if (std.mem.eql(u8, normalized, "sha-384")) {
+        const Sha384 = std.crypto.hash.sha2.Sha384;
+        Sha384.hash(data.values, page.buf[0..Sha384.digest_length], .{});
+        return local.resolvePromise(js.ArrayBuffer{ .values = page.buf[0..Sha384.digest_length] });
+    }
+    if (std.mem.eql(u8, normalized, "sha-512")) {
+        const Sha512 = std.crypto.hash.sha2.Sha512;
+        Sha512.hash(data.values, page.buf[0..Sha512.digest_length], .{});
+        return local.resolvePromise(js.ArrayBuffer{ .values = page.buf[0..Sha512.digest_length] });
+    }
+    return local.rejectPromise(DOMException.fromError(error.NotSupported));
+}
+
 /// Returns the desired digest by its name.
 fn findDigest(name: []const u8) error{Invalid}!*const crypto.EVP_MD {
     if (std.mem.eql(u8, "SHA-256", name)) {
@@ -354,7 +384,7 @@ pub const CryptoKey = struct {
             .object => |obj| obj.name,
         };
         // Find digest.
-        const digest = try findDigest(hash);
+        const d = try findDigest(hash);
 
         // We need at least a single usage.
         if (key_usages.len == 0) {
@@ -380,7 +410,7 @@ pub const CryptoKey = struct {
                 break :blk length / 8;
             }
             // Prefer block size of the hash function instead.
-            break :blk crypto.EVP_MD_block_size(digest);
+            break :blk crypto.EVP_MD_block_size(d);
         };
 
         const key = try page.arena.alloc(u8, block_size);
@@ -395,7 +425,7 @@ pub const CryptoKey = struct {
             ._extractable = extractable,
             ._usages = usages_mask,
             ._key = key,
-            ._vary = .{ .digest = digest },
+            ._vary = .{ .digest = d },
         });
 
         return .{ .key = crypto_key };
@@ -635,4 +665,5 @@ pub const JsApi = struct {
     pub const sign = bridge.function(SubtleCrypto.sign, .{ .dom_exception = true });
     pub const verify = bridge.function(SubtleCrypto.verify, .{ .dom_exception = true });
     pub const deriveBits = bridge.function(SubtleCrypto.deriveBits, .{ .dom_exception = true });
+    pub const digest = bridge.function(SubtleCrypto.digest, .{ .dom_exception = true });
 };
