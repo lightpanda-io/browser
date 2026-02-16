@@ -33,143 +33,154 @@ const State = struct {
         index: usize,
     };
 
-        list_depth: usize = 0,
-        list_stack: [32]ListState = undefined,
-        in_pre: bool = false,
-        in_code: bool = false,
-        in_blockquote: bool = false,
-        in_table: bool = false,
-        table_row_index: usize = 0,
-        table_col_count: usize = 0,
-        last_char_was_newline: bool = true,
-    };
-    
-    pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
-        _ = opts;
-        var state = State{};
-        try render(node, &state, writer, page);
-        if (!state.last_char_was_newline) {
-            try writer.writeByte('\n');
-        }
+    list_depth: usize = 0,
+    list_stack: [32]ListState = undefined,
+    in_pre: bool = false,
+    pre_node: ?*Node = null,
+    in_code: bool = false,
+    in_blockquote: bool = false,
+    in_table: bool = false,
+    table_row_index: usize = 0,
+    table_col_count: usize = 0,
+    last_char_was_newline: bool = true,
+};
+
+pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
+    _ = opts;
+    var state = State{};
+    try render(node, &state, writer, page);
+    if (!state.last_char_was_newline) {
+        try writer.writeByte('\n');
     }
-    
-    fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
-        switch (node._type) {
-            .document, .document_fragment => {
-                try renderChildren(node, state, writer, page);
-            },
-            .element => |el| {
-                try renderElement(el, state, writer, page);
-            },
-            .cdata => |cd| {
-                if (node.is(Node.CData.Text)) |_| {
-                    try renderText(cd.getData(), state, writer);
-                }
-            },
-            else => {}, // Ignore other node types
-        }
-    }
-    
-    fn renderChildren(parent: *Node, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
-        var it = parent.childrenIterator();
-        while (it.next()) |child| {
-            try render(child, state, writer, page);
-        }
-    }
-    
-    fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
-        const tag = el.getTag();
-    
-        // Skip hidden/metadata elements
-        switch (tag) {
-            .script, .style, .noscript, .template, .head, .meta, .link, .title, .svg => return,
-            else => {},
-        }
-    
-        // --- Opening Tag Logic ---
-    
-        // Ensure block elements start on a new line (double newline for paragraphs etc)
-        switch (tag) {
-            .p, .div, .section, .article, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .pre, .table, .hr => {
-                if (!state.in_table) {
-                    if (!state.last_char_was_newline) {
-                        try writer.writeByte('\n');
-                        state.last_char_was_newline = true;
-                    }
-                    if (tag == .p or tag == .h1 or tag == .h2 or tag == .h3 or tag == .h4 or tag == .h5 or tag == .h6 or tag == .blockquote or tag == .pre or tag == .table) {
-                        // Add an extra newline for spacing between blocks
-                        try writer.writeByte('\n');
+}
+
+fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
+    switch (node._type) {
+        .document, .document_fragment => {
+            try renderChildren(node, state, writer, page);
+        },
+        .element => |el| {
+            try renderElement(el, state, writer, page);
+        },
+        .cdata => |cd| {
+            if (node.is(Node.CData.Text)) |_| {
+                var text = cd.getData();
+                if (state.in_pre) {
+                    if (state.pre_node) |pre| {
+                        if (node.parentNode() == pre and node.nextSibling() == null) {
+                            text = std.mem.trimRight(u8, text, " \t\r\n");
+                        }
                     }
                 }
-            },
-            .li, .tr => {
+                try renderText(text, state, writer);
+            }
+        },
+        else => {}, // Ignore other node types
+    }
+}
+
+fn renderChildren(parent: *Node, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
+    var it = parent.childrenIterator();
+    while (it.next()) |child| {
+        try render(child, state, writer, page);
+    }
+}
+
+fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
+    const tag = el.getTag();
+
+    // Skip hidden/metadata elements
+    switch (tag) {
+        .script, .style, .noscript, .template, .head, .meta, .link, .title, .svg => return,
+        else => {},
+    }
+
+    // --- Opening Tag Logic ---
+
+    // Ensure block elements start on a new line (double newline for paragraphs etc)
+    switch (tag) {
+        .p, .div, .section, .article, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .pre, .table, .hr => {
+            if (!state.in_table) {
                 if (!state.last_char_was_newline) {
                     try writer.writeByte('\n');
                     state.last_char_was_newline = true;
                 }
-            },
-            else => {},
-        }
-    
-        // Prefixes
-        switch (tag) {
-            .h1 => try writer.writeAll("# "),
-            .h2 => try writer.writeAll("## "),
-            .h3 => try writer.writeAll("### "),
-            .h4 => try writer.writeAll("#### "),
-            .h5 => try writer.writeAll("##### "),
-            .h6 => try writer.writeAll("###### "),
-            .ul => {
-                if (state.list_depth < state.list_stack.len) {
-                    state.list_stack[state.list_depth] = .{ .type = .unordered, .index = 0 };
-                    state.list_depth += 1;
+                if (tag == .p or tag == .h1 or tag == .h2 or tag == .h3 or tag == .h4 or tag == .h5 or tag == .h6 or tag == .blockquote or tag == .pre or tag == .table) {
+                    // Add an extra newline for spacing between blocks
+                    try writer.writeByte('\n');
                 }
-            },
-            .ol => {
-                if (state.list_depth < state.list_stack.len) {
-                    state.list_stack[state.list_depth] = .{ .type = .ordered, .index = 1 };
-                    state.list_depth += 1;
-                }
-            },
-            .li => {
-                const indent = if (state.list_depth > 0) state.list_depth - 1 else 0;
-                try writeIndentation(indent, writer);
-                
-                if (state.list_depth > 0) {
-                    const current_list = &state.list_stack[state.list_depth - 1];
-                    if (current_list.type == .ordered) {
-                        try writer.print("{d}. ", .{current_list.index});
-                        current_list.index += 1;
-                    } else {
-                        try writer.writeAll("- ");
-                    }
+            }
+        },
+        .li, .tr => {
+            if (!state.last_char_was_newline) {
+                try writer.writeByte('\n');
+                state.last_char_was_newline = true;
+            }
+        },
+        else => {},
+    }
+
+    // Prefixes
+    switch (tag) {
+        .h1 => try writer.writeAll("# "),
+        .h2 => try writer.writeAll("## "),
+        .h3 => try writer.writeAll("### "),
+        .h4 => try writer.writeAll("#### "),
+        .h5 => try writer.writeAll("##### "),
+        .h6 => try writer.writeAll("###### "),
+        .ul => {
+            if (state.list_depth < state.list_stack.len) {
+                state.list_stack[state.list_depth] = .{ .type = .unordered, .index = 0 };
+                state.list_depth += 1;
+            }
+        },
+        .ol => {
+            if (state.list_depth < state.list_stack.len) {
+                state.list_stack[state.list_depth] = .{ .type = .ordered, .index = 1 };
+                state.list_depth += 1;
+            }
+        },
+        .li => {
+            const indent = if (state.list_depth > 0) state.list_depth - 1 else 0;
+            try writeIndentation(indent, writer);
+
+            if (state.list_depth > 0) {
+                const current_list = &state.list_stack[state.list_depth - 1];
+                if (current_list.type == .ordered) {
+                    try writer.print("{d}. ", .{current_list.index});
+                    current_list.index += 1;
                 } else {
                     try writer.writeAll("- ");
                 }
-                state.last_char_was_newline = false;
-            },
-            .table => {
-                state.in_table = true;
-                state.table_row_index = 0;
-                state.table_col_count = 0;
-            },
-            .tr => {
-                state.table_col_count = 0;
-                try writer.writeByte('|');
-            },
-            .td, .th => {
-                // Note: leading pipe handled by previous cell closing or tr opening
-                state.last_char_was_newline = false;
-                // Add spacing
-                try writer.writeByte(' ');
-            },
-            .blockquote => {            try writer.writeAll("> ");
+            } else {
+                try writer.writeAll("- ");
+            }
+            state.last_char_was_newline = false;
+        },
+        .table => {
+            state.in_table = true;
+            state.table_row_index = 0;
+            state.table_col_count = 0;
+        },
+        .tr => {
+            state.table_col_count = 0;
+            try writer.writeByte('|');
+        },
+        .td, .th => {
+            // Note: leading pipe handled by previous cell closing or tr opening
+            state.last_char_was_newline = false;
+            // Add spacing
+            try writer.writeByte(' ');
+        },
+        .blockquote => {
+            try writer.writeAll("> ");
             state.in_blockquote = true;
             state.last_char_was_newline = false;
         },
         .pre => {
             try writer.writeAll("```\n");
             state.in_pre = true;
+            state.pre_node = el.asNode();
             state.last_char_was_newline = true;
         },
         .code => {
@@ -259,6 +270,7 @@ const State = struct {
             }
             try writer.writeAll("```\n");
             state.in_pre = false;
+            state.pre_node = null;
             state.last_char_was_newline = true;
         },
         .code => {
