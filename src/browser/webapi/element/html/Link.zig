@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 
@@ -68,6 +69,18 @@ pub fn setAs(self: *Link, value: []const u8, page: *Page) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("as"), .wrap(value), page);
 }
 
+pub fn getCrossOrigin(self: *const Link) ?[]const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("crossOrigin"));
+}
+
+pub fn setCrossOrigin(self: *Link, value: []const u8, page: *Page) !void {
+    var normalized: []const u8 = "anonymous";
+    if (std.ascii.eqlIgnoreCase(value, "use-credentials")) {
+        normalized = "use-credentials";
+    }
+    return self.asElement().setAttributeSafe(comptime .wrap("crossOrigin"), .wrap(normalized), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Link);
 
@@ -80,6 +93,7 @@ pub const JsApi = struct {
     pub const as = bridge.accessor(Link.getAs, Link.setAs, .{});
     pub const rel = bridge.accessor(Link.getRel, Link.setRel, .{});
     pub const href = bridge.accessor(Link.getHref, Link.setHref, .{});
+    pub const crossOrigin = bridge.accessor(Link.getCrossOrigin, Link.setCrossOrigin, .{});
     pub const relList = bridge.accessor(_getRelList, null, .{ .null_as_undefined = true });
 
     fn _getRelList(self: *Link, page: *Page) !?*@import("../../collections.zig").DOMTokenList {
