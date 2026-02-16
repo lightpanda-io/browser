@@ -166,7 +166,7 @@ pub const Serve = struct {
 pub const Fetch = struct {
     url: [:0]const u8,
     dump: bool = false,
-    dump_markdown: bool = false,
+    markdown: bool = false,
     common: Common = .{},
     withbase: bool = false,
     strip: dump.Opts.Strip = .{},
@@ -309,7 +309,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--dump          Dumps document to stdout.
         \\                Defaults to false.
         \\
-        \\--dump-markdown Dumps document to stdout as Markdown.
+        \\--markdown      Dumps document to stdout as Markdown.
         \\                Defaults to false.
         \\
         \\--strip_mode    Comma separated list of tag groups to remove from dump
@@ -414,7 +414,7 @@ fn inferMode(opt: []const u8) ?RunMode {
         return .fetch;
     }
 
-    if (std.mem.eql(u8, opt, "--dump-markdown")) {
+    if (std.mem.eql(u8, opt, "--markdown")) {
         return .fetch;
     }
 
@@ -555,7 +555,7 @@ fn parseFetchArgs(
     args: *std.process.ArgIterator,
 ) !Fetch {
     var fetch_dump: bool = false;
-    var fetch_dump_markdown: bool = false;
+    var fetch_markdown: bool = false;
     var withbase: bool = false;
     var url: ?[:0]const u8 = null;
     var common: Common = .{};
@@ -567,8 +567,8 @@ fn parseFetchArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--dump-markdown", opt)) {
-            fetch_dump_markdown = true;
+        if (std.mem.eql(u8, "--markdown", opt)) {
+            fetch_markdown = true;
             continue;
         }
 
@@ -636,7 +636,7 @@ fn parseFetchArgs(
     return .{
         .url = url.?,
         .dump = fetch_dump,
-        .dump_markdown = fetch_dump_markdown,
+        .markdown = fetch_markdown,
         .strip = strip,
         .common = common,
         .withbase = withbase,
