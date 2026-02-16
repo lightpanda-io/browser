@@ -799,14 +799,23 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Page = @ptrCast(@alignCast(ctx));
     self.clearTransferArena();
     self._parse_state = .{ .err = err };
+    defer self.documentIsComplete();
 
-    // Dispatch a navigated event to indicate the end of the navigation.
-    self._session.notification.dispatch(.page_navigated, &.{
-        .req_id = self._req_id.?,
-        .opts = self._navigated_options.?,
-        .url = self.url,
-        .timestamp = timestamp(.monotonic),
-    });
+    // Generate a pseudo HTML page indicating the navigation falilure.
+    const parse_arena = self.getArena(.{ .debug = "Page.parse" }) catch |e| {
+        log.err(.browser, "get arena on pageErrorCallback", .{ .err = e });
+        return;
+    };
+    defer self.releaseArena(parse_arena);
+
+    const html = std.mem.concat(parse_arena, u8, &.{
+        "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1><p>Reason: ",
+        @errorName(err),
+        "</p></body></htm>",
+    }) catch "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1></body></htm>";
+
+    var parser = Parser.init(parse_arena, self.document.asNode(), self);
+    parser.parse(html);
 }
 
 // The transfer arena is useful and interesting, but has a weird lifetime.
