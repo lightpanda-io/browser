@@ -37,7 +37,6 @@ pub const Scope = enum {
     scheduler,
     not_implemented,
     telemetry,
-    interceptor,
     unknown_prop,
 };
 
@@ -145,13 +144,6 @@ fn logTo(comptime scope: Scope, level: Level, comptime msg: []const u8, data: an
         .pretty => try logPretty(scope, level, msg, data, out),
     }
     out.flush() catch return;
-
-    const interceptor = _interceptor orelse return;
-    if (interceptor.writer(interceptor.ctx, scope, level)) |iwriter| {
-        try logLogfmt(scope, level, msg, data, iwriter);
-        try iwriter.flush();
-        interceptor.done(interceptor.ctx, scope, level);
-    }
 }
 
 fn logLogfmt(comptime scope: Scope, level: Level, comptime msg: []const u8, data: anytype, writer: *std.Io.Writer) !void {
@@ -365,24 +357,6 @@ fn timestamp(comptime mode: datetime.TimestampMode) u64 {
     }
     return datetime.milliTimestamp(mode);
 }
-
-var _interceptor: ?Interceptor = null;
-pub fn registerInterceptor(interceptor: Interceptor) void {
-    _interceptor = interceptor;
-}
-
-pub fn unregisterInterceptor() void {
-    _interceptor = null;
-}
-
-const Interceptor = struct {
-    ctx: *anyopaque,
-    done: DoneFunc,
-    writer: WriterFunc,
-
-    const DoneFunc = *const fn (ctx: *anyopaque, scope: Scope, level: Level) void;
-    const WriterFunc = *const fn (ctx: *anyopaque, scope: Scope, level: Level) ?*std.Io.Writer;
-};
 
 const testing = @import("testing.zig");
 test "log: data" {
