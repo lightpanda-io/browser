@@ -78,16 +78,16 @@ pub const ArrayBuffer = struct {
 };
 
 pub const ArrayType = enum(u8) {
-    Int8,
-    Uint8,
-    Uint8Clamped,
-    Int16,
-    Uint16,
-    Int32,
-    Uint32,
-    Float16,
-    Float32,
-    Float64,
+    int8,
+    uint8,
+    uint8_clamped,
+    int16,
+    uint16,
+    int32,
+    uint32,
+    float16,
+    float32,
+    float64,
 };
 
 pub fn ArrayBufferRef(comptime kind: ArrayType) type {
@@ -95,15 +95,15 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
         const Self = @This();
 
         const BackingInt = switch (kind) {
-            .Int8 => i8,
-            .Uint8, .Uint8Clamped => u8,
-            .Int16 => i16,
-            .Uint16 => u16,
-            .Int32 => i32,
-            .Uint32 => u32,
-            .Float16 => f16,
-            .Float32 => f32,
-            .Float64 => f64,
+            .int8 => i8,
+            .uint8, .uint8_clamped => u8,
+            .int16 => i16,
+            .uint16 => u16,
+            .int32 => i32,
+            .uint32 => u32,
+            .float16 => f16,
+            .float32 => f32,
+            .float64 => f64,
         };
 
         handle: *const v8.Value,
@@ -125,20 +125,20 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
                 array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
             }
 
-            const internal: *const v8.Value = switch (comptime kind) {
-                .Int8 => @ptrCast(v8.v8__Int8Array__New(array_buffer, 0, size).?),
-                .Uint8 => @ptrCast(v8.v8__Uint8Array__New(array_buffer, 0, size).?),
-                .Uint8Clamped => @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, size).?),
-                .Int16 => @ptrCast(v8.v8__Int16Array__New(array_buffer, 0, size).?),
-                .Uint16 => @ptrCast(v8.v8__Uint16Array__New(array_buffer, 0, size).?),
-                .Int32 => @ptrCast(v8.v8__Int32Array__New(array_buffer, 0, size).?),
-                .Uint32 => @ptrCast(v8.v8__Uint32Array__New(array_buffer, 0, size).?),
-                .Float16 => @ptrCast(v8.v8__Float16Array__New(array_buffer, 0, size).?),
-                .Float32 => @ptrCast(v8.v8__Float32Array__New(array_buffer, 0, size).?),
-                .Float64 => @ptrCast(v8.v8__Float64Array__New(array_buffer, 0, size).?),
+            const handle: *const v8.Value = switch (comptime kind) {
+                .int8 => @ptrCast(v8.v8__Int8Array__New(array_buffer, 0, size).?),
+                .uint8 => @ptrCast(v8.v8__Uint8Array__New(array_buffer, 0, size).?),
+                .uint8_clamped => @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, size).?),
+                .int16 => @ptrCast(v8.v8__Int16Array__New(array_buffer, 0, size).?),
+                .uint16 => @ptrCast(v8.v8__Uint16Array__New(array_buffer, 0, size).?),
+                .int32 => @ptrCast(v8.v8__Int32Array__New(array_buffer, 0, size).?),
+                .uint32 => @ptrCast(v8.v8__Uint32Array__New(array_buffer, 0, size).?),
+                .float16 => @ptrCast(v8.v8__Float16Array__New(array_buffer, 0, size).?),
+                .float32 => @ptrCast(v8.v8__Float32Array__New(array_buffer, 0, size).?),
+                .float64 => @ptrCast(v8.v8__Float64Array__New(array_buffer, 0, size).?),
             };
 
-            return .{ .internal = internal };
+            return .{ .handle = handle };
         }
     };
 }
