@@ -27,7 +27,14 @@ pub const Opts = struct {
 };
 
 const State = struct {
+    const ListType = enum { ordered, unordered };
+    const ListState = struct {
+        type: ListType,
+        index: usize,
+    };
+
     list_depth: usize = 0,
+    list_stack: [32]ListState = undefined,
     in_pre: bool = false,
     in_code: bool = false,
     in_blockquote: bool = false,
@@ -107,13 +114,33 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         .h4 => try writer.writeAll("#### "),
         .h5 => try writer.writeAll("##### "),
         .h6 => try writer.writeAll("###### "),
-        .ul, .ol => {
-            state.list_depth += 1;
+        .ul => {
+            if (state.list_depth < state.list_stack.len) {
+                state.list_stack[state.list_depth] = .{ .type = .unordered, .index = 0 };
+                state.list_depth += 1;
+            }
+        },
+        .ol => {
+            if (state.list_depth < state.list_stack.len) {
+                state.list_stack[state.list_depth] = .{ .type = .ordered, .index = 1 };
+                state.list_depth += 1;
+            }
         },
         .li => {
             const indent = if (state.list_depth > 0) state.list_depth - 1 else 0;
             try writeIndentation(indent, writer);
-            try writer.writeAll("- ");
+
+            if (state.list_depth > 0) {
+                const current_list = &state.list_stack[state.list_depth - 1];
+                if (current_list.type == .ordered) {
+                    try writer.print("{d}. ", .{current_list.index});
+                    current_list.index += 1;
+                } else {
+                    try writer.writeAll("- ");
+                }
+            } else {
+                try writer.writeAll("- ");
+            }
             state.last_char_was_newline = false;
         },
         .blockquote => {
@@ -418,7 +445,7 @@ test "markdown: strikethrough" {
     try s.asNode().setTextContent("deleted", page);
     _ = try div.asNode().appendChild(s.asNode(), page);
 
-    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try dump(div.asNode(), .{}, &aw.writer, page);
 
@@ -442,9 +469,35 @@ test "markdown: task list" {
     try input2.setAttributeSafe(comptime .wrap("type"), .wrap("checkbox"), page);
     _ = try div.asNode().appendChild(input2.asNode(), page);
 
-    var aw = std.Io.Writer.Allocating.init(testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try dump(div.asNode(), .{}, &aw.writer, page);
 
     try testing.expectString("[x] [ ] \n", aw.written());
+}
+
+test "markdown: ordered list" {
+    const testing = @import("../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    const div = try doc.createElement("div", null, page);
+
+    const ol = try doc.createElement("ol", null, page);
+    _ = try div.asNode().appendChild(ol.asNode(), page);
+
+    const li1 = try doc.createElement("li", null, page);
+    try li1.asNode().setTextContent("First", page);
+    _ = try ol.asNode().appendChild(li1.asNode(), page);
+
+    const li2 = try doc.createElement("li", null, page);
+    try li2.asNode().setTextContent("Second", page);
+    _ = try ol.asNode().appendChild(li2.asNode(), page);
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{}, &aw.writer, page);
+
+    try testing.expectString("1. First\n2. Second\n", aw.written());
 }
