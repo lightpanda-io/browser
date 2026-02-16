@@ -107,7 +107,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         },
         .fetch => |opts| {
             const url = opts.url;
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump = opts.dump, .url = url, .snapshot = app.snapshot.fromEmbedded() });
+            log.debug(.app, "startup", .{ .mode = "fetch", .html = opts.html, .url = url, .snapshot = app.snapshot.fromEmbedded() });
 
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = 5000,
@@ -120,7 +120,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             var stdout = std.fs.File.stdout();
             var writer = stdout.writer(&.{});
-            if (opts.dump or opts.markdown) {
+            if (opts.html or opts.markdown) {
                 fetch_opts.writer = &writer.interface;
             }
 

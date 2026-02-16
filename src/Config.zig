@@ -165,7 +165,7 @@ pub const Serve = struct {
 
 pub const Fetch = struct {
     url: [:0]const u8,
-    dump: bool = false,
+    html: bool = false,
     markdown: bool = false,
     common: Common = .{},
     withbase: bool = false,
@@ -303,11 +303,13 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\fetch command
         \\Fetches the specified URL
-        \\Example: {s} fetch --dump https://lightpanda.io/
+        \\Example: {s} fetch --html https://lightpanda.io/
         \\
         \\Options:
-        \\--dump          Dumps document to stdout.
+        \\--html          Dumps document to stdout as HTML.
         \\                Defaults to false.
+        \\
+        \\--dump          Alias for --html (deprecated).
         \\
         \\--markdown      Dumps document to stdout as Markdown.
         \\                Defaults to false.
@@ -407,6 +409,10 @@ fn inferMode(opt: []const u8) ?RunMode {
     }
 
     if (std.mem.startsWith(u8, opt, "--") == false) {
+        return .fetch;
+    }
+
+    if (std.mem.eql(u8, opt, "--html")) {
         return .fetch;
     }
 
@@ -554,7 +560,7 @@ fn parseFetchArgs(
     allocator: Allocator,
     args: *std.process.ArgIterator,
 ) !Fetch {
-    var fetch_dump: bool = false;
+    var fetch_html: bool = false;
     var fetch_markdown: bool = false;
     var withbase: bool = false;
     var url: ?[:0]const u8 = null;
@@ -562,8 +568,8 @@ fn parseFetchArgs(
     var strip: dump.Opts.Strip = .{};
 
     while (args.next()) |opt| {
-        if (std.mem.eql(u8, "--dump", opt)) {
-            fetch_dump = true;
+        if (std.mem.eql(u8, "--html", opt) or std.mem.eql(u8, "--dump", opt)) {
+            fetch_html = true;
             continue;
         }
 
@@ -635,7 +641,7 @@ fn parseFetchArgs(
 
     return .{
         .url = url.?,
-        .dump = fetch_dump,
+        .html = fetch_html,
         .markdown = fetch_markdown,
         .strip = strip,
         .common = common,
