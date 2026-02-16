@@ -16,12 +16,54 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const log = @import("../log.zig");
 
+pub const CompiledPattern = struct {
+    pattern: []const u8,
+    ty: enum {
+        prefix, // "/admin/" - prefix match
+        exact, // "/admin$" - exact match
+        wildcard, // any pattern that contains *
+    },
+
+    fn compile(pattern: []const u8) CompiledPattern {
+        if (pattern.len == 0) {
+            return .{
+                .pattern = pattern,
+                .ty = .prefix,
+            };
+        }
+
+        const is_wildcard = std.mem.indexOfScalar(u8, pattern, '*') != null;
+
+        if (is_wildcard) {
+            return .{
+                .pattern = pattern,
+                .ty = .wildcard,
+            };
+        }
+
+        const has_end_anchor = pattern[pattern.len - 1] == '$';
+        return .{
+            .pattern = pattern,
+            .ty = if (has_end_anchor) .exact else .prefix,
+        };
+    }
+};
+
 pub const Rule = union(enum) {
-    allow: []const u8,
-    disallow: []const u8,
+    allow: CompiledPattern,
+    disallow: CompiledPattern,
+
+    fn allowRule(pattern: []const u8) Rule {
+        return .{ .allow = CompiledPattern.compile(pattern) };
+    }
+
+    fn disallowRule(pattern: []const u8) Rule {
+        return .{ .disallow = CompiledPattern.compile(pattern) };
+    }
 };
 
 pub const Key = enum {
@@ -44,11 +86,22 @@ pub const RobotStore = struct {
         const Context = @This();
 
         pub fn hash(_: Context, value: []const u8) u32 {
-            var hasher = std.hash.Wyhash.init(value.len);
-            for (value) |c| {
-                std.hash.autoHash(&hasher, std.ascii.toLower(c));
+            var key = value;
+            var buf: [128]u8 = undefined;
+            var h = std.hash.Wyhash.init(value.len);
+
+            while (key.len >= 128) {
+                const lower = std.ascii.lowerString(buf[0..], key[0..128]);
+                h.update(lower);
+                key = key[128..];
             }
-            return @truncate(hasher.final());
+
+            if (key.len > 0) {
+                const lower = std.ascii.lowerString(buf[0..key.len], key);
+                h.update(lower);
+            }
+
+            return @truncate(h.final());
         }
 
         pub fn eql(_: Context, a: []const u8, b: []const u8) bool {
@@ -112,8 +165,8 @@ const State = struct {
 fn freeRulesInList(allocator: std.mem.Allocator, rules: []const Rule) void {
     for (rules) |rule| {
         switch (rule) {
-            .allow => |value| allocator.free(value),
-            .disallow => |value| allocator.free(value),
+            .allow => |compiled| allocator.free(compiled.pattern),
+            .disallow => |compiled| allocator.free(compiled.pattern),
         }
     }
 }
@@ -122,7 +175,7 @@ fn parseRulesWithUserAgent(
     allocator: std.mem.Allocator,
     user_agent: []const u8,
     raw_bytes: []const u8,
-) ![]const Rule {
+) ![]Rule {
     var rules: std.ArrayList(Rule) = .empty;
     defer rules.deinit(allocator);
 
@@ -201,13 +254,13 @@ fn parseRulesWithUserAgent(
                     .in_our_entry => {
                         const duped_value = try allocator.dupe(u8, value);
                         errdefer allocator.free(duped_value);
-                        try rules.append(allocator, .{ .allow = duped_value });
+                        try rules.append(allocator, Rule.allowRule(duped_value));
                     },
                     .in_other_entry => {},
                     .in_wildcard_entry => {
                         const duped_value = try allocator.dupe(u8, value);
                         errdefer allocator.free(duped_value);
-                        try wildcard_rules.append(allocator, .{ .allow = duped_value });
+                        try wildcard_rules.append(allocator, Rule.allowRule(duped_value));
                     },
                     .not_in_entry => {
                         log.warn(.browser, "robots unexpected rule", .{ .rule = "allow" });
@@ -220,15 +273,19 @@ fn parseRulesWithUserAgent(
 
                 switch (state.entry) {
                     .in_our_entry => {
+                        if (value.len == 0) continue;
+
                         const duped_value = try allocator.dupe(u8, value);
                         errdefer allocator.free(duped_value);
-                        try rules.append(allocator, .{ .disallow = duped_value });
+                        try rules.append(allocator, Rule.disallowRule(duped_value));
                     },
                     .in_other_entry => {},
                     .in_wildcard_entry => {
+                        if (value.len == 0) continue;
+
                         const duped_value = try allocator.dupe(u8, value);
                         errdefer allocator.free(duped_value);
-                        try wildcard_rules.append(allocator, .{ .disallow = duped_value });
+                        try wildcard_rules.append(allocator, Rule.disallowRule(duped_value));
                     },
                     .not_in_entry => {
                         log.warn(.browser, "robots unexpected rule", .{ .rule = "disallow" });
@@ -252,6 +309,39 @@ fn parseRulesWithUserAgent(
 
 pub fn fromBytes(allocator: std.mem.Allocator, user_agent: []const u8, bytes: []const u8) !Robots {
     const rules = try parseRulesWithUserAgent(allocator, user_agent, bytes);
+
+    // sort by order once.
+    std.mem.sort(Rule, rules, {}, struct {
+        fn lessThan(_: void, a: Rule, b: Rule) bool {
+            const a_len = switch (a) {
+                .allow => |p| p.pattern.len,
+                .disallow => |p| p.pattern.len,
+            };
+
+            const b_len = switch (b) {
+                .allow => |p| p.pattern.len,
+                .disallow => |p| p.pattern.len,
+            };
+
+            // Sort by length first.
+            if (a_len != b_len) {
+                return a_len > b_len;
+            }
+
+            // Otherwise, allow should beat disallow.
+            const a_is_allow = switch (a) {
+                .allow => true,
+                .disallow => false,
+            };
+            const b_is_allow = switch (b) {
+                .allow => true,
+                .disallow => false,
+            };
+
+            return a_is_allow and !b_is_allow;
+        }
+    }.lessThan);
+
     return .{ .rules = rules };
 }
 
@@ -260,86 +350,102 @@ pub fn deinit(self: *Robots, allocator: std.mem.Allocator) void {
     allocator.free(self.rules);
 }
 
-fn matchPatternRecursive(pattern: []const u8, path: []const u8, exact_match: bool) bool {
-    if (pattern.len == 0) return true;
-
-    const star_pos = std.mem.indexOfScalar(u8, pattern, '*') orelse {
-        if (exact_match) {
-            // If we end in '$', we must be exactly equal.
-            return std.mem.eql(u8, path, pattern);
-        } else {
-            // Otherwise, we are just a prefix.
-            return std.mem.startsWith(u8, path, pattern);
-        }
-    };
-
-    // Ensure the prefix before the '*' matches.
-    if (!std.mem.startsWith(u8, path, pattern[0..star_pos])) {
-        return false;
-    }
-
-    const suffix_pattern = pattern[star_pos + 1 ..];
-    if (suffix_pattern.len == 0) return true;
-
-    var i: usize = star_pos;
-    while (i <= path.len) : (i += 1) {
-        if (matchPatternRecursive(suffix_pattern, path[i..], exact_match)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /// There are rules for how the pattern in robots.txt should be matched.
 ///
 /// * should match 0 or more of any character.
 /// $ should signify the end of a path, making it exact.
 /// otherwise, it is a prefix path.
-fn matchPattern(pattern: []const u8, path: []const u8) ?usize {
-    if (pattern.len == 0) return 0;
-    const exact_match = pattern[pattern.len - 1] == '$';
-    const inner_pattern = if (exact_match) pattern[0 .. pattern.len - 1] else pattern;
+fn matchPattern(compiled: CompiledPattern, path: []const u8) bool {
+    switch (compiled.ty) {
+        .prefix => return std.mem.startsWith(u8, path, compiled.pattern),
+        .exact => {
+            const pattern = compiled.pattern;
+            return std.mem.eql(u8, path, pattern[0 .. pattern.len - 1]);
+        },
+        .wildcard => {
+            const pattern = compiled.pattern;
+            const exact_match = pattern[pattern.len - 1] == '$';
+            const inner_pattern = if (exact_match) pattern[0 .. pattern.len - 1] else pattern;
+            return matchInnerPattern(inner_pattern, path, exact_match);
+        },
+    }
+}
 
-    if (matchPatternRecursive(
-        inner_pattern,
-        path,
-        exact_match,
-    )) return pattern.len else return null;
+fn matchInnerPattern(pattern: []const u8, path: []const u8, exact_match: bool) bool {
+    var pattern_idx: usize = 0;
+    var path_idx: usize = 0;
+
+    var star_pattern_idx: ?usize = null;
+    var star_path_idx: ?usize = null;
+
+    while (pattern_idx < pattern.len or path_idx < path.len) {
+        // 1: If pattern is consumed and we are doing prefix match, we matched.
+        if (pattern_idx >= pattern.len and !exact_match) {
+            return true;
+        }
+
+        // 2: Current character is a wildcard
+        if (pattern_idx < pattern.len and pattern[pattern_idx] == '*') {
+            star_pattern_idx = pattern_idx;
+            star_path_idx = path_idx;
+            pattern_idx += 1;
+            continue;
+        }
+
+        // 3: Characters match, advance both heads.
+        if (pattern_idx < pattern.len and path_idx < path.len and pattern[pattern_idx] == path[path_idx]) {
+            pattern_idx += 1;
+            path_idx += 1;
+            continue;
+        }
+
+        // 4: we have a previous wildcard, backtrack and try matching more.
+        if (star_pattern_idx) |star_p_idx| {
+            // if we have exhausted the path,
+            // we know we haven't matched.
+            if (star_path_idx.? > path.len) {
+                return false;
+            }
+
+            pattern_idx = star_p_idx + 1;
+            path_idx = star_path_idx.?;
+            star_path_idx.? += 1;
+            continue;
+        }
+
+        // Fallthrough: No match and no backtracking.
+        return false;
+    }
+
+    // Handle trailing widlcards that can match 0 characters.
+    while (pattern_idx < pattern.len and pattern[pattern_idx] == '*') {
+        pattern_idx += 1;
+    }
+
+    if (exact_match) {
+        // Both must be fully consumed.
+        return pattern_idx == pattern.len and path_idx == path.len;
+    }
+
+    // For prefix match, pattern must be completed.
+    return pattern_idx == pattern.len;
 }
 
 pub fn isAllowed(self: *const Robots, path: []const u8) bool {
-    const rules = self.rules;
-
-    var longest_match_len: usize = 0;
-    var is_allowed_result = true;
-
-    for (rules) |rule| {
+    for (self.rules) |rule| {
         switch (rule) {
-            .allow => |pattern| {
-                if (matchPattern(pattern, path)) |len| {
-                    // Longest or Last Wins.
-                    if (len >= longest_match_len) {
-                        longest_match_len = len;
-                        is_allowed_result = true;
-                    }
-                }
-            },
-            .disallow => |pattern| {
-                if (pattern.len == 0) continue;
-
-                if (matchPattern(pattern, path)) |len| {
-                    // Longest or Last Wins.
-                    if (len >= longest_match_len) {
-                        longest_match_len = len;
-                        is_allowed_result = false;
-                    }
-                }
-            },
+            .allow => |compiled| if (matchPattern(compiled, path)) return true,
+            .disallow => |compiled| if (matchPattern(compiled, path)) return false,
         }
     }
 
-    return is_allowed_result;
+    return true;
+}
+
+fn testMatch(pattern: []const u8, path: []const u8) bool {
+    comptime if (!builtin.is_test) unreachable;
+
+    return matchPattern(CompiledPattern.compile(pattern), path);
 }
 
 test "Robots: simple robots.txt" {
@@ -362,77 +468,77 @@ test "Robots: simple robots.txt" {
     }
 
     try std.testing.expectEqual(1, rules.len);
-    try std.testing.expectEqualStrings("/admin/", rules[0].disallow);
+    try std.testing.expectEqualStrings("/admin/", rules[0].disallow.pattern);
 }
 
 test "Robots: matchPattern - simple prefix" {
-    try std.testing.expect(matchPattern("/admin", "/admin/page") != null);
-    try std.testing.expect(matchPattern("/admin", "/admin") != null);
-    try std.testing.expect(matchPattern("/admin", "/other") == null);
-    try std.testing.expect(matchPattern("/admin/page", "/admin") == null);
+    try std.testing.expect(testMatch("/admin", "/admin/page"));
+    try std.testing.expect(testMatch("/admin", "/admin"));
+    try std.testing.expect(!testMatch("/admin", "/other"));
+    try std.testing.expect(!testMatch("/admin/page", "/admin"));
 }
 
 test "Robots: matchPattern - single wildcard" {
-    try std.testing.expect(matchPattern("/admin/*", "/admin/") != null);
-    try std.testing.expect(matchPattern("/admin/*", "/admin/page") != null);
-    try std.testing.expect(matchPattern("/admin/*", "/admin/page/subpage") != null);
-    try std.testing.expect(matchPattern("/admin/*", "/other/page") == null);
+    try std.testing.expect(testMatch("/admin/*", "/admin/"));
+    try std.testing.expect(testMatch("/admin/*", "/admin/page"));
+    try std.testing.expect(testMatch("/admin/*", "/admin/page/subpage"));
+    try std.testing.expect(!testMatch("/admin/*", "/other/page"));
 }
 
 test "Robots: matchPattern - wildcard in middle" {
-    try std.testing.expect(matchPattern("/abc/*/xyz", "/abc/def/xyz") != null);
-    try std.testing.expect(matchPattern("/abc/*/xyz", "/abc/def/ghi/xyz") != null);
-    try std.testing.expect(matchPattern("/abc/*/xyz", "/abc/def") == null);
-    try std.testing.expect(matchPattern("/abc/*/xyz", "/other/def/xyz") == null);
+    try std.testing.expect(testMatch("/abc/*/xyz", "/abc/def/xyz"));
+    try std.testing.expect(testMatch("/abc/*/xyz", "/abc/def/ghi/xyz"));
+    try std.testing.expect(!testMatch("/abc/*/xyz", "/abc/def"));
+    try std.testing.expect(!testMatch("/abc/*/xyz", "/other/def/xyz"));
 }
 
 test "Robots: matchPattern - complex wildcard case" {
-    try std.testing.expect(matchPattern("/abc/*/def/xyz", "/abc/def/def/xyz") != null);
-    try std.testing.expect(matchPattern("/abc/*/def/xyz", "/abc/ANYTHING/def/xyz") != null);
+    try std.testing.expect(testMatch("/abc/*/def/xyz", "/abc/def/def/xyz"));
+    try std.testing.expect(testMatch("/abc/*/def/xyz", "/abc/ANYTHING/def/xyz"));
 }
 
 test "Robots: matchPattern - multiple wildcards" {
-    try std.testing.expect(matchPattern("/a/*/b/*/c", "/a/x/b/y/c") != null);
-    try std.testing.expect(matchPattern("/a/*/b/*/c", "/a/x/y/b/z/w/c") != null);
-    try std.testing.expect(matchPattern("/*.php", "/index.php") != null);
-    try std.testing.expect(matchPattern("/*.php", "/admin/index.php") != null);
+    try std.testing.expect(testMatch("/a/*/b/*/c", "/a/x/b/y/c"));
+    try std.testing.expect(testMatch("/a/*/b/*/c", "/a/x/y/b/z/w/c"));
+    try std.testing.expect(testMatch("/*.php", "/index.php"));
+    try std.testing.expect(testMatch("/*.php", "/admin/index.php"));
 }
 
 test "Robots: matchPattern - end anchor" {
-    try std.testing.expect(matchPattern("/*.php$", "/index.php") != null);
-    try std.testing.expect(matchPattern("/*.php$", "/index.php?param=value") == null);
-    try std.testing.expect(matchPattern("/admin$", "/admin") != null);
-    try std.testing.expect(matchPattern("/admin$", "/admin/") == null);
-    try std.testing.expect(matchPattern("/fish$", "/fish") != null);
-    try std.testing.expect(matchPattern("/fish$", "/fishheads") == null);
+    try std.testing.expect(testMatch("/*.php$", "/index.php"));
+    try std.testing.expect(!testMatch("/*.php$", "/index.php?param=value"));
+    try std.testing.expect(testMatch("/admin$", "/admin"));
+    try std.testing.expect(!testMatch("/admin$", "/admin/"));
+    try std.testing.expect(testMatch("/fish$", "/fish"));
+    try std.testing.expect(!testMatch("/fish$", "/fishheads"));
 }
 
 test "Robots: matchPattern - wildcard with extension" {
-    try std.testing.expect(matchPattern("/fish*.php", "/fish.php") != null);
-    try std.testing.expect(matchPattern("/fish*.php", "/fishheads.php") != null);
-    try std.testing.expect(matchPattern("/fish*.php", "/fish/salmon.php") != null);
-    try std.testing.expect(matchPattern("/fish*.php", "/fish.asp") == null);
+    try std.testing.expect(testMatch("/fish*.php", "/fish.php"));
+    try std.testing.expect(testMatch("/fish*.php", "/fishheads.php"));
+    try std.testing.expect(testMatch("/fish*.php", "/fish/salmon.php"));
+    try std.testing.expect(!testMatch("/fish*.php", "/fish.asp"));
 }
 
 test "Robots: matchPattern - empty and edge cases" {
-    try std.testing.expect(matchPattern("", "/anything") != null);
-    try std.testing.expect(matchPattern("/", "/") != null);
-    try std.testing.expect(matchPattern("*", "/anything") != null);
-    try std.testing.expect(matchPattern("/*", "/anything") != null);
-    try std.testing.expect(matchPattern("$", "") != null);
+    try std.testing.expect(testMatch("", "/anything"));
+    try std.testing.expect(testMatch("/", "/"));
+    try std.testing.expect(testMatch("*", "/anything"));
+    try std.testing.expect(testMatch("/*", "/anything"));
+    try std.testing.expect(testMatch("$", ""));
 }
 
 test "Robots: matchPattern - real world examples" {
-    try std.testing.expect(matchPattern("/", "/anything") != null);
+    try std.testing.expect(testMatch("/", "/anything"));
 
-    try std.testing.expect(matchPattern("/admin/", "/admin/page") != null);
-    try std.testing.expect(matchPattern("/admin/", "/public/page") == null);
+    try std.testing.expect(testMatch("/admin/", "/admin/page"));
+    try std.testing.expect(!testMatch("/admin/", "/public/page"));
 
-    try std.testing.expect(matchPattern("/*.pdf$", "/document.pdf") != null);
-    try std.testing.expect(matchPattern("/*.pdf$", "/document.pdf.bak") == null);
+    try std.testing.expect(testMatch("/*.pdf$", "/document.pdf"));
+    try std.testing.expect(!testMatch("/*.pdf$", "/document.pdf.bak"));
 
-    try std.testing.expect(matchPattern("/*?", "/page?param=value") != null);
-    try std.testing.expect(matchPattern("/*?", "/page") == null);
+    try std.testing.expect(testMatch("/*?", "/page?param=value"));
+    try std.testing.expect(!testMatch("/*?", "/page"));
 }
 
 test "Robots: isAllowed - basic allow/disallow" {
@@ -675,7 +781,7 @@ test "Robots: isAllowed - complex real-world example" {
     try std.testing.expect(robots.isAllowed("/cgi-bin/script.sh") == true);
 }
 
-test "Robots: isAllowed - order doesn't matter for same length" {
+test "Robots: isAllowed - order doesn't matter + allow wins" {
     const allocator = std.testing.allocator;
 
     var robots = try Robots.fromBytes(allocator, "Bot",
@@ -687,7 +793,7 @@ test "Robots: isAllowed - order doesn't matter for same length" {
     );
     defer robots.deinit(allocator);
 
-    try std.testing.expect(robots.isAllowed("/page") == false);
+    try std.testing.expect(robots.isAllowed("/page") == true);
 }
 
 test "Robots: isAllowed - empty file uses wildcard defaults" {
