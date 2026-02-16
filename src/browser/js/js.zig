@@ -91,7 +91,7 @@ pub const ArrayType = enum(u8) {
 };
 
 pub fn ArrayBufferRef(comptime kind: ArrayType) type {
-    return extern struct {
+    return struct {
         const Self = @This();
 
         const BackingInt = switch (kind) {
