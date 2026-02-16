@@ -95,33 +95,6 @@ pub fn fromJS(comptime R: type, js_obj_handle: *const v8.Object) !R {
     }
 
     const internal_field_count = v8.v8__Object__InternalFieldCount(js_obj_handle);
-    // Special case for Window: the global object doesn't have internal fields
-    // Window instance is stored in context.page.window instead
-    if (internal_field_count == 0) {
-        // Normally, this would be an error. All JsObject that map to a Zig type
-        // are either `empty_with_no_proto` (handled above) or have an
-        // interalFieldCount. The only exception to that is the Window...
-        const isolate = v8.v8__Object__GetIsolate(js_obj_handle).?;
-        const context = js.Context.fromIsolate(.{ .handle = isolate });
-
-        const Window = @import("../webapi/Window.zig");
-        if (T == Window) {
-            return context.page.window;
-        }
-
-        // ... Or the window's prototype.
-        // We could make this all comptime-fancy, but it's easier to hard-code
-        // the EventTarget
-
-        const EventTarget = @import("../webapi/EventTarget.zig");
-        if (T == EventTarget) {
-            return context.page.window._proto;
-        }
-
-        // Type not found in Window's prototype chain
-        return error.InvalidArgument;
-    }
-
     // if it isn't an empty struct, then the v8.Object should have an
     // InternalFieldCount > 0, since our toa pointer should be embedded
     // at index 0 of the internal field count.

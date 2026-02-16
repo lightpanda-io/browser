@@ -471,12 +471,13 @@ pub const Function = struct {
         // We support two ways to cache a value directly into a v8::Object. The
         // difference between the two is like the difference between a Map
         // and a Struct.
-        // 1 - Using the object's private state with a v8::Private key. Think of
-        //     this as a HashMap. It takes no memory if the cache isn't used
-        //     but has overhead when used.
-        // 2 - (TODO) Using the object's internal fields. Think of this as
+        // 1 - Using the object's internal fields. Think of this as
         //     adding a field to the struct. It's fast, but the space is reserved
         //     upfront for _every_ instance, whether we use it or not.
+        //
+        // 2 - Using the object's private state with a v8::Private key. Think of
+        //     this as a HashMap. It takes no memory if the cache isn't used
+        //     but has overhead when used.
         //
         // Consider `window.document`, (1) we have relatively few Window objects,
         // (2) They all have a document and (3) The document is accessed _a lot_.
@@ -485,9 +486,9 @@ pub const Function = struct {
         // Consider `node.childNodes`, (1) we can have 20K+ node objects, (2)
         // 95% of nodes will never have their .childNodes access by JavaScript.
         // Private map lookup makes sense.
-        const Caching = union(enum) {
+        pub const Caching = union(enum) {
+            internal: u8,
             private: []const u8,
-            // TODO internal_field: u8,
         };
     };
 
@@ -567,6 +568,24 @@ pub const Function = struct {
         const return_value = info.getReturnValue();
 
         switch (cache) {
+            .internal => |idx| {
+                if (v8.v8__Object__GetInternalField(js_this, idx)) |cached| {
+                    // means we can't cache undefined, since we can't tell the
+                    // difference between "it isn't in the cache" and  "it's
+                    // in the cache with a valud of undefined"
+                    if (!v8.v8__Value__IsUndefined(cached)) {
+                        return_value.set(cached);
+                        return true;
+                    }
+                }
+
+                // store this so that we can quickly save the result into the cache
+                cache_state.* = .{
+                    .js_this = js_this,
+                    .v8_context = v8_context,
+                    .mode = .{ .internal = idx },
+                };
+            },
             .private => |private_symbol| {
                 const global_handle = &@field(ctx.env.private_symbols, private_symbol).handle;
                 const private_key: *const v8.Private = v8.v8__Global__Get(global_handle, ctx.isolate.handle).?;
@@ -599,11 +618,14 @@ pub const Function = struct {
         js_this: *const v8.Object,
         v8_context: *const v8.Context,
         mode: union(enum) {
+            internal: u8,
             private: *const v8.Private,
         },
 
         pub fn save(self: *const CacheState, comptime cache: Opts.Caching, js_value: js.Value) void {
-            if (comptime cache == .private) {
+            if (comptime cache == .internal) {
+                v8.v8__Object__SetInternalField(self.js_this, self.mode.internal, js_value.handle);
+            } else {
                 var out: v8.MaybeBool = undefined;
                 v8.v8__Object__SetPrivate(self.js_this, self.v8_context, self.mode.private, js_value.handle, &out);
             }

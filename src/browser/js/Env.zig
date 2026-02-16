@@ -226,14 +226,31 @@ pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
 
     // Get the global template that was created once per isolate
     const global_template: *const v8.ObjectTemplate = @ptrCast(@alignCast(v8.v8__Eternal__Get(&self.global_template, isolate.handle).?));
+    v8.v8__ObjectTemplate__SetInternalFieldCount(global_template, comptime Snapshot.countInternalFields(Window.JsApi));
     const v8_context = v8.v8__Context__New(isolate.handle, global_template, null).?;
 
     // Create the v8::Context and wrap it in a v8::Global
     var context_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, v8_context, &context_global);
 
-    // our window wrapped in a v8::Global
+    // get the global object for the context, this maps to our Window
     const global_obj = v8.v8__Context__Global(v8_context).?;
+    {
+        // Store our TAO inside the internal field of the global object. This
+        // maps the v8::Object -> Zig instance. Almost all objects have this, and
+        // it gets setup automatically as objects are created, but the Window
+        // object already exists in v8 (it's the global) so we manually create
+        // the mapping here.
+        const tao = try context_arena.create(@import("TaggedOpaque.zig"));
+        tao.* = .{
+            .value = @ptrCast(page.window),
+            .prototype_chain = (&Window.JsApi.Meta.prototype_chain).ptr,
+            .prototype_len = @intCast(Window.JsApi.Meta.prototype_chain.len),
+            .subtype = .node, // this probably isn't right, but it's what we've been doing all along
+        };
+        v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
+    }
+    // our window wrapped in a v8::Global
     var global_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, global_obj, &global_global);
 
