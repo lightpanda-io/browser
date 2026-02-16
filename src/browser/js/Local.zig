@@ -311,7 +311,7 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 js.ArrayBufferRef(.Int32), js.ArrayBufferRef(.Uint32),
                 js.ArrayBufferRef(.Float16), js.ArrayBufferRef(.Float32), js.ArrayBufferRef(.Float64),
                 => {
-                    return .{ .local = self, .handle = value.internal };
+                    return .{ .local = self, .handle = value.handle };
                 },
 
                 inline

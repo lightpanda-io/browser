@@ -106,7 +106,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             .Float64 => f64,
         };
 
-        internal: *const v8.Value,
+        handle: *const v8.Value,
 
         pub fn init(isolate: Isolate, size: usize) Self {
             const bits = switch (@typeInfo(BackingInt)) {
