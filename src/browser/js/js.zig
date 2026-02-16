@@ -145,8 +145,10 @@ pub fn simpleZigValueToJs(isolate: Isolate, value: anytype, comptime fail: bool,
                     const values = value.values;
                     const len = values.len;
                     const backing_store = v8.v8__ArrayBuffer__NewBackingStore(isolate.handle, len);
-                    const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
-                    @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
+                    if (len > 0) {
+                        const data: [*]u8 = @ptrCast(@alignCast(v8.v8__BackingStore__Data(backing_store)));
+                        @memcpy(data[0..len], @as([]const u8, @ptrCast(values))[0..len]);
+                    }
                     const backing_store_ptr = v8.v8__BackingStore__TO_SHARED_PTR(backing_store);
                     return @ptrCast(v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?);
                 },
