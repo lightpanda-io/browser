@@ -105,13 +105,12 @@ pub fn deinit(self: *Session) void {
 pub fn createPage(self: *Session) !*Page {
     lp.assert(self.page == null, "Session.createPage - page not null", .{});
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
-
     const id = self.page_id_gen +% 1;
     self.page_id_gen = id;
 
-    try Page.init(page, id, self);
+    self.page = @as(Page, undefined);
+    const page = &self.page.?;
+    try Page.init(page, id, self, null);
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -150,13 +149,14 @@ pub fn replacePage(self: *Session) !*Page {
 
     var current = self.page.?;
     const page_id = current.id;
+    const parent = current._parent;
     current.deinit();
 
     self.browser.env.memoryPressureNotification(.moderate);
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, page_id, self);
+    try Page.init(page, page_id, self, parent);
     return page;
 }
 

@@ -679,7 +679,7 @@ pub fn normalize(self: *Node, page: *Page) !void {
     return self._normalize(page.call_arena, &buffer, page);
 }
 
-pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, StringTooLarge, NotSupported, NotImplemented, InvalidCharacterError, CloneError }!*Node {
+pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) error{ OutOfMemory, StringTooLarge, NotSupported, NotImplemented, InvalidCharacterError, CloneError, IFrameLoadError }!*Node {
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => |cd| {

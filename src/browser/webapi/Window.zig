@@ -52,6 +52,7 @@ const Allocator = std.mem.Allocator;
 const Window = @This();
 
 _proto: *EventTarget,
+_page: *Page,
 _document: *Document,
 _css: CSS = .init,
 _crypto: Crypto = .init,
@@ -93,6 +94,21 @@ pub fn getSelf(self: *Window) *Window {
 }
 
 pub fn getWindow(self: *Window) *Window {
+    return self;
+}
+
+pub fn getTop(self: *Window) *Window {
+    var p = self._page;
+    while (p.parent) |parent| {
+        p = parent;
+    }
+    return p.window;
+}
+
+pub fn getParent(self: *Window) *Window {
+    if (self._page.parent) |p| {
+        return p.window;
+    }
     return self;
 }
 
@@ -388,23 +404,31 @@ pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     return decoded;
 }
 
-pub fn getFrame(_: *Window, _: usize) !?*Window {
-    // TODO return the iframe's window.
-    return null;
+pub fn getFrame(self: *Window, idx: usize) !?*Window {
+    const page = self._page;
+    const frames = page.frames.items;
+    if (idx >= frames.len) {
+        return null;
+    }
+
+    if (page.frames_sorted == false) {
+        std.mem.sort(*Page, frames, {}, struct {
+            fn lessThan(_: void, a: *Page, b: *Page) bool {
+                const iframe_a = a.iframe orelse return false;
+                const iframe_b = b.iframe orelse return true;
+
+                const pos = iframe_a.asNode().compareDocumentPosition(iframe_b.asNode());
+                // Return true if a precedes b (a should come before b in sorted order)
+                return (pos & 0x04) != 0; // FOLLOWING bit: b follows a
+            }
+        }.lessThan);
+        page.frames_sorted = true;
+    }
+    return frames[idx].window;
 }
 
 pub fn getFramesLength(self: *const Window) u32 {
-    const TreeWalker = @import("TreeWalker.zig");
-    var walker = TreeWalker.Full.init(self._document.asNode(), .{});
-
-    var ln: u32 = 0;
-    while (walker.next()) |node| {
-        if (node.is(Element.Html.IFrame) != null) {
-            ln += 1;
-        }
-    }
-
-    return ln;
+    return @intCast(self._page.frames.items.len);
 }
 
 pub fn getScrollX(self: *const Window) u32 {
@@ -716,10 +740,10 @@ pub const JsApi = struct {
     pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 } });
     pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = .{ .internal = 2 } });
 
-    pub const top = bridge.accessor(Window.getWindow, null, .{});
+    pub const top = bridge.accessor(Window.getTop, null, .{});
     pub const self = bridge.accessor(Window.getWindow, null, .{});
     pub const window = bridge.accessor(Window.getWindow, null, .{});
-    pub const parent = bridge.accessor(Window.getWindow, null, .{});
+    pub const parent = bridge.accessor(Window.getParent, null, .{});
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
     pub const screen = bridge.accessor(Window.getScreen, null, .{});
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, null, .{});

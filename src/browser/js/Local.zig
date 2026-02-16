@@ -1326,6 +1326,7 @@ pub const Scope = struct {
     handle_scope: js.HandleScope,
 
     pub fn deinit(self: *Scope) void {
+        v8.v8__Context__Exit(self.local.handle);
         self.handle_scope.deinit();
     }
 

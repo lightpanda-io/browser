@@ -342,6 +342,7 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
     try page._event_manager.dispatch(self.asEventTarget(), event);
 }
 
+<<<<<<< HEAD
 // TODO: Per spec, hidden is a tristate: true | false | "until-found".
 // We only support boolean for now; "until-found" would need bridge union support.
 pub fn getHidden(self: *HtmlElement) bool {
@@ -373,13 +374,14 @@ pub fn setTabIndex(self: *HtmlElement, value: i32, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), page);
 }
 
-fn getAttributeFunction(
+
+pub fn getAttributeFunction(
     self: *HtmlElement,
     listener_type: GlobalEventHandler,
     page: *Page,
 ) !?js.Function.Global {
     const element = self.asElement();
-    if (page.getAttrListener(element, listener_type)) |cached| {
+    if (page._element_attr_listeners.get(.{ .target = element.asEventTarget(), .handler = listener_type })) |cached| {
         return cached;
     }
 

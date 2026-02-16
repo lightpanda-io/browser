@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<div id=div-1>sub2 div1</div>
+
+<script>
+  // should not have access to the parent's JS context
+  window.top.sub2_loaded = window.testing == undefined;
+</script>

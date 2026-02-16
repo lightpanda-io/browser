@@ -763,7 +763,7 @@ const IsolatedWorld = struct {
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !*js.Context {
         if (self.context == null) {
-            self.context = try self.browser.env.createContext(page, false);
+            self.context = try self.browser.env.createContext(page);
         } else {
             log.warn(.cdp, "not implemented", .{
                 .feature = "createContext: Not implemented second isolated context creation",

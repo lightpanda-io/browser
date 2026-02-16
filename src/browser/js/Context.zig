@@ -47,9 +47,6 @@ isolate: js.Isolate,
 // from this, and we can free it when the context is done.
 handle: v8.Global,
 
-// True if the context is auto-entered,
-entered: bool,
-
 cpu_profiler: ?*v8.CpuProfiler = null,
 
 heap_profiler: ?*v8.HeapProfiler = null,
@@ -247,11 +244,6 @@ pub fn deinit(self: *Context) void {
             v8.v8__Global__Reset(global);
         }
     }
-
-    if (self.entered) {
-        v8.v8__Context__Exit(@ptrCast(v8.v8__Global__Get(&self.handle, self.isolate.handle)));
-    }
-
     v8.v8__Global__Reset(&self.handle);
 }
 
@@ -333,11 +325,14 @@ pub fn localScope(self: *Context, ls: *js.Local.Scope) void {
     const isolate = self.isolate;
     js.HandleScope.init(&ls.handle_scope, isolate);
 
+    const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
+    v8.v8__Context__Enter(local_v8_context);
+
     // TODO: add and init ls.hs  for the handlescope
     ls.local = .{
         .ctx = self,
-        .handle = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle)),
         .isolate = isolate,
+        .handle = local_v8_context,
         .call_arena = self.call_arena,
     };
 }
@@ -364,7 +359,6 @@ pub fn stringToPersistedFunction(self: *Context, str: []const u8) !js.Function.G
         extra = "(e)";
     }
     const full = try std.fmt.allocPrintSentinel(self.call_arena, "(function(e) {{ {s}{s} }})", .{ normalized, extra }, 0);
-
     const js_val = try ls.local.compileAndRun(full, null);
     if (!js_val.isFunction()) {
         return error.StringFunctionError;

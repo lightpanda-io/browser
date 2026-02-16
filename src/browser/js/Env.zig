@@ -175,8 +175,23 @@ pub fn init(app: *App, opts: InitOpts) !Env {
             .data = null,
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
+        // I don' 100% understand this. We actually set this up in the snapshot,
+        // but for the global instance, it doesn't work. SetIndexedHandler and
+        // SetNamedHandler are set on the Instance template, and that's the key
+        // difference. The context has its own global instance, so we need to set
+        // these back up directly on it. There might be a better way to do this.
+        v8.v8__ObjectTemplate__SetIndexedHandler(global_template_local, &.{
+            .getter = Window.JsApi.index.getter,
+            .setter = null,
+            .query = null,
+            .deleter = null,
+            .enumerator = null,
+            .definer = null,
+            .descriptor = null,
+            .data = null,
+            .flags = 0,
+        });
         v8.v8__Eternal__New(isolate_handle, @ptrCast(global_template_local), &global_eternal);
-
         private_symbols = PrivateSymbols.init(isolate_handle);
     }
 
@@ -225,7 +240,7 @@ pub fn deinit(self: *Env) void {
     allocator.destroy(self.isolate_params);
 }
 
-pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
+pub fn createContext(self: *Env, page: *Page) !*Context {
     const context_arena = try self.app.arena_pool.acquire();
     errdefer self.app.arena_pool.release(context_arena);
 
@@ -264,13 +279,6 @@ pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
     var global_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, global_obj, &global_global);
 
-    if (enter) {
-        v8.v8__Context__Enter(v8_context);
-    }
-    errdefer if (enter) {
-        v8.v8__Context__Exit(v8_context);
-    };
-
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
@@ -279,7 +287,6 @@ pub fn createContext(self: *Env, page: *Page, enter: bool) !*Context {
         .env = self,
         .page = page,
         .id = context_id,
-        .entered = enter,
         .isolate = isolate,
         .arena = context_arena,
         .handle = context_global,
