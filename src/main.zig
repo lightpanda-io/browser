@@ -83,7 +83,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
     switch (args.mode) {
         .serve => |opts| {
-            var sighandler = SigHandler{ .arena = main_arena };
+            const sighandler = try main_arena.create(SigHandler);
+            sighandler.* = .{ .arena = main_arena };
             try sighandler.install();
 
             log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
