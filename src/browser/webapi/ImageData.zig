@@ -58,6 +58,10 @@ pub fn constructor(
     maybe_settings: ?ConstructorSettings,
     page: *Page,
 ) !*ImageData {
+    if (width == 0 or height == 0) {
+        return error.IndexSizeError;
+    }
+
     const settings: ConstructorSettings = maybe_settings orelse .{};
     if (settings.colorSpace.eql(comptime .wrap("srgb")) == false) {
         return error.TypeError;
