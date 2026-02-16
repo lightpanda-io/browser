@@ -31,7 +31,6 @@ const Session = @import("../browser/Session.zig");
 const Page = @import("../browser/Page.zig");
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../Notification.zig");
-const LogInterceptor = @import("domains/log.zig").LogInterceptor;
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 pub const URL_BASE = "chrome://newtab/";
@@ -378,8 +377,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         intercept_state: InterceptState,
 
-        log_interceptor: LogInterceptor(Self),
-
         // When network is enabled, we'll capture the transfer.id -> body
         // This is awfully memory intensive, but our underlying http client and
         // its users (script manager and page) correctly do not hold the body
@@ -428,7 +425,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
                 .captured_responses = .empty,
-                .log_interceptor = LogInterceptor(Self).init(allocator, self),
                 .notification = notification,
             };
             self.node_search_list = Node.Search.List.init(allocator, &self.node_registry);
@@ -441,9 +437,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            // safe to call even if never registered
-            log.unregisterInterceptor();
-            self.log_interceptor.deinit();
             const browser = &self.cdp.browser;
 
             // Drain microtasks makes sure we don't have inspector's callback
@@ -583,18 +576,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             self.page_life_cycle_events = false;
             self.notification.unregister(.page_network_idle, self);
             self.notification.unregister(.page_network_almost_idle, self);
-        }
-
-        pub fn logEnable(self: *Self) void {
-            log.registerInterceptor(.{
-                .ctx = &self.log_interceptor,
-                .done = LogInterceptor(Self).done,
-                .writer = LogInterceptor(Self).writer,
-            });
-        }
-
-        pub fn logDisable(_: *const Self) void {
-            log.unregisterInterceptor();
         }
 
         pub fn onPageRemove(ctx: *anyopaque, _: Notification.PageRemove) !void {
