@@ -1160,6 +1160,9 @@ fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnman
 
         if (js_val.isSymbol()) {
             const symbol_handle = v8.v8__Symbol__Description(@ptrCast(js_val.handle), self.isolate.handle).?;
+            if (v8.v8__Value__IsUndefined(symbol_handle)) {
+                return writer.writeAll("undefined (symbol)");
+            }
             return writer.print("{f} (symbol)", .{js.String{ .local = self, .handle = @ptrCast(symbol_handle) }});
         }
         const js_val_str = try js_val.toStringSlice();
