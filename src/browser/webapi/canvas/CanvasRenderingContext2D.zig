@@ -23,6 +23,8 @@ const js = @import("../../js/js.zig");
 const color = @import("../../color.zig");
 const Page = @import("../../Page.zig");
 
+const ImageData = @import("../ImageData.zig");
+
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `HTMLCanvasElement#getContext`.
 /// https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D
@@ -85,6 +87,35 @@ pub fn getTextBaseline(_: *const CanvasRenderingContext2D) []const u8 {
     return "alphabetic";
 }
 
+const WidthOrImageData = union(enum) {
+    width: u32,
+    image_data: *ImageData,
+};
+
+pub fn createImageData(
+    _: *const CanvasRenderingContext2D,
+    width_or_image_data: WidthOrImageData,
+    /// If `ImageData` variant preferred, this is null.
+    maybe_height: ?u32,
+    /// Can be used if width and height provided.
+    maybe_settings: ?ImageData.ConstructorSettings,
+    page: *Page,
+) !*ImageData {
+    switch (width_or_image_data) {
+        .width => |width| {
+            const height = maybe_height orelse return error.TypeError;
+            return ImageData.constructor(width, height, maybe_settings, page);
+        },
+        .image_data => |image_data| {
+            return ImageData.constructor(image_data._width, image_data._height, null, page);
+        },
+    }
+
+    unreachable;
+}
+
+pub fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+
 pub fn save(_: *CanvasRenderingContext2D) void {}
 pub fn restore(_: *CanvasRenderingContext2D) void {}
 pub fn scale(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -130,6 +161,9 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
+    pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{});
 
     pub const save = bridge.function(CanvasRenderingContext2D.save, .{});
     pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{});
