@@ -708,7 +708,10 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
                 try arr.appendSlice(self.arena, "<html><head><meta charset=\"utf-8\"></head><body><pre>");
                 self._parse_state = .{ .text = arr };
             },
-            else => self._parse_state = .{ .raw = .{} },
+            .image_jpeg, .image_gif, .image_png, .image_webp => {
+                self._parse_state = .{ .image = .empty };
+            },
+            else => self._parse_state = .{ .raw = .empty },
         }
     }
 
@@ -730,7 +733,7 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
                 v = v[index + 1 ..];
             }
         },
-        .raw => |*buf| try buf.appendSlice(self.arena, data),
+        .raw, .image => |*buf| try buf.appendSlice(self.arena, data),
         .pre => unreachable,
         .complete => unreachable,
         .err => unreachable,
@@ -753,12 +756,13 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         log.debug(.page, "page.load.complete", .{ .url = self.url });
     };
 
+    const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
+    defer self.releaseArena(parse_arena);
+
+    var parser = Parser.init(parse_arena, self.document.asNode(), self);
+
     switch (self._parse_state) {
         .html => |buf| {
-            const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
-            defer self.releaseArena(parse_arena);
-
-            var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(buf.items);
             self._script_manager.staticScriptsDone();
             if (self._script_manager.isDone()) {
@@ -770,16 +774,26 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         },
         .text => |*buf| {
             try buf.appendSlice(self.arena, "</pre></body></html>");
-
-            const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
-            defer self.releaseArena(parse_arena);
-
-            var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(buf.items);
+            self.documentIsComplete();
+        },
+        .image => |buf| {
+            self._parse_state = .{ .raw_done = buf.items };
+
+            // Use empty an HTML containing the image.
+            const html = try std.mem.concat(parse_arena, u8, &.{
+                "<html><head><meta charset=\"utf-8\"></head><body><img src=\"",
+                self.url,
+                "\"></body></htm>",
+            });
+            parser.parse(html);
             self.documentIsComplete();
         },
         .raw => |buf| {
             self._parse_state = .{ .raw_done = buf.items };
+
+            // Use empty an empty HTML document.
+            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></htm>");
             self.documentIsComplete();
         },
         .pre => {
@@ -787,20 +801,19 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
             // We assume we have received an OK status (checked in Client.headerCallback)
             // so we load a blank document to navigate away from any prior page.
             self._parse_state = .{ .complete = {} };
+
+            // Use empty an empty HTML document.
+            parser.parse("<html><head><meta charset=\"utf-8\"></head><body></body></htm>");
             self.documentIsComplete();
         },
         .err => |err| {
             // Generate a pseudo HTML page indicating the failure.
-            const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
-            defer self.releaseArena(parse_arena);
-
-            const html = std.mem.concat(parse_arena, u8, &.{
+            const html = try std.mem.concat(parse_arena, u8, &.{
                 "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1><p>Reason: ",
                 @errorName(err),
                 "</p></body></htm>",
-            }) catch "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1></body></htm>";
+            });
 
-            var parser = Parser.init(parse_arena, self.document.asNode(), self);
             parser.parse(html);
             self.documentIsComplete();
         },
@@ -880,7 +893,7 @@ fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
 
     while (true) {
         switch (self._parse_state) {
-            .pre, .raw, .text => {
+            .pre, .raw, .text, .image => {
                 // The main page hasn't started/finished navigating.
                 // There's no JS to run, and no reason to run the scheduler.
                 if (http_client.active == 0 and exit_when_done) {
@@ -2848,6 +2861,7 @@ const ParseState = union(enum) {
     err: anyerror,
     html: std.ArrayList(u8),
     text: std.ArrayList(u8),
+    image: std.ArrayList(u8),
     raw: std.ArrayList(u8),
     raw_done: []const u8,
 };
