@@ -175,6 +175,13 @@ pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
     return chain.get(1);
 }
 
+pub fn standaloneEventTarget(self: *Factory, child: anytype) !*EventTarget {
+    const allocator = self._slab.allocator();
+    const et = try allocator.create(EventTarget);
+    et.* = .{ ._type = unionInit(EventTarget.Type, child) };
+    return et;
+}
+
 // this is a root object
 pub fn event(self: *Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
