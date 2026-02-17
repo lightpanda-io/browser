@@ -1402,10 +1402,22 @@ pub const Transfer = struct {
         };
 
         if (comptime IS_DEBUG) {
-            std.debug.assert(std.mem.endsWith(u8, buffer[0..buf_len], "\r\n"));
+            // curl will allow header lines that end with either \r\n or just \n
+            std.debug.assert(buffer[buf_len - 1] == '\n');
         }
 
-        const header = buffer[0 .. buf_len - 2];
+        if (buf_len < 3) {
+            // could be \r\n or \n.
+            return buf_len;
+        }
+
+        var header_len = buf_len - 2;
+        if (buffer[buf_len - 2] != '\r') {
+            // curl supports headers that just end with either \r\n or \n
+            header_len = buf_len - 1;
+        }
+
+        const header = buffer[0 .. header_len];
 
         // We need to parse the first line headers for each request b/c curl's
         // CURLINFO_RESPONSE_CODE returns the status code of the final request.
@@ -1462,7 +1474,7 @@ pub const Transfer = struct {
             transfer.bytes_received += buf_len;
         }
 
-        if (buf_len != 2) {
+        if (buf_len > 2) {
             if (transfer._auth_challenge != null) {
                 // try to parse auth challenge.
                 if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
