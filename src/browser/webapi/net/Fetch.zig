@@ -205,7 +205,8 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
         var response = self._response;
         response._transfer = null;
         response.deinit(true);
-        self._owns_response = false;
+        // Do not access `self` after this point: the Fetch struct was
+        // allocated from response._arena which has been released.
     }
 }
 
