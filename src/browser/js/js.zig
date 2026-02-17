@@ -90,7 +90,13 @@ pub const ArrayType = enum(u8) {
     float64,
 };
 
-pub fn ArrayBufferRef(comptime kind: ArrayType) type {
+pub const ArrayBufferState = enum(u1) { local, global };
+
+/// If `state` is `global`; a persisted, global typed array is created.
+pub fn ArrayBufferRef(
+    comptime kind: ArrayType,
+    comptime state: ArrayBufferState,
+) type {
     return struct {
         const Self = @This();
 
@@ -106,7 +112,10 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             .float64 => f64,
         };
 
-        handle: *const v8.Value,
+        handle: switch (state) {
+            .local => *const v8.Value,
+            .global => v8.Global,
+        },
 
         pub fn init(isolate: Isolate, size: usize) Self {
             const bits = switch (@typeInfo(BackingInt)) {
@@ -125,7 +134,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
                 array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
             }
 
-            const handle: *const v8.Value = switch (comptime kind) {
+            const local_handle: *const v8.Value = switch (comptime kind) {
                 .int8 => @ptrCast(v8.v8__Int8Array__New(array_buffer, 0, size).?),
                 .uint8 => @ptrCast(v8.v8__Uint8Array__New(array_buffer, 0, size).?),
                 .uint8_clamped => @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, size).?),
@@ -138,7 +147,23 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
                 .float64 => @ptrCast(v8.v8__Float64Array__New(array_buffer, 0, size).?),
             };
 
-            return .{ .handle = handle };
+            switch (comptime state) {
+                .local => return .{ .handle = local_handle },
+                .global => {
+                    // We need a global handle if state is `global`.
+                    var global_handle: v8.Global = undefined;
+                    v8.v8__Global__New(isolate.handle, local_handle, &global_handle);
+                    return .{ .handle = global_handle };
+                },
+            }
+        }
+
+        /// Returns appropriate local handle.
+        pub fn localHandle(self: *const Self, scope: *const Local) *const v8.Value {
+            return switch (comptime state) {
+                .local => return self.handle,
+                .global => v8.v8__Global__Get(&self.handle, scope.isolate.handle).?,
+            };
         }
     };
 }
