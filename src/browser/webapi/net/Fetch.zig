@@ -117,6 +117,7 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     }
 
     res._status = header.status;
+    res._status_text = std.http.Status.phrase(@enumFromInt(header.status)) orelse "";
     res._url = try arena.dupeZ(u8, std.mem.span(header.url));
     res._is_redirected = header.redirect_count > 0;
 

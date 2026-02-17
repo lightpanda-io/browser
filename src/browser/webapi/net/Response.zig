@@ -95,10 +95,6 @@ pub fn getStatus(self: *const Response) u16 {
 }
 
 pub fn getStatusText(self: *const Response) []const u8 {
-    // @TODO
-    // This property is meant to actually capture the response status text, not
-    // just return the text representation of self._status. If we do,
-    // new Response(null, {status: 200}).statusText, we should get empty string.
     return self._status_text;
 }
 
