@@ -144,8 +144,8 @@ pub fn play(self: *Media, page: *Page) !void {
     self._network_state = .NETWORK_IDLE;
     if (was_paused) {
         try self.dispatchEvent("play", page);
+        try self.dispatchEvent("playing", page);
     }
-    try self.dispatchEvent("playing", page);
 }
 
 pub fn pause(self: *Media, page: *Page) !void {
