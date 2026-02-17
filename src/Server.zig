@@ -119,7 +119,8 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
             return error.ShuttingDown;
         }
 
-        self.handleConnection(socket, timeout_ms);
+        const thread = try std.Thread.spawn(.{}, handleConnection, .{ self, socket, timeout_ms });
+        thread.join();
     }
 }
 
