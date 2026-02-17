@@ -126,7 +126,7 @@ fn run(
     const url = try std.fmt.allocPrintSentinel(arena, "http://localhost:9582/{s}", .{test_file}, 0);
     try page.navigate(url, .{});
 
-    _ = page.wait(2000);
+    _ = session.wait(2000);
 
     var ls: lp.js.Local.Scope = undefined;
     page.js.localScope(&ls);

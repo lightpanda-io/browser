@@ -942,6 +942,7 @@ fn clearTransferArena(self: *Page) void {
     self.arena_pool.reset(self._session.transfer_arena, 4 * 1024);
 }
 
+<<<<<<< HEAD
 pub fn wait(self: *Page, wait_ms: u32) Session.WaitResult {
     return self._wait(wait_ms) catch |err| {
         switch (err) {
@@ -1173,6 +1174,8 @@ fn printWaitAnalysis(self: *Page) void {
     }
 }
 
+=======
+>>>>>>> 3bd80eb3 (Move page.wait to session.wait)
 pub fn isGoingAway(self: *const Page) bool {
     return self._queued_navigation != null;
 }
@@ -1565,7 +1568,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
     }
 }
 
-fn notifyNetworkIdle(self: *Page) void {
+pub fn notifyNetworkIdle(self: *Page) void {
     lp.assert(self._notified_network_idle == .done, "Page.notifyNetworkIdle", .{});
     self._session.notification.dispatch(.page_network_idle, &.{
         .page_id = self.id,
@@ -1574,7 +1577,7 @@ fn notifyNetworkIdle(self: *Page) void {
     });
 }
 
-fn notifyNetworkAlmostIdle(self: *Page) void {
+pub fn notifyNetworkAlmostIdle(self: *Page) void {
     lp.assert(self._notified_network_almost_idle == .done, "Page.notifyNetworkAlmostIdle", .{});
     self._session.notification.dispatch(.page_network_almost_idle, &.{
         .page_id = self.id,
