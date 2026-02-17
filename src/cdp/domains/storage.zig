@@ -209,7 +209,8 @@ pub fn writeCookie(cookie: *const Cookie, w: anytype) !void {
         try w.objectField("expires");
         try w.write(cookie.expires orelse -1);
 
-        // TODO size
+        try w.objectField("size");
+        try w.write(cookie.name.len + cookie.value.len);
 
         try w.objectField("httpOnly");
         try w.write(cookie.http_only);
@@ -267,8 +268,8 @@ test "cdp.Storage: cookies" {
     });
     try ctx.expectSentResult(.{
         .cookies = &[_]ResCookie{
-            .{ .name = "test", .value = "value", .domain = ".example.com", .path = "/mango" },
-            .{ .name = "test2", .value = "value2", .domain = "car.example.com", .path = "/", .secure = true }, // No Pancakes!
+            .{ .name = "test", .value = "value", .domain = ".example.com", .path = "/mango", .size = 9 },
+            .{ .name = "test2", .value = "value2", .domain = "car.example.com", .path = "/", .size = 11, .secure = true }, // No Pancakes!
         },
     }, .{ .id = 5 });
 
@@ -293,6 +294,7 @@ pub const ResCookie = struct {
     domain: []const u8,
     path: []const u8 = "/",
     expires: f64 = -1,
+    size: usize = 0,
     httpOnly: bool = false,
     secure: bool = false,
     sameSite: []const u8 = "None",
