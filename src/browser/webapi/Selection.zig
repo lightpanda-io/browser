@@ -387,20 +387,47 @@ fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range:
     var new_node = focus_node;
     var new_offset = focus_offset;
 
-    if (forward) {
-        const len = focus_node.getLength();
-        if (focus_offset < len) {
-            new_offset += 1;
-        } else if (nextTextNode(focus_node)) |next| {
-            new_node = next;
-            new_offset = 0;
+    if (!isTextNode(focus_node)) {
+        if (forward) {
+            if (focus_node.getChildAt(focus_offset)) |child| {
+                if (isTextNode(child)) {
+                    new_node = child;
+                    new_offset = 0;
+                } else if (nextTextNode(child)) |t| {
+                    new_node = t;
+                    new_offset = 0;
+                }
+            }
+        } else {
+            var idx = focus_offset;
+            while (idx > 0) {
+                idx -= 1;
+                const child = focus_node.getChildAt(idx) orelse break;
+                var bottom = child;
+                while (bottom.lastChild()) |c| bottom = c;
+                if (isTextNode(bottom)) {
+                    new_node = bottom;
+                    new_offset = bottom.getLength();
+                    break;
+                }
+            }
         }
     } else {
-        if (focus_offset > 0) {
-            new_offset -= 1;
-        } else if (prevTextNode(focus_node)) |prev| {
-            new_node = prev;
-            new_offset = prev.getLength() - 1;
+        if (forward) {
+            const len = focus_node.getLength();
+            if (focus_offset < len) {
+                new_offset += 1;
+            } else if (nextTextNode(focus_node)) |next| {
+                new_node = next;
+                new_offset = 0;
+            }
+        } else {
+            if (focus_offset > 0) {
+                new_offset -= 1;
+            } else if (prevTextNode(focus_node)) |prev| {
+                new_node = prev;
+                new_offset = prev.getLength();
+            }
         }
     }
 
