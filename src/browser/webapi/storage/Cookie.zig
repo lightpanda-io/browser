@@ -83,7 +83,7 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
         const sep = std.mem.indexOfScalarPos(u8, attribute, 0, '=') orelse attribute.len;
         const key_string = trim(attribute[0..sep]);
 
-        if (key_string.len > 8) {
+        if (key_string.len > scrap.len) {
             // not valid, ignore
             continue;
         }
@@ -107,6 +107,9 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
             .expires => expires = value,
             .httponly => http_only = true,
             .samesite => {
+                if (value.len > scrap.len) {
+                    continue;
+                }
                 same_site = std.meta.stringToEnum(Cookie.SameSite, std.ascii.lowerString(&scrap, value)) orelse continue;
             },
         }
