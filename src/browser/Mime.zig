@@ -38,6 +38,10 @@ pub const ContentTypeEnum = enum {
     text_javascript,
     text_plain,
     text_css,
+    image_jpeg,
+    image_gif,
+    image_png,
+    image_webp,
     application_json,
     unknown,
     other,
@@ -49,6 +53,10 @@ pub const ContentType = union(ContentTypeEnum) {
     text_javascript: void,
     text_plain: void,
     text_css: void,
+    image_jpeg: void,
+    image_gif: void,
+    image_png: void,
+    image_webp: void,
     application_json: void,
     unknown: void,
     other: struct { type: []const u8, sub_type: []const u8 },
@@ -61,6 +69,10 @@ pub fn contentTypeString(mime: *const Mime) []const u8 {
         .text_javascript => "application/javascript",
         .text_plain => "text/plain",
         .text_css => "text/css",
+        .image_jpeg => "image/jpeg",
+        .image_png => "image/png",
+        .image_gif => "image/gif",
+        .image_webp => "image/webp",
         .application_json => "application/json",
         else => "",
     };
@@ -243,6 +255,11 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
         @"application/javascript",
         @"application/x-javascript",
 
+        @"image/jpeg",
+        @"image/png",
+        @"image/gif",
+        @"image/webp",
+
         @"application/json",
     }, type_name)) |known_type| {
         const ct: ContentType = switch (known_type) {
@@ -251,6 +268,10 @@ fn parseContentType(value: []const u8) !struct { ContentType, usize } {
             .@"text/javascript", .@"application/javascript", .@"application/x-javascript" => .{ .text_javascript = {} },
             .@"text/plain" => .{ .text_plain = {} },
             .@"text/css" => .{ .text_css = {} },
+            .@"image/jpeg" => .{ .image_jpeg = {} },
+            .@"image/png" => .{ .image_png = {} },
+            .@"image/gif" => .{ .image_gif = {} },
+            .@"image/webp" => .{ .image_webp = {} },
             .@"application/json" => .{ .application_json = {} },
         };
         return .{ ct, attribute_start };
@@ -358,6 +379,11 @@ test "Mime: parse common" {
 
     try expect(.{ .content_type = .{ .application_json = {} } }, "application/json");
     try expect(.{ .content_type = .{ .text_css = {} } }, "text/css");
+
+    try expect(.{ .content_type = .{ .image_jpeg = {} } }, "image/jpeg");
+    try expect(.{ .content_type = .{ .image_png = {} } }, "image/png");
+    try expect(.{ .content_type = .{ .image_gif = {} } }, "image/gif");
+    try expect(.{ .content_type = .{ .image_webp = {} } }, "image/webp");
 }
 
 test "Mime: parse uncommon" {
