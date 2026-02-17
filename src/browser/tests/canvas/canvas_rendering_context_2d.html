@@ -74,6 +74,7 @@
   const ctx = element.getContext("2d");
 
   const imageData = ctx.createImageData(10, 10);
+  testing.expectEqual(true, imageData instanceof ImageData);
   // Modify some pixel data.
   imageData.data[0] = 255;
   imageData.data[1] = 0;
