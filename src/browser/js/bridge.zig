@@ -864,4 +864,5 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
     @import("../webapi/SubtleCrypto.zig"),
     @import("../webapi/Selection.zig"),
+    @import("../webapi/ImageData.zig"),
 });
