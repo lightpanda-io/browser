@@ -115,7 +115,8 @@ pub fn observe(
     self._interests = interests;
 
     // Deliver existing entries if buffered option is set.
-    if (options.buffered) {
+    // Per spec, buffered is only valid with the type option, not entryTypes.
+    if (options.buffered and options.type != null) {
         for (page.window._performance._entries.items) |entry| {
             if (self.interested(entry)) {
                 try self._entries.append(page.arena, entry);
