@@ -75,7 +75,8 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .page = null,
         .arena = arena,
         .history = .{},
-        .navigation = .{},
+        // The prototype (EventTarget) for Navigation is created when a Page is created.
+        .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
         .browser = browser,
         .notification = notification,

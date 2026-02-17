@@ -39,7 +39,7 @@ pub const Type = union(enum) {
     media_query_list: *@import("css/MediaQueryList.zig"),
     message_port: *@import("MessagePort.zig"),
     text_track_cue: *@import("media/TextTrackCue.zig"),
-    navigation: *@import("navigation/NavigationEventTarget.zig"),
+    navigation: *@import("navigation/Navigation.zig"),
     screen: *@import("Screen.zig"),
     screen_orientation: *@import("Screen.zig").Orientation,
     visual_viewport: *@import("VisualViewport.zig"),
