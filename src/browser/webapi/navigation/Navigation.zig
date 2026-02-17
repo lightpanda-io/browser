@@ -24,6 +24,8 @@ const URL = @import("../URL.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const EventTarget = @import("../EventTarget.zig");
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
@@ -36,9 +38,10 @@ const NavigationState = @import("root.zig").NavigationState;
 
 const NavigationHistoryEntry = @import("NavigationHistoryEntry.zig");
 const NavigationCurrentEntryChangeEvent = @import("../event/NavigationCurrentEntryChangeEvent.zig");
-const NavigationEventTarget = @import("NavigationEventTarget.zig");
 
-_proto: *NavigationEventTarget = undefined,
+_proto: *EventTarget,
+_on_currententrychange: ?js.Function.Global = null,
+
 _current_navigation_kind: ?NavigationKind = null,
 
 _index: usize = 0,
@@ -48,7 +51,7 @@ _next_entry_id: usize = 0,
 _activation: ?NavigationActivation = null,
 
 fn asEventTarget(self: *Navigation) *EventTarget {
-    return self._proto.asEventTarget();
+    return self._proto;
 }
 
 pub fn onRemovePage(self: *Navigation) void {
@@ -56,9 +59,7 @@ pub fn onRemovePage(self: *Navigation) void {
 }
 
 pub fn onNewPage(self: *Navigation, page: *Page) !void {
-    self._proto = try page._factory.eventTarget(
-        NavigationEventTarget{ ._proto = undefined },
-    );
+    self._proto = try page._factory.standaloneEventTarget(self);
 }
 
 pub fn getActivation(self: *const Navigation) ?NavigationActivation {
@@ -124,13 +125,19 @@ pub fn forward(self: *Navigation, page: *Page) !NavigationReturn {
     return self.navigateInner(next_entry._url, .{ .traverse = new_index }, page);
 }
 
-pub fn updateEntries(self: *Navigation, url: [:0]const u8, kind: NavigationKind, page: *Page, dispatch: bool) !void {
+pub fn updateEntries(
+    self: *Navigation,
+    url: [:0]const u8,
+    kind: NavigationKind,
+    page: *Page,
+    should_dispatch: bool,
+) !void {
     switch (kind) {
         .replace => |state| {
-            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, dispatch);
+            _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, should_dispatch);
         },
         .push => |state| {
-            _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, dispatch);
+            _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, should_dispatch);
         },
         .traverse => |index| {
             self._index = index;
@@ -166,7 +173,7 @@ pub fn pushEntry(
     _url: [:0]const u8,
     state: NavigationState,
     page: *Page,
-    dispatch: bool,
+    should_dispatch: bool,
 ) !*NavigationHistoryEntry {
     const arena = page._session.arena;
     const url = try arena.dupeZ(u8, _url);
@@ -197,13 +204,13 @@ pub fn pushEntry(
     self._index = index;
 
     if (previous) |prev| {
-        if (dispatch) {
+        if (should_dispatch) {
             const event = try NavigationCurrentEntryChangeEvent.initTrusted(
                 .wrap("currententrychange"),
                 .{ .from = prev, .navigationType = @tagName(.push) },
                 page,
             );
-            try self._proto.dispatch(.{ .currententrychange = event }, page);
+            try self.dispatch(.{ .currententrychange = event }, page);
         }
     }
 
@@ -215,7 +222,7 @@ pub fn replaceEntry(
     _url: [:0]const u8,
     state: NavigationState,
     page: *Page,
-    dispatch: bool,
+    should_dispatch: bool,
 ) !*NavigationHistoryEntry {
     const arena = page._session.arena;
     const url = try arena.dupeZ(u8, _url);
@@ -236,13 +243,13 @@ pub fn replaceEntry(
 
     self._entries.items[self._index] = entry;
 
-    if (dispatch) {
+    if (should_dispatch) {
         const event = try NavigationCurrentEntryChangeEvent.initTrusted(
             .wrap("currententrychange"),
             .{ .from = previous, .navigationType = @tagName(.replace) },
             page,
         );
-        try self._proto.dispatch(.{ .currententrychange = event }, page);
+        try self.dispatch(.{ .currententrychange = event }, page);
     }
 
     return entry;
@@ -334,7 +341,7 @@ pub fn navigateInner(
         .{ .from = previous, .navigationType = @tagName(kind) },
         page,
     );
-    try self._proto.dispatch(.{ .currententrychange = event }, page);
+    try self.dispatch(.{ .currententrychange = event }, page);
 
     _ = try committed.persist();
     _ = try finished.persist();
@@ -376,7 +383,7 @@ pub fn reload(self: *Navigation, _opts: ?ReloadOptions, page: *Page) !Navigation
             .{ .from = previous, .navigationType = @tagName(.reload) },
             page,
         );
-        try self._proto.dispatch(.{ .currententrychange = event }, page);
+        try self.dispatch(.{ .currententrychange = event }, page);
     }
 
     return self.navigateInner(entry._url, .reload, page);
@@ -418,7 +425,52 @@ pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions,
         .{ .from = previous, .navigationType = null },
         page,
     );
-    try self._proto.dispatch(.{ .currententrychange = event }, page);
+    try self.dispatch(.{ .currententrychange = event }, page);
+}
+
+const DispatchType = union(enum) {
+    currententrychange: *NavigationCurrentEntryChangeEvent,
+};
+
+pub fn dispatch(self: *Navigation, event_type: DispatchType, page: *Page) !void {
+    const event, const field = blk: {
+        break :blk switch (event_type) {
+            .currententrychange => |cec| .{ cec.asEvent(), "_on_currententrychange" },
+        };
+    };
+    defer if (!event._v8_handoff) event.deinit(false);
+
+    if (comptime IS_DEBUG) {
+        if (page.js.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "Navigation.dispatch", .url = page.url });
+            std.debug.assert(page.js.local != null);
+        }
+    }
+
+    const func = @field(self, field) orelse return;
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    return page._event_manager.dispatchWithFunction(
+        self.asEventTarget(),
+        event,
+        ls.toLocal(func),
+        .{ .context = "Navigation" },
+    );
+}
+
+fn getOnCurrentEntryChange(self: *Navigation) ?js.Function.Global {
+    return self._on_currententrychange;
+}
+
+pub fn setOnCurrentEntryChange(self: *Navigation, listener: ?js.Function) !void {
+    if (listener) |listen| {
+        self._on_currententrychange = try listen.persistWithThis(self);
+    } else {
+        self._on_currententrychange = null;
+    }
 }
 
 pub const JsApi = struct {
@@ -441,4 +493,10 @@ pub const JsApi = struct {
     pub const navigate = bridge.function(Navigation.navigate, .{});
     pub const traverseTo = bridge.function(Navigation.traverseTo, .{});
     pub const updateCurrentEntry = bridge.function(Navigation.updateCurrentEntry, .{});
+
+    pub const oncurrententrychange = bridge.accessor(
+        Navigation.getOnCurrentEntryChange,
+        Navigation.setOnCurrentEntryChange,
+        .{},
+    );
 };
