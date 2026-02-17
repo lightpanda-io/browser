@@ -10,11 +10,13 @@
   testing.expectEqual(0, event.clientY);
   testing.expectEqual(0, event.screenX);
   testing.expectEqual(0, event.screenY);
+  testing.expectEqual(0, event.buttons);
 </script>
 
 <script id=parameters>
-  let new_event = new MouseEvent('click', { 'button': 0, 'clientX': 10, 'clientY': 20, screenX: 200, screenY: 500 });
+  let new_event = new MouseEvent('click', { 'button': 0, 'clientX': 10, 'clientY': 20, screenX: 200, screenY: 500, buttons: 5 });
   testing.expectEqual(0, new_event.button);
+  testing.expectEqual(5, new_event.buttons);
   testing.expectEqual(10, new_event.x);
   testing.expectEqual(20, new_event.y);
   testing.expectEqual(10, new_event.pageX);
