@@ -138,16 +138,21 @@ fn isMaybeSupported(mime_type: []const u8) bool {
 }
 
 pub fn play(self: *Media, page: *Page) !void {
+    const was_paused = self._paused;
     self._paused = false;
     self._ready_state = .HAVE_ENOUGH_DATA;
     self._network_state = .NETWORK_IDLE;
-    try self.dispatchEvent("play", page);
+    if (was_paused) {
+        try self.dispatchEvent("play", page);
+    }
     try self.dispatchEvent("playing", page);
 }
 
 pub fn pause(self: *Media, page: *Page) !void {
-    self._paused = true;
-    try self.dispatchEvent("pause", page);
+    if (!self._paused) {
+        self._paused = true;
+        try self.dispatchEvent("pause", page);
+    }
 }
 
 pub fn load(self: *Media, page: *Page) !void {
@@ -160,7 +165,7 @@ pub fn load(self: *Media, page: *Page) !void {
 }
 
 fn dispatchEvent(self: *Media, name: []const u8, page: *Page) !void {
-    const event = try Event.init(name, null, page);
+    const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, page);
     defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }

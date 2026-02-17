@@ -60,14 +60,25 @@
     audio.addEventListener('pause', () => events.push('pause'));
     audio.addEventListener('emptied', () => events.push('emptied'));
 
+    // First play: paused -> playing, fires play + playing
     audio.play();
     testing.expectEqual('play,playing', events.join(','));
 
-    audio.pause();
-    testing.expectEqual('play,playing,pause', events.join(','));
+    // Second play: already playing, fires only playing (not play)
+    audio.play();
+    testing.expectEqual('play,playing,playing', events.join(','));
 
+    // Pause: playing -> paused, fires pause
+    audio.pause();
+    testing.expectEqual('play,playing,playing,pause', events.join(','));
+
+    // Second pause: already paused, no event
+    audio.pause();
+    testing.expectEqual('play,playing,playing,pause', events.join(','));
+
+    // Load: fires emptied
     audio.load();
-    testing.expectEqual('play,playing,pause,emptied', events.join(','));
+    testing.expectEqual('play,playing,playing,pause,emptied', events.join(','));
   }
 </script>
 
