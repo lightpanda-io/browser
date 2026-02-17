@@ -23,6 +23,7 @@ const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
+const Event = @import("../../Event.zig");
 pub const Audio = @import("Audio.zig");
 pub const Video = @import("Video.zig");
 const MediaError = @import("../../media/MediaError.zig");
@@ -136,25 +137,32 @@ fn isMaybeSupported(mime_type: []const u8) bool {
     return false;
 }
 
-pub fn play(self: *Media) void {
+pub fn play(self: *Media, page: *Page) !void {
     self._paused = false;
     self._ready_state = .HAVE_ENOUGH_DATA;
     self._network_state = .NETWORK_IDLE;
-    // TODO: Could dispatch 'play' and 'playing' events
+    try self.dispatchEvent("play", page);
+    try self.dispatchEvent("playing", page);
 }
 
-pub fn pause(self: *Media) void {
+pub fn pause(self: *Media, page: *Page) !void {
     self._paused = true;
-    // TODO: Could dispatch 'pause' event
+    try self.dispatchEvent("pause", page);
 }
 
-pub fn load(self: *Media) void {
+pub fn load(self: *Media, page: *Page) !void {
     self._paused = true;
     self._current_time = 0;
     self._ready_state = .HAVE_NOTHING;
     self._network_state = .NETWORK_LOADING;
     self._error = null;
-    // TODO: Could dispatch events
+    try self.dispatchEvent("emptied", page);
+}
+
+fn dispatchEvent(self: *Media, name: []const u8, page: *Page) !void {
+    const event = try Event.init(name, null, page);
+    defer if (!event._v8_handoff) event.deinit(false);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
 pub fn getPaused(self: *const Media) bool {

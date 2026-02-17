@@ -50,6 +50,27 @@
   }
 </script>
 
+<script id="play_pause_events">
+  {
+    const audio = document.createElement('audio');
+    const events = [];
+
+    audio.addEventListener('play', () => events.push('play'));
+    audio.addEventListener('playing', () => events.push('playing'));
+    audio.addEventListener('pause', () => events.push('pause'));
+    audio.addEventListener('emptied', () => events.push('emptied'));
+
+    audio.play();
+    testing.expectEqual('play,playing', events.join(','));
+
+    audio.pause();
+    testing.expectEqual('play,playing,pause', events.join(','));
+
+    audio.load();
+    testing.expectEqual('play,playing,pause,emptied', events.join(','));
+  }
+</script>
+
 <script id="volume_muted">
   {
     const audio = document.getElementById('audio1');
