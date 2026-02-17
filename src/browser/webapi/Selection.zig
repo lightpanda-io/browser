@@ -375,13 +375,12 @@ fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range:
     const abstract = range.asAbstractRange();
 
     const focus_node = switch (self._direction) {
-        .forward, .none => abstract.getStartContainer(),
-        .backward => abstract.getEndContainer(),
+        .backward => abstract.getStartContainer(),
+        .forward, .none => abstract.getEndContainer(),
     };
-
     const focus_offset = switch (self._direction) {
-        .forward, .none => abstract.getStartOffset(),
-        .backward => abstract.getEndOffset(),
+        .backward => abstract.getStartOffset(),
+        .forward, .none => abstract.getEndOffset(),
     };
 
     var new_node = focus_node;
@@ -471,36 +470,69 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
     const abstract = range.asAbstractRange();
 
     const focus_node = switch (self._direction) {
-        .forward, .none => abstract.getStartContainer(),
-        .backward => abstract.getEndContainer(),
+        .backward => abstract.getStartContainer(),
+        .forward, .none => abstract.getEndContainer(),
     };
-
     const focus_offset = switch (self._direction) {
-        .forward, .none => abstract.getStartOffset(),
-        .backward => abstract.getEndOffset(),
+        .backward => abstract.getStartOffset(),
+        .forward, .none => abstract.getEndOffset(),
     };
 
     var new_node = focus_node;
     var new_offset = focus_offset;
 
-    if (forward) {
-        const i = nextWordEnd(new_node.getData(), new_offset);
-        if (i > new_offset) {
-            new_offset = i;
-        } else if (nextTextNode(focus_node)) |next| {
-            new_node = next;
-            new_offset = nextWordEnd(next.getData(), 0);
+    if (!isTextNode(focus_node)) {
+        if (forward) {
+            const child = focus_node.getChildAt(focus_offset) orelse {
+                if (nextTextNode(focus_node)) |next| {
+                    new_node = next;
+                    new_offset = nextWordEnd(next.getData(), 0);
+                }
+                return self.applyWordModify(alter, new_node, new_offset, page);
+            };
+            const t = if (isTextNode(child)) child else nextTextNode(child) orelse {
+                return self.applyWordModify(alter, new_node, new_offset, page);
+            };
+            new_node = t;
+            new_offset = nextWordEnd(t.getData(), 0);
+        } else {
+            var idx = focus_offset;
+            while (idx > 0) {
+                idx -= 1;
+                const child = focus_node.getChildAt(idx) orelse break;
+                var bottom = child;
+                while (bottom.lastChild()) |c| bottom = c;
+                if (isTextNode(bottom)) {
+                    new_node = bottom;
+                    new_offset = prevWordStart(bottom.getData(), bottom.getLength());
+                    break;
+                }
+            }
         }
     } else {
-        const i = prevWordStart(new_node.getData(), new_offset);
-        if (i < new_offset) {
-            new_offset = i;
-        } else if (prevTextNode(focus_node)) |prev| {
-            new_node = prev;
-            new_offset = prevWordStart(prev.getData(), @intCast(prev.getData().len));
+        if (forward) {
+            const i = nextWordEnd(new_node.getData(), new_offset);
+            if (i > new_offset) {
+                new_offset = i;
+            } else if (nextTextNode(focus_node)) |next| {
+                new_node = next;
+                new_offset = nextWordEnd(next.getData(), 0);
+            }
+        } else {
+            const i = prevWordStart(new_node.getData(), new_offset);
+            if (i < new_offset) {
+                new_offset = i;
+            } else if (prevTextNode(focus_node)) |prev| {
+                new_node = prev;
+                new_offset = prevWordStart(prev.getData(), @intCast(prev.getData().len));
+            }
         }
     }
 
+    try self.applyWordModify(alter, new_node, new_offset, page);
+}
+
+fn applyWordModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset: u32, page: *Page) !void {
     switch (alter) {
         .move => {
             const new_range = try Range.init(page);
