@@ -48,7 +48,7 @@ _proto: *UIEvent,
 
 _alt_key: bool,
 _button: MouseButton,
-// TODO: _buttons
+_buttons: u16,
 _client_x: f64,
 _client_y: f64,
 _ctrl_key: bool,
@@ -69,7 +69,7 @@ pub const MouseEventOptions = struct {
     altKey: bool = false,
     metaKey: bool = false,
     button: i32 = 0,
-    // TODO: buttons
+    buttons: u16 = 0,
     relatedTarget: ?*EventTarget = null,
 };
 
@@ -100,6 +100,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
             ._alt_key = opts.altKey,
             ._meta_key = opts.metaKey,
             ._button = std.meta.intToEnum(MouseButton, opts.button) catch return error.TypeError,
+            ._buttons = opts.buttons,
             ._related_target = opts.relatedTarget,
         },
     );
@@ -135,6 +136,10 @@ pub fn getAltKey(self: *const MouseEvent) bool {
 
 pub fn getButton(self: *const MouseEvent) u8 {
     return @intFromEnum(self._button);
+}
+
+pub fn getButtons(self: *const MouseEvent) u16 {
+    return self._buttons;
 }
 
 pub fn getClientX(self: *const MouseEvent) f64 {
@@ -193,6 +198,7 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(MouseEvent.init, .{});
     pub const altKey = bridge.accessor(getAltKey, null, .{});
     pub const button = bridge.accessor(getButton, null, .{});
+    pub const buttons = bridge.accessor(getButtons, null, .{});
     pub const clientX = bridge.accessor(getClientX, null, .{});
     pub const clientY = bridge.accessor(getClientY, null, .{});
     pub const ctrlKey = bridge.accessor(getCtrlKey, null, .{});
