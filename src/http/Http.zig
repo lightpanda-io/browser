@@ -17,8 +17,6 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
-const Config = @import("../Config.zig");
 
 pub const c = @cImport({
     @cInclude("curl/curl.h");
@@ -28,6 +26,8 @@ pub const ENABLE_DEBUG = false;
 pub const Client = @import("Client.zig");
 pub const Transfer = Client.Transfer;
 
+const lp = @import("lightpanda");
+const Config = @import("../Config.zig");
 const log = @import("../log.zig");
 const errors = @import("errors.zig");
 const RobotStore = @import("../browser/Robots.zig").RobotStore;
@@ -42,10 +42,11 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 // once for all http connections is a win.
 const Http = @This();
 
-config: *const Config,
-client: *Client,
-ca_blob: ?c.curl_blob,
 arena: ArenaAllocator,
+allocator: Allocator,
+config: *const Config,
+ca_blob: ?c.curl_blob,
+robot_store: *RobotStore,
 
 pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Config) !Http {
     try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
@@ -60,40 +61,29 @@ pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Confi
 
     var ca_blob: ?c.curl_blob = null;
     if (config.tlsVerifyHost()) {
-        ca_blob = try loadCerts(allocator, arena.allocator());
+        ca_blob = try loadCerts(allocator);
     }
-
-    var client = try Client.init(allocator, ca_blob, robot_store, config);
-    errdefer client.deinit();
 
     return .{
         .arena = arena,
-        .client = client,
-        .ca_blob = ca_blob,
+        .allocator = allocator,
         .config = config,
+        .ca_blob = ca_blob,
+        .robot_store = robot_store,
     };
 }
 
 pub fn deinit(self: *Http) void {
-    self.client.deinit();
+    if (self.ca_blob) |ca_blob| {
+        const data: [*]u8 = @ptrCast(ca_blob.data);
+        self.allocator.free(data[0..ca_blob.len]);
+    }
     c.curl_global_cleanup();
     self.arena.deinit();
 }
 
-pub fn poll(self: *Http, timeout_ms: u32) Client.PerformStatus {
-    return self.client.tick(timeout_ms) catch |err| {
-        log.err(.app, "http poll", .{ .err = err });
-        return .normal;
-    };
-}
-
-pub fn addCDPClient(self: *Http, cdp_client: Client.CDPClient) void {
-    lp.assert(self.client.cdp_client == null, "Http addCDPClient existing", .{});
-    self.client.cdp_client = cdp_client;
-}
-
-pub fn removeCDPClient(self: *Http) void {
-    self.client.cdp_client = null;
+pub fn createClient(self: *Http, allocator: Allocator) !*Client {
+    return Client.init(allocator, self.ca_blob, self.robot_store, self.config);
 }
 
 pub fn newConnection(self: *Http) !Connection {
@@ -351,7 +341,7 @@ pub const Method = enum(u8) {
 // This whole rescan + decode is really just needed for MacOS. On Linux
 // bundle.rescan does find the .pem file(s) which could be in a few different
 // places, so it's still useful, just not efficient.
-fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
+fn loadCerts(allocator: Allocator) !c.curl_blob {
     var bundle: std.crypto.Certificate.Bundle = .{};
     try bundle.rescan(allocator);
     defer bundle.deinit(allocator);
@@ -374,8 +364,9 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
         (bundle.map.count() * 75) + // start / end per certificate + extra, just in case
         (encoded_size / 64) // newline per 64 characters
     ;
-    try arr.ensureTotalCapacity(arena, buffer_size);
-    var writer = arr.writer(arena);
+    try arr.ensureTotalCapacity(allocator, buffer_size);
+    errdefer arr.deinit(allocator);
+    var writer = arr.writer(allocator);
 
     var it = bundle.map.valueIterator();
     while (it.next()) |index| {
@@ -388,11 +379,16 @@ fn loadCerts(allocator: Allocator, arena: Allocator) !c.curl_blob {
     }
 
     // Final encoding should not be larger than our initial size estimate
-    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estiate = buffer_size, .len = arr.items.len });
+    lp.assert(buffer_size > arr.items.len, "Http loadCerts", .{ .estimate = buffer_size, .len = arr.items.len });
+
+    // Allocate exactly the size needed and copy the data
+    const result = try allocator.dupe(u8, arr.items);
+    // Free the original oversized allocation
+    arr.deinit(allocator);
 
     return .{
-        .len = arr.items.len,
-        .data = arr.items.ptr,
+        .len = result.len,
+        .data = result.ptr,
         .flags = 0,
     };
 }

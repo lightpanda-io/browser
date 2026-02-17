@@ -30,6 +30,8 @@ const log = @import("log.zig");
 const App = @import("App.zig");
 const Config = @import("Config.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
+const Http = @import("http/Http.zig");
+const HttpClient = @import("http/Client.zig");
 
 const Server = @This();
 
@@ -147,19 +149,22 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
     client.* = try Client.init(socket, self);
     defer client.deinit();
 
-    var http = &self.app.http;
-    http.addCDPClient(.{
-        .socket = socket,
+    client.http.cdp_client = .{
+        .socket = client.socket,
         .ctx = client,
         .blocking_read_start = Client.blockingReadStart,
         .blocking_read = Client.blockingRead,
         .blocking_read_end = Client.blockingReadStop,
-    });
-    defer http.removeCDPClient();
+    };
+    defer client.http.cdp_client = null;
 
     lp.assert(client.mode == .http, "Server.readLoop invalid mode", .{});
     while (true) {
-        if (http.poll(timeout_ms) != .cdp_socket) {
+        const status = client.http.tick(timeout_ms) catch |err| {
+            log.err(.app, "http tick", .{ .err = err });
+            return;
+        };
+        if (status != .cdp_socket) {
             log.info(.app, "CDP timeout", .{});
             return;
         }
@@ -186,7 +191,11 @@ fn readLoop(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
                 ms_remaining = timeout_ms;
             },
             .no_page => {
-                if (http.poll(ms_remaining) != .cdp_socket) {
+                const status = client.http.tick(ms_remaining) catch |err| {
+                    log.err(.app, "http tick", .{ .err = err });
+                    return;
+                };
+                if (status != .cdp_socket) {
                     log.info(.app, "CDP timeout", .{});
                     return;
                 }
@@ -217,6 +226,7 @@ pub const Client = struct {
     },
 
     server: *Server,
+    http: *HttpClient,
     reader: Reader(true),
     socket: posix.socket_t,
     socket_flags: usize,
@@ -240,9 +250,13 @@ pub const Client = struct {
         var reader = try Reader(true).init(server.allocator);
         errdefer reader.deinit();
 
+        const http = try server.app.http.createClient(server.allocator);
+        errdefer http.deinit();
+
         return .{
             .socket = socket,
             .server = server,
+            .http = http,
             .reader = reader,
             .mode = .{ .http = {} },
             .socket_flags = socket_flags,
@@ -471,7 +485,7 @@ pub const Client = struct {
             break :blk res;
         };
 
-        self.mode = .{ .cdp = try CDP.init(self.server.app, self) };
+        self.mode = .{ .cdp = try CDP.init(self.server.app, self.http, self) };
         return self.send(response);
     }
 

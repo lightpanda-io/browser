@@ -24,9 +24,9 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const App = @import("../App.zig");
+const HttpClient = @import("../http/Client.zig");
 
 const ArenaPool = App.ArenaPool;
-const HttpClient = App.Http.Client;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -47,6 +47,7 @@ http_client: *HttpClient,
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
+    http_client: *HttpClient,
 };
 
 pub fn init(app: *App, opts: InitOpts) !Browser {
@@ -61,7 +62,7 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
         .session = null,
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
-        .http_client = app.http.client,
+        .http_client = opts.http_client,
     };
 }
 
