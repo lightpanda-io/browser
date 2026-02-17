@@ -789,6 +789,21 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
             self._parse_state = .{ .complete = {} };
             self.documentIsComplete();
         },
+        .err => |err| {
+            // Generate a pseudo HTML page indicating the failure.
+            const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
+            defer self.releaseArena(parse_arena);
+
+            const html = std.mem.concat(parse_arena, u8, &.{
+                "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1><p>Reason: ",
+                @errorName(err),
+                "</p></body></htm>",
+            }) catch "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1></body></htm>";
+
+            var parser = Parser.init(parse_arena, self.document.asNode(), self);
+            parser.parse(html);
+            self.documentIsComplete();
+        },
         else => unreachable,
     }
 }
@@ -797,25 +812,14 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     log.err(.page, "navigate failed", .{ .err = err });
 
     var self: *Page = @ptrCast(@alignCast(ctx));
-    self.clearTransferArena();
     self._parse_state = .{ .err = err };
-    defer self.documentIsComplete();
 
-    // Generate a pseudo HTML page indicating the navigation falilure.
-    const parse_arena = self.getArena(.{ .debug = "Page.parse" }) catch |e| {
-        log.err(.browser, "get arena on pageErrorCallback", .{ .err = e });
+    // In case of error, we want to complete the page with a custom HTML
+    // containing the error.
+    pageDoneCallback(ctx) catch |e| {
+        log.err(.browser, "pageErrorCallback", .{ .err = e });
         return;
     };
-    defer self.releaseArena(parse_arena);
-
-    const html = std.mem.concat(parse_arena, u8, &.{
-        "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1><p>Reason: ",
-        @errorName(err),
-        "</p></body></htm>",
-    }) catch "<html><head><meta charset=\"utf-8\"></head><body><h1>Navigation failed</h1></body></htm>";
-
-    var parser = Parser.init(parse_arena, self.document.asNode(), self);
-    parser.parse(html);
 }
 
 // The transfer arena is useful and interesting, but has a weird lifetime.
