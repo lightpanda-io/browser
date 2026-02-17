@@ -34,7 +34,7 @@ const CDP = @import("cdp/cdp.zig").CDP;
 const Server = @This();
 
 app: *App,
-shutdown: bool = false,
+shutdown: std.atomic.Value(bool) = .init(false),
 allocator: Allocator,
 client: ?posix.socket_t,
 listener: ?posix.socket_t,
@@ -56,7 +56,7 @@ pub fn init(app: *App, address: net.Address) !Server {
 
 /// Interrupts the server so that main can complete normally and call all defer handlers.
 pub fn stop(self: *Server) void {
-    if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
+    if (self.shutdown.swap(true, .release)) {
         return;
     }
 
@@ -76,6 +76,10 @@ pub fn stop(self: *Server) void {
 }
 
 pub fn deinit(self: *Server) void {
+    if (!self.shutdown.load(.acquire)) {
+        self.stop();
+    }
+
     if (self.listener) |listener| {
         posix.close(listener);
         self.listener = null;
@@ -99,7 +103,7 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
     try posix.listen(listener, 1);
 
     log.info(.app, "server running", .{ .address = address });
-    while (!@atomicLoad(bool, &self.shutdown, .monotonic)) {
+    while (!self.shutdown.load(.acquire)) {
         const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
             switch (err) {
                 error.SocketNotListening, error.ConnectionAborted => {
