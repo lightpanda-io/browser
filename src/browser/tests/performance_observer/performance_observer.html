@@ -69,3 +69,31 @@
 <script>
   testing.expectEqual(['mark', 'measure'], PerformanceObserver.supportedEntryTypes);
 </script>
+
+<script id="buffered_option">
+{
+  // Create marks BEFORE the observer
+  performance.mark("early1", { startTime: 1.0 });
+  performance.mark("early2", { startTime: 2.0 });
+
+  let receivedEntries = null;
+  const observer = new PerformanceObserver((list) => {
+    receivedEntries = list.getEntries();
+  });
+
+  // With buffered: true, existing marks should be delivered immediately
+  observer.observe({ type: "mark", buffered: true });
+
+  testing.eventually(() => {
+    testing.expectEqual(true, receivedEntries !== null);
+    // Should have received at least the 2 early marks
+    testing.expectEqual(true, receivedEntries.length >= 2);
+
+    const names = receivedEntries.map(e => e.name);
+    testing.expectEqual(true, names.indexOf("early1") >= 0);
+    testing.expectEqual(true, names.indexOf("early2") >= 0);
+
+    observer.disconnect();
+  });
+}
+</script>

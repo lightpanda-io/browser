@@ -113,6 +113,18 @@ pub fn observe(
 
     // Update interests.
     self._interests = interests;
+
+    // Deliver existing entries if buffered option is set.
+    if (options.buffered) {
+        for (page.window._performance._entries.items) |entry| {
+            if (self.interested(entry)) {
+                try self._entries.append(page.arena, entry);
+            }
+        }
+        if (self.hasRecords()) {
+            try self.dispatch(page);
+        }
+    }
 }
 
 pub fn disconnect(self: *PerformanceObserver, page: *Page) void {
