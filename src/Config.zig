@@ -30,6 +30,13 @@ pub const RunMode = enum {
     version,
 };
 
+pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
+
+// max message size
+// +14 for max websocket payload overhead
+// +140 for the max control packet that might be interleaved in a message
+pub const CDP_MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
+
 mode: Mode,
 exec_name: []const u8,
 http_headers: HttpHeaders,
@@ -145,6 +152,20 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn maxConnections(self: *const Config) u16 {
+    return switch (self.mode) {
+        .serve => |opts| opts.cdp_max_connections,
+        else => unreachable,
+    };
+}
+
+pub fn maxPendingConnections(self: *const Config) u31 {
+    return switch (self.mode) {
+        .serve => |opts| opts.cdp_max_pending_connections,
+        else => unreachable,
+    };
+}
+
 pub const Mode = union(RunMode) {
     help: bool, // false when being printed because of an error
     fetch: Fetch,
@@ -156,10 +177,8 @@ pub const Serve = struct {
     host: []const u8 = "127.0.0.1",
     port: u16 = 9222,
     timeout: u31 = 10,
-    max_connections: u16 = 16,
-    max_tabs_per_connection: u16 = 8,
-    max_memory_per_tab: u64 = 512 * 1024 * 1024,
-    max_pending_connections: u16 = 128,
+    cdp_max_connections: u16 = 16,
+    cdp_max_pending_connections: u16 = 128,
     common: Common = .{},
 };
 
@@ -333,18 +352,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--timeout       Inactivity timeout in seconds before disconnecting clients
         \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
         \\
-        \\--max_connections
+        \\--cdp_max_connections
         \\                Maximum number of simultaneous CDP connections.
         \\                Defaults to 16.
         \\
-        \\--max_tabs      Maximum number of tabs per CDP connection.
-        \\                Defaults to 8.
-        \\
-        \\--max_tab_memory
-        \\                Maximum memory per tab in bytes.
-        \\                Defaults to 536870912 (512 MB).
-        \\
-        \\--max_pending_connections
+        \\--cdp_max_pending_connections
         \\                Maximum pending connections in the accept queue.
         \\                Defaults to 128.
         \\
@@ -479,53 +491,27 @@ fn parseServeArgs(
             continue;
         }
 
-        if (std.mem.eql(u8, "--max_connections", opt)) {
+        if (std.mem.eql(u8, "--cdp_max_connections", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--max_connections" });
+                log.fatal(.app, "missing argument value", .{ .arg = "--cdp_max_connections" });
                 return error.InvalidArgument;
             };
 
-            serve.max_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--max_connections", .err = err });
+            serve.cdp_max_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = "--cdp_max_connections", .err = err });
                 return error.InvalidArgument;
             };
             continue;
         }
 
-        if (std.mem.eql(u8, "--max_tabs", opt)) {
+        if (std.mem.eql(u8, "--cdp_max_pending_connections", opt)) {
             const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--max_tabs" });
+                log.fatal(.app, "missing argument value", .{ .arg = "--cdp_max_pending_connections" });
                 return error.InvalidArgument;
             };
 
-            serve.max_tabs_per_connection = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--max_tabs", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--max_tab_memory", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--max_tab_memory" });
-                return error.InvalidArgument;
-            };
-
-            serve.max_memory_per_tab = std.fmt.parseInt(u64, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--max_tab_memory", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--max_pending_connections", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--max_pending_connections" });
-                return error.InvalidArgument;
-            };
-
-            serve.max_pending_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--max_pending_connections", .err = err });
+            serve.cdp_max_pending_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = "--cdp_max_pending_connections", .err = err });
                 return error.InvalidArgument;
             };
             continue;

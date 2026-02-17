@@ -28,16 +28,11 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const log = @import("log.zig");
 const App = @import("App.zig");
+const Config = @import("Config.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
 
-const MAX_HTTP_REQUEST_SIZE = 4096;
-
-// max message size
-// +14 for max websocket payload overhead
-// +140 for the max control packet that might be interleaved in a message
-const MAX_MESSAGE_SIZE = 512 * 1024 + 14 + 140;
-
 const Server = @This();
+
 app: *App,
 shutdown: bool = false,
 allocator: Allocator,
@@ -314,7 +309,7 @@ pub const Client = struct {
         lp.assert(self.reader.pos == 0, "Client.HTTP pos", .{ .pos = self.reader.pos });
         const request = self.reader.buf[0..self.reader.len];
 
-        if (request.len > MAX_HTTP_REQUEST_SIZE) {
+        if (request.len > Config.CDP_MAX_HTTP_REQUEST_SIZE) {
             self.writeHTTPErrorResponse(413, "Request too large");
             return error.RequestTooLarge;
         }
@@ -707,7 +702,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
                     if (message_len > 125) {
                         return error.ControlTooLarge;
                     }
-                } else if (message_len > MAX_MESSAGE_SIZE) {
+                } else if (message_len > Config.CDP_MAX_MESSAGE_SIZE) {
                     return error.TooLarge;
                 } else if (message_len > self.buf.len) {
                     const len = self.buf.len;
@@ -735,7 +730,7 @@ fn Reader(comptime EXPECT_MASK: bool) type {
 
                 if (is_continuation) {
                     const fragments = &(self.fragments orelse return error.InvalidContinuation);
-                    if (fragments.message.items.len + message_len > MAX_MESSAGE_SIZE) {
+                    if (fragments.message.items.len + message_len > Config.CDP_MAX_MESSAGE_SIZE) {
                         return error.TooLarge;
                     }
 
