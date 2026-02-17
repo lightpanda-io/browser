@@ -46,16 +46,6 @@ notification: *Notification,
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
 
-// The page's arena is unsuitable for data that has to existing while
-// navigating from one page to another. For example, if we're clicking
-// on an HREF, the URL exists in the original page (where the click
-// originated) but also has to exist in the new page.
-// While we could use the Session's arena, this could accumulate a lot of
-// memory if we do many navigation events. The `transfer_arena` is meant to
-// bridge the gap: existing long enough to store any data needed to end one
-// page and start another.
-transfer_arena: Allocator,
-
 cookie_jar: storage.Cookie.Jar,
 storage_shed: storage.Shed,
 
@@ -71,9 +61,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     const arena = try browser.arena_pool.acquire();
     errdefer browser.arena_pool.release(arena);
 
-    const transfer_arena = try browser.arena_pool.acquire();
-    errdefer browser.arena_pool.release(transfer_arena);
-
     self.* = .{
         .page = null,
         .arena = arena,
@@ -84,7 +71,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .storage_shed = .{},
         .browser = browser,
         .notification = notification,
-        .transfer_arena = transfer_arena,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
     };
 }
@@ -97,7 +83,6 @@ pub fn deinit(self: *Session) void {
 
     self.cookie_jar.deinit();
     self.storage_shed.deinit(browser.app.allocator);
-    browser.arena_pool.release(self.transfer_arena);
     browser.arena_pool.release(self.arena);
 }
 
@@ -182,17 +167,17 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
         const wait_result = self._wait(page, wait_ms) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
-                else => log.err(.browser, "session wait", .{ .err = err, }),
+                else => log.err(.browser, "session wait", .{
+                    .err = err,
+                }),
             }
             return .done;
         };
 
         switch (wait_result) {
             .done => {
-                if (page._queued_navigation == null) {
-                    return .done;
-                }
-                page = self.processScheduledNavigation() catch return .done;
+                const qn = page._queued_navigation orelse return .done;
+                page = self.processScheduledNavigation(qn) catch return .done;
             },
             else => |result| return result,
         }
@@ -337,35 +322,34 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     }
 }
 
-fn processScheduledNavigation(self: *Session) !*Page {
-    defer self.browser.arena_pool.reset(self.transfer_arena, 4 * 1024);
-    const url, const opts, const page_id = blk: {
-        const page = self.page.?;
-        const qn = page._queued_navigation.?;
-        // qn might not be safe to use after self.removePage is called, hence
-        // this block;
-        const url = qn.url;
-        const opts = qn.opts;
+fn processScheduledNavigation(self: *Session, qn: *Page.QueuedNavigation) !*Page {
+    const browser = self.browser;
+    defer browser.arena_pool.release(qn.arena);
 
-        // This was already aborted on the page, but it would be pretty
-        // bad if old requests went to the new page, so let's make double sure
-        self.browser.http_client.abort();
+    const page_id, const parent = blk: {
+        const page = &self.page.?;
+        const page_id = page.id;
+        const parent = page._parent;
+
+        browser.http_client.abort();
         self.removePage();
 
-        break :blk .{ url, opts, page.id };
+        break :blk .{page_id, parent};
     };
 
-    const page = self.createPage() catch |err| {
-        log.err(.browser, "queued navigation page error", .{
-            .err = err,
-            .url = url,
-        });
-        return err;
-    };
-    page.id = page_id;
+    self.page = @as(Page, undefined);
+    const page = &self.page.?;
+    try Page.init(page, page_id, self, parent);
 
-    page.navigate(url, opts) catch |err| {
-        log.err(.browser, "queued navigation error", .{ .err = err, .url = url });
+    // Creates a new NavigationEventTarget for this page.
+    try self.navigation.onNewPage(page);
+
+    // start JS env
+    // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
+    self.notification.dispatch(.page_created, page);
+
+    page.navigate(qn.url, qn.opts) catch |err| {
+        log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
         return err;
     };
 

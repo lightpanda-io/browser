@@ -181,7 +181,7 @@ _notified_network_almost_idle: IdleNotification = .init,
 
 // A navigation event that happens from a script gets scheduled to run on the
 // next tick.
-_queued_navigation: ?QueuedNavigation = null,
+_queued_navigation: ?*QueuedNavigation = null,
 
 // The URL of the current page
 url: [:0]const u8 = "about:blank",
@@ -542,23 +542,27 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 // We cannot navigate immediately as navigating will delete the DOM tree,
 // which holds this event's node.
 // As such we schedule the function to be called as soon as possible.
-// The page.arena is safe to use here, but the transfer_arena exists
-// specifically for this type of lifetime.
 pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
     if (self.canScheduleNavigation(priority) == false) {
         return;
     }
+    const arena = try self.arena_pool.acquire();
+    errdefer self.arena_pool.release(arena);
+    return self.scheduleNavigationWithArena(arena, request_url, opts, priority);
+}
 
-    const session = self._session;
-
+fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
     const resolved_url = try URL.resolve(
-        session.transfer_arena,
+        arena,
         self.base(),
         request_url,
         .{ .always_dupe = true },
     );
 
+    const session = self._session;
     if (!opts.force and URL.eqlDocument(self.url, resolved_url)) {
+        self.arena_pool.release(arena);
+
         self.url = try self.arena.dupeZ(u8, resolved_url);
         self.window._location = try Location.init(self.url, self);
         self.document._location = self.window._location;
@@ -572,13 +576,16 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
         .type = self._type,
     });
 
-    self._session.browser.http_client.abort();
+    session.browser.http_client.abort();
 
-    self._queued_navigation = .{
+    const qn = try arena.create(QueuedNavigation);
+    qn.* = .{
         .opts = opts,
+        .arena = arena,
         .url = resolved_url,
         .priority = priority,
     };
+    self._queued_navigation = qn;
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -837,8 +844,6 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         log.debug(.page, "navigate done", .{ .type = self._type });
     }
 
-    self.clearTransferArena();
-
     //We need to handle different navigation types differently.
     try self._session.navigation.commitNavigation(self);
 
@@ -925,24 +930,6 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     };
 }
 
-// The transfer arena is useful and interesting, but has a weird lifetime.
-// When we're transferring from one page to another (via delayed navigation)
-// we need things in memory: like the URL that we're navigating to and
-// optionally the body to POST. That cannot exist in the page.arena, because
-// the page that we have is going to be destroyed and a new page is going
-// to be created. If we used the page.arena, we'd wouldn't be able to reset
-// it between navigation.
-// So the transfer arena is meant to exist between a navigation event. It's
-// freed when the main html navigation is complete, either in pageDoneCallback
-// or pageErrorCallback. It needs to exist for this long because, if we set
-// a body, CURLOPT_POSTFIELDS does not copy the body (it optionally can, but
-// why would we want to) and requires the body to live until the transfer
-// is complete.
-fn clearTransferArena(self: *Page) void {
-    self.arena_pool.reset(self._session.transfer_arena, 4 * 1024);
-}
-
-<<<<<<< HEAD
 pub fn wait(self: *Page, wait_ms: u32) Session.WaitResult {
     return self._wait(wait_ms) catch |err| {
         switch (err) {
@@ -1174,8 +1161,6 @@ fn printWaitAnalysis(self: *Page) void {
     }
 }
 
-=======
->>>>>>> 3bd80eb3 (Move page.wait to session.wait)
 pub fn isGoingAway(self: *const Page) bool {
     return self._queued_navigation != null;
 }
@@ -3150,7 +3135,8 @@ const NavigationPriority = enum {
     anchor,
 };
 
-const QueuedNavigation = struct {
+pub const QueuedNavigation = struct {
+    arena: Allocator,
     url: [:0]const u8,
     opts: NavigateOpts,
     priority: NavigationPriority,
@@ -3333,11 +3319,12 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, self);
 
-    const transfer_arena = self._session.transfer_arena;
+    const arena = try self.arena_pool.acquire();
+    errdefer self.arena_pool.release(arena);
 
     const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));
 
-    var buf = std.Io.Writer.Allocating.init(transfer_arena);
+    var buf = std.Io.Writer.Allocating.init(arena);
     try form_data.write(encoding, &buf.writer);
 
     const method = form_element.getAttributeSafe(comptime .wrap("method")) orelse "";
@@ -3353,9 +3340,9 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
         // form_data.write currently only supports this encoding, so we know this has to be the content type
         opts.header = "Content-Type: application/x-www-form-urlencoded";
     } else {
-        action = try URL.concatQueryString(transfer_arena, action, buf.written());
+        action = try URL.concatQueryString(arena, action, buf.written());
     }
-    return self.scheduleNavigation(action, opts, .form);
+    return self.scheduleNavigationWithArena(arena, action, opts, .form);
 }
 
 // insertText is a shortcut to insert text into the active element.
