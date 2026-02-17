@@ -433,14 +433,55 @@ fn generateConstructor(comptime JsApi: type, isolate: *v8.Isolate) *v8.FunctionT
     };
 
     const template = @constCast(v8.v8__FunctionTemplate__New__DEFAULT2(isolate, callback).?);
-    if (!@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
-        const instance_template = v8.v8__FunctionTemplate__InstanceTemplate(template);
-        v8.v8__ObjectTemplate__SetInternalFieldCount(instance_template, 1);
+    {
+        const internal_field_count = comptime countInternalFields(JsApi);
+        if (internal_field_count > 0) {
+            const instance_template = v8.v8__FunctionTemplate__InstanceTemplate(template);
+            v8.v8__ObjectTemplate__SetInternalFieldCount(instance_template, internal_field_count);
+        }
     }
     const name_str = if (@hasDecl(JsApi.Meta, "name")) JsApi.Meta.name else @typeName(JsApi);
     const class_name = v8.v8__String__NewFromUtf8(isolate, name_str.ptr, v8.kNormal, @intCast(name_str.len));
     v8.v8__FunctionTemplate__SetClassName(template, class_name);
     return template;
+}
+
+pub fn countInternalFields(comptime JsApi: type) u8 {
+    var last_used_id = 0;
+    var cache_count: u8 = 0;
+
+    inline for (@typeInfo(JsApi).@"struct".decls) |d| {
+        const name: [:0]const u8 = d.name;
+        const value = @field(JsApi, name);
+        const definition = @TypeOf(value);
+
+        switch (definition) {
+            inline bridge.Accessor, bridge.Function => {
+                const cache = value.cache orelse continue;
+                if (cache != .internal) {
+                    continue;
+                }
+                // We assert that they are declared in-order. This isn't necessary
+                // but I don't want to do anything fancy to look for gaps or
+                // duplicates.
+                const internal_id = cache.internal;
+                if (internal_id != last_used_id + 1) {
+                    @compileError(@typeName(JsApi) ++ "." ++ name ++ " has a non-monotonic cache index");
+                }
+                last_used_id = internal_id;
+                cache_count += 1; // this is just last_used, but it's more explicit this way
+            },
+            else => {},
+        }
+    }
+
+    if (@hasDecl(JsApi.Meta, "empty_with_no_proto")) {
+        return cache_count;
+    }
+
+    // we need cache_count internal fields, + 1 for the TAO pointer (the v8 -> Zig)
+    // mapping) itself.
+    return cache_count + 1;
 }
 
 // Attaches JsApi members to the prototype template (normal case)

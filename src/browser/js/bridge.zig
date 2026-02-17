@@ -160,10 +160,12 @@ pub const Constructor = struct {
 pub const Function = struct {
     static: bool,
     arity: usize,
+    cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
     fn init(comptime T: type, comptime func: anytype, comptime opts: Caller.Function.Opts) Function {
         return .{
+            .cache = opts.cache,
             .static = opts.static,
             .arity = getArity(@TypeOf(func)),
             .func = struct {
@@ -193,11 +195,13 @@ pub const Function = struct {
 
 pub const Accessor = struct {
     static: bool = false,
+    cache: ?Caller.Function.Opts.Caching = null,
     getter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
     setter: ?*const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void = null,
 
     fn init(comptime T: type, comptime getter: anytype, comptime setter: anytype, comptime opts: Caller.Function.Opts) Accessor {
         var accessor = Accessor{
+            .cache = opts.cache,
             .static = opts.static,
         };
 

@@ -713,18 +713,19 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const document = bridge.accessor(Window.getDocument, null, .{ .cache = .{ .internal = 1 } });
+    pub const console = bridge.accessor(Window.getConsole, null, .{ .cache = .{ .internal = 2 } });
+
     pub const top = bridge.accessor(Window.getWindow, null, .{});
     pub const self = bridge.accessor(Window.getWindow, null, .{});
     pub const window = bridge.accessor(Window.getWindow, null, .{});
     pub const parent = bridge.accessor(Window.getWindow, null, .{});
-    pub const console = bridge.accessor(Window.getConsole, null, .{});
     pub const navigator = bridge.accessor(Window.getNavigator, null, .{});
     pub const screen = bridge.accessor(Window.getScreen, null, .{});
     pub const visualViewport = bridge.accessor(Window.getVisualViewport, null, .{});
     pub const performance = bridge.accessor(Window.getPerformance, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
-    pub const document = bridge.accessor(Window.getDocument, null, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{});
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});
