@@ -246,7 +246,7 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
             ._page = page,
             ._arena = arena,
             ._target = target,
-            ._time = 0.0, // TODO: Get actual timestamp
+            ._time = page.window._performance.now(),
             ._bounding_client_rect = data.bounding_client_rect,
             ._intersection_rect = data.intersection_rect,
             ._root_bounds = data.root_bounds,

@@ -25,6 +25,8 @@
         testing.expectEqual('number', typeof entry.intersectionRatio);
         testing.expectEqual('object', typeof entry.boundingClientRect);
         testing.expectEqual('object', typeof entry.intersectionRect);
+        testing.expectEqual('number', typeof entry.time);
+        testing.expectEqual(true, entry.time > 0);
 
         observer.disconnect();
     });
