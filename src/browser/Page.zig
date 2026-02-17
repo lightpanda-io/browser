@@ -1243,6 +1243,11 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
         }
     }
 
+    try self.schedulePerformanceObserverDelivery();
+}
+
+/// Schedules async delivery of buffered performance observer records.
+pub fn schedulePerformanceObserverDelivery(self: *Page) !void {
     // Already scheduled.
     if (self._performance_delivery_scheduled) {
         return;
