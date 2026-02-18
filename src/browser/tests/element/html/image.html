@@ -98,6 +98,22 @@
 }
 </script>
 
+<script id="complete">
+{
+    // Image with no src is complete per spec
+    const img = document.createElement('img');
+    testing.expectEqual(true, img.complete);
+
+    // Image with src is also complete (headless browser, no actual fetch)
+    img.src = 'test.png';
+    testing.expectEqual(true, img.complete);
+
+    // Image constructor also complete
+    const img2 = new Image();
+    testing.expectEqual(true, img2.complete);
+}
+</script>
+
 <script id="load-trigger-event">
 {
   const img = document.createElement("img");
