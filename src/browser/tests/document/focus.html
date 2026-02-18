@@ -81,6 +81,172 @@
 </script>
 
 
+<script id="focusin_focusout_events">
+{
+  const input1 = $('#input1');
+  const input2 = $('#input2');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let events = [];
+
+  input1.addEventListener('focus', () => events.push('focus1'));
+  input1.addEventListener('focusin', () => events.push('focusin1'));
+  input1.addEventListener('blur', () => events.push('blur1'));
+  input1.addEventListener('focusout', () => events.push('focusout1'));
+  input2.addEventListener('focus', () => events.push('focus2'));
+  input2.addEventListener('focusin', () => events.push('focusin2'));
+
+  // Focus input1 — should fire focus then focusin
+  input1.focus();
+  testing.expectEqual('focus1,focusin1', events.join(','));
+
+  // Focus input2 — should fire blur, focusout on input1, then focus, focusin on input2
+  events = [];
+  input2.focus();
+  testing.expectEqual('blur1,focusout1,focus2,focusin2', events.join(','));
+}
+</script>
+
+<script id="focusin_bubbles">
+{
+  const input1 = $('#input1');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let bodyFocusin = 0;
+  let bodyFocus = 0;
+
+  document.body.addEventListener('focusin', () => bodyFocusin++);
+  document.body.addEventListener('focus', () => bodyFocus++);
+
+  input1.focus();
+
+  // focusin should bubble to body, focus should not
+  testing.expectEqual(1, bodyFocusin);
+  testing.expectEqual(0, bodyFocus);
+}
+</script>
+
+<script id="focusout_bubbles">
+{
+  const input1 = $('#input1');
+
+  input1.focus();
+
+  let bodyFocusout = 0;
+  let bodyBlur = 0;
+
+  document.body.addEventListener('focusout', () => bodyFocusout++);
+  document.body.addEventListener('blur', () => bodyBlur++);
+
+  input1.blur();
+
+  // focusout should bubble to body, blur should not
+  testing.expectEqual(1, bodyFocusout);
+  testing.expectEqual(0, bodyBlur);
+}
+</script>
+
+<script id="focus_relatedTarget">
+{
+  const input1 = $('#input1');
+  const input2 = $('#input2');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusRelated = null;
+  let blurRelated = null;
+  let focusinRelated = null;
+  let focusoutRelated = null;
+
+  input1.addEventListener('blur', (e) => { blurRelated = e.relatedTarget; });
+  input1.addEventListener('focusout', (e) => { focusoutRelated = e.relatedTarget; });
+  input2.addEventListener('focus', (e) => { focusRelated = e.relatedTarget; });
+  input2.addEventListener('focusin', (e) => { focusinRelated = e.relatedTarget; });
+
+  input1.focus();
+  input2.focus();
+
+  // blur/focusout on input1 should have relatedTarget = input2 (gaining focus)
+  testing.expectEqual(input2, blurRelated);
+  testing.expectEqual(input2, focusoutRelated);
+
+  // focus/focusin on input2 should have relatedTarget = input1 (losing focus)
+  testing.expectEqual(input1, focusRelated);
+  testing.expectEqual(input1, focusinRelated);
+}
+</script>
+
+<script id="blur_relatedTarget_null">
+{
+  const btn = $('#btn1');
+
+  btn.focus();
+
+  let blurRelated = 'not_set';
+  btn.addEventListener('blur', (e) => { blurRelated = e.relatedTarget; });
+  btn.blur();
+
+  // blur without moving to another element should have relatedTarget = null
+  testing.expectEqual(null, blurRelated);
+}
+</script>
+
+<script id="focus_event_properties">
+{
+  const input1 = $('#input1');
+  const input2 = $('#input2');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusEvent = null;
+  let focusinEvent = null;
+  let blurEvent = null;
+  let focusoutEvent = null;
+
+  input1.addEventListener('blur', (e) => { blurEvent = e; });
+  input1.addEventListener('focusout', (e) => { focusoutEvent = e; });
+  input2.addEventListener('focus', (e) => { focusEvent = e; });
+  input2.addEventListener('focusin', (e) => { focusinEvent = e; });
+
+  input1.focus();
+  input2.focus();
+
+  // All four should be FocusEvent instances
+  testing.expectEqual(true, blurEvent instanceof FocusEvent);
+  testing.expectEqual(true, focusoutEvent instanceof FocusEvent);
+  testing.expectEqual(true, focusEvent instanceof FocusEvent);
+  testing.expectEqual(true, focusinEvent instanceof FocusEvent);
+
+  // All four should be composed per spec
+  testing.expectEqual(true, blurEvent.composed);
+  testing.expectEqual(true, focusoutEvent.composed);
+  testing.expectEqual(true, focusEvent.composed);
+  testing.expectEqual(true, focusinEvent.composed);
+
+  // None should be cancelable
+  testing.expectEqual(false, blurEvent.cancelable);
+  testing.expectEqual(false, focusoutEvent.cancelable);
+  testing.expectEqual(false, focusEvent.cancelable);
+  testing.expectEqual(false, focusinEvent.cancelable);
+
+  // blur/focus don't bubble, focusin/focusout do
+  testing.expectEqual(false, blurEvent.bubbles);
+  testing.expectEqual(true, focusoutEvent.bubbles);
+  testing.expectEqual(false, focusEvent.bubbles);
+  testing.expectEqual(true, focusinEvent.bubbles);
+}
+</script>
+
 <script id="focus_disconnected">
 {
   const focused = document.activeElement;
