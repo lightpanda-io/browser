@@ -76,21 +76,21 @@
     audio.pause();
     testing.expectEqual('play,playing,pause', events.join(','));
 
-    // Third play: resume from pause, fires play only (not playing)
+    // Third play: resume from pause, fires play + playing (verified in Chrome)
     audio.play();
-    testing.expectEqual('play,playing,pause,play', events.join(','));
+    testing.expectEqual('play,playing,pause,play,playing', events.join(','));
 
     // Pause again
     audio.pause();
-    testing.expectEqual('play,playing,pause,play,pause', events.join(','));
+    testing.expectEqual('play,playing,pause,play,playing,pause', events.join(','));
 
     // Load: resets state, fires emptied
     audio.load();
-    testing.expectEqual('play,playing,pause,play,pause,emptied', events.join(','));
+    testing.expectEqual('play,playing,pause,play,playing,pause,emptied', events.join(','));
 
-    // Play after load: fires play + playing again (fresh start)
+    // Play after load: fires play + playing
     audio.play();
-    testing.expectEqual('play,playing,pause,play,pause,emptied,play,playing', events.join(','));
+    testing.expectEqual('play,playing,pause,play,playing,pause,emptied,play,playing', events.join(','));
   }
 </script>
 

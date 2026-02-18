@@ -61,7 +61,6 @@ _playback_rate: f64 = 1.0,
 _ready_state: ReadyState = .HAVE_NOTHING,
 _network_state: NetworkState = .NETWORK_EMPTY,
 _error: ?*MediaError = null,
-_playing: bool = false,
 
 pub fn asElement(self: *Media) *Element {
     return self._proto._proto;
@@ -145,10 +144,7 @@ pub fn play(self: *Media, page: *Page) !void {
     self._network_state = .NETWORK_IDLE;
     if (was_paused) {
         try self.dispatchEvent("play", page);
-        if (!self._playing) {
-            self._playing = true;
-            try self.dispatchEvent("playing", page);
-        }
+        try self.dispatchEvent("playing", page);
     }
 }
 
@@ -161,7 +157,6 @@ pub fn pause(self: *Media, page: *Page) !void {
 
 pub fn load(self: *Media, page: *Page) !void {
     self._paused = true;
-    self._playing = false;
     self._current_time = 0;
     self._ready_state = .HAVE_NOTHING;
     self._network_state = .NETWORK_LOADING;
