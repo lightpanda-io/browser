@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<ol>
+  <li id="li1" value="5">Item</li>
+  <li id="li2">Item</li>
+</ol>
+
+<script id="value">
+  {
+    const li1 = document.getElementById('li1');
+    testing.expectEqual(5, li1.value);
+
+    li1.value = 10;
+    testing.expectEqual(10, li1.value);
+
+    const li2 = document.getElementById('li2');
+    testing.expectEqual(0, li2.value);
+
+    li2.value = -3;
+    testing.expectEqual(-3, li2.value);
+  }
+</script>

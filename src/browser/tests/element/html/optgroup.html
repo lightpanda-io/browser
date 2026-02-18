@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<select>
+  <optgroup id="og1" label="Group 1" disabled>
+    <option>A</option>
+  </optgroup>
+  <optgroup id="og2" label="Group 2">
+    <option>B</option>
+  </optgroup>
+</select>
+
+<script id="disabled">
+  {
+    const og1 = document.getElementById('og1');
+    testing.expectEqual(true, og1.disabled);
+
+    og1.disabled = false;
+    testing.expectEqual(false, og1.disabled);
+
+    const og2 = document.getElementById('og2');
+    testing.expectEqual(false, og2.disabled);
+
+    og2.disabled = true;
+    testing.expectEqual(true, og2.disabled);
+  }
+</script>
+
+<script id="label">
+  {
+    const og1 = document.getElementById('og1');
+    testing.expectEqual('Group 1', og1.label);
+
+    og1.label = 'Updated';
+    testing.expectEqual('Updated', og1.label);
+
+    const og = document.createElement('optgroup');
+    testing.expectEqual('', og.label);
+  }
+</script>

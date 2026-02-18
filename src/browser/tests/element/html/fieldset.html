@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<fieldset id="fs1" disabled name="group1">
+  <input type="text">
+</fieldset>
+<fieldset id="fs2">
+  <input type="text">
+</fieldset>
+
+<script id="disabled">
+  {
+    const fs1 = document.getElementById('fs1');
+    testing.expectEqual(true, fs1.disabled);
+
+    fs1.disabled = false;
+    testing.expectEqual(false, fs1.disabled);
+
+    const fs2 = document.getElementById('fs2');
+    testing.expectEqual(false, fs2.disabled);
+  }
+</script>
+
+<script id="name">
+  {
+    const fs1 = document.getElementById('fs1');
+    testing.expectEqual('group1', fs1.name);
+
+    fs1.name = 'updated';
+    testing.expectEqual('updated', fs1.name);
+
+    const fs2 = document.getElementById('fs2');
+    testing.expectEqual('', fs2.name);
+  }
+</script>

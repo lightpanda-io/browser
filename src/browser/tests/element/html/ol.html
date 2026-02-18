@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<ol id="ol1" start="5" reversed type="a">
+  <li>Item</li>
+</ol>
+<ol id="ol2">
+  <li>Item</li>
+</ol>
+
+<script id="start">
+  {
+    const ol1 = document.getElementById('ol1');
+    testing.expectEqual(5, ol1.start);
+
+    ol1.start = 10;
+    testing.expectEqual(10, ol1.start);
+
+    const ol2 = document.getElementById('ol2');
+    testing.expectEqual(1, ol2.start);
+  }
+</script>
+
+<script id="reversed">
+  {
+    const ol1 = document.getElementById('ol1');
+    testing.expectEqual(true, ol1.reversed);
+
+    ol1.reversed = false;
+    testing.expectEqual(false, ol1.reversed);
+
+    const ol2 = document.getElementById('ol2');
+    testing.expectEqual(false, ol2.reversed);
+
+    ol2.reversed = true;
+    testing.expectEqual(true, ol2.reversed);
+  }
+</script>
+
+<script id="type">
+  {
+    const ol1 = document.getElementById('ol1');
+    testing.expectEqual('a', ol1.type);
+
+    ol1.type = '1';
+    testing.expectEqual('1', ol1.type);
+
+    const ol2 = document.getElementById('ol2');
+    testing.expectEqual('1', ol2.type);
+  }
+</script>

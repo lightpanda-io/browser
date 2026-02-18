@@ -16,7 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -31,6 +33,16 @@ pub fn asNode(self: *LI) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getValue(self: *LI) i32 {
+    const attr = self.asElement().getAttributeSafe(comptime .wrap("value")) orelse return 0;
+    return std.fmt.parseInt(i32, attr, 10) catch 0;
+}
+
+pub fn setValue(self: *LI, value: i32, page: *Page) !void {
+    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("value"), .wrap(str), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(LI);
 
@@ -39,4 +51,11 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const value = bridge.accessor(LI.getValue, LI.setValue, .{});
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.LI" {
+    try testing.htmlRunner("element/html/li.html", .{});
+}
