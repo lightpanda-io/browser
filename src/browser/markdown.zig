@@ -152,7 +152,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         },
         .li => {
             const indent = if (state.list_depth > 0) state.list_depth - 1 else 0;
-            try writeIndentation(indent, writer);
+            for (0..indent) |_| try writer.writeAll("  ");
 
             if (state.list_depth > 0) {
                 const current_list = &state.list_stack[state.list_depth - 1];
@@ -396,13 +396,6 @@ fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
             },
             else => try writer.writeByte(c),
         }
-    }
-}
-
-fn writeIndentation(level: usize, writer: *std.Io.Writer) !void {
-    var i: usize = 0;
-    while (i < level) : (i += 1) {
-        try writer.writeAll("  ");
     }
 }
 
