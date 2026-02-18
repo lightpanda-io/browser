@@ -431,17 +431,7 @@ fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range:
         }
     }
 
-    switch (alter) {
-        .move => {
-            const new_range = try Range.init(page);
-            try new_range.setStart(new_node, new_offset);
-            try new_range.setEnd(new_node, new_offset);
-            self._range = new_range;
-            self._direction = .none;
-            try dispatchSelectionChangeEvent(page);
-        },
-        .extend => try self.extend(new_node, new_offset, page),
-    }
+    try self.applyModify(alter, new_node, new_offset, page);
 }
 
 fn isWordChar(c: u8) bool {
@@ -510,11 +500,11 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
                     new_node = next;
                     new_offset = nextWordEnd(next.getData(), 0);
                 }
-                return self.applyWordModify(alter, new_node, new_offset, page);
+                return self.applyModify(alter, new_node, new_offset, page);
             };
 
             const t = if (isTextNode(child)) child else nextTextNode(child) orelse {
-                return self.applyWordModify(alter, new_node, new_offset, page);
+                return self.applyModify(alter, new_node, new_offset, page);
             };
 
             new_node = t;
@@ -535,10 +525,10 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
         }
     }
 
-    try self.applyWordModify(alter, new_node, new_offset, page);
+    try self.applyModify(alter, new_node, new_offset, page);
 }
 
-fn applyWordModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset: u32, page: *Page) !void {
+fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset: u32, page: *Page) !void {
     switch (alter) {
         .move => {
             const new_range = try Range.init(page);
