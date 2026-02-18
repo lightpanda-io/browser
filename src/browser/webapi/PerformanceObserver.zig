@@ -117,7 +117,7 @@ pub fn observe(
     // Deliver existing entries if buffered option is set.
     // Per spec, buffered is only valid with the type option, not entryTypes.
     // Delivery is async via a queued task, not synchronous.
-    if (options.buffered and options.type != null) {
+    if (options.buffered and options.type != null and !self.hasRecords()) {
         for (page.window._performance._entries.items) |entry| {
             if (self.interested(entry)) {
                 try self._entries.append(page.arena, entry);
