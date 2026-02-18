@@ -342,6 +342,8 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
     try page._event_manager.dispatch(self.asEventTarget(), event);
 }
 
+// TODO: Per spec, hidden is a tristate: true | false | "until-found".
+// We only support boolean for now; "until-found" would need bridge union support.
 pub fn getHidden(self: *HtmlElement) bool {
     return self.asElement().getAttributeSafe(comptime .wrap("hidden")) != null;
 }
@@ -355,7 +357,13 @@ pub fn setHidden(self: *HtmlElement, hidden: bool, page: *Page) !void {
 }
 
 pub fn getTabIndex(self: *HtmlElement) i32 {
-    const attr = self.asElement().getAttributeSafe(comptime .wrap("tabindex")) orelse return -1;
+    const attr = self.asElement().getAttributeSafe(comptime .wrap("tabindex")) orelse {
+        // Per spec, interactive/focusable elements default to 0 when tabindex is absent
+        return switch (self._type) {
+            .anchor, .area, .button, .input, .select, .textarea, .iframe => 0,
+            else => -1,
+        };
+    };
     return std.fmt.parseInt(i32, attr, 10) catch -1;
 }
 
