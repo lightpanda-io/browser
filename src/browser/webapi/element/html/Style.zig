@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../js/js.zig");
 const Page = @import("../../../Page.zig");
 
@@ -25,6 +26,7 @@ const HtmlElement = @import("../Html.zig");
 
 const Style = @This();
 _proto: *HtmlElement,
+_sheet: ?*CSSStyleSheet = null,
 
 pub fn asElement(self: *Style) *Element {
     return self._proto._proto;
@@ -75,9 +77,15 @@ pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
 }
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
-pub fn getSheet(_: *const Style) ?*CSSStyleSheet {
-    // TODO?
-    return null;
+pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
+    // Per spec, sheet is null for disconnected elements or non-CSS types.
+    if (!self.asNode().isConnected()) return null;
+    if (!std.mem.eql(u8, self.getType(), "text/css")) return null;
+
+    if (self._sheet) |sheet| return sheet;
+    const sheet = try CSSStyleSheet.init(page);
+    self._sheet = sheet;
+    return sheet;
 }
 
 pub const JsApi = struct {
