@@ -19,6 +19,25 @@
     lessStyle.type = 'text/less';
     document.head.appendChild(lessStyle);
     testing.expectEqual(null, lessStyle.sheet);
+
+    // Empty type attribute is valid (defaults to text/css per spec)
+    const emptyType = document.createElement('style');
+    emptyType.setAttribute('type', '');
+    document.head.appendChild(emptyType);
+    testing.expectEqual(true, emptyType.sheet instanceof CSSStyleSheet);
+
+    // Case-insensitive type check
+    const upperType = document.createElement('style');
+    upperType.type = 'TEXT/CSS';
+    document.head.appendChild(upperType);
+    testing.expectEqual(true, upperType.sheet instanceof CSSStyleSheet);
+
+    // Disconnection clears sheet
+    const tempStyle = document.createElement('style');
+    document.head.appendChild(tempStyle);
+    testing.expectEqual(true, tempStyle.sheet instanceof CSSStyleSheet);
+    document.head.removeChild(tempStyle);
+    testing.expectEqual(null, tempStyle.sheet);
   }
 </script>
 

@@ -79,8 +79,17 @@ pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
 pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     // Per spec, sheet is null for disconnected elements or non-CSS types.
-    if (!self.asNode().isConnected()) return null;
-    if (!std.mem.eql(u8, self.getType(), "text/css")) return null;
+    // Valid types: absent (defaults to "text/css"), empty string, or
+    // case-insensitive match for "text/css".
+    if (!self.asNode().isConnected()) {
+        self._sheet = null;
+        return null;
+    }
+    const t = self.getType();
+    if (t.len != 0 and !std.ascii.eqlIgnoreCase(t, "text/css")) {
+        self._sheet = null;
+        return null;
+    }
 
     if (self._sheet) |sheet| return sheet;
     const sheet = try CSSStyleSheet.init(page);
