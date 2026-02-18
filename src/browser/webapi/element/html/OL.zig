@@ -56,7 +56,7 @@ pub fn setReversed(self: *OL, value: bool, page: *Page) !void {
 }
 
 pub fn getType(self: *OL) []const u8 {
-    return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "";
+    return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "1";
 }
 
 pub fn setType(self: *OL, value: []const u8, page: *Page) !void {

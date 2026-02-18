@@ -21,7 +21,9 @@ pub fn asNode(self: *TableCell) *Node {
 
 pub fn getColSpan(self: *TableCell) u32 {
     const attr = self.asElement().getAttributeSafe(comptime .wrap("colspan")) orelse return 1;
-    return std.fmt.parseUnsigned(u32, attr, 10) catch 1;
+    const v = std.fmt.parseUnsigned(u32, attr, 10) catch return 1;
+    if (v == 0) return 1;
+    return @min(v, 1000);
 }
 
 pub fn setColSpan(self: *TableCell, value: u32, page: *Page) !void {
@@ -31,7 +33,8 @@ pub fn setColSpan(self: *TableCell, value: u32, page: *Page) !void {
 
 pub fn getRowSpan(self: *TableCell) u32 {
     const attr = self.asElement().getAttributeSafe(comptime .wrap("rowspan")) orelse return 1;
-    return std.fmt.parseUnsigned(u32, attr, 10) catch 1;
+    const v = std.fmt.parseUnsigned(u32, attr, 10) catch return 1;
+    return @min(v, 65534);
 }
 
 pub fn setRowSpan(self: *TableCell, value: u32, page: *Page) !void {

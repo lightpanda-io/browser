@@ -18,6 +18,14 @@
 
     const td2 = document.getElementById('td2');
     testing.expectEqual(1, td2.colSpan);
+
+    // colSpan 0 clamps to 1
+    td2.colSpan = 0;
+    testing.expectEqual(1, td2.colSpan);
+
+    // colSpan > 1000 clamps to 1000
+    td2.colSpan = 9999;
+    testing.expectEqual(1000, td2.colSpan);
   }
 </script>
 
@@ -31,5 +39,13 @@
 
     const td2 = document.getElementById('td2');
     testing.expectEqual(1, td2.rowSpan);
+
+    // rowSpan 0 is valid per spec (span remaining rows)
+    td2.rowSpan = 0;
+    testing.expectEqual(0, td2.rowSpan);
+
+    // rowSpan > 65534 clamps to 65534
+    td2.rowSpan = 99999;
+    testing.expectEqual(65534, td2.rowSpan);
   }
 </script>
