@@ -17,10 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+
 const Page = @import("Page.zig");
-const Node = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
-const Slot = @import("webapi/element/html/Slot.zig");
+const Node = @import("webapi/Node.zig");
 
 pub const Opts = struct {
     // Options for future customization (e.g., dialect)
