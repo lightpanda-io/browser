@@ -176,8 +176,10 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
 
         switch (wait_result) {
             .done => {
-                const qn = page._queued_navigation orelse return .done;
-                page = self.processScheduledNavigation(qn) catch return .done;
+                if (page._queued_navigation == null) {
+                    return .done;
+                }
+                page = self.processScheduledNavigation(page) catch return .done;
             },
             else => |result| return result,
         }
@@ -322,8 +324,12 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     }
 }
 
-fn processScheduledNavigation(self: *Session, qn: *Page.QueuedNavigation) !*Page {
+fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
     const browser = self.browser;
+
+    const qn = current_page._queued_navigation.?;
+    // take ownership of the page's queued navigation
+    current_page._queued_navigation = null;
     defer browser.arena_pool.release(qn.arena);
 
     const page_id, const parent = blk: {

@@ -332,6 +332,10 @@ pub fn deinit(self: *Page) void {
         // stats.print(&stream) catch unreachable;
     }
 
+    if (self._queued_navigation) |qn| {
+        self.arena_pool.release(qn.arena);
+    }
+
     const session = self._session;
     session.browser.env.destroyContext(self.js);
 
@@ -585,6 +589,10 @@ fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []con
         .url = resolved_url,
         .priority = priority,
     };
+
+    if (self._queued_navigation) |existing| {
+        self.arena_pool.release(existing.arena);
+    }
     self._queued_navigation = qn;
 }
 
@@ -917,9 +925,9 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
 }
 
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
-    log.err(.page, "navigate failed", .{ .err = err, .type = self._type });
-
     var self: *Page = @ptrCast(@alignCast(ctx));
+
+    log.err(.page, "navigate failed", .{ .err = err, .type = self._type });
     self._parse_state = .{ .err = err };
 
     // In case of error, we want to complete the page with a custom HTML
