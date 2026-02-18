@@ -72,6 +72,9 @@
 
 <script id="buffered_option">
 {
+  // Clear marks from previous tests so we get a precise count
+  performance.clearMarks();
+
   // Create marks BEFORE the observer
   performance.mark("early1", { startTime: 1.0 });
   performance.mark("early2", { startTime: 2.0 });
@@ -81,17 +84,14 @@
     receivedEntries = list.getEntries();
   });
 
-  // With buffered: true, existing marks should be delivered immediately
+  // With buffered: true, existing marks should be delivered
   observer.observe({ type: "mark", buffered: true });
 
   testing.eventually(() => {
     testing.expectEqual(true, receivedEntries !== null);
-    // Should have received at least the 2 early marks
-    testing.expectEqual(true, receivedEntries.length >= 2);
-
-    const names = receivedEntries.map(e => e.name);
-    testing.expectEqual(true, names.indexOf("early1") >= 0);
-    testing.expectEqual(true, names.indexOf("early2") >= 0);
+    testing.expectEqual(2, receivedEntries.length);
+    testing.expectEqual("early1", receivedEntries[0].name);
+    testing.expectEqual("early2", receivedEntries[1].name);
 
     observer.disconnect();
   });
