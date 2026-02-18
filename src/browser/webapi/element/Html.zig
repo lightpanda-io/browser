@@ -342,6 +342,29 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
     try page._event_manager.dispatch(self.asEventTarget(), event);
 }
 
+pub fn getHidden(self: *HtmlElement) bool {
+    return self.asElement().getAttributeSafe(comptime .wrap("hidden")) != null;
+}
+
+pub fn setHidden(self: *HtmlElement, hidden: bool, page: *Page) !void {
+    if (hidden) {
+        try self.asElement().setAttributeSafe(comptime .wrap("hidden"), .wrap(""), page);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("hidden"), page);
+    }
+}
+
+pub fn getTabIndex(self: *HtmlElement) i32 {
+    const attr = self.asElement().getAttributeSafe(comptime .wrap("tabindex")) orelse return -1;
+    return std.fmt.parseInt(i32, attr, 10) catch -1;
+}
+
+pub fn setTabIndex(self: *HtmlElement, value: i32, page: *Page) !void {
+    var buf: [12]u8 = undefined;
+    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return;
+    try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), page);
+}
+
 fn getAttributeFunction(
     self: *HtmlElement,
     listener_type: GlobalEventHandler,
@@ -1151,6 +1174,9 @@ pub const JsApi = struct {
     pub const insertAdjacentHTML = bridge.function(HtmlElement.insertAdjacentHTML, .{ .dom_exception = true });
     pub const click = bridge.function(HtmlElement.click, .{});
 
+    pub const hidden = bridge.accessor(HtmlElement.getHidden, HtmlElement.setHidden, .{});
+    pub const tabIndex = bridge.accessor(HtmlElement.getTabIndex, HtmlElement.setTabIndex, .{});
+
     pub const onabort = bridge.accessor(HtmlElement.getOnAbort, HtmlElement.setOnAbort, .{});
     pub const onanimationcancel = bridge.accessor(HtmlElement.getOnAnimationCancel, HtmlElement.setOnAnimationCancel, .{});
     pub const onanimationend = bridge.accessor(HtmlElement.getOnAnimationEnd, HtmlElement.setOnAnimationEnd, .{});
@@ -1280,4 +1306,7 @@ pub const Build = struct {
 const testing = @import("../../../testing.zig");
 test "WebApi: HTML.event_listeners" {
     try testing.htmlRunner("element/html/event_listeners.html", .{});
+}
+test "WebApi: HTMLElement.props" {
+    try testing.htmlRunner("element/html/htmlelement-props.html", .{});
 }

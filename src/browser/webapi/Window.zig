@@ -704,6 +704,15 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
     };
 }
 
+// Headless browser stubs: alert/confirm/prompt are no-ops
+fn jsAlert(_: *Window, _: ?[]const u8) void {}
+fn jsConfirm(_: *Window, _: ?[]const u8) bool {
+    return false;
+}
+fn jsPrompt(_: *Window, _: ?[]const u8, _: ?[]const u8) ?[]const u8 {
+    return null;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Window);
 
@@ -775,12 +784,19 @@ pub const JsApi = struct {
 
     pub const innerWidth = bridge.property(1920, .{ .template = false });
     pub const innerHeight = bridge.property(1080, .{ .template = false });
+    pub const devicePixelRatio = bridge.property(1, .{ .template = false });
+
     // This should return a window-like object in specific conditions. Would be
     // pretty complicated to properly support I think.
     pub const opener = bridge.property(null, .{ .template = false });
+
+    pub const alert = bridge.function(Window.jsAlert, .{});
+    pub const confirm = bridge.function(Window.jsConfirm, .{});
+    pub const prompt = bridge.function(Window.jsPrompt, .{});
 };
 
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
     try testing.htmlRunner("window", .{});
+    try testing.htmlRunner("window-stubs.html", .{});
 }

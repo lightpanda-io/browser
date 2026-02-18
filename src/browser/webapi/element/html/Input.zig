@@ -287,6 +287,58 @@ pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
     }
 }
 
+pub fn getPlaceholder(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("placeholder")) orelse "";
+}
+
+pub fn setPlaceholder(self: *Input, placeholder: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("placeholder"), .wrap(placeholder), page);
+}
+
+pub fn getMin(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("min")) orelse "";
+}
+
+pub fn setMin(self: *Input, min: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("min"), .wrap(min), page);
+}
+
+pub fn getMax(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("max")) orelse "";
+}
+
+pub fn setMax(self: *Input, max: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("max"), .wrap(max), page);
+}
+
+pub fn getStep(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("step")) orelse "";
+}
+
+pub fn setStep(self: *Input, step: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("step"), .wrap(step), page);
+}
+
+pub fn getMultiple(self: *const Input) bool {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("multiple")) != null;
+}
+
+pub fn setMultiple(self: *Input, multiple: bool, page: *Page) !void {
+    if (multiple) {
+        try self.asElement().setAttributeSafe(comptime .wrap("multiple"), .wrap(""), page);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("multiple"), page);
+    }
+}
+
+pub fn getAutocomplete(self: *const Input) []const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("autocomplete")) orelse "";
+}
+
+pub fn setAutocomplete(self: *Input, autocomplete: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("autocomplete"), .wrap(autocomplete), page);
+}
+
 pub fn select(self: *Input, page: *Page) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
     try self.setSelectionRange(0, len, null, page);
@@ -564,6 +616,12 @@ pub const JsApi = struct {
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
     pub const indeterminate = bridge.accessor(Input.getIndeterminate, Input.setIndeterminate, .{});
+    pub const placeholder = bridge.accessor(Input.getPlaceholder, Input.setPlaceholder, .{});
+    pub const min = bridge.accessor(Input.getMin, Input.setMin, .{});
+    pub const max = bridge.accessor(Input.getMax, Input.setMax, .{});
+    pub const step = bridge.accessor(Input.getStep, Input.setStep, .{});
+    pub const multiple = bridge.accessor(Input.getMultiple, Input.setMultiple, .{});
+    pub const autocomplete = bridge.accessor(Input.getAutocomplete, Input.setAutocomplete, .{});
     pub const select = bridge.function(Input.select, .{});
 
     pub const selectionStart = bridge.accessor(Input.getSelectionStart, Input.setSelectionStart, .{});
@@ -662,4 +720,5 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input.html", .{});
     try testing.htmlRunner("element/html/input_click.html", .{});
     try testing.htmlRunner("element/html/input_radio.html", .{});
+    try testing.htmlRunner("element/html/input-attrs.html", .{});
 }
