@@ -88,3 +88,46 @@
   testing.expectEqual(focused, document.activeElement);
 }
 </script>
+
+<script id="click_focuses_element">
+{
+  const input1 = $('#input1');
+  const input2 = $('#input2');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  let focusCount = 0;
+  let blurCount = 0;
+
+  input1.addEventListener('focus', () => focusCount++);
+  input1.addEventListener('blur', () => blurCount++);
+  input2.addEventListener('focus', () => focusCount++);
+
+  // Click input1 — should focus it and fire focus event
+  input1.click();
+  testing.expectEqual(input1, document.activeElement);
+  testing.expectEqual(1, focusCount);
+  testing.expectEqual(0, blurCount);
+
+  // Click input2 — should move focus, fire blur on input1 and focus on input2
+  input2.click();
+  testing.expectEqual(input2, document.activeElement);
+  testing.expectEqual(2, focusCount);
+  testing.expectEqual(1, blurCount);
+}
+</script>
+
+<script id="click_focuses_button">
+{
+  const btn = $('#btn1');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  btn.click();
+  testing.expectEqual(btn, document.activeElement);
+}
+</script>
