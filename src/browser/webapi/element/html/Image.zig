@@ -112,6 +112,12 @@ pub fn getNaturalHeight(_: *const Image) u32 {
     return 0;
 }
 
+pub fn getComplete(_: *const Image) bool {
+    // Per spec, complete is true when: no src/srcset, image fully fetched,
+    // or image is broken. Since we don't fetch images, they are always complete.
+    return true;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Image);
 
@@ -131,6 +137,7 @@ pub const JsApi = struct {
     pub const loading = bridge.accessor(Image.getLoading, Image.setLoading, .{});
     pub const naturalWidth = bridge.accessor(Image.getNaturalWidth, null, .{});
     pub const naturalHeight = bridge.accessor(Image.getNaturalHeight, null, .{});
+    pub const complete = bridge.accessor(Image.getComplete, null, .{});
 };
 
 pub const Build = struct {
