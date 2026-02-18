@@ -704,7 +704,6 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
     };
 }
 
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Window);
 
@@ -800,5 +799,4 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
     try testing.htmlRunner("window", .{});
-    try testing.htmlRunner("window/stubs.html", .{});
 }
