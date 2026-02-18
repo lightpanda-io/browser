@@ -180,7 +180,6 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         .td, .th => {
             // Note: leading pipe handled by previous cell closing or tr opening
             state.last_char_was_newline = false;
-            // Add spacing
             try writer.writeByte(' ');
         },
         .blockquote => {
@@ -255,7 +254,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
                     state.last_char_was_newline = false;
                 }
             }
-            return; // Void element
+            return;
         },
         else => {},
     }
@@ -370,17 +369,13 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!
     var it = std.mem.tokenizeAny(u8, text, " \t\n\r");
     var first = true;
     while (it.next()) |word| {
-        // If this is the first word we're writing in this sequence...
         if (first) {
-            // ...and we didn't just write a newline...
             if (!state.last_char_was_newline) {
-                // ...check if the original text had leading whitespace.
                 if (text.len > 0 and std.ascii.isWhitespace(text[0])) {
                     try writer.writeByte(' ');
                 }
             }
         } else {
-            // Between words always add space
             try writer.writeByte(' ');
         }
 
@@ -398,27 +393,9 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!
 }
 
 fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
-    // Escaping: \ ` * _ { } [ ] ( ) # + - ! | < >
     for (text) |c| {
         switch (c) {
-            '\\',
-            '`',
-            '*',
-            '_',
-            '{',
-            '}',
-            '[',
-            ']',
-            '(',
-            ')',
-            '#',
-            '+',
-            '-',
-            '!',
-            '|',
-            '<',
-            '>',
-            => {
+            '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '!', '|', '<', '>' => {
                 try writer.writeByte('\\');
                 try writer.writeByte(c);
             },
@@ -434,185 +411,108 @@ fn writeIndentation(level: usize, writer: *std.Io.Writer) anyerror!void {
     }
 }
 
-test "markdown: basic" {
+fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
     const testing = @import("../testing.zig");
     const page = try testing.test_session.createPage();
     defer testing.test_session.removePage();
     const doc = page.window._document;
 
     const div = try doc.createElement("div", null, page);
-    try div.asNode().setTextContent("Hello world", page);
+    try page.parseHtmlAsChildren(div.asNode(), html);
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
     try dump(div.asNode(), .{}, &aw.writer, page);
 
-    try testing.expectString("Hello world\n", aw.written());
+    try testing.expectString(expected, aw.written());
+}
+
+test "markdown: basic" {
+    try testMarkdownHTML("Hello world", "Hello world\n");
 }
 
 test "markdown: whitespace" {
-    const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
-
-    const div = try doc.createElement("div", null, page);
-
-    const s1 = try doc.createElement("span", null, page);
-    try s1.asNode().setTextContent("A", page);
-    const s2 = try doc.createElement("span", null, page);
-    try s2.asNode().setTextContent("B", page);
-
-    _ = try div.asNode().appendChild(s1.asNode(), page);
-    // Add text node with space
-    const txt = try page.createTextNode(" ");
-    _ = try div.asNode().appendChild(txt, page);
-    _ = try div.asNode().appendChild(s2.asNode(), page);
-
-    var aw = std.Io.Writer.Allocating.init(testing.allocator);
-    defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
-
-    try testing.expectString("A B\n", aw.written());
+    try testMarkdownHTML("<span>A</span> <span>B</span>", "A B\n");
 }
 
 test "markdown: escaping" {
-    const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
-
-    const div = try doc.createElement("div", null, page);
-
-    const p = try doc.createElement("p", null, page);
-    try p.asNode().setTextContent("# Not a header", page);
-    _ = try div.asNode().appendChild(p.asNode(), page);
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
-
-    try testing.expectString("\n\\# Not a header\n", aw.written());
+    try testMarkdownHTML("<p># Not a header</p>", "\n\\# Not a header\n");
 }
 
 test "markdown: strikethrough" {
-    const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
-
-    const div = try doc.createElement("div", null, page);
-
-    const s = try doc.createElement("s", null, page);
-    try s.asNode().setTextContent("deleted", page);
-    _ = try div.asNode().appendChild(s.asNode(), page);
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
-
-    try testing.expectString("~~deleted~~\n", aw.written());
+    try testMarkdownHTML("<s>deleted</s>", "~~deleted~~\n");
 }
 
 test "markdown: task list" {
-    const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
-
-    const div = try doc.createElement("div", null, page);
-
-    const input1 = try doc.createElement("input", null, page);
-    try input1.setAttributeSafe(comptime .wrap("type"), .wrap("checkbox"), page);
-    try input1.setAttributeSafe(comptime .wrap("checked"), .wrap(""), page);
-    _ = try div.asNode().appendChild(input1.asNode(), page);
-
-    const input2 = try doc.createElement("input", null, page);
-    try input2.setAttributeSafe(comptime .wrap("type"), .wrap("checkbox"), page);
-    _ = try div.asNode().appendChild(input2.asNode(), page);
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
-
-    try testing.expectString("[x] [ ] \n", aw.written());
+    try testMarkdownHTML(
+        \\<input type="checkbox" checked><input type="checkbox">
+    , "[x] [ ] \n");
 }
 
 test "markdown: ordered list" {
-    const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
-
-    const div = try doc.createElement("div", null, page);
-
-    const ol = try doc.createElement("ol", null, page);
-    _ = try div.asNode().appendChild(ol.asNode(), page);
-
-    const li1 = try doc.createElement("li", null, page);
-    try li1.asNode().setTextContent("First", page);
-    _ = try ol.asNode().appendChild(li1.asNode(), page);
-
-    const li2 = try doc.createElement("li", null, page);
-    try li2.asNode().setTextContent("Second", page);
-    _ = try ol.asNode().appendChild(li2.asNode(), page);
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
-
-    try testing.expectString("1. First\n2. Second\n", aw.written());
+    try testMarkdownHTML(
+        \\<ol><li>First</li><li>Second</li></ol>
+    , "1. First\n2. Second\n");
 }
 
 test "markdown: table" {
-    const testing = @import("../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
-
-    const div = try doc.createElement("div", null, page);
-
-    const table = try doc.createElement("table", null, page);
-    _ = try div.asNode().appendChild(table.asNode(), page);
-
-    const thead = try doc.createElement("thead", null, page);
-    _ = try table.asNode().appendChild(thead.asNode(), page);
-
-    const tr1 = try doc.createElement("tr", null, page);
-    _ = try thead.asNode().appendChild(tr1.asNode(), page);
-
-    const th1 = try doc.createElement("th", null, page);
-    try th1.asNode().setTextContent("Head 1", page);
-    _ = try tr1.asNode().appendChild(th1.asNode(), page);
-
-    const th2 = try doc.createElement("th", null, page);
-    try th2.asNode().setTextContent("Head 2", page);
-    _ = try tr1.asNode().appendChild(th2.asNode(), page);
-
-    const tbody = try doc.createElement("tbody", null, page);
-    _ = try table.asNode().appendChild(tbody.asNode(), page);
-
-    const tr2 = try doc.createElement("tr", null, page);
-    _ = try tbody.asNode().appendChild(tr2.asNode(), page);
-
-    const td1 = try doc.createElement("td", null, page);
-    try td1.asNode().setTextContent("Cell 1", page);
-    _ = try tr2.asNode().appendChild(td1.asNode(), page);
-
-    const td2 = try doc.createElement("td", null, page);
-    try td2.asNode().setTextContent("Cell 2", page);
-    _ = try tr2.asNode().appendChild(td2.asNode(), page);
-
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer aw.deinit();
-    try dump(div.asNode(), .{}, &aw.writer, page);
-
-    const expected =
+    try testMarkdownHTML(
+        \\<table><thead><tr><th>Head 1</th><th>Head 2</th></tr></thead>
+        \\<tbody><tr><td>Cell 1</td><td>Cell 2</td></tr></tbody></table>
+    ,
         \\
         \\| Head 1 | Head 2 |
         \\|---|---|
         \\| Cell 1 | Cell 2 |
         \\
-    ;
-    try testing.expectString(expected, aw.written());
+    );
+}
+
+test "markdown: nested lists" {
+    try testMarkdownHTML(
+        \\<ul><li>Parent<ul><li>Child</li></ul></li></ul>
+    ,
+        \\- Parent
+        \\  - Child
+        \\
+    );
+}
+
+test "markdown: blockquote" {
+    try testMarkdownHTML("<blockquote>Hello world</blockquote>", "\n> Hello world\n");
+}
+
+test "markdown: links" {
+    try testMarkdownHTML("<a href=\"https://lightpanda.io\">Lightpanda</a>", "[Lightpanda](https://lightpanda.io)\n");
+}
+
+test "markdown: images" {
+    try testMarkdownHTML("<img src=\"logo.png\" alt=\"Logo\">", "![Logo](logo.png)\n");
+}
+
+test "markdown: headings" {
+    try testMarkdownHTML("<h1>Title</h1><h2>Subtitle</h2>",
+        \\
+        \\# Title
+        \\
+        \\## Subtitle
+        \\
+    );
+}
+
+test "markdown: code" {
+    try testMarkdownHTML(
+        \\<p>Use git push</p>
+        \\<pre><code>line 1
+        \\line 2</code></pre>
+    ,
+        \\
+        \\Use git push
+        \\
+        \\```
+        \\line 1
+        \\line 2
+        \\```
+        \\
+    );
 }
