@@ -38,7 +38,6 @@ const State = struct {
     in_pre: bool = false,
     pre_node: ?*Node = null,
     in_code: bool = false,
-    in_blockquote: bool = false,
     in_table: bool = false,
     table_row_index: usize = 0,
     table_col_count: usize = 0,
@@ -75,7 +74,7 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void 
     }
 }
 
-fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
+fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
     switch (node._type) {
         .document, .document_fragment => {
             try renderChildren(node, state, writer, page);
@@ -100,14 +99,14 @@ fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) anyer
     }
 }
 
-fn renderChildren(parent: *Node, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
+fn renderChildren(parent: *Node, state: *State, writer: *std.Io.Writer, page: *Page) !void {
     var it = parent.childrenIterator();
     while (it.next()) |child| {
         try render(child, state, writer, page);
     }
 }
 
-fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Page) anyerror!void {
+fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Page) !void {
     const tag = el.getTag();
 
     // Skip hidden/metadata elements
@@ -184,7 +183,6 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         },
         .blockquote => {
             try writer.writeAll("> ");
-            state.in_blockquote = true;
             state.last_char_was_newline = false;
         },
         .pre => {
@@ -241,18 +239,24 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         },
         .anchor => {
             try writer.writeByte('[');
+            try renderChildren(el.asNode(), state, writer, page);
+            try writer.writeAll("](");
+            if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
+                try writer.writeAll(href);
+            }
+            try writer.writeByte(')');
             state.last_char_was_newline = false;
+            return;
         },
         .input => {
-            if (el.getAttributeSafe(comptime .wrap("type"))) |t| {
-                if (std.mem.eql(u8, t, "checkbox")) {
-                    if (el.hasAttributeSafe(comptime .wrap("checked"))) {
-                        try writer.writeAll("[x] ");
-                    } else {
-                        try writer.writeAll("[ ] ");
-                    }
-                    state.last_char_was_newline = false;
+            const input = el.as(Element.Html.Input);
+            if (input._input_type == .checkbox) {
+                if (input._checked) {
+                    try writer.writeAll("[x] ");
+                } else {
+                    try writer.writeAll("[ ] ");
                 }
+                state.last_char_was_newline = false;
             }
             return;
         },
@@ -266,14 +270,6 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
 
     // Suffixes
     switch (tag) {
-        .anchor => {
-            try writer.writeAll("](");
-            if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
-                try writer.writeAll(href);
-            }
-            try writer.writeByte(')');
-            state.last_char_was_newline = false;
-        },
         .pre => {
             if (!state.last_char_was_newline) {
                 try writer.writeByte('\n');
@@ -302,9 +298,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             try writer.writeAll("~~");
             state.last_char_was_newline = false;
         },
-        .blockquote => {
-            state.in_blockquote = false;
-        },
+        .blockquote => {},
         .ul, .ol => {
             if (state.list_depth > 0) state.list_depth -= 1;
         },
@@ -340,7 +334,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
     }
 }
 
-fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!void {
+fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) !void {
     if (text.len == 0) return;
 
     if (state.in_pre) {
@@ -395,7 +389,7 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) anyerror!
 fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
     for (text) |c| {
         switch (c) {
-            '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '!', '|', '<', '>' => {
+            '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')', '#', '+', '-', '!', '|' => {
                 try writer.writeByte('\\');
                 try writer.writeByte(c);
             },
@@ -404,7 +398,7 @@ fn escapeMarkdown(writer: *std.Io.Writer, text: []const u8) !void {
     }
 }
 
-fn writeIndentation(level: usize, writer: *std.Io.Writer) anyerror!void {
+fn writeIndentation(level: usize, writer: *std.Io.Writer) !void {
     var i: usize = 0;
     while (i < level) : (i += 1) {
         try writer.writeAll("  ");

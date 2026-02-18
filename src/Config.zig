@@ -560,15 +560,17 @@ fn parseFetchArgs(
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--dump" });
-                return error.InvalidArgument;
-            };
-
-            dump_mode = std.meta.stringToEnum(DumpFormat, str) orelse {
-                log.fatal(.app, "invalid option choice", .{ .arg = "--dump", .value = str });
-                return error.InvalidArgument;
-            };
+            var peek_args = args.*;
+            if (peek_args.next()) |next_arg| {
+                if (std.meta.stringToEnum(DumpFormat, next_arg)) |mode| {
+                    dump_mode = mode;
+                    _ = args.next();
+                } else {
+                    dump_mode = .html;
+                }
+            } else {
+                dump_mode = .html;
+            }
             continue;
         }
 
