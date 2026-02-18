@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<input id="i1" placeholder="Enter name" min="0" max="100" step="5" autocomplete="email">
+<input id="i2" type="file" multiple>
+<input id="i3">
+
+<script id="placeholder">
+  {
+    const i1 = document.getElementById('i1');
+    testing.expectEqual('Enter name', i1.placeholder);
+
+    i1.placeholder = 'Updated';
+    testing.expectEqual('Updated', i1.placeholder);
+
+    const i3 = document.getElementById('i3');
+    testing.expectEqual('', i3.placeholder);
+  }
+</script>
+
+<script id="min">
+  {
+    const i1 = document.getElementById('i1');
+    testing.expectEqual('0', i1.min);
+
+    i1.min = '10';
+    testing.expectEqual('10', i1.min);
+
+    const i3 = document.getElementById('i3');
+    testing.expectEqual('', i3.min);
+  }
+</script>
+
+<script id="max">
+  {
+    const i1 = document.getElementById('i1');
+    testing.expectEqual('100', i1.max);
+
+    i1.max = '200';
+    testing.expectEqual('200', i1.max);
+
+    const i3 = document.getElementById('i3');
+    testing.expectEqual('', i3.max);
+  }
+</script>
+
+<script id="step">
+  {
+    const i1 = document.getElementById('i1');
+    testing.expectEqual('5', i1.step);
+
+    i1.step = '0.5';
+    testing.expectEqual('0.5', i1.step);
+
+    const i3 = document.getElementById('i3');
+    testing.expectEqual('', i3.step);
+  }
+</script>
+
+<script id="multiple">
+  {
+    const i2 = document.getElementById('i2');
+    testing.expectEqual(true, i2.multiple);
+
+    i2.multiple = false;
+    testing.expectEqual(false, i2.multiple);
+
+    const i3 = document.getElementById('i3');
+    testing.expectEqual(false, i3.multiple);
+
+    i3.multiple = true;
+    testing.expectEqual(true, i3.multiple);
+  }
+</script>
+
+<script id="autocomplete">
+  {
+    const i1 = document.getElementById('i1');
+    testing.expectEqual('email', i1.autocomplete);
+
+    i1.autocomplete = 'off';
+    testing.expectEqual('off', i1.autocomplete);
+
+    const i3 = document.getElementById('i3');
+    testing.expectEqual('', i3.autocomplete);
+  }
+</script>

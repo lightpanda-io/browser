@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<div id="d1" hidden>Hidden div</div>
+<div id="d2">Visible div</div>
+<input id="i1" tabindex="5">
+<div id="d3">No tabindex</div>
+
+<script id="hidden">
+  {
+    const d1 = document.getElementById('d1');
+    testing.expectEqual(true, d1.hidden);
+
+    d1.hidden = false;
+    testing.expectEqual(false, d1.hidden);
+
+    const d2 = document.getElementById('d2');
+    testing.expectEqual(false, d2.hidden);
+
+    d2.hidden = true;
+    testing.expectEqual(true, d2.hidden);
+  }
+</script>
+
+<script id="tabIndex">
+  {
+    const i1 = document.getElementById('i1');
+    testing.expectEqual(5, i1.tabIndex);
+
+    i1.tabIndex = 10;
+    testing.expectEqual(10, i1.tabIndex);
+
+    // Non-interactive elements default to -1
+    const d3 = document.getElementById('d3');
+    testing.expectEqual(-1, d3.tabIndex);
+
+    d3.tabIndex = 0;
+    testing.expectEqual(0, d3.tabIndex);
+
+    // Interactive elements default to 0 per spec
+    const input = document.createElement('input');
+    testing.expectEqual(0, input.tabIndex);
+
+    const button = document.createElement('button');
+    testing.expectEqual(0, button.tabIndex);
+
+    const a = document.createElement('a');
+    testing.expectEqual(0, a.tabIndex);
+
+    const select = document.createElement('select');
+    testing.expectEqual(0, select.tabIndex);
+
+    const textarea = document.createElement('textarea');
+    testing.expectEqual(0, textarea.tabIndex);
+  }
+</script>

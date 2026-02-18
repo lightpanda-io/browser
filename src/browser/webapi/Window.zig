@@ -704,6 +704,7 @@ fn getFunctionFromSetter(setter_: ?FunctionSetter) ?js.Function.Global {
     };
 }
 
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Window);
 
@@ -775,12 +776,29 @@ pub const JsApi = struct {
 
     pub const innerWidth = bridge.property(1920, .{ .template = false });
     pub const innerHeight = bridge.property(1080, .{ .template = false });
+    pub const devicePixelRatio = bridge.property(1, .{ .template = false });
+
     // This should return a window-like object in specific conditions. Would be
     // pretty complicated to properly support I think.
     pub const opener = bridge.property(null, .{ .template = false });
+
+    pub const alert = bridge.function(struct {
+        fn alert(_: *const Window, _: ?[]const u8) void {}
+    }.alert, .{});
+    pub const confirm = bridge.function(struct {
+        fn confirm(_: *const Window, _: ?[]const u8) bool {
+            return false;
+        }
+    }.confirm, .{});
+    pub const prompt = bridge.function(struct {
+        fn prompt(_: *const Window, _: ?[]const u8, _: ?[]const u8) ?[]const u8 {
+            return null;
+        }
+    }.prompt, .{});
 };
 
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
     try testing.htmlRunner("window", .{});
+    try testing.htmlRunner("window/stubs.html", .{});
 }

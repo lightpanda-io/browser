@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="alert">
+  {
+    // alert should be callable without error
+    window.alert('hello');
+    window.alert();
+    testing.expectEqual(undefined, window.alert('test'));
+  }
+</script>
+
+<script id="confirm">
+  {
+    // confirm returns false in headless mode
+    testing.expectEqual(false, window.confirm('proceed?'));
+    testing.expectEqual(false, window.confirm());
+  }
+</script>
+
+<script id="prompt">
+  {
+    // prompt returns null in headless mode
+    testing.expectEqual(null, window.prompt('enter value'));
+    testing.expectEqual(null, window.prompt('enter value', 'default'));
+    testing.expectEqual(null, window.prompt());
+  }
+</script>
+
+<script id="devicePixelRatio">
+  {
+    testing.expectEqual(1, window.devicePixelRatio);
+  }
+</script>
