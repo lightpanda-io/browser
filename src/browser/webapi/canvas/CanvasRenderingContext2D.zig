@@ -110,8 +110,6 @@ pub fn createImageData(
             return ImageData.constructor(image_data._width, image_data._height, null, page);
         },
     }
-
-    unreachable;
 }
 
 pub fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
