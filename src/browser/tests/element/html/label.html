@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<label id="l1" for="input1">Name</label>
+<input id="input1">
+
+<script id="htmlFor">
+  {
+    const l1 = document.getElementById('l1');
+    testing.expectEqual('input1', l1.htmlFor);
+
+    l1.htmlFor = 'input2';
+    testing.expectEqual('input2', l1.htmlFor);
+
+    const l2 = document.createElement('label');
+    testing.expectEqual('', l2.htmlFor);
+  }
+</script>

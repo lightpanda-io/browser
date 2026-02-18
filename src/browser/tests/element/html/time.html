@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<time id="t1" datetime="2024-01-15">January 15</time>
+
+<script id="dateTime">
+  {
+    const t = document.getElementById('t1');
+    testing.expectEqual('2024-01-15', t.dateTime);
+
+    t.dateTime = '2024-12-25T10:00';
+    testing.expectEqual('2024-12-25T10:00', t.dateTime);
+
+    const t2 = document.createElement('time');
+    testing.expectEqual('', t2.dateTime);
+  }
+</script>

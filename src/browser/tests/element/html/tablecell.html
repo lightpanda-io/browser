@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<table>
+  <tr>
+    <td id="td1" colspan="3" rowspan="2">Cell</td>
+    <td id="td2">Cell</td>
+  </tr>
+</table>
+
+<script id="colSpan">
+  {
+    const td1 = document.getElementById('td1');
+    testing.expectEqual(3, td1.colSpan);
+
+    td1.colSpan = 5;
+    testing.expectEqual(5, td1.colSpan);
+
+    const td2 = document.getElementById('td2');
+    testing.expectEqual(1, td2.colSpan);
+  }
+</script>
+
+<script id="rowSpan">
+  {
+    const td1 = document.getElementById('td1');
+    testing.expectEqual(2, td1.rowSpan);
+
+    td1.rowSpan = 4;
+    testing.expectEqual(4, td1.rowSpan);
+
+    const td2 = document.getElementById('td2');
+    testing.expectEqual(1, td2.rowSpan);
+  }
+</script>

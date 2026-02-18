@@ -16,7 +16,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
 const js = @import("../../../js/js.zig");
+const Page = @import("../../../Page.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -31,6 +33,36 @@ pub fn asNode(self: *OL) *Node {
     return self.asElement().asNode();
 }
 
+pub fn getStart(self: *OL) i32 {
+    const attr = self.asElement().getAttributeSafe(comptime .wrap("start")) orelse return 1;
+    return std.fmt.parseInt(i32, attr, 10) catch 1;
+}
+
+pub fn setStart(self: *OL, value: i32, page: *Page) !void {
+    const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
+    try self.asElement().setAttributeSafe(comptime .wrap("start"), .wrap(str), page);
+}
+
+pub fn getReversed(self: *OL) bool {
+    return self.asElement().getAttributeSafe(comptime .wrap("reversed")) != null;
+}
+
+pub fn setReversed(self: *OL, value: bool, page: *Page) !void {
+    if (value) {
+        try self.asElement().setAttributeSafe(comptime .wrap("reversed"), .wrap(""), page);
+    } else {
+        try self.asElement().removeAttribute(comptime .wrap("reversed"), page);
+    }
+}
+
+pub fn getType(self: *OL) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("type")) orelse "";
+}
+
+pub fn setType(self: *OL, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("type"), .wrap(value), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OL);
 
@@ -39,4 +71,13 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const start = bridge.accessor(OL.getStart, OL.setStart, .{});
+    pub const reversed = bridge.accessor(OL.getReversed, OL.setReversed, .{});
+    pub const @"type" = bridge.accessor(OL.getType, OL.setType, .{});
 };
+
+const testing = @import("../../../../testing.zig");
+test "WebApi: HTML.OL" {
+    try testing.htmlRunner("element/html/ol.html", .{});
+}

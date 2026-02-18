@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<blockquote id="q1" cite="https://example.com/source">Quote</blockquote>
+
+<script id="cite">
+  {
+    const q1 = document.getElementById('q1');
+    testing.expectEqual('https://example.com/source', q1.cite);
+
+    q1.cite = 'https://example.com/other';
+    testing.expectEqual('https://example.com/other', q1.cite);
+
+    const q2 = document.createElement('blockquote');
+    testing.expectEqual('', q2.cite);
+  }
+</script>
