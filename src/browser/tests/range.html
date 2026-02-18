@@ -7,7 +7,7 @@
   <span id="s1">Span content</span>
 </div>
 
-<!-- <script id=basic>
+<script id=basic>
 {
   const range = document.createRange();
   testing.expectEqual('object', typeof range);
@@ -188,6 +188,74 @@
   range.setEnd(p1, 0);
 
   testing.expectEqual('', range.toString());
+}
+</script>
+
+<script id=toString_sameText>
+{
+  const p = document.createElement('p');
+  p.textContent = 'Hello World';
+
+  const range = document.createRange();
+  range.setStart(p.firstChild, 3);
+  range.setEnd(p.firstChild, 8);
+
+  testing.expectEqual('lo Wo', range.toString());
+}
+</script>
+
+<script id=toString_sameElement>
+{
+  const div = document.createElement('div');
+  div.innerHTML = '<p>First</p><p>Second</p><p>Third</p>';
+
+  const range = document.createRange();
+  range.setStart(div, 0);
+  range.setEnd(div, 2);
+
+  testing.expectEqual('FirstSecond', range.toString());
+}
+</script>
+
+<script id=toString_crossContainer_siblings>
+{
+  const p = document.createElement('p');
+  p.appendChild(document.createTextNode('AAAA'));
+  p.appendChild(document.createTextNode('BBBB'));
+  p.appendChild(document.createTextNode('CCCC'));
+
+  const range = document.createRange();
+  range.setStart(p.childNodes[0], 2);
+  range.setEnd(p.childNodes[2], 2);
+
+  testing.expectEqual('AABBBBCC', range.toString());
+}
+</script>
+
+<script id=toString_crossContainer_nested>
+{
+  const div = document.createElement('div');
+  div.innerHTML = '<p>First paragraph</p><p>Second paragraph</p>';
+
+  const range = document.createRange();
+  range.setStart(div.querySelector('p').firstChild, 6);
+  range.setEnd(div.querySelectorAll('p')[1].firstChild, 6);
+
+  testing.expectEqual('paragraphSecond', range.toString());
+}
+</script>
+
+<script id=toString_excludes_comments>
+{
+  const div = document.createElement('div');
+  div.appendChild(document.createTextNode('before'));
+  div.appendChild(document.createComment('this is a comment'));
+  div.appendChild(document.createTextNode('after'));
+
+  const range = document.createRange();
+  range.selectNodeContents(div);
+
+  testing.expectEqual('beforeafter', range.toString());
 }
 </script>
 
@@ -819,7 +887,7 @@
     range1.compareBoundaryPoints(Range.START_TO_START, range2);
   });
 }
-</script> -->
+</script>
 
 <script id=deleteContents_crossNode>
 {
@@ -849,7 +917,7 @@
 }
 </script>
 
-<!-- <script id=deleteContents_crossNode_partial>
+<script id=deleteContents_crossNode_partial>
 {
   // Test deleteContents where start node is completely preserved
   const p = document.createElement('p');
@@ -954,4 +1022,3 @@
   testing.expectEqual('Stnd', div.textContent);
 }
 </script>
- -->
