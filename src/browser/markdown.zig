@@ -249,14 +249,15 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             return;
         },
         .input => {
-            const input = el.as(Element.Html.Input);
-            if (input._input_type == .checkbox) {
-                if (input._checked) {
-                    try writer.writeAll("[x] ");
-                } else {
-                    try writer.writeAll("[ ] ");
+            if (el.getAttributeSafe(comptime .wrap("type"))) |type_attr| {
+                if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
+                    if (el.getAttributeSafe(comptime .wrap("checked"))) |_| {
+                        try writer.writeAll("[x] ");
+                    } else {
+                        try writer.writeAll("[ ] ");
+                    }
+                    state.last_char_was_newline = false;
                 }
-                state.last_char_was_newline = false;
             }
             return;
         },
