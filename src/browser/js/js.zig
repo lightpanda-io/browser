@@ -90,13 +90,7 @@ pub const ArrayType = enum(u8) {
     float64,
 };
 
-pub const ArrayBufferState = enum(u1) { local, global };
-
-/// If `state` is `global`; a persisted, global typed array is created.
-pub fn ArrayBufferRef(
-    comptime kind: ArrayType,
-    comptime state: ArrayBufferState,
-) type {
+pub fn ArrayBufferRef(comptime kind: ArrayType) type {
     return struct {
         const Self = @This();
 
@@ -112,12 +106,25 @@ pub fn ArrayBufferRef(
             .float64 => f64,
         };
 
-        handle: switch (state) {
-            .local => *const v8.Value,
-            .global => v8.Global,
-        },
+        local: *const Local,
+        handle: *const v8.Value,
 
-        pub fn init(isolate: Isolate, size: usize) Self {
+        /// Persisted typed array.
+        pub const Global = struct {
+            handle: v8.Global,
+
+            pub fn deinit(self: *Global) void {
+                v8.v8__Global__Reset(&self.handle);
+            }
+
+            pub fn local(self: *const Global, l: *const Local) Self {
+                return .{ .local = l, .handle = v8.v8__Global__Get(&self.handle, l.isolate.handle).? };
+            }
+        };
+
+        pub fn init(local: *const Local, size: usize) Self {
+            const ctx = local.ctx;
+            const isolate = ctx.isolate;
             const bits = switch (@typeInfo(BackingInt)) {
                 .int => |n| n.bits,
                 .float => |f| f.bits,
@@ -134,7 +141,7 @@ pub fn ArrayBufferRef(
                 array_buffer = v8.v8__ArrayBuffer__New2(isolate.handle, &backing_store_ptr).?;
             }
 
-            const local_handle: *const v8.Value = switch (comptime kind) {
+            const handle: *const v8.Value = switch (comptime kind) {
                 .int8 => @ptrCast(v8.v8__Int8Array__New(array_buffer, 0, size).?),
                 .uint8 => @ptrCast(v8.v8__Uint8Array__New(array_buffer, 0, size).?),
                 .uint8_clamped => @ptrCast(v8.v8__Uint8ClampedArray__New(array_buffer, 0, size).?),
@@ -147,23 +154,16 @@ pub fn ArrayBufferRef(
                 .float64 => @ptrCast(v8.v8__Float64Array__New(array_buffer, 0, size).?),
             };
 
-            switch (comptime state) {
-                .local => return .{ .handle = local_handle },
-                .global => {
-                    // We need a global handle if state is `global`.
-                    var global_handle: v8.Global = undefined;
-                    v8.v8__Global__New(isolate.handle, local_handle, &global_handle);
-                    return .{ .handle = global_handle };
-                },
-            }
+            return .{ .local = local, .handle = handle };
         }
 
-        /// Returns appropriate local handle.
-        pub fn localHandle(self: *const Self, scope: *const Local) *const v8.Value {
-            return switch (comptime state) {
-                .local => return self.handle,
-                .global => v8.v8__Global__Get(&self.handle, scope.isolate.handle).?,
-            };
+        pub fn persist(self: *const Self) !Global {
+            var ctx = self.local.ctx;
+            var global: v8.Global = undefined;
+            v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
+            try ctx.global_values.append(ctx.arena, global);
+
+            return .{ .handle = global };
         }
     };
 }

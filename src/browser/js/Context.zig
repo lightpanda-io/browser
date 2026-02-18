@@ -1048,13 +1048,8 @@ pub const FinalizerCallback = struct {
 /// Creates a new typed array. Memory is owned by JS context.
 /// If storing the type in a Zig type is desired, prefer `.global` state to persist.
 /// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Typed_arrays
-pub fn createTypedArray(
-    self: *const Context,
-    comptime array_type: js.ArrayType,
-    comptime state: js.ArrayBufferState,
-    size: usize,
-) js.ArrayBufferRef(array_type, state) {
-    return .init(self.isolate, size);
+pub fn createTypedArray(self: *const Context, comptime array_type: js.ArrayType, size: usize) js.ArrayBufferRef(array_type) {
+    return .init(self.local.?, size);
 }
 
 // == Profiler ==
