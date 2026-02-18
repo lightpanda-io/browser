@@ -38,6 +38,11 @@
     testing.expectEqual(true, tempStyle.sheet instanceof CSSStyleSheet);
     document.head.removeChild(tempStyle);
     testing.expectEqual(null, tempStyle.sheet);
+
+    // ownerNode points back to the style element
+    const ownStyle = document.createElement('style');
+    document.head.appendChild(ownStyle);
+    testing.expectEqual(true, ownStyle.sheet.ownerNode === ownStyle);
   }
 </script>
 

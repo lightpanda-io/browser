@@ -92,7 +92,7 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     }
 
     if (self._sheet) |sheet| return sheet;
-    const sheet = try CSSStyleSheet.init(page);
+    const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
     self._sheet = sheet;
     return sheet;
 }
