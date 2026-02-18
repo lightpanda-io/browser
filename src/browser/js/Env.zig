@@ -39,6 +39,14 @@ const JsApis = bridge.JsApis;
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 
+fn initClassIds() void {
+    inline for (JsApis, 0..) |JsApi, i| {
+        JsApi.Meta.class_id = i;
+    }
+}
+
+var class_id_once = std.once(initClassIds);
+
 // The Env maps to a V8 isolate, which represents a isolated sandbox for
 // executing JavaScript. The Env is where we'll define our V8 <-> Zig bindings,
 // and it's where we'll start ExecutionWorlds, which actually execute JavaScript.
@@ -90,6 +98,9 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         }
     }
 
+    // Initialize class IDs once before any V8 work
+    class_id_once.call();
+
     const allocator = app.allocator;
     const snapshot = &app.snapshot;
 
@@ -132,8 +143,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
         temp_scope.init(isolate);
         defer temp_scope.deinit();
 
-        inline for (JsApis, 0..) |JsApi, i| {
-            JsApi.Meta.class_id = i;
+        inline for (JsApis, 0..) |_, i| {
             const data = v8.v8__Isolate__GetDataFromSnapshotOnce(isolate_handle, snapshot.data_start + i);
             const function_handle: *const v8.FunctionTemplate = @ptrCast(data);
             // Make function template eternal

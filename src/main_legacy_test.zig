@@ -46,17 +46,24 @@ pub fn main() !void {
     var test_arena = std.heap.ArenaAllocator.init(allocator);
     defer test_arena.deinit();
 
-    var browser = try lp.Browser.init(app, .{});
-    const notification = try lp.Notification.init(app.allocator);
-    defer notification.deinit();
+    const http_client = try app.http.createClient(allocator);
+    defer http_client.deinit();
+
+    var browser = try lp.Browser.init(app, .{ .http_client = http_client });
     defer browser.deinit();
 
+    const notification = try lp.Notification.init(allocator);
+    defer notification.deinit();
+
     const session = try browser.newSession(notification);
+    defer session.deinit();
 
     var dir = try std.fs.cwd().openDir("src/browser/tests/legacy/", .{ .iterate = true, .no_follow = true });
     defer dir.close();
+
     var walker = try dir.walk(allocator);
     defer walker.deinit();
+
     while (try walker.next()) |entry| {
         _ = test_arena.reset(.retain_capacity);
         if (entry.kind != .file) {

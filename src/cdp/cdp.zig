@@ -28,6 +28,7 @@ const js = @import("../browser/js/js.zig");
 const App = @import("../App.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
+const HttpClient = @import("../http/Client.zig");
 const Page = @import("../browser/Page.zig");
 const Incrementing = @import("../id.zig").Incrementing;
 const Notification = @import("../Notification.zig");
@@ -84,10 +85,11 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
         const Self = @This();
 
-        pub fn init(app: *App, client: TypeProvider.Client) !Self {
+        pub fn init(app: *App, http_client: *HttpClient, client: TypeProvider.Client) !Self {
             const allocator = app.allocator;
             const browser = try Browser.init(app, .{
                 .env = .{ .with_inspector = true },
+                .http_client = http_client,
             });
             errdefer browser.deinit();
 
