@@ -421,7 +421,16 @@ fn appendBeforeSiblingCallback(ctx: *anyopaque, sibling_ref: *anyopaque, node_or
 fn _appendBeforeSiblingCallback(self: *Parser, sibling: *Node, node_or_text: h5e.NodeOrText) !void {
     const parent = sibling.parentNode() orelse return error.NoParent;
     const node: *Node = switch (node_or_text.toUnion()) {
-        .node => |cpn| getNode(cpn),
+        .node => |cpn| blk: {
+            const child = getNode(cpn);
+            if (child._parent) |previous_parent| {
+                // A custom element constructor may have inserted the node into the
+                // DOM before the parser officially places it (e.g. via foster
+                // parenting). Detach it first so insertNodeRelative's assertion holds.
+                self.page.removeNode(previous_parent, child, .{ .will_be_reconnected = parent.isConnected() });
+            }
+            break :blk child;
+        },
         .text => |txt| try self.page.createTextNode(txt),
     };
     try self.page.insertNodeRelative(parent, node, .{ .before = sibling }, .{});
