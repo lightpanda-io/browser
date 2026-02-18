@@ -50,6 +50,50 @@
   }
 </script>
 
+<script id="play_pause_events">
+  {
+    const audio = document.createElement('audio');
+    const events = [];
+
+    audio.addEventListener('play', () => events.push('play'));
+    audio.addEventListener('playing', () => events.push('playing'));
+    audio.addEventListener('pause', () => events.push('pause'));
+    audio.addEventListener('emptied', () => events.push('emptied'));
+
+    // First play: paused -> playing, fires play + playing
+    audio.play();
+    testing.expectEqual('play,playing', events.join(','));
+
+    // Second play: already playing, no events
+    audio.play();
+    testing.expectEqual('play,playing', events.join(','));
+
+    // Pause: playing -> paused, fires pause
+    audio.pause();
+    testing.expectEqual('play,playing,pause', events.join(','));
+
+    // Second pause: already paused, no event
+    audio.pause();
+    testing.expectEqual('play,playing,pause', events.join(','));
+
+    // Third play: resume from pause, fires play + playing (verified in Chrome)
+    audio.play();
+    testing.expectEqual('play,playing,pause,play,playing', events.join(','));
+
+    // Pause again
+    audio.pause();
+    testing.expectEqual('play,playing,pause,play,playing,pause', events.join(','));
+
+    // Load: resets state, fires emptied
+    audio.load();
+    testing.expectEqual('play,playing,pause,play,playing,pause,emptied', events.join(','));
+
+    // Play after load: fires play + playing
+    audio.play();
+    testing.expectEqual('play,playing,pause,play,playing,pause,emptied,play,playing', events.join(','));
+  }
+</script>
+
 <script id="volume_muted">
   {
     const audio = document.getElementById('audio1');
