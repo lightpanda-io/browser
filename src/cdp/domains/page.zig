@@ -252,13 +252,14 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
         .address_bar => null,
     };
     if (reason_) |reason| {
-        try cdp.sendEvent("Page.frameScheduledNavigation", .{
-            .frameId = frame_id,
-            .delay = 0,
-            .reason = reason,
-            .url = event.url,
-        }, .{ .session_id = session_id });
-
+        if (reason != .initialFrameNavigation) {
+            try cdp.sendEvent("Page.frameScheduledNavigation", .{
+                .frameId = frame_id,
+                .delay = 0,
+                .reason = reason,
+                .url = event.url,
+            }, .{ .session_id = session_id });
+        }
         try cdp.sendEvent("Page.frameRequestedNavigation", .{
             .frameId = frame_id,
             .reason = reason,

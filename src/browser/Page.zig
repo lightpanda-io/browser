@@ -1210,7 +1210,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
     page_frame.iframe = iframe;
     iframe._content_window = page_frame.window;
 
-    page_frame.navigate(src, .{}) catch |err| {
+    page_frame.navigate(src, .{.reason = .initialFrameNavigation}) catch |err| {
         log.warn(.page, "iframe navigate failure", .{ .url = src, .err = err });
         self._pending_loads -= 1;
         iframe._content_window = null;
@@ -3119,6 +3119,7 @@ pub const NavigateReason = enum {
     script,
     history,
     navigation,
+    initialFrameNavigation,
 };
 
 pub const NavigateOpts = struct {
