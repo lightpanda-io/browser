@@ -45,6 +45,27 @@ const State = struct {
     last_char_was_newline: bool = true,
 };
 
+fn isBlock(tag: Element.Tag) bool {
+    return switch (tag) {
+        .p, .div, .section, .article, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .pre, .table, .hr => true,
+        else => false,
+    };
+}
+
+fn shouldAddSpacing(tag: Element.Tag) bool {
+    return switch (tag) {
+        .p, .h1, .h2, .h3, .h4, .h5, .h6, .blockquote, .pre, .table => true,
+        else => false,
+    };
+}
+
+fn ensureNewline(state: *State, writer: *std.Io.Writer) !void {
+    if (!state.last_char_was_newline) {
+        try writer.writeByte('\n');
+        state.last_char_was_newline = true;
+    }
+}
+
 pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
     _ = opts;
     var state = State{};
@@ -98,26 +119,16 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
     // --- Opening Tag Logic ---
 
     // Ensure block elements start on a new line (double newline for paragraphs etc)
-    switch (tag) {
-        .p, .div, .section, .article, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .pre, .table, .hr => {
-            if (!state.in_table) {
-                if (!state.last_char_was_newline) {
-                    try writer.writeByte('\n');
-                    state.last_char_was_newline = true;
-                }
-                if (tag == .p or tag == .h1 or tag == .h2 or tag == .h3 or tag == .h4 or tag == .h5 or tag == .h6 or tag == .blockquote or tag == .pre or tag == .table) {
-                    // Add an extra newline for spacing between blocks
-                    try writer.writeByte('\n');
-                }
-            }
-        },
-        .li, .tr => {
-            if (!state.last_char_was_newline) {
+    if (isBlock(tag)) {
+        if (!state.in_table) {
+            try ensureNewline(state, writer);
+            if (shouldAddSpacing(tag)) {
+                // Add an extra newline for spacing between blocks
                 try writer.writeByte('\n');
-                state.last_char_was_newline = true;
             }
-        },
-        else => {},
+        }
+    } else if (tag == .li or tag == .tr) {
+        try ensureNewline(state, writer);
     }
 
     // Prefixes
@@ -323,17 +334,10 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
     }
 
     // Post-block newlines
-    switch (tag) {
-        .p, .div, .section, .article, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .table => {
-            if (!state.in_table) {
-                if (!state.last_char_was_newline) {
-                    try writer.writeByte('\n');
-                    state.last_char_was_newline = true;
-                }
-            }
-        },
-        .tr => {}, // Handled explicitly in closing tag logic
-        else => {},
+    if (isBlock(tag)) {
+        if (!state.in_table) {
+            try ensureNewline(state, writer);
+        }
     }
 }
 
