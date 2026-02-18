@@ -369,7 +369,7 @@ pub fn getTabIndex(self: *HtmlElement) i32 {
 
 pub fn setTabIndex(self: *HtmlElement, value: i32, page: *Page) !void {
     var buf: [12]u8 = undefined;
-    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch return;
+    const str = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
     try self.asElement().setAttributeSafe(comptime .wrap("tabindex"), .wrap(str), page);
 }
 
