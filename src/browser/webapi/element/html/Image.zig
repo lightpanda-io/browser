@@ -113,8 +113,10 @@ pub fn getNaturalHeight(_: *const Image) u32 {
 }
 
 pub fn getComplete(_: *const Image) bool {
-    // Per spec, complete is true when: no src/srcset, image fully fetched,
-    // or image is broken. Since we don't fetch images, they are always complete.
+    // Per spec, complete is true when: no src/srcset, src is empty,
+    // image is fully available, or image is broken (with no pending request).
+    // Since we never fetch images, they are in the "broken" state, which has
+    // complete=true. This is consistent with naturalWidth/naturalHeight=0.
     return true;
 }
 
