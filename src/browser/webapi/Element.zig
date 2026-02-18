@@ -799,6 +799,8 @@ pub fn focus(self: *Element, page: *Page) !void {
         try page._event_manager.dispatch(old_target, focusout_event.asEvent());
     }
 
+    // Must be set after blur/focusout and before focus/focusin —
+    // event dispatch can reset _active_element if set earlier.
     if (self.asNode().isConnected()) {
         page.document._active_element = self;
     }
