@@ -119,3 +119,33 @@
 }
 </script>
 
+<script id="constructor_self_insert_foster_parent">
+{
+    // Regression: custom element constructor inserting itself (via appendChild) during
+    // innerHTML parsing. When the element is not valid table content, the HTML5 parser
+    // foster-parents it before the <table> via appendBeforeSiblingCallback. That callback
+    // previously didn't check for an existing _parent before calling insertNodeRelative,
+    // causing the "Page.insertNodeRelative parent" assertion to fire.
+    let constructorCalled = 0;
+    let container;
+
+    class CtorSelfInsert extends HTMLElement {
+        constructor() {
+            super();
+            constructorCalled++;
+            // Insert self into container so _parent is set before the parser
+            // officially places this element via appendBeforeSiblingCallback.
+            if (container) container.appendChild(this);
+        }
+    }
+    customElements.define('ctor-self-insert', CtorSelfInsert);
+
+    container = document.createElement('div');
+    // ctor-self-insert is not valid table content; the parser foster-parents it
+    // before the <table>, calling appendBeforeSiblingCallback(sibling=table, node=element).
+    // At that point the element already has _parent=container from the constructor.
+    container.innerHTML = '<table><ctor-self-insert></ctor-self-insert></table>';
+
+    testing.expectEqual(1, constructorCalled);
+}
+</script>

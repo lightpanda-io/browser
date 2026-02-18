@@ -1417,7 +1417,7 @@ pub const Transfer = struct {
             header_len = buf_len - 1;
         }
 
-        const header = buffer[0 .. header_len];
+        const header = buffer[0..header_len];
 
         // We need to parse the first line headers for each request b/c curl's
         // CURLINFO_RESPONSE_CODE returns the status code of the final request.
