@@ -1,6 +1,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Element = @import("../Element.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
 const CSSRule = @import("CSSRule.zig");
 
@@ -11,14 +12,18 @@ _title: []const u8 = "",
 _disabled: bool = false,
 _css_rules: ?*CSSRuleList = null,
 _owner_rule: ?*CSSRule = null,
+_owner_node: ?*Element = null,
 
 pub fn init(page: *Page) !*CSSStyleSheet {
     return page._factory.create(CSSStyleSheet{});
 }
 
-pub fn getOwnerNode(self: *const CSSStyleSheet) ?*CSSStyleSheet {
-    _ = self;
-    return null;
+pub fn initWithOwner(owner: *Element, page: *Page) !*CSSStyleSheet {
+    return page._factory.create(CSSStyleSheet{ ._owner_node = owner });
+}
+
+pub fn getOwnerNode(self: *const CSSStyleSheet) ?*Element {
+    return self._owner_node;
 }
 
 pub fn getHref(self: *const CSSStyleSheet) ?[]const u8 {

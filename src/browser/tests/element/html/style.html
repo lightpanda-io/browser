@@ -3,7 +3,46 @@
 
 <script id="sheet">
   {
+    // Disconnected style element should have no sheet
     testing.expectEqual(null, document.createElement('style').sheet);
+
+    // Connected style element should have a CSSStyleSheet
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    testing.expectEqual(true, style.sheet instanceof CSSStyleSheet);
+
+    // Same sheet instance on repeated access
+    testing.expectEqual(true, style.sheet === style.sheet);
+
+    // Non-CSS type should have no sheet
+    const lessStyle = document.createElement('style');
+    lessStyle.type = 'text/less';
+    document.head.appendChild(lessStyle);
+    testing.expectEqual(null, lessStyle.sheet);
+
+    // Empty type attribute is valid (defaults to text/css per spec)
+    const emptyType = document.createElement('style');
+    emptyType.setAttribute('type', '');
+    document.head.appendChild(emptyType);
+    testing.expectEqual(true, emptyType.sheet instanceof CSSStyleSheet);
+
+    // Case-insensitive type check
+    const upperType = document.createElement('style');
+    upperType.type = 'TEXT/CSS';
+    document.head.appendChild(upperType);
+    testing.expectEqual(true, upperType.sheet instanceof CSSStyleSheet);
+
+    // Disconnection clears sheet
+    const tempStyle = document.createElement('style');
+    document.head.appendChild(tempStyle);
+    testing.expectEqual(true, tempStyle.sheet instanceof CSSStyleSheet);
+    document.head.removeChild(tempStyle);
+    testing.expectEqual(null, tempStyle.sheet);
+
+    // ownerNode points back to the style element
+    const ownStyle = document.createElement('style');
+    document.head.appendChild(ownStyle);
+    testing.expectEqual(true, ownStyle.sheet.ownerNode === ownStyle);
   }
 </script>
 
