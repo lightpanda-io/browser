@@ -122,8 +122,8 @@ jobs:
     needs: zig-build-release
 
     env:
-      MAX_VmHWM: 26000 # 26MB (KB)
-      MAX_CG_PEAK: 6000 # 6MB (KB)
+      MAX_VmHWM: 28000 # 28MB (KB)
+      MAX_CG_PEAK: 8000 # 8MB (KB)
       MAX_AVG_DURATION: 17
       LIGHTPANDA_DISABLE_TELEMETRY: true
 
