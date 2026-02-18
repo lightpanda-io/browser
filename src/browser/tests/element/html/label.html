@@ -16,3 +16,59 @@
     testing.expectEqual('', l2.htmlFor);
   }
 </script>
+
+<label id="l2" for="input1"><span>Name</span></label>
+<input id="input2" type="text">
+<input id="input-hidden" type="hidden">
+<select id="sel1"><option>a</option></select>
+<button id="btn1">Click</button>
+<label id="l3"><input id="input3"><span>desc</span></label>
+<label id="l4"><span>no control here</span></label>
+<label id="l5"><label id="l5-inner"><input id="input5"></label></label>
+
+<script id="control">
+  {
+    // for attribute pointing to a text input
+    const l2 = document.getElementById('l2');
+    testing.expectEqual('input1', l2.control.id);
+
+    // for attribute pointing to a non-existent id
+    const lMissing = document.createElement('label');
+    lMissing.htmlFor = 'does-not-exist';
+    testing.expectEqual(null, lMissing.control);
+
+    // for attribute pointing to a hidden input -> not labelable, returns null
+    const lHidden = document.createElement('label');
+    lHidden.htmlFor = 'input-hidden';
+    document.body.appendChild(lHidden);
+    testing.expectEqual(null, lHidden.control);
+
+    // for attribute pointing to a select
+    const lSel = document.createElement('label');
+    lSel.htmlFor = 'sel1';
+    document.body.appendChild(lSel);
+    testing.expectEqual('sel1', lSel.control.id);
+
+    // for attribute pointing to a button
+    const lBtn = document.createElement('label');
+    lBtn.htmlFor = 'btn1';
+    document.body.appendChild(lBtn);
+    testing.expectEqual('btn1', lBtn.control.id);
+
+    // no for attribute: first labelable descendant
+    const l3 = document.getElementById('l3');
+    testing.expectEqual('input3', l3.control.id);
+
+    // no for attribute: no labelable descendant -> null
+    const l4 = document.getElementById('l4');
+    testing.expectEqual(null, l4.control);
+
+    // no for attribute: nested labels, first labelable in tree order
+    const l5 = document.getElementById('l5');
+    testing.expectEqual('input5', l5.control.id);
+
+    // label with no for and not in document -> null
+    const lDetached = document.createElement('label');
+    testing.expectEqual(null, lDetached.control);
+  }
+</script>
