@@ -76,9 +76,21 @@
     audio.pause();
     testing.expectEqual('play,playing,pause', events.join(','));
 
-    // Load: fires emptied
+    // Third play: resume from pause, fires play only (not playing)
+    audio.play();
+    testing.expectEqual('play,playing,pause,play', events.join(','));
+
+    // Pause again
+    audio.pause();
+    testing.expectEqual('play,playing,pause,play,pause', events.join(','));
+
+    // Load: resets state, fires emptied
     audio.load();
-    testing.expectEqual('play,playing,pause,emptied', events.join(','));
+    testing.expectEqual('play,playing,pause,play,pause,emptied', events.join(','));
+
+    // Play after load: fires play + playing again (fresh start)
+    audio.play();
+    testing.expectEqual('play,playing,pause,play,pause,emptied,play,playing', events.join(','));
   }
 </script>
 
