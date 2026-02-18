@@ -79,7 +79,7 @@ multi: *c.CURLM,
 handles: Handles,
 
 // Use to generate the next request ID
-next_request_id: u64 = 0,
+next_request_id: u32 = 0,
 
 // When handles has no more available easys, requests get queued.
 queue: TransferQueue,
@@ -336,6 +336,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .method = .GET,
             .headers = headers,
             .blocking = false,
+            .page_id = req.page_id,
             .cookie_jar = req.cookie_jar,
             .notification = req.notification,
             .resource_type = .fetch,
@@ -562,12 +563,12 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     transfer._intercept_state = .fulfilled;
 }
 
-pub fn nextReqId(self: *Client) usize {
-    return self.next_request_id + 1;
+pub fn nextReqId(self: *Client) u32 {
+    return self.next_request_id +% 1;
 }
 
-pub fn incrReqId(self: *Client) usize {
-    const id = self.next_request_id + 1;
+pub fn incrReqId(self: *Client) u32 {
+    const id = self.next_request_id +% 1;
     self.next_request_id = id;
     return id;
 }
@@ -1003,6 +1004,7 @@ pub const RequestCookie = struct {
 };
 
 pub const Request = struct {
+    page_id: u32,
     method: Method,
     url: [:0]const u8,
     headers: Http.Headers,
@@ -1093,7 +1095,7 @@ pub const AuthChallenge = struct {
 
 pub const Transfer = struct {
     arena: ArenaAllocator,
-    id: usize = 0,
+    id: u32 = 0,
     req: Request,
     url: [:0]const u8,
     ctx: *anyopaque, // copied from req.ctx to make it easier for callback handlers

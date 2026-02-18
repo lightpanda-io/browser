@@ -116,30 +116,3 @@ fn insertText(cmd: anytype) !void {
 
     try cmd.sendResult(null, .{});
 }
-
-fn clickNavigate(cmd: anytype, uri: std.Uri) !void {
-    const bc = cmd.browser_context.?;
-
-    var url_buf: std.ArrayList(u8) = .{};
-    try uri.writeToStream(.{
-        .scheme = true,
-        .authentication = true,
-        .authority = true,
-        .port = true,
-        .path = true,
-        .query = true,
-    }, url_buf.writer(cmd.arena));
-    const url = url_buf.items;
-
-    try cmd.sendEvent("Page.frameRequestedNavigation", .{
-        .url = url,
-        .frameId = bc.target_id.?,
-        .reason = "anchorClick",
-        .disposition = "currentTab",
-    }, .{ .session_id = bc.session_id.? });
-
-    try bc.session.removePage();
-    _ = try bc.session.createPage(null);
-
-    try @import("page.zig").navigateToUrl(cmd, url, false);
-}

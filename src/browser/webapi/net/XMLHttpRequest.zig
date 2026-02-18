@@ -223,6 +223,7 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     try http_client.request(.{
         .ctx = self,
         .url = self._url,
+        .page_id = page.id,
         .method = self._method,
         .headers = headers,
         .body = self._request_body,

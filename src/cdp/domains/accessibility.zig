@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const id = @import("../id.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -46,15 +47,18 @@ fn getFullAXTree(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+    const session = bc.session;
 
-    if (params.frameId) |frameId| {
-        const target_id = bc.target_id orelse return error.TargetNotLoaded;
-        if (std.mem.eql(u8, target_id, frameId) == false) {
+    const page = blk: {
+        const frame_id = params.frameId orelse {
+            break :blk session.currentPage() orelse return error.PageNotLoaded;
+        };
+        const page_id = try id.toPageId(.frame_id, frame_id);
+        break :blk session.findPage(page_id) orelse {
             return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
-        }
-    }
+        };
+    };
 
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     const doc = page.window._document.asNode();
     const node = try bc.node_registry.register(doc);
 

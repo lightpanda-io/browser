@@ -72,6 +72,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
 
     try http_client.request(.{
         .ctx = fetch,
+        .page_id = page.id,
         .url = request._url,
         .method = request._method,
         .body = request._body,

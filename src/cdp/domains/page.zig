@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const js = @import("../../browser/js/js.zig");
 const Page = @import("../../browser/Page.zig");
@@ -73,9 +74,9 @@ fn getFrameTree(cmd: anytype) !void {
     return cmd.sendResult(.{
         .frameTree = .{
             .frame = Frame{
-                .id = target_id,
-                .loaderId = bc.loader_id,
+                .id = &target_id,
                 .securityOrigin = bc.security_origin,
+                .loaderId = "LID-0000000001",
                 .url = bc.getURL() orelse "about:blank",
                 .secureContextType = bc.secure_context_type,
             },
@@ -103,18 +104,21 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     if (page._load_state == .complete) {
+        const frame_id = &id.toFrameId(page.id);
+        const loader_id = &id.toLoaderId(page._req_id);
+
         const now = timestampF(.monotonic);
-        try sendPageLifecycle(bc, "DOMContentLoaded", now);
-        try sendPageLifecycle(bc, "load", now);
+        try sendPageLifecycle(bc, "DOMContentLoaded", now, frame_id, loader_id);
+        try sendPageLifecycle(bc, "load", now, frame_id, loader_id);
 
         const http_client = page._session.browser.http_client;
         const http_active = http_client.active;
         const total_network_activity = http_active + http_client.intercepted;
         if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
-            try sendPageLifecycle(bc, "networkAlmostIdle", now);
+            try sendPageLifecycle(bc, "networkAlmostIdle", now, frame_id, loader_id);
         }
         if (page._notified_network_idle.check(total_network_activity == 0)) {
-            try sendPageLifecycle(bc, "networkIdle", now);
+            try sendPageLifecycle(bc, "networkIdle", now, frame_id, loader_id);
         }
     }
 
@@ -227,15 +231,14 @@ fn navigate(cmd: anytype) !void {
     });
 }
 
-pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.PageNavigate) !void {
+pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-
-    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{event.req_id});
-    const target_id = bc.target_id orelse unreachable;
-
     bc.reset();
+
+    const frame_id = &id.toFrameId(event.page_id);
+    const loader_id = &id.toLoaderId(event.req_id);
 
     var cdp = bc.cdp;
     const reason_: ?[]const u8 = switch (event.opts.reason) {
@@ -250,14 +253,14 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
     };
     if (reason_) |reason| {
         try cdp.sendEvent("Page.frameScheduledNavigation", .{
-            .frameId = target_id,
+            .frameId = frame_id,
             .delay = 0,
             .reason = reason,
             .url = event.url,
         }, .{ .session_id = session_id });
 
         try cdp.sendEvent("Page.frameRequestedNavigation", .{
-            .frameId = target_id,
+            .frameId = frame_id,
             .reason = reason,
             .url = event.url,
             .disposition = "currentTab",
@@ -266,7 +269,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
 
     // frameStartedNavigating event
     try cdp.sendEvent("Page.frameStartedNavigating", .{
-        .frameId = target_id,
+        .frameId = frame_id,
         .url = event.url,
         .loaderId = loader_id,
         .navigationType = "differentDocument",
@@ -274,7 +277,7 @@ pub fn pageNavigate(arena: Allocator, bc: anytype, event: *const Notification.Pa
 
     // frameStartedLoading event
     try cdp.sendEvent("Page.frameStartedLoading", .{
-        .frameId = target_id,
+        .frameId = frame_id,
     }, .{ .session_id = session_id });
 }
 
@@ -301,9 +304,10 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{event.req_id});
-    const target_id = bc.target_id orelse unreachable;
+
     const timestamp = event.timestamp;
+    const frame_id = &id.toFrameId(event.page_id);
+    const loader_id = &id.toLoaderId(event.req_id);
 
     var cdp = bc.cdp;
 
@@ -316,7 +320,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         try cdp.sendJSON(.{
             .id = input_id,
             .result = .{
-                .frameId = target_id,
+                .frameId = frame_id,
                 .loaderId = loader_id,
             },
             .sessionId = session_id,
@@ -326,7 +330,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     if (bc.page_life_cycle_events) {
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .name = "init",
-            .frameId = target_id,
+            .frameId = frame_id,
             .loaderId = loader_id,
             .timestamp = event.timestamp,
         }, .{ .session_id = session_id });
@@ -345,7 +349,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
 
     if (reason_ != null) {
         try cdp.sendEvent("Page.frameClearedScheduledNavigation", .{
-            .frameId = target_id,
+            .frameId = frame_id,
         }, .{ .session_id = session_id });
     }
 
@@ -356,7 +360,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
 
     {
         const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-        const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\"}}", .{target_id});
+        const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
 
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);
@@ -371,7 +375,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         );
     }
     for (bc.isolated_worlds.items) |isolated_world| {
-        const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\"}}", .{target_id});
+        const aux_json = try std.fmt.allocPrint(arena, "{{\"isDefault\":false,\"type\":\"isolated\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
 
         // Calling contextCreated will assign a new Id to the context and send the contextCreated event
 
@@ -392,7 +396,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     try cdp.sendEvent("Page.frameNavigated", .{
         .type = "Navigation",
         .frame = Frame{
-            .id = target_id,
+            .id = frame_id,
             .url = event.url,
             .loaderId = loader_id,
             .securityOrigin = bc.security_origin,
@@ -419,7 +423,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "DOMContentLoaded",
-            .frameId = target_id,
+            .frameId = frame_id,
             .loaderId = loader_id,
         }, .{ .session_id = session_id });
     }
@@ -436,35 +440,33 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .timestamp = timestamp,
             .name = "load",
-            .frameId = target_id,
+            .frameId = frame_id,
             .loaderId = loader_id,
         }, .{ .session_id = session_id });
     }
 
     // frameStoppedLoading
     return cdp.sendEvent("Page.frameStoppedLoading", .{
-        .frameId = target_id,
+        .frameId = frame_id,
     }, .{ .session_id = session_id });
 }
 
 pub fn pageNetworkIdle(bc: anytype, event: *const Notification.PageNetworkIdle) !void {
-    return sendPageLifecycle(bc, "networkIdle", event.timestamp);
+    return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.page_id), &id.toLoaderId(event.req_id));
 }
 
 pub fn pageNetworkAlmostIdle(bc: anytype, event: *const Notification.PageNetworkAlmostIdle) !void {
-    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp);
+    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.page_id), &id.toLoaderId(event.req_id));
 }
 
-fn sendPageLifecycle(bc: anytype, name: []const u8, timestamp: u64) !void {
+fn sendPageLifecycle(bc: anytype, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const loader_id = bc.loader_id;
-    const target_id = bc.target_id orelse unreachable;
     return bc.cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
         .name = name,
-        .frameId = target_id,
+        .frameId = frame_id,
         .loaderId = loader_id,
         .timestamp = timestamp,
     }, .{ .session_id = session_id });
@@ -487,15 +489,15 @@ test "cdp.page: getFrameTree" {
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
     }
 
-    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .target_id = "TID-3" });
+    const bc = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
     {
         try ctx.processMessage(.{ .id = 11, .method = "Page.getFrameTree" });
         try ctx.expectSentResult(.{
             .frameTree = .{
                 .frame = .{
-                    .id = "TID-3",
-                    .loaderId = bc.loader_id,
-                    .url = "about:blank",
+                    .id = "FID-000000000X",
+                    .loaderId = "LID-0000000001",
+                    .url = "http://127.0.0.1:9582/src/browser/tests/hi.html",
                     .domainAndRegistry = "",
                     .securityOrigin = bc.security_origin,
                     .mimeType = "text/html",

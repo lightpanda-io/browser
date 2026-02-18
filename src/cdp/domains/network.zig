@@ -21,6 +21,8 @@ const lp = @import("lightpanda");
 const Allocator = std.mem.Allocator;
 
 const CdpStorage = @import("storage.zig");
+
+const id = @import("../id.zig");
 const URL = @import("../../browser/URL.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
 const Notification = @import("../../Notification.zig");
@@ -208,7 +210,7 @@ fn getResponseBody(cmd: anytype) !void {
     }, .{});
 }
 
-pub fn httpRequestFail(arena: Allocator, bc: anytype, msg: *const Notification.RequestFail) !void {
+pub fn httpRequestFail(bc: anytype, msg: *const Notification.RequestFail) !void {
     // It's possible that the request failed because we aborted when the client
     // sent Target.closeTarget. In that case, bc.session_id will be cleared
     // already, and we can skip sending these messages to the client.
@@ -220,7 +222,7 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, msg: *const Notification.R
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.loadingFailed", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
+        .requestId = &id.toRequestId(msg.transfer.id),
         // Seems to be what chrome answers with. I assume it depends on the type of error?
         .type = "Ping",
         .errorText = msg.err,
@@ -228,28 +230,27 @@ pub fn httpRequestFail(arena: Allocator, bc: anytype, msg: *const Notification.R
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestStart(arena: Allocator, bc: anytype, msg: *const Notification.RequestStart) !void {
+pub fn httpRequestStart(bc: anytype, msg: *const Notification.RequestStart) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
 
-    const target_id = bc.target_id orelse unreachable;
-    const page = bc.session.currentPage() orelse unreachable;
+    const transfer = msg.transfer;
+    const req = &transfer.req;
+    const page_id = req.page_id;
+    const page = bc.session.findPage(page_id) orelse return;
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {
-        try msg.transfer.req.headers.add(extra);
+        try req.headers.add(extra);
     }
-
-    const transfer = msg.transfer;
-    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id});
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
-        .requestId = loader_id,
-        .frameId = target_id,
-        .loaderId = loader_id,
-        .type = msg.transfer.req.resource_type.string(),
+        .loaderId = &id.toLoaderId(transfer.id),
+        .requestId = &id.toRequestId(transfer.id),
+        .frameId = &id.toFrameId(page_id),
+        .type = req.resource_type.string(),
         .documentURL = page.url,
         .request = TransferAsRequestWriter.init(transfer),
         .initiator = .{ .type = "other" },
@@ -262,29 +263,27 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-    const target_id = bc.target_id orelse unreachable;
 
     const transfer = msg.transfer;
-    const loader_id = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id});
 
     // We're missing a bunch of fields, but, for now, this seems like enough
     try bc.cdp.sendEvent("Network.responseReceived", .{
-        .requestId = loader_id,
-        .frameId = target_id,
-        .loaderId = loader_id,
+        .loaderId = &id.toLoaderId(transfer.id),
+        .requestId = &id.toRequestId(transfer.id),
+        .frameId = &id.toFrameId(transfer.req.page_id),
         .response = TransferAsResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
 }
 
-pub fn httpRequestDone(arena: Allocator, bc: anytype, msg: *const Notification.RequestDone) !void {
+pub fn httpRequestDone(bc: anytype, msg: *const Notification.RequestDone) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-
+    const transfer = msg.transfer;
     try bc.cdp.sendEvent("Network.loadingFinished", .{
-        .requestId = try std.fmt.allocPrint(arena, "REQ-{d}", .{msg.transfer.id}),
-        .encodedDataLength = msg.transfer.bytes_received,
+        .requestId = &id.toRequestId(transfer.id),
+        .encodedDataLength = transfer.bytes_received,
     }, .{ .session_id = session_id });
 }
 

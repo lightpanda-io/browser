@@ -18,6 +18,8 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+
+const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const js = @import("../../browser/js/js.zig");
 
@@ -66,11 +68,11 @@ fn getTargets(cmd: anytype) !void {
         }, .{ .include_session_id = false });
     };
 
-    const target_id = bc.target_id orelse {
+    const target_id = &(bc.target_id orelse {
         return cmd.sendResult(.{
             .targetInfos = [_]TargetInfo{},
         }, .{ .include_session_id = false });
-    };
+    });
 
     return cmd.sendResult(.{
         .targetInfos = [_]TargetInfo{.{
@@ -171,11 +173,12 @@ fn createTarget(cmd: anytype) !void {
     // if target_id is null, we should never have a session_id
     lp.assert(bc.session_id == null, "CDP.target.createTarget not null session_id", .{});
 
-    const target_id = cmd.cdp.target_id_gen.next();
-
-    bc.target_id = target_id;
-
     const page = try bc.session.createPage();
+
+    // the target_id == the frame_id of the "root" page
+    const frame_id = id.toFrameId(page.id);
+    bc.target_id = frame_id;
+    const target_id = &bc.target_id.?;
     {
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);
@@ -195,7 +198,6 @@ fn createTarget(cmd: anytype) !void {
     // change CDP state
     bc.security_origin = "://";
     bc.secure_context_type = "InsecureScheme";
-    bc.loader_id = LOADER_ID;
 
     // send targetCreated event
     // TODO: should this only be sent when Target.setDiscoverTargets
@@ -234,7 +236,7 @@ fn attachToTarget(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+    const target_id = &(bc.target_id orelse return error.TargetNotLoaded);
     if (std.mem.eql(u8, target_id, params.targetId) == false) {
         return error.UnknownTargetId;
     }
@@ -255,7 +257,7 @@ fn closeTarget(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const target_id = bc.target_id orelse return error.TargetNotLoaded;
+    const target_id = &(bc.target_id orelse return error.TargetNotLoaded);
     if (std.mem.eql(u8, target_id, params.targetId) == false) {
         return error.UnknownTargetId;
     }
@@ -298,7 +300,7 @@ fn getTargetInfo(cmd: anytype) !void {
 
     if (params.targetId) |param_target_id| {
         const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-        const target_id = bc.target_id orelse return error.TargetNotLoaded;
+        const target_id = &(bc.target_id orelse return error.TargetNotLoaded);
         if (std.mem.eql(u8, target_id, param_target_id) == false) {
             return error.UnknownTargetId;
         }
@@ -415,10 +417,11 @@ fn setAutoAttach(cmd: anytype) !void {
     // autoAttach is set to true, we must attach to all existing targets.
     if (cmd.browser_context) |bc| {
         if (bc.target_id == null) {
-            // hasn't attached  yet
-            const target_id = cmd.cdp.target_id_gen.next();
-            try doAttachtoTarget(cmd, target_id);
-            bc.target_id = target_id;
+            if (bc.session.currentPage()) |page| {
+                // the target_id == the frame_id of the "root" page
+                bc.target_id = id.toFrameId(page.id);
+                try doAttachtoTarget(cmd, &bc.target_id.?);
+            }
         }
         // should we send something here?
         return;
@@ -612,14 +615,14 @@ test "cdp.target: closeTarget" {
 
     // pretend we createdTarget first
     _ = try bc.session.createPage();
-    bc.target_id = "TID-A";
+    bc.target_id = "TID-000000000A".*;
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } }));
         try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
     }
 
     {
-        try ctx.processMessage(.{ .id = 11, .method = "Target.closeTarget", .params = .{ .targetId = "TID-A" } });
+        try ctx.processMessage(.{ .id = 11, .method = "Target.closeTarget", .params = .{ .targetId = "TID-000000000A" } });
         try ctx.expectSentResult(.{ .success = true }, .{ .id = 11 });
         try testing.expectEqual(null, bc.session.page);
         try testing.expectEqual(null, bc.target_id);
@@ -643,14 +646,14 @@ test "cdp.target: attachToTarget" {
 
     // pretend we createdTarget first
     _ = try bc.session.createPage();
-    bc.target_id = "TID-B";
+    bc.target_id = "TID-000000000B".*;
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } }));
         try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
     }
 
     {
-        try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-B" } });
+        try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-000000000B" } });
         const session_id = bc.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
         try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
@@ -687,17 +690,17 @@ test "cdp.target: getTargetInfo" {
 
     // pretend we createdTarget first
     _ = try bc.session.createPage();
-    bc.target_id = "TID-A";
+    bc.target_id = "TID-000000000C".*;
     {
         try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } }));
         try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
     }
 
     {
-        try ctx.processMessage(.{ .id = 11, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-A" } });
+        try ctx.processMessage(.{ .id = 11, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-000000000C" } });
         try ctx.expectSentResult(.{
             .targetInfo = .{
-                .targetId = "TID-A",
+                .targetId = "TID-000000000C",
                 .type = "page",
                 .title = "",
                 .url = "about:blank",
