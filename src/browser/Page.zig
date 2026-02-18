@@ -3045,21 +3045,25 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
+            try element.focus(self);
             try self.scheduleNavigation(href, .{
                 .reason = .script,
                 .kind = .{ .push = null },
             }, .anchor);
         },
-        .input => |input| switch (input._input_type) {
-            .submit => return self.submitForm(element, input.getForm(self), .{}),
-            else => self.window._document._active_element = element,
+        .input => |input| {
+            try element.focus(self);
+            if (input._input_type == .submit) {
+                return self.submitForm(element, input.getForm(self), .{});
+            }
         },
         .button => |button| {
+            try element.focus(self);
             if (std.mem.eql(u8, button.getType(), "submit")) {
                 return self.submitForm(element, button.getForm(self), .{});
             }
         },
-        .select, .textarea => self.window._document._active_element = element,
+        .select, .textarea => try element.focus(self),
         else => {},
     }
 }
