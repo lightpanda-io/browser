@@ -224,7 +224,7 @@ jobs:
 
       - name: run hyperfine
         run: |
-          hyperfine --export-json=hyperfine.json --warmup 3 --runs 20 --shell=none "./lightpanda --dump http://127.0.0.1:1234/campfire-commerce/"
+          hyperfine --export-json=hyperfine.json --warmup 3 --runs 20 --shell=none "./lightpanda --dump html http://127.0.0.1:1234/campfire-commerce/"
 
       - name: stop http
         run: kill `cat WS.pid`
