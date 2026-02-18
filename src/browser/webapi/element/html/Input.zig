@@ -290,6 +290,9 @@ pub fn setRequired(self: *Input, required: bool, page: *Page) !void {
 pub fn select(self: *Input, page: *Page) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
     try self.setSelectionRange(0, len, null, page);
+    const event = try Event.init("select", .{ .bubbles = true }, page);
+    defer if (!event._v8_handoff) event.deinit(false);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
 fn selectionAvailable(self: *const Input) bool {
