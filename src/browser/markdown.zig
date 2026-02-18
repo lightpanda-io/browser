@@ -75,15 +75,16 @@ pub fn dump(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) !void 
 }
 
 fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
-    switch (node._type) {
+    switch (node.getNodeType()) {
         .document, .document_fragment => {
             try renderChildren(node, state, writer, page);
         },
-        .element => |el| {
-            try renderElement(el, state, writer, page);
+        .element => {
+            try renderElement(node.as(Element), state, writer, page);
         },
-        .cdata => |cd| {
+        .text, .cdata_section => {
             if (node.is(Node.CData.Text)) |_| {
+                const cd = node.as(Node.CData);
                 var text = cd.getData();
                 if (state.in_pre) {
                     if (state.pre_node) |pre| {

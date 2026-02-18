@@ -50,6 +50,21 @@ _child_link: LinkedList.Node = .{},
 // Lookup for nodes that have a different owner document than page.document
 pub const OwnerDocumentLookup = std.AutoHashMapUnmanaged(*Node, *Document);
 
+pub const NodeType = enum(u8) {
+    element = 1,
+    attribute = 2,
+    text = 3,
+    cdata_section = 4,
+    entity_reference = 5,
+    entity = 6,
+    processing_instruction = 7,
+    comment = 8,
+    document = 9,
+    document_type = 10,
+    document_fragment = 11,
+    notation = 12,
+};
+
 pub const Type = union(enum) {
     cdata: *CData,
     element: *Element,
@@ -317,19 +332,19 @@ pub fn getNodeName(self: *const Node, buf: []u8) []const u8 {
     };
 }
 
-pub fn getNodeType(self: *const Node) u8 {
+pub fn getNodeType(self: *const Node) NodeType {
     return switch (self._type) {
-        .element => 1,
-        .attribute => 2,
+        .element => .element,
+        .attribute => .attribute,
         .cdata => |cd| switch (cd._type) {
-            .text => 3,
-            .cdata_section => 4,
-            .processing_instruction => 7,
-            .comment => 8,
+            .text => .text,
+            .cdata_section => .cdata_section,
+            .processing_instruction => .processing_instruction,
+            .comment => .comment,
         },
-        .document => 9,
-        .document_type => 10,
-        .document_fragment => 11,
+        .document => .document,
+        .document_type => .document_type,
+        .document_fragment => .document_fragment,
     };
 }
 
@@ -946,18 +961,18 @@ pub const JsApi = struct {
         pub const enumerable = false;
     };
 
-    pub const ELEMENT_NODE = bridge.property(1, .{ .template = true });
-    pub const ATTRIBUTE_NODE = bridge.property(2, .{ .template = true });
-    pub const TEXT_NODE = bridge.property(3, .{ .template = true });
-    pub const CDATA_SECTION_NODE = bridge.property(4, .{ .template = true });
-    pub const ENTITY_REFERENCE_NODE = bridge.property(5, .{ .template = true });
-    pub const ENTITY_NODE = bridge.property(6, .{ .template = true });
-    pub const PROCESSING_INSTRUCTION_NODE = bridge.property(7, .{ .template = true });
-    pub const COMMENT_NODE = bridge.property(8, .{ .template = true });
-    pub const DOCUMENT_NODE = bridge.property(9, .{ .template = true });
-    pub const DOCUMENT_TYPE_NODE = bridge.property(10, .{ .template = true });
-    pub const DOCUMENT_FRAGMENT_NODE = bridge.property(11, .{ .template = true });
-    pub const NOTATION_NODE = bridge.property(12, .{ .template = true });
+    pub const ELEMENT_NODE = bridge.property(@intFromEnum(NodeType.element), .{ .template = true });
+    pub const ATTRIBUTE_NODE = bridge.property(@intFromEnum(NodeType.attribute), .{ .template = true });
+    pub const TEXT_NODE = bridge.property(@intFromEnum(NodeType.text), .{ .template = true });
+    pub const CDATA_SECTION_NODE = bridge.property(@intFromEnum(NodeType.cdata_section), .{ .template = true });
+    pub const ENTITY_REFERENCE_NODE = bridge.property(@intFromEnum(NodeType.entity_reference), .{ .template = true });
+    pub const ENTITY_NODE = bridge.property(@intFromEnum(NodeType.entity), .{ .template = true });
+    pub const PROCESSING_INSTRUCTION_NODE = bridge.property(@intFromEnum(NodeType.processing_instruction), .{ .template = true });
+    pub const COMMENT_NODE = bridge.property(@intFromEnum(NodeType.comment), .{ .template = true });
+    pub const DOCUMENT_NODE = bridge.property(@intFromEnum(NodeType.document), .{ .template = true });
+    pub const DOCUMENT_TYPE_NODE = bridge.property(@intFromEnum(NodeType.document_type), .{ .template = true });
+    pub const DOCUMENT_FRAGMENT_NODE = bridge.property(@intFromEnum(NodeType.document_fragment), .{ .template = true });
+    pub const NOTATION_NODE = bridge.property(@intFromEnum(NodeType.notation), .{ .template = true });
 
     pub const DOCUMENT_POSITION_DISCONNECTED = bridge.property(0x01, .{ .template = true });
     pub const DOCUMENT_POSITION_PRECEDING = bridge.property(0x02, .{ .template = true });
@@ -971,7 +986,11 @@ pub const JsApi = struct {
             return self.getNodeName(&page.buf);
         }
     }.wrap, null, .{});
-    pub const nodeType = bridge.accessor(Node.getNodeType, null, .{});
+    pub const nodeType = bridge.accessor(struct {
+        fn get(self: *const Node) u8 {
+            return @intFromEnum(self.getNodeType());
+        }
+    }.get, null, .{});
 
     pub const textContent = bridge.accessor(_textContext, Node.setTextContent, .{});
     fn _textContext(self: *Node, page: *const Page) !?[]const u8 {

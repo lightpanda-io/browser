@@ -75,7 +75,7 @@ pub fn shouldShow(node: *const Node, what_to_show: u32) bool {
     // nodeType values (1=ELEMENT, 3=TEXT, 9=DOCUMENT, etc.) need to map to
     // SHOW_* bitmask positions (0x1, 0x4, 0x100, etc.)
     const node_type_value = node.getNodeType();
-    const bit_position = node_type_value - 1;
+    const bit_position = @intFromEnum(node_type_value) - 1;
     const node_type_bit: u32 = @as(u32, 1) << @intCast(bit_position);
     return (what_to_show & node_type_bit) != 0;
 }

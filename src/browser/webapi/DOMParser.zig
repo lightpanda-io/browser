@@ -93,7 +93,7 @@ pub fn parseFromString(
                 unreachable;
             };
 
-            if (first_child.getNodeType() == 7) {
+            if (first_child.getNodeType() == .processing_instruction) {
                 // We're sure that firstChild exist, this cannot fail.
                 _ = doc_node.removeChild(first_child, page) catch unreachable;
             }

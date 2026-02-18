@@ -300,7 +300,7 @@ pub const Writer = struct {
         }
 
         try w.objectField("nodeType");
-        try w.write(dom_node.getNodeType());
+        try w.write(@intFromEnum(dom_node.getNodeType()));
 
         try w.objectField("nodeName");
         var name_buf: [Page.BUF_SIZE]u8 = undefined;
