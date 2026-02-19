@@ -512,21 +512,13 @@ fn sanitizeValue(self: *Input, value: []const u8, page: *Page) ![]const u8 {
                 else => sanitized,
             };
         },
-        .date, .time, .@"datetime-local", .month, .week => {
-            // TODO, we should sanitize this, but lack the necessary functions
-            // datetime.zig could handle date and time, but not the other three
-            // for now, allow al values.
-            return value;
-        },
-        .number => {
-            _ = std.fmt.parseFloat(f64, value) catch return "";
-            return value;
-        },
-        .range => {
-            // Range: default to "50" if invalid
-            _ = std.fmt.parseFloat(f64, value) catch return "50";
-            return value;
-        },
+        .date => return if (isValidDate(value)) value else "",
+        .month => return if (isValidMonth(value)) value else "",
+        .week => return if (isValidWeek(value)) value else "",
+        .time => return if (isValidTime(value)) value else "",
+        .@"datetime-local" => return try sanitizeDatetimeLocal(value, page.call_arena),
+        .number => return if (isValidFloatingPoint(value)) value else "",
+        .range => return if (isValidFloatingPoint(value)) value else "50",
         .color => {
             if (value.len == 7 and value[0] == '#') {
                 var needs_lower = false;
@@ -548,6 +540,226 @@ fn sanitizeValue(self: *Input, value: []const u8, page: *Page) ![]const u8 {
         .file => return "", // File: always empty
         .checkbox, .radio, .submit, .image, .reset, .button, .hidden => return value, // no sanitization
     }
+}
+
+/// WHATWG "valid floating-point number" grammar check + overflow detection.
+/// Rejects "+1", "1.", "Infinity", "NaN", "2e308", leading whitespace, trailing junk.
+fn isValidFloatingPoint(value: []const u8) bool {
+    if (value.len == 0) return false;
+    var pos: usize = 0;
+
+    // Optional leading minus (no plus allowed)
+    if (value[pos] == '-') {
+        pos += 1;
+        if (pos >= value.len) return false;
+    }
+
+    // Must have one or both of: digit-sequence, dot+digit-sequence
+    var has_integer = false;
+    var has_decimal = false;
+
+    if (pos < value.len and std.ascii.isDigit(value[pos])) {
+        has_integer = true;
+        while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) {}
+    }
+
+    if (pos < value.len and value[pos] == '.') {
+        pos += 1;
+        if (pos < value.len and std.ascii.isDigit(value[pos])) {
+            has_decimal = true;
+            while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) {}
+        } else {
+            return false; // dot without trailing digits ("1.")
+        }
+    }
+
+    if (!has_integer and !has_decimal) return false;
+
+    // Optional exponent: (e|E) [+|-] digits
+    if (pos < value.len and (value[pos] == 'e' or value[pos] == 'E')) {
+        pos += 1;
+        if (pos >= value.len) return false;
+        if (value[pos] == '+' or value[pos] == '-') {
+            pos += 1;
+            if (pos >= value.len) return false;
+        }
+        if (!std.ascii.isDigit(value[pos])) return false;
+        while (pos < value.len and std.ascii.isDigit(value[pos])) : (pos += 1) {}
+    }
+
+    if (pos != value.len) return false; // trailing junk
+
+    // Grammar is valid; now check the parsed value doesn't overflow
+    const f = std.fmt.parseFloat(f64, value) catch return false;
+    return !std.math.isInf(f) and !std.math.isNan(f);
+}
+
+/// Validate a WHATWG "valid date string": YYYY-MM-DD
+fn isValidDate(value: []const u8) bool {
+    // Minimum: 4-digit year + "-MM-DD" = 10 chars
+    if (value.len < 10) return false;
+    const year_len = value.len - 6; // "-MM-DD" is always 6 chars from end
+    if (year_len < 4) return false;
+    if (value[year_len] != '-' or value[year_len + 3] != '-') return false;
+
+    const year = parseAllDigits(value[0..year_len]) orelse return false;
+    if (year == 0) return false;
+    const month = parseAllDigits(value[year_len + 1 .. year_len + 3]) orelse return false;
+    if (month < 1 or month > 12) return false;
+    const day = parseAllDigits(value[year_len + 4 .. year_len + 6]) orelse return false;
+    if (day < 1 or day > daysInMonth(@intCast(year), @intCast(month))) return false;
+    return true;
+}
+
+/// Validate a WHATWG "valid month string": YYYY-MM
+fn isValidMonth(value: []const u8) bool {
+    if (value.len < 7) return false;
+    const year_len = value.len - 3; // "-MM" is 3 chars from end
+    if (year_len < 4) return false;
+    if (value[year_len] != '-') return false;
+
+    const year = parseAllDigits(value[0..year_len]) orelse return false;
+    if (year == 0) return false;
+    const month = parseAllDigits(value[year_len + 1 .. year_len + 3]) orelse return false;
+    return month >= 1 and month <= 12;
+}
+
+/// Validate a WHATWG "valid week string": YYYY-Www
+fn isValidWeek(value: []const u8) bool {
+    if (value.len < 8) return false;
+    const year_len = value.len - 4; // "-Www" is 4 chars from end
+    if (year_len < 4) return false;
+    if (value[year_len] != '-' or value[year_len + 1] != 'W') return false;
+
+    const year = parseAllDigits(value[0..year_len]) orelse return false;
+    if (year == 0) return false;
+    const week = parseAllDigits(value[year_len + 2 .. year_len + 4]) orelse return false;
+    if (week < 1) return false;
+    return week <= maxWeeksInYear(@intCast(year));
+}
+
+/// Validate a WHATWG "valid time string": HH:MM[:SS[.s{1,3}]]
+fn isValidTime(value: []const u8) bool {
+    if (value.len < 5) return false;
+    if (value[2] != ':') return false;
+    const hour = parseAllDigits(value[0..2]) orelse return false;
+    if (hour > 23) return false;
+    const minute = parseAllDigits(value[3..5]) orelse return false;
+    if (minute > 59) return false;
+    if (value.len == 5) return true;
+
+    // Optional seconds
+    if (value.len < 8 or value[5] != ':') return false;
+    const second = parseAllDigits(value[6..8]) orelse return false;
+    if (second > 59) return false;
+    if (value.len == 8) return true;
+
+    // Optional fractional seconds: 1-3 digits
+    if (value[8] != '.') return false;
+    const frac_len = value.len - 9;
+    if (frac_len < 1 or frac_len > 3) return false;
+    for (value[9..]) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
+}
+
+/// Sanitize datetime-local: validate and normalize, or return "".
+/// Spec: if valid, normalize to "YYYY-MM-DDThh:mm" (shortest time form);
+/// otherwise set to "".
+fn sanitizeDatetimeLocal(value: []const u8, arena: std.mem.Allocator) ![]const u8 {
+    if (value.len < 16) return "";
+
+    // Find separator (T or space) by scanning for it before a valid time start
+    var sep_pos: ?usize = null;
+    if (value.len >= 16) {
+        for (0..value.len - 4) |i| {
+            if ((value[i] == 'T' or value[i] == ' ') and
+                i + 3 < value.len and
+                std.ascii.isDigit(value[i + 1]) and
+                std.ascii.isDigit(value[i + 2]) and
+                value[i + 3] == ':')
+            {
+                sep_pos = i;
+                break;
+            }
+        }
+    }
+    const sep = sep_pos orelse return "";
+
+    const date_part = value[0..sep];
+    const time_part = value[sep + 1 ..];
+    if (!isValidDate(date_part) or !isValidTime(time_part)) return "";
+
+    // Already normalized? (T separator and no trailing :00 or :00.000)
+    if (value[sep] == 'T' and time_part.len == 5) return value;
+
+    // Parse time components for normalization
+    const second: u32 = if (time_part.len >= 8) (parseAllDigits(time_part[6..8]) orelse return "") else 0;
+    var has_nonzero_frac = false;
+    var frac_end: usize = 0;
+    if (time_part.len > 9 and time_part[8] == '.') {
+        for (time_part[9..], 0..) |c, fi| {
+            if (c != '0') has_nonzero_frac = true;
+            frac_end = fi + 1;
+        }
+        // Strip trailing zeros from fractional part
+        while (frac_end > 0 and time_part[9 + frac_end - 1] == '0') : (frac_end -= 1) {}
+    }
+
+    // Build shortest time: HH:MM, or HH:MM:SS, or HH:MM:SS.fff
+    const need_seconds = second != 0 or has_nonzero_frac;
+    const time_len: usize = if (need_seconds) (if (frac_end > 0) 9 + frac_end else 8) else 5;
+    const total_len = date_part.len + 1 + time_len;
+
+    const result = try arena.alloc(u8, total_len);
+    @memcpy(result[0..date_part.len], date_part);
+    result[date_part.len] = 'T';
+    @memcpy(result[date_part.len + 1 ..][0..5], time_part[0..5]);
+
+    if (need_seconds) {
+        @memcpy(result[date_part.len + 6 ..][0..3], time_part[5..8]);
+        if (frac_end > 0) {
+            result[date_part.len + 9] = '.';
+            @memcpy(result[date_part.len + 10 ..][0..frac_end], time_part[9..][0..frac_end]);
+        }
+    }
+    return result[0..total_len];
+}
+
+/// Parse a slice that must be ALL ASCII digits into a u32. Returns null if any non-digit or empty.
+fn parseAllDigits(s: []const u8) ?u32 {
+    if (s.len == 0) return null;
+    var result: u32 = 0;
+    for (s) |c| {
+        if (!std.ascii.isDigit(c)) return null;
+        result = result *% 10 +% (c - '0');
+    }
+    return result;
+}
+
+fn isLeapYear(year: u32) bool {
+    return (year % 4 == 0 and year % 100 != 0) or (year % 400 == 0);
+}
+
+fn daysInMonth(year: u32, month: u32) u32 {
+    return switch (month) {
+        1, 3, 5, 7, 8, 10, 12 => 31,
+        4, 6, 9, 11 => 30,
+        2 => if (isLeapYear(year)) @as(u32, 29) else 28,
+        else => 0,
+    };
+}
+
+/// ISO 8601: a year has 53 weeks if Jan 1 is Thursday, or Jan 1 is Wednesday and leap year.
+fn maxWeeksInYear(year: u32) u32 {
+    // Gauss's algorithm for Jan 1 day-of-week
+    // dow: 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+    const y1 = year - 1;
+    const dow = (1 + 5 * (y1 % 4) + 4 * (y1 % 100) + 6 * (y1 % 400)) % 7;
+    if (dow == 4) return 53; // Jan 1 is Thursday
+    if (dow == 3 and isLeapYear(year)) return 53; // Jan 1 is Wednesday + leap year
+    return 52;
 }
 
 fn uncheckRadioGroup(self: *Input, page: *Page) !void {
@@ -658,9 +870,8 @@ pub const Build = struct {
         else
             .text;
 
-        // Current value starts equal to default, but sanitized per input type.
-        // sanitizeValue allocates temporaries from call_arena, so we must
-        // persist any new buffer into page.arena for the value to survive.
+        // Sanitize initial value per input type (e.g. date rejects "invalid-date").
+        // sanitizeValue may allocate from call_arena, so persist any new buffer.
         if (self._default_value) |dv| {
             const sanitized = try self.sanitizeValue(dv, page);
             if (sanitized.ptr == dv.ptr and sanitized.len == dv.len) {
@@ -745,4 +956,136 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input_click.html", .{});
     try testing.htmlRunner("element/html/input_radio.html", .{});
     try testing.htmlRunner("element/html/input-attrs.html", .{});
+}
+
+test "isValidFloatingPoint" {
+    // Valid
+    try std.testing.expect(isValidFloatingPoint("1"));
+    try std.testing.expect(isValidFloatingPoint("0.5"));
+    try std.testing.expect(isValidFloatingPoint("-1"));
+    try std.testing.expect(isValidFloatingPoint("-0.5"));
+    try std.testing.expect(isValidFloatingPoint("1e10"));
+    try std.testing.expect(isValidFloatingPoint("1E10"));
+    try std.testing.expect(isValidFloatingPoint("1e+10"));
+    try std.testing.expect(isValidFloatingPoint("1e-10"));
+    try std.testing.expect(isValidFloatingPoint("0.123"));
+    try std.testing.expect(isValidFloatingPoint(".5"));
+    // Invalid
+    try std.testing.expect(!isValidFloatingPoint(""));
+    try std.testing.expect(!isValidFloatingPoint("+1"));
+    try std.testing.expect(!isValidFloatingPoint("1."));
+    try std.testing.expect(!isValidFloatingPoint("Infinity"));
+    try std.testing.expect(!isValidFloatingPoint("NaN"));
+    try std.testing.expect(!isValidFloatingPoint(" 1"));
+    try std.testing.expect(!isValidFloatingPoint("1 "));
+    try std.testing.expect(!isValidFloatingPoint("1e"));
+    try std.testing.expect(!isValidFloatingPoint("1e+"));
+    try std.testing.expect(!isValidFloatingPoint("2e308")); // overflow
+}
+
+test "isValidDate" {
+    try std.testing.expect(isValidDate("2024-01-01"));
+    try std.testing.expect(isValidDate("2024-02-29")); // leap year
+    try std.testing.expect(isValidDate("2024-12-31"));
+    try std.testing.expect(isValidDate("10000-01-01")); // >4-digit year
+    try std.testing.expect(!isValidDate("2024-02-30")); // invalid day
+    try std.testing.expect(!isValidDate("2023-02-29")); // not leap year
+    try std.testing.expect(!isValidDate("2024-13-01")); // invalid month
+    try std.testing.expect(!isValidDate("2024-00-01")); // month 0
+    try std.testing.expect(!isValidDate("0000-01-01")); // year 0
+    try std.testing.expect(!isValidDate("2024-1-01")); // single-digit month
+    try std.testing.expect(!isValidDate(""));
+    try std.testing.expect(!isValidDate("not-a-date"));
+}
+
+test "isValidMonth" {
+    try std.testing.expect(isValidMonth("2024-01"));
+    try std.testing.expect(isValidMonth("2024-12"));
+    try std.testing.expect(!isValidMonth("2024-00"));
+    try std.testing.expect(!isValidMonth("2024-13"));
+    try std.testing.expect(!isValidMonth("0000-01"));
+    try std.testing.expect(!isValidMonth(""));
+}
+
+test "isValidWeek" {
+    try std.testing.expect(isValidWeek("2024-W01"));
+    try std.testing.expect(isValidWeek("2024-W52"));
+    try std.testing.expect(isValidWeek("2020-W53")); // 2020 has 53 weeks
+    try std.testing.expect(!isValidWeek("2024-W00"));
+    try std.testing.expect(!isValidWeek("2024-W54"));
+    try std.testing.expect(!isValidWeek("0000-W01"));
+    try std.testing.expect(!isValidWeek(""));
+}
+
+test "isValidTime" {
+    try std.testing.expect(isValidTime("00:00"));
+    try std.testing.expect(isValidTime("23:59"));
+    try std.testing.expect(isValidTime("12:30:45"));
+    try std.testing.expect(isValidTime("12:30:45.1"));
+    try std.testing.expect(isValidTime("12:30:45.12"));
+    try std.testing.expect(isValidTime("12:30:45.123"));
+    try std.testing.expect(!isValidTime("24:00"));
+    try std.testing.expect(!isValidTime("12:60"));
+    try std.testing.expect(!isValidTime("12:30:60"));
+    try std.testing.expect(!isValidTime("12:30:45.1234")); // >3 frac digits
+    try std.testing.expect(!isValidTime("12:30:45.")); // dot without digits
+    try std.testing.expect(!isValidTime(""));
+}
+
+test "sanitizeDatetimeLocal" {
+    const allocator = std.testing.allocator;
+    // Already normalized — returns input slice, no allocation
+    try std.testing.expectEqualStrings("2024-01-01T12:30", try sanitizeDatetimeLocal("2024-01-01T12:30", allocator));
+    // Space separator → T (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01 12:30", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30", result);
+        allocator.free(result);
+    }
+    // Strip trailing :00 (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01T12:30:00", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30", result);
+        allocator.free(result);
+    }
+    // Keep non-zero seconds (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01T12:30:45", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30:45", result);
+        allocator.free(result);
+    }
+    // Keep fractional seconds, strip trailing zeros (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01T12:30:45.100", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30:45.1", result);
+        allocator.free(result);
+    }
+    // Invalid → "" (no allocation)
+    try std.testing.expectEqualStrings("", try sanitizeDatetimeLocal("not-a-datetime", allocator));
+    try std.testing.expectEqualStrings("", try sanitizeDatetimeLocal("", allocator));
+}
+
+test "parseAllDigits" {
+    try std.testing.expectEqual(@as(?u32, 0), parseAllDigits("0"));
+    try std.testing.expectEqual(@as(?u32, 123), parseAllDigits("123"));
+    try std.testing.expectEqual(@as(?u32, 2024), parseAllDigits("2024"));
+    try std.testing.expectEqual(@as(?u32, null), parseAllDigits(""));
+    try std.testing.expectEqual(@as(?u32, null), parseAllDigits("12a"));
+    try std.testing.expectEqual(@as(?u32, null), parseAllDigits("abc"));
+}
+
+test "daysInMonth" {
+    try std.testing.expectEqual(@as(u32, 31), daysInMonth(2024, 1));
+    try std.testing.expectEqual(@as(u32, 29), daysInMonth(2024, 2)); // leap
+    try std.testing.expectEqual(@as(u32, 28), daysInMonth(2023, 2)); // non-leap
+    try std.testing.expectEqual(@as(u32, 30), daysInMonth(2024, 4));
+    try std.testing.expectEqual(@as(u32, 29), daysInMonth(2000, 2)); // century leap
+    try std.testing.expectEqual(@as(u32, 28), daysInMonth(1900, 2)); // century non-leap
+}
+
+test "maxWeeksInYear" {
+    try std.testing.expectEqual(@as(u32, 52), maxWeeksInYear(2024));
+    try std.testing.expectEqual(@as(u32, 53), maxWeeksInYear(2020)); // Jan 1 = Wed + leap
+    try std.testing.expectEqual(@as(u32, 53), maxWeeksInYear(2015)); // Jan 1 = Thu
+    try std.testing.expectEqual(@as(u32, 52), maxWeeksInYear(2023));
 }
