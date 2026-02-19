@@ -33,10 +33,26 @@ _properties: std.DoublyLinkedList = .{},
 _is_computed: bool = false,
 
 pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleDeclaration {
-    return page._factory.create(CSSStyleDeclaration{
+    const self = try page._factory.create(CSSStyleDeclaration{
         ._element = element,
         ._is_computed = is_computed,
     });
+
+    // Parse the element's existing style attribute into _properties so that
+    // subsequent JS reads and writes see all CSS properties, not just newly
+    // added ones.  Computed styles have no inline attribute to parse.
+    if (!is_computed) {
+        if (element) |el| {
+            if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
+                var it = CssParser.parseDeclarationsList(attr_value);
+                while (it.next()) |declaration| {
+                    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
+                }
+            }
+        }
+    }
+
+    return self;
 }
 
 pub fn length(self: *const CSSStyleDeclaration) u32 {
@@ -76,21 +92,27 @@ pub fn getPropertyPriority(self: *const CSSStyleDeclaration, property_name: []co
 }
 
 pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, priority_: ?[]const u8, page: *Page) !void {
-    if (value.len == 0) {
-        _ = try self.removeProperty(property_name, page);
-        return;
-    }
-
-    const normalized = normalizePropertyName(property_name, &page.buf);
-    const priority = priority_ orelse "";
-
     // Validate priority
+    const priority = priority_ orelse "";
     const important = if (priority.len > 0) blk: {
         if (!std.ascii.eqlIgnoreCase(priority, "important")) {
             return;
         }
         break :blk true;
     } else false;
+
+    try self.setPropertyImpl(property_name, value, important, page);
+
+    try self.syncStyleAttribute(page);
+}
+
+fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, page: *Page) !void {
+    if (value.len == 0) {
+        _ = try self.removePropertyImpl(property_name, page);
+        return;
+    }
+
+    const normalized = normalizePropertyName(property_name, &page.buf);
 
     // Find existing property
     if (self.findProperty(normalized)) |existing| {
@@ -110,6 +132,12 @@ pub fn setProperty(self: *CSSStyleDeclaration, property_name: []const u8, value:
 }
 
 pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
+    const result = try self.removePropertyImpl(property_name, page);
+    try self.syncStyleAttribute(page);
+    return result;
+}
+
+fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
     const normalized = normalizePropertyName(property_name, &page.buf);
     const prop = self.findProperty(normalized) orelse return "";
 
@@ -121,12 +149,21 @@ pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, pag
     return old_value;
 }
 
+// Serialize current properties back to the element's style attribute so that
+// DOM serialization (outerHTML, getAttribute) reflects JS-modified styles.
+fn syncStyleAttribute(self: *CSSStyleDeclaration, page: *Page) !void {
+    const element = self._element orelse return;
+    const css_text = try self.getCssText(page);
+    try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), page);
+}
+
 pub fn getFloat(self: *const CSSStyleDeclaration, page: *Page) []const u8 {
     return self.getPropertyValue("float", page);
 }
 
 pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, page: *Page) !void {
-    return self.setProperty("float", value_ orelse "", null, page);
+    try self.setPropertyImpl("float", value_ orelse "", false, page);
+    try self.syncStyleAttribute(page);
 }
 
 pub fn getCssText(self: *const CSSStyleDeclaration, page: *Page) ![]const u8 {
@@ -153,9 +190,9 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !vo
     // Parse and set new properties
     var it = CssParser.parseDeclarationsList(text);
     while (it.next()) |declaration| {
-        const priority: ?[]const u8 = if (declaration.important) "important" else null;
-        try self.setProperty(declaration.name, declaration.value, priority, page);
+        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
     }
+    try self.syncStyleAttribute(page);
 }
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
