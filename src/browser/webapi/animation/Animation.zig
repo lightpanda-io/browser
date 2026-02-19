@@ -52,12 +52,17 @@ pub fn init(page: *Page) !*Animation {
     const arena = try page.getArena(.{ .debug = "Animation" });
     errdefer page.releaseArena(arena);
 
-    const self = try page._factory.create(Animation{
+    const self = try arena.create(Animation);
+    self.* = .{
         ._page = page,
         ._arena = arena,
-    });
+    };
 
     return self;
+}
+
+pub fn deinit(self: *Animation, _: bool) void {
+    self._page.releaseArena(self._arena);
 }
 
 pub fn play(self: *Animation, page: *Page) !void {
@@ -162,10 +167,6 @@ pub fn setStartTime(self: *Animation, value: ?f64, page: *Page) !void {
 
 pub fn getOnFinish(self: *const Animation) ?js.Function.Temp {
     return self._onFinish;
-}
-
-pub fn deinit(self: *Animation, _: bool) void {
-    self._page.releaseArena(self._arena);
 }
 
 // callback function transitionning from a state to another
