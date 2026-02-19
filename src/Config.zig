@@ -23,6 +23,8 @@ const Allocator = std.mem.Allocator;
 const log = @import("log.zig");
 const dump = @import("browser/dump.zig");
 
+const WebBotAuth = @import("browser/WebBotAuth.zig");
+
 pub const RunMode = enum {
     help,
     fetch,
@@ -152,6 +154,17 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     };
 }
 
+pub fn webBotAuth(self: *const Config) ?WebBotAuth {
+    return switch (self.mode) {
+        inline .serve, .fetch => |opts| WebBotAuth{
+            .key_file = opts.common.web_bot_auth_key_file orelse return null,
+            .keyid = opts.common.web_bot_auth_keyid orelse return null,
+            .domain = opts.common.web_bot_auth_domain orelse return null,
+        },
+        .help, .version => null,
+    };
+}
+
 pub fn maxConnections(self: *const Config) u16 {
     return switch (self.mode) {
         .serve => |opts| opts.cdp_max_connections,
@@ -210,6 +223,10 @@ pub const Common = struct {
     log_format: ?log.Format = null,
     log_filter_scopes: ?[]log.Scope = null,
     user_agent_suffix: ?[]const u8 = null,
+
+    web_bot_auth_key_file: ?[]const u8 = null,
+    web_bot_auth_keyid: ?[]const u8 = null,
+    web_bot_auth_domain: ?[]const u8 = null,
 };
 
 /// Pre-formatted HTTP headers for reuse across Http and Client.
@@ -317,6 +334,14 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--user_agent_suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
         \\
+        \\--web_bot_auth_key_file
+        \\                Path to the Ed25519 private key PEM file.
+        \\
+        \\--web_bot_auth_keyid
+        \\                The JWK thumbprint of your public key.
+        \\
+        \\--web_bot_auth_directory
+        \\                Your domain e.g. yourdomain.com
     ;
 
     //                                                                     MAX_HELP_LEN|
@@ -809,6 +834,33 @@ fn parseCommonArg(
             }
         }
         common.user_agent_suffix = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--web_bot_auth_key_file", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--web_bot_auth_key_file" });
+            return error.InvalidArgument;
+        };
+        common.web_bot_auth_key_file = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--web_bot_auth_keyid", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--web_bot_auth_keyid" });
+            return error.InvalidArgument;
+        };
+        common.web_bot_auth_keyid = try allocator.dupe(u8, str);
+        return true;
+    }
+
+    if (std.mem.eql(u8, "--web_bot_auth_domain", opt)) {
+        const str = args.next() orelse {
+            log.fatal(.app, "missing argument value", .{ .arg = "--web_bot_auth_domain" });
+            return error.InvalidArgument;
+        };
+        common.web_bot_auth_domain = try allocator.dupe(u8, str);
         return true;
     }
 
