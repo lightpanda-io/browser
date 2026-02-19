@@ -664,12 +664,16 @@ pub fn getAttributeNamedNodeMap(self: *Element, page: *Page) !*Attribute.NamedNo
     return gop.value_ptr.*;
 }
 
-pub fn getStyle(self: *Element, page: *Page) !*CSSStyleProperties {
+pub fn getOrCreateStyle(self: *Element, page: *Page) !*CSSStyleProperties {
     const gop = try page._element_styles.getOrPut(page.arena, self);
     if (!gop.found_existing) {
         gop.value_ptr.* = try CSSStyleProperties.init(self, false, page);
     }
     return gop.value_ptr.*;
+}
+
+fn getStyle(self: *Element, page: *Page) ?*CSSStyleProperties {
+    return page._element_styles.get(self);
 }
 
 pub fn getClassList(self: *Element, page: *Page) !*collections.DOMTokenList {
@@ -973,14 +977,15 @@ pub fn parentElement(self: *Element) ?*Element {
     return self._proto.parentElement();
 }
 
-pub fn checkVisibility(self: *Element, page: *Page) !bool {
+pub fn checkVisibility(self: *Element, page: *Page) bool {
     var current: ?*Element = self;
 
     while (current) |el| {
-        const style = try el.getStyle(page);
-        const display = style.asCSSStyleDeclaration().getPropertyValue("display", page);
-        if (std.mem.eql(u8, display, "none")) {
-            return false;
+        if (el.getStyle(page)) |style| {
+            const display = style.asCSSStyleDeclaration().getPropertyValue("display", page);
+            if (std.mem.eql(u8, display, "none")) {
+                return false;
+            }
         }
         current = el.parentElement();
     }
@@ -988,11 +993,15 @@ pub fn checkVisibility(self: *Element, page: *Page) !bool {
     return true;
 }
 
-fn getElementDimensions(self: *Element, page: *Page) !struct { width: f64, height: f64 } {
-    const style = try self.getStyle(page);
-    const decl = style.asCSSStyleDeclaration();
-    var width = CSS.parseDimension(decl.getPropertyValue("width", page)) orelse 5.0;
-    var height = CSS.parseDimension(decl.getPropertyValue("height", page)) orelse 5.0;
+fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
+    var width: f64 = 5.0;
+    var height: f64 = 5.0;
+
+    if (self.getStyle(page)) |style| {
+        const decl = style.asCSSStyleDeclaration();
+        width = CSS.parseDimension(decl.getPropertyValue("width", page)) orelse 5.0;
+        height = CSS.parseDimension(decl.getPropertyValue("height", page)) orelse 5.0;
+    }
 
     if (width == 5.0 or height == 5.0) {
         const tag = self.getTag();
@@ -1017,52 +1026,59 @@ fn getElementDimensions(self: *Element, page: *Page) !struct { width: f64, heigh
     return .{ .width = width, .height = height };
 }
 
-pub fn getClientWidth(self: *Element, page: *Page) !f64 {
-    if (!try self.checkVisibility(page)) {
+pub fn getClientWidth(self: *Element, page: *Page) f64 {
+    if (!self.checkVisibility(page)) {
         return 0.0;
     }
-    const dims = try self.getElementDimensions(page);
+    const dims = self.getElementDimensions(page);
     return dims.width;
 }
 
-pub fn getClientHeight(self: *Element, page: *Page) !f64 {
-    if (!try self.checkVisibility(page)) {
+pub fn getClientHeight(self: *Element, page: *Page) f64 {
+    if (!self.checkVisibility(page)) {
         return 0.0;
     }
-    const dims = try self.getElementDimensions(page);
+    const dims = self.getElementDimensions(page);
     return dims.height;
 }
 
-pub fn getBoundingClientRect(self: *Element, page: *Page) !*DOMRect {
-    if (!try self.checkVisibility(page)) {
-        return page._factory.create(DOMRect{
+pub fn getBoundingClientRect(self: *Element, page: *Page) DOMRect {
+    if (!self.checkVisibility(page)) {
+        return .{
             ._x = 0.0,
             ._y = 0.0,
             ._width = 0.0,
             ._height = 0.0,
-        });
+        };
     }
 
+    return self.getBoundingClientRectForVisible(page);
+}
+
+// Some cases need a the BoundingClientRect but have already done the
+// visibility check.
+pub fn getBoundingClientRectForVisible(self: *Element, page: *Page) DOMRect {
     const y = calculateDocumentPosition(self.asNode());
-    const dims = try self.getElementDimensions(page);
+    const dims = self.getElementDimensions(page);
 
     // Use sibling position for x coordinate to ensure siblings have different x values
     const x = calculateSiblingPosition(self.asNode());
 
-    return page._factory.create(DOMRect{
+    return .{
         ._x = x,
         ._y = y,
         ._width = dims.width,
         ._height = dims.height,
-    });
+    };
 }
 
 pub fn getClientRects(self: *Element, page: *Page) ![]DOMRect {
-    if (!try self.checkVisibility(page)) {
+    if (!self.checkVisibility(page)) {
         return &.{};
     }
-    const ptr = try self.getBoundingClientRect(page);
-    return ptr[0..1];
+    const rects = try page.call_arena.alloc(DOMRect, 1);
+    rects[0] = self.getBoundingClientRectForVisible(page);
+    return rects;
 }
 
 pub fn getScrollTop(self: *Element, page: *Page) u32 {
@@ -1091,41 +1107,41 @@ pub fn setScrollLeft(self: *Element, value: i32, page: *Page) !void {
     gop.value_ptr.x = @intCast(@max(0, value));
 }
 
-pub fn getScrollHeight(self: *Element, page: *Page) !f64 {
+pub fn getScrollHeight(self: *Element, page: *Page) f64 {
     // In our dummy layout engine, content doesn't overflow
     return self.getClientHeight(page);
 }
 
-pub fn getScrollWidth(self: *Element, page: *Page) !f64 {
+pub fn getScrollWidth(self: *Element, page: *Page) f64 {
     // In our dummy layout engine, content doesn't overflow
     return self.getClientWidth(page);
 }
 
-pub fn getOffsetHeight(self: *Element, page: *Page) !f64 {
-    if (!try self.checkVisibility(page)) {
+pub fn getOffsetHeight(self: *Element, page: *Page) f64 {
+    if (!self.checkVisibility(page)) {
         return 0.0;
     }
-    const dims = try self.getElementDimensions(page);
+    const dims = self.getElementDimensions(page);
     return dims.height;
 }
 
-pub fn getOffsetWidth(self: *Element, page: *Page) !f64 {
-    if (!try self.checkVisibility(page)) {
+pub fn getOffsetWidth(self: *Element, page: *Page) f64 {
+    if (!self.checkVisibility(page)) {
         return 0.0;
     }
-    const dims = try self.getElementDimensions(page);
+    const dims = self.getElementDimensions(page);
     return dims.width;
 }
 
-pub fn getOffsetTop(self: *Element, page: *Page) !f64 {
-    if (!try self.checkVisibility(page)) {
+pub fn getOffsetTop(self: *Element, page: *Page) f64 {
+    if (!self.checkVisibility(page)) {
         return 0.0;
     }
     return calculateDocumentPosition(self.asNode());
 }
 
-pub fn getOffsetLeft(self: *Element, page: *Page) !f64 {
-    if (!try self.checkVisibility(page)) {
+pub fn getOffsetLeft(self: *Element, page: *Page) f64 {
+    if (!self.checkVisibility(page)) {
         return 0.0;
     }
     return calculateSiblingPosition(self.asNode());
@@ -1571,7 +1587,7 @@ pub const JsApi = struct {
     pub const className = bridge.accessor(Element.getClassName, Element.setClassName, .{});
     pub const classList = bridge.accessor(Element.getClassList, Element.setClassList, .{});
     pub const dataset = bridge.accessor(Element.getDataset, null, .{});
-    pub const style = bridge.accessor(Element.getStyle, null, .{});
+    pub const style = bridge.accessor(Element.getOrCreateStyle, null, .{});
     pub const attributes = bridge.accessor(Element.getAttributeNamedNodeMap, null, .{});
     pub const hasAttribute = bridge.function(Element.hasAttribute, .{});
     pub const hasAttributes = bridge.function(Element.hasAttributes, .{});

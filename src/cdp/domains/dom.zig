@@ -356,7 +356,7 @@ const BoxModel = struct {
     // shapeOutside: ?ShapeOutsideInfo,
 };
 
-fn rectToQuad(rect: *const DOMNode.Element.DOMRect) Quad {
+fn rectToQuad(rect: DOMNode.Element.DOMRect) Quad {
     return Quad{
         rect._x,
         rect._y,
@@ -434,9 +434,7 @@ fn getContentQuads(cmd: anytype) !void {
     // Text may be tricky, multiple quads in case of multiple lines? empty quads of text  = ""?
     // Elements like SVGElement may have multiple quads.
 
-    const rect = try element.getBoundingClientRect(page);
-    const quad = rectToQuad(rect);
-
+    const quad = rectToQuad(element.getBoundingClientRect(page));
     return cmd.sendResult(.{ .quads = &.{quad} }, .{});
 }
 
@@ -455,7 +453,7 @@ fn getBoxModel(cmd: anytype) !void {
     // TODO implement for document or text
     const element = node.dom.is(DOMNode.Element) orelse return error.NodeIsNotAnElement;
 
-    const rect = try element.getBoundingClientRect(page);
+    const rect = element.getBoundingClientRect(page);
     const quad = rectToQuad(rect);
     const zero = [_]f64{0.0} ** 8;
 
