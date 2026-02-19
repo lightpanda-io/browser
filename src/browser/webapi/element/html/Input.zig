@@ -516,7 +516,7 @@ fn sanitizeValue(self: *Input, value: []const u8, page: *Page) ![]const u8 {
         .month => return if (isValidMonth(value)) value else "",
         .week => return if (isValidWeek(value)) value else "",
         .time => return if (isValidTime(value)) value else "",
-        .@"datetime-local" => return try sanitizeDatetimeLocal(value, page),
+        .@"datetime-local" => return try sanitizeDatetimeLocal(value, page.call_arena),
         .number => return if (isValidFloatingPoint(value)) value else "",
         .range => return if (isValidFloatingPoint(value)) value else "50",
         .color => {
@@ -667,7 +667,7 @@ fn isValidTime(value: []const u8) bool {
 /// Sanitize datetime-local: validate and normalize, or return "".
 /// Spec: if valid, normalize to "YYYY-MM-DDThh:mm" (shortest time form);
 /// otherwise set to "".
-fn sanitizeDatetimeLocal(value: []const u8, page: *Page) ![]const u8 {
+fn sanitizeDatetimeLocal(value: []const u8, arena: std.mem.Allocator) ![]const u8 {
     if (value.len < 16) return "";
 
     // Find separator (T or space) by scanning for it before a valid time start
@@ -712,7 +712,7 @@ fn sanitizeDatetimeLocal(value: []const u8, page: *Page) ![]const u8 {
     const time_len: usize = if (need_seconds) (if (frac_end > 0) 9 + frac_end else 8) else 5;
     const total_len = date_part.len + 1 + time_len;
 
-    const result = try page.call_arena.alloc(u8, total_len);
+    const result = try arena.alloc(u8, total_len);
     @memcpy(result[0..date_part.len], date_part);
     result[date_part.len] = 'T';
     @memcpy(result[date_part.len + 1 ..][0..5], time_part[0..5]);
@@ -956,4 +956,136 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input_click.html", .{});
     try testing.htmlRunner("element/html/input_radio.html", .{});
     try testing.htmlRunner("element/html/input-attrs.html", .{});
+}
+
+test "isValidFloatingPoint" {
+    // Valid
+    try std.testing.expect(isValidFloatingPoint("1"));
+    try std.testing.expect(isValidFloatingPoint("0.5"));
+    try std.testing.expect(isValidFloatingPoint("-1"));
+    try std.testing.expect(isValidFloatingPoint("-0.5"));
+    try std.testing.expect(isValidFloatingPoint("1e10"));
+    try std.testing.expect(isValidFloatingPoint("1E10"));
+    try std.testing.expect(isValidFloatingPoint("1e+10"));
+    try std.testing.expect(isValidFloatingPoint("1e-10"));
+    try std.testing.expect(isValidFloatingPoint("0.123"));
+    try std.testing.expect(isValidFloatingPoint(".5"));
+    // Invalid
+    try std.testing.expect(!isValidFloatingPoint(""));
+    try std.testing.expect(!isValidFloatingPoint("+1"));
+    try std.testing.expect(!isValidFloatingPoint("1."));
+    try std.testing.expect(!isValidFloatingPoint("Infinity"));
+    try std.testing.expect(!isValidFloatingPoint("NaN"));
+    try std.testing.expect(!isValidFloatingPoint(" 1"));
+    try std.testing.expect(!isValidFloatingPoint("1 "));
+    try std.testing.expect(!isValidFloatingPoint("1e"));
+    try std.testing.expect(!isValidFloatingPoint("1e+"));
+    try std.testing.expect(!isValidFloatingPoint("2e308")); // overflow
+}
+
+test "isValidDate" {
+    try std.testing.expect(isValidDate("2024-01-01"));
+    try std.testing.expect(isValidDate("2024-02-29")); // leap year
+    try std.testing.expect(isValidDate("2024-12-31"));
+    try std.testing.expect(isValidDate("10000-01-01")); // >4-digit year
+    try std.testing.expect(!isValidDate("2024-02-30")); // invalid day
+    try std.testing.expect(!isValidDate("2023-02-29")); // not leap year
+    try std.testing.expect(!isValidDate("2024-13-01")); // invalid month
+    try std.testing.expect(!isValidDate("2024-00-01")); // month 0
+    try std.testing.expect(!isValidDate("0000-01-01")); // year 0
+    try std.testing.expect(!isValidDate("2024-1-01")); // single-digit month
+    try std.testing.expect(!isValidDate(""));
+    try std.testing.expect(!isValidDate("not-a-date"));
+}
+
+test "isValidMonth" {
+    try std.testing.expect(isValidMonth("2024-01"));
+    try std.testing.expect(isValidMonth("2024-12"));
+    try std.testing.expect(!isValidMonth("2024-00"));
+    try std.testing.expect(!isValidMonth("2024-13"));
+    try std.testing.expect(!isValidMonth("0000-01"));
+    try std.testing.expect(!isValidMonth(""));
+}
+
+test "isValidWeek" {
+    try std.testing.expect(isValidWeek("2024-W01"));
+    try std.testing.expect(isValidWeek("2024-W52"));
+    try std.testing.expect(isValidWeek("2020-W53")); // 2020 has 53 weeks
+    try std.testing.expect(!isValidWeek("2024-W00"));
+    try std.testing.expect(!isValidWeek("2024-W54"));
+    try std.testing.expect(!isValidWeek("0000-W01"));
+    try std.testing.expect(!isValidWeek(""));
+}
+
+test "isValidTime" {
+    try std.testing.expect(isValidTime("00:00"));
+    try std.testing.expect(isValidTime("23:59"));
+    try std.testing.expect(isValidTime("12:30:45"));
+    try std.testing.expect(isValidTime("12:30:45.1"));
+    try std.testing.expect(isValidTime("12:30:45.12"));
+    try std.testing.expect(isValidTime("12:30:45.123"));
+    try std.testing.expect(!isValidTime("24:00"));
+    try std.testing.expect(!isValidTime("12:60"));
+    try std.testing.expect(!isValidTime("12:30:60"));
+    try std.testing.expect(!isValidTime("12:30:45.1234")); // >3 frac digits
+    try std.testing.expect(!isValidTime("12:30:45.")); // dot without digits
+    try std.testing.expect(!isValidTime(""));
+}
+
+test "sanitizeDatetimeLocal" {
+    const allocator = std.testing.allocator;
+    // Already normalized — returns input slice, no allocation
+    try std.testing.expectEqualStrings("2024-01-01T12:30", try sanitizeDatetimeLocal("2024-01-01T12:30", allocator));
+    // Space separator → T (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01 12:30", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30", result);
+        allocator.free(result);
+    }
+    // Strip trailing :00 (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01T12:30:00", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30", result);
+        allocator.free(result);
+    }
+    // Keep non-zero seconds (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01T12:30:45", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30:45", result);
+        allocator.free(result);
+    }
+    // Keep fractional seconds, strip trailing zeros (allocates)
+    {
+        const result = try sanitizeDatetimeLocal("2024-01-01T12:30:45.100", allocator);
+        try std.testing.expectEqualStrings("2024-01-01T12:30:45.1", result);
+        allocator.free(result);
+    }
+    // Invalid → "" (no allocation)
+    try std.testing.expectEqualStrings("", try sanitizeDatetimeLocal("not-a-datetime", allocator));
+    try std.testing.expectEqualStrings("", try sanitizeDatetimeLocal("", allocator));
+}
+
+test "parseAllDigits" {
+    try std.testing.expectEqual(@as(?u32, 0), parseAllDigits("0"));
+    try std.testing.expectEqual(@as(?u32, 123), parseAllDigits("123"));
+    try std.testing.expectEqual(@as(?u32, 2024), parseAllDigits("2024"));
+    try std.testing.expectEqual(@as(?u32, null), parseAllDigits(""));
+    try std.testing.expectEqual(@as(?u32, null), parseAllDigits("12a"));
+    try std.testing.expectEqual(@as(?u32, null), parseAllDigits("abc"));
+}
+
+test "daysInMonth" {
+    try std.testing.expectEqual(@as(u32, 31), daysInMonth(2024, 1));
+    try std.testing.expectEqual(@as(u32, 29), daysInMonth(2024, 2)); // leap
+    try std.testing.expectEqual(@as(u32, 28), daysInMonth(2023, 2)); // non-leap
+    try std.testing.expectEqual(@as(u32, 30), daysInMonth(2024, 4));
+    try std.testing.expectEqual(@as(u32, 29), daysInMonth(2000, 2)); // century leap
+    try std.testing.expectEqual(@as(u32, 28), daysInMonth(1900, 2)); // century non-leap
+}
+
+test "maxWeeksInYear" {
+    try std.testing.expectEqual(@as(u32, 52), maxWeeksInYear(2024));
+    try std.testing.expectEqual(@as(u32, 53), maxWeeksInYear(2020)); // Jan 1 = Wed + leap
+    try std.testing.expectEqual(@as(u32, 53), maxWeeksInYear(2015)); // Jan 1 = Thu
+    try std.testing.expectEqual(@as(u32, 52), maxWeeksInYear(2023));
 }
