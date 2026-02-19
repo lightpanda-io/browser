@@ -29,6 +29,8 @@ const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Robots = @import("../browser/Robots.zig");
 const RobotStore = Robots.RobotStore;
+const WebBotAuth = @import("../browser/WebBotAuth.zig");
+
 const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
@@ -83,6 +85,9 @@ robot_store: *RobotStore,
 // Allows us to fetch the robots.txt just once.
 pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
 
+// Reference to the App-owned WebBotAuth.
+web_bot_auth: *const ?WebBotAuth,
+
 // Once we have a handle/easy to process a request with, we create a Transfer
 // which contains the Request as well as any state we need to process the
 // request. These wil come and go with each request.
@@ -121,7 +126,13 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, config: *const Config) !*Client {
+pub fn init(
+    allocator: Allocator,
+    ca_blob: ?Net.Blob,
+    robot_store: *RobotStore,
+    web_bot_auth: *const ?WebBotAuth,
+    config: *const Config,
+) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -145,6 +156,7 @@ pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, 
         .handles = handles,
         .allocator = allocator,
         .robot_store = robot_store,
+        .web_bot_auth = web_bot_auth,
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
         .config = config,
@@ -666,6 +678,12 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         var header_list = req.headers;
         try conn.secretHeaders(&header_list, &self.config.http_headers); // Add headers that must be hidden from intercepts
         try conn.setHeaders(&header_list);
+
+        // If we have WebBotAuth, sign our request.
+        if (self.web_bot_auth.*) |wba| {
+            const authority = URL.getHost(req.url);
+            try wba.signRequest(self.allocator, &header_list, authority);
+        }
 
         // Add cookies.
         if (header_list.cookies) |cookies| {
