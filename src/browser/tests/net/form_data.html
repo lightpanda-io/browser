@@ -602,6 +602,114 @@
 }
 </script>
 
+<script id=disabledFieldset>
+{
+  // Elements inside a disabled fieldset should not be included
+  const form = document.createElement('form');
+
+  const fieldset = document.createElement('fieldset');
+  fieldset.disabled = true;
+
+  const inside = document.createElement('input');
+  inside.name = 'inside';
+  inside.value = 'nope';
+  fieldset.appendChild(inside);
+
+  const outside = document.createElement('input');
+  outside.name = 'outside';
+  outside.value = 'yes';
+
+  form.appendChild(fieldset);
+  form.appendChild(outside);
+
+  const fd = new FormData(form);
+  testing.expectEqual(null, fd.get('inside'));
+  testing.expectEqual('yes', fd.get('outside'));
+}
+</script>
+
+<script id=disabledFieldsetLegendExemption>
+{
+  // Elements inside the FIRST legend of a disabled fieldset are NOT disabled
+  const form = document.createElement('form');
+
+  const fieldset = document.createElement('fieldset');
+  fieldset.disabled = true;
+
+  const legend = document.createElement('legend');
+  const inLegend = document.createElement('input');
+  inLegend.name = 'in-legend';
+  inLegend.value = 'exempt';
+  legend.appendChild(inLegend);
+
+  const notInLegend = document.createElement('input');
+  notInLegend.name = 'not-in-legend';
+  notInLegend.value = 'nope';
+
+  fieldset.appendChild(legend);
+  fieldset.appendChild(notInLegend);
+  form.appendChild(fieldset);
+
+  const fd = new FormData(form);
+  testing.expectEqual('exempt', fd.get('in-legend'));
+  testing.expectEqual(null, fd.get('not-in-legend'));
+}
+</script>
+
+<script id=disabledFieldsetSecondLegend>
+{
+  // Only the FIRST legend gets the exemption; second legend inputs are still disabled
+  const form = document.createElement('form');
+
+  const fieldset = document.createElement('fieldset');
+  fieldset.disabled = true;
+
+  const legend1 = document.createElement('legend');
+  const inLegend1 = document.createElement('input');
+  inLegend1.name = 'first-legend';
+  inLegend1.value = 'exempt';
+  legend1.appendChild(inLegend1);
+
+  const legend2 = document.createElement('legend');
+  const inLegend2 = document.createElement('input');
+  inLegend2.name = 'second-legend';
+  inLegend2.value = 'nope';
+  legend2.appendChild(inLegend2);
+
+  fieldset.appendChild(legend1);
+  fieldset.appendChild(legend2);
+  form.appendChild(fieldset);
+
+  const fd = new FormData(form);
+  testing.expectEqual('exempt', fd.get('first-legend'));
+  testing.expectEqual(null, fd.get('second-legend'));
+}
+</script>
+
+<script id=disabledFieldsetNested>
+{
+  // Outer fieldset disabled: inner enabled fieldset's elements are still disabled
+  const form = document.createElement('form');
+
+  const outer = document.createElement('fieldset');
+  outer.disabled = true;
+
+  const inner = document.createElement('fieldset');
+  // inner is NOT disabled itself
+
+  const input = document.createElement('input');
+  input.name = 'deep';
+  input.value = 'nope';
+  inner.appendChild(input);
+
+  outer.appendChild(inner);
+  form.appendChild(outer);
+
+  const fd = new FormData(form);
+  testing.expectEqual(null, fd.get('deep'));
+}
+</script>
+
 <script id=imageWithoutName>
 {
   // Test that image input without name still submits x and y coordinates
