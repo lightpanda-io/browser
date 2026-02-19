@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const Node = @import("../Node.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
@@ -497,12 +498,11 @@ fn getFrameOwner(cmd: anytype) !void {
     })) orelse return error.InvalidParams;
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
-    const target_id = bc.target_id orelse return error.TargetNotLoaded;
-    if (std.mem.eql(u8, target_id, params.frameId) == false) {
-        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
-    }
+    const page_id = try id.toPageId(.frame_id, params.frameId);
 
-    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const page = bc.session.findPage(page_id) orelse {
+        return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
+    };
 
     const node = try bc.node_registry.register(page.window._document.asNode());
     return cmd.sendResult(.{ .nodeId = node.id, .backendNodeId = node.id }, .{});

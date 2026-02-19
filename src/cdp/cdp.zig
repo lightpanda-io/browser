@@ -30,12 +30,11 @@ const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
 const HttpClient = @import("../http/Client.zig");
 const Page = @import("../browser/Page.zig");
-const Incrementing = @import("../id.zig").Incrementing;
+const Incrementing = @import("id.zig").Incrementing;
 const Notification = @import("../Notification.zig");
 const InterceptState = @import("domains/fetch.zig").InterceptState;
 
 pub const URL_BASE = "chrome://newtab/";
-pub const LOADER_ID = "LOADERID24DD2FD56CF1EF33C965C79C";
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -45,7 +44,6 @@ pub const CDP = CDPT(struct {
 
 const SessionIdGen = Incrementing(u32, "SID");
 const TargetIdGen = Incrementing(u32, "TID");
-const LoaderIdGen = Incrementing(u32, "LID");
 const BrowserContextIdGen = Incrementing(u32, "BID");
 
 // Generic so that we can inject mocks into it.
@@ -63,7 +61,6 @@ pub fn CDPT(comptime TypeProvider: type) type {
         target_auto_attach: bool = false,
 
         target_id_gen: TargetIdGen = .{},
-        loader_id_gen: LoaderIdGen = .{},
         session_id_gen: SessionIdGen = .{},
         browser_context_id_gen: BrowserContextIdGen = .{},
 
@@ -200,7 +197,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                     .frameTree = .{
                         .frame = .{
                             .id = "TID-STARTUP-B",
-                            .loaderId = LOADER_ID,
+                            .loaderId = "LOADERID24DD2FD56CF1EF33C965C79C",
                             .securityOrigin = URL_BASE,
                             .url = "about:blank",
                             .secureContextType = "Secure",
@@ -350,7 +347,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // Maps to our Page. (There are other types of targets, but we only
         // deal with "pages" for now). Since we only allow 1 open page at a
         // time, we only have 1 target_id.
-        target_id: ?[]const u8,
+        target_id: ?[14]u8,
 
         // The CDP session_id. After the target/page is created, the client
         // "attaches" to it (either explicitly or automatically). We return a
@@ -362,7 +359,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         // we should reject it.
         session_id: ?[]const u8,
 
-        loader_id: []const u8,
         security_origin: []const u8,
         page_life_cycle_events: bool,
         secure_context_type: []const u8,
@@ -416,7 +412,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .session = session,
                 .security_origin = URL_BASE,
                 .secure_context_type = "Secure", // TODO = enum
-                .loader_id = LOADER_ID,
                 .page_life_cycle_events = false, // TODO; Target based value
                 .node_registry = registry,
                 .node_search_list = undefined,
@@ -593,7 +588,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onPageNavigate(ctx: *anyopaque, msg: *const Notification.PageNavigate) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/page.zig").pageNavigate(self.notification_arena, self, msg);
+            return @import("domains/page.zig").pageNavigate(self, msg);
         }
 
         pub fn onPageNavigated(ctx: *anyopaque, msg: *const Notification.PageNavigated) !void {
@@ -615,19 +610,19 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
-            try @import("domains/network.zig").httpRequestStart(self.notification_arena, self, msg);
+            try @import("domains/network.zig").httpRequestStart(self, msg);
         }
 
         pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
-            try @import("domains/fetch.zig").requestIntercept(self.notification_arena, self, msg);
+            try @import("domains/fetch.zig").requestIntercept(self, msg);
         }
 
         pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestFail(self.notification_arena, self, msg);
+            return @import("domains/network.zig").httpRequestFail(self, msg);
         }
 
         pub fn onHttpResponseHeadersDone(ctx: *anyopaque, msg: *const Notification.ResponseHeaderDone) !void {
@@ -639,7 +634,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
-            return @import("domains/network.zig").httpRequestDone(self.notification_arena, self, msg);
+            return @import("domains/network.zig").httpRequestDone(self, msg);
         }
 
         pub fn onHttpResponseData(ctx: *anyopaque, msg: *const Notification.ResponseData) !void {
@@ -657,7 +652,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         pub fn onHttpRequestAuthRequired(ctx: *anyopaque, data: *const Notification.RequestAuthRequired) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
-            try @import("domains/fetch.zig").requestAuthRequired(self.notification_arena, self, data);
+            try @import("domains/fetch.zig").requestAuthRequired(self, data);
         }
 
         fn resetNotificationArena(self: *Self) void {

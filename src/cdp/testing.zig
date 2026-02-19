@@ -92,7 +92,7 @@ const TestContext = struct {
 
     const BrowserContextOpts = struct {
         id: ?[]const u8 = null,
-        target_id: ?[]const u8 = null,
+        target_id: ?[14]u8 = null,
         session_id: ?[]const u8 = null,
         url: ?[:0]const u8 = null,
     };
@@ -122,7 +122,7 @@ const TestContext = struct {
                 bc.session_id = "SID-X";
             }
             if (bc.target_id == null) {
-                bc.target_id = "TID-X";
+                bc.target_id = "TID-000000000Z".*;
             }
             const page = try bc.session.createPage();
             const full_url = try std.fmt.allocPrintSentinel(

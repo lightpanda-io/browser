@@ -19,6 +19,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const network = @import("network.zig");
 
@@ -48,7 +49,7 @@ pub fn processMessage(cmd: anytype) !void {
 // Stored in CDP
 pub const InterceptState = struct {
     allocator: Allocator,
-    waiting: std.AutoArrayHashMapUnmanaged(u64, *Http.Transfer),
+    waiting: std.AutoArrayHashMapUnmanaged(u32, *Http.Transfer),
 
     pub fn init(allocator: Allocator) !InterceptState {
         return .{
@@ -65,8 +66,8 @@ pub const InterceptState = struct {
         return self.waiting.put(self.allocator, transfer.id, transfer);
     }
 
-    pub fn remove(self: *InterceptState, id: u64) ?*Http.Transfer {
-        const entry = self.waiting.fetchSwapRemove(id) orelse return null;
+    pub fn remove(self: *InterceptState, request_id: u32) ?*Http.Transfer {
+        const entry = self.waiting.fetchSwapRemove(request_id) orelse return null;
         return entry.value;
     }
 
@@ -178,12 +179,10 @@ fn arePatternsSupported(patterns: []RequestPattern) bool {
     return true;
 }
 
-pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notification.RequestIntercept) !void {
+pub fn requestIntercept(bc: anytype, intercept: *const Notification.RequestIntercept) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-
-    const target_id = bc.target_id orelse unreachable;
 
     // We keep it around to wait for modifications to the request.
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
@@ -193,16 +192,16 @@ pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notific
     try bc.intercept_state.put(transfer);
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
-        .requestId = try std.fmt.allocPrint(arena, "INTERCEPT-{d}", .{transfer.id}),
+        .requestId = &id.toInterceptId(transfer.id),
+        .frameId = &id.toFrameId(transfer.req.page_id),
         .request = network.TransferAsRequestWriter.init(transfer),
-        .frameId = target_id,
         .resourceType = switch (transfer.req.resource_type) {
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
             .fetch => "Fetch",
         },
-        .networkId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
+        .networkId = &id.toRequestId(transfer.id), // matches the Network REQ-ID
     }, .{ .session_id = session_id });
 
     log.debug(.cdp, "request intercept", .{
@@ -218,7 +217,7 @@ pub fn requestIntercept(arena: Allocator, bc: anytype, intercept: *const Notific
 fn continueRequest(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
-        requestId: []const u8, // "INTERCEPT-{d}"
+        requestId: []const u8, // INT-{d}"
         url: ?[]const u8 = null,
         method: ?[]const u8 = null,
         postData: ?[]const u8 = null,
@@ -278,7 +277,7 @@ const AuthChallengeResponse = enum {
 fn continueWithAuth(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
-        requestId: []const u8, // "INTERCEPT-{d}"
+        requestId: []const u8, // "INT-{d}"
         authChallengeResponse: struct {
             response: AuthChallengeResponse,
             username: []const u8 = "",
@@ -322,7 +321,7 @@ fn fulfillRequest(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
 
     const params = (try cmd.params(struct {
-        requestId: []const u8, // "INTERCEPT-{d}"
+        requestId: []const u8, // "INT-{d}"
         responseCode: u16,
         responseHeaders: ?[]const Http.Header = null,
         binaryResponseHeaders: ?[]const u8 = null,
@@ -363,7 +362,7 @@ fn fulfillRequest(cmd: anytype) !void {
 fn failRequest(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const params = (try cmd.params(struct {
-        requestId: []const u8, // "INTERCEPT-{d}"
+        requestId: []const u8, // "INT-{d}"
         errorReason: ErrorReason,
     })) orelse return error.InvalidParams;
 
@@ -382,12 +381,10 @@ fn failRequest(cmd: anytype) !void {
     return cmd.sendResult(null, .{});
 }
 
-pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Notification.RequestAuthRequired) !void {
+pub fn requestAuthRequired(bc: anytype, intercept: *const Notification.RequestAuthRequired) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.
     const session_id = bc.session_id orelse return;
-
-    const target_id = bc.target_id orelse unreachable;
 
     // We keep it around to wait for modifications to the request.
     // NOTE: we assume whomever created the request created it with a lifetime of the Page.
@@ -399,9 +396,9 @@ pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Noti
     const challenge = transfer._auth_challenge orelse return error.NullAuthChallenge;
 
     try bc.cdp.sendEvent("Fetch.authRequired", .{
-        .requestId = try std.fmt.allocPrint(arena, "INTERCEPT-{d}", .{transfer.id}),
+        .requestId = &id.toInterceptId(transfer.id),
+        .frameId = &id.toFrameId(transfer.req.page_id),
         .request = network.TransferAsRequestWriter.init(transfer),
-        .frameId = target_id,
         .resourceType = switch (transfer.req.resource_type) {
             .script => "Script",
             .xhr => "XHR",
@@ -414,7 +411,7 @@ pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Noti
             .scheme = if (challenge.scheme == .digest) "digest" else "basic",
             .realm = challenge.realm,
         },
-        .networkId = try std.fmt.allocPrint(arena, "REQ-{d}", .{transfer.id}),
+        .networkId = &id.toRequestId(transfer.id),
     }, .{ .session_id = session_id });
 
     log.debug(.cdp, "request auth required", .{
@@ -427,10 +424,10 @@ pub fn requestAuthRequired(arena: Allocator, bc: anytype, intercept: *const Noti
     intercept.wait_for_interception.* = true;
 }
 
-// Get u64 from requestId which is formatted as: "INTERCEPT-{d}"
-fn idFromRequestId(request_id: []const u8) !u64 {
-    if (!std.mem.startsWith(u8, request_id, "INTERCEPT-")) {
+// Get u32 from requestId which is formatted as: "INT-{d}"
+fn idFromRequestId(request_id: []const u8) !u32 {
+    if (!std.mem.startsWith(u8, request_id, "INT-")) {
         return error.InvalidParams;
     }
-    return std.fmt.parseInt(u64, request_id[10..], 10) catch return error.InvalidParams;
+    return std.fmt.parseInt(u32, request_id[4..], 10) catch return error.InvalidParams;
 }

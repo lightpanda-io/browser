@@ -79,6 +79,10 @@ pub const BUF_SIZE = 1024;
 
 const Page = @This();
 
+// This is the "id" of the frame. It can be re-used from page-to-page, e.g.
+// when navigating.
+id: u32,
+
 _session: *Session,
 
 _event_manager: EventManager,
@@ -218,10 +222,10 @@ document: *Document,
 // DOM version used to invalidate cached state of "live" collections
 version: usize = 0,
 
-_req_id: ?usize = null,
+_req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 
-pub fn init(self: *Page, session: *Session) !void {
+pub fn init(self: *Page, id: u32, session: *Session) !void {
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.init", .{});
     }
@@ -240,6 +244,7 @@ pub fn init(self: *Page, session: *Session) !void {
     })).asDocument();
 
     self.* = .{
+        .id = id,
         .js = undefined,
         .arena = page_arena,
         .document = document,
@@ -413,7 +418,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
         self.documentIsComplete();
 
-        self._session.notification.dispatch(.page_navigate, &.{
+        session.notification.dispatch(.page_navigate, &.{
+            .page_id = self.id,
             .req_id = req_id,
             .opts = opts,
             .url = request_url,
@@ -421,14 +427,15 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         });
 
         // Record telemetry for navigation
-        self._session.browser.app.telemetry.record(.{
+        session.browser.app.telemetry.record(.{
             .navigate = .{
                 .tls = false, // about:blank is not TLS
-                .proxy = self._session.browser.app.config.httpProxy() != null,
+                .proxy = session.browser.app.config.httpProxy() != null,
             },
         });
 
-        self._session.notification.dispatch(.page_navigated, &.{
+        session.notification.dispatch(.page_navigated, &.{
+            .page_id = self.id,
             .req_id = req_id,
             .opts = .{
                 .cdp_id = opts.cdp_id,
@@ -440,11 +447,11 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         });
 
         // force next request id manually b/c we won't create a real req.
-        _ = self._session.browser.http_client.incrReqId();
+        _ = session.browser.http_client.incrReqId();
         return;
     }
 
-    var http_client = self._session.browser.http_client;
+    var http_client = session.browser.http_client;
 
     self.url = try self.arena.dupeZ(u8, request_url);
 
@@ -463,7 +470,8 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
 
     // We dispatch page_navigate event before sending the request.
     // It ensures the event page_navigated is not dispatched before this one.
-    self._session.notification.dispatch(.page_navigate, &.{
+    session.notification.dispatch(.page_navigate, &.{
+        .page_id = self.id,
         .req_id = req_id,
         .opts = opts,
         .url = self.url,
@@ -471,9 +479,9 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     });
 
     // Record telemetry for navigation
-    self._session.browser.app.telemetry.record(.{ .navigate = .{
+    session.browser.app.telemetry.record(.{ .navigate = .{
         .tls = std.ascii.startsWithIgnoreCase(self.url, "https://"),
-        .proxy = self._session.browser.app.config.httpProxy() != null,
+        .proxy = session.browser.app.config.httpProxy() != null,
     } });
 
     session.navigation._current_navigation_kind = opts.kind;
@@ -481,10 +489,11 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     http_client.request(.{
         .ctx = self,
         .url = self.url,
+        .page_id = self.id,
         .method = opts.method,
         .headers = headers,
         .body = opts.body,
-        .cookie_jar = &self._session.cookie_jar,
+        .cookie_jar = &session.cookie_jar,
         .resource_type = .document,
         .notification = self._session.notification,
         .header_callback = pageHeaderDoneCallback,
@@ -611,12 +620,12 @@ pub fn documentIsComplete(self: *Page) void {
     };
 
     if (IS_DEBUG) {
-        std.debug.assert(self._req_id != null);
         std.debug.assert(self._navigated_options != null);
     }
 
     self._session.notification.dispatch(.page_navigated, &.{
-        .req_id = self._req_id.?,
+        .page_id = self.id,
+        .req_id = self._req_id,
         .opts = self._navigated_options.?,
         .url = self.url,
         .timestamp = timestamp(.monotonic),
@@ -1422,6 +1431,8 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 fn notifyNetworkIdle(self: *Page) void {
     lp.assert(self._notified_network_idle == .done, "Page.notifyNetworkIdle", .{});
     self._session.notification.dispatch(.page_network_idle, &.{
+        .page_id = self.id,
+        .req_id = self._req_id,
         .timestamp = timestamp(.monotonic),
     });
 }
@@ -1429,6 +1440,8 @@ fn notifyNetworkIdle(self: *Page) void {
 fn notifyNetworkAlmostIdle(self: *Page) void {
     lp.assert(self._notified_network_almost_idle == .done, "Page.notifyNetworkAlmostIdle", .{});
     self._session.notification.dispatch(.page_network_almost_idle, &.{
+        .page_id = self.id,
+        .req_id = self._req_id,
         .timestamp = timestamp(.monotonic),
     });
 }

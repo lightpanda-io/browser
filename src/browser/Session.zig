@@ -63,6 +63,8 @@ navigation: Navigation,
 
 page: ?Page,
 
+page_id_gen: u32,
+
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
     const arena = try browser.arena_pool.acquire();
@@ -75,6 +77,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .page = null,
         .arena = arena,
         .history = .{},
+        .page_id_gen = 0,
         // The prototype (EventTarget) for Navigation is created when a Page is created.
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
@@ -104,7 +107,11 @@ pub fn createPage(self: *Session) !*Page {
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, self);
+
+    const id = self.page_id_gen +% 1;
+    self.page_id_gen = id;
+
+    try Page.init(page, id, self);
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -140,12 +147,16 @@ pub fn replacePage(self: *Session) !*Page {
     }
 
     lp.assert(self.page != null, "Session.replacePage null page", .{});
-    self.page.?.deinit();
+
+    var current = self.page.?;
+    const page_id = current.id;
+    current.deinit();
+
     self.browser.env.memoryPressureNotification(.moderate);
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, self);
+    try Page.init(page, page_id, self);
     return page;
 }
 
@@ -158,6 +169,11 @@ pub const WaitResult = enum {
     no_page,
     cdp_socket,
 };
+
+pub fn findPage(self: *Session, id: u32) ?*Page {
+    const page = self.currentPage() orelse return null;
+    return if (page.id == id) page else null;
+}
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
     while (true) {
@@ -181,8 +197,9 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
 
 fn processScheduledNavigation(self: *Session) !void {
     defer self.browser.arena_pool.reset(self.transfer_arena, 4 * 1024);
-    const url, const opts = blk: {
-        const qn = self.page.?._queued_navigation.?;
+    const url, const opts, const page_id = blk: {
+        const page = self.page.?;
+        const qn = page._queued_navigation.?;
         // qn might not be safe to use after self.removePage is called, hence
         // this block;
         const url = qn.url;
@@ -193,7 +210,7 @@ fn processScheduledNavigation(self: *Session) !void {
         self.browser.http_client.abort();
         self.removePage();
 
-        break :blk .{ url, opts };
+        break :blk .{ url, opts, page.id };
     };
 
     const page = self.createPage() catch |err| {
@@ -203,6 +220,7 @@ fn processScheduledNavigation(self: *Session) !void {
         });
         return err;
     };
+    page.id = page_id;
 
     page.navigate(url, opts) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err, .url = url });

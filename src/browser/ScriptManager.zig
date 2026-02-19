@@ -259,6 +259,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .url = url,
             .ctx = script,
             .method = .GET,
+            .page_id = page.id,
             .headers = try self.getHeaders(url),
             .blocking = is_blocking,
             .cookie_jar = &page._session.cookie_jar,
@@ -358,9 +359,11 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .manager = self,
     };
 
+    const page = self.page;
+
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        self.page.js.localScope(&ls);
+        page.js.localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{
@@ -375,10 +378,11 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .url = url,
         .ctx = script,
         .method = .GET,
+        .page_id = page.id,
         .headers = try self.getHeaders(url),
-        .cookie_jar = &self.page._session.cookie_jar,
+        .cookie_jar = &page._session.cookie_jar,
         .resource_type = .script,
-        .notification = self.page._session.notification,
+        .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
@@ -451,9 +455,10 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         } },
     };
 
+    const page = self.page;
     if (comptime IS_DEBUG) {
         var ls: js.Local.Scope = undefined;
-        self.page.js.localScope(&ls);
+        page.js.localScope(&ls);
         defer ls.deinit();
 
         log.debug(.http, "script queue", .{
@@ -476,11 +481,12 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     try self.client.request(.{
         .url = url,
         .method = .GET,
+        .page_id = page.id,
         .headers = try self.getHeaders(url),
         .ctx = script,
         .resource_type = .script,
-        .cookie_jar = &self.page._session.cookie_jar,
-        .notification = self.page._session.notification,
+        .cookie_jar = &page._session.cookie_jar,
+        .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
         .data_callback = Script.dataCallback,
