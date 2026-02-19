@@ -43,7 +43,7 @@ pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleDeclar
     // added ones.  Computed styles have no inline attribute to parse.
     if (!is_computed) {
         if (element) |el| {
-            if (el.getAttributeSafe(String.wrap("style"))) |attr_value| {
+            if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
                 var it = CssParser.parseDeclarationsList(attr_value);
                 while (it.next()) |declaration| {
                     const priority: ?[]const u8 = if (declaration.important) "important" else null;
