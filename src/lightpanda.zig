@@ -28,6 +28,7 @@ pub const Notification = @import("Notification.zig");
 pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
+pub const markdown = @import("browser/markdown.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
@@ -36,6 +37,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
     dump: dump.RootOpts,
+    dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
@@ -97,7 +99,12 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     _ = session.wait(opts.wait_ms);
 
     const writer = opts.writer orelse return;
-    try dump.root(page.window._document, opts.dump, writer, page);
+    if (opts.dump_mode) |mode| {
+        switch (mode) {
+            .html => try dump.root(page.window._document, opts.dump, writer, page),
+            .markdown => try markdown.dump(page.window._document.asNode(), .{}, writer, page),
+        }
+    }
     try writer.flush();
 }
 

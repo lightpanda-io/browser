@@ -182,9 +182,14 @@ pub const Serve = struct {
     common: Common = .{},
 };
 
+pub const DumpFormat = enum {
+    html,
+    markdown,
+};
+
 pub const Fetch = struct {
     url: [:0]const u8,
-    dump: bool = false,
+    dump_mode: ?DumpFormat = null,
     common: Common = .{},
     withbase: bool = false,
     strip: dump.Opts.Strip = .{},
@@ -321,11 +326,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\fetch command
         \\Fetches the specified URL
-        \\Example: {s} fetch --dump https://lightpanda.io/
+        \\Example: {s} fetch --dump html https://lightpanda.io/
         \\
         \\Options:
         \\--dump          Dumps document to stdout.
-        \\                Defaults to false.
+        \\                Argument must be 'html' or 'markdown'.
+        \\                Defaults to no dump.
         \\
         \\--strip_mode    Comma separated list of tag groups to remove from dump
         \\                the dump. e.g. --strip_mode js,css
@@ -532,7 +538,7 @@ fn parseFetchArgs(
     allocator: Allocator,
     args: *std.process.ArgIterator,
 ) !Fetch {
-    var fetch_dump: bool = false;
+    var dump_mode: ?DumpFormat = null;
     var withbase: bool = false;
     var url: ?[:0]const u8 = null;
     var common: Common = .{};
@@ -540,7 +546,17 @@ fn parseFetchArgs(
 
     while (args.next()) |opt| {
         if (std.mem.eql(u8, "--dump", opt)) {
-            fetch_dump = true;
+            var peek_args = args.*;
+            if (peek_args.next()) |next_arg| {
+                if (std.meta.stringToEnum(DumpFormat, next_arg)) |mode| {
+                    dump_mode = mode;
+                    _ = args.next();
+                } else {
+                    dump_mode = .html;
+                }
+            } else {
+                dump_mode = .html;
+            }
             continue;
         }
 
@@ -607,7 +623,7 @@ fn parseFetchArgs(
 
     return .{
         .url = url.?,
-        .dump = fetch_dump,
+        .dump_mode = dump_mode,
         .strip = strip,
         .common = common,
         .withbase = withbase,
