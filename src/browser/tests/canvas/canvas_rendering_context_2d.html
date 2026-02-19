@@ -33,3 +33,58 @@
   testing.expectEqual(ctx.fillStyle, "rgba(255, 0, 0, 0.06)");
 }
 </script>
+
+<script id="CanvasRenderingContext2D#createImageData(width, height)">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  const imageData = ctx.createImageData(100, 200);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  testing.expectEqual(imageData.width, 100);
+  testing.expectEqual(imageData.height, 200);
+  testing.expectEqual(imageData.data.length, 100 * 200 * 4);
+  testing.expectEqual(true, imageData.data instanceof Uint8ClampedArray);
+
+  // All pixels should be initialized to 0.
+  testing.expectEqual(imageData.data[0], 0);
+  testing.expectEqual(imageData.data[1], 0);
+  testing.expectEqual(imageData.data[2], 0);
+  testing.expectEqual(imageData.data[3], 0);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#createImageData(imageData)">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  const source = ctx.createImageData(50, 75);
+  const imageData = ctx.createImageData(source);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  testing.expectEqual(imageData.width, 50);
+  testing.expectEqual(imageData.height, 75);
+  testing.expectEqual(imageData.data.length, 50 * 75 * 4);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#putImageData">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  const imageData = ctx.createImageData(10, 10);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  // Modify some pixel data.
+  imageData.data[0] = 255;
+  imageData.data[1] = 0;
+  imageData.data[2] = 0;
+  imageData.data[3] = 255;
+
+  // putImageData should not throw.
+  ctx.putImageData(imageData, 0, 0);
+  ctx.putImageData(imageData, 10, 20);
+  // With dirty rect parameters.
+  ctx.putImageData(imageData, 0, 0, 0, 0, 5, 5);
+}
+</script>

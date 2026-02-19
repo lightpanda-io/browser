@@ -58,7 +58,10 @@ pub fn constructor(
     maybe_settings: ?ConstructorSettings,
     page: *Page,
 ) !*ImageData {
-    if (width == 0 or height == 0) {
+    // Though arguments are unsigned long, these are capped to max. i32 on Chrome.
+    // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/canvas/image_data.cc#L61
+    const max_i32 = std.math.maxInt(i32);
+    if (width == 0 or width > max_i32 or height == 0 or height > max_i32) {
         return error.IndexSizeError;
     }
 
@@ -70,7 +73,11 @@ pub fn constructor(
         return error.TypeError;
     }
 
-    const size = width * height * 4;
+    var size, var overflown = @mulWithOverflow(width, height);
+    if (overflown == 1) return error.IndexSizeError;
+    size, overflown = @mulWithOverflow(size, 4);
+    if (overflown == 1) return error.IndexSizeError;
+
     return page._factory.create(ImageData{
         ._width = width,
         ._height = height,

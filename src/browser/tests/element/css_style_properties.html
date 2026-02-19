@@ -121,6 +121,29 @@
 }
 </script>
 
+<script id="propertyAssignment">
+{
+  const div = $('#test-div');
+  div.style.cssText = '';
+
+  // camelCase assignment
+  div.style.opacity = '0.5';
+  testing.expectEqual('0.5', div.style.opacity);
+
+  // bracket notation assignment
+  div.style['filter'] = 'blur(5px)';
+  testing.expectEqual('blur(5px)', div.style.filter);
+
+  // numeric value coerced to string
+  div.style.opacity = 1;
+  testing.expectEqual('1', div.style.opacity);
+
+  // assigning method names should be ignored (not intercepted)
+  div.style.setProperty('color', 'blue');
+  testing.expectEqual('blue', div.style.color);
+}
+</script>
+
 <script id="prototypeChainCheck">
 {
   const div = $('#test-div');

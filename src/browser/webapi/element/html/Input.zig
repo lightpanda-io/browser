@@ -527,6 +527,7 @@ fn sanitizeValue(self: *Input, value: []const u8, page: *Page) ![]const u8 {
                     if (c >= 'A' and c <= 'F') needs_lower = true;
                 }
                 if (!needs_lower) return value;
+                // Normalize to lowercase per spec
                 const result = try page.call_arena.alloc(u8, 7);
                 result[0] = '#';
                 for (value[1..], 0..) |c, j| {
@@ -862,8 +863,6 @@ pub const Build = struct {
         self._default_value = element.getAttributeSafe(comptime .wrap("value"));
         self._default_checked = element.getAttributeSafe(comptime .wrap("checked")) != null;
 
-        // Current state starts equal to default
-        self._value = self._default_value;
         self._checked = self._default_checked;
 
         self._input_type = if (element.getAttributeSafe(comptime .wrap("type"))) |type_attr|
