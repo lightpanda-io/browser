@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 const log = @import("log.zig");
 const dump = @import("browser/dump.zig");
 
-const WebBotAuth = @import("browser/WebBotAuth.zig");
+const WebBotAuthConfig = @import("network/WebBotAuth.zig").Config;
 
 pub const RunMode = enum {
     help,
@@ -163,9 +163,9 @@ pub fn cdpTimeout(self: *const Config) usize {
     };
 }
 
-pub fn webBotAuth(self: *const Config) ?WebBotAuth {
+pub fn webBotAuth(self: *const Config) ?WebBotAuthConfig {
     return switch (self.mode) {
-        inline .serve, .fetch, .mcp => |opts| WebBotAuth{
+        inline .serve, .fetch, .mcp => |opts| WebBotAuthConfig{
             .key_file = opts.common.web_bot_auth_key_file orelse return null,
             .keyid = opts.common.web_bot_auth_keyid orelse return null,
             .domain = opts.common.web_bot_auth_domain orelse return null,

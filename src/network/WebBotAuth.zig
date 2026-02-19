@@ -19,7 +19,7 @@
 const std = @import("std");
 const crypto = @import("../crypto.zig");
 
-const Http = @import("../http/Http.zig");
+const Http = @import("../network/http.zig");
 
 const WebBotAuth = @This();
 

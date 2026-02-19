@@ -28,6 +28,7 @@ const libcurl = @import("../sys/libcurl.zig");
 
 const net_http = @import("http.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
+const WebBotAuth = @import("WebBotAuth.zig");
 
 const Runtime = @This();
 
@@ -42,6 +43,7 @@ allocator: Allocator,
 config: *const Config,
 ca_blob: ?net_http.Blob,
 robot_store: RobotStore,
+web_bot_auth: ?WebBotAuth,
 
 connections: []net_http.Connection,
 available: std.DoublyLinkedList = .{},
@@ -205,6 +207,11 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
         available.append(&connections[i].node);
     }
 
+    const web_bot_auth = if (config.webBotAuth()) |wba_cfg|
+        try WebBotAuth.fromConfig(allocator, &wba_cfg)
+    else
+        null;
+
     return .{
         .allocator = allocator,
         .config = config,
@@ -212,6 +219,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
         .robot_store = RobotStore.init(allocator),
         .connections = connections,
         .available = available,
+        .web_bot_auth = web_bot_auth,
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
     };
@@ -238,6 +246,9 @@ pub fn deinit(self: *Runtime) void {
     self.allocator.free(self.connections);
 
     self.robot_store.deinit();
+    if (self.web_bot_auth) |wba| {
+        wba.deinit(self.allocator);
+    }
 
     globalDeinit();
 }
