@@ -129,6 +129,8 @@ pub fn initEvent(
     self._bubbles = bubbles orelse false;
     self._cancelable = cancelable orelse false;
     self._stop_propagation = false;
+    self._stop_immediate_propagation = false;
+    self._prevent_default = false;
 }
 
 pub fn deinit(self: *Event, shutdown: bool) void {

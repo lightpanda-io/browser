@@ -262,6 +262,8 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     // and default actions execute (unless prevented)
     defer {
         event._event_phase = .none;
+        event._stop_propagation = false;
+        event._stop_immediate_propagation = false;
         // Handle checkbox/radio activation rollback or commit
         if (activation_state) |state| {
             state.restore(event, page);
@@ -322,19 +324,18 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     var i: usize = path_len;
     while (i > 1) {
         i -= 1;
+        if (event._stop_propagation) return;
         const current_target = path[i];
         if (self.lookup.get(.{
             .event_target = @intFromPtr(current_target),
             .type_string = event._type_string,
         })) |list| {
             try self.dispatchPhase(list, current_target, event, was_handled, true);
-            if (event._stop_propagation) {
-                return;
-            }
         }
     }
 
     // Phase 2: At target
+    if (event._stop_propagation) return;
     event._event_phase = .at_target;
     const target_et = target.asEventTarget();
 
@@ -375,14 +376,12 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     if (event._bubbles) {
         event._event_phase = .bubbling_phase;
         for (path[1..]) |current_target| {
+            if (event._stop_propagation) break;
             if (self.lookup.get(.{
                 .type_string = event._type_string,
                 .event_target = @intFromPtr(current_target),
             })) |list| {
                 try self.dispatchPhase(list, current_target, event, was_handled, false);
-                if (event._stop_propagation) {
-                    break;
-                }
             }
         }
     }
