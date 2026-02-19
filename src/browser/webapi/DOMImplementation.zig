@@ -31,7 +31,7 @@ pub fn createDocumentType(_: *const DOMImplementation, qualified_name: []const u
     return DocumentType.init(qualified_name, public_id, system_id, page);
 }
 
-pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page: *Page) !*Document {
+pub fn createHTMLDocument(_: *const DOMImplementation, title: ?js.NullableString, page: *Page) !*Document {
     const document = (try page._factory.document(Node.Document.HTMLDocument{ ._proto = undefined })).asDocument();
     document._ready_state = .complete;
     document._url = "about:blank";
@@ -55,7 +55,7 @@ pub fn createHTMLDocument(_: *const DOMImplementation, title: ?[]const u8, page:
     if (title) |t| {
         const title_node = try page.createElementNS(.html, "title", null);
         _ = try head_node.appendChild(title_node, page);
-        const text_node = try page.createTextNode(t);
+        const text_node = try page.createTextNode(t.value);
         _ = try title_node.appendChild(text_node, page);
     }
 

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <a id="link" href="foo" class="ok">OK</a>
 
-<script src="../../testing.js"></script>
+<script src="../testing.js"></script>
 <script id=text>
   let t = new Text('foo');
   testing.expectEqual('foo', t.data);
@@ -16,4 +16,7 @@
   let split = text.splitText('OK'.length);
   testing.expectEqual(' modified', split.data);
   testing.expectEqual('OK', text.data);
+
+    let x = new Text(null);
+    testing.expectEqual("null", x.data);
 </script>

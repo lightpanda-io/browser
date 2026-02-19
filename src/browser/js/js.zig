@@ -168,6 +168,16 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
     };
 }
 
+// If a WebAPI takes a []const u8, then we'll coerce any JS value to that string
+// so null -> "null". But if a WebAPI takes an optional string, ?[]const u8,
+// how should we handle null? If the parameter _isn't_ passed, then it's obvious
+// that it should be null, but what if `null` is passed? It's ambiguous, should
+// that be null, or "null"? It could depend on the api. So, `null` passed to
+// ?[]const u8 will be `null`. If you want it to be "null", use a `.js.NullableString`.
+pub const NullableString = struct {
+    value: []const u8,
+};
+
 pub const Exception = struct {
     local: *const Local,
     handle: *const v8.Value,

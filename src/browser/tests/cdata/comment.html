@@ -4,4 +4,6 @@
 <script id=comment>
   testing.expectEqual('', new Comment().data);
   testing.expectEqual('over 9000! ', new Comment('over 9000! ').data);
+
+  testing.expectEqual('null', new Comment(null).data);
 </script>
