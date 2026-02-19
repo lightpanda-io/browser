@@ -68,7 +68,7 @@ pub fn play(self: *Animation, page: *Page) !void {
     // transition to running.
     self._playState = .running;
 
-    // Schedule the transition from .idle => .running in 10ms.
+    // Schedule the transition from .running => .finished in 10ms.
     page.js.strongRef(self);
     try page.js.scheduler.add(
         self,
