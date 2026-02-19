@@ -75,6 +75,12 @@ pub fn newArray(self: *const Local, len: u32) js.Array {
     };
 }
 
+/// Creates a new typed array. Memory is owned by JS context.
+/// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Typed_arrays
+pub fn createTypedArray(self: *const Local, comptime array_type: js.ArrayType, size: usize) js.ArrayBufferRef(array_type) {
+    return .init(self, size);
+}
+
 pub fn runMicrotasks(self: *const Local) void {
     self.isolate.performMicrotasksCheckpoint();
 }

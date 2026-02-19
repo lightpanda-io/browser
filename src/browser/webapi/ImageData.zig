@@ -74,7 +74,7 @@ pub fn constructor(
     return page._factory.create(ImageData{
         ._width = width,
         ._height = height,
-        ._data = try page.js.createTypedArray(.uint8_clamped, size).persist(),
+        ._data = try page.js.local.?.createTypedArray(.uint8_clamped, size).persist(),
     });
 }
 
