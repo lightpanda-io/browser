@@ -415,3 +415,42 @@ test "WebApi: CData.render" {
         try std.testing.expect(result == test_case.result);
     }
 }
+
+test "utf16Len" {
+    // ASCII: 1 byte = 1 code unit each
+    try std.testing.expectEqual(@as(usize, 0), utf16Len(""));
+    try std.testing.expectEqual(@as(usize, 5), utf16Len("hello"));
+    // CJK: 3 bytes UTF-8 = 1 UTF-16 code unit each
+    try std.testing.expectEqual(@as(usize, 2), utf16Len("資料")); // 6 bytes, 2 code units
+    // Emoji U+1F320: 4 bytes UTF-8 = 2 UTF-16 code units (surrogate pair)
+    try std.testing.expectEqual(@as(usize, 2), utf16Len("🌠")); // 4 bytes, 2 code units
+    // Mixed: 🌠(2) + " test "(6) + 🌠(2) + " TEST"(5) = 15
+    try std.testing.expectEqual(@as(usize, 15), utf16Len("🌠 test 🌠 TEST"));
+    // 2-byte UTF-8 (e.g. é U+00E9): 1 UTF-16 code unit
+    try std.testing.expectEqual(@as(usize, 4), utf16Len("café")); // c(1) + a(1) + f(1) + é(1)
+}
+
+test "utf16OffsetToUtf8" {
+    // ASCII: offsets map 1:1
+    try std.testing.expectEqual(@as(usize, 0), try utf16OffsetToUtf8("hello", 0));
+    try std.testing.expectEqual(@as(usize, 3), try utf16OffsetToUtf8("hello", 3));
+    try std.testing.expectEqual(@as(usize, 5), try utf16OffsetToUtf8("hello", 5)); // end
+    try std.testing.expectError(error.IndexSizeError, utf16OffsetToUtf8("hello", 6)); // past end
+
+    // CJK "資料" (6 bytes, 2 UTF-16 code units)
+    try std.testing.expectEqual(@as(usize, 0), try utf16OffsetToUtf8("資料", 0)); // before 資
+    try std.testing.expectEqual(@as(usize, 3), try utf16OffsetToUtf8("資料", 1)); // before 料
+    try std.testing.expectEqual(@as(usize, 6), try utf16OffsetToUtf8("資料", 2)); // end
+    try std.testing.expectError(error.IndexSizeError, utf16OffsetToUtf8("資料", 3));
+
+    // Emoji "🌠AB" (4+1+1 = 6 bytes; 2+1+1 = 4 UTF-16 code units)
+    try std.testing.expectEqual(@as(usize, 0), try utf16OffsetToUtf8("🌠AB", 0)); // before 🌠
+    // offset 1 lands inside the surrogate pair — still valid UTF-16 offset
+    try std.testing.expectEqual(@as(usize, 4), try utf16OffsetToUtf8("🌠AB", 2)); // before A
+    try std.testing.expectEqual(@as(usize, 5), try utf16OffsetToUtf8("🌠AB", 3)); // before B
+    try std.testing.expectEqual(@as(usize, 6), try utf16OffsetToUtf8("🌠AB", 4)); // end
+
+    // Empty string: only offset 0 is valid
+    try std.testing.expectEqual(@as(usize, 0), try utf16OffsetToUtf8("", 0));
+    try std.testing.expectError(error.IndexSizeError, utf16OffsetToUtf8("", 1));
+}
