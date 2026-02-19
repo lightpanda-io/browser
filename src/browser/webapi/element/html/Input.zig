@@ -125,7 +125,10 @@ pub fn setType(self: *Input, typ: []const u8, page: *Page) !void {
 }
 
 pub fn getValue(self: *const Input) []const u8 {
-    return self._value orelse self._default_value orelse "";
+    return self._value orelse self._default_value orelse switch (self._input_type) {
+        .checkbox, .radio => "on",
+        else => "",
+    };
 }
 
 pub fn setValue(self: *Input, value: []const u8, page: *Page) !void {
@@ -526,10 +529,19 @@ fn sanitizeValue(self: *Input, value: []const u8, page: *Page) ![]const u8 {
         },
         .color => {
             if (value.len == 7 and value[0] == '#') {
+                var needs_lower = false;
                 for (value[1..]) |c| {
                     if (!std.ascii.isHex(c)) return "#000000";
+                    if (c >= 'A' and c <= 'F') needs_lower = true;
                 }
-                return value;
+                if (!needs_lower) return value;
+                // Normalize to lowercase per spec
+                const result = try page.call_arena.alloc(u8, 7);
+                result[0] = '#';
+                for (value[1..], 0..) |c, j| {
+                    result[j + 1] = std.ascii.toLower(c);
+                }
+                return result;
             }
             return "#000000";
         },
@@ -639,14 +651,26 @@ pub const Build = struct {
         self._default_value = element.getAttributeSafe(comptime .wrap("value"));
         self._default_checked = element.getAttributeSafe(comptime .wrap("checked")) != null;
 
-        // Current state starts equal to default
-        self._value = self._default_value;
         self._checked = self._default_checked;
 
         self._input_type = if (element.getAttributeSafe(comptime .wrap("type"))) |type_attr|
             Type.fromString(type_attr)
         else
             .text;
+
+        // Current value starts equal to default, but sanitized per input type.
+        // sanitizeValue allocates temporaries from call_arena, so we must
+        // persist any new buffer into page.arena for the value to survive.
+        if (self._default_value) |dv| {
+            const sanitized = try self.sanitizeValue(dv, page);
+            if (sanitized.ptr == dv.ptr and sanitized.len == dv.len) {
+                self._value = self._default_value;
+            } else {
+                self._value = try page.arena.dupe(u8, sanitized);
+            }
+        } else {
+            self._value = null;
+        }
 
         // If this is a checked radio button, uncheck others in its group
         if (self._checked and self._input_type == .radio) {
