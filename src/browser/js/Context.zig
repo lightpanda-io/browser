@@ -1045,12 +1045,6 @@ pub const FinalizerCallback = struct {
     }
 };
 
-/// Creates a new typed array. Memory is owned by JS context.
-/// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Typed_arrays
-pub fn createTypedArray(self: *Context, comptime array_type: js.ArrayType, size: usize) js.ArrayBufferRef(array_type) {
-    return .init(self.isolate, size);
-}
-
 // == Profiler ==
 pub fn startCpuProfiler(self: *Context) void {
     if (comptime !IS_DEBUG) {

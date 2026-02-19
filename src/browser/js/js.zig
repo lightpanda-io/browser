@@ -106,9 +106,25 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             .float64 => f64,
         };
 
+        local: *const Local,
         handle: *const v8.Value,
 
-        pub fn init(isolate: Isolate, size: usize) Self {
+        /// Persisted typed array.
+        pub const Global = struct {
+            handle: v8.Global,
+
+            pub fn deinit(self: *Global) void {
+                v8.v8__Global__Reset(&self.handle);
+            }
+
+            pub fn local(self: *const Global, l: *const Local) Self {
+                return .{ .local = l, .handle = v8.v8__Global__Get(&self.handle, l.isolate.handle).? };
+            }
+        };
+
+        pub fn init(local: *const Local, size: usize) Self {
+            const ctx = local.ctx;
+            const isolate = ctx.isolate;
             const bits = switch (@typeInfo(BackingInt)) {
                 .int => |n| n.bits,
                 .float => |f| f.bits,
@@ -138,7 +154,16 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
                 .float64 => @ptrCast(v8.v8__Float64Array__New(array_buffer, 0, size).?),
             };
 
-            return .{ .handle = handle };
+            return .{ .local = local, .handle = handle };
+        }
+
+        pub fn persist(self: *const Self) !Global {
+            var ctx = self.local.ctx;
+            var global: v8.Global = undefined;
+            v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
+            try ctx.global_values.append(ctx.arena, global);
+
+            return .{ .handle = global };
         }
     };
 }

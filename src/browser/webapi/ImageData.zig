@@ -29,7 +29,7 @@ const Page = @import("../Page.zig");
 const ImageData = @This();
 _width: u32,
 _height: u32,
-_data: js.ArrayBufferRef(.uint8_clamped),
+_data: js.ArrayBufferRef(.uint8_clamped).Global,
 
 pub const ConstructorSettings = struct {
     /// Specifies the color space of the image data.
@@ -74,7 +74,7 @@ pub fn constructor(
     return page._factory.create(ImageData{
         ._width = width,
         ._height = height,
-        ._data = page.js.createTypedArray(.uint8_clamped, size),
+        ._data = try page.js.local.?.createTypedArray(.uint8_clamped, size).persist(),
     });
 }
 
@@ -94,7 +94,7 @@ pub fn getColorSpace(_: *const ImageData) String {
     return comptime .wrap("srgb");
 }
 
-pub fn getData(self: *const ImageData) js.ArrayBufferRef(.uint8_clamped) {
+pub fn getData(self: *const ImageData) js.ArrayBufferRef(.uint8_clamped).Global {
     return self._data;
 }
 

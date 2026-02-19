@@ -75,6 +75,12 @@ pub fn newArray(self: *const Local, len: u32) js.Array {
     };
 }
 
+/// Creates a new typed array. Memory is owned by JS context.
+/// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Typed_arrays
+pub fn createTypedArray(self: *const Local, comptime array_type: js.ArrayType, size: usize) js.ArrayBufferRef(array_type) {
+    return .init(self, size);
+}
+
 pub fn runMicrotasks(self: *const Local) void {
     self.isolate.performMicrotasksCheckpoint();
 }
@@ -306,12 +312,13 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 js.Value => return value,
                 js.Exception => return .{ .local = self, .handle = isolate.throwException(value.handle) },
 
-                js.ArrayBufferRef(.int8), js.ArrayBufferRef(.uint8), js.ArrayBufferRef(.uint8_clamped),
-                js.ArrayBufferRef(.int16), js.ArrayBufferRef(.uint16),
-                js.ArrayBufferRef(.int32), js.ArrayBufferRef(.uint32),
-                js.ArrayBufferRef(.float16), js.ArrayBufferRef(.float32), js.ArrayBufferRef(.float64),
+                js.ArrayBufferRef(.int8).Global, js.ArrayBufferRef(.uint8).Global,
+                js.ArrayBufferRef(.uint8_clamped).Global, js.ArrayBufferRef(.int16).Global,
+                js.ArrayBufferRef(.uint16).Global, js.ArrayBufferRef(.int32).Global,
+                js.ArrayBufferRef(.uint32).Global, js.ArrayBufferRef(.float16).Global,
+                js.ArrayBufferRef(.float32).Global, js.ArrayBufferRef(.float64).Global,
                 => {
-                    return .{ .local = self, .handle = value.handle };
+                    return .{ .local = self, .handle = value.local(self).handle };
                 },
 
                 inline
