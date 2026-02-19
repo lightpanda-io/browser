@@ -93,6 +93,9 @@ pub fn deinit(self: *App) void {
     }
     self.telemetry.deinit();
     self.robots.deinit();
+    if (self.web_bot_auth) |wba| {
+        wba.deinit(allocator);
+    }
     self.http.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
