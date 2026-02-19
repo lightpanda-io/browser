@@ -37,6 +37,14 @@ pub fn asCSSStyleDeclaration(self: *CSSStyleProperties) *CSSStyleDeclaration {
     return self._proto;
 }
 
+pub fn setNamed(self: *CSSStyleProperties, name: []const u8, value: []const u8, page: *Page) !void {
+    if (method_names.has(name)) {
+        return error.NotHandled;
+    }
+    const dash_case = camelCaseToDashCase(name, &page.buf);
+    try self._proto.setProperty(dash_case, value, null, page);
+}
+
 pub fn getNamed(self: *CSSStyleProperties, name: []const u8, page: *Page) ![]const u8 {
     if (method_names.has(name)) {
         return error.NotHandled;
@@ -108,6 +116,9 @@ fn isKnownCSSProperty(dash_case: []const u8) bool {
         .{ "display", {} },
         .{ "visibility", {} },
         .{ "opacity", {} },
+        .{ "filter", {} },
+        .{ "transform", {} },
+        .{ "transition", {} },
         .{ "position", {} },
         .{ "top", {} },
         .{ "bottom", {} },
@@ -201,5 +212,5 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const @"[]" = bridge.namedIndexed(CSSStyleProperties.getNamed, null, null, .{});
+    pub const @"[]" = bridge.namedIndexed(CSSStyleProperties.getNamed, CSSStyleProperties.setNamed, null, .{});
 };
