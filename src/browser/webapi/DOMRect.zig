@@ -36,35 +36,35 @@ pub fn init(x: f64, y: f64, width: f64, height: f64, page: *Page) !*DOMRect {
     });
 }
 
-pub fn getX(self: *DOMRect) f64 {
+pub fn getX(self: *const DOMRect) f64 {
     return self._x;
 }
 
-pub fn getY(self: *DOMRect) f64 {
+pub fn getY(self: *const DOMRect) f64 {
     return self._y;
 }
 
-pub fn getWidth(self: *DOMRect) f64 {
+pub fn getWidth(self: *const DOMRect) f64 {
     return self._width;
 }
 
-pub fn getHeight(self: *DOMRect) f64 {
+pub fn getHeight(self: *const DOMRect) f64 {
     return self._height;
 }
 
-pub fn getTop(self: *DOMRect) f64 {
+pub fn getTop(self: *const DOMRect) f64 {
     return @min(self._y, self._y + self._height);
 }
 
-pub fn getRight(self: *DOMRect) f64 {
+pub fn getRight(self: *const DOMRect) f64 {
     return @max(self._x, self._x + self._width);
 }
 
-pub fn getBottom(self: *DOMRect) f64 {
+pub fn getBottom(self: *const DOMRect) f64 {
     return @max(self._y, self._y + self._height);
 }
 
-pub fn getLeft(self: *DOMRect) f64 {
+pub fn getLeft(self: *const DOMRect) f64 {
     return @min(self._x, self._x + self._width);
 }
 

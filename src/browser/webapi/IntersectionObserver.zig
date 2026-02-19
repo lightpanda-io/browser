@@ -177,19 +177,19 @@ fn calculateIntersection(
     target: *Element,
     page: *Page,
 ) !IntersectionData {
-    const target_rect = try target.getBoundingClientRect(page);
+    const target_rect = target.getBoundingClientRect(page);
 
     // Use root element's rect or viewport (simplified: assume 1920x1080)
     const root_rect = if (self._root) |root|
-        try root.getBoundingClientRect(page)
+        root.getBoundingClientRect(page)
     else
         // Simplified viewport - assume 1920x1080 for now
-        try page._factory.create(DOMRect{
+        DOMRect{
             ._x = 0.0,
             ._y = 0.0,
             ._width = 1920.0,
             ._height = 1080.0,
-        });
+        };
 
     // For a headless browser without real layout, we treat all elements as fully visible.
     // This avoids fingerprinting issues (massive viewports) and matches the behavior
@@ -200,7 +200,7 @@ fn calculateIntersection(
     const intersection_ratio: f64 = if (has_parent) 1.0 else 0.0;
 
     // Intersection rect is the same as the target rect if visible, otherwise zero rect
-    const intersection_rect = if (has_parent) target_rect else &zero_rect;
+    const intersection_rect = if (has_parent) target_rect else zero_rect;
 
     return .{
         .is_intersecting = is_intersecting,
@@ -214,9 +214,9 @@ fn calculateIntersection(
 const IntersectionData = struct {
     is_intersecting: bool,
     intersection_ratio: f64,
-    intersection_rect: *DOMRect,
-    bounding_client_rect: *DOMRect,
-    root_bounds: *DOMRect,
+    intersection_rect: DOMRect,
+    bounding_client_rect: DOMRect,
+    root_bounds: DOMRect,
 };
 
 fn meetsThreshold(self: *IntersectionObserver, ratio: f64) bool {
@@ -241,17 +241,19 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
 
     if (should_report) {
         const arena = try page.getArena(.{ .debug = "IntersectionObserverEntry" });
+        errdefer page.releaseArena(arena);
+
         const entry = try arena.create(IntersectionObserverEntry);
         entry.* = .{
             ._page = page,
             ._arena = arena,
             ._target = target,
             ._time = page.window._performance.now(),
-            ._bounding_client_rect = data.bounding_client_rect,
-            ._intersection_rect = data.intersection_rect,
-            ._root_bounds = data.root_bounds,
-            ._intersection_ratio = data.intersection_ratio,
             ._is_intersecting = is_now_intersecting,
+            ._root_bounds = try page._factory.create(data.root_bounds),
+            ._intersection_rect = try page._factory.create(data.intersection_rect),
+            ._bounding_client_rect = try page._factory.create(data.bounding_client_rect),
+            ._intersection_ratio = data.intersection_ratio,
         };
 
         try self._pending_entries.append(self._arena, entry);
