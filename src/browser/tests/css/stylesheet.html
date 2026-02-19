@@ -205,3 +205,54 @@
     testing.expectEqual('', style.getPropertyPriority('content'));
 }
 </script>
+
+<script id="CSSStyleDeclaration_style_syncs_to_attribute">
+{
+    // JS style modifications must be reflected in getAttribute.
+    const div = document.createElement('div');
+
+    // Named property assignment (element.style.X = ...)
+    div.style.opacity = '0';
+    testing.expectEqual('opacity: 0;', div.getAttribute('style'));
+
+    // Update existing property
+    div.style.opacity = '1';
+    testing.expectEqual('opacity: 1;', div.getAttribute('style'));
+
+    // Add a second property
+    div.style.color = 'red';
+    testing.expectTrue(div.getAttribute('style').includes('opacity: 1'));
+    testing.expectTrue(div.getAttribute('style').includes('color: red'));
+
+    // removeProperty syncs back
+    div.style.removeProperty('opacity');
+    testing.expectTrue(!div.getAttribute('style').includes('opacity'));
+    testing.expectTrue(div.getAttribute('style').includes('color: red'));
+
+    // setCssText syncs back
+    div.style.cssText = 'filter: blur(0px)';
+    testing.expectEqual('filter: blur(0px);', div.getAttribute('style'));
+
+    // setCssText with empty string clears attribute
+    div.style.cssText = '';
+    testing.expectEqual('', div.getAttribute('style'));
+}
+</script>
+
+<script id="CSSStyleDeclaration_outerHTML_reflects_style_changes">
+{
+    // outerHTML must reflect JS-modified styles (regression test for
+    // DOM serialization reading stale HTML-parsed attribute values).
+    const div = document.createElement('div');
+    div.setAttribute('style', 'filter:blur(10px);opacity:0');
+
+    div.style.filter = 'blur(0px)';
+    div.style.opacity = '1';
+
+    const html = div.outerHTML;
+    testing.expectTrue(html.includes('filter: blur(0px)'));
+    testing.expectTrue(html.includes('opacity: 1'));
+    testing.expectTrue(!html.includes('blur(10px)'));
+    testing.expectTrue(!html.includes('opacity:0'));
+}
+</script>
