@@ -49,15 +49,26 @@ node: std.DoublyLinkedList.Node = .{},
 
 const Observing = struct {
     target: *Node,
-    options: ObserveOptions,
+    options: ResolvedOptions,
 };
 
-pub const ObserveOptions = struct {
+/// Internal options with all nullable bools resolved to concrete values.
+const ResolvedOptions = struct {
     attributes: bool = false,
     attributeOldValue: bool = false,
     childList: bool = false,
     characterData: bool = false,
     characterDataOldValue: bool = false,
+    subtree: bool = false,
+    attributeFilter: ?[]const []const u8 = null,
+};
+
+pub const ObserveOptions = struct {
+    attributes: ?bool = null,
+    attributeOldValue: ?bool = null,
+    childList: bool = false,
+    characterData: ?bool = null,
+    characterDataOldValue: ?bool = null,
     subtree: bool = false,
     attributeFilter: ?[]const []const u8 = null,
 };
@@ -88,24 +99,61 @@ pub fn deinit(self: *MutationObserver, shutdown: bool) void {
 pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
     const arena = self._arena;
 
+    // Per spec: if attributeOldValue/attributeFilter present and attributes
+    // not explicitly set, imply attributes=true. Same for characterData.
+    var resolved = options;
+    if (resolved.attributes == null and (resolved.attributeOldValue != null or resolved.attributeFilter != null)) {
+        resolved.attributes = true;
+    }
+    if (resolved.characterData == null and resolved.characterDataOldValue != null) {
+        resolved.characterData = true;
+    }
+
+    const attributes = resolved.attributes orelse false;
+    const character_data = resolved.characterData orelse false;
+
+    // Validate: at least one of childList/attributes/characterData must be true
+    if (!resolved.childList and !attributes and !character_data) {
+        return error.TypeError;
+    }
+
+    // Validate: attributeOldValue/attributeFilter require attributes != false
+    if ((resolved.attributeOldValue orelse false) and !attributes) {
+        return error.TypeError;
+    }
+    if (resolved.attributeFilter != null and !attributes) {
+        return error.TypeError;
+    }
+
+    // Validate: characterDataOldValue requires characterData != false
+    if ((resolved.characterDataOldValue orelse false) and !character_data) {
+        return error.TypeError;
+    }
+
+    // Build resolved options with concrete bool values
+    var store_options = ResolvedOptions{
+        .attributes = attributes,
+        .attributeOldValue = resolved.attributeOldValue orelse false,
+        .childList = resolved.childList,
+        .characterData = character_data,
+        .characterDataOldValue = resolved.characterDataOldValue orelse false,
+        .subtree = resolved.subtree,
+        .attributeFilter = resolved.attributeFilter,
+    };
+
     // Deep copy attributeFilter if present
-    var copied_options = options;
     if (options.attributeFilter) |filter| {
         const filter_copy = try arena.alloc([]const u8, filter.len);
         for (filter, 0..) |name, i| {
             filter_copy[i] = try arena.dupe(u8, name);
         }
-        copied_options.attributeFilter = filter_copy;
-    }
-
-    if (options.characterDataOldValue) {
-        copied_options.characterData = true;
+        store_options.attributeFilter = filter_copy;
     }
 
     // Check if already observing this target
     for (self._observing.items) |*obs| {
         if (obs.target == target) {
-            obs.options = copied_options;
+            obs.options = store_options;
             return;
         }
     }
@@ -118,7 +166,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 
     try self._observing.append(arena, .{
         .target = target,
-        .options = copied_options,
+        .options = store_options,
     });
 }
 

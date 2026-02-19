@@ -209,6 +209,11 @@ fn validateNodeInsertion(parent: *Node, node: *Node) !void {
     if (node._type == .attribute) {
         return error.HierarchyError;
     }
+
+    // Doctype nodes can only be inserted into a Document
+    if (node._type == .document_type and parent._type != .document) {
+        return error.HierarchyError;
+    }
 }
 
 pub fn appendChild(self: *Node, child: *Node, page: *Page) !*Node {

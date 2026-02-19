@@ -189,7 +189,9 @@ pub fn getCurrentTarget(self: *const Event) ?*EventTarget {
 }
 
 pub fn preventDefault(self: *Event) void {
-    self._prevent_default = true;
+    if (self._cancelable) {
+        self._prevent_default = true;
+    }
 }
 
 pub fn stopPropagation(self: *Event) void {
@@ -210,7 +212,12 @@ pub fn getReturnValue(self: *const Event) bool {
 }
 
 pub fn setReturnValue(self: *Event, v: bool) void {
-    self._prevent_default = !v;
+    if (!v) {
+        // Setting returnValue=false is equivalent to preventDefault()
+        if (self._cancelable) {
+            self._prevent_default = true;
+        }
+    }
 }
 
 pub fn getCancelBubble(self: *const Event) bool {
