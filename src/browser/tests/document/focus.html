@@ -297,3 +297,25 @@
   testing.expectEqual(btn, document.activeElement);
 }
 </script>
+
+<script id="focus_disconnected_no_blur">
+{
+  const input1 = $('#input1');
+
+  if (document.activeElement) {
+    document.activeElement.blur();
+  }
+
+  input1.focus();
+  testing.expectEqual(input1, document.activeElement);
+
+  let blurCount = 0;
+  input1.addEventListener('blur', () => { blurCount++ });
+
+  // Focusing a disconnected element should be a no-op:
+  // blur must not fire on the currently focused element
+  document.createElement('a').focus();
+  testing.expectEqual(input1, document.activeElement);
+  testing.expectEqual(0, blurCount);
+}
+</script>

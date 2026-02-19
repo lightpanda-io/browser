@@ -29,6 +29,7 @@ const reflect = @import("../reflect.zig");
 const Node = @import("Node.zig");
 const CSS = @import("CSS.zig");
 const ShadowRoot = @import("ShadowRoot.zig");
+const EventTarget = @import("EventTarget.zig");
 const collections = @import("collections.zig");
 const Selector = @import("selector/Selector.zig");
 const Animation = @import("animation/Animation.zig");
@@ -138,7 +139,7 @@ pub fn asNode(self: *Element) *Node {
     return self._proto;
 }
 
-pub fn asEventTarget(self: *Element) *@import("EventTarget.zig") {
+pub fn asEventTarget(self: *Element) *EventTarget {
     return self._proto.asEventTarget();
 }
 
@@ -775,13 +776,18 @@ pub fn remove(self: *Element, page: *Page) void {
 }
 
 pub fn focus(self: *Element, page: *Page) !void {
+    if (self.asNode().isConnected() == false) {
+        // a disconnected node cannot take focus
+        return;
+    }
+
     const FocusEvent = @import("event/FocusEvent.zig");
 
-    // Capture relatedTarget before anything changes
-    const old_related: ?*@import("EventTarget.zig") = if (page.document._active_element) |old| old.asEventTarget() else null;
     const new_target = self.asEventTarget();
+    const old_active = page.document._active_element;
+    page.document._active_element = self;
 
-    if (page.document._active_element) |old| {
+    if (old_active) |old| {
         if (old == self) {
             return;
         }
@@ -799,11 +805,7 @@ pub fn focus(self: *Element, page: *Page) !void {
         try page._event_manager.dispatch(old_target, focusout_event.asEvent());
     }
 
-    // Must be set after blur/focusout and before focus/focusin —
-    // event dispatch can reset _active_element if set earlier.
-    if (self.asNode().isConnected()) {
-        page.document._active_element = self;
-    }
+    const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
 
     // Dispatch focus on new element (no bubble, composed)
     const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, page);
