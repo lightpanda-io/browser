@@ -952,7 +952,7 @@ pub fn closest(self: *Element, selector: []const u8, page: *Page) !?*Element {
 
     var current: ?*Element = self;
     while (current) |el| {
-        if (try el.matches(selector, page)) {
+        if (try Selector.matchesWithScope(el, selector, self, page)) {
             return el;
         }
 

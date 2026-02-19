@@ -92,6 +92,24 @@ pub fn matches(el: *Node.Element, input: []const u8, page: *Page) !bool {
     return false;
 }
 
+// Like matches, but allows the caller to specify a scope node distinct from el.
+// Used by closest() so that :scope always refers to the original context element.
+pub fn matchesWithScope(el: *Node.Element, input: []const u8, scope: *Node.Element, page: *Page) !bool {
+    if (input.len == 0) {
+        return error.SyntaxError;
+    }
+
+    const arena = page.call_arena;
+    const selectors = try Parser.parseList(arena, input, page);
+
+    for (selectors) |selector| {
+        if (List.matches(el.asNode(), selector, scope.asNode(), page)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 pub fn classAttributeContains(class_attr: []const u8, class_name: []const u8) bool {
     if (class_name.len == 0 or class_name.len > class_attr.len) return false;
 
