@@ -16,6 +16,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const String = @import("../../../string.zig").String;
 const Page = @import("../../Page.zig");
 const js = @import("../../js/js.zig");
@@ -38,23 +40,32 @@ pub const Options = Event.inheritOptions(
     FocusEventOptions,
 );
 
+pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*FocusEvent {
+    const arena = try page.getArena(.{ .debug = "FocusEvent.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, page);
+}
+
 pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*FocusEvent {
     const arena = try page.getArena(.{ .debug = "FocusEvent" });
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, type_string, _opts, false, page);
+}
 
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*FocusEvent {
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(
         arena,
-        type_string,
+        typ,
         FocusEvent{
             ._proto = undefined,
             ._related_target = opts.relatedTarget,
         },
     );
 
-    Event.populatePrototypes(event, opts, false);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 
