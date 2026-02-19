@@ -549,23 +549,93 @@ pub fn toString(self: *const Range, page: *Page) ![]const u8 {
 }
 
 fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
-    if (self._proto.getCollapsed()) {
-        return;
+    if (self._proto.getCollapsed()) return;
+
+    const start_node = self._proto._start_container;
+    const end_node = self._proto._end_container;
+    const start_offset = self._proto._start_offset;
+    const end_offset = self._proto._end_offset;
+
+    // Same text node — just substring
+    if (start_node == end_node) {
+        if (start_node.is(Node.CData)) |cdata| {
+            if (!isCommentOrPI(cdata)) {
+                const data = cdata.getData();
+                const s = @min(start_offset, data.len);
+                const e = @min(end_offset, data.len);
+                try writer.writeAll(data[s..e]);
+            }
+            return;
+        }
     }
 
-    if (self._proto._start_container == self._proto._end_container) {
-        if (self._proto._start_container.is(Node.CData)) |cdata| {
+    const root = self._proto.getCommonAncestorContainer();
+
+    // Partial start: if start container is a text node, write from offset to end
+    if (start_node.is(Node.CData)) |cdata| {
+        if (!isCommentOrPI(cdata)) {
             const data = cdata.getData();
-            if (self._proto._start_offset < data.len and self._proto._end_offset <= data.len) {
-                try writer.writeAll(data[self._proto._start_offset..self._proto._end_offset]);
+            const s = @min(start_offset, data.len);
+            try writer.writeAll(data[s..]);
+        }
+    }
+
+    // Walk fully-contained text nodes between the boundaries.
+    // For text containers, the walk starts after that node.
+    // For element containers, the walk starts at the child at offset.
+    const walk_start: ?*Node = if (start_node.is(Node.CData) != null)
+        nextInTreeOrder(start_node, root)
+    else
+        start_node.getChildAt(start_offset) orelse nextAfterSubtree(start_node, root);
+
+    const walk_end: ?*Node = if (end_node.is(Node.CData) != null)
+        end_node
+    else
+        end_node.getChildAt(end_offset) orelse nextAfterSubtree(end_node, root);
+
+    if (walk_start) |start| {
+        var current: ?*Node = start;
+        while (current) |n| {
+            if (walk_end) |we| {
+                if (n == we) break;
+            }
+            if (n.is(Node.CData)) |cdata| {
+                if (!isCommentOrPI(cdata)) {
+                    try writer.writeAll(cdata.getData());
+                }
+            }
+            current = nextInTreeOrder(n, root);
+        }
+    }
+
+    // Partial end: if end container is a different text node, write from start to offset
+    if (start_node != end_node) {
+        if (end_node.is(Node.CData)) |cdata| {
+            if (!isCommentOrPI(cdata)) {
+                const data = cdata.getData();
+                const e = @min(end_offset, data.len);
+                try writer.writeAll(data[0..e]);
             }
         }
-        // For elements, would need to iterate children
-        return;
     }
+}
 
-    // Complex case: different containers - would need proper tree walking
-    // For now, just return empty
+fn isCommentOrPI(cdata: *Node.CData) bool {
+    return cdata.is(Node.CData.Comment) != null or cdata.is(Node.CData.ProcessingInstruction) != null;
+}
+
+fn nextInTreeOrder(node: *Node, root: *Node) ?*Node {
+    if (node.firstChild()) |child| return child;
+    return nextAfterSubtree(node, root);
+}
+
+fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
+    var current = node;
+    while (current != root) {
+        if (current.nextSibling()) |sibling| return sibling;
+        current = current.parentNode() orelse return null;
+    }
+    return null;
 }
 
 pub const JsApi = struct {
