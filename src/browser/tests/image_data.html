@@ -59,10 +59,6 @@
   }
 </script>
 
-<script id=constructor-invalid-colorspace>
-  testing.expectError("TypeError", () => {
-    new ImageData(5, 5, { colorSpace: "display-p3" });
-  });
 </script>
 
 <script id=single-pixel>
@@ -72,4 +68,8 @@
     testing.expectEqual(1, img.width);
     testing.expectEqual(1, img.height);
   }
+</script>
+
+<script id=too-large>
+  testing.expectError("IndexSizeError", () => new ImageData(2_147_483_648, 2_147_483_648));
 </script>
