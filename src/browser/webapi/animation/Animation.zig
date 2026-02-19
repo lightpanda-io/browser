@@ -87,8 +87,11 @@ pub fn pause(self: *Animation) void {
     self._playState = .paused;
 }
 
-pub fn cancel(_: *Animation) void {
-    log.warn(.not_implemented, "Animation.cancel", .{});
+pub fn cancel(self: *Animation) void {
+    // Transition to idle. If the animation was .running, the already-scheduled
+    // update() callback will fire but see .idle state, skip the finish
+    // transition, and release the strong ref via weakRef() as normal.
+    self._playState = .idle;
 }
 
 pub fn finish(self: *Animation, page: *Page) void {
