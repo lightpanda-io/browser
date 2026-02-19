@@ -91,12 +91,9 @@ pub fn deinit(self: *Session) void {
 pub fn createPage(self: *Session) !*Page {
     lp.assert(self.page == null, "Session.createPage - page not null", .{});
 
-    const id = self.page_id_gen +% 1;
-    self.page_id_gen = id;
-
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, id, self, null);
+    try Page.init(page, self.nextPageId(), self, null);
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -135,7 +132,7 @@ pub fn replacePage(self: *Session) !*Page {
 
     var current = self.page.?;
     const page_id = current.id;
-    const parent = current._parent;
+    const parent = current.parent;
     current.deinit();
 
     self.browser.env.memoryPressureNotification(.moderate);
@@ -335,12 +332,12 @@ fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
     const page_id, const parent = blk: {
         const page = &self.page.?;
         const page_id = page.id;
-        const parent = page._parent;
+        const parent = page.parent;
 
         browser.http_client.abort();
         self.removePage();
 
-        break :blk .{page_id, parent};
+        break :blk .{ page_id, parent };
     };
 
     self.page = @as(Page, undefined);
@@ -360,4 +357,10 @@ fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
     };
 
     return page;
+}
+
+pub fn nextPageId(self: *Session) u32 {
+    const id = self.page_id_gen +% 1;
+    self.page_id_gen = id;
+    return id;
 }

@@ -226,7 +226,6 @@ frames_sorted: bool = true,
 // DOM version used to invalidate cached state of "live" collections
 version: usize = 0,
 
-
 // This is maybe not great. It's a counter on the number of events that we're
 // waiting on before triggering the "load" event. Essentially, we need all
 // synchronous scripts and all iframes to be loaded. Scripts are handled by the
@@ -236,7 +235,7 @@ _pending_loads: u32,
 _parent_notified: if (IS_DEBUG) bool else void = if (IS_DEBUG) false else {},
 
 _type: enum { root, frame }, // only used for logs right now
-_req_id: ?u32 = null,
+_req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
 
 pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
@@ -1202,15 +1201,17 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         return;
     }
 
+    const session = self._session;
+
     iframe._executed = true;
     const page_frame = try self.arena.create(Page);
-    try Page.init(page_frame, self._session, self);
+    try Page.init(page_frame, session.nextPageId(), session, self);
 
     self._pending_loads += 1;
     page_frame.iframe = iframe;
     iframe._content_window = page_frame.window;
 
-    page_frame.navigate(src, .{.reason = .initialFrameNavigation}) catch |err| {
+    page_frame.navigate(src, .{ .reason = .initialFrameNavigation }) catch |err| {
         log.warn(.page, "iframe navigate failure", .{ .url = src, .err = err });
         self._pending_loads -= 1;
         iframe._content_window = null;

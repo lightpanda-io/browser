@@ -250,9 +250,10 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
             else => unreachable,
         },
         .address_bar => null,
+        .initialFrameNavigation => "initialFrameNavigation",
     };
     if (reason_) |reason| {
-        if (reason != .initialFrameNavigation) {
+        if (event.opts.reason != .initialFrameNavigation) {
             try cdp.sendEvent("Page.frameScheduledNavigation", .{
                 .frameId = frame_id,
                 .delay = 0,
@@ -346,6 +347,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
             else => unreachable,
         },
         .address_bar => null,
+        .initialFrameNavigation => "initialFrameNavigation",
     };
 
     if (reason_ != null) {
