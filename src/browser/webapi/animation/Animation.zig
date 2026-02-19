@@ -163,7 +163,7 @@ pub fn deinit(self: *Animation, _: bool) void {
 }
 
 // callback function transitionning from a state to another
-fn update(ctx: *anyopaque) anyerror!?u32 {
+fn update(ctx: *anyopaque) !?u32 {
     const self: *Animation = @ptrCast(@alignCast(ctx));
 
     switch (self._playState) {
