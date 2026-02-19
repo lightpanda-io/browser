@@ -29,6 +29,7 @@ pub const Headers = Net.Headers;
 
 const Config = @import("../Config.zig");
 const RobotStore = @import("../browser/Robots.zig").RobotStore;
+const WebBotAuth = @import("../browser/WebBotAuth.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -45,8 +46,14 @@ allocator: Allocator,
 config: *const Config,
 ca_blob: ?Net.Blob,
 robot_store: *RobotStore,
+web_bot_auth: *const ?WebBotAuth,
 
-pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Config) !Http {
+pub fn init(
+    allocator: Allocator,
+    robot_store: *RobotStore,
+    web_bot_auth: *const ?WebBotAuth,
+    config: *const Config,
+) !Http {
     try Net.globalInit();
     errdefer Net.globalDeinit();
 
@@ -68,6 +75,7 @@ pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Confi
         .config = config,
         .ca_blob = ca_blob,
         .robot_store = robot_store,
+        .web_bot_auth = web_bot_auth,
     };
 }
 
@@ -81,7 +89,7 @@ pub fn deinit(self: *Http) void {
 }
 
 pub fn createClient(self: *Http, allocator: Allocator) !*Client {
-    return Client.init(allocator, self.ca_blob, self.robot_store, self.config);
+    return Client.init(allocator, self.ca_blob, self.robot_store, self.web_bot_auth, self.config);
 }
 
 pub fn newConnection(self: *Http) !Net.Connection {
