@@ -302,6 +302,27 @@ pub fn pageCreated(bc: anytype, page: *Page) !void {
     bc.captured_responses = .empty;
 }
 
+pub fn pageFrameCreated(bc: anytype, event: *const Notification.PageFrameCreated) !void {
+    const session_id = bc.session_id orelse return;
+
+    const cdp = bc.cdp;
+    const frame_id = &id.toFrameId(event.page_id);
+
+    try cdp.sendEvent("Page.frameAttached", .{ .params = .{
+        .frameId = frame_id,
+        .parentFrameId = &id.toFrameId(event.parent_id),
+    } }, .{ .session_id = session_id });
+
+    if (bc.page_life_cycle_events) {
+        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+            .name = "init",
+            .frameId = frame_id,
+            .loaderId = &id.toLoaderId(event.page_id),
+            .timestamp = event.timestamp,
+        }, .{ .session_id = session_id });
+    }
+}
+
 pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.PageNavigated) !void {
     // detachTarget could be called, in which case, we still have a page doing
     // things, but no session.

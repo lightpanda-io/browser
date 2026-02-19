@@ -73,6 +73,7 @@ const EventListeners = struct {
     page_navigated: List = .{},
     page_network_idle: List = .{},
     page_network_almost_idle: List = .{},
+    page_frame_created: List = .{},
     http_request_fail: List = .{},
     http_request_start: List = .{},
     http_request_intercept: List = .{},
@@ -89,6 +90,7 @@ const Events = union(enum) {
     page_navigated: *const PageNavigated,
     page_network_idle: *const PageNetworkIdle,
     page_network_almost_idle: *const PageNetworkAlmostIdle,
+    page_frame_created: *const PageFrameCreated,
     http_request_fail: *const RequestFail,
     http_request_start: *const RequestStart,
     http_request_intercept: *const RequestIntercept,
@@ -126,6 +128,12 @@ pub const PageNetworkIdle = struct {
 pub const PageNetworkAlmostIdle = struct {
     req_id: u32,
     page_id: u32,
+    timestamp: u64,
+};
+
+pub const PageFrameCreated = struct {
+    page_id: u32,
+    parent_id: u32,
     timestamp: u64,
 };
 

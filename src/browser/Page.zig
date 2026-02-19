@@ -1201,15 +1201,22 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         return;
     }
 
-    const session = self._session;
-
     iframe._executed = true;
+
+    const session = self._session;
+    const page_id = session.nextPageId();
     const page_frame = try self.arena.create(Page);
-    try Page.init(page_frame, session.nextPageId(), session, self);
+    try Page.init(page_frame, page_id, session, self);
 
     self._pending_loads += 1;
     page_frame.iframe = iframe;
     iframe._content_window = page_frame.window;
+
+    self._session.notification.dispatch(.page_frame_created, &.{
+        .page_id = page_id,
+        .parent_id = self.id,
+        .timestamp = timestamp(.monotonic),
+    });
 
     page_frame.navigate(src, .{ .reason = .initialFrameNavigation }) catch |err| {
         log.warn(.page, "iframe navigate failure", .{ .url = src, .err = err });
