@@ -154,7 +154,7 @@ fn removePropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, pag
 fn syncStyleAttribute(self: *CSSStyleDeclaration, page: *Page) !void {
     const element = self._element orelse return;
     const css_text = try self.getCssText(page);
-    try element.setAttributeSafe(String.wrap("style"), String.wrap(css_text), page);
+    try element.setAttributeSafe(comptime .wrap("style"), .wrap(css_text), page);
 }
 
 pub fn getFloat(self: *const CSSStyleDeclaration, page: *Page) []const u8 {
