@@ -716,6 +716,14 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!voi
             try wba.signRequest(self.allocator, &header_list, authority);
         }
 
+        if (comptime IS_DEBUG) {
+            var slist = header_list.headers;
+            while (slist) |node| {
+                log.debug(.http, "request header", .{ .header = std.mem.span(node.data) });
+                slist = node.next;
+            }
+        }
+
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
 
         // Add cookies.
