@@ -376,3 +376,67 @@
 }
 </script>
 
+<form id="form-validity-test">
+  <input id="vi-required-empty" type="text" required>
+  <input id="vi-optional" type="text">
+  <input id="vi-hidden-required" type="hidden" required>
+  <fieldset id="vi-fieldset">
+    <input id="vi-nested-required" type="text" required>
+    <select id="vi-select-required" required>
+      <option value="">Pick one</option>
+      <option value="a">A</option>
+    </select>
+  </fieldset>
+</form>
+<input id="vi-checkbox" type="checkbox">
+
+<script id=invalidPseudo>
+{
+  // Inputs with required + empty value are :invalid
+  testing.expectEqual(true, document.getElementById('vi-required-empty').matches(':invalid'));
+  testing.expectEqual(false, document.getElementById('vi-required-empty').matches(':valid'));
+
+  // Inputs without required are :valid
+  testing.expectEqual(false, document.getElementById('vi-optional').matches(':invalid'));
+  testing.expectEqual(true, document.getElementById('vi-optional').matches(':valid'));
+
+  // hidden inputs are not candidates for constraint validation
+  testing.expectEqual(false, document.getElementById('vi-hidden-required').matches(':invalid'));
+  testing.expectEqual(false, document.getElementById('vi-hidden-required').matches(':valid'));
+
+  // select with required and empty selected value is :invalid
+  testing.expectEqual(true, document.getElementById('vi-select-required').matches(':invalid'));
+  testing.expectEqual(false, document.getElementById('vi-select-required').matches(':valid'));
+
+  // fieldset containing invalid controls is :invalid
+  testing.expectEqual(true, document.getElementById('vi-fieldset').matches(':invalid'));
+  testing.expectEqual(false, document.getElementById('vi-fieldset').matches(':valid'));
+
+  // form containing invalid controls is :invalid
+  testing.expectEqual(true, document.getElementById('form-validity-test').matches(':invalid'));
+  testing.expectEqual(false, document.getElementById('form-validity-test').matches(':valid'));
+}
+</script>
+
+<script id=validAfterValueSet>
+{
+  // After setting a value, a required input becomes :valid
+  const input = document.getElementById('vi-required-empty');
+  input.value = 'hello';
+  testing.expectEqual(false, input.matches(':invalid'));
+  testing.expectEqual(true, input.matches(':valid'));
+  input.value = '';
+}
+</script>
+
+<script id=indeterminatePseudo>
+{
+  const cb = document.getElementById('vi-checkbox');
+  testing.expectEqual(false, cb.matches(':indeterminate'));
+  cb.indeterminate = true;
+  testing.expectEqual(true, cb.matches(':indeterminate'));
+  cb.indeterminate = false;
+  testing.expectEqual(false, cb.matches(':indeterminate'));
+}
+</script>
+

@@ -531,11 +531,45 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .enabled => {
             return el.getAttributeSafe(comptime .wrap("disabled")) == null;
         },
-        .indeterminate => return false,
+        .indeterminate => {
+            const input = el.is(Node.Element.Html.Input) orelse return false;
+            return switch (input._input_type) {
+                .checkbox => input.getIndeterminate(),
+                else => false,
+            };
+        },
 
         // Form validation
-        .valid => return false,
-        .invalid => return false,
+        .valid => {
+            if (el.is(Node.Element.Html.Input)) |input| {
+                return switch (input._input_type) {
+                    .hidden, .submit, .reset, .button => false,
+                    else => !input.getRequired() or input.getValue().len > 0,
+                };
+            }
+            if (el.is(Node.Element.Html.Select)) |select| {
+                return !select.getRequired() or select.getValue(page).len > 0;
+            }
+            if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
+                return !hasInvalidDescendant(node, page);
+            }
+            return false;
+        },
+        .invalid => {
+            if (el.is(Node.Element.Html.Input)) |input| {
+                return switch (input._input_type) {
+                    .hidden, .submit, .reset, .button => false,
+                    else => input.getRequired() and input.getValue().len == 0,
+                };
+            }
+            if (el.is(Node.Element.Html.Select)) |select| {
+                return select.getRequired() and select.getValue(page).len == 0;
+            }
+            if (el.is(Node.Element.Html.Form) != null or el.is(Node.Element.Html.FieldSet) != null) {
+                return hasInvalidDescendant(node, page);
+            }
+            return false;
+        },
         .required => {
             return el.getAttributeSafe(comptime .wrap("required")) != null;
         },
@@ -679,6 +713,26 @@ fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *
             return true;
         }
 
+        child = c.nextSibling();
+    }
+    return false;
+}
+
+fn hasInvalidDescendant(parent: *Node, page: *Page) bool {
+    var child = parent.firstChild();
+    while (child) |c| {
+        if (c.is(Node.Element)) |child_el| {
+            if (child_el.is(Node.Element.Html.Input)) |input| {
+                const invalid = switch (input._input_type) {
+                    .hidden, .submit, .reset, .button => false,
+                    else => input.getRequired() and input.getValue().len == 0,
+                };
+                if (invalid) return true;
+            } else if (child_el.is(Node.Element.Html.Select)) |select| {
+                if (select.getRequired() and select.getValue(page).len == 0) return true;
+            }
+        }
+        if (hasInvalidDescendant(c, page)) return true;
         child = c.nextSibling();
     }
     return false;
