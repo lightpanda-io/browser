@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const Page = @import("Page.zig");
+const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 
@@ -68,24 +69,23 @@ fn isLayoutBlock(tag: Element.Tag) bool {
 fn isStandaloneAnchor(el: *Element) bool {
     const node = el.asNode();
     const parent = node.parentNode() orelse return false;
+    const parent_el = parent.is(Element) orelse return false;
 
-    if (parent._type != .element) return false;
-    const parent_el = parent.as(Element);
     if (!isLayoutBlock(parent_el.getTag())) return false;
 
     var prev = node.previousSibling();
     while (prev) |p| : (prev = p.previousSibling()) {
         if (isSignificantText(p)) return false;
-        if (p._type == .element) {
-            if (isVisibleElement(p.as(Element))) break;
+        if (p.is(Element)) |pe| {
+            if (isVisibleElement(pe)) break;
         }
     }
 
     var next = node.nextSibling();
     while (next) |n| : (next = n.nextSibling()) {
         if (isSignificantText(n)) return false;
-        if (n._type == .element) {
-            if (isVisibleElement(n.as(Element))) break;
+        if (n.is(Element)) |ne| {
+            if (isVisibleElement(ne)) break;
         }
     }
 
@@ -93,12 +93,8 @@ fn isStandaloneAnchor(el: *Element) bool {
 }
 
 fn isSignificantText(node: *Node) bool {
-    if (node._type != .cdata) return false;
-    const cd = node.as(Node.CData);
-    if (node.is(Node.CData.Text)) |_| {
-        return !isAllWhitespace(cd.getData());
-    }
-    return false;
+    const text = node.is(Node.CData.Text) orelse return false;
+    return !isAllWhitespace(text.getWholeText());
 }
 
 fn isVisibleElement(el: *Element) bool {
@@ -117,8 +113,7 @@ fn isAllWhitespace(text: []const u8) bool {
 fn hasBlockDescendant(node: *Node) bool {
     var it = node.childrenIterator();
     while (it.next()) |child| {
-        if (child._type == .element) {
-            const el = child.as(Element);
+        if (child.is(Element)) |el| {
             if (isBlock(el.getTag())) return true;
             if (hasBlockDescendant(child)) return true;
         }
