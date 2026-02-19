@@ -151,6 +151,12 @@ pub fn getStartTime(self: *const Animation) ?f64 {
 
 pub fn setStartTime(self: *Animation, value: ?f64, page: *Page) !void {
     self._startTime = value;
+
+    // if the startTime is null, don't play the animation.
+    if (value == null) {
+        return;
+    }
+
     return self.play(page);
 }
 
