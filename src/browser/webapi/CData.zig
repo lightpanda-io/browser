@@ -33,6 +33,66 @@ _type: Type,
 _proto: *Node,
 _data: []const u8 = "",
 
+/// Count UTF-16 code units in a UTF-8 string.
+/// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
+/// everything else produces 1.
+fn utf16Len(data: []const u8) usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < data.len) {
+        const byte = data[i];
+        const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch {
+            // Invalid UTF-8 byte — count as 1 code unit, advance 1 byte
+            i += 1;
+            count += 1;
+            continue;
+        };
+        if (i + seq_len > data.len) {
+            // Truncated sequence
+            count += 1;
+            i += 1;
+            continue;
+        }
+        if (seq_len == 4) {
+            count += 2; // surrogate pair
+        } else {
+            count += 1;
+        }
+        i += seq_len;
+    }
+    return count;
+}
+
+/// Convert a UTF-16 code unit offset to a UTF-8 byte offset.
+/// Returns IndexSizeError if utf16_offset > utf16 length of data.
+pub fn utf16OffsetToUtf8(data: []const u8, utf16_offset: usize) error{IndexSizeError}!usize {
+    var utf16_pos: usize = 0;
+    var i: usize = 0;
+    while (i < data.len) {
+        if (utf16_pos == utf16_offset) return i;
+        const byte = data[i];
+        const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch {
+            i += 1;
+            utf16_pos += 1;
+            continue;
+        };
+        if (i + seq_len > data.len) {
+            utf16_pos += 1;
+            i += 1;
+            continue;
+        }
+        if (seq_len == 4) {
+            utf16_pos += 2;
+        } else {
+            utf16_pos += 1;
+        }
+        i += seq_len;
+    }
+    // At end of string — valid only if offset equals total length
+    if (utf16_pos == utf16_offset) return i;
+    return error.IndexSizeError;
+}
+
 pub const Type = union(enum) {
     text: Text,
     comment: Comment,
@@ -128,6 +188,17 @@ pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
     page.characterDataChange(self.asNode(), old_value);
 }
 
+/// JS bridge wrapper for `data` setter.
+/// Handles [LegacyNullToEmptyString]: null → setData(null) → "".
+/// Passes everything else (including undefined) through V8 toString,
+/// so `undefined` becomes the string "undefined" per spec.
+pub fn _setData(self: *CData, value: js.Value, page: *Page) !void {
+    if (value.isNull()) {
+        return self.setData(null, page);
+    }
+    return self.setData(try value.toZig([]const u8), page);
+}
+
 pub fn format(self: *const CData, writer: *std.io.Writer) !void {
     return switch (self._type) {
         .text => writer.print("<text>{s}</text>", .{self._data}),
@@ -138,7 +209,7 @@ pub fn format(self: *const CData, writer: *std.io.Writer) !void {
 }
 
 pub fn getLength(self: *const CData) usize {
-    return std.unicode.utf8CountCodepoints(self._data) catch self._data.len;
+    return utf16Len(self._data);
 }
 
 pub fn isEqualNode(self: *const CData, other: *const CData) bool {
@@ -163,49 +234,52 @@ pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
 }
 
 pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void {
-    if (offset > self._data.len) return error.IndexSizeError;
-    const end = @min(offset + count, self._data.len);
+    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
+    const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
+    const byte_end = utf16OffsetToUtf8(self._data, end_utf16) catch self._data.len;
 
     // Just slice - original data stays in arena
     const old_value = self._data;
-    if (offset == 0) {
-        self._data = self._data[end..];
-    } else if (end >= self._data.len) {
-        self._data = self._data[0..offset];
+    if (byte_offset == 0) {
+        self._data = self._data[byte_end..];
+    } else if (byte_end >= self._data.len) {
+        self._data = self._data[0..byte_offset];
     } else {
         self._data = try std.mem.concat(page.arena, u8, &.{
-            self._data[0..offset],
-            self._data[end..],
+            self._data[0..byte_offset],
+            self._data[byte_end..],
         });
     }
     page.characterDataChange(self.asNode(), old_value);
 }
 
 pub fn insertData(self: *CData, offset: usize, data: []const u8, page: *Page) !void {
-    if (offset > self._data.len) return error.IndexSizeError;
+    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
     const new_data = try std.mem.concat(page.arena, u8, &.{
-        self._data[0..offset],
+        self._data[0..byte_offset],
         data,
-        self._data[offset..],
+        self._data[byte_offset..],
     });
     try self.setData(new_data, page);
 }
 
 pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, page: *Page) !void {
-    if (offset > self._data.len) return error.IndexSizeError;
-    const end = @min(offset + count, self._data.len);
+    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
+    const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
+    const byte_end = utf16OffsetToUtf8(self._data, end_utf16) catch self._data.len;
     const new_data = try std.mem.concat(page.arena, u8, &.{
-        self._data[0..offset],
+        self._data[0..byte_offset],
         data,
-        self._data[end..],
+        self._data[byte_end..],
     });
     try self.setData(new_data, page);
 }
 
 pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {
-    if (offset > self._data.len) return error.IndexSizeError;
-    const end = @min(offset + count, self._data.len);
-    return self._data[offset..end];
+    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
+    const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
+    const byte_end = utf16OffsetToUtf8(self._data, end_utf16) catch self._data.len;
+    return self._data[byte_offset..byte_end];
 }
 
 pub fn remove(self: *CData, page: *Page) !void {
@@ -276,7 +350,7 @@ pub const JsApi = struct {
         pub const enumerable = false;
     };
 
-    pub const data = bridge.accessor(CData.getData, CData.setData, .{});
+    pub const data = bridge.accessor(CData.getData, CData._setData, .{});
     pub const length = bridge.accessor(CData.getLength, null, .{});
 
     pub const appendData = bridge.function(CData.appendData, .{});
