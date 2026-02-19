@@ -3,13 +3,67 @@
 
 <script id=animation>
   let a1 = document.createElement('div').animate(null, null);
-  testing.expectEqual('finished', a1.playState);
+  testing.expectEqual('idle', a1.playState);
 
   let cb = [];
-  a1.ready.then(() => { cb.push('ready') });
   a1.finished.then((x) => {
-    cb.push('finished');
+    cb.push(a1.playState);
     cb.push(x == a1);
   });
-  testing.eventually(() => testing.expectEqual(['finished', true], cb));
+  a1.ready.then(() => {
+    cb.push(a1.playState);
+    a1.play();
+    cb.push(a1.playState);
+  });
+  testing.eventually(() => testing.expectEqual(['idle', 'running', 'finished', true], cb));
+</script>
+
+<script id=startTime>
+  let a2 = document.createElement('div').animate(null, null);
+  // startTime defaults to null
+  testing.expectEqual(null, a2.startTime);
+  // startTime is settable
+  a2.startTime = 42.5;
+  testing.expectEqual(42.5, a2.startTime);
+  // startTime can be reset to null
+  a2.startTime = null;
+  testing.expectEqual(null, a2.startTime);
+</script>
+
+<script id=onfinish>
+  let a3 = document.createElement('div').animate(null, null);
+  // onfinish defaults to null
+  testing.expectEqual(null, a3.onfinish);
+
+  let calls = [];
+  // onfinish callback should be scheduled and called asynchronously
+  a3.onfinish = function() { calls.push('finish'); };
+  a3.play();
+  testing.eventually(() => testing.expectEqual(['finish'], calls));
+</script>
+
+<script id=pause>
+  let a4 = document.createElement('div').animate(null, null);
+  let cb4 = [];
+  a4.finished.then((x) => { cb4.push(a4.playState) });
+  a4.ready.then(() => {
+    a4.play();
+    cb4.push(a4.playState)
+    a4.pause();
+    cb4.push(a4.playState)
+  });
+  testing.eventually(() => testing.expectEqual(['running', 'paused'], cb4));
+</script>
+
+<script id=finish>
+  let a5 = document.createElement('div').animate(null, null);
+  testing.expectEqual('idle', a5.playState);
+
+  let cb5 = [];
+  a5.finished.then((x) => { cb5.push(a5.playState) });
+  a5.ready.then(() => {
+    cb5.push(a5.playState);
+    a5.play();
+  });
+  testing.eventually(() => testing.expectEqual(['idle', 'finished'], cb5));
 </script>
