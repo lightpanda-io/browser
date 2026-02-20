@@ -195,6 +195,33 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(DOMException.getName, null, .{});
     pub const message = bridge.accessor(DOMException.getMessage, null, .{});
     pub const toString = bridge.function(DOMException.toString, .{});
+
+    // Legacy error code constants (on both prototype and constructor)
+    pub const INDEX_SIZE_ERR = bridge.property(1, .{ .template = true });
+    pub const DOMSTRING_SIZE_ERR = bridge.property(2, .{ .template = true });
+    pub const HIERARCHY_REQUEST_ERR = bridge.property(3, .{ .template = true });
+    pub const WRONG_DOCUMENT_ERR = bridge.property(4, .{ .template = true });
+    pub const INVALID_CHARACTER_ERR = bridge.property(5, .{ .template = true });
+    pub const NO_DATA_ALLOWED_ERR = bridge.property(6, .{ .template = true });
+    pub const NO_MODIFICATION_ALLOWED_ERR = bridge.property(7, .{ .template = true });
+    pub const NOT_FOUND_ERR = bridge.property(8, .{ .template = true });
+    pub const NOT_SUPPORTED_ERR = bridge.property(9, .{ .template = true });
+    pub const INUSE_ATTRIBUTE_ERR = bridge.property(10, .{ .template = true });
+    pub const INVALID_STATE_ERR = bridge.property(11, .{ .template = true });
+    pub const SYNTAX_ERR = bridge.property(12, .{ .template = true });
+    pub const INVALID_MODIFICATION_ERR = bridge.property(13, .{ .template = true });
+    pub const NAMESPACE_ERR = bridge.property(14, .{ .template = true });
+    pub const INVALID_ACCESS_ERR = bridge.property(15, .{ .template = true });
+    pub const VALIDATION_ERR = bridge.property(16, .{ .template = true });
+    pub const TYPE_MISMATCH_ERR = bridge.property(17, .{ .template = true });
+    pub const SECURITY_ERR = bridge.property(18, .{ .template = true });
+    pub const NETWORK_ERR = bridge.property(19, .{ .template = true });
+    pub const ABORT_ERR = bridge.property(20, .{ .template = true });
+    pub const URL_MISMATCH_ERR = bridge.property(21, .{ .template = true });
+    pub const QUOTA_EXCEEDED_ERR = bridge.property(22, .{ .template = true });
+    pub const TIMEOUT_ERR = bridge.property(23, .{ .template = true });
+    pub const INVALID_NODE_TYPE_ERR = bridge.property(24, .{ .template = true });
+    pub const DATA_CLONE_ERR = bridge.property(25, .{ .template = true });
 };
 
 const testing = @import("../../testing.zig");
