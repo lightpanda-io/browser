@@ -108,6 +108,20 @@
   }
 </script>
 
+<script id=createHTMLDocument_nulll_title>
+  {
+    const impl = document.implementation;
+    const doc = impl.createHTMLDocument(null);
+
+    testing.expectEqual('null', doc.title);
+
+    // Should have title element in head
+    const titleElement = doc.head.querySelector('title');
+    testing.expectEqual(true, titleElement !== null);
+    testing.expectEqual('null', titleElement.textContent);
+  }
+</script>
+
 <script id=createHTMLDocument_structure>
   {
     const impl = document.implementation;

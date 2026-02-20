@@ -453,6 +453,13 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
                 return js_val;
             }
 
+            if (comptime o.child == js.NullableString) {
+                if (js_val.isUndefined()) {
+                    return null;
+                }
+                return .{ .value = try js_val.toStringSlice() };
+            }
+
             if (comptime o.child == js.Object) {
                 return js.Object{
                     .local = self,

@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const CData = @import("../CData.zig");
 
@@ -23,8 +24,8 @@ const Text = @This();
 
 _proto: *CData,
 
-pub fn init(str: ?[]const u8, page: *Page) !*Text {
-    const node = try page.createTextNode(str orelse "");
+pub fn init(str: ?js.NullableString, page: *Page) !*Text {
+    const node = try page.createTextNode(if (str) |s| s.value else "");
     return node.as(Text);
 }
 
@@ -54,13 +55,7 @@ pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
     return new_text;
 }
 
-const testing = @import("../../../testing.zig");
-test "WebApi: CData.Text" {
-    try testing.htmlRunner("cdata/text", .{});
-}
-
 pub const JsApi = struct {
-    const js = @import("../../js/js.zig");
     pub const bridge = js.Bridge(Text);
 
     pub const Meta = struct {

@@ -25,8 +25,8 @@ const Comment = @This();
 
 _proto: *CData,
 
-pub fn init(content: ?[]const u8, page: *Page) !*Comment {
-    const node = try page.createComment(content orelse "");
+pub fn init(str: ?js.NullableString, page: *Page) !*Comment {
+    const node = try page.createComment(if (str) |s| s.value else "");
     return node.as(Comment);
 }
 
@@ -42,3 +42,8 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(Comment.init, .{});
 };
+
+const testing = @import("../../../testing.zig");
+test "WebApi: CData.Text" {
+    try testing.htmlRunner("cdata/comment.html", .{});
+}
