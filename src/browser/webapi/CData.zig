@@ -227,24 +227,30 @@ pub fn before(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
 pub fn after(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
-    const next = node.nextSibling();
+    const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(page);
-        _ = try parent.insertBefore(child, next, page);
+        _ = try parent.insertBefore(child, viable_next, page);
     }
 }
 
 pub fn replaceWith(self: *CData, nodes: []const Node.NodeOrText, page: *Page) !void {
-    const node = self.asNode();
-    const parent = node.parentNode() orelse return;
-    const next = node.nextSibling();
+    const ref_node = self.asNode();
+    const parent = ref_node.parentNode() orelse return;
 
-    _ = try parent.removeChild(node, page);
-
+    var rm_ref_node = true;
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(page);
-        _ = try parent.insertBefore(child, next, page);
+        if (child == ref_node) {
+            rm_ref_node = false;
+            continue;
+        }
+        _ = try parent.insertBefore(child, ref_node, page);
+    }
+
+    if (rm_ref_node) {
+        _ = try parent.removeChild(ref_node, page);
     }
 }
 

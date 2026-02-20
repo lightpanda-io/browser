@@ -870,11 +870,11 @@ pub fn before(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void
 pub fn after(self: *Element, nodes: []const Node.NodeOrText, page: *Page) !void {
     const node = self.asNode();
     const parent = node.parentNode() orelse return;
-    const next = node.nextSibling();
+    const viable_next = Node.NodeOrText.viableNextSibling(node, nodes);
 
     for (nodes) |node_or_text| {
         const child = try node_or_text.toNode(page);
-        _ = try parent.insertBefore(child, next, page);
+        _ = try parent.insertBefore(child, viable_next, page);
     }
 }
 
