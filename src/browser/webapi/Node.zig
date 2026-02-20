@@ -1074,6 +1074,25 @@ pub const NodeOrText = union(enum) {
             .text => |txt| page.createTextNode(txt),
         };
     }
+
+    /// DOM spec: first following sibling of `node` that is not in `nodes`.
+    pub fn viableNextSibling(node: *Node, nodes: []const NodeOrText) ?*Node {
+        var sibling = node.nextSibling() orelse return null;
+        blk: while (true) {
+            for (nodes) |n| {
+                switch (n) {
+                    .node => |nn| if (sibling == nn) {
+                        sibling = sibling.nextSibling() orelse return null;
+                        continue :blk;
+                    },
+                    .text => {},
+                }
+            } else {
+                return sibling;
+            }
+        }
+        return null;
+    }
 };
 
 const testing = @import("../../testing.zig");
