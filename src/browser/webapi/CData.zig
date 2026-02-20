@@ -93,6 +93,48 @@ pub fn utf16OffsetToUtf8(data: []const u8, utf16_offset: usize) error{IndexSizeE
     return error.IndexSizeError;
 }
 
+/// Convert a UTF-16 code unit range to UTF-8 byte offsets in a single pass.
+/// Returns IndexSizeError if utf16_start > utf16 length of data.
+/// Clamps utf16_end to the actual string length if it exceeds it.
+fn utf16RangeToUtf8(data: []const u8, utf16_start: usize, utf16_end: usize) !struct { start: usize, end: usize } {
+    var i: usize = 0;
+    var utf16_pos: usize = 0;
+    var byte_start: ?usize = null;
+
+    while (i < data.len) {
+        // Record start offset when we reach it
+        if (utf16_pos == utf16_start) {
+            byte_start = i;
+        }
+        // If we've found start and reached end, return both
+        if (utf16_pos == utf16_end and byte_start != null) {
+            return .{ .start = byte_start.?, .end = i };
+        }
+
+        const byte = data[i];
+        const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch {
+            i += 1;
+            utf16_pos += 1;
+            continue;
+        };
+        if (i + seq_len > data.len) {
+            utf16_pos += 1;
+            i += 1;
+            continue;
+        }
+        utf16_pos += if (seq_len == 4) 2 else 1;
+        i += seq_len;
+    }
+
+    // At end of string
+    if (utf16_pos == utf16_start) {
+        byte_start = i;
+    }
+    const start = byte_start orelse return error.IndexSizeError;
+    // End is either exactly at utf16_end or clamped to string end
+    return .{ .start = start, .end = i };
+}
+
 pub const Type = union(enum) {
     text: Text,
     comment: Comment,
@@ -234,20 +276,19 @@ pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
 }
 
 pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void {
-    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
-    const byte_end = utf16OffsetToUtf8(self._data, end_utf16) catch self._data.len;
+    const range = try utf16RangeToUtf8(self._data, offset, end_utf16);
 
     // Just slice - original data stays in arena
     const old_value = self._data;
-    if (byte_offset == 0) {
-        self._data = self._data[byte_end..];
-    } else if (byte_end >= self._data.len) {
-        self._data = self._data[0..byte_offset];
+    if (range.start == 0) {
+        self._data = self._data[range.end..];
+    } else if (range.end >= self._data.len) {
+        self._data = self._data[0..range.start];
     } else {
         self._data = try std.mem.concat(page.arena, u8, &.{
-            self._data[0..byte_offset],
-            self._data[byte_end..],
+            self._data[0..range.start],
+            self._data[range.end..],
         });
     }
     page.characterDataChange(self.asNode(), old_value);
@@ -264,22 +305,20 @@ pub fn insertData(self: *CData, offset: usize, data: []const u8, page: *Page) !v
 }
 
 pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, page: *Page) !void {
-    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
-    const byte_end = utf16OffsetToUtf8(self._data, end_utf16) catch self._data.len;
+    const range = try utf16RangeToUtf8(self._data, offset, end_utf16);
     const new_data = try std.mem.concat(page.arena, u8, &.{
-        self._data[0..byte_offset],
+        self._data[0..range.start],
         data,
-        self._data[byte_end..],
+        self._data[range.end..],
     });
     try self.setData(new_data, page);
 }
 
 pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {
-    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
-    const byte_end = utf16OffsetToUtf8(self._data, end_utf16) catch self._data.len;
-    return self._data[byte_offset..byte_end];
+    const range = try utf16RangeToUtf8(self._data, offset, end_utf16);
+    return self._data[range.start..range.end];
 }
 
 pub fn remove(self: *CData, page: *Page) !void {
@@ -459,4 +498,95 @@ test "utf16OffsetToUtf8" {
     // Empty string: only offset 0 is valid
     try std.testing.expectEqual(@as(usize, 0), try utf16OffsetToUtf8("", 0));
     try std.testing.expectError(error.IndexSizeError, utf16OffsetToUtf8("", 1));
+}
+
+test "utf16RangeToUtf8" {
+    // ASCII: basic range
+    {
+        const result = try utf16RangeToUtf8("hello", 1, 4);
+        try std.testing.expectEqual(@as(usize, 1), result.start);
+        try std.testing.expectEqual(@as(usize, 4), result.end);
+    }
+
+    // ASCII: range to end
+    {
+        const result = try utf16RangeToUtf8("hello", 2, 5);
+        try std.testing.expectEqual(@as(usize, 2), result.start);
+        try std.testing.expectEqual(@as(usize, 5), result.end);
+    }
+
+    // ASCII: range past end (should clamp)
+    {
+        const result = try utf16RangeToUtf8("hello", 2, 100);
+        try std.testing.expectEqual(@as(usize, 2), result.start);
+        try std.testing.expectEqual(@as(usize, 5), result.end); // clamped
+    }
+
+    // ASCII: full range
+    {
+        const result = try utf16RangeToUtf8("hello", 0, 5);
+        try std.testing.expectEqual(@as(usize, 0), result.start);
+        try std.testing.expectEqual(@as(usize, 5), result.end);
+    }
+
+    // ASCII: start past end
+    try std.testing.expectError(error.IndexSizeError, utf16RangeToUtf8("hello", 6, 10));
+
+    // CJK "資料" (6 bytes, 2 UTF-16 code units)
+    {
+        const result = try utf16RangeToUtf8("資料", 0, 1);
+        try std.testing.expectEqual(@as(usize, 0), result.start);
+        try std.testing.expectEqual(@as(usize, 3), result.end); // after 資
+    }
+
+    {
+        const result = try utf16RangeToUtf8("資料", 1, 2);
+        try std.testing.expectEqual(@as(usize, 3), result.start); // before 料
+        try std.testing.expectEqual(@as(usize, 6), result.end); // end
+    }
+
+    {
+        const result = try utf16RangeToUtf8("資料", 0, 2);
+        try std.testing.expectEqual(@as(usize, 0), result.start);
+        try std.testing.expectEqual(@as(usize, 6), result.end);
+    }
+
+    // Emoji "🌠AB" (4+1+1 = 6 bytes; 2+1+1 = 4 UTF-16 code units)
+    {
+        const result = try utf16RangeToUtf8("🌠AB", 0, 2);
+        try std.testing.expectEqual(@as(usize, 0), result.start);
+        try std.testing.expectEqual(@as(usize, 4), result.end); // after 🌠
+    }
+
+    {
+        const result = try utf16RangeToUtf8("🌠AB", 2, 3);
+        try std.testing.expectEqual(@as(usize, 4), result.start); // before A
+        try std.testing.expectEqual(@as(usize, 5), result.end); // before B
+    }
+
+    {
+        const result = try utf16RangeToUtf8("🌠AB", 0, 4);
+        try std.testing.expectEqual(@as(usize, 0), result.start);
+        try std.testing.expectEqual(@as(usize, 6), result.end);
+    }
+
+    // Empty string
+    {
+        const result = try utf16RangeToUtf8("", 0, 0);
+        try std.testing.expectEqual(@as(usize, 0), result.start);
+        try std.testing.expectEqual(@as(usize, 0), result.end);
+    }
+
+    {
+        const result = try utf16RangeToUtf8("", 0, 100);
+        try std.testing.expectEqual(@as(usize, 0), result.start);
+        try std.testing.expectEqual(@as(usize, 0), result.end); // clamped
+    }
+
+    // Mixed "🌠 test 🌠" (4+1+4+1+4 = 14 bytes; 2+1+4+1+2 = 10 UTF-16 code units)
+    {
+        const result = try utf16RangeToUtf8("🌠 test 🌠", 3, 7);
+        try std.testing.expectEqual(@as(usize, 5), result.start); // before 'test'
+        try std.testing.expectEqual(@as(usize, 9), result.end); // after 'test', before second space
+    }
 }
