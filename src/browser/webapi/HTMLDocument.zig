@@ -201,7 +201,10 @@ pub fn setCookie(_: *HTMLDocument, cookie_str: []const u8, page: *Page) ![]const
     // we use the cookie jar's allocator to parse the cookie because it
     // outlives the page's arena.
     const Cookie = @import("storage/Cookie.zig");
-    const c = try Cookie.parse(page._session.cookie_jar.allocator, page.url, cookie_str);
+    const c = Cookie.parse(page._session.cookie_jar.allocator, page.url, cookie_str) catch {
+        // Invalid cookies should be silently ignored, not throw errors
+        return "";
+    };
     errdefer c.deinit();
     if (c.http_only) {
         c.deinit();

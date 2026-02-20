@@ -49,10 +49,10 @@ pub fn deinit(self: *const Cookie) void {
 
 // There's https://datatracker.ietf.org/doc/html/rfc6265 but browsers are
 // far less strict. I only found 2 cases where browsers will reject a cookie:
-//   - a byte 0...32 and 127..255 anywhere in the cookie (the HTTP header
+//   - a byte 0...31 and 127...255 anywhere in the cookie (the HTTP header
 //     parser might take care of this already)
 //   - any shenanigans with the domain attribute - it has to be the current
-//     domain or one of higher order, exluding TLD.
+//     domain or one of higher order, excluding TLD.
 // Anything else, will turn into a cookie.
 // Single value? That's a cookie with an emtpy name and a value
 // Key or Values with characters the RFC says aren't allowed? Allowed! (
@@ -318,7 +318,7 @@ fn parseNameValue(str: []const u8) !struct { []const u8, []const u8, []const u8 
 
 pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, is_navigation: bool, is_http: bool) bool {
     if (self.http_only and is_http == false) {
-        // http only cookies can be accessed from Javascript
+        // http only cookies cannot be accessed from Javascript
         return false;
     }
 
@@ -435,9 +435,9 @@ pub const Jar = struct {
     pub fn removeExpired(self: *Jar, request_time: ?i64) void {
         if (self.cookies.items.len == 0) return;
         const time = request_time orelse std.time.timestamp();
-        var i: usize = self.cookies.items.len - 1;
+        var i: usize = self.cookies.items.len ;
         while (i > 0) {
-            defer i -= 1;
+            i -= 1;
             const cookie = &self.cookies.items[i];
             if (isCookieExpired(cookie, time)) {
                 self.cookies.swapRemove(i).deinit();
@@ -558,7 +558,7 @@ fn trimLeft(str: []const u8) []const u8 {
 }
 
 fn trimRight(str: []const u8) []const u8 {
-    return std.mem.trimLeft(u8, str, &std.ascii.whitespace);
+    return std.mem.trimRight(u8, str, &std.ascii.whitespace);
 }
 
 fn toLower(str: []u8) []u8 {
