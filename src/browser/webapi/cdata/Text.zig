@@ -35,15 +35,13 @@ pub fn getWholeText(self: *Text) []const u8 {
 pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
     const data = self._proto._data;
 
-    if (offset > data.len) {
-        return error.IndexSizeError;
-    }
+    const byte_offset = CData.utf16OffsetToUtf8(data, offset) catch return error.IndexSizeError;
 
-    const new_data = data[offset..];
+    const new_data = data[byte_offset..];
     const new_node = try page.createTextNode(new_data);
     const new_text = new_node.as(Text);
 
-    const old_data = data[0..offset];
+    const old_data = data[0..byte_offset];
     try self._proto.setData(old_data, page);
 
     // If this node has a parent, insert the new node right after this one
