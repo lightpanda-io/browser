@@ -338,6 +338,35 @@ pub fn getNodeType(self: *const Node) u8 {
     };
 }
 
+pub fn lookupNamespaceURI(self: *Node, prefix_arg: ?[]const u8, page: *Page) ?[]const u8 {
+    const prefix: ?[]const u8 = if (prefix_arg) |p| (if (p.len == 0) null else p) else null;
+
+    switch (self._type) {
+        .element => |el| return el.lookupNamespaceURIForElement(prefix, page),
+        .document => |doc| {
+            const de = doc.getDocumentElement() orelse return null;
+            return de.lookupNamespaceURIForElement(prefix, page);
+        },
+        .document_type, .document_fragment => return null,
+        .attribute => |attr| {
+            const owner = attr.getOwnerElement() orelse return null;
+            return owner.lookupNamespaceURIForElement(prefix, page);
+        },
+        .cdata => {
+            const parent = self.parentElement() orelse return null;
+            return parent.lookupNamespaceURIForElement(prefix, page);
+        },
+    }
+}
+
+pub fn isDefaultNamespace(self: *Node, namespace_arg: ?[]const u8, page: *Page) bool {
+    const namespace: ?[]const u8 = if (namespace_arg) |ns| (if (ns.len == 0) null else ns) else null;
+    const default_ns = self.lookupNamespaceURI(null, page);
+    if (default_ns == null and namespace == null) return true;
+    if (default_ns != null and namespace != null) return std.mem.eql(u8, default_ns.?, namespace.?);
+    return false;
+}
+
 pub fn isEqualNode(self: *Node, other: *Node) bool {
     if (self == other) {
         return true;
@@ -1016,6 +1045,8 @@ pub const JsApi = struct {
     pub const compareDocumentPosition = bridge.function(Node.compareDocumentPosition, .{});
     pub const getRootNode = bridge.function(Node.getRootNode, .{});
     pub const isEqualNode = bridge.function(Node.isEqualNode, .{});
+    pub const lookupNamespaceURI = bridge.function(Node.lookupNamespaceURI, .{});
+    pub const isDefaultNamespace = bridge.function(Node.isDefaultNamespace, .{});
 
     fn _baseURI(_: *Node, page: *const Page) []const u8 {
         return page.base();

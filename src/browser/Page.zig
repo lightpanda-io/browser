@@ -111,6 +111,7 @@ _element_shadow_roots: Element.ShadowRootLookup = .empty,
 _node_owner_documents: Node.OwnerDocumentLookup = .empty,
 _element_assigned_slots: Element.AssignedSlotLookup = .empty,
 _element_scroll_positions: Element.ScrollPositionLookup = .empty,
+_element_namespace_uris: Element.NamespaceUriLookup = .empty,
 
 /// Lazily-created inline event listeners (or listeners provided as attributes).
 /// Avoids bloating all elements with extra function fields for rare usage.
