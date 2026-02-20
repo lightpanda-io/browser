@@ -1594,7 +1594,7 @@ pub const JsApi = struct {
     fn _attachShadow(self: *Element, init: ShadowRootInit, page: *Page) !*ShadowRoot {
         return self.attachShadow(init.mode, page);
     }
-    pub const replaceChildren = bridge.function(Element.replaceChildren, .{});
+    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true });
     pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true });
     pub const remove = bridge.function(Element.remove, .{});
     pub const append = bridge.function(Element.append, .{ .dom_exception = true });
