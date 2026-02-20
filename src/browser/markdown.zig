@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const Page = @import("Page.zig");
+const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
 
@@ -46,7 +47,7 @@ const State = struct {
 
 fn isBlock(tag: Element.Tag) bool {
     return switch (tag) {
-        .p, .div, .section, .article, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .pre, .table, .hr => true,
+        .p, .div, .section, .article, .main, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .pre, .table, .hr => true,
         else => false,
     };
 }
@@ -56,6 +57,68 @@ fn shouldAddSpacing(tag: Element.Tag) bool {
         .p, .h1, .h2, .h3, .h4, .h5, .h6, .blockquote, .pre, .table => true,
         else => false,
     };
+}
+
+fn isLayoutBlock(tag: Element.Tag) bool {
+    return switch (tag) {
+        .main, .section, .article, .nav, .aside, .header, .footer, .div, .ul, .ol => true,
+        else => false,
+    };
+}
+
+fn isStandaloneAnchor(el: *Element) bool {
+    const node = el.asNode();
+    const parent = node.parentNode() orelse return false;
+    const parent_el = parent.is(Element) orelse return false;
+
+    if (!isLayoutBlock(parent_el.getTag())) return false;
+
+    var prev = node.previousSibling();
+    while (prev) |p| : (prev = p.previousSibling()) {
+        if (isSignificantText(p)) return false;
+        if (p.is(Element)) |pe| {
+            if (isVisibleElement(pe)) break;
+        }
+    }
+
+    var next = node.nextSibling();
+    while (next) |n| : (next = n.nextSibling()) {
+        if (isSignificantText(n)) return false;
+        if (n.is(Element)) |ne| {
+            if (isVisibleElement(ne)) break;
+        }
+    }
+
+    return true;
+}
+
+fn isSignificantText(node: *Node) bool {
+    const text = node.is(Node.CData.Text) orelse return false;
+    return !isAllWhitespace(text.getWholeText());
+}
+
+fn isVisibleElement(el: *Element) bool {
+    return switch (el.getTag()) {
+        .script, .style, .noscript, .template, .head, .meta, .link, .title, .svg => false,
+        else => true,
+    };
+}
+
+fn isAllWhitespace(text: []const u8) bool {
+    return for (text) |c| {
+        if (!std.ascii.isWhitespace(c)) break false;
+    } else true;
+}
+
+fn hasBlockDescendant(node: *Node) bool {
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Element)) |el| {
+            if (isBlock(el.getTag())) return true;
+            if (hasBlockDescendant(child)) return true;
+        }
+    }
+    return false;
 }
 
 fn ensureNewline(state: *State, writer: *std.Io.Writer) !void {
@@ -110,10 +173,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
     const tag = el.getTag();
 
     // Skip hidden/metadata elements
-    switch (tag) {
-        .script, .style, .noscript, .template, .head, .meta, .link, .title, .svg => return,
-        else => {},
-    }
+    if (!isVisibleElement(el)) return;
 
     // --- Opening Tag Logic ---
 
@@ -238,6 +298,32 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             return; // Treat as void
         },
         .anchor => {
+            const has_block = hasBlockDescendant(el.asNode());
+            if (has_block) {
+                try renderChildren(el.asNode(), state, writer, page);
+                if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
+                    if (!state.last_char_was_newline) try writer.writeByte('\n');
+                    try writer.writeAll("([Link](");
+                    try writer.writeAll(href);
+                    try writer.writeAll("))\n");
+                    state.last_char_was_newline = true;
+                }
+                return;
+            }
+
+            if (isStandaloneAnchor(el)) {
+                if (!state.last_char_was_newline) try writer.writeByte('\n');
+                try writer.writeByte('[');
+                try renderChildren(el.asNode(), state, writer, page);
+                try writer.writeAll("](");
+                if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
+                    try writer.writeAll(href);
+                }
+                try writer.writeAll(")\n");
+                state.last_char_was_newline = true;
+                return;
+            }
+
             try writer.writeByte('[');
             try renderChildren(el.asNode(), state, writer, page);
             try writer.writeAll("](");
@@ -501,6 +587,58 @@ test "markdown: code" {
         \\line 1
         \\line 2
         \\```
+        \\
+    );
+}
+
+test "markdown: block link" {
+    try testMarkdownHTML(
+        \\<a href="https://example.com">
+        \\  <h3>Title</h3>
+        \\  <p>Description</p>
+        \\</a>
+    ,
+        \\
+        \\### Title
+        \\
+        \\Description
+        \\([Link](https://example.com))
+        \\
+    );
+}
+
+test "markdown: inline link" {
+    try testMarkdownHTML(
+        \\<p>Visit <a href="https://example.com">Example</a>.</p>
+    ,
+        \\
+        \\Visit [Example](https://example.com).
+        \\
+    );
+}
+
+test "markdown: standalone anchors" {
+    // Inside main, with whitespace between anchors -> treated as blocks
+    try testMarkdownHTML(
+        \\<main>
+        \\  <a href="1">Link 1</a>
+        \\  <a href="2">Link 2</a>
+        \\</main>
+    ,
+        \\[Link 1](1)
+        \\[Link 2](2)
+        \\
+    );
+}
+
+test "markdown: mixed anchors in main" {
+    // Anchors surrounded by text should remain inline
+    try testMarkdownHTML(
+        \\<main>
+        \\  Welcome <a href="1">Link 1</a>.
+        \\</main>
+    ,
+        \\Welcome [Link 1](1). 
         \\
     );
 }
