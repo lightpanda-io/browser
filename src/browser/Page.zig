@@ -39,6 +39,7 @@ const ScriptManager = @import("ScriptManager.zig");
 const Parser = @import("parser/Parser.zig");
 
 const URL = @import("URL.zig");
+const Blob = @import("webapi/Blob.zig");
 const Node = @import("webapi/Node.zig");
 const Event = @import("webapi/Event.zig");
 const EventTarget = @import("webapi/EventTarget.zig");
@@ -132,6 +133,9 @@ _element_namespace_uris: Element.NamespaceUriLookup = .empty,
 /// img.setAttribute("onload", "(() => { ... })()");
 /// ```
 _element_attr_listeners: GlobalEventHandlersLookup = .empty,
+
+// Blob URL registry for URL.createObjectURL/revokeObjectURL
+_blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 
 /// `load` events that'll be fired before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
