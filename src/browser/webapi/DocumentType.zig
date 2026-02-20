@@ -74,6 +74,12 @@ pub fn clone(self: *const DocumentType, page: *Page) !*DocumentType {
     return .init(self._name, self._public_id, self._system_id, page);
 }
 
+pub fn remove(self: *DocumentType, page: *Page) !void {
+    const node = self.asNode();
+    const parent = node.parentNode() orelse return;
+    _ = try parent.removeChild(node, page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(DocumentType);
 
@@ -87,4 +93,5 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(DocumentType.getName, null, .{});
     pub const publicId = bridge.accessor(DocumentType.getPublicId, null, .{});
     pub const systemId = bridge.accessor(DocumentType.getSystemId, null, .{});
+    pub const remove = bridge.function(DocumentType.remove, .{});
 };

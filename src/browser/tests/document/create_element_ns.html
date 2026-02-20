@@ -7,9 +7,11 @@
   testing.expectEqual(true, htmlDiv1 instanceof HTMLDivElement);
   testing.expectEqual('http://www.w3.org/1999/xhtml', htmlDiv1.namespaceURI);
 
+  // Per spec, createElementNS does NOT lowercase — 'DIV' != 'div', so this
+  // creates an HTMLUnknownElement, not an HTMLDivElement.
   const htmlDiv2 = document.createElementNS('http://www.w3.org/1999/xhtml', 'DIV');
   testing.expectEqual('DIV', htmlDiv2.tagName);
-  testing.expectEqual(true, htmlDiv2 instanceof HTMLDivElement);
+  testing.expectEqual(false, htmlDiv2 instanceof HTMLDivElement);
   testing.expectEqual('http://www.w3.org/1999/xhtml', htmlDiv2.namespaceURI);
 
   const svgRect = document.createElementNS('http://www.w3.org/2000/svg', 'RecT');

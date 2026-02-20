@@ -157,8 +157,8 @@ pub fn createElement(self: *Document, name: []const u8, options_: ?CreateElement
 pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8, page: *Page) !*Element {
     try validateElementName(name);
     const ns = Element.Namespace.parse(namespace);
-    const normalized_name = if (ns == .html) std.ascii.lowerString(&page.buf, name) else name;
-    const node = try page.createElementNS(ns, normalized_name, null);
+    // Per spec, createElementNS does NOT lowercase (unlike createElement).
+    const node = try page.createElementNS(ns, name, null);
 
     // Store original URI for unknown namespaces so lookupNamespaceURI can return it
     if (ns == .unknown) {
