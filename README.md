@@ -281,35 +281,64 @@ make end2end
 Lightpanda is tested against the standardized [Web Platform
 Tests](https://web-platform-tests.org/).
 
-The relevant tests cases are committed in a [dedicated repository](https://github.com/lightpanda-io/wpt) which is fetched by the `make install-submodule` command.
-
-All the tests cases executed are located in the `tests/wpt` sub-directory.
+We use [a fork](https://github.com/lightpanda-io/wpt/tree/fork) including a
+custom
+[`testharnessreport.js`](https://github.com/lightpanda-io/wpt/commit/01a3115c076a3ad0c84849dbbf77a6e3d199c56f).
 
 For reference, you can easily execute a WPT test case with your browser via
 [wpt.live](https://wpt.live).
 
+#### Configure WPT HTTP server
+
+To run the test, you must clone the repository, configure the custom hosts and generate the
+`MANIFEST.json` file.
+
+Clone the repository with the `fork` branch.
+```
+git clone -b fork --depth=1 git@github.com:lightpanda-io/wpt.git
+```
+
+Enter into the `wpt/` dir.
+
+Install custom domains in your `/etc/hosts`
+```
+./wpt make-hosts-file | sudo tee -a /etc/hosts
+```
+
+Generate `MANIFEST.json`
+```
+./wpt manifest
+```
+Use the [WPT's setup guide](https://web-platform-tests.org/running-tests/from-local-system.html) for details.
+
 #### Run WPT test suite
 
-To run all the tests:
+First start the WPT's HTTP server from your `wpt/` clone dir.
 
 ```
-make wpt
+./wpt serve
+```
+
+In Lightpanda, you can now run all the tests:
+
+```
+zig build wpt
 ```
 
 Or one specific test:
 
 ```
-make wpt Node-childNodes.html
+zig build wpt -- Node-childNodes.html
 ```
 
-#### Add a new WPT test case
+`wpt` command accepts `--summary` and `--json` options modifying output.
 
-We add new relevant tests cases files when we implemented changes in Lightpanda.
+:warning: Running the whole test suite will take a long time. In this case, it's useful to build in `releaseFast` mode to make tests faster.
 
-To add a new test, copy the file you want from the [WPT
-repo](https://github.com/web-platform-tests/wpt) into the `tests/wpt` directory.
+```
+zig build -Doptimize=ReleaseFast wpt
+```
 
-:warning: Please keep the original directory tree structure of `tests/wpt`.
 
 ## Contributing
 
