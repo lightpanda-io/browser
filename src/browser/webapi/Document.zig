@@ -160,6 +160,14 @@ pub fn createElementNS(self: *Document, namespace: ?[]const u8, name: []const u8
     const normalized_name = if (ns == .html) std.ascii.lowerString(&page.buf, name) else name;
     const node = try page.createElementNS(ns, normalized_name, null);
 
+    // Store original URI for unknown namespaces so lookupNamespaceURI can return it
+    if (ns == .unknown) {
+        if (namespace) |uri| {
+            const duped = try page.dupeString(uri);
+            try page._element_namespace_uris.put(page.arena, node.as(Element), duped);
+        }
+    }
+
     // Track owner document if it's not the main document
     if (self != page.document) {
         try page.setNodeOwnerDocument(node, self);

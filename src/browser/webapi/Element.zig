@@ -49,6 +49,7 @@ pub const ClassListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMT
 pub const RelListLookup = std.AutoHashMapUnmanaged(*Element, *collections.DOMTokenList);
 pub const ShadowRootLookup = std.AutoHashMapUnmanaged(*Element, *ShadowRoot);
 pub const AssignedSlotLookup = std.AutoHashMapUnmanaged(*Element, *Html.Slot);
+pub const NamespaceUriLookup = std.AutoHashMapUnmanaged(*Element, []const u8);
 
 pub const ScrollPosition = struct {
     x: u32 = 0,
@@ -364,6 +365,64 @@ pub fn getNamespaceURI(self: *const Element) ?[]const u8 {
     return self._namespace.toUri();
 }
 
+pub fn getNamespaceUri(self: *Element, page: *Page) ?[]const u8 {
+    if (self._namespace != .unknown) return self._namespace.toUri();
+    return page._element_namespace_uris.get(self);
+}
+
+pub fn lookupNamespaceURIForElement(self: *Element, prefix: ?[]const u8, page: *Page) ?[]const u8 {
+    // Hardcoded reserved prefixes
+    if (prefix) |p| {
+        if (std.mem.eql(u8, p, "xml")) return "http://www.w3.org/XML/1998/namespace";
+        if (std.mem.eql(u8, p, "xmlns")) return "http://www.w3.org/2000/xmlns/";
+    }
+
+    // Step 1: check element's own namespace/prefix
+    if (self.getNamespaceUri(page)) |ns_uri| {
+        const el_prefix = self._prefix();
+        const match = if (prefix == null and el_prefix == null)
+            true
+        else if (prefix != null and el_prefix != null)
+            std.mem.eql(u8, prefix.?, el_prefix.?)
+        else
+            false;
+        if (match) return ns_uri;
+    }
+
+    // Step 2: search xmlns attributes
+    if (self._attributes) |attrs| {
+        var iter = attrs.iterator();
+        while (iter.next()) |entry| {
+            if (prefix == null) {
+                if (entry._name.eql(comptime .wrap("xmlns"))) {
+                    const val = entry._value.str();
+                    return if (val.len == 0) null else val;
+                }
+            } else {
+                const name = entry._name.str();
+                if (std.mem.startsWith(u8, name, "xmlns:")) {
+                    if (std.mem.eql(u8, name["xmlns:".len..], prefix.?)) {
+                        const val = entry._value.str();
+                        return if (val.len == 0) null else val;
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: recurse to parent element
+    const parent = self.asNode().parentElement() orelse return null;
+    return parent.lookupNamespaceURIForElement(prefix, page);
+}
+
+fn _prefix(self: *const Element) ?[]const u8 {
+    const name = self.getTagNameLower();
+    if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
+        return name[0..pos];
+    }
+    return null;
+}
+
 pub fn getLocalName(self: *Element) []const u8 {
     const name = self.getTagNameLower();
     if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
@@ -534,17 +593,26 @@ pub fn setAttributeNS(
     value: String,
     page: *Page,
 ) !void {
-    if (maybe_namespace) |namespace| {
+    const attr_name = if (maybe_namespace) |namespace| blk: {
+        // For xmlns namespace, store the full qualified name (e.g. "xmlns:bar")
+        // so lookupNamespaceURI can find namespace declarations.
+        if (std.mem.eql(u8, namespace, "http://www.w3.org/2000/xmlns/")) {
+            break :blk qualified_name;
+        }
         if (!std.mem.eql(u8, namespace, "http://www.w3.org/1999/xhtml")) {
             log.warn(.not_implemented, "Element.setAttributeNS", .{ .namespace = namespace });
         }
-    }
-
-    const local_name = if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
-        qualified_name[idx + 1 ..]
-    else
-        qualified_name;
-    return self.setAttribute(.wrap(local_name), value, page);
+        break :blk if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
+            qualified_name[idx + 1 ..]
+        else
+            qualified_name;
+    } else blk: {
+        break :blk if (std.mem.indexOfScalarPos(u8, qualified_name, 0, ':')) |idx|
+            qualified_name[idx + 1 ..]
+        else
+            qualified_name;
+    };
+    return self.setAttribute(.wrap(attr_name), value, page);
 }
 
 pub fn setAttributeSafe(self: *Element, name: String, value: String, page: *Page) !void {
@@ -1560,15 +1628,7 @@ pub const JsApi = struct {
         return buf.written();
     }
 
-    pub const prefix = bridge.accessor(_prefix, null, .{});
-    fn _prefix(self: *Element) ?[]const u8 {
-        const name = self.getTagNameLower();
-        if (std.mem.indexOfPos(u8, name, 0, ":")) |pos| {
-            return name[0..pos];
-        }
-
-        return null;
-    }
+    pub const prefix = bridge.accessor(Element._prefix, null, .{});
 
     pub const setAttribute = bridge.function(_setAttribute, .{ .dom_exception = true });
     fn _setAttribute(self: *Element, name: String, value: js.Value, page: *Page) !void {
