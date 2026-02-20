@@ -211,7 +211,7 @@ pub const Connection = struct {
         const easy = self.easy;
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1)));
         try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDS, body.ptr));
+        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COPYPOSTFIELDS, body.ptr));
     }
 
     // These are headers that may not be send to the users for inteception.

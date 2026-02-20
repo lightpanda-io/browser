@@ -220,4 +220,8 @@
       return val;
     });
   }
+
+  if (window._lightpanda_skip_auto_assert !== true) {
+	  window.addEventListener('load', testing.assertOk);
+	}
 })();

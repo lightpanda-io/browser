@@ -83,6 +83,10 @@ imported_modules: std.StringHashMapUnmanaged(ImportedModule),
 // importmap contains resolved urls.
 importmap: std.StringHashMapUnmanaged([:0]const u8),
 
+// have we notified the page that all scripts are loaded (used to fire the "load"
+// event).
+page_notified_of_completion: bool,
+
 pub fn init(allocator: Allocator, http_client: *Http.Client, page: *Page) ScriptManager {
     return .{
         .page = page,
@@ -96,6 +100,7 @@ pub fn init(allocator: Allocator, http_client: *Http.Client, page: *Page) Script
         .client = http_client,
         .static_scripts_done = false,
         .buffer_pool = BufferPool.init(allocator, 5),
+        .page_notified_of_completion = false,
         .script_pool = std.heap.MemoryPool(Script).init(allocator),
     };
 }
@@ -570,10 +575,9 @@ fn evaluate(self: *ScriptManager) void {
     // Page makes this safe to call multiple times.
     page.documentIsLoaded();
 
-    if (self.async_scripts.first == null) {
-        // Looks like all async scripts are done too!
-        // Page makes this safe to call multiple times.
-        page.documentIsComplete();
+    if (self.async_scripts.first == null and self.page_notified_of_completion == false) {
+        self.page_notified_of_completion = true;
+        page.scriptsCompletedLoading();
     }
 }
 

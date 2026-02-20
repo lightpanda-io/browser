@@ -495,12 +495,15 @@ fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?j
     const handler_type = global_event_handlers.fromEventType(event._type_string.str()) orelse return null;
 
     // Look up the inline handler for this target
-    const element = switch (target._type) {
-        .node => |n| n.is(Element) orelse return null,
+    const html_element = switch (target._type) {
+        .node => |n| n.is(Element.Html) orelse return null,
         else => return null,
     };
 
-    return self.page.getAttrListener(element, handler_type);
+    return html_element.getAttributeFunction(handler_type, self.page) catch |err| {
+        log.warn(.event, "inline html callback", .{ .type = handler_type, .err = err });
+        return null;
+    };
 }
 
 fn removeListener(self: *EventManager, list: *std.DoublyLinkedList, listener: *Listener) void {

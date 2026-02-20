@@ -431,6 +431,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             try notification.register(.page_created, self, onPageCreated);
             try notification.register(.page_navigate, self, onPageNavigate);
             try notification.register(.page_navigated, self, onPageNavigated);
+            try notification.register(.page_frame_created, self, onPageFrameCreated);
         }
 
         pub fn deinit(self: *Self) void {
@@ -587,7 +588,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn onPageNavigate(ctx: *anyopaque, msg: *const Notification.PageNavigate) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
-            defer self.resetNotificationArena();
             return @import("domains/page.zig").pageNavigate(self, msg);
         }
 
@@ -595,6 +595,11 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx));
             defer self.resetNotificationArena();
             return @import("domains/page.zig").pageNavigated(self.notification_arena, self, msg);
+        }
+
+        pub fn onPageFrameCreated(ctx: *anyopaque, msg: *const Notification.PageFrameCreated) !void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            return @import("domains/page.zig").pageFrameCreated(self, msg);
         }
 
         pub fn onPageNetworkIdle(ctx: *anyopaque, msg: *const Notification.PageNetworkIdle) !void {
@@ -609,19 +614,16 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn onHttpRequestStart(ctx: *anyopaque, msg: *const Notification.RequestStart) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
-            defer self.resetNotificationArena();
             try @import("domains/network.zig").httpRequestStart(self, msg);
         }
 
         pub fn onHttpRequestIntercept(ctx: *anyopaque, msg: *const Notification.RequestIntercept) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
-            defer self.resetNotificationArena();
             try @import("domains/fetch.zig").requestIntercept(self, msg);
         }
 
         pub fn onHttpRequestFail(ctx: *anyopaque, msg: *const Notification.RequestFail) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
-            defer self.resetNotificationArena();
             return @import("domains/network.zig").httpRequestFail(self, msg);
         }
 
@@ -633,7 +635,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn onHttpRequestDone(ctx: *anyopaque, msg: *const Notification.RequestDone) !void {
             const self: *Self = @ptrCast(@alignCast(ctx));
-            defer self.resetNotificationArena();
             return @import("domains/network.zig").httpRequestDone(self, msg);
         }
 
@@ -763,7 +764,7 @@ const IsolatedWorld = struct {
     // Currently we have only 1 page/frame and thus also only 1 state in the isolate world.
     pub fn createContext(self: *IsolatedWorld, page: *Page) !*js.Context {
         if (self.context == null) {
-            self.context = try self.browser.env.createContext(page, false);
+            self.context = try self.browser.env.createContext(page);
         } else {
             log.warn(.cdp, "not implemented", .{
                 .feature = "createContext: Not implemented second isolated context creation",

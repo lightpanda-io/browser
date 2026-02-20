@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script>
+  function frame1Onload() {
+    window.f1_onload = true;
+  }
+</script>
+
+<iframe id=f1 onload="frame1Onload" src="support/sub1.html"></iframe>
+<iframe id=f2 src="support/sub2.html"></iframe>
+
+<script id="basic">
+  testing.eventually(() => {
+    testing.expectEqual(undefined, window[10]);
+
+    testing.expectEqual(window, window[0].top);
+    testing.expectEqual(window, window[0].parent);
+    testing.expectEqual(false, window === window[0]);
+
+    testing.expectEqual(window, window[1].top);
+    testing.expectEqual(window, window[1].parent);
+    testing.expectEqual(false, window === window[1]);
+    testing.expectEqual(false, window[0] === window[1]);
+
+    testing.expectEqual(0, $('#f1').childNodes.length);
+
+    testing.expectEqual(window[0], $('#f1').contentWindow);
+    testing.expectEqual(window[1], $('#f2').contentWindow);
+
+    testing.expectEqual(window[0].document, $('#f1').contentDocument);
+    testing.expectEqual(window[1].document, $('#f2').contentDocument);
+
+    // sibling frames share the same top
+    testing.expectEqual(window[0].top, window[1].top);
+
+    // child frames have no sub-frames
+    testing.expectEqual(0, window[0].length);
+    testing.expectEqual(0, window[1].length);
+
+    // self and window are self-referential on child frames
+    testing.expectEqual(window[0], window[0].self);
+    testing.expectEqual(window[0], window[0].window);
+    testing.expectEqual(window[1], window[1].self);
+
+    // child frame's top.parent is itself (root has no parent)
+    testing.expectEqual(window, window[0].top.parent);
+
+    // testing.expectEqual(true, window.sub1_loaded);
+    // testing.expectEqual(true, window.sub2_loaded);
+  });
+</script>
+
+<script id=onload>
+  {
+    let f3_load_event = false;
+    let f3 = document.createElement('iframe');
+    f3.addEventListener('load', () => {
+      f3_load_event = true;
+    });
+    f3.src = 'invalid'; // still fires load!
+    document.documentElement.appendChild(f3);
+
+    testing.eventually(() => {
+      testing.expectEqual(true, window.f1_onload);
+      testing.expectEqual(true, f3_load_event);
+    });
+  }
+</script>
+
+<script id=count>
+  testing.eventually(() => {
+    testing.expectEqual(3, window.length);
+  });
+</script>

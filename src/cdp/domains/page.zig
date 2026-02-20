@@ -250,15 +250,17 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
             else => unreachable,
         },
         .address_bar => null,
+        .initialFrameNavigation => "initialFrameNavigation",
     };
     if (reason_) |reason| {
-        try cdp.sendEvent("Page.frameScheduledNavigation", .{
-            .frameId = frame_id,
-            .delay = 0,
-            .reason = reason,
-            .url = event.url,
-        }, .{ .session_id = session_id });
-
+        if (event.opts.reason != .initialFrameNavigation) {
+            try cdp.sendEvent("Page.frameScheduledNavigation", .{
+                .frameId = frame_id,
+                .delay = 0,
+                .reason = reason,
+                .url = event.url,
+            }, .{ .session_id = session_id });
+        }
         try cdp.sendEvent("Page.frameRequestedNavigation", .{
             .frameId = frame_id,
             .reason = reason,
@@ -298,6 +300,27 @@ pub fn pageCreated(bc: anytype, page: *Page) !void {
     // this is called a "renderer" and the cache-duration can be controlled via
     // the Network.configureDurableMessages message (which we don't support)
     bc.captured_responses = .empty;
+}
+
+pub fn pageFrameCreated(bc: anytype, event: *const Notification.PageFrameCreated) !void {
+    const session_id = bc.session_id orelse return;
+
+    const cdp = bc.cdp;
+    const frame_id = &id.toFrameId(event.page_id);
+
+    try cdp.sendEvent("Page.frameAttached", .{ .params = .{
+        .frameId = frame_id,
+        .parentFrameId = &id.toFrameId(event.parent_id),
+    } }, .{ .session_id = session_id });
+
+    if (bc.page_life_cycle_events) {
+        try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
+            .name = "init",
+            .frameId = frame_id,
+            .loaderId = &id.toLoaderId(event.page_id),
+            .timestamp = event.timestamp,
+        }, .{ .session_id = session_id });
+    }
 }
 
 pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.PageNavigated) !void {
@@ -345,6 +368,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
             else => unreachable,
         },
         .address_bar => null,
+        .initialFrameNavigation => "initialFrameNavigation",
     };
 
     if (reason_ != null) {

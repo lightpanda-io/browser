@@ -414,6 +414,15 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
+    // by default, on load, testing.js will call testing.assertOk(). This makes our
+    // tests work well in a browser. But, for our test runner, we disable that
+    // and call it explicitly. This gives us better error messages.
+    ls.local.eval("window._lightpanda_skip_auto_assert = true;", "auto_assert") catch |err| {
+        const caught = try_catch.caughtOrError(arena_allocator, err);
+        std.debug.print("disable auto assert failure\nError: {f}\n", .{caught});
+        return err;
+    };
+
     try page.navigate(url, .{});
     _ = test_session.wait(2000);
 
