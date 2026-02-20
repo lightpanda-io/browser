@@ -387,9 +387,9 @@ pub const MutationRecord = struct {
     }
 
     pub fn getAttributeNamespace(self: *const MutationRecord) ?[]const u8 {
-        if (self._attribute_name != null) {
-            return "http://www.w3.org/1999/xhtml";
-        }
+        _ = self;
+        // Non-namespaced attribute mutations return null. Full namespace tracking
+        // for setAttributeNS mutations is not yet implemented.
         return null;
     }
 

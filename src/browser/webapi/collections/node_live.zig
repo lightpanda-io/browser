@@ -225,8 +225,13 @@ pub fn NodeLive(comptime mode: Mode) type {
                     // If we're in `tag_name` mode, then the tag_name isn't
                     // a known tag. It could be a custom element, heading, or
                     // any generic element. Compare against the element's tag name.
+                    // Per spec, getElementsByTagName is case-insensitive for HTML
+                    // namespace elements, case-sensitive for others.
                     const el = node.is(Element) orelse return false;
                     const element_tag = el.getTagNameLower();
+                    if (el._namespace == .html) {
+                        return std.ascii.eqlIgnoreCase(element_tag, self._filter.str());
+                    }
                     return std.mem.eql(u8, element_tag, self._filter.str());
                 },
                 .tag_name_ns => {
