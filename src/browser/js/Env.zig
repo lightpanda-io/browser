@@ -175,7 +175,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
             .data = null,
             .flags = v8.kOnlyInterceptStrings | v8.kNonMasking,
         });
-        // I don' 100% understand this. We actually set this up in the snapshot,
+        // I don't 100% understand this. We actually set this up in the snapshot,
         // but for the global instance, it doesn't work. SetIndexedHandler and
         // SetNamedHandler are set on the Instance template, and that's the key
         // difference. The context has its own global instance, so we need to set
