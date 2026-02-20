@@ -656,3 +656,45 @@
     testing.expectEqual("?a=%7E&b=%7E&c=foo", url.search);
   }
 </script>
+
+<script id=objectURL>
+{
+  // Test createObjectURL with Blob
+  const blob = new Blob(['<html><body>Hello</body></html>'], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+
+  testing.expectEqual('string', typeof url);
+  testing.expectEqual(true, url.startsWith('blob:'));
+  testing.expectEqual(true, url.includes('http'));
+}
+
+{
+  // Test revokeObjectURL
+  const blob = new Blob(['test'], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+
+  testing.expectEqual(true, url.startsWith('blob:'));
+
+  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(url); // Second revoke should be safe
+}
+
+{
+  // Test with non-blob URL (should be safe/silent)
+  URL.revokeObjectURL('http://example.com/notblob');
+  URL.revokeObjectURL('');
+  testing.expectEqual(true, true);
+}
+
+{
+  // Test uniqueness
+  const blob1 = new Blob(['test1']);
+  const blob2 = new Blob(['test2']);
+  const url1 = URL.createObjectURL(blob1);
+  const url2 = URL.createObjectURL(blob2);
+
+  testing.expectEqual(false, url1 === url2);
+  testing.expectEqual(true, url1.startsWith('blob:'));
+  testing.expectEqual(true, url2.startsWith('blob:'));
+}
+</script>

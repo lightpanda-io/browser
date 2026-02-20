@@ -22,6 +22,7 @@ const js = @import("../js/js.zig");
 const U = @import("../URL.zig");
 const Page = @import("../Page.zig");
 const URLSearchParams = @import("net/URLSearchParams.zig");
+const Blob = @import("Blob.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -228,6 +229,30 @@ pub fn canParse(url: []const u8, base_: ?[]const u8) bool {
     return U.isCompleteHTTPUrl(url);
 }
 
+pub fn createObjectURL(blob: *Blob, page: *Page) ![]const u8 {
+    var uuid_buf: [36]u8 = undefined;
+    @import("../../id.zig").uuidv4(&uuid_buf);
+
+    const origin = (try page.getOrigin(page.call_arena)) orelse "null";
+    const blob_url = try std.fmt.allocPrint(
+        page.arena,
+        "blob:{s}/{s}",
+        .{ origin, uuid_buf },
+    );
+    try page._blob_urls.put(page.arena, blob_url, blob);
+    return blob_url;
+}
+
+pub fn revokeObjectURL(url: []const u8, page: *Page) void {
+    // Per spec: silently ignore non-blob URLs
+    if (!std.mem.startsWith(u8, url, "blob:")) {
+        return;
+    }
+
+    // Remove from registry (no-op if not found)
+    _ = page._blob_urls.remove(url);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(URL);
 
@@ -239,6 +264,8 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(URL.init, .{});
     pub const canParse = bridge.function(URL.canParse, .{ .static = true });
+    pub const createObjectURL = bridge.function(URL.createObjectURL, .{ .static = true });
+    pub const revokeObjectURL = bridge.function(URL.revokeObjectURL, .{ .static = true });
     pub const toString = bridge.function(URL.toString, .{});
     pub const toJSON = bridge.function(URL.toString, .{});
     pub const href = bridge.accessor(URL.toString, URL.setHref, .{});
