@@ -3131,9 +3131,7 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
             else return
         ;
         // zig fmt: on
-        const current_value = textarea.getValue();
-        const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, append });
-        return textarea.setValue(new_value, self);
+        return textarea.innerInsert(append, self);
     }
 }
 
@@ -3218,13 +3216,11 @@ pub fn insertText(self: *Page, v: []const u8) !void {
             return;
         }
 
-        try input.innerInsert(v, self);
+        return input.innerInsert(v, self);
     }
 
     if (html_element.is(Element.Html.TextArea)) |textarea| {
-        const current_value = textarea.getValue();
-        const new_value = try std.mem.concat(self.arena, u8, &.{ current_value, v });
-        return textarea.setValue(new_value, self);
+        return textarea.innerInsert(v, self);
     }
 }
 
