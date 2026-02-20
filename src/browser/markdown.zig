@@ -36,7 +36,6 @@ const State = struct {
 
     list_depth: usize = 0,
     list_stack: [32]ListState = undefined,
-    in_pre: bool = false,
     pre_node: ?*Node = null,
     in_code: bool = false,
     in_table: bool = false,
@@ -112,13 +111,12 @@ fn isAllWhitespace(text: []const u8) bool {
 
 fn hasBlockDescendant(node: *Node) bool {
     var it = node.childrenIterator();
-    while (it.next()) |child| {
+    return while (it.next()) |child| {
         if (child.is(Element)) |el| {
-            if (isBlock(el.getTag())) return true;
-            if (hasBlockDescendant(child)) return true;
+            if (isBlock(el.getTag())) break true;
+            if (hasBlockDescendant(child)) break true;
         }
-    }
-    return false;
+    } else false;
 }
 
 fn ensureNewline(state: *State, writer: *std.Io.Writer) !void {
@@ -148,17 +146,15 @@ fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) error
         .cdata => |cd| {
             if (node.is(Node.CData.Text)) |_| {
                 var text = cd.getData();
-                if (state.in_pre) {
-                    if (state.pre_node) |pre| {
-                        if (node.parentNode() == pre and node.nextSibling() == null) {
-                            text = std.mem.trimRight(u8, text, " \t\r\n");
-                        }
+                if (state.pre_node) |pre| {
+                    if (node.parentNode() == pre and node.nextSibling() == null) {
+                        text = std.mem.trimRight(u8, text, " \t\r\n");
                     }
                 }
                 try renderText(text, state, writer);
             }
         },
-        else => {}, // Ignore other node types
+        else => {},
     }
 }
 
@@ -172,19 +168,15 @@ fn renderChildren(parent: *Node, state: *State, writer: *std.Io.Writer, page: *P
 fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Page) !void {
     const tag = el.getTag();
 
-    // Skip hidden/metadata elements
     if (!isVisibleElement(el)) return;
 
     // --- Opening Tag Logic ---
 
     // Ensure block elements start on a new line (double newline for paragraphs etc)
-    if (isBlock(tag)) {
-        if (!state.in_table) {
-            try ensureNewline(state, writer);
-            if (shouldAddSpacing(tag)) {
-                // Add an extra newline for spacing between blocks
-                try writer.writeByte('\n');
-            }
+    if (isBlock(tag) and !state.in_table) {
+        try ensureNewline(state, writer);
+        if (shouldAddSpacing(tag)) {
+            try writer.writeByte('\n');
         }
     } else if (tag == .li or tag == .tr) {
         try ensureNewline(state, writer);
@@ -214,14 +206,10 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             const indent = if (state.list_depth > 0) state.list_depth - 1 else 0;
             for (0..indent) |_| try writer.writeAll("  ");
 
-            if (state.list_depth > 0) {
+            if (state.list_depth > 0 and state.list_stack[state.list_depth - 1].type == .ordered) {
                 const current_list = &state.list_stack[state.list_depth - 1];
-                if (current_list.type == .ordered) {
-                    try writer.print("{d}. ", .{current_list.index});
-                    current_list.index += 1;
-                } else {
-                    try writer.writeAll("- ");
-                }
+                try writer.print("{d}. ", .{current_list.index});
+                current_list.index += 1;
             } else {
                 try writer.writeAll("- ");
             }
@@ -247,12 +235,11 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         },
         .pre => {
             try writer.writeAll("```\n");
-            state.in_pre = true;
             state.pre_node = el.asNode();
             state.last_char_was_newline = true;
         },
         .code => {
-            if (!state.in_pre) {
+            if (state.pre_node == null) {
                 try writer.writeByte('`');
                 state.in_code = true;
                 state.last_char_was_newline = false;
@@ -273,7 +260,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
         .hr => {
             try writer.writeAll("---\n");
             state.last_char_was_newline = true;
-            return; // Void element
+            return;
         },
         .br => {
             if (state.in_table) {
@@ -282,7 +269,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
                 try writer.writeByte('\n');
                 state.last_char_was_newline = true;
             }
-            return; // Void element
+            return;
         },
         .img => {
             try writer.writeAll("![");
@@ -295,7 +282,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             }
             try writer.writeAll(")");
             state.last_char_was_newline = false;
-            return; // Treat as void
+            return;
         },
         .anchor => {
             const has_block = hasBlockDescendant(el.asNode());
@@ -335,15 +322,11 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             return;
         },
         .input => {
-            if (el.getAttributeSafe(comptime .wrap("type"))) |type_attr| {
-                if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
-                    if (el.getAttributeSafe(comptime .wrap("checked"))) |_| {
-                        try writer.writeAll("[x] ");
-                    } else {
-                        try writer.writeAll("[ ] ");
-                    }
-                    state.last_char_was_newline = false;
-                }
+            const type_attr = el.getAttributeSafe(comptime .wrap("type")) orelse return;
+            if (std.ascii.eqlIgnoreCase(type_attr, "checkbox")) {
+                const checked = el.getAttributeSafe(comptime .wrap("checked")) != null;
+                try writer.writeAll(if (checked) "[x] " else "[ ] ");
+                state.last_char_was_newline = false;
             }
             return;
         },
@@ -362,12 +345,11 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
                 try writer.writeByte('\n');
             }
             try writer.writeAll("```\n");
-            state.in_pre = false;
             state.pre_node = null;
             state.last_char_was_newline = true;
         },
         .code => {
-            if (!state.in_pre) {
+            if (state.pre_node == null) {
                 try writer.writeByte('`');
                 state.in_code = false;
                 state.last_char_was_newline = false;
@@ -396,8 +378,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             try writer.writeByte('\n');
             if (state.table_row_index == 0) {
                 try writer.writeByte('|');
-                var i: usize = 0;
-                while (i < state.table_col_count) : (i += 1) {
+                for (0..state.table_col_count) |_| {
                     try writer.writeAll("---|");
                 }
                 try writer.writeByte('\n');
@@ -414,32 +395,22 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
     }
 
     // Post-block newlines
-    if (isBlock(tag)) {
-        if (!state.in_table) {
-            try ensureNewline(state, writer);
-        }
+    if (isBlock(tag) and !state.in_table) {
+        try ensureNewline(state, writer);
     }
 }
 
 fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) !void {
     if (text.len == 0) return;
 
-    if (state.in_pre) {
+    if (state.pre_node) |_| {
         try writer.writeAll(text);
-        if (text.len > 0 and text[text.len - 1] == '\n') {
-            state.last_char_was_newline = true;
-        } else {
-            state.last_char_was_newline = false;
-        }
+        state.last_char_was_newline = text[text.len - 1] == '\n';
         return;
     }
 
     // Check for pure whitespace
-    const is_all_whitespace = for (text) |c| {
-        if (!std.ascii.isWhitespace(c)) break false;
-    } else true;
-
-    if (is_all_whitespace) {
+    if (isAllWhitespace(text)) {
         if (!state.last_char_was_newline) {
             try writer.writeByte(' ');
         }
@@ -450,13 +421,7 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) !void {
     var it = std.mem.tokenizeAny(u8, text, " \t\n\r");
     var first = true;
     while (it.next()) |word| {
-        if (first) {
-            if (!state.last_char_was_newline) {
-                if (text.len > 0 and std.ascii.isWhitespace(text[0])) {
-                    try writer.writeByte(' ');
-                }
-            }
-        } else {
+        if (!first or (!state.last_char_was_newline and std.ascii.isWhitespace(text[0]))) {
             try writer.writeByte(' ');
         }
 
@@ -466,10 +431,8 @@ fn renderText(text: []const u8, state: *State, writer: *std.Io.Writer) !void {
     }
 
     // Handle trailing whitespace from the original text
-    if (!first and !state.last_char_was_newline) {
-        if (text.len > 0 and std.ascii.isWhitespace(text[text.len - 1])) {
-            try writer.writeByte(' ');
-        }
+    if (!first and !state.last_char_was_newline and std.ascii.isWhitespace(text[text.len - 1])) {
+        try writer.writeByte(' ');
     }
 }
 
