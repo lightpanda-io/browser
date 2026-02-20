@@ -141,15 +141,15 @@ fn hexDigitsNeeded(c: u8) usize {
 }
 
 fn writeEscape(comptime is_first: bool, buf: []u8, c: u8) usize {
+    if (c == 0) {
+        // NULL character becomes replacement character (no backslash)
+        const replacement = "\u{FFFD}";
+        @memcpy(buf[0..replacement.len], replacement);
+        return replacement.len;
+    }
+
     buf[0] = '\\';
     var data = buf[1..];
-
-    if (c == 0) {
-        // NULL character becomes replacement character
-        const replacement = "\u{FFFD}";
-        @memcpy(data[0..replacement.len], replacement);
-        return 1 + replacement.len;
-    }
 
     if (isHexEscape(c) or ((comptime is_first) and c >= '0' and c <= '9')) {
         const hex_str = std.fmt.bufPrint(data, "{x} ", .{c}) catch unreachable;
