@@ -221,6 +221,44 @@
   }
 </script>
 
+<script id="select_event">
+  {
+    const input = document.createElement('input');
+    input.value = 'Hello World';
+    document.body.appendChild(input);
+
+    let eventCount = 0;
+    let lastEvent = null;
+
+    input.addEventListener('select', (e) => {
+      eventCount++;
+      lastEvent = e;
+    });
+
+    let onselectFired = false;
+    input.onselect = () => { onselectFired = true; };
+
+    let bubbledToBody = false;
+    document.body.addEventListener('select', () => {
+      bubbledToBody = true;
+    });
+
+    testing.expectEqual(0, eventCount);
+
+    input.select();
+
+    testing.eventually(() => {
+      testing.expectEqual(1, eventCount);
+      testing.expectEqual('select', lastEvent.type);
+      testing.expectEqual(input, lastEvent.target);
+      testing.expectEqual(true, lastEvent.bubbles);
+      testing.expectEqual(false, lastEvent.cancelable);
+      testing.expectEqual(true, bubbledToBody);
+      testing.expectEqual(true, onselectFired);
+    });
+  }
+</script>
+
 <script id="defaultChecked">
   testing.expectEqual(true, $('#check1').defaultChecked)
   testing.expectEqual(false, $('#check2').defaultChecked)

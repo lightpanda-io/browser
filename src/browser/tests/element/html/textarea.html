@@ -230,6 +230,44 @@
   }
 </script>
 
+<script id="select_event">
+  {
+    const textarea = document.createElement('textarea');
+    textarea.value = 'Hello World';
+    document.body.appendChild(textarea);
+
+    let eventCount = 0;
+    let lastEvent = null;
+
+    textarea.addEventListener('select', (e) => {
+      eventCount++;
+      lastEvent = e;
+    });
+
+    let onselectFired = false;
+    textarea.onselect = () => { onselectFired = true; };
+
+    let bubbledToBody = false;
+    document.body.addEventListener('select', () => {
+      bubbledToBody = true;
+    });
+
+    testing.expectEqual(0, eventCount);
+
+    textarea.select();
+
+    testing.eventually(() => {
+      testing.expectEqual(1, eventCount);
+      testing.expectEqual('select', lastEvent.type);
+      testing.expectEqual(textarea, lastEvent.target);
+      testing.expectEqual(true, lastEvent.bubbles);
+      testing.expectEqual(false, lastEvent.cancelable);
+      testing.expectEqual(true, bubbledToBody);
+      testing.expectEqual(true, onselectFired);
+    });
+  }
+</script>
+
 <script id="selectionchange_event">
   {
     const textarea = document.createElement('textarea');
