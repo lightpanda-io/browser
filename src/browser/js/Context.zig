@@ -43,6 +43,9 @@ env: *Env,
 page: *Page,
 isolate: js.Isolate,
 
+// Per-context microtask queue for isolation between contexts
+microtask_queue: *v8.MicrotaskQueue,
+
 // The v8::Global<v8::Context>. When necessary, we can create a v8::Local<<v8::Context>>
 // from this, and we can free it when the context is done.
 handle: v8.Global,
@@ -121,10 +124,6 @@ script_manager: ?*ScriptManager,
 // Our macrotasks
 scheduler: Scheduler,
 
-// Prevents us from enqueuing a microtask for this context while we're shutting
-// down.
-shutting_down: bool = false,
-
 unknown_properties: (if (IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (IS_DEBUG) .{} else {},
 
 const ModuleEntry = struct {
@@ -146,16 +145,11 @@ const ModuleEntry = struct {
 };
 
 pub fn fromC(c_context: *const v8.Context) *Context {
-    const data = v8.v8__Context__GetEmbedderData(c_context, 1).?;
-    const big_int = js.BigInt{ .handle = @ptrCast(data) };
-    return @ptrFromInt(big_int.getUint64());
+    return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
 }
 
 pub fn fromIsolate(isolate: js.Isolate) *Context {
-    const v8_context = v8.v8__Isolate__GetCurrentContext(isolate.handle).?;
-    const data = v8.v8__Context__GetEmbedderData(v8_context, 1).?;
-    const big_int = js.BigInt{ .handle = @ptrCast(data) };
-    return @ptrFromInt(big_int.getUint64());
+    return fromC(v8.v8__Isolate__GetCurrentContext(isolate.handle).?);
 }
 
 pub fn deinit(self: *Context) void {
@@ -169,21 +163,15 @@ pub fn deinit(self: *Context) void {
             });
         }
     }
-    defer self.env.app.arena_pool.release(self.arena);
+
+    const env = self.env;
+    defer env.app.arena_pool.release(self.arena);
 
     var hs: js.HandleScope = undefined;
     const entered = self.enter(&hs);
     defer entered.exit();
 
-    // We might have microtasks in the isolate that refence this context. The
-    // only option we have is to run them. But a microtask could queue another
-    // microtask, so we set the shutting_down flag, so that any such microtask
-    // will be a noop (this isn't automatic, when v8 calls our microtask callback
-    // the first thing we'll check is if self.shutting_down == true).
-    self.shutting_down = true;
-    self.env.runMicrotasks();
-
-    // can release objects
+    // this can release objects
     self.scheduler.deinit();
 
     {
@@ -244,7 +232,13 @@ pub fn deinit(self: *Context) void {
             v8.v8__Global__Reset(global);
         }
     }
+
     v8.v8__Global__Reset(&self.handle);
+    env.isolate.notifyContextDisposed();
+    // There can be other tasks associated with this context that we need to
+    // purge while the context is still alive.
+    env.pumpMessageLoop();
+    v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
@@ -992,13 +986,10 @@ pub fn queueSlotchangeDelivery(self: *Context) !void {
 // But for these Context microtasks, we want to (a) make sure the context isn't
 // being shut down and (b) that it's entered.
 fn enqueueMicrotask(self: *Context, callback: anytype) void {
-    self.isolate.enqueueMicrotask(struct {
+    // Use context-specific microtask queue instead of isolate queue
+    v8.v8__MicrotaskQueue__EnqueueMicrotask(self.microtask_queue, self.isolate.handle, struct {
         fn run(data: ?*anyopaque) callconv(.c) void {
             const ctx: *Context = @ptrCast(@alignCast(data.?));
-            if (ctx.shutting_down) {
-                return;
-            }
-
             var hs: js.HandleScope = undefined;
             const entered = ctx.enter(&hs);
             defer entered.exit();
@@ -1008,7 +999,8 @@ fn enqueueMicrotask(self: *Context, callback: anytype) void {
 }
 
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
-    self.isolate.enqueueMicrotaskFunc(cb);
+    // Use context-specific microtask queue instead of isolate queue
+    v8.v8__MicrotaskQueue__EnqueueMicrotaskFunc(self.microtask_queue, self.isolate.handle, cb.handle);
 }
 
 pub fn createFinalizerCallback(self: *Context, global: v8.Global, ptr: *anyopaque, finalizerFn: *const fn (ptr: *anyopaque) void) !*FinalizerCallback {

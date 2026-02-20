@@ -82,7 +82,7 @@ pub fn createTypedArray(self: *const Local, comptime array_type: js.ArrayType, s
 }
 
 pub fn runMicrotasks(self: *const Local) void {
-    self.isolate.performMicrotasksCheckpoint();
+    self.ctx.env.runMicrotasks();
 }
 
 // == Executors ==

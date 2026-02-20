@@ -96,10 +96,6 @@ pub fn runMacrotasks(self: *Browser) !?u64 {
 }
 
 pub fn runMessageLoop(self: *const Browser) void {
-    while (self.env.pumpMessageLoop()) {
-        if (comptime IS_DEBUG) {
-            log.debug(.browser, "pumpMessageLoop", .{});
-        }
-    }
+    self.env.pumpMessageLoop();
     self.env.runIdleTasks();
 }
