@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <head id="the_head">
+  <meta charset="UTF-8">
   <title>Test Document Title</title>
   <script src="../testing.js"></script>
 </head>
@@ -176,15 +177,111 @@
   testing.expectEqual(initialLength, anchors.length);
 </script>
 
-<script id=cookie>
-  testing.expectEqual('', document.cookie);
-  document.cookie = 'name=Oeschger;';
-  document.cookie = 'favorite_food=tripe;';
+<script id=cookie_basic>
+  // Basic cookie operations
+  document.cookie = 'testbasic1=Oeschger';
+  testing.expectEqual(true, document.cookie.includes('testbasic1=Oeschger'));
 
-  testing.expectEqual('name=Oeschger; favorite_food=tripe', document.cookie);
-  // "" should be returned, but the framework overrules it atm
+  document.cookie = 'testbasic2=tripe';
+  testing.expectEqual(true, document.cookie.includes('testbasic1=Oeschger'));
+  testing.expectEqual(true, document.cookie.includes('testbasic2=tripe'));
+
+  // HttpOnly should be ignored from JavaScript
+  const beforeHttp = document.cookie;
   document.cookie = 'IgnoreMy=Ghost; HttpOnly';
-  testing.expectEqual('name=Oeschger; favorite_food=tripe', document.cookie);
+  testing.expectEqual(false, document.cookie.includes('IgnoreMy=Ghost'));
+
+  // Clean up
+  document.cookie = 'testbasic1=; Max-Age=0';
+  document.cookie = 'testbasic2=; Max-Age=0';
+</script>
+
+<script id=cookie_special_chars>
+  // Test special characters in cookie values
+  document.cookie = 'testspaces=hello world';
+  testing.expectEqual(true, document.cookie.includes('testspaces=hello world'));
+  document.cookie = 'testspaces=; Max-Age=0';
+
+  // Test various allowed special characters
+  document.cookie = 'testspecial=!#$%&\'()*+-./';
+  testing.expectEqual(true, document.cookie.includes('testspecial='));
+  document.cookie = 'testspecial=; Max-Age=0';
+
+  // Semicolon terminates the cookie value
+  document.cookie = 'testsemi=before;after';
+  testing.expectEqual(true, document.cookie.includes('testsemi=before'));
+  testing.expectEqual(false, document.cookie.includes('after'));
+  document.cookie = 'testsemi=; Max-Age=0';
+</script>
+
+<script id=cookie_empty_name>
+  // Cookie with empty name (just a value)
+  document.cookie = 'teststandalone';
+  testing.expectEqual(true, document.cookie.includes('teststandalone'));
+  document.cookie = 'teststandalone; Max-Age=0';
+</script>
+
+<script id=cookie_whitespace>
+  // Names and values should be trimmed
+  document.cookie = '  testtrim  =  trimmed_value  ';
+  testing.expectEqual(true, document.cookie.includes('testtrim=trimmed_value'));
+  document.cookie = 'testtrim=; Max-Age=0';
+</script>
+
+<script id=cookie_max_age>
+  // Max-Age=0 should immediately delete
+  document.cookie = 'testtemp0=value; Max-Age=0';
+  testing.expectEqual(false, document.cookie.includes('testtemp0=value'));
+
+  // Negative Max-Age should also delete
+  document.cookie = 'testinstant=value';
+  testing.expectEqual(true, document.cookie.includes('testinstant=value'));
+  document.cookie = 'testinstant=value; Max-Age=-1';
+  testing.expectEqual(false, document.cookie.includes('testinstant=value'));
+
+  // Positive Max-Age should keep cookie
+  document.cookie = 'testkept=value; Max-Age=3600';
+  testing.expectEqual(true, document.cookie.includes('testkept=value'));
+  document.cookie = 'testkept=; Max-Age=0';
+</script>
+
+<script id=cookie_overwrite>
+  // Setting a cookie with the same name should overwrite
+  document.cookie = 'testoverwrite=first';
+  testing.expectEqual(true, document.cookie.includes('testoverwrite=first'));
+
+  document.cookie = 'testoverwrite=second';
+  testing.expectEqual(true, document.cookie.includes('testoverwrite=second'));
+  testing.expectEqual(false, document.cookie.includes('testoverwrite=first'));
+
+  document.cookie = 'testoverwrite=; Max-Age=0';
+</script>
+
+<script id=cookie_path>
+  // Path attribute
+  document.cookie = 'testpath1=value; Path=/';
+  testing.expectEqual(true, document.cookie.includes('testpath1=value'));
+
+  // Different path cookie should coexist
+  document.cookie = 'testpath2=value2; Path=/src';
+  testing.expectEqual(true, document.cookie.includes('testpath1=value'));
+
+  document.cookie = 'testpath1=; Max-Age=0; Path=/';
+  document.cookie = 'testpath2=; Max-Age=0; Path=/src';
+</script>
+
+<script id=cookie_invalid_chars>
+  // Control characters (< 32 or > 126) should be rejected
+  const beforeBad = document.cookie;
+
+  document.cookie = 'testbad1\x00=value';
+  testing.expectEqual(false, document.cookie.includes('testbad1'));
+
+  document.cookie = 'testbad2\x1F=value';
+  testing.expectEqual(false, document.cookie.includes('testbad2'));
+
+  document.cookie = 'testbad3=val\x7F';
+  testing.expectEqual(false, document.cookie.includes('testbad3'));
 </script>
 
 <script id=createAttribute>
