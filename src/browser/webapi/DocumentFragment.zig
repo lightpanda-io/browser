@@ -256,9 +256,9 @@ pub const JsApi = struct {
     pub const childElementCount = bridge.accessor(DocumentFragment.getChildElementCount, null, .{});
     pub const firstElementChild = bridge.accessor(DocumentFragment.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(DocumentFragment.lastElementChild, null, .{});
-    pub const append = bridge.function(DocumentFragment.append, .{});
-    pub const prepend = bridge.function(DocumentFragment.prepend, .{});
-    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{});
+    pub const append = bridge.function(DocumentFragment.append, .{ .dom_exception = true });
+    pub const prepend = bridge.function(DocumentFragment.prepend, .{ .dom_exception = true });
+    pub const replaceChildren = bridge.function(DocumentFragment.replaceChildren, .{ .dom_exception = true });
     pub const innerHTML = bridge.accessor(_innerHTML, DocumentFragment.setInnerHTML, .{});
 
     fn _innerHTML(self: *DocumentFragment, page: *Page) ![]const u8 {

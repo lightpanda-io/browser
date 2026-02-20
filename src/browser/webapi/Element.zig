@@ -1612,13 +1612,13 @@ pub const JsApi = struct {
     fn _attachShadow(self: *Element, init: ShadowRootInit, page: *Page) !*ShadowRoot {
         return self.attachShadow(init.mode, page);
     }
-    pub const replaceChildren = bridge.function(Element.replaceChildren, .{});
-    pub const replaceWith = bridge.function(Element.replaceWith, .{});
+    pub const replaceChildren = bridge.function(Element.replaceChildren, .{ .dom_exception = true });
+    pub const replaceWith = bridge.function(Element.replaceWith, .{ .dom_exception = true });
     pub const remove = bridge.function(Element.remove, .{});
-    pub const append = bridge.function(Element.append, .{});
-    pub const prepend = bridge.function(Element.prepend, .{});
-    pub const before = bridge.function(Element.before, .{});
-    pub const after = bridge.function(Element.after, .{});
+    pub const append = bridge.function(Element.append, .{ .dom_exception = true });
+    pub const prepend = bridge.function(Element.prepend, .{ .dom_exception = true });
+    pub const before = bridge.function(Element.before, .{ .dom_exception = true });
+    pub const after = bridge.function(Element.after, .{ .dom_exception = true });
     pub const firstElementChild = bridge.accessor(Element.firstElementChild, null, .{});
     pub const lastElementChild = bridge.accessor(Element.lastElementChild, null, .{});
     pub const nextElementSibling = bridge.accessor(Element.nextElementSibling, null, .{});

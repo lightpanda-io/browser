@@ -681,9 +681,10 @@ const ActivationState = struct {
         }
 
         // Commit: fire input and change events only if state actually changed
+        // and the element is connected to a document (detached elements don't fire).
         // For checkboxes, state always changes. For radios, only if was unchecked.
         const state_changed = (input._input_type == .checkbox) or !self.old_checked;
-        if (state_changed) {
+        if (state_changed and input.asElement().asNode().isConnected()) {
             fireEvent(page, input, "input") catch |err| {
                 log.warn(.event, "input event", .{ .err = err });
             };
