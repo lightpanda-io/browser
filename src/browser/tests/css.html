@@ -69,3 +69,11 @@
     testing.expectEqual(true, CSS.supports('z-index', '10'));
   }
 </script>
+
+<script id="escape_null_character">
+  {
+    testing.expectEqual('\uFFFD', CSS.escape('\x00'));
+    testing.expectEqual('test\uFFFDvalue', CSS.escape('test\x00value'));
+    testing.expectEqual('\uFFFDabc', CSS.escape('\x00abc'));
+  }
+</script>
