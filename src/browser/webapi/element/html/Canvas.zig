@@ -25,6 +25,7 @@ const HtmlElement = @import("../Html.zig");
 
 const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
 const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
+const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 
 const Canvas = @This();
 _proto: *HtmlElement,
@@ -80,6 +81,14 @@ pub fn getContext(_: *Canvas, context_type: []const u8, page: *Page) !?DrawingCo
     return null;
 }
 
+/// Transfers control of the canvas to an OffscreenCanvas.
+/// Returns an OffscreenCanvas with the same dimensions.
+pub fn transferControlToOffscreen(self: *Canvas, page: *Page) !*OffscreenCanvas {
+    const width = self.getWidth();
+    const height = self.getHeight();
+    return OffscreenCanvas.constructor(width, height, page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Canvas);
 
@@ -92,4 +101,5 @@ pub const JsApi = struct {
     pub const width = bridge.accessor(Canvas.getWidth, Canvas.setWidth, .{});
     pub const height = bridge.accessor(Canvas.getHeight, Canvas.setHeight, .{});
     pub const getContext = bridge.function(Canvas.getContext, .{});
+    pub const transferControlToOffscreen = bridge.function(Canvas.transferControlToOffscreen, .{});
 };
