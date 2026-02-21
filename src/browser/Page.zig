@@ -2490,13 +2490,16 @@ pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
 }
 
 pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []const u8) !*Node {
-    // Validate target doesn't contain "?>"
+    // Validate neither target nor data contain "?>"
     if (std.mem.indexOf(u8, target, "?>") != null) {
         return error.InvalidCharacterError;
     }
+    if (std.mem.indexOf(u8, data, "?>") != null) {
+        return error.InvalidCharacterError;
+    }
 
-    // Validate target follows XML name rules (similar to attribute name validation)
-    try Element.Attribute.validateAttributeName(.wrap(target));
+    // Validate target follows XML Name production
+    try validateXmlName(target);
 
     const owned_target = try self.dupeString(target);
     const owned_data = try self.dupeString(data);
@@ -2516,6 +2519,63 @@ pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []cons
     pi._proto = cd;
 
     return cd.asNode();
+}
+
+/// Validate a string against the XML Name production.
+/// https://www.w3.org/TR/xml/#NT-Name
+fn validateXmlName(name: []const u8) !void {
+    if (name.len == 0) return error.InvalidCharacterError;
+
+    var i: usize = 0;
+
+    // First character must be a NameStartChar.
+    const first_len = std.unicode.utf8ByteSequenceLength(name[0]) catch
+        return error.InvalidCharacterError;
+    if (first_len > name.len) return error.InvalidCharacterError;
+    const first_cp = std.unicode.utf8Decode(name[0..][0..first_len]) catch
+        return error.InvalidCharacterError;
+    if (!isXmlNameStartChar(first_cp)) return error.InvalidCharacterError;
+    i = first_len;
+
+    // Subsequent characters must be NameChars.
+    while (i < name.len) {
+        const cp_len = std.unicode.utf8ByteSequenceLength(name[i]) catch
+            return error.InvalidCharacterError;
+        if (i + cp_len > name.len) return error.InvalidCharacterError;
+        const cp = std.unicode.utf8Decode(name[i..][0..cp_len]) catch
+            return error.InvalidCharacterError;
+        if (!isXmlNameChar(cp)) return error.InvalidCharacterError;
+        i += cp_len;
+    }
+}
+
+fn isXmlNameStartChar(c: u21) bool {
+    return c == ':' or
+        (c >= 'A' and c <= 'Z') or
+        c == '_' or
+        (c >= 'a' and c <= 'z') or
+        (c >= 0xC0 and c <= 0xD6) or
+        (c >= 0xD8 and c <= 0xF6) or
+        (c >= 0xF8 and c <= 0x2FF) or
+        (c >= 0x370 and c <= 0x37D) or
+        (c >= 0x37F and c <= 0x1FFF) or
+        (c >= 0x200C and c <= 0x200D) or
+        (c >= 0x2070 and c <= 0x218F) or
+        (c >= 0x2C00 and c <= 0x2FEF) or
+        (c >= 0x3001 and c <= 0xD7FF) or
+        (c >= 0xF900 and c <= 0xFDCF) or
+        (c >= 0xFDF0 and c <= 0xFFFD) or
+        (c >= 0x10000 and c <= 0xEFFFF);
+}
+
+fn isXmlNameChar(c: u21) bool {
+    return isXmlNameStartChar(c) or
+        c == '-' or
+        c == '.' or
+        (c >= '0' and c <= '9') or
+        c == 0xB7 or
+        (c >= 0x300 and c <= 0x36F) or
+        (c >= 0x203F and c <= 0x2040);
 }
 
 pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {

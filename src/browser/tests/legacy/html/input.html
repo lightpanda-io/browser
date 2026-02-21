@@ -43,7 +43,7 @@
   testing.expectEqual(5, input.maxLength);
   input.maxLength = 'banana';
   testing.expectEqual(0, input.maxLength);
-  testing.expectError('Error: NegativeValueNotAllowed', () => { input.maxLength = -45;});
+  testing.expectError('IndexSizeError: Index or size is negative or greater than the allowed amount', () => { input.maxLength = -45;});
 
   testing.expectEqual(20, input.size);
   input.size = 5;
