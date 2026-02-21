@@ -26,6 +26,7 @@ const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const RobotStore = @import("browser/Robots.zig").RobotStore;
+const WebBotAuth = @import("browser/WebBotAuth.zig");
 
 pub const Http = @import("http/Http.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
@@ -40,6 +41,7 @@ telemetry: Telemetry,
 allocator: Allocator,
 arena_pool: ArenaPool,
 robots: RobotStore,
+web_bot_auth: ?WebBotAuth,
 app_dir_path: ?[]const u8,
 shutdown: bool = false,
 
@@ -52,7 +54,14 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.robots = RobotStore.init(allocator);
 
-    app.http = try Http.init(allocator, &app.robots, config);
+    if (config.webBotAuth()) |wba_cfg| {
+        app.web_bot_auth = try WebBotAuth.fromConfig(allocator, &wba_cfg);
+    } else {
+        app.web_bot_auth = null;
+    }
+    errdefer if (app.web_bot_auth) |wba| wba.deinit(allocator);
+
+    app.http = try Http.init(allocator, &app.robots, &app.web_bot_auth, config);
     errdefer app.http.deinit();
 
     app.platform = try Platform.init();
@@ -84,6 +93,9 @@ pub fn deinit(self: *App) void {
     }
     self.telemetry.deinit();
     self.robots.deinit();
+    if (self.web_bot_auth) |wba| {
+        wba.deinit(allocator);
+    }
     self.http.deinit();
     self.snapshot.deinit();
     self.platform.deinit();

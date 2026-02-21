@@ -31,6 +31,7 @@ const Config = @import("../Config.zig");
 const log = @import("../log.zig");
 const errors = @import("errors.zig");
 const RobotStore = @import("../browser/Robots.zig").RobotStore;
+const WebBotAuth = @import("../browser/WebBotAuth.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -47,8 +48,14 @@ allocator: Allocator,
 config: *const Config,
 ca_blob: ?c.curl_blob,
 robot_store: *RobotStore,
+web_bot_auth: *const ?WebBotAuth,
 
-pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Config) !Http {
+pub fn init(
+    allocator: Allocator,
+    robot_store: *RobotStore,
+    web_bot_auth: *const ?WebBotAuth,
+    config: *const Config,
+) !Http {
     try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
     errdefer c.curl_global_cleanup();
 
@@ -70,6 +77,7 @@ pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Confi
         .config = config,
         .ca_blob = ca_blob,
         .robot_store = robot_store,
+        .web_bot_auth = web_bot_auth,
     };
 }
 
@@ -83,7 +91,7 @@ pub fn deinit(self: *Http) void {
 }
 
 pub fn createClient(self: *Http, allocator: Allocator) !*Client {
-    return Client.init(allocator, self.ca_blob, self.robot_store, self.config);
+    return Client.init(allocator, self.ca_blob, self.robot_store, self.web_bot_auth, self.config);
 }
 
 pub fn newConnection(self: *Http) !Connection {
