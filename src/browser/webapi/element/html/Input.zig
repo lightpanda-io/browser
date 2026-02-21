@@ -182,6 +182,26 @@ pub fn setDefaultChecked(self: *Input, checked: bool, page: *Page) !void {
     }
 }
 
+pub fn getWillValidate(self: *const Input) bool {
+    // An input element is barred from constraint validation if:
+    // - type is hidden, button, or reset
+    // - element is disabled
+    // - element has a datalist ancestor
+    return switch (self._input_type) {
+        .hidden, .button, .reset => false,
+        else => !self.getDisabled() and !self.hasDatalistAncestor(),
+    };
+}
+
+fn hasDatalistAncestor(self: *const Input) bool {
+    var node = self.asConstElement().asConstNode().parentElement();
+    while (node) |parent| {
+        if (parent.is(HtmlElement.DataList) != null) return true;
+        node = parent.asConstNode().parentElement();
+    }
+    return false;
+}
+
 pub fn getDisabled(self: *const Input) bool {
     // TODO: Also check for disabled fieldset ancestors
     // (but not if we're inside a <legend> of that fieldset)
@@ -227,7 +247,7 @@ pub fn getMaxLength(self: *const Input) i32 {
 
 pub fn setMaxLength(self: *Input, max_length: i32, page: *Page) !void {
     if (max_length < 0) {
-        return error.NegativeValueNotAllowed;
+        return error.IndexSizeError;
     }
     var buf: [32]u8 = undefined;
     const value = std.fmt.bufPrint(&buf, "{d}", .{max_length}) catch unreachable;
@@ -858,7 +878,7 @@ pub const JsApi = struct {
     pub const accept = bridge.accessor(Input.getAccept, Input.setAccept, .{});
     pub const readOnly = bridge.accessor(Input.getReadonly, Input.setReadonly, .{});
     pub const alt = bridge.accessor(Input.getAlt, Input.setAlt, .{});
-    pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{});
+    pub const maxLength = bridge.accessor(Input.getMaxLength, Input.setMaxLength, .{ .dom_exception = true });
     pub const size = bridge.accessor(Input.getSize, Input.setSize, .{});
     pub const src = bridge.accessor(Input.getSrc, Input.setSrc, .{});
     pub const form = bridge.accessor(Input.getForm, null, .{});
@@ -869,6 +889,7 @@ pub const JsApi = struct {
     pub const step = bridge.accessor(Input.getStep, Input.setStep, .{});
     pub const multiple = bridge.accessor(Input.getMultiple, Input.setMultiple, .{});
     pub const autocomplete = bridge.accessor(Input.getAutocomplete, Input.setAutocomplete, .{});
+    pub const willValidate = bridge.accessor(Input.getWillValidate, null, .{});
     pub const select = bridge.function(Input.select, .{});
 
     pub const selectionStart = bridge.accessor(Input.getSelectionStart, Input.setSelectionStart, .{});
