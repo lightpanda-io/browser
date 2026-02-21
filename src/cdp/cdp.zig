@@ -662,6 +662,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
         pub fn callInspector(self: *const Self, msg: []const u8) void {
             self.inspector_session.send(msg);
+            self.session.browser.env.runMicrotasks();
         }
 
         pub fn onInspectorResponse(ctx: *anyopaque, _: u32, msg: []const u8) void {

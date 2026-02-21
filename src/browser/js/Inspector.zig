@@ -241,8 +241,6 @@ pub const Session = struct {
             msg.ptr,
             msg.len,
         );
-
-        v8.v8__Isolate__PerformMicrotaskCheckpoint(isolate);
     }
 
     // Gets a value by object ID regardless of which context it is in.
