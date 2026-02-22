@@ -130,6 +130,17 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 return err;
             };
         },
+        .mcp => {
+            log.info(.app, "starting MCP server", .{});
+
+            log.opts.format = .logfmt;
+
+            var mcp_server = try lp.mcp.Server.init(allocator, app);
+            defer mcp_server.deinit();
+
+            try mcp_server.start();
+            lp.mcp.router.processRequests(mcp_server);
+        },
         else => unreachable,
     }
 }
