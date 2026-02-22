@@ -435,7 +435,7 @@ pub const Jar = struct {
     pub fn removeExpired(self: *Jar, request_time: ?i64) void {
         if (self.cookies.items.len == 0) return;
         const time = request_time orelse std.time.timestamp();
-        var i: usize = self.cookies.items.len ;
+        var i: usize = self.cookies.items.len;
         while (i > 0) {
             i -= 1;
             const cookie = &self.cookies.items[i];
