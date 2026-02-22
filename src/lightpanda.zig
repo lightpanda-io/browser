@@ -132,4 +132,5 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
 
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("mcp/tests.zig");
 }
