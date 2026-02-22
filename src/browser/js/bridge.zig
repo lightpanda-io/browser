@@ -713,6 +713,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/css/CSSStyleRule.zig"),
     @import("../webapi/css/CSSStyleSheet.zig"),
     @import("../webapi/css/CSSStyleProperties.zig"),
+    @import("../webapi/css/FontFaceSet.zig"),
     @import("../webapi/css/MediaQueryList.zig"),
     @import("../webapi/css/StyleSheetList.zig"),
     @import("../webapi/Document.zig"),

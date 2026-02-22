@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="document_fonts_exists">
+{
+    testing.expectTrue(document.fonts !== undefined);
+    testing.expectTrue(document.fonts !== null);
+}
+</script>
+
+<script id="document_fonts_same_instance">
+{
+    // Should return same instance each time
+    const f1 = document.fonts;
+    const f2 = document.fonts;
+    testing.expectTrue(f1 === f2);
+}
+</script>
+
+<script id="document_fonts_status">
+{
+    testing.expectEqual('loaded', document.fonts.status);
+}
+</script>
+
+<script id="document_fonts_size">
+{
+    testing.expectEqual(0, document.fonts.size);
+}
+</script>
+
+<script id="document_fonts_ready_is_promise">
+{
+    const ready = document.fonts.ready;
+    testing.expectTrue(ready instanceof Promise);
+}
+</script>
+
+<script id="document_fonts_ready_resolves">
+{
+    let resolved = false;
+    document.fonts.ready.then(() => { resolved = true; });
+    // Promise resolution is async; just confirm .then() does not throw
+    testing.expectTrue(typeof document.fonts.ready.then === 'function');
+}
+</script>
+
+<script id="document_fonts_check">
+{
+    testing.expectTrue(document.fonts.check('16px sans-serif'));
+}
+</script>
+
+<script id="document_fonts_constructor_name">
+{
+    testing.expectEqual('FontFaceSet', document.fonts.constructor.name);
+}
+</script>

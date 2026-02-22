@@ -34,6 +34,7 @@ const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
+const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
@@ -52,6 +53,7 @@ _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 _removed_ids: std.StringHashMapUnmanaged(void) = .empty,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
+_fonts: ?*FontFaceSet = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
 _adopted_style_sheets: ?js.Object.Global = null,
@@ -428,6 +430,15 @@ pub fn getStyleSheets(self: *Document, page: *Page) !*StyleSheetList {
     const sheets = try StyleSheetList.init(page);
     self._style_sheets = sheets;
     return sheets;
+}
+
+pub fn getFonts(self: *Document, page: *Page) !*FontFaceSet {
+    if (self._fonts) |fonts| {
+        return fonts;
+    }
+    const fonts = try FontFaceSet.init(page);
+    self._fonts = fonts;
+    return fonts;
 }
 
 pub fn adoptNode(_: *const Document, node: *Node, page: *Page) !*Node {
@@ -963,6 +974,7 @@ pub const JsApi = struct {
     pub const implementation = bridge.accessor(Document.getImplementation, null, .{});
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
+    pub const fonts = bridge.accessor(Document.getFonts, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, null, .{});
     pub const createElement = bridge.function(Document.createElement, .{ .dom_exception = true });
