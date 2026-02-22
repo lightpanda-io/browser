@@ -53,6 +53,7 @@ _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 _removed_ids: std.StringHashMapUnmanaged(void) = .empty,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
+_implementation: ?*DOMImplementation = null,
 _fonts: ?*FontFaceSet = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
@@ -274,8 +275,11 @@ pub fn querySelectorAll(self: *Document, input: String, page: *Page) !*Selector.
     return Selector.querySelectorAll(self.asNode(), input.str(), page);
 }
 
-pub fn getImplementation(_: *const Document) DOMImplementation {
-    return .{};
+pub fn getImplementation(self: *Document, page: *Page) !*DOMImplementation {
+    if (self._implementation) |impl| return impl;
+    const impl = try page._factory.create(DOMImplementation{});
+    self._implementation = impl;
+    return impl;
 }
 
 pub fn createDocumentFragment(self: *Document, page: *Page) !*Node.DocumentFragment {
@@ -737,6 +741,7 @@ pub fn open(self: *Document, page: *Page) !*Document {
     self._elements_by_id.clearAndFree(page.arena);
     self._active_element = null;
     self._style_sheets = null;
+    self._implementation = null;
     self._ready_state = .loading;
 
     self._script_created_parser = Parser.Streaming.init(page.arena, doc_node, page);

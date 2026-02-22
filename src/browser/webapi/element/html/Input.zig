@@ -125,6 +125,7 @@ pub fn setType(self: *Input, typ: []const u8, page: *Page) !void {
 }
 
 pub fn getValue(self: *const Input) []const u8 {
+    if (self._input_type == .file) return "";
     return self._value orelse self._default_value orelse switch (self._input_type) {
         .checkbox, .radio => "on",
         else => "",
@@ -132,8 +133,9 @@ pub fn getValue(self: *const Input) []const u8 {
 }
 
 pub fn setValue(self: *Input, value: []const u8, page: *Page) !void {
-    // File inputs cannot have their value set programmatically for security reasons
+    // File inputs: setting to empty string is a no-op, anything else throws
     if (self._input_type == .file) {
+        if (value.len == 0) return;
         return error.InvalidStateError;
     }
     // This should _not_ call setAttribute. It updates the current state only
@@ -866,9 +868,17 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    /// Handles [LegacyNullToEmptyString]: null → "" per HTML spec.
+    fn setValueFromJS(self: *Input, js_value: js.Value, page: *Page) !void {
+        if (js_value.isNull()) {
+            return self.setValue("", page);
+        }
+        return self.setValue(try js_value.toZig([]const u8), page);
+    }
+
     pub const onselectionchange = bridge.accessor(Input.getOnSelectionChange, Input.setOnSelectionChange, .{});
     pub const @"type" = bridge.accessor(Input.getType, Input.setType, .{});
-    pub const value = bridge.accessor(Input.getValue, Input.setValue, .{ .dom_exception = true });
+    pub const value = bridge.accessor(Input.getValue, setValueFromJS, .{ .dom_exception = true });
     pub const defaultValue = bridge.accessor(Input.getDefaultValue, Input.setDefaultValue, .{});
     pub const checked = bridge.accessor(Input.getChecked, Input.setChecked, .{});
     pub const defaultChecked = bridge.accessor(Input.getDefaultChecked, Input.setDefaultChecked, .{});
