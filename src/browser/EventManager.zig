@@ -170,6 +170,8 @@ const DispatchError = error{
     JsException,
 };
 pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!void {
+    defer if (!event._v8_handoff) event.deinit(false, self.page);
+
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }
@@ -218,6 +220,8 @@ const DispatchWithFunctionOptions = struct {
     inject_target: bool = true,
 };
 pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *Event, function_: ?js.Function, comptime opts: DispatchWithFunctionOptions) !void {
+    defer if (!event._v8_handoff) event.deinit(false, self.page);
+
     if (comptime IS_DEBUG) {
         log.debug(.event, "dispatchWithFunction", .{ .type = event._type_string.str(), .context = opts.context, .has_function = function_ != null });
     }
@@ -757,7 +761,6 @@ const ActivationState = struct {
             .bubbles = true,
             .cancelable = false,
         }, page);
-        defer if (!event._v8_handoff) event.deinit(false);
 
         const target = input.asElement().asEventTarget();
         try page._event_manager.dispatch(target, event);

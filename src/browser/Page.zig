@@ -643,7 +643,6 @@ pub fn documentIsLoaded(self: *Page) void {
 
 pub fn _documentIsLoaded(self: *Page) !void {
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self);
-    defer if (!event._v8_handoff) event.deinit(false);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -664,7 +663,6 @@ pub fn iframeCompletedLoading(self: *Page, iframe: *Element.Html.IFrame) void {
             log.err(.page, "iframe event init", .{ .err = err });
             break :blk;
         };
-        defer if (!event._v8_handoff) event.deinit(false);
         self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
             log.warn(.js, "iframe onload", .{ .err = err, .url = iframe._src });
         };
@@ -727,7 +725,6 @@ fn _documentIsComplete(self: *Page) !void {
     // Dispatch `_to_load` events before window.load.
     for (self._to_load.items) |element| {
         const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-        defer if (!event._v8_handoff) event.deinit(false);
         try self._event_manager.dispatch(element.asEventTarget(), event);
     }
 
@@ -736,7 +733,6 @@ fn _documentIsComplete(self: *Page) !void {
 
     // Dispatch window.load event.
     const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-    defer if (!event._v8_handoff) event.deinit(false);
     // This event is weird, it's dispatched directly on the window, but
     // with the document as the target.
     event._target = self.document.asEventTarget();
@@ -748,7 +744,6 @@ fn _documentIsComplete(self: *Page) !void {
     );
 
     const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
-    defer if (!pageshow_event._v8_handoff) pageshow_event.deinit(false);
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
         pageshow_event,
@@ -1565,8 +1560,6 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
             log.err(.page, "deliverSlotchange.init", .{ .err = err, .type = self._type });
             continue;
         };
-        defer if (!event._v8_handoff) event.deinit(false);
-
         const target = slot.asNode().asEventTarget();
         _ = target.dispatchEvent(event, self) catch |err| {
             log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type });
@@ -3182,8 +3175,6 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
         .clientX = x,
         .clientY = y,
     }, self)).asEvent();
-
-    defer if (!event._v8_handoff) event.deinit(false);
     try self._event_manager.dispatch(target.asEventTarget(), event);
 }
 
@@ -3241,8 +3232,6 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
-
     const element = self.window._document._active_element orelse return;
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{
@@ -3312,10 +3301,8 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const form_element = form.asElement();
 
     if (submit_opts.fire_event) {
-        const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
-        defer if (!submit_event._v8_handoff) submit_event.deinit(false);
-
         const onsubmit_handler = try form.asHtmlElement().getOnSubmit(self);
+        const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
 
         var ls: JS.Local.Scope = undefined;
         self.js.localScope(&ls);

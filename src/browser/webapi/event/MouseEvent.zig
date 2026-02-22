@@ -109,8 +109,8 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
     return event;
 }
 
-pub fn deinit(self: *MouseEvent, shutdown: bool) void {
-    self._proto.deinit(shutdown);
+pub fn deinit(self: *MouseEvent, shutdown: bool, page: *Page) void {
+    self._proto.deinit(shutdown, page);
 }
 
 pub fn asEvent(self: *MouseEvent) *Event {

@@ -30,7 +30,6 @@ pub const Event = @This();
 
 pub const _prototype_root = true;
 _type: Type,
-_page: *Page,
 _arena: Allocator,
 _bubbles: bool = false,
 _cancelable: bool = false,
@@ -84,16 +83,16 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*Event {
     const arena = try page.getArena(.{ .debug = "Event" });
     errdefer page.releaseArena(arena);
     const str = try String.init(arena, typ, .{});
-    return initWithTrusted(arena, str, opts_, false, page);
+    return initWithTrusted(arena, str, opts_, false);
 }
 
 pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
     const arena = try page.getArena(.{ .debug = "Event.trusted" });
     errdefer page.releaseArena(arena);
-    return initWithTrusted(arena, typ, opts_, true, page);
+    return initWithTrusted(arena, typ, opts_, true);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool, page: *Page) !*Event {
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool) !*Event {
     const opts = opts_ orelse Options{};
 
     // Round to 2ms for privacy (browsers do this)
@@ -102,7 +101,6 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
 
     const event = try arena.create(Event);
     event.* = .{
-        ._page = page,
         ._arena = arena,
         ._type = .generic,
         ._bubbles = opts.bubbles,
@@ -133,9 +131,9 @@ pub fn initEvent(
     self._prevent_default = false;
 }
 
-pub fn deinit(self: *Event, shutdown: bool) void {
+pub fn deinit(self: *Event, shutdown: bool, page: *Page) void {
     _ = shutdown;
-    self._page.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
 pub fn as(self: *Event, comptime T: type) *T {

@@ -166,7 +166,6 @@ pub fn load(self: *Media, page: *Page) !void {
 
 fn dispatchEvent(self: *Media, name: []const u8, page: *Page) !void {
     const event = try Event.init(name, .{ .bubbles = false, .cancelable = false }, page);
-    defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 

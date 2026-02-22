@@ -130,7 +130,6 @@ const PostMessageCallback = struct {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
             return null;
         }).asEvent();
-        defer if (!event._v8_handoff) event.deinit(false);
 
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);

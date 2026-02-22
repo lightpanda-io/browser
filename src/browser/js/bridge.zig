@@ -104,11 +104,11 @@ pub fn Builder(comptime T: type) type {
             return entries;
         }
 
-        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool) void) Finalizer {
+        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool, page: *Page) void) Finalizer {
             return .{
                 .from_zig = struct {
-                    fn wrap(ptr: *anyopaque) void {
-                        func(@ptrCast(@alignCast(ptr)), true);
+                    fn wrap(ptr: *anyopaque, page: *Page) void {
+                        func(@ptrCast(@alignCast(ptr)), true, page);
                     }
                 }.wrap,
 
@@ -120,7 +120,7 @@ pub fn Builder(comptime T: type) type {
                         const ctx = fc.ctx;
                         const value_ptr = fc.ptr;
                         if (ctx.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
-                            func(@ptrCast(@alignCast(value_ptr)), false);
+                            func(@ptrCast(@alignCast(value_ptr)), false, ctx.page);
                             ctx.release(value_ptr);
                         } else {
                             // A bit weird, but v8 _requires_ that we release it
@@ -398,7 +398,7 @@ pub const Property = struct {
 const Finalizer = struct {
     // The finalizer wrapper when called fro Zig. This is only called on
     // Context.deinit
-    from_zig: *const fn (ctx: *anyopaque) void,
+    from_zig: *const fn (ctx: *anyopaque, page: *Page) void,
 
     // The finalizer wrapper when called from V8. This may never be called
     // (hence why we fallback to calling in Context.denit). If it is called,

@@ -1011,7 +1011,7 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     self.isolate.enqueueMicrotaskFunc(cb);
 }
 
-pub fn createFinalizerCallback(self: *Context, global: v8.Global, ptr: *anyopaque, finalizerFn: *const fn (ptr: *anyopaque) void) !*FinalizerCallback {
+pub fn createFinalizerCallback(self: *Context, global: v8.Global, ptr: *anyopaque, finalizerFn: *const fn (ptr: *anyopaque, page: *Page) void) !*FinalizerCallback {
     const fc = try self.finalizer_callback_pool.create();
     fc.* = .{
         .ctx = self,
@@ -1031,10 +1031,10 @@ pub const FinalizerCallback = struct {
     ctx: *Context,
     ptr: *anyopaque,
     global: v8.Global,
-    finalizerFn: *const fn (ptr: *anyopaque) void,
+    finalizerFn: *const fn (ptr: *anyopaque, page: *Page) void,
 
     pub fn deinit(self: *FinalizerCallback) void {
-        self.finalizerFn(self.ptr);
+        self.finalizerFn(self.ptr, self.ctx.page);
         self.ctx.finalizer_callback_pool.destroy(self);
     }
 };

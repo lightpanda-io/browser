@@ -338,7 +338,6 @@ pub fn click(self: *HtmlElement, page: *Page) !void {
         .clientX = 0,
         .clientY = 0,
     }, page)).asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(self.asEventTarget(), event);
 }
 

@@ -183,41 +183,41 @@ pub fn standaloneEventTarget(self: *Factory, child: anytype) !*EventTarget {
 }
 
 // this is a root object
-pub fn event(self: *Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, @TypeOf(child) },
     ).allocate(arena);
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = try self.eventInit(arena, typ, chain.get(1));
+    event_ptr.* = try eventInit(arena, typ, chain.get(1));
     chain.setLeaf(1, child);
 
     return chain.get(1);
 }
 
-pub fn uiEvent(self: *Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+pub fn uiEvent(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, @TypeOf(child) },
     ).allocate(arena);
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = try self.eventInit(arena, typ, chain.get(1));
+    event_ptr.* = try eventInit(arena, typ, chain.get(1));
     chain.setMiddle(1, UIEvent.Type);
     chain.setLeaf(2, child);
 
     return chain.get(2);
 }
 
-pub fn mouseEvent(self: *Factory, arena: Allocator, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
+pub fn mouseEvent(_: *const Factory, arena: Allocator, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ Event, UIEvent, MouseEvent, @TypeOf(child) },
     ).allocate(arena);
 
     // Special case: Event has a _type_string field, so we need manual setup
     const event_ptr = chain.get(0);
-    event_ptr.* = try self.eventInit(arena, typ, chain.get(1));
+    event_ptr.* = try eventInit(arena, typ, chain.get(1));
     chain.setMiddle(1, UIEvent.Type);
 
     // Set MouseEvent with all its fields
@@ -231,14 +231,13 @@ pub fn mouseEvent(self: *Factory, arena: Allocator, typ: String, mouse: MouseEve
     return chain.get(3);
 }
 
-fn eventInit(self: *const Factory, arena: Allocator, typ: String, value: anytype) !Event {
+fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
     // Round to 2ms for privacy (browsers do this)
     const raw_timestamp = @import("../datetime.zig").milliTimestamp(.monotonic);
     const time_stamp = (raw_timestamp / 2) * 2;
 
     return .{
         ._arena = arena,
-        ._page = self._page,
         ._type = unionInit(Event.Type, value),
         ._type_string = typ,
         ._time_stamp = time_stamp,
