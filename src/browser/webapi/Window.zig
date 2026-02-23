@@ -807,7 +807,7 @@ pub const JsApi = struct {
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, _: ?[]const u8) void {}
-    }.alert, .{});
+    }.alert, .{ .noop = true });
     pub const confirm = bridge.function(struct {
         fn confirm(_: *const Window, _: ?[]const u8) bool {
             return false;

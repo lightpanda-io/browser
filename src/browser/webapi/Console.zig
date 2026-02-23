@@ -178,7 +178,7 @@ pub const JsApi = struct {
     pub const info = bridge.function(Console.info, .{});
     pub const log = bridge.function(Console.log, .{});
     pub const warn = bridge.function(Console.warn, .{});
-    pub const clear = bridge.function(Console.clear, .{});
+    pub const clear = bridge.function(Console.clear, .{ .noop = true });
     pub const assert = bridge.function(Console.assert, .{});
     pub const @"error" = bridge.function(Console.@"error", .{});
     pub const exception = bridge.function(Console.@"error", .{});

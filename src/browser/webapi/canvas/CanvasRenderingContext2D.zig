@@ -47,46 +47,6 @@ pub fn setFillStyle(
     self._fill_style = color.RGBA.parse(value) catch self._fill_style;
 }
 
-pub fn getGlobalAlpha(_: *const CanvasRenderingContext2D) f64 {
-    return 1.0;
-}
-
-pub fn getGlobalCompositeOperation(_: *const CanvasRenderingContext2D) []const u8 {
-    return "source-over";
-}
-
-pub fn getStrokeStyle(_: *const CanvasRenderingContext2D) []const u8 {
-    return "#000000";
-}
-
-pub fn getLineWidth(_: *const CanvasRenderingContext2D) f64 {
-    return 1.0;
-}
-
-pub fn getLineCap(_: *const CanvasRenderingContext2D) []const u8 {
-    return "butt";
-}
-
-pub fn getLineJoin(_: *const CanvasRenderingContext2D) []const u8 {
-    return "miter";
-}
-
-pub fn getMiterLimit(_: *const CanvasRenderingContext2D) f64 {
-    return 10.0;
-}
-
-pub fn getFont(_: *const CanvasRenderingContext2D) []const u8 {
-    return "10px sans-serif";
-}
-
-pub fn getTextAlign(_: *const CanvasRenderingContext2D) []const u8 {
-    return "start";
-}
-
-pub fn getTextBaseline(_: *const CanvasRenderingContext2D) []const u8 {
-    return "alphabetic";
-}
-
 const WidthOrImageData = union(enum) {
     width: u32,
     image_data: *ImageData,
@@ -113,7 +73,6 @@ pub fn createImageData(
 }
 
 pub fn putImageData(_: *const CanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
-
 pub fn save(_: *CanvasRenderingContext2D) void {}
 pub fn restore(_: *CanvasRenderingContext2D) void {}
 pub fn scale(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -122,13 +81,7 @@ pub fn translate(_: *CanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *CanvasRenderingContext2D) void {}
-pub fn setGlobalAlpha(_: *CanvasRenderingContext2D, _: f64) void {}
-pub fn setGlobalCompositeOperation(_: *CanvasRenderingContext2D, _: []const u8) void {}
 pub fn setStrokeStyle(_: *CanvasRenderingContext2D, _: []const u8) void {}
-pub fn setLineWidth(_: *CanvasRenderingContext2D, _: f64) void {}
-pub fn setLineCap(_: *CanvasRenderingContext2D, _: []const u8) void {}
-pub fn setLineJoin(_: *CanvasRenderingContext2D, _: []const u8) void {}
-pub fn setMiterLimit(_: *CanvasRenderingContext2D, _: f64) void {}
 pub fn clearRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn fillRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn strokeRect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
@@ -144,9 +97,6 @@ pub fn rect(_: *CanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {
 pub fn fill(_: *CanvasRenderingContext2D) void {}
 pub fn stroke(_: *CanvasRenderingContext2D) void {}
 pub fn clip(_: *CanvasRenderingContext2D) void {}
-pub fn setFont(_: *CanvasRenderingContext2D, _: []const u8) void {}
-pub fn setTextAlign(_: *CanvasRenderingContext2D, _: []const u8) void {}
-pub fn setTextBaseline(_: *CanvasRenderingContext2D, _: []const u8) void {}
 pub fn fillText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *CanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 
@@ -160,53 +110,46 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
-    pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{});
-
-    pub const save = bridge.function(CanvasRenderingContext2D.save, .{});
-    pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{});
-
-    pub const scale = bridge.function(CanvasRenderingContext2D.scale, .{});
-    pub const rotate = bridge.function(CanvasRenderingContext2D.rotate, .{});
-    pub const translate = bridge.function(CanvasRenderingContext2D.translate, .{});
-    pub const transform = bridge.function(CanvasRenderingContext2D.transform, .{});
-    pub const setTransform = bridge.function(CanvasRenderingContext2D.setTransform, .{});
-    pub const resetTransform = bridge.function(CanvasRenderingContext2D.resetTransform, .{});
-
-    pub const globalAlpha = bridge.accessor(CanvasRenderingContext2D.getGlobalAlpha, CanvasRenderingContext2D.setGlobalAlpha, .{});
-    pub const globalCompositeOperation = bridge.accessor(CanvasRenderingContext2D.getGlobalCompositeOperation, CanvasRenderingContext2D.setGlobalCompositeOperation, .{});
+    pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
+    pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
+    pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
+    pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
+    pub const lineWidth = bridge.property(1.0, .{ .template = false, .readonly = false });
+    pub const lineCap = bridge.property("butt", .{ .template = false, .readonly = false });
+    pub const lineJoin = bridge.property("miter", .{ .template = false, .readonly = false });
+    pub const miterLimit = bridge.property(10.0, .{ .template = false, .readonly = false });
+    pub const textAlign = bridge.property("start", .{ .template = false, .readonly = false });
+    pub const textBaseline = bridge.property("alphabetic", .{ .template = false, .readonly = false });
 
     pub const fillStyle = bridge.accessor(CanvasRenderingContext2D.getFillStyle, CanvasRenderingContext2D.setFillStyle, .{});
-    pub const strokeStyle = bridge.accessor(CanvasRenderingContext2D.getStrokeStyle, CanvasRenderingContext2D.setStrokeStyle, .{});
+    pub const createImageData = bridge.function(CanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
-    pub const lineWidth = bridge.accessor(CanvasRenderingContext2D.getLineWidth, CanvasRenderingContext2D.setLineWidth, .{});
-    pub const lineCap = bridge.accessor(CanvasRenderingContext2D.getLineCap, CanvasRenderingContext2D.setLineCap, .{});
-    pub const lineJoin = bridge.accessor(CanvasRenderingContext2D.getLineJoin, CanvasRenderingContext2D.setLineJoin, .{});
-    pub const miterLimit = bridge.accessor(CanvasRenderingContext2D.getMiterLimit, CanvasRenderingContext2D.setMiterLimit, .{});
-
-    pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{});
-    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{});
-    pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{});
-
-    pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{});
-    pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{});
-    pub const moveTo = bridge.function(CanvasRenderingContext2D.moveTo, .{});
-    pub const lineTo = bridge.function(CanvasRenderingContext2D.lineTo, .{});
-    pub const quadraticCurveTo = bridge.function(CanvasRenderingContext2D.quadraticCurveTo, .{});
-    pub const bezierCurveTo = bridge.function(CanvasRenderingContext2D.bezierCurveTo, .{});
-    pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{});
-    pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{});
-    pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{});
-
-    pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{});
-    pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{});
-    pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{});
-
-    pub const font = bridge.accessor(CanvasRenderingContext2D.getFont, CanvasRenderingContext2D.setFont, .{});
-    pub const textAlign = bridge.accessor(CanvasRenderingContext2D.getTextAlign, CanvasRenderingContext2D.setTextAlign, .{});
-    pub const textBaseline = bridge.accessor(CanvasRenderingContext2D.getTextBaseline, CanvasRenderingContext2D.setTextBaseline, .{});
-    pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
-    pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});
+    pub const putImageData = bridge.function(CanvasRenderingContext2D.putImageData, .{ .noop = true });
+    pub const save = bridge.function(CanvasRenderingContext2D.save, .{ .noop = true });
+    pub const restore = bridge.function(CanvasRenderingContext2D.restore, .{ .noop = true });
+    pub const scale = bridge.function(CanvasRenderingContext2D.scale, .{ .noop = true });
+    pub const rotate = bridge.function(CanvasRenderingContext2D.rotate, .{ .noop = true });
+    pub const translate = bridge.function(CanvasRenderingContext2D.translate, .{ .noop = true });
+    pub const transform = bridge.function(CanvasRenderingContext2D.transform, .{ .noop = true });
+    pub const setTransform = bridge.function(CanvasRenderingContext2D.setTransform, .{ .noop = true });
+    pub const resetTransform = bridge.function(CanvasRenderingContext2D.resetTransform, .{ .noop = true });
+    pub const clearRect = bridge.function(CanvasRenderingContext2D.clearRect, .{ .noop = true });
+    pub const fillRect = bridge.function(CanvasRenderingContext2D.fillRect, .{ .noop = true });
+    pub const strokeRect = bridge.function(CanvasRenderingContext2D.strokeRect, .{ .noop = true });
+    pub const beginPath = bridge.function(CanvasRenderingContext2D.beginPath, .{ .noop = true });
+    pub const closePath = bridge.function(CanvasRenderingContext2D.closePath, .{ .noop = true });
+    pub const moveTo = bridge.function(CanvasRenderingContext2D.moveTo, .{ .noop = true });
+    pub const lineTo = bridge.function(CanvasRenderingContext2D.lineTo, .{ .noop = true });
+    pub const quadraticCurveTo = bridge.function(CanvasRenderingContext2D.quadraticCurveTo, .{ .noop = true });
+    pub const bezierCurveTo = bridge.function(CanvasRenderingContext2D.bezierCurveTo, .{ .noop = true });
+    pub const arc = bridge.function(CanvasRenderingContext2D.arc, .{ .noop = true });
+    pub const arcTo = bridge.function(CanvasRenderingContext2D.arcTo, .{ .noop = true });
+    pub const rect = bridge.function(CanvasRenderingContext2D.rect, .{ .noop = true });
+    pub const fill = bridge.function(CanvasRenderingContext2D.fill, .{ .noop = true });
+    pub const stroke = bridge.function(CanvasRenderingContext2D.stroke, .{ .noop = true });
+    pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
+    pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{ .noop = true });
+    pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{ .noop = true });
 };
 
 const testing = @import("../../../testing.zig");

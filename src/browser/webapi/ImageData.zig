@@ -93,14 +93,6 @@ pub fn getHeight(self: *const ImageData) u32 {
     return self._height;
 }
 
-pub fn getPixelFormat(_: *const ImageData) String {
-    return comptime .wrap("rgba-unorm8");
-}
-
-pub fn getColorSpace(_: *const ImageData) String {
-    return comptime .wrap("srgb");
-}
-
 pub fn getData(self: *const ImageData) js.ArrayBufferRef(.uint8_clamped).Global {
     return self._data;
 }
@@ -116,11 +108,12 @@ pub const JsApi = struct {
 
     pub const constructor = bridge.constructor(ImageData.constructor, .{ .dom_exception = true });
 
+    pub const colorSpace = bridge.property("srgb", .{ .template = false, .readonly = true });
+    pub const pixelFormat = bridge.property("rgba-unorm8", .{ .template = false, .readonly = true });
+
+    pub const data = bridge.accessor(ImageData.getData, null, .{});
     pub const width = bridge.accessor(ImageData.getWidth, null, .{});
     pub const height = bridge.accessor(ImageData.getHeight, null, .{});
-    pub const pixelFormat = bridge.accessor(ImageData.getPixelFormat, null, .{});
-    pub const colorSpace = bridge.accessor(ImageData.getColorSpace, null, .{});
-    pub const data = bridge.accessor(ImageData.getData, null, .{});
 };
 
 const testing = @import("../../testing.zig");

@@ -46,46 +46,6 @@ pub fn setFillStyle(
     self._fill_style = color.RGBA.parse(value) catch self._fill_style;
 }
 
-pub fn getGlobalAlpha(_: *const OffscreenCanvasRenderingContext2D) f64 {
-    return 1.0;
-}
-
-pub fn getGlobalCompositeOperation(_: *const OffscreenCanvasRenderingContext2D) []const u8 {
-    return "source-over";
-}
-
-pub fn getStrokeStyle(_: *const OffscreenCanvasRenderingContext2D) []const u8 {
-    return "#000000";
-}
-
-pub fn getLineWidth(_: *const OffscreenCanvasRenderingContext2D) f64 {
-    return 1.0;
-}
-
-pub fn getLineCap(_: *const OffscreenCanvasRenderingContext2D) []const u8 {
-    return "butt";
-}
-
-pub fn getLineJoin(_: *const OffscreenCanvasRenderingContext2D) []const u8 {
-    return "miter";
-}
-
-pub fn getMiterLimit(_: *const OffscreenCanvasRenderingContext2D) f64 {
-    return 10.0;
-}
-
-pub fn getFont(_: *const OffscreenCanvasRenderingContext2D) []const u8 {
-    return "10px sans-serif";
-}
-
-pub fn getTextAlign(_: *const OffscreenCanvasRenderingContext2D) []const u8 {
-    return "start";
-}
-
-pub fn getTextBaseline(_: *const OffscreenCanvasRenderingContext2D) []const u8 {
-    return "alphabetic";
-}
-
 const WidthOrImageData = union(enum) {
     width: u32,
     image_data: *ImageData,
@@ -112,7 +72,6 @@ pub fn createImageData(
 }
 
 pub fn putImageData(_: *const OffscreenCanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
-
 pub fn save(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn restore(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn scale(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -121,13 +80,7 @@ pub fn translate(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn setGlobalAlpha(_: *OffscreenCanvasRenderingContext2D, _: f64) void {}
-pub fn setGlobalCompositeOperation(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
 pub fn setStrokeStyle(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
-pub fn setLineWidth(_: *OffscreenCanvasRenderingContext2D, _: f64) void {}
-pub fn setLineCap(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
-pub fn setLineJoin(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
-pub fn setMiterLimit(_: *OffscreenCanvasRenderingContext2D, _: f64) void {}
 pub fn clearRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn fillRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
@@ -143,9 +96,6 @@ pub fn rect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f6
 pub fn fill(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn setFont(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
-pub fn setTextAlign(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
-pub fn setTextBaseline(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
 pub fn fillText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 
@@ -159,51 +109,44 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
-    pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{});
-
-    pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{});
-    pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{});
-
-    pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{});
-    pub const rotate = bridge.function(OffscreenCanvasRenderingContext2D.rotate, .{});
-    pub const translate = bridge.function(OffscreenCanvasRenderingContext2D.translate, .{});
-    pub const transform = bridge.function(OffscreenCanvasRenderingContext2D.transform, .{});
-    pub const setTransform = bridge.function(OffscreenCanvasRenderingContext2D.setTransform, .{});
-    pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{});
-
-    pub const globalAlpha = bridge.accessor(OffscreenCanvasRenderingContext2D.getGlobalAlpha, OffscreenCanvasRenderingContext2D.setGlobalAlpha, .{});
-    pub const globalCompositeOperation = bridge.accessor(OffscreenCanvasRenderingContext2D.getGlobalCompositeOperation, OffscreenCanvasRenderingContext2D.setGlobalCompositeOperation, .{});
+    pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
+    pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
+    pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
+    pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
+    pub const lineWidth = bridge.property(1.0, .{ .template = false, .readonly = false });
+    pub const lineCap = bridge.property("butt", .{ .template = false, .readonly = false });
+    pub const lineJoin = bridge.property("miter", .{ .template = false, .readonly = false });
+    pub const miterLimit = bridge.property(10.0, .{ .template = false, .readonly = false });
+    pub const textAlign = bridge.property("start", .{ .template = false, .readonly = false });
+    pub const textBaseline = bridge.property("alphabetic", .{ .template = false, .readonly = false });
 
     pub const fillStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getFillStyle, OffscreenCanvasRenderingContext2D.setFillStyle, .{});
-    pub const strokeStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getStrokeStyle, OffscreenCanvasRenderingContext2D.setStrokeStyle, .{});
+    pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
-    pub const lineWidth = bridge.accessor(OffscreenCanvasRenderingContext2D.getLineWidth, OffscreenCanvasRenderingContext2D.setLineWidth, .{});
-    pub const lineCap = bridge.accessor(OffscreenCanvasRenderingContext2D.getLineCap, OffscreenCanvasRenderingContext2D.setLineCap, .{});
-    pub const lineJoin = bridge.accessor(OffscreenCanvasRenderingContext2D.getLineJoin, OffscreenCanvasRenderingContext2D.setLineJoin, .{});
-    pub const miterLimit = bridge.accessor(OffscreenCanvasRenderingContext2D.getMiterLimit, OffscreenCanvasRenderingContext2D.setMiterLimit, .{});
-
-    pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{});
-    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{});
-    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{});
-
-    pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{});
-    pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{});
-    pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{});
-    pub const lineTo = bridge.function(OffscreenCanvasRenderingContext2D.lineTo, .{});
-    pub const quadraticCurveTo = bridge.function(OffscreenCanvasRenderingContext2D.quadraticCurveTo, .{});
-    pub const bezierCurveTo = bridge.function(OffscreenCanvasRenderingContext2D.bezierCurveTo, .{});
-    pub const arc = bridge.function(OffscreenCanvasRenderingContext2D.arc, .{});
-    pub const arcTo = bridge.function(OffscreenCanvasRenderingContext2D.arcTo, .{});
-    pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{});
-
-    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{});
-    pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{});
-    pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{});
-
-    pub const font = bridge.accessor(OffscreenCanvasRenderingContext2D.getFont, OffscreenCanvasRenderingContext2D.setFont, .{});
-    pub const textAlign = bridge.accessor(OffscreenCanvasRenderingContext2D.getTextAlign, OffscreenCanvasRenderingContext2D.setTextAlign, .{});
-    pub const textBaseline = bridge.accessor(OffscreenCanvasRenderingContext2D.getTextBaseline, OffscreenCanvasRenderingContext2D.setTextBaseline, .{});
-    pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{});
-    pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{});
+    pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .noop = true });
+    pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
+    pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
+    pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{ .noop = true });
+    pub const rotate = bridge.function(OffscreenCanvasRenderingContext2D.rotate, .{ .noop = true });
+    pub const translate = bridge.function(OffscreenCanvasRenderingContext2D.translate, .{ .noop = true });
+    pub const transform = bridge.function(OffscreenCanvasRenderingContext2D.transform, .{ .noop = true });
+    pub const setTransform = bridge.function(OffscreenCanvasRenderingContext2D.setTransform, .{ .noop = true });
+    pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{ .noop = true });
+    pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{ .noop = true });
+    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{ .noop = true });
+    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{ .noop = true });
+    pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{ .noop = true });
+    pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{ .noop = true });
+    pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{ .noop = true });
+    pub const lineTo = bridge.function(OffscreenCanvasRenderingContext2D.lineTo, .{ .noop = true });
+    pub const quadraticCurveTo = bridge.function(OffscreenCanvasRenderingContext2D.quadraticCurveTo, .{ .noop = true });
+    pub const bezierCurveTo = bridge.function(OffscreenCanvasRenderingContext2D.bezierCurveTo, .{ .noop = true });
+    pub const arc = bridge.function(OffscreenCanvasRenderingContext2D.arc, .{ .noop = true });
+    pub const arcTo = bridge.function(OffscreenCanvasRenderingContext2D.arcTo, .{ .noop = true });
+    pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{ .noop = true });
+    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{ .noop = true });
+    pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{ .noop = true });
+    pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{ .noop = true });
+    pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{ .noop = true });
+    pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{ .noop = true });
 };

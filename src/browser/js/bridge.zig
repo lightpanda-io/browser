@@ -160,6 +160,7 @@ pub const Constructor = struct {
 pub const Function = struct {
     static: bool,
     arity: usize,
+    noop: bool = false,
     cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
@@ -168,13 +169,15 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .arity = getArity(@TypeOf(func)),
-            .func = struct {
+            .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                     Caller.Function.call(T, handle.?, func, opts);
                 }
             }.wrap,
         };
     }
+
+    pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
 
     fn getArity(comptime T: type) usize {
         var count: usize = 0;
@@ -367,6 +370,7 @@ pub const Callable = struct {
 pub const Property = struct {
     value: Value,
     template: bool,
+    readonly: bool,
 
     const Value = union(enum) {
         null,
@@ -378,20 +382,15 @@ pub const Property = struct {
 
     const Opts = struct {
         template: bool,
+        readonly: bool = true,
     };
 
     fn init(value: Value, opts: Opts) Property {
         return .{
             .value = value,
             .template = opts.template,
+            .readonly = opts.readonly,
         };
-    }
-
-    pub fn getter(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-        const value = v8.v8__FunctionCallbackInfo__Data(handle.?);
-        var rv: v8.ReturnValue = undefined;
-        v8.v8__FunctionCallbackInfo__GetReturnValue(handle.?, &rv);
-        v8.v8__ReturnValue__Set(rv, value);
     }
 };
 

@@ -38,11 +38,6 @@ pub fn getMedia(self: *const MediaQueryList) []const u8 {
     return self._media;
 }
 
-/// Always returns false for dummy implementation
-pub fn getMatches(_: *const MediaQueryList) bool {
-    return false;
-}
-
 pub fn addListener(_: *const MediaQueryList, _: js.Function) void {}
 pub fn removeListener(_: *const MediaQueryList, _: js.Function) void {}
 
@@ -56,9 +51,9 @@ pub const JsApi = struct {
     };
 
     pub const media = bridge.accessor(MediaQueryList.getMedia, null, .{});
-    pub const matches = bridge.accessor(MediaQueryList.getMatches, null, .{});
-    pub const addListener = bridge.function(MediaQueryList.addListener, .{});
-    pub const removeListener = bridge.function(MediaQueryList.removeListener, .{});
+    pub const matches = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const addListener = bridge.function(MediaQueryList.addListener, .{ .noop = true });
+    pub const removeListener = bridge.function(MediaQueryList.removeListener, .{ .noop = true });
 };
 
 const testing = @import("../../../testing.zig");

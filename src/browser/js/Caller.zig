@@ -463,6 +463,7 @@ const ReturnValue = struct {
 
 pub const Function = struct {
     pub const Opts = struct {
+        noop: bool = false,
         static: bool = false,
         dom_exception: bool = false,
         as_typed_array: bool = false,
