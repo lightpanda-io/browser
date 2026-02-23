@@ -238,7 +238,7 @@
     testing.expectEqual('', audio.src);
 
     audio.src = 'test.mp3';
-    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/test.mp3', audio.src);
+    testing.expectEqual(testing.BASE_URL + 'element/html/test.mp3', audio.src);
   }
 </script>
 
@@ -248,7 +248,7 @@
     testing.expectEqual('', video.poster);
 
     video.poster = 'poster.jpg';
-    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/poster.jpg', video.poster);
+    testing.expectEqual(testing.BASE_URL + 'element/html/poster.jpg', video.poster);
   }
 </script>
 

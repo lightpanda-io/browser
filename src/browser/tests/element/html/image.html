@@ -32,12 +32,12 @@
 
     img.src = 'test.png';
     // src property returns resolved absolute URL
-    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/test.png', img.src);
+    testing.expectEqual(testing.BASE_URL + 'element/html/test.png', img.src);
     // getAttribute returns the raw attribute value
     testing.expectEqual('test.png', img.getAttribute('src'));
 
     img.src = '/absolute/path.png';
-    testing.expectEqual('http://127.0.0.1:9582/absolute/path.png', img.src);
+    testing.expectEqual(testing.ORIGIN + 'absolute/path.png', img.src);
     testing.expectEqual('/absolute/path.png', img.getAttribute('src'));
 
     img.src = 'https://example.com/image.png';

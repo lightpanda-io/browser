@@ -11,11 +11,11 @@
 <script id=empty_href>
   testing.expectEqual('', $('#a0').href);
 
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/anchor1.html', $('#a1').href);
-  testing.expectEqual('http://127.0.0.1:9582/hello/world/anchor2.html', $('#a2').href);
+  testing.expectEqual(testing.BASE_URL + 'element/anchor1.html', $('#a1').href);
+  testing.expectEqual(testing.ORIGIN + 'hello/world/anchor2.html', $('#a2').href);
   testing.expectEqual('https://www.openmymind.net/Elixirs-With-Statement/', $('#a3').href);
 
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/foo', $('#link').href);
+  testing.expectEqual(testing.BASE_URL + 'element/html/foo', $('#link').href);
 </script>
 
 <script id=dynamic_anchor_defaults>
@@ -129,7 +129,7 @@
   testing.expectEqual('https://foo.bar/?q=bar#frag', link.href);
 
   link.href = 'foo';
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/foo', link.href);
+  testing.expectEqual(testing.BASE_URL + 'element/html/foo', link.href);
 
   testing.expectEqual('', link.type);
   link.type = 'text/html';
