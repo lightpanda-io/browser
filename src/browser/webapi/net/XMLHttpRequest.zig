@@ -92,7 +92,7 @@ pub fn init(page: *Page) !*XMLHttpRequest {
     });
 }
 
-pub fn deinit(self: *XMLHttpRequest, shutdown: bool) void {
+pub fn deinit(self: *XMLHttpRequest, shutdown: bool, page: *Page) void {
     if (self._transfer) |transfer| {
         if (shutdown) {
             transfer.terminate();
@@ -102,7 +102,6 @@ pub fn deinit(self: *XMLHttpRequest, shutdown: bool) void {
         self._transfer = null;
     }
 
-    const page = self._page;
     const js_ctx = page.js;
     if (self._on_ready_state_change) |func| {
         js_ctx.release(func);
@@ -182,9 +181,10 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
     self._response_headers.clearRetainingCapacity();
     self._request_body = null;
 
+    const page = self._page;
     self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, self._page.base(), url, .{ .always_dupe = true });
-    try self.stateChanged(.opened, self._page.js.local.?, self._page);
+    self._url = try URL.resolve(self._arena, page.base(), url, .{ .always_dupe = true });
+    try self.stateChanged(.opened, page.js.local.?, page);
 }
 
 pub fn setRequestHeader(self: *XMLHttpRequest, name: []const u8, value: []const u8, page: *Page) !void {
@@ -524,8 +524,6 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, local: *const js.Local
     self._ready_state = state;
 
     const event = try Event.initTrusted(.wrap("readystatechange"), .{}, page);
-    defer if (!event._v8_handoff) event.deinit(false);
-
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,

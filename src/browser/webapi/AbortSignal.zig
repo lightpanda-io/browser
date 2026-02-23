@@ -77,8 +77,6 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, local: *const js.Local, page:
 
     // Dispatch abort event
     const event = try Event.initTrusted(comptime .wrap("abort"), .{}, page);
-    defer if (!event._v8_handoff) event.deinit(false);
-
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
         event,

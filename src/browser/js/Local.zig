@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Page = @import("../Page.zig");
 const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
@@ -1061,7 +1062,7 @@ const Resolved = struct {
     class_id: u16,
     prototype_chain: []const @import("TaggedOpaque.zig").PrototypeChainEntry,
     finalizer_from_v8: ?*const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void = null,
-    finalizer_from_zig: ?*const fn (ptr: *anyopaque) void = null,
+    finalizer_from_zig: ?*const fn (ptr: *anyopaque, page: *Page) void = null,
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));

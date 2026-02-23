@@ -62,7 +62,6 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
         .{ .total = progress.total, .loaded = progress.loaded },
         page,
     )).asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
 
     return page._event_manager.dispatchWithFunction(
         self.asEventTarget(),

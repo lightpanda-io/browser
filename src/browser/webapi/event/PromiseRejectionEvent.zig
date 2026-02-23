@@ -56,16 +56,14 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEve
     return event;
 }
 
-pub fn deinit(self: *PromiseRejectionEvent, shutdown: bool) void {
-    const proto = self._proto;
-    const js_ctx = proto._page.js;
+pub fn deinit(self: *PromiseRejectionEvent, shutdown: bool, page: *Page) void {
     if (self._reason) |r| {
-        js_ctx.release(r);
+        page.js.release(r);
     }
     if (self._promise) |p| {
-        js_ctx.release(p);
+        page.js.release(p);
     }
-    proto.deinit(shutdown);
+    self._proto.deinit(shutdown, page);
 }
 
 pub fn asEvent(self: *PromiseRejectionEvent) *Event {

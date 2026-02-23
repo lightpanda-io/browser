@@ -65,8 +65,8 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *PageTransitionEvent, shutdown: bool) void {
-    self._proto.deinit(shutdown);
+pub fn deinit(self: *PageTransitionEvent, shutdown: bool, page: *Page) void {
+    self._proto.deinit(shutdown, page);
 }
 
 pub fn asEvent(self: *PageTransitionEvent) *Event {

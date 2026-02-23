@@ -39,7 +39,6 @@ pub const init: Selection = .{};
 
 fn dispatchSelectionChangeEvent(page: *Page) !void {
     const event = try Event.init("selectionchange", .{}, page);
-    defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(page.document.asEventTarget(), event);
 }
 

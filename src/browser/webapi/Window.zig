@@ -308,12 +308,10 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
         .cancelable = true,
     }, page);
 
-    const event = error_event.asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
-
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
     // If it returns true, the event is cancelled.
+    var prevent_default = false;
     if (self._on_error) |on_error| {
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);
@@ -330,12 +328,12 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
 
         // Per spec: returning true from onerror cancels the event
         if (result) |r| {
-            if (r.isTrue()) {
-                event._prevent_default = true;
-            }
+            prevent_default = r.isTrue();
         }
     }
 
+    const event = error_event.asEvent();
+    event._prevent_default = prevent_default;
     try page._event_manager.dispatch(self.asEventTarget(), event);
 
     if (comptime builtin.is_test == false) {
@@ -478,7 +476,6 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                 }
 
                 const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, p);
-                defer if (!event._v8_handoff) event.deinit(false);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .end;
@@ -506,7 +503,6 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                     .done => return null,
                 }
                 const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, p);
-                defer if (!event._v8_handoff) event.deinit(false);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .done;
@@ -527,11 +523,10 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
         });
     }
 
-    var event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
+    const event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
         .reason = if (rejection.reason()) |r| try r.temp() else null,
         .promise = try rejection.promise().temp(),
     }, page)).asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
 
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
@@ -705,7 +700,6 @@ const PostMessageCallback = struct {
             .bubbles = false,
             .cancelable = false,
         }, page)).asEvent();
-        defer if (!event._v8_handoff) event.deinit(false);
         try page._event_manager.dispatch(window.asEventTarget(), event);
 
         return null;

@@ -38,7 +38,6 @@ pub fn registerTypes() []const type {
 
 const MutationObserver = @This();
 
-_page: *Page,
 _arena: Allocator,
 _callback: js.Function.Temp,
 _observing: std.ArrayList(Observing) = .{},
@@ -79,15 +78,13 @@ pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
 
     const self = try arena.create(MutationObserver);
     self.* = .{
-        ._page = page,
         ._arena = arena,
         ._callback = callback,
     };
     return self;
 }
 
-pub fn deinit(self: *MutationObserver, shutdown: bool) void {
-    const page = self._page;
+pub fn deinit(self: *MutationObserver, shutdown: bool, page: *Page) void {
     page.js.release(self._callback);
     if ((comptime IS_DEBUG) and !shutdown) {
         std.debug.assert(self._observing.items.len == 0);
@@ -174,7 +171,7 @@ pub fn disconnect(self: *MutationObserver, page: *Page) void {
     page.unregisterMutationObserver(self);
     self._observing.clearRetainingCapacity();
     for (self._pending_records.items) |record| {
-        record.deinit(false);
+        record.deinit(false, page);
     }
     self._pending_records.clearRetainingCapacity();
     page.js.safeWeakRef(self);
@@ -218,10 +215,9 @@ pub fn notifyAttributeChange(
             }
         }
 
-        const arena = try self._page.getArena(.{ .debug = "MutationRecord" });
+        const arena = try page.getArena(.{ .debug = "MutationRecord" });
         const record = try arena.create(MutationRecord);
         record.* = .{
-            ._page = page,
             ._arena = arena,
             ._type = .attributes,
             ._target = target_node,
@@ -263,10 +259,9 @@ pub fn notifyCharacterDataChange(
             continue;
         }
 
-        const arena = try self._page.getArena(.{ .debug = "MutationRecord" });
+        const arena = try page.getArena(.{ .debug = "MutationRecord" });
         const record = try arena.create(MutationRecord);
         record.* = .{
-            ._page = page,
             ._arena = arena,
             ._type = .characterData,
             ._target = target,
@@ -311,10 +306,9 @@ pub fn notifyChildListChange(
             continue;
         }
 
-        const arena = try self._page.getArena(.{ .debug = "MutationRecord" });
+        const arena = try page.getArena(.{ .debug = "MutationRecord" });
         const record = try arena.create(MutationRecord);
         record.* = .{
-            ._page = page,
             ._arena = arena,
             ._type = .childList,
             ._target = target,
@@ -354,7 +348,6 @@ pub fn deliverRecords(self: *MutationObserver, page: *Page) !void {
 
 pub const MutationRecord = struct {
     _type: Type,
-    _page: *Page,
     _target: *Node,
     _arena: Allocator,
     _attribute_name: ?[]const u8,
@@ -370,8 +363,8 @@ pub const MutationRecord = struct {
         characterData,
     };
 
-    pub fn deinit(self: *const MutationRecord, _: bool) void {
-        self._page.releaseArena(self._arena);
+    pub fn deinit(self: *const MutationRecord, _: bool, page: *Page) void {
+        page.releaseArena(self._arena);
     }
 
     pub fn getType(self: *const MutationRecord) []const u8 {

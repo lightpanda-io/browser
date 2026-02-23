@@ -893,7 +893,7 @@ pub const Script = struct {
             });
             return;
         };
-        defer if (!event._v8_handoff) event.deinit(false);
+        defer if (!event._v8_handoff) event.deinit(false, self.manager.page);
 
         var caught: js.TryCatch.Caught = undefined;
         cb.tryCall(void, .{event}, &caught) catch {
