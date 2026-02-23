@@ -180,6 +180,13 @@
 
     testing.expectEqual(true, response.body !== null);
     testing.expectEqual(true, response.body instanceof ReadableStream);
+
+    const buf = await response.arrayBuffer()
+    restore();
+
+    const uint8array = new Uint8Array(buf);
+    const decoder = new TextDecoder('utf-8');
+    testing.expectEqual('1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890', decoder.decode(uint8array));
   });
 </script>
 
