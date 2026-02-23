@@ -309,11 +309,14 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
         node = n._parent;
     }
 
-    // Even though the window isn't part of the DOM, events always propagate
+    // Even though the window isn't part of the DOM, most events propagate
     // through it in the capture phase (unless we stopped at a shadow boundary)
-    if (path_len < path_buffer.len) {
-        path_buffer[path_len] = page.window.asEventTarget();
-        path_len += 1;
+    // The only explicit exception is "load"
+    if (event._type_string.eql(comptime .wrap("load")) == false) {
+        if (path_len < path_buffer.len) {
+            path_buffer[path_len] = page.window.asEventTarget();
+            path_len += 1;
+        }
     }
 
     const path = path_buffer[0..path_len];
