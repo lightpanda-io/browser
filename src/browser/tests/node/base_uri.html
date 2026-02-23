@@ -5,7 +5,7 @@
 <a href="foo" id="foo">foo</a>
 
 <script id=baseURI>
-  testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/node/base_uri.html", document.URL);
+  testing.expectEqual(testing.BASE_URL + 'node/base_uri.html', document.URL);
   testing.expectEqual("https://example.com/", document.baseURI);
 
   const link = $('#foo');

@@ -12,7 +12,7 @@
   testing.expectEqual(10, document.childNodes[0].nodeType);
   testing.expectEqual(null, document.parentNode);
   testing.expectEqual(undefined, document.getCurrentScript);
-  testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/document/document.html", document.URL);
+  testing.expectEqual(testing.BASE_URL + 'document/document.html', document.URL);
   testing.expectEqual(window, document.defaultView);
   testing.expectEqual(false, document.hidden);
   testing.expectEqual("visible", document.visibilityState);
@@ -57,7 +57,7 @@
   testing.expectEqual('CSS1Compat', document.compatMode);
   testing.expectEqual(document.URL, document.documentURI);
   testing.expectEqual('', document.referrer);
-  testing.expectEqual('127.0.0.1', document.domain);
+  testing.expectEqual(testing.HOST, document.domain);
 </script>
 
 <script id=programmatic_document_metadata>
@@ -70,7 +70,7 @@
   testing.expectEqual('CSS1Compat', doc.compatMode);
   testing.expectEqual('', doc.referrer);
   // Programmatic document should have empty domain (no URL/origin)
-  testing.expectEqual('127.0.0.1', doc.domain);
+  testing.expectEqual(testing.HOST, doc.domain);
 </script>
 
 <!-- Test anchors and links -->

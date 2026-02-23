@@ -57,9 +57,9 @@
 
     testing.expectEqual('', input.src);
     input.src = 'foo'
-    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/foo', input.src);
+    testing.expectEqual(testing.BASE_URL + 'element/html/foo', input.src);
     input.src = '-3'
-    testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/element/html/-3', input.src);
+    testing.expectEqual(testing.BASE_URL + 'element/html/-3', input.src);
     input.src = ''
   }
 </script>
