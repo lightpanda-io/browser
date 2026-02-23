@@ -143,6 +143,10 @@ pub fn getJson(self: *Response, page: *Page) !js.Promise {
     return local.resolvePromise(try value.persist());
 }
 
+pub fn arrayBuffer(self: *const Response, page: *Page) !js.Promise {
+    return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Response);
 
@@ -165,6 +169,7 @@ pub const JsApi = struct {
     pub const body = bridge.accessor(Response.getBody, null, .{});
     pub const url = bridge.accessor(Response.getURL, null, .{});
     pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
+    pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
 };
 
 const testing = @import("../../../testing.zig");
