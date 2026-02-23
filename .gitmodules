@@ -1,3 +1,0 @@
-[submodule "tests/wpt"]
-	path = tests/wpt
-	url = https://github.com/lightpanda-io/wpt
