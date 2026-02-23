@@ -249,10 +249,19 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     hs.init(isolate);
     defer hs.deinit();
 
+    // Create a per-context microtask queue for isolation
+    const microtask_queue = v8.v8__MicrotaskQueue__New(isolate.handle, v8.kExplicit).?;
+    errdefer v8.v8__MicrotaskQueue__DELETE(microtask_queue);
+
     // Get the global template that was created once per isolate
     const global_template: *const v8.ObjectTemplate = @ptrCast(@alignCast(v8.v8__Eternal__Get(&self.global_template, isolate.handle).?));
     v8.v8__ObjectTemplate__SetInternalFieldCount(global_template, comptime Snapshot.countInternalFields(Window.JsApi));
-    const v8_context = v8.v8__Context__New(isolate.handle, global_template, null).?;
+
+    const v8_context = v8.v8__Context__New__Config(isolate.handle, &.{
+        .global_template = global_template,
+        .global_object = null,
+        .microtask_queue = microtask_queue,
+    }).?;
 
     // Create the v8::Context and wrap it in a v8::Global
     var context_global: v8.Global = undefined;
@@ -292,6 +301,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .handle = context_global,
         .templates = self.templates,
         .call_arena = page.call_arena,
+        .microtask_queue = microtask_queue,
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
         .finalizer_callback_pool = std.heap.MemoryPool(Context.FinalizerCallback).init(self.app.allocator),
@@ -300,8 +310,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
-    const data = isolate.initBigInt(@intFromPtr(context));
-    v8.v8__Context__SetEmbedderData(v8_context, 1, @ptrCast(data.handle));
+    v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, 1, @ptrCast(context));
 
     try self.contexts.append(self.app.allocator, context);
     return context;
@@ -328,11 +337,13 @@ pub fn destroyContext(self: *Env, context: *Context) void {
     }
 
     context.deinit();
-    isolate.notifyContextDisposed();
 }
 
 pub fn runMicrotasks(self: *const Env) void {
-    self.isolate.performMicrotasksCheckpoint();
+    const v8_isolate = self.isolate.handle;
+    for (self.contexts.items) |ctx| {
+        v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
+    }
 }
 
 pub fn runMacrotasks(self: *Env) !?u64 {
@@ -360,12 +371,18 @@ pub fn runMacrotasks(self: *Env) !?u64 {
     return ms_to_next_task;
 }
 
-pub fn pumpMessageLoop(self: *const Env) bool {
+pub fn pumpMessageLoop(self: *const Env) void {
     var hs: v8.HandleScope = undefined;
     v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
     defer v8.v8__HandleScope__DESTRUCT(&hs);
 
-    return v8.v8__Platform__PumpMessageLoop(self.platform.handle, self.isolate.handle, false);
+    const isolate = self.isolate.handle;
+    const platform = self.platform.handle;
+    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {
+        if (comptime IS_DEBUG) {
+            log.debug(.browser, "pumpMessageLoop", .{});
+        }
+    }
 }
 
 pub fn runIdleTasks(self: *const Env) void {

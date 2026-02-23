@@ -41,18 +41,6 @@ pub fn exit(self: Isolate) void {
     v8.v8__Isolate__Exit(self.handle);
 }
 
-pub fn performMicrotasksCheckpoint(self: Isolate) void {
-    v8.v8__Isolate__PerformMicrotaskCheckpoint(self.handle);
-}
-
-pub fn enqueueMicrotask(self: Isolate, callback: anytype, data: anytype) void {
-    v8.v8__Isolate__EnqueueMicrotask(self.handle, callback, data);
-}
-
-pub fn enqueueMicrotaskFunc(self: Isolate, function: js.Function) void {
-    v8.v8__Isolate__EnqueueMicrotaskFunc(self.handle, function.handle);
-}
-
 pub fn lowMemoryNotification(self: Isolate) void {
     v8.v8__Isolate__LowMemoryNotification(self.handle);
 }
