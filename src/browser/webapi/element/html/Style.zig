@@ -115,10 +115,8 @@ pub const JsApi = struct {
 
 pub const Build = struct {
     pub fn created(node: *Node, page: *Page) !void {
-        const self = node.as(Style);
-        const style = self.asElement();
         // Push to `_to_load` to dispatch load event just before window load event.
-        return page._to_load.append(page.arena, style);
+        return page._to_load.append(page.arena, node.as(Element.Html));
     }
 };
 

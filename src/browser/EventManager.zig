@@ -56,6 +56,10 @@ pub const EventManager = @This();
 
 page: *Page,
 arena: Allocator,
+// Used as an optimization in Page._documentIsComplete. If we know there are no
+// 'load' listeners in the document, we can skip dispatching the per-resource
+// 'load' event (e.g. amazon product page has no listener and ~350 resources)
+has_dom_load_listener: bool,
 listener_pool: std.heap.MemoryPool(Listener),
 list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
 lookup: std.HashMapUnmanaged(
@@ -76,6 +80,7 @@ pub fn init(arena: Allocator, page: *Page) EventManager {
         .listener_pool = .init(arena),
         .dispatch_depth = 0,
         .deferred_removals = .{},
+        .has_dom_load_listener = false,
     };
 }
 
@@ -105,6 +110,10 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
 
     // Allocate the type string we'll use in both listener and key
     const type_string = try String.init(self.arena, typ, .{});
+
+    if (type_string.eql(comptime .wrap("load")) and target._type == .node) {
+        self.has_dom_load_listener = true;
+    }
 
     const gop = try self.lookup.getOrPut(self.arena, .{
         .type_string = type_string,

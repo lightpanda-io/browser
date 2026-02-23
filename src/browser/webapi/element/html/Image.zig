@@ -151,7 +151,7 @@ pub const Build = struct {
         _ = image.getAttributeSafe(comptime .wrap("src")) orelse return;
 
         // Push to `_to_load` to dispatch load event just before window load event.
-        return page._to_load.append(page.arena, image);
+        return page._to_load.append(page.arena, self._proto);
     }
 };
 

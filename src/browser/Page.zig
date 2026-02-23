@@ -69,9 +69,7 @@ const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const WebApiURL = @import("webapi/URL.zig");
-const global_event_handlers = @import("webapi/global_event_handlers.zig");
-const GlobalEventHandlersLookup = global_event_handlers.Lookup;
-const GlobalEventHandler = global_event_handlers.Handler;
+const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
 var default_url = WebApiURL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
@@ -139,7 +137,7 @@ _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 
 /// `load` events that'll be fired before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
-_to_load: std.ArrayList(*Element) = .{},
+_to_load: std.ArrayList(*Element.Html) = .{},
 
 _script_manager: ScriptManager,
 
@@ -722,12 +720,16 @@ fn _documentIsComplete(self: *Page) !void {
     self.js.localScope(&ls);
     defer ls.deinit();
 
-    // Dispatch `_to_load` events before window.load.
-    for (self._to_load.items) |element| {
-        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-        try self._event_manager.dispatch(element.asEventTarget(), event);
+    {
+        // Dispatch `_to_load` events before window.load.
+        const has_dom_load_listener = self._event_manager.has_dom_load_listener;
+        for (self._to_load.items) |html_element| {
+            if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
+                const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+                try self._event_manager.dispatch(html_element.asEventTarget(), event);
+            }
+        }
     }
-
     // `_to_load` can be cleaned here.
     self._to_load.clearAndFree(self.arena);
 
@@ -1344,29 +1346,6 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
         }
     }
     return null;
-}
-
-/// Sets an inline event listener (`onload`, `onclick`, `onwheel` etc.);
-/// overrides the listener if there's already one.
-pub fn setAttrListener(
-    self: *Page,
-    element: *Element,
-    listener_type: GlobalEventHandler,
-    listener_callback: JS.Function.Global,
-) !void {
-    if (comptime IS_DEBUG) {
-        log.debug(.event, "Page.setAttrListener", .{
-            .element = element,
-            .listener_type = listener_type,
-            .type = self._type,
-        });
-    }
-
-    const gop = try self._element_attr_listeners.getOrPut(self.arena, .{
-        .target = element.asEventTarget(),
-        .handler = listener_type,
-    });
-    gop.value_ptr.* = listener_callback;
 }
 
 pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
