@@ -30,8 +30,6 @@ const Script = @This();
 
 _proto: *HtmlElement,
 _src: []const u8 = "",
-_on_load: ?js.Function.Global = null,
-_on_error: ?js.Function.Global = null,
 _executed: bool = false,
 
 pub fn asElement(self: *Script) *Element {
@@ -108,22 +106,6 @@ pub fn setDefer(self: *Script, value: bool, page: *Page) !void {
     }
 }
 
-pub fn getOnLoad(self: *const Script) ?js.Function.Global {
-    return self._on_load;
-}
-
-pub fn setOnLoad(self: *Script, cb: ?js.Function.Global) void {
-    self._on_load = cb;
-}
-
-pub fn getOnError(self: *const Script) ?js.Function.Global {
-    return self._on_error;
-}
-
-pub fn setOnError(self: *Script, cb: ?js.Function.Global) void {
-    self._on_error = cb;
-}
-
 pub fn getNoModule(self: *const Script) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("nomodule")) != null;
 }
@@ -147,8 +129,6 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{});
     pub const nonce = bridge.accessor(Script.getNonce, Script.setNonce, .{});
     pub const charset = bridge.accessor(Script.getCharset, Script.setCharset, .{});
-    pub const onload = bridge.accessor(Script.getOnLoad, Script.setOnLoad, .{});
-    pub const onerror = bridge.accessor(Script.getOnError, Script.setOnError, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
     pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{});
     fn _innerText(self: *Script, page: *const Page) ![]const u8 {
@@ -160,26 +140,10 @@ pub const JsApi = struct {
 };
 
 pub const Build = struct {
-    pub fn complete(node: *Node, page: *Page) !void {
+    pub fn complete(node: *Node, _: *Page) !void {
         const self = node.as(Script);
         const element = self.asElement();
         self._src = element.getAttributeSafe(comptime .wrap("src")) orelse "";
-
-        if (element.getAttributeSafe(comptime .wrap("onload"))) |on_load| {
-            if (page.js.stringToPersistedFunction(on_load)) |func| {
-                self._on_load = func;
-            } else |err| {
-                log.err(.js, "script.onload", .{ .err = err, .str = on_load });
-            }
-        }
-
-        if (element.getAttributeSafe(comptime .wrap("onerror"))) |on_error| {
-            if (page.js.stringToPersistedFunction(on_error)) |func| {
-                self._on_error = func;
-            } else |err| {
-                log.err(.js, "script.onerror", .{ .err = err, .str = on_error });
-            }
-        }
     }
 };
 

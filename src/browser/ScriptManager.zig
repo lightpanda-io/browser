@@ -20,13 +20,14 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const js = @import("js/js.zig");
 const log = @import("../log.zig");
+const Http = @import("../http/Http.zig");
+const String = @import("../string.zig").String;
 
+const js = @import("js/js.zig");
 const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
-const Http = @import("../http/Http.zig");
 
 const Element = @import("webapi/Element.zig");
 
@@ -830,12 +831,14 @@ pub const Script = struct {
                     .kind = self.kind,
                     .cacheable = cacheable,
                 });
-                self.executeCallback("error", local.toLocal(script_element._on_error), page);
+                self.executeCallback(comptime .wrap("error"), page);
                 return;
             };
-            self.executeCallback("load", local.toLocal(script_element._on_load), page);
+            self.executeCallback(comptime .wrap("load"), page);
             return;
         }
+
+        defer page._event_manager.clearIgnoreList();
 
         var try_catch: js.TryCatch = undefined;
         try_catch.init(local);
@@ -855,7 +858,7 @@ pub const Script = struct {
         };
 
         if (comptime IS_DEBUG) {
-            log.debug(.browser, "executed script", .{ .src = url, .success = success, .on_load = script_element._on_load != null });
+            log.debug(.browser, "executed script", .{ .src = url, .success = success });
         }
 
         defer {
@@ -867,7 +870,7 @@ pub const Script = struct {
         }
 
         if (success) {
-            self.executeCallback("load", local.toLocal(script_element._on_load), page);
+            self.executeCallback(comptime .wrap("load"), page);
             return;
         }
 
@@ -878,14 +881,12 @@ pub const Script = struct {
             .cacheable = cacheable,
         });
 
-        self.executeCallback("error", local.toLocal(script_element._on_error), page);
+        self.executeCallback(comptime .wrap("error"), page);
     }
 
-    fn executeCallback(self: *const Script, comptime typ: []const u8, cb_: ?js.Function, page: *Page) void {
-        const cb = cb_ orelse return;
-
+    fn executeCallback(self: *const Script, typ: String, page: *Page) void {
         const Event = @import("webapi/Event.zig");
-        const event = Event.initTrusted(comptime .wrap(typ), .{}, page) catch |err| {
+        const event = Event.initTrusted(typ, .{}, page) catch |err| {
             log.warn(.js, "script internal callback", .{
                 .url = self.url,
                 .type = typ,
@@ -893,14 +894,11 @@ pub const Script = struct {
             });
             return;
         };
-        defer if (!event._v8_handoff) event.deinit(false, self.manager.page);
-
-        var caught: js.TryCatch.Caught = undefined;
-        cb.tryCall(void, .{event}, &caught) catch {
+        page._event_manager.dispatchOpts(self.script_element.?.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
             log.warn(.js, "script callback", .{
                 .url = self.url,
                 .type = typ,
-                .caught = caught,
+                .err = err,
             });
         };
     }
