@@ -17,14 +17,6 @@ pub fn getReady(_: *FontFaceSet, page: *Page) !js.Promise {
     return page.js.local.?.resolvePromise({});
 }
 
-pub fn getStatus(_: *const FontFaceSet) []const u8 {
-    return "loaded";
-}
-
-pub fn getSize(_: *const FontFaceSet) u32 {
-    return 0;
-}
-
 // check(font, text?) - always true; headless has no real fonts to check.
 pub fn check(_: *const FontFaceSet, font: []const u8) bool {
     _ = font;
@@ -46,9 +38,9 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
+    pub const size = bridge.property(0, .{ .template = false, .readonly = true });
+    pub const status = bridge.property("loaded", .{ .template = false, .readonly = true });
     pub const ready = bridge.accessor(FontFaceSet.getReady, null, .{});
-    pub const status = bridge.accessor(FontFaceSet.getStatus, null, .{});
-    pub const size = bridge.accessor(FontFaceSet.getSize, null, .{});
     pub const check = bridge.function(FontFaceSet.check, .{});
     pub const load = bridge.function(FontFaceSet.load, .{});
 };

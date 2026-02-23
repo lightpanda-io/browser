@@ -282,9 +282,13 @@ fn hasNamedIndexedGetter(comptime JsApi: type) bool {
 fn countExternalReferences() comptime_int {
     @setEvalBranchQuota(100_000);
 
-    // +1 for the illegal constructor callback
-    var count: comptime_int = 1;
-    var has_non_template_property: bool = false;
+    var count: comptime_int = 0;
+
+    // +1 for the illegal constructor callback shared by various types
+    count += 1;
+
+    // +1 for the noop function shared by various types
+    count += 1;
 
     inline for (JsApis) |JsApi| {
         // Constructor (only if explicit)
@@ -307,10 +311,6 @@ fn countExternalReferences() comptime_int {
                 if (value.setter != null) count += 1; // setter
             } else if (T == bridge.Function) {
                 count += 1;
-            } else if (T == bridge.Property) {
-                if (value.template == false) {
-                    has_non_template_property = true;
-                }
             } else if (T == bridge.Iterator) {
                 count += 1;
             } else if (T == bridge.Indexed) {
@@ -321,10 +321,6 @@ fn countExternalReferences() comptime_int {
                 if (value.deleter != null) count += 1;
             }
         }
-    }
-
-    if (has_non_template_property) {
-        count += 1;
     }
 
     // In debug mode, add unknown property callbacks for types without NamedIndexed
@@ -346,7 +342,8 @@ fn collectExternalReferences() [countExternalReferences()]isize {
     references[idx] = @bitCast(@intFromPtr(&illegalConstructorCallback));
     idx += 1;
 
-    var has_non_template_property = false;
+    references[idx] = @bitCast(@intFromPtr(&bridge.Function.noopFunction));
+    idx += 1;
 
     inline for (JsApis) |JsApi| {
         if (@hasDecl(JsApi, "constructor")) {
@@ -373,10 +370,6 @@ fn collectExternalReferences() [countExternalReferences()]isize {
             } else if (T == bridge.Function) {
                 references[idx] = @bitCast(@intFromPtr(value.func));
                 idx += 1;
-            } else if (T == bridge.Property) {
-                if (value.template == false) {
-                    has_non_template_property = true;
-                }
             } else if (T == bridge.Iterator) {
                 references[idx] = @bitCast(@intFromPtr(value.func));
                 idx += 1;
@@ -396,11 +389,6 @@ fn collectExternalReferences() [countExternalReferences()]isize {
                 }
             }
         }
-    }
-
-    if (has_non_template_property) {
-        references[idx] = @bitCast(@intFromPtr(&bridge.Property.getter));
-        idx += 1;
     }
 
     // In debug mode, collect unknown property callbacks for types without NamedIndexed
@@ -486,8 +474,8 @@ pub fn countInternalFields(comptime JsApi: type) u8 {
 
 // Attaches JsApi members to the prototype template (normal case)
 fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.FunctionTemplate) void {
-    const target = v8.v8__FunctionTemplate__PrototypeTemplate(template);
     const instance = v8.v8__FunctionTemplate__InstanceTemplate(template);
+    const prototype = v8.v8__FunctionTemplate__PrototypeTemplate(template);
 
     const declarations = @typeInfo(JsApi).@"struct".decls;
     var has_named_index_getter = false;
@@ -505,14 +493,14 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     if (value.static) {
                         v8.v8__Template__SetAccessorProperty__DEFAULT(@ptrCast(template), js_name, getter_callback);
                     } else {
-                        v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(target, js_name, getter_callback);
+                        v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(prototype, js_name, getter_callback);
                     }
                 } else {
                     if (comptime IS_DEBUG) {
                         std.debug.assert(value.static == false);
                     }
                     const setter_callback = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{ .callback = value.setter.? }).?);
-                    v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT2(target, js_name, getter_callback, setter_callback);
+                    v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT2(prototype, js_name, getter_callback, setter_callback);
                 }
             },
             bridge.Function => {
@@ -521,7 +509,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                 if (value.static) {
                     v8.v8__Template__Set(@ptrCast(template), js_name, @ptrCast(function_template), v8.None);
                 } else {
-                    v8.v8__Template__Set(@ptrCast(target), js_name, @ptrCast(function_template), v8.None);
+                    v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.None);
                 }
             },
             bridge.Indexed => {
@@ -559,7 +547,7 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                     v8.v8__Symbol__GetAsyncIterator(isolate)
                 else
                     v8.v8__Symbol__GetIterator(isolate);
-                v8.v8__Template__Set(@ptrCast(target), js_name, @ptrCast(function_template), v8.None);
+                v8.v8__Template__Set(@ptrCast(prototype), js_name, @ptrCast(function_template), v8.None);
             },
             bridge.Property => {
                 const js_value = switch (value.value) {
@@ -568,22 +556,14 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
                 };
                 const js_name = v8.v8__String__NewFromUtf8(isolate, name.ptr, v8.kNormal, @intCast(name.len));
 
-                if (value.template == false) {
-                    // not defined on the template, only on the instance. This
-                    // is like an Accessor, but because the value is known at
-                    // compile time, we skip _a lot_ of code and quickly return
-                    // the hard-coded value
-                    const getter_callback = @constCast(v8.v8__FunctionTemplate__New__Config(isolate, &.{
-                        .callback = bridge.Property.getter,
-                        .data = js_value,
-                        .side_effect_type = v8.kSideEffectType_HasSideEffectToReceiver,
-                    }));
-                    v8.v8__ObjectTemplate__SetAccessorProperty__DEFAULT(target, js_name, getter_callback);
-                } else {
-                    // apply it both to the type itself
+                {
+                    const flags = if (value.readonly) v8.ReadOnly + v8.DontDelete else 0;
+                    v8.v8__Template__Set(@ptrCast(prototype), js_name, js_value, flags);
+                }
+
+                if (value.template) {
+                    // apply it both to the type itself (e.g. Node.Elem)
                     v8.v8__Template__Set(@ptrCast(template), js_name, js_value, v8.ReadOnly + v8.DontDelete);
-                    // and to instances of the type
-                    v8.v8__Template__Set(@ptrCast(target), js_name, js_value, v8.ReadOnly + v8.DontDelete);
                 }
             },
             bridge.Constructor => {}, // already handled in generateConstructor
