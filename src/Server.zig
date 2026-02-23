@@ -291,7 +291,7 @@ pub const Client = struct {
         if (log.enabled(.app, .info)) {
             var client_address: std.net.Address = undefined;
             var socklen: posix.socklen_t = @sizeOf(net.Address);
-            try std.posix.getsockname(socket, &client_address.any, &socklen);
+            try std.posix.getpeername(socket, &client_address.any, &socklen);
             log.info(.app, "client connected", .{ .ip = client_address });
         }
 
