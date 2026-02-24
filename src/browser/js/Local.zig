@@ -217,7 +217,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), fc);
                 }
 
-                conditionallyFlagHandoff(value);
+                conditionallyReference(value);
                 if (@hasDecl(JsApi.Meta, "weak")) {
                     if (comptime IS_DEBUG) {
                         std.debug.assert(JsApi.Meta.weak == true);
@@ -1101,14 +1101,14 @@ fn resolveT(comptime T: type, value: *anyopaque) Resolved {
     };
 }
 
-fn conditionallyFlagHandoff(value: anytype) void {
+fn conditionallyReference(value: anytype) void {
     const T = bridge.Struct(@TypeOf(value));
-    if (@hasField(T, "_v8_handoff")) {
-        value._v8_handoff = true;
+    if (@hasDecl(T, "acquireRef")) {
+        value.acquireRef();
         return;
     }
     if (@hasField(T, "_proto")) {
-        conditionallyFlagHandoff(value._proto);
+        conditionallyReference(value._proto);
     }
 }
 
