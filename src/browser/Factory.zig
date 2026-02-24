@@ -42,11 +42,92 @@ const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
 const assert = std.debug.assert;
 
+// Shared across all frames of a Page.
 const Factory = @This();
 
-_page: *Page,
 _arena: Allocator,
 _slab: SlabAllocator,
+
+pub fn init(arena: Allocator) !*Factory {
+    const self = try arena.create(Factory);
+    self.* = .{
+        ._arena = arena,
+        ._slab = SlabAllocator.init(arena, 128),
+    };
+    return self;
+}
+
+// this is a root object
+pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
+    const allocator = self._slab.allocator();
+    const chain = try PrototypeChain(
+        &.{ EventTarget, @TypeOf(child) },
+    ).allocate(allocator);
+
+    const event_ptr = chain.get(0);
+    event_ptr.* = .{
+        ._type = unionInit(EventTarget.Type, chain.get(1)),
+    };
+    chain.setLeaf(1, child);
+
+    return chain.get(1);
+}
+
+pub fn standaloneEventTarget(self: *Factory, child: anytype) !*EventTarget {
+    const allocator = self._slab.allocator();
+    const et = try allocator.create(EventTarget);
+    et.* = .{ ._type = unionInit(EventTarget.Type, child) };
+    return et;
+}
+
+// this is a root object
+pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+    const chain = try PrototypeChain(
+        &.{ Event, @TypeOf(child) },
+    ).allocate(arena);
+
+    // Special case: Event has a _type_string field, so we need manual setup
+    const event_ptr = chain.get(0);
+    event_ptr.* = try eventInit(arena, typ, chain.get(1));
+    chain.setLeaf(1, child);
+
+    return chain.get(1);
+}
+
+pub fn uiEvent(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
+    const chain = try PrototypeChain(
+        &.{ Event, UIEvent, @TypeOf(child) },
+    ).allocate(arena);
+
+    // Special case: Event has a _type_string field, so we need manual setup
+    const event_ptr = chain.get(0);
+    event_ptr.* = try eventInit(arena, typ, chain.get(1));
+    chain.setMiddle(1, UIEvent.Type);
+    chain.setLeaf(2, child);
+
+    return chain.get(2);
+}
+
+pub fn mouseEvent(_: *const Factory, arena: Allocator, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
+    const chain = try PrototypeChain(
+        &.{ Event, UIEvent, MouseEvent, @TypeOf(child) },
+    ).allocate(arena);
+
+    // Special case: Event has a _type_string field, so we need manual setup
+    const event_ptr = chain.get(0);
+    event_ptr.* = try eventInit(arena, typ, chain.get(1));
+    chain.setMiddle(1, UIEvent.Type);
+
+    // Set MouseEvent with all its fields
+    const mouse_ptr = chain.get(2);
+    mouse_ptr.* = mouse;
+    mouse_ptr._proto = chain.get(1);
+    mouse_ptr._type = unionInit(MouseEvent.Type, chain.get(3));
+
+    chain.setLeaf(3, child);
+
+    return chain.get(3);
+}
 
 fn PrototypeChain(comptime types: []const type) type {
     return struct {
@@ -149,86 +230,6 @@ fn AutoPrototypeChain(comptime types: []const type) type {
             return chain.get(types.len - 1);
         }
     };
-}
-
-pub fn init(arena: Allocator, page: *Page) Factory {
-    return .{
-        ._page = page,
-        ._arena = arena,
-        ._slab = SlabAllocator.init(arena, 128),
-    };
-}
-
-// this is a root object
-pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-    const chain = try PrototypeChain(
-        &.{ EventTarget, @TypeOf(child) },
-    ).allocate(allocator);
-
-    const event_ptr = chain.get(0);
-    event_ptr.* = .{
-        ._type = unionInit(EventTarget.Type, chain.get(1)),
-    };
-    chain.setLeaf(1, child);
-
-    return chain.get(1);
-}
-
-pub fn standaloneEventTarget(self: *Factory, child: anytype) !*EventTarget {
-    const allocator = self._slab.allocator();
-    const et = try allocator.create(EventTarget);
-    et.* = .{ ._type = unionInit(EventTarget.Type, child) };
-    return et;
-}
-
-// this is a root object
-pub fn event(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
-    const chain = try PrototypeChain(
-        &.{ Event, @TypeOf(child) },
-    ).allocate(arena);
-
-    // Special case: Event has a _type_string field, so we need manual setup
-    const event_ptr = chain.get(0);
-    event_ptr.* = try eventInit(arena, typ, chain.get(1));
-    chain.setLeaf(1, child);
-
-    return chain.get(1);
-}
-
-pub fn uiEvent(_: *const Factory, arena: Allocator, typ: String, child: anytype) !*@TypeOf(child) {
-    const chain = try PrototypeChain(
-        &.{ Event, UIEvent, @TypeOf(child) },
-    ).allocate(arena);
-
-    // Special case: Event has a _type_string field, so we need manual setup
-    const event_ptr = chain.get(0);
-    event_ptr.* = try eventInit(arena, typ, chain.get(1));
-    chain.setMiddle(1, UIEvent.Type);
-    chain.setLeaf(2, child);
-
-    return chain.get(2);
-}
-
-pub fn mouseEvent(_: *const Factory, arena: Allocator, typ: String, mouse: MouseEvent, child: anytype) !*@TypeOf(child) {
-    const chain = try PrototypeChain(
-        &.{ Event, UIEvent, MouseEvent, @TypeOf(child) },
-    ).allocate(arena);
-
-    // Special case: Event has a _type_string field, so we need manual setup
-    const event_ptr = chain.get(0);
-    event_ptr.* = try eventInit(arena, typ, chain.get(1));
-    chain.setMiddle(1, UIEvent.Type);
-
-    // Set MouseEvent with all its fields
-    const mouse_ptr = chain.get(2);
-    mouse_ptr.* = mouse;
-    mouse_ptr._proto = chain.get(1);
-    mouse_ptr._type = unionInit(MouseEvent.Type, chain.get(3));
-
-    chain.setLeaf(3, child);
-
-    return chain.get(3);
 }
 
 fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
@@ -383,7 +384,7 @@ pub fn destroy(self: *Factory, value: anytype) void {
     }
 
     if (comptime @hasField(S, "_proto")) {
-        self.destroyChain(value, true, 0, std.mem.Alignment.@"1");
+        self.destroyChain(value, 0, std.mem.Alignment.@"1");
     } else {
         self.destroyStandalone(value);
     }
@@ -397,7 +398,6 @@ pub fn destroyStandalone(self: *Factory, value: anytype) void {
 fn destroyChain(
     self: *Factory,
     value: anytype,
-    comptime first: bool,
     old_size: usize,
     old_align: std.mem.Alignment,
 ) void {
@@ -409,23 +409,8 @@ fn destroyChain(
     const new_size = current_size + @sizeOf(S);
     const new_align = std.mem.Alignment.max(old_align, std.mem.Alignment.of(S));
 
-    // This is initially called from a deinit. We don't want to call that
-    // same deinit. So when this is the first time destroyChain is called
-    // we don't call deinit (because we're in that deinit)
-    if (!comptime first) {
-        // But if it isn't the first time
-        if (@hasDecl(S, "deinit")) {
-            // And it has a deinit, we'll call it
-            switch (@typeInfo(@TypeOf(S.deinit)).@"fn".params.len) {
-                1 => value.deinit(),
-                2 => value.deinit(self._page),
-                else => @compileLog(@typeName(S) ++ " has an invalid deinit function"),
-            }
-        }
-    }
-
     if (@hasField(S, "_proto")) {
-        self.destroyChain(value._proto, false, new_size, new_align);
+        self.destroyChain(value._proto, new_size, new_align);
     } else {
         // no proto so this is the head of the chain.
         // we use this as the ptr to the start of the chain.
