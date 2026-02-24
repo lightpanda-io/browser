@@ -2,11 +2,28 @@
 <script src="../../../testing.js"></script>
 
 <script id="script">
-   {
-    let s = document.createElement('script');
-    testing.expectEqual('', s.src);
+{
+   let dom_load = false;
+   let attribute_load = false;
 
-    s.src = 'over.9000.js';
-    testing.expectEqual(testing.BASE_URL + 'element/html/script/over.9000.js', s.src);
+   let s = document.createElement('script');
+   document.documentElement.addEventListener('load', (e) => {
+      testing.expectEqual(s, e.target);
+      dom_load = true;
+   }, true);
+
+   testing.expectEqual('', s.src);
+   s.onload = function(e) {
+      testing.expectEqual(s, e.target);
+      attribute_load = true;
    }
+   s.src = 'empty.js';
+   testing.expectEqual(testing.BASE_URL + 'element/html/script/empty.js', s.src);
+   document.head.appendChild(s);
+
+   testing.eventually(() => {
+      testing.expectEqual(true, dom_load);
+      testing.expectEqual(true, attribute_load);
+   });
+}
 </script>

@@ -61,6 +61,7 @@ arena: Allocator,
 // 'load' event (e.g. amazon product page has no listener and ~350 resources)
 has_dom_load_listener: bool,
 listener_pool: std.heap.MemoryPool(Listener),
+ignore_list: std.ArrayList(*Listener),
 list_pool: std.heap.MemoryPool(std.DoublyLinkedList),
 lookup: std.HashMapUnmanaged(
     EventKey,
@@ -76,6 +77,7 @@ pub fn init(arena: Allocator, page: *Page) EventManager {
         .page = page,
         .lookup = .{},
         .arena = arena,
+        .ignore_list = .{},
         .list_pool = .init(arena),
         .listener_pool = .init(arena),
         .dispatch_depth = 0,
@@ -155,6 +157,11 @@ pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, call
     };
     // append the listener to the list of listeners for this target
     gop.value_ptr.*.append(&listener.node);
+
+    // Track load listeners for script execution ignore list
+    if (type_string.eql(comptime .wrap("load"))) {
+        try self.ignore_list.append(self.arena, listener);
+    }
 }
 
 pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, use_capture: bool) void {
@@ -165,6 +172,10 @@ pub fn remove(self: *EventManager, target: *EventTarget, typ: []const u8, callba
     if (findListener(list, callback, use_capture)) |listener| {
         self.removeListener(list, listener);
     }
+}
+
+pub fn clearIgnoreList(self: *EventManager) void {
+    self.ignore_list.clearRetainingCapacity();
 }
 
 // Dispatching can be recursive from the compiler's point of view, so we need to
@@ -178,7 +189,21 @@ const DispatchError = error{
     ExecutionError,
     JsException,
 };
+
+pub const DispatchOpts = struct {
+    // A "load" event triggered by a script (in ScriptManager) should not trigger
+    // a "load" listener added within that script. Therefore, any "load" listener
+    // that we add go into an ignore list until after the script finishes executing.
+    // The ignore list is only checked when apply_ignore  == true, which is only
+    // set by the ScriptManager when raising the script's "load" event.
+    apply_ignore: bool = false,
+};
+
 pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) DispatchError!void {
+    return self.dispatchOpts(target, event, .{});
+}
+
+pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchOpts) DispatchError!void {
     defer if (!event._v8_handoff) event.deinit(false, self.page);
 
     if (comptime IS_DEBUG) {
@@ -197,7 +222,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
     };
 
     switch (target._type) {
-        .node => |node| try self.dispatchNode(node, event, &was_handled),
+        .node => |node| try self.dispatchNode(node, event, &was_handled, opts),
         .xhr,
         .window,
         .abort_signal,
@@ -214,7 +239,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
                 .event_target = @intFromPtr(target),
                 .type_string = event._type_string,
             }) orelse return;
-            try self.dispatchAll(list, target, event, &was_handled);
+            try self.dispatchAll(list, target, event, &was_handled, opts);
         },
     }
 }
@@ -262,10 +287,10 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
         .event_target = @intFromPtr(target),
         .type_string = event._type_string,
     }) orelse return;
-    try self.dispatchAll(list, target, event, &was_dispatched);
+    try self.dispatchAll(list, target, event, &was_dispatched, .{});
 }
 
-fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool) !void {
+fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool, comptime opts: DispatchOpts) !void {
     const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
     const page = self.page;
@@ -346,7 +371,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
             .event_target = @intFromPtr(current_target),
             .type_string = event._type_string,
         })) |list| {
-            try self.dispatchPhase(list, current_target, event, was_handled, true);
+            try self.dispatchPhase(list, current_target, event, was_handled, comptime .init(true, opts));
         }
     }
 
@@ -380,7 +405,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
             .type_string = event._type_string,
             .event_target = @intFromPtr(target_et),
         })) |list| {
-            try self.dispatchPhase(list, target_et, event, was_handled, null);
+            try self.dispatchPhase(list, target_et, event, was_handled, comptime .init(null, opts));
             if (event._stop_propagation) {
                 return;
             }
@@ -397,13 +422,25 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
                 .type_string = event._type_string,
                 .event_target = @intFromPtr(current_target),
             })) |list| {
-                try self.dispatchPhase(list, current_target, event, was_handled, false);
+                try self.dispatchPhase(list, current_target, event, was_handled, comptime .init(false, opts));
             }
         }
     }
 }
 
-fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime capture_only: ?bool) !void {
+const DispatchPhaseOpts = struct {
+    capture_only: ?bool = null,
+    apply_ignore: bool = false,
+
+    fn init(capture_only: ?bool, opts: DispatchOpts) DispatchPhaseOpts {
+        return .{
+            .capture_only = capture_only,
+            .apply_ignore = opts.apply_ignore,
+        };
+    }
+};
+
+fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime opts: DispatchPhaseOpts) !void {
     const page = self.page;
 
     // Track dispatch depth for deferred removal
@@ -429,7 +466,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
     // Iterate through the list, stopping after we've encountered the last_listener
     var node = list.first;
     var is_done = false;
-    while (node) |n| {
+    node_loop: while (node) |n| {
         if (is_done) {
             break;
         }
@@ -439,7 +476,7 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         node = n.next;
 
         // Skip non-matching listeners
-        if (comptime capture_only) |capture| {
+        if (comptime opts.capture_only) |capture| {
             if (listener.capture != capture) {
                 continue;
             }
@@ -455,6 +492,14 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             if (signal.getAborted()) {
                 self.removeListener(list, listener);
                 continue;
+            }
+        }
+
+        if (comptime opts.apply_ignore) {
+            for (self.ignore_list.items) |ignored| {
+                if (ignored == listener) {
+                    continue :node_loop;
+                }
             }
         }
 
@@ -502,8 +547,8 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
 }
 
 //  Non-Node dispatching (XHR, Window without propagation)
-fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool) !void {
-    return self.dispatchPhase(list, current_target, event, was_handled, null);
+fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime opts: DispatchOpts) !void {
+    return self.dispatchPhase(list, current_target, event, was_handled, comptime .init(null, opts));
 }
 
 fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?js.Function.Global {
