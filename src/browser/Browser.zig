@@ -87,7 +87,7 @@ pub fn closeSession(self: *Browser) void {
     }
 }
 
-pub fn runMicrotasks(self: *const Browser) void {
+pub fn runMicrotasks(self: *Browser) void {
     self.env.runMicrotasks();
 }
 
