@@ -737,8 +737,7 @@ fn _documentIsComplete(self: *Page) !void {
             }
         }
     }
-    // `_to_load` can be cleaned here.
-    self._to_load.clearAndFree(self.arena);
+    self._to_load.clearRetainingCapacity();
 
     // Dispatch window.load event.
     const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
@@ -1045,6 +1044,31 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
     }
 }
 
+pub fn linkAddedCallback(self: *Page, link: *Element.Html.Link) !void {
+    // if we're planning on navigating to another page, don't trigger load event.
+    if (self.isGoingAway()) {
+        return;
+    }
+
+    const element = link.asElement();
+    // Exit if rel not set.
+    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
+    // Exit if rel is not stylesheet.
+    if (!std.mem.eql(u8, rel, "stylesheet")) return;
+    // Exit if href not set.
+    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+    if (href.len == 0) return;
+
+    // If `_to_load` len was 0, we have to schedule a callback on scheduler.
+    const loads = &self._to_load;
+    const not_scheduled = loads.items.len == 0;
+    try loads.append(self.arena, link._proto);
+
+    if (not_scheduled) {
+        try self.scheduleLoadEventDelivery();
+    }
+}
+
 pub fn domChanged(self: *Page) void {
     self.version += 1;
 
@@ -1215,6 +1239,36 @@ pub fn checkIntersections(self: *Page) !void {
     for (self._intersection_observers.items) |observer| {
         try observer.checkIntersections(self);
     }
+}
+
+pub fn scheduleLoadEventDelivery(self: *Page) !void {
+    // The dispatcher function.
+    const callback = struct {
+        fn callback(ptr: *anyopaque) anyerror!?u32 {
+            const page: *Page = @ptrCast(@alignCast(ptr));
+            const has_dom_load_listener = page._event_manager.has_dom_load_listener;
+            for (page._to_load.items) |html_element| {
+                if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, page)) {
+                    const event = try Event.initTrusted(comptime .wrap("load"), .{}, page);
+                    try page._event_manager.dispatch(html_element.asEventTarget(), event);
+                }
+            }
+            // We drained everything.
+            page._to_load.clearRetainingCapacity();
+
+            return null;
+        }
+    }.callback;
+
+    return self.js.scheduler.add(
+        self,
+        callback,
+        0,
+        .{
+            .low_priority = false,
+            .name = "scheduleLoadEventDelivery",
+        },
+    );
 }
 
 pub fn scheduleMutationDelivery(self: *Page) !void {
@@ -2841,6 +2895,11 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         self.iframeAddedCallback(iframe) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
             return err;
+        };
+    } else if (node.is(Element.Html.Link)) |link| {
+        self.linkAddedCallback(link) catch |err| {
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
+            return error.LinkLoadError;
         };
     }
 }
