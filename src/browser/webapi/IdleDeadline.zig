@@ -20,6 +20,9 @@ const std = @import("std");
 
 const IdleDeadline = @This();
 
+// Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+_pad: bool = false,
+
 pub fn init() IdleDeadline {
     return .{};
 }
