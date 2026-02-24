@@ -208,9 +208,37 @@ fn getMarkTime(self: *const Performance, mark_name: []const u8) !f64 {
         }
     }
 
-    // Recognized mark names by browsers. `navigationStart` is an equivalent
-    // to 0. Others are dependant to request arrival, end of request etc.
-    if (std.mem.eql(u8, "navigationStart", mark_name)) {
+    // PerformanceTiming attribute names are valid start/end marks per the
+    // W3C User Timing Level 2 spec. All are relative to navigationStart (= 0).
+    // https://www.w3.org/TR/user-timing/#dom-performance-measure
+    //
+    // `navigationStart` is an equivalent to 0.
+    // Others are dependant to request arrival, end of request etc, but we
+    // return a dummy 0 value for now.
+    const navigation_timing_marks = std.StaticStringMap(void).initComptime(.{
+        .{ "navigationStart", {} },
+        .{ "unloadEventStart", {} },
+        .{ "unloadEventEnd", {} },
+        .{ "redirectStart", {} },
+        .{ "redirectEnd", {} },
+        .{ "fetchStart", {} },
+        .{ "domainLookupStart", {} },
+        .{ "domainLookupEnd", {} },
+        .{ "connectStart", {} },
+        .{ "connectEnd", {} },
+        .{ "secureConnectionStart", {} },
+        .{ "requestStart", {} },
+        .{ "responseStart", {} },
+        .{ "responseEnd", {} },
+        .{ "domLoading", {} },
+        .{ "domInteractive", {} },
+        .{ "domContentLoadedEventStart", {} },
+        .{ "domContentLoadedEventEnd", {} },
+        .{ "domComplete", {} },
+        .{ "loadEventStart", {} },
+        .{ "loadEventEnd", {} },
+    });
+    if (navigation_timing_marks.has(mark_name)) {
         return 0;
     }
 
