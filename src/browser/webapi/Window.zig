@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 const builtin = @import("builtin");
+const hive = @import("../../hive.zig");
 
 const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
@@ -68,8 +69,9 @@ _on_popstate: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
 _location: *Location,
-_timer_id: u30 = 0,
-_timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
+/// We currently have hard limit on how many timers/timer-likes there can be.
+/// So, keeping this static makes more sense.
+_timers: hive.Static(ScheduleCallback, 512, .{}) = .empty,
 _custom_elements: CustomElementRegistry = .{},
 _scroll_pos: struct {
     x: u32,
@@ -262,22 +264,22 @@ pub fn queueMicrotask(_: *Window, cb: js.Function, page: *Page) void {
 }
 
 pub fn clearTimeout(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
+    const sc = self._timers.getPtr(timerIdToKey(id)) orelse return;
     sc.removed = true;
 }
 
 pub fn clearInterval(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
+    const sc = self._timers.getPtr(timerIdToKey(id)) orelse return;
     sc.removed = true;
 }
 
 pub fn clearImmediate(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
+    const sc = self._timers.getPtr(timerIdToKey(id)) orelse return;
     sc.removed = true;
 }
 
 pub fn cancelAnimationFrame(self: *Window, id: u32) void {
-    var sc = self._timers.get(id) orelse return;
+    const sc = self._timers.getPtr(timerIdToKey(id)) orelse return;
     sc.removed = true;
 }
 
@@ -536,6 +538,18 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
     );
 }
 
+/// Timer IDs are not allowed to be 0.
+/// https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#timer-initialisation-steps
+/// Sole reason this function exists is to cover such situation.
+inline fn timerKeyToId(key: usize) usize {
+    return key + 1;
+}
+
+/// Ditto.
+inline fn timerIdToKey(timer_id: usize) usize {
+    return timer_id - 1;
+}
+
 const ScheduleOpts = struct {
     repeat: bool,
     params: []js.Value.Temp,
@@ -545,42 +559,31 @@ const ScheduleOpts = struct {
     mode: ScheduleCallback.Mode = .normal,
 };
 fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: ScheduleOpts, page: *Page) !u32 {
-    if (self._timers.count() > 512) {
-        // these are active
-        return error.TooManyTimeout;
-    }
+    const key = self._timers.getKey() orelse return error.TooManyTimeout;
 
     const arena = try page.getArena(.{ .debug = "Window.schedule" });
     errdefer page.releaseArena(arena);
 
-    const timer_id = self._timer_id +% 1;
-    self._timer_id = timer_id;
-
     const params = opts.params;
-    var persisted_params: []js.Value.Temp = &.{};
-    if (params.len > 0) {
-        persisted_params = try arena.dupe(js.Value.Temp, params);
-    }
+    const persisted_params: []js.Value.Temp = if (params.len > 0)
+        try arena.dupe(js.Value.Temp, params)
+    else
+        &.{};
 
-    const gop = try self._timers.getOrPut(page.arena, timer_id);
-    if (gop.found_existing) {
-        // 2^31 would have to wrap for this to happen.
-        return error.TooManyTimeout;
-    }
-    errdefer _ = self._timers.remove(timer_id);
+    const timer_id = timerKeyToId(key);
 
-    const callback = try arena.create(ScheduleCallback);
-    callback.* = .{
+    // Better to allocate this with page.arena; easier to track.
+    const callback = try self._timers.put(page.arena, key, .{
         .cb = cb,
         .page = page,
         .arena = arena,
         .mode = opts.mode,
         .name = opts.name,
-        .timer_id = timer_id,
+        .timer_id = @intCast(timer_id),
         .params = persisted_params,
         .repeat_ms = if (opts.repeat) if (delay_ms == 0) 1 else delay_ms else null,
-    };
-    gop.value_ptr.* = callback;
+    });
+    errdefer self._timers.remove(page.arena, key);
 
     try page.js.scheduler.add(callback, ScheduleCallback.run, delay_ms, .{
         .name = opts.name,
@@ -588,7 +591,7 @@ fn scheduleCallback(self: *Window, cb: js.Function.Temp, delay_ms: u32, opts: Sc
         .finalizer = ScheduleCallback.cancelled,
     });
 
-    return timer_id;
+    return @intCast(timer_id);
 }
 
 const ScheduleCallback = struct {
@@ -634,7 +637,7 @@ const ScheduleCallback = struct {
         const window = page.window;
 
         if (self.removed) {
-            _ = window._timers.remove(self.timer_id);
+            window._timers.remove(page.arena, timerIdToKey(self.timer_id));
             self.deinit();
             return null;
         }
@@ -666,7 +669,7 @@ const ScheduleCallback = struct {
             return ms;
         }
         defer self.deinit();
-        _ = window._timers.remove(self.timer_id);
+        window._timers.remove(page.arena, timerIdToKey(self.timer_id));
         return null;
     }
 };
