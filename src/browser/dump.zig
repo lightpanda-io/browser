@@ -294,6 +294,12 @@ fn shouldEscapeText(node_: ?*Node) bool {
     if (node.is(Node.Element.Html.Script) != null) {
         return false;
     }
+    // When scripting is enabled, <noscript> is a raw text element per the HTML spec
+    // (https://html.spec.whatwg.org/multipage/parsing.html#serialising-html-fragments).
+    // Its text content must not be HTML-escaped during serialization.
+    if (node.is(Node.Element.Html.Generic)) |generic| {
+        if (generic._tag == .noscript) return false;
+    }
     return true;
 }
 fn writeEscapedText(text: []const u8, writer: *std.Io.Writer) !void {
