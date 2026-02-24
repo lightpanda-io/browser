@@ -22,6 +22,9 @@ const Element = @import("Element.zig");
 
 pub const ResizeObserver = @This();
 
+// Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+_pad: bool = false,
+
 fn init(cbk: js.Function) ResizeObserver {
     _ = cbk;
     return .{};
