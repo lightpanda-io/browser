@@ -25,6 +25,7 @@ const Node = @import("Node.zig");
 const String = @import("../../string.zig").String;
 
 const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const Event = @This();
 
@@ -44,13 +45,16 @@ _stop_immediate_propagation: bool = false,
 _event_phase: EventPhase = .none,
 _time_stamp: u64,
 _needs_retargeting: bool = false,
-_isTrusted: bool = false,
+_is_trusted: bool = false,
 
 // There's a period of time between creating an event and handing it off to v8
-// where things can fail. If it does fail, we need to deinit the event. This flag
-// when true, tells us the event is registered in the js.Contxt and thus, at
-// the very least, will be finalized on context shutdown.
-_v8_handoff: bool = false,
+// where things can fail. If it does fail, we need to deinit the event. The timing
+// window can be difficult to capture, so we use a reference count.
+// should be 0, 1, or 2. 0
+// - 0: no reference, always a transient state going to either 1 or about to be deinit'd
+// - 1: either zig or v8 have a reference
+// - 2: both zig and v8 have a reference
+_rc: u8 = 0,
 
 pub const EventPhase = enum(u8) {
     none = 0,
@@ -92,7 +96,7 @@ pub fn initTrusted(typ: String, opts_: ?Options, page: *Page) !*Event {
     return initWithTrusted(arena, typ, opts_, true);
 }
 
-fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool) !*Event {
+fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, comptime trusted: bool) !*Event {
     const opts = opts_ orelse Options{};
 
     // Round to 2ms for privacy (browsers do this)
@@ -108,7 +112,7 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
         ._cancelable = opts.cancelable,
         ._composed = opts.composed,
         ._type_string = typ,
-        ._isTrusted = trusted,
+        ._is_trusted = trusted,
     };
     return event;
 }
@@ -131,9 +135,26 @@ pub fn initEvent(
     self._prevent_default = false;
 }
 
+pub fn acquireRef(self: *Event) void {
+    self._rc += 1;
+}
+
 pub fn deinit(self: *Event, shutdown: bool, page: *Page) void {
-    _ = shutdown;
-    page.releaseArena(self._arena);
+    if (shutdown) {
+        page.releaseArena(self._arena);
+        return;
+    }
+
+    const rc = self._rc;
+    if (comptime IS_DEBUG) {
+        std.debug.assert(rc != 0);
+    }
+
+    if (rc == 1) {
+        page.releaseArena(self._arena);
+    } else {
+        self._rc = rc - 1;
+    }
 }
 
 pub fn as(self: *Event, comptime T: type) *T {
@@ -235,15 +256,15 @@ pub fn getTimeStamp(self: *const Event) u64 {
 }
 
 pub fn setTrusted(self: *Event) void {
-    self._isTrusted = true;
+    self._is_trusted = true;
 }
 
 pub fn setUntrusted(self: *Event) void {
-    self._isTrusted = false;
+    self._is_trusted = false;
 }
 
 pub fn getIsTrusted(self: *const Event) bool {
-    return self._isTrusted;
+    return self._is_trusted;
 }
 
 pub fn composedPath(self: *Event, page: *Page) ![]const *EventTarget {
@@ -401,8 +422,8 @@ pub fn populatePrototypes(self: anytype, opts: anytype, trusted: bool) void {
     }
 
     // Set isTrusted at the Event level (base of prototype chain)
-    if (T == Event or @hasField(T, "_isTrusted")) {
-        self._isTrusted = trusted;
+    if (T == Event or @hasField(T, "is_trusted")) {
+        self._is_trusted = trusted;
     }
 }
 

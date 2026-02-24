@@ -237,6 +237,7 @@ fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
     const time_stamp = (raw_timestamp / 2) * 2;
 
     return .{
+        ._rc = 0,
         ._arena = arena,
         ._type = unionInit(Event.Type, value),
         ._type_string = typ,

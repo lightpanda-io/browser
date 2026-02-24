@@ -55,7 +55,8 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
     if (event._event_phase != .none) {
         return error.InvalidStateError;
     }
-    event._isTrusted = false;
+    event._is_trusted = false;
+    event.acquireRef();
     try page._event_manager.dispatch(self, event);
     return !event._cancelable or !event._prevent_default;
 }

@@ -204,7 +204,8 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
 }
 
 pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchOpts) DispatchError!void {
-    defer if (!event._v8_handoff) event.deinit(false, self.page);
+    event.acquireRef();
+    defer event.deinit(false, self.page);
 
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
@@ -254,7 +255,8 @@ const DispatchWithFunctionOptions = struct {
     inject_target: bool = true,
 };
 pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *Event, function_: ?js.Function, comptime opts: DispatchWithFunctionOptions) !void {
-    defer if (!event._v8_handoff) event.deinit(false, self.page);
+    event.acquireRef();
+    defer event.deinit(false, self.page);
 
     if (comptime IS_DEBUG) {
         log.debug(.event, "dispatchWithFunction", .{ .type = event._type_string.str(), .context = opts.context, .has_function = function_ != null });
