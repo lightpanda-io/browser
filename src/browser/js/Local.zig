@@ -1209,13 +1209,20 @@ fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnman
         gop.value_ptr.* = {};
     }
 
-    const names_arr = js_obj.getOwnPropertyNames();
-    const len = names_arr.len();
-
     if (depth > 20) {
         return writer.writeAll("...deeply nested object...");
     }
-    const own_len = js_obj.getOwnPropertyNames().len();
+
+    const names_arr = js_obj.getOwnPropertyNames() catch {
+        return writer.writeAll("...invalid object...");
+    };
+    const len = names_arr.len();
+
+    const own_len = blk: {
+        const own_names = js_obj.getOwnPropertyNames() catch break :blk 0;
+        break :blk own_names.len();
+    };
+
     if (own_len == 0) {
         const js_val_str = try js_val.toStringSlice();
         if (js_val_str.len > 2000) {
