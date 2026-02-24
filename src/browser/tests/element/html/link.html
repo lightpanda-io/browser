@@ -19,3 +19,52 @@
   l2.crossOrigin = '';
   testing.expectEqual('anonymous', l2.crossOrigin);
 </script>
+
+<script id="link-load-event">
+{
+  // A link with rel=stylesheet and a non-empty href fires a load event when appended to the DOM
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'https://lightpanda.io/opensource-browser/15';
+
+  testing.async(async () => {
+    const result = await new Promise(resolve => {
+      link.addEventListener('load', ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
+        testing.expectEqual(false, bubbles);
+        testing.expectEqual(false, cancelBubble);
+        testing.expectEqual(false, cancelable);
+        testing.expectEqual(false, composed);
+        testing.expectEqual(true, isTrusted);
+        testing.expectEqual(link, target);
+        resolve(true);
+      });
+      document.head.appendChild(link);
+    });
+    testing.expectEqual(true, result);
+  });
+}
+</script>
+
+<script id="link-no-load-without-href">
+{
+  // A link with rel=stylesheet but no href should not fire a load event
+  let fired = false;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.addEventListener('load', () => { fired = true; });
+  document.head.appendChild(link);
+  testing.eventually(() => testing.expectEqual(false, fired));
+}
+</script>
+
+<script id="link-no-load-wrong-rel">
+{
+  // A link without rel=stylesheet should not fire a load event
+  let fired = false;
+  const link = document.createElement('link');
+  link.href = 'https://lightpanda.io/opensource-browser/15';
+  link.addEventListener('load', () => { fired = true; });
+  document.head.appendChild(link);
+  testing.eventually(() => testing.expectEqual(false, fired));
+}
+</script>
