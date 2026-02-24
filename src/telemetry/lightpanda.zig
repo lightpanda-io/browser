@@ -21,6 +21,7 @@ pub const LightPanda = struct {
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
     connection: Http.Connection,
+    config: *const Config,
     pending: std.DoublyLinkedList,
     mem_pool: std.heap.MemoryPool(LightPandaEvent),
 
@@ -40,6 +41,7 @@ pub const LightPanda = struct {
             .running = true,
             .allocator = allocator,
             .connection = connection,
+            .config = app.config,
             .mem_pool = std.heap.MemoryPool(LightPandaEvent).init(allocator),
         };
     }
@@ -109,7 +111,7 @@ pub const LightPanda = struct {
         }
 
         try self.connection.setBody(aw.written());
-        const status = try self.connection.request();
+        const status = try self.connection.request(&self.config.http_headers);
 
         if (status != 200) {
             log.warn(.telemetry, "server error", .{ .status = status });

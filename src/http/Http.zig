@@ -19,20 +19,15 @@
 const std = @import("std");
 const Net = @import("../Net.zig");
 
-pub const c = Net.c;
+const c = Net.c;
 
-pub const ENABLE_DEBUG = Net.ENABLE_DEBUG;
+const ENABLE_DEBUG = Net.ENABLE_DEBUG;
 pub const Client = @import("Client.zig");
 pub const Transfer = Client.Transfer;
 
 pub const Method = Net.Method;
 pub const Header = Net.Header;
 pub const Headers = Net.Headers;
-
-pub const Connection = Net.Connection;
-
-pub const errorCheck = Net.errorCheck;
-pub const errorMCheck = Net.errorMCheck;
 
 const Config = @import("../Config.zig");
 const RobotStore = @import("../browser/Robots.zig").RobotStore;
@@ -91,6 +86,6 @@ pub fn createClient(self: *Http, allocator: Allocator) !*Client {
     return Client.init(allocator, self.ca_blob, self.robot_store, self.config);
 }
 
-pub fn newConnection(self: *Http) !Connection {
-    return Connection.init(self.ca_blob, self.config);
+pub fn newConnection(self: *Http) !Net.Connection {
+    return Net.Connection.init(self.ca_blob, self.config);
 }

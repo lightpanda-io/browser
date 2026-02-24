@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
 
-const Http = @import("Http.zig");
+const Net = @import("../Net.zig");
 const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
@@ -30,18 +30,20 @@ const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Robots = @import("../browser/Robots.zig");
 const RobotStore = Robots.RobotStore;
 
-const c = Http.c;
+const c = Net.c;
 const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const errorCheck = Http.errorCheck;
-const errorMCheck = Http.errorMCheck;
-
 const IS_DEBUG = builtin.mode == .Debug;
 
-const Method = Http.Method;
+const errorCheck = Net.errorCheck;
+const errorMCheck = Net.errorMCheck;
+
+const Method = Net.Method;
+const ResponseHead = Net.ResponseHead;
+const HeaderIterator = Net.HeaderIterator;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -186,14 +188,14 @@ pub fn deinit(self: *Client) void {
     self.allocator.destroy(self);
 }
 
-pub fn newHeaders(self: *const Client) !Http.Headers {
-    return Http.Headers.init(self.config.http_headers.user_agent_header);
+pub fn newHeaders(self: *const Client) !Net.Headers {
+    return Net.Headers.init(self.config.http_headers.user_agent_header);
 }
 
 pub fn abort(self: *Client) void {
     while (self.handles.in_use.first) |node| {
         const handle: *Handle = @fieldParentPtr("node", node);
-        var transfer = Transfer.fromEasy(handle.conn.easy) catch |err| {
+        var transfer = Transfer.fromConnection(&handle.conn) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "abort" });
             continue;
         };
@@ -354,7 +356,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
     try entry.value_ptr.append(self.allocator, req);
 }
 
-fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
+fn robotsHeaderCallback(transfer: *Transfer) !bool {
     const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
 
     if (transfer.response_header) |hdr| {
@@ -369,7 +371,7 @@ fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
     return true;
 }
 
-fn robotsDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+fn robotsDataCallback(transfer: *Transfer, data: []const u8) !void {
     const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
     try ctx.buffer.appendSlice(ctx.client.allocator, data);
 }
@@ -548,7 +550,7 @@ pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
 }
 
 // For an intercepted request
-pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
     if (comptime IS_DEBUG) {
         std.debug.assert(transfer._intercept_state != .not_intercepted);
         log.debug(.http, "filfull transfer", .{ .intercepted = self.intercepted });
@@ -627,7 +629,7 @@ pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
 
     for (self.handles.handles) |*h| {
-        try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
+        try h.conn.setProxy(proxy.ptr);
     }
     self.use_proxy = true;
 }
@@ -639,7 +641,7 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 
     const proxy = if (self.http_proxy) |p| p.ptr else null;
     for (self.handles.handles) |*h| {
-        try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
+        try h.conn.setProxy(proxy);
     }
     self.use_proxy = proxy != null;
 }
@@ -650,15 +652,7 @@ pub fn enableTlsVerify(self: *const Client) !void {
     // the command during navigate and Curl seems to accept it...
 
     for (self.handles.handles) |*h| {
-        const easy = h.conn.easy;
-
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
-
-        if (self.use_proxy) {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 2)));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 1)));
-        }
+        try h.conn.setTlsVerify(true, self.use_proxy);
     }
 }
 
@@ -668,21 +662,12 @@ pub fn disableTlsVerify(self: *const Client) !void {
     // the command during navigate and Curl seems to accept it...
 
     for (self.handles.handles) |*h| {
-        const easy = h.conn.easy;
-
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
-
-        if (self.use_proxy) {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 0)));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 0)));
-        }
+        try h.conn.setTlsVerify(false, self.use_proxy);
     }
 }
 
 fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!void {
-    const conn = handle.conn;
-    const easy = conn.easy;
+    const conn = &handle.conn;
     const req = &transfer.req;
 
     {
@@ -694,23 +679,23 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!voi
         if (req.body) |b| {
             try conn.setBody(b);
         } else {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1)));
+            try conn.setGetMode();
         }
 
         var header_list = req.headers;
-        try conn.secretHeaders(&header_list); // Add headers that must be hidden from intercepts
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
+        try conn.secretHeaders(&header_list, &self.config.http_headers); // Add headers that must be hidden from intercepts
+        try conn.setHeaders(&header_list);
 
         // Add cookies.
         if (header_list.cookies) |cookies| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, cookies));
+            try conn.setCookies(cookies);
         }
 
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PRIVATE, transfer));
+        try conn.setPrivate(transfer);
 
         // add credentials
         if (req.credentials) |creds| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXYUSERPWD, creds.ptr));
+            try conn.setProxyCredentials(creds);
         }
     }
 
@@ -719,11 +704,11 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!voi
     // fails BEFORE `curl_multi_add_handle` suceeds, the we still need to do
     // cleanup. But if things fail after `curl_multi_add_handle`, we expect
     // perfom to pickup the failure and cleanup.
-    try errorMCheck(c.curl_multi_add_handle(self.multi, easy));
+    try errorMCheck(c.curl_multi_add_handle(self.multi, conn.easy));
 
     if (req.start_callback) |cb| {
         cb(transfer) catch |err| {
-            try errorMCheck(c.curl_multi_remove_handle(self.multi, easy));
+            try errorMCheck(c.curl_multi_remove_handle(self.multi, conn.easy));
             transfer.deinit();
             return err;
         };
@@ -786,7 +771,8 @@ fn processMessages(self: *Client) !bool {
         }
 
         const easy = msg.easy_handle.?;
-        const transfer = try Transfer.fromEasy(easy);
+        const conn: Net.Connection = .{ .easy = easy };
+        const transfer = try Transfer.fromConnection(&conn);
 
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
@@ -840,7 +826,7 @@ fn processMessages(self: *Client) !bool {
             // In case of request w/o data, we need to call the header done
             // callback now.
             if (!transfer._header_done_called) {
-                const proceed = transfer.headerDoneCallback(easy) catch |err| {
+                const proceed = transfer.headerDoneCallback(&conn) catch |err| {
                     log.err(.http, "header_done_callback", .{ .err = err });
                     requestFailed(transfer, err, true);
                     continue;
@@ -951,7 +937,7 @@ const Handles = struct {
 // wraps a c.CURL (an easy handle)
 pub const Handle = struct {
     client: *Client,
-    conn: Http.Connection,
+    conn: Net.Connection,
     node: Handles.HandleList.Node,
 
     fn init(
@@ -959,16 +945,11 @@ pub const Handle = struct {
         ca_blob: ?c.curl_blob,
         config: *const Config,
     ) !Handle {
-        const conn = try Http.Connection.init(ca_blob, config);
+        var conn = try Net.Connection.init(ca_blob, config);
         errdefer conn.deinit();
 
-        const easy = conn.easy;
-
         // callbacks
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERDATA, easy));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERFUNCTION, Transfer.headerCallback));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, easy));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.dataCallback));
+        try conn.setCallbacks(Transfer.headerCallback, Transfer.dataCallback);
 
         return .{
             .node = .{},
@@ -988,7 +969,7 @@ pub const RequestCookie = struct {
     is_navigation: bool,
     origin: [:0]const u8,
 
-    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
+    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Net.Headers) !void {
         var arr: std.ArrayList(u8) = .{};
         try self.jar.forRequest(url, arr.writer(temp), .{
             .is_http = self.is_http,
@@ -1007,7 +988,7 @@ pub const Request = struct {
     page_id: u32,
     method: Method,
     url: [:0]const u8,
-    headers: Http.Headers,
+    headers: Net.Headers,
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
     resource_type: ResourceType,
@@ -1053,7 +1034,7 @@ pub const Request = struct {
     };
 };
 
-pub const AuthChallenge = @import("../Net.zig").AuthChallenge;
+const AuthChallenge = Net.AuthChallenge;
 
 pub const Transfer = struct {
     arena: ArenaAllocator,
@@ -1071,7 +1052,7 @@ pub const Transfer = struct {
     max_response_size: ?usize = null,
 
     // We'll store the response header here
-    response_header: ?ResponseHeader = null,
+    response_header: ?ResponseHead = null,
 
     // track if the header callbacks done have been called.
     _header_done_called: bool = false,
@@ -1128,34 +1109,28 @@ pub const Transfer = struct {
         self.client.transfer_pool.destroy(self);
     }
 
-    fn buildResponseHeader(self: *Transfer, easy: *c.CURL) !void {
+    fn buildResponseHeader(self: *Transfer, conn: *const Net.Connection) !void {
         if (comptime IS_DEBUG) {
             std.debug.assert(self.response_header == null);
         }
 
-        var url: [*c]u8 = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url));
+        const url = try conn.getEffectiveUrl();
 
-        var status: c_long = undefined;
-        if (self._auth_challenge) |_| {
-            status = 407;
-        } else {
-            try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status));
-        }
-
-        var redirect_count: c_long = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_REDIRECT_COUNT, &redirect_count));
+        const status: u16 = if (self._auth_challenge != null)
+            407
+        else
+            try conn.getResponseCode();
 
         self.response_header = .{
             .url = url,
-            .status = @intCast(status),
-            .redirect_count = @intCast(redirect_count),
+            .status = status,
+            .redirect_count = try conn.getRedirectCount(),
         };
 
-        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+        if (conn.getResponseHeader("content-type", 0)) |ct| {
             var hdr = &self.response_header.?;
             const value = ct.value;
-            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            const len = @min(value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
             hdr._content_type_len = len;
             @memcpy(hdr._content_type[0..len], value[0..len]);
         }
@@ -1182,7 +1157,7 @@ pub const Transfer = struct {
         self.req.credentials = userpwd;
     }
 
-    pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Http.Header) !void {
+    pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Net.Header) !void {
         self.req.headers.deinit();
 
         var buf: std.ArrayList(u8) = .empty;
@@ -1261,7 +1236,7 @@ pub const Transfer = struct {
     // redirectionCookies manages cookies during redirections handled by Curl.
     // It sets the cookies from the current response to the cookie jar.
     // It also immediately sets cookies for the following request.
-    fn redirectionCookies(transfer: *Transfer, easy: *c.CURL) !void {
+    fn redirectionCookies(transfer: *Transfer, conn: *const Net.Connection) !void {
         const req = &transfer.req;
         const arena = transfer.arena.allocator();
 
@@ -1269,7 +1244,7 @@ pub const Transfer = struct {
         if (req.cookie_jar) |jar| {
             var i: usize = 0;
             while (true) {
-                const ct = getResponseHeader(easy, "set-cookie", i);
+                const ct = conn.getResponseHeader("set-cookie", i);
                 if (ct == null) break;
                 try jar.populateFromResponse(transfer.url, ct.?.value);
                 i += 1;
@@ -1278,12 +1253,11 @@ pub const Transfer = struct {
         }
 
         // set cookies for the following redirection's request.
-        const location = getResponseHeader(easy, "location", 0) orelse {
+        const location = conn.getResponseHeader("location", 0) orelse {
             return error.LocationNotFound;
         };
 
-        var base_url: [*c]u8 = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &base_url));
+        const base_url = try conn.getEffectiveUrl();
 
         const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
         transfer.url = url;
@@ -1297,23 +1271,23 @@ pub const Transfer = struct {
                 .is_navigation = req.resource_type == .document,
             });
             try cookies.append(arena, 0); //null terminate
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
+            try conn.setCookies(@ptrCast(cookies.items.ptr));
         }
     }
 
     // headerDoneCallback is called once the headers have been read.
     // It can be called either on dataCallback or once the request for those
     // w/o body.
-    fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !bool {
+    fn headerDoneCallback(transfer: *Transfer, conn: *const Net.Connection) !bool {
         lp.assert(transfer._header_done_called == false, "Transfer.headerDoneCallback", .{});
         defer transfer._header_done_called = true;
 
-        try transfer.buildResponseHeader(easy);
+        try transfer.buildResponseHeader(conn);
 
-        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+        if (conn.getResponseHeader("content-type", 0)) |ct| {
             var hdr = &transfer.response_header.?;
             const value = ct.value;
-            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            const len = @min(value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
             hdr._content_type_len = len;
             @memcpy(hdr._content_type[0..len], value[0..len]);
         }
@@ -1321,7 +1295,7 @@ pub const Transfer = struct {
         if (transfer.req.cookie_jar) |jar| {
             var i: usize = 0;
             while (true) {
-                const ct = getResponseHeader(easy, "set-cookie", i);
+                const ct = conn.getResponseHeader("set-cookie", i);
                 if (ct == null) break;
                 jar.populateFromResponse(transfer.url, ct.?.value) catch |err| {
                     log.err(.http, "set cookie", .{ .err = err, .req = transfer });
@@ -1359,8 +1333,8 @@ pub const Transfer = struct {
             std.debug.assert(header_count == 1);
         }
 
-        const easy: *c.CURL = @ptrCast(@alignCast(data));
-        var transfer = fromEasy(easy) catch |err| {
+        const conn: Net.Connection = .{ .easy = @ptrCast(@alignCast(data)) };
+        var transfer = fromConnection(&conn) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "header callback" });
             return 0;
         };
@@ -1463,7 +1437,7 @@ pub const Transfer = struct {
 
         if (transfer._redirecting) {
             // parse and set cookies for the redirection.
-            redirectionCookies(transfer, easy) catch |err| {
+            redirectionCookies(transfer, &conn) catch |err| {
                 if (comptime IS_DEBUG) {
                     log.debug(.http, "redirection cookies", .{ .err = err });
                 }
@@ -1481,8 +1455,8 @@ pub const Transfer = struct {
             std.debug.assert(chunk_count == 1);
         }
 
-        const easy: *c.CURL = @ptrCast(@alignCast(data));
-        var transfer = fromEasy(easy) catch |err| {
+        const conn: Net.Connection = .{ .easy = @ptrCast(@alignCast(data)) };
+        var transfer = fromConnection(&conn) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "body callback" });
             return c.CURL_WRITEFUNC_ERROR;
         };
@@ -1492,7 +1466,7 @@ pub const Transfer = struct {
         }
 
         if (!transfer._header_done_called) {
-            const proceed = transfer.headerDoneCallback(easy) catch |err| {
+            const proceed = transfer.headerDoneCallback(&conn) catch |err| {
                 log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
                 return c.CURL_WRITEFUNC_ERROR;
             };
@@ -1532,7 +1506,7 @@ pub const Transfer = struct {
         if (self._handle) |handle| {
             // If we have a handle, than this is a real curl request and we
             // iterate through the header that curl maintains.
-            return .{ .curl = .{ .easy = handle.conn.easy } };
+            return .{ .curl = .{ .conn = &handle.conn } };
         }
         // If there's no handle, it either means this is being called before
         // the request is even being made (which would be a bug in the code)
@@ -1541,14 +1515,18 @@ pub const Transfer = struct {
         return .{ .list = .{ .list = self.response_header.?._injected_headers } };
     }
 
-    // pub because Page.printWaitAnalysis uses it
-    pub fn fromEasy(easy: *c.CURL) !*Transfer {
-        var private: *anyopaque = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_PRIVATE, &private));
+    pub fn fromConnection(conn: *const Net.Connection) !*Transfer {
+        const private = try conn.getPrivate();
         return @ptrCast(@alignCast(private));
     }
 
-    pub fn fulfill(transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+    // pub because Page.printWaitAnalysis uses it
+    pub fn fromEasy(easy: *c.CURL) !*Transfer {
+        const conn: Net.Connection = .{ .easy = easy };
+        return fromConnection(&conn);
+    }
+
+    pub fn fulfill(transfer: *Transfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
         if (transfer._handle != null) {
             // should never happen, should have been intercepted/paused, and then
             // either continued, aborted or fulfilled once.
@@ -1562,7 +1540,7 @@ pub const Transfer = struct {
         };
     }
 
-    fn _fulfill(transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+    fn _fulfill(transfer: *Transfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
         const req = &transfer.req;
         if (req.start_callback) |cb| {
             try cb(transfer);
@@ -1576,7 +1554,7 @@ pub const Transfer = struct {
         };
         for (headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
-                const len = @min(hdr.value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+                const len = @min(hdr.value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
                 @memcpy(transfer.response_header.?._content_type[0..len], hdr.value[0..len]);
                 transfer.response_header.?._content_type_len = len;
                 break;
@@ -1607,7 +1585,7 @@ pub const Transfer = struct {
         if (self._handle) |handle| {
             // If we have a handle, than this is a normal request. We can get the
             // header value from the easy handle.
-            const cl = getResponseHeader(handle.conn.easy, "content-length", 0) orelse return null;
+            const cl = handle.conn.getResponseHeader("content-length", 0) orelse return null;
             return cl.value;
         }
 
@@ -1625,11 +1603,3 @@ pub const Transfer = struct {
         return null;
     }
 };
-
-pub const ResponseHeader = @import("../Net.zig").ResponseHeader;
-
-const HeaderIterator = Net.HeaderIterator;
-
-const Net = @import("../Net.zig");
-const CurlHeaderValue = Net.CurlHeaderValue;
-const getResponseHeader = Net.getResponseHeader;
