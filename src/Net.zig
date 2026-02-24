@@ -471,6 +471,7 @@ pub fn globalDeinit() void {
 
 pub const Connection = struct {
     easy: *c.CURL,
+    node: Handles.HandleList.Node = .{},
 
     pub fn init(
         ca_blob_: ?c.curl_blob,
@@ -697,6 +698,110 @@ pub const Connection = struct {
 
         try errorCheck(c.curl_easy_perform(self.easy));
         return self.getResponseCode();
+    }
+};
+
+pub const Handles = struct {
+    connections: []Connection,
+    in_use: HandleList,
+    available: HandleList,
+    multi: *c.CURLM,
+    performing: bool = false,
+
+    pub const HandleList = std.DoublyLinkedList;
+
+    pub fn init(
+        allocator: Allocator,
+        ca_blob: ?c.curl_blob,
+        config: *const Config,
+    ) !Handles {
+        const count: usize = config.httpMaxConcurrent();
+        if (count == 0) return error.InvalidMaxConcurrent;
+
+        const multi = c.curl_multi_init() orelse return error.FailedToInitializeMulti;
+        errdefer _ = c.curl_multi_cleanup(multi);
+
+        try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, config.httpMaxHostOpen())));
+
+        const connections = try allocator.alloc(Connection, count);
+        errdefer allocator.free(connections);
+
+        var available: HandleList = .{};
+        for (0..count) |i| {
+            connections[i] = try Connection.init(ca_blob, config);
+            available.append(&connections[i].node);
+        }
+
+        return .{
+            .in_use = .{},
+            .connections = connections,
+            .available = available,
+            .multi = multi,
+        };
+    }
+
+    pub fn deinit(self: *Handles, allocator: Allocator) void {
+        for (self.connections) |*conn| {
+            conn.deinit();
+        }
+        allocator.free(self.connections);
+        _ = c.curl_multi_cleanup(self.multi);
+    }
+
+    pub fn hasAvailable(self: *const Handles) bool {
+        return self.available.first != null;
+    }
+
+    pub fn get(self: *Handles) ?*Connection {
+        if (self.available.popFirst()) |node| {
+            node.prev = null;
+            node.next = null;
+            self.in_use.append(node);
+            return @as(*Connection, @fieldParentPtr("node", node));
+        }
+        return null;
+    }
+
+    pub fn add(self: *Handles, conn: *const Connection) !void {
+        try errorMCheck(c.curl_multi_add_handle(self.multi, conn.easy));
+    }
+
+    pub fn remove(self: *Handles, conn: *Connection) void {
+        errorMCheck(c.curl_multi_remove_handle(self.multi, conn.easy)) catch |err| {
+            log.fatal(.http, "multi remove handle", .{ .err = err });
+        };
+        var node = &conn.node;
+        self.in_use.remove(node);
+        node.prev = null;
+        node.next = null;
+        self.available.append(node);
+    }
+
+    pub fn perform(self: *Handles) !c_int {
+        var running: c_int = undefined;
+        self.performing = true;
+        defer self.performing = false;
+        try errorMCheck(c.curl_multi_perform(self.multi, &running));
+        return running;
+    }
+
+    pub fn poll(self: *Handles, extra_fds: []c.curl_waitfd, timeout_ms: c_int) !void {
+        try errorMCheck(c.curl_multi_poll(self.multi, extra_fds.ptr, @intCast(extra_fds.len), timeout_ms, null));
+    }
+
+    pub const MultiMessage = struct {
+        conn: Connection,
+        err: ?Error,
+    };
+
+    pub fn readMessage(self: *Handles) ?MultiMessage {
+        var messages_count: c_int = 0;
+        const msg_ = c.curl_multi_info_read(self.multi, &messages_count) orelse return null;
+        const msg: *c.CURLMsg = @ptrCast(msg_);
+        return .{
+            .conn = .{ .easy = msg.easy_handle.? },
+            .err = if (errorCheck(msg.data.result)) |_| null else |err| err,
+        };
     }
 };
 

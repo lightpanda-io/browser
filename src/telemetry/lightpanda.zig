@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
 const App = @import("../App.zig");
-const Http = @import("../http/Http.zig");
+const Net = @import("../Net.zig");
 const Config = @import("../Config.zig");
 const telemetry = @import("telemetry.zig");
 
@@ -20,7 +20,7 @@ pub const LightPanda = struct {
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
-    connection: Http.Connection,
+    connection: Net.Connection,
     config: *const Config,
     pending: std.DoublyLinkedList,
     mem_pool: std.heap.MemoryPool(LightPandaEvent),
