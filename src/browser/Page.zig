@@ -173,7 +173,7 @@ _upgrading_element: ?*Node = null,
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
 
 // for heap allocations and managing WebAPI objects
-_factory: Factory,
+_factory: *Factory,
 
 _load_state: LoadState = .waiting,
 
@@ -247,13 +247,14 @@ pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
     }
     const browser = session.browser;
     const arena_pool = browser.arena_pool;
-    const page_arena = try arena_pool.acquire();
-    errdefer arena_pool.release(page_arena);
+
+    const page_arena = if (parent) |p| p.arena else try arena_pool.acquire();
+    errdefer if (parent == null) arena_pool.release(page_arena);
+
+    var factory = if (parent) |p| p._factory else try Factory.init(page_arena);
 
     const call_arena = try arena_pool.acquire();
     errdefer arena_pool.release(call_arena);
-
-    var factory = Factory.init(page_arena, self);
 
     const document = (try factory.document(Node.Document.HTMLDocument{
         ._proto = undefined,
@@ -355,7 +356,10 @@ pub fn deinit(self: *Page) void {
     }
 
     self.arena_pool.release(self.call_arena);
-    self.arena_pool.release(self.arena);
+
+    if (self.parent == null) {
+        self.arena_pool.release(self.arena);
+    }
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
