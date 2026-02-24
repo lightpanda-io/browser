@@ -252,6 +252,28 @@
   }
 </script>
 
+<script id=measure_with_navigation_timing_marks>
+  {
+    // performance.measure() must accept PerformanceTiming attribute names
+    // (e.g. "fetchStart") as start/end marks per the W3C User Timing Level 2 spec.
+    // https://www.w3.org/TR/user-timing/#dom-performance-measure
+    performance.clearMarks();
+    performance.clearMeasures();
+
+    performance.mark("mark-dataComplete");
+    let m = performance.measure("dataComplete", "fetchStart", "mark-dataComplete");
+    testing.expectEqual('dataComplete', m.name);
+    testing.expectEqual('measure', m.entryType);
+    testing.expectEqual(true, m.duration >= 0);
+
+    // navigationStart is also a valid mark name (was already supported)
+    performance.mark("mark-end");
+    let m2 = performance.measure("fromNav", "navigationStart", "mark-end");
+    testing.expectEqual('fromNav', m2.name);
+    testing.expectEqual(true, m2.duration >= 0);
+  }
+</script>
+
 <script id=mixed_marks_and_measures>
   {
     performance.clearMarks();
