@@ -350,7 +350,7 @@ pub fn deinit(self: *Page) void {
         var it = self._arena_pool_leak_track.valueIterator();
         while (it.next()) |value_ptr| {
             if (value_ptr.count > 0) {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type });
+                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type, .url = self.url });
             }
         }
     }
@@ -422,7 +422,7 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
     if (comptime IS_DEBUG) {
         const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
         if (found.count != 1) {
-            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type });
+            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type, .url = self.url });
             return;
         }
         found.count = 0;
@@ -639,7 +639,7 @@ pub fn documentIsLoaded(self: *Page) void {
     self._load_state = .load;
     self.document._ready_state = .interactive;
     self._documentIsLoaded() catch |err| {
-        log.err(.page, "document is loaded", .{ .err = err, .type = self._type });
+        log.err(.page, "document is loaded", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
@@ -662,7 +662,7 @@ pub fn iframeCompletedLoading(self: *Page, iframe: *Element.Html.IFrame) void {
         defer ls.deinit();
 
         const event = Event.initTrusted(comptime .wrap("load"), .{}, self) catch |err| {
-            log.err(.page, "iframe event init", .{ .err = err });
+            log.err(.page, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
         };
         self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
@@ -701,7 +701,7 @@ pub fn documentIsComplete(self: *Page) void {
 
     self._load_state = .complete;
     self._documentIsComplete() catch |err| {
-        log.err(.page, "document is complete", .{ .err = err, .type = self._type });
+        log.err(.page, "document is complete", .{ .err = err, .type = self._type, .url = self.url });
     };
 
     if (IS_DEBUG) {
@@ -807,7 +807,7 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         } orelse .unknown;
 
         if (comptime IS_DEBUG) {
-            log.debug(.page, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len, .type = self._type });
+            log.debug(.page, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len, .type = self._type, .url = self.url });
         }
 
         switch (mime.content_type) {
@@ -854,7 +854,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     var self: *Page = @ptrCast(@alignCast(ctx));
 
     if (comptime IS_DEBUG) {
-        log.debug(.page, "navigate done", .{ .type = self._type });
+        log.debug(.page, "navigate done", .{ .type = self._type, .url = self.url });
     }
 
     //We need to handle different navigation types differently.
@@ -932,13 +932,13 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Page = @ptrCast(@alignCast(ctx));
 
-    log.err(.page, "navigate failed", .{ .err = err, .type = self._type });
+    log.err(.page, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
     self._parse_state = .{ .err = err };
 
     // In case of error, we want to complete the page with a custom HTML
     // containing the error.
     pageDoneCallback(ctx) catch |e| {
-        log.err(.browser, "pageErrorCallback", .{ .err = e, .type = self._type });
+        log.err(.browser, "pageErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
         return;
     };
 }
@@ -953,7 +953,7 @@ pub fn wait(self: *Page, wait_ms: u32) Session.WaitResult {
                 // to run this through more real-world sites and see if we need
                 // to expand the switch (err) to have more customized logs for
                 // specific messages.
-                log.err(.browser, "page wait", .{ .err = err, .type = self._type });
+                log.err(.browser, "page wait", .{ .err = err, .type = self._type, .url = self.url });
             },
         }
         return .done;
@@ -1187,6 +1187,7 @@ pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Ele
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
+            .url = self.url,
             .src = script.asElement().getAttributeSafe(comptime .wrap("src")),
             .type = self._type,
         });
@@ -1273,7 +1274,7 @@ pub fn domChanged(self: *Page) void {
 
     self._intersection_check_scheduled = true;
     self.js.queueIntersectionChecks() catch |err| {
-        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type });
+        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
@@ -1371,7 +1372,7 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
     for (self._performance_observers.items) |observer| {
         if (observer.interested(entry)) {
             observer._entries.append(self.arena, entry) catch |err| {
-                log.err(.page, "notifyPerformanceObservers", .{ .err = err, .type = self._type });
+                log.err(.page, "notifyPerformanceObservers", .{ .err = err, .type = self._type, .url = self.url });
             };
         }
     }
@@ -1466,7 +1467,7 @@ pub fn performScheduledIntersectionChecks(self: *Page) void {
     }
     self._intersection_check_scheduled = false;
     self.checkIntersections() catch |err| {
-        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type });
+        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
@@ -1482,7 +1483,7 @@ pub fn deliverIntersections(self: *Page) void {
         i -= 1;
         const observer = self._intersection_observers.items[i];
         observer.deliverEntries(self) catch |err| {
-            log.err(.page, "page.deliverIntersections", .{ .err = err, .type = self._type });
+            log.err(.page, "page.deliverIntersections", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1500,7 +1501,7 @@ pub fn deliverMutations(self: *Page) void {
     };
 
     if (self._mutation_delivery_depth > 100) {
-        log.err(.page, "page.MutationLimit", .{ .type = self._type });
+        log.err(.page, "page.MutationLimit", .{ .type = self._type, .url = self.url });
         self._mutation_delivery_depth = 0;
         return;
     }
@@ -1509,7 +1510,7 @@ pub fn deliverMutations(self: *Page) void {
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.deliverRecords(self) catch |err| {
-            log.err(.page, "page.deliverMutations", .{ .err = err, .type = self._type });
+            log.err(.page, "page.deliverMutations", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1527,7 +1528,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 
     var i: usize = 0;
     var slots = self.call_arena.alloc(*Element.Html.Slot, pending) catch |err| {
-        log.err(.page, "deliverSlotchange.append", .{ .err = err, .type = self._type });
+        log.err(.page, "deliverSlotchange.append", .{ .err = err, .type = self._type, .url = self.url });
         return;
     };
 
@@ -1540,12 +1541,12 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 
     for (slots) |slot| {
         const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self) catch |err| {
-            log.err(.page, "deliverSlotchange.init", .{ .err = err, .type = self._type });
+            log.err(.page, "deliverSlotchange.init", .{ .err = err, .type = self._type, .url = self.url });
             continue;
         };
         const target = slot.asNode().asEventTarget();
         _ = target.dispatchEvent(event, self) catch |err| {
-            log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type });
+            log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1600,7 +1601,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Page, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
         return err;
     };
     return self.nodeIsReady(true, node);
@@ -2299,7 +2300,7 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
 
                 var caught: JS.TryCatch.Caught = undefined;
                 _ = ls.toLocal(def.constructor).newInstance(&caught) catch |err| {
-                    log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = self._type });
+                    log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = self._type, .url = self.url });
                     return node;
                 };
 
@@ -2357,7 +2358,7 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
         @call(.auto, @field(E.Build, "created"), .{ node, self }) catch |err| {
-            log.err(.page, "build.created", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type });
+            log.err(.page, "build.created", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
             return err;
         };
     }
@@ -2827,7 +2828,7 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
 
 pub fn attributeChange(self: *Page, element: *Element, name: String, value: String, old_value: ?String) void {
     _ = Element.Build.call(element, "attributeChange", .{ element, name, value, self }) catch |err| {
-        log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err, .type = self._type });
+        log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err, .type = self._type, .url = self.url });
     };
 
     Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, value, self);
@@ -2836,7 +2837,7 @@ pub fn attributeChange(self: *Page, element: *Element, name: String, value: Stri
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
-            log.err(.page, "attributeChange.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "attributeChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 
@@ -2853,7 +2854,7 @@ pub fn attributeChange(self: *Page, element: *Element, name: String, value: Stri
 
 pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: String) void {
     _ = Element.Build.call(element, "attributeRemove", .{ element, name, self }) catch |err| {
-        log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err, .type = self._type });
+        log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err, .type = self._type, .url = self.url });
     };
 
     Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, null, self);
@@ -2862,7 +2863,7 @@ pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: 
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
-            log.err(.page, "attributeRemove.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "attributeRemove.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 
@@ -2879,11 +2880,11 @@ pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: 
 
 fn signalSlotChange(self: *Page, slot: *Element.Html.Slot) void {
     self._slots_pending_slotchange.put(self.arena, slot, {}) catch |err| {
-        log.err(.page, "signalSlotChange.put", .{ .err = err, .type = self._type });
+        log.err(.page, "signalSlotChange.put", .{ .err = err, .type = self._type, .url = self.url });
         return;
     };
     self.scheduleSlotchangeDelivery() catch |err| {
-        log.err(.page, "signalSlotChange.schedule", .{ .err = err, .type = self._type });
+        log.err(.page, "signalSlotChange.schedule", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
@@ -2923,7 +2924,7 @@ fn updateElementAssignedSlot(self: *Page, element: *Element) void {
     // Recursively search through the shadow root for a matching slot
     if (findMatchingSlot(shadow_root.asNode(), slot_name)) |slot| {
         self._element_assigned_slots.put(self.arena, element, slot) catch |err| {
-            log.err(.page, "updateElementAssignedSlot.put", .{ .err = err, .type = self._type });
+            log.err(.page, "updateElementAssignedSlot.put", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -2970,7 +2971,7 @@ pub fn characterDataChange(
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyCharacterDataChange(target, old_value, self) catch |err| {
-            log.err(.page, "cdataChange.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "cdataChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -2997,7 +2998,7 @@ pub fn childListChange(
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyChildListChange(target, added_nodes, removed_nodes, previous_sibling, next_sibling, self) catch |err| {
-            log.err(.page, "childListChange.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "childListChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -3048,7 +3049,7 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         }
 
         self.scriptAddedCallback(from_parser, script) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "script", .type = self._type });
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "script", .type = self._type, .url = self.url });
             return err;
         };
     } else if (node.is(Element.Html.IFrame)) |iframe| {
@@ -3058,7 +3059,7 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         }
 
         self.iframeAddedCallback(iframe) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type });
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
             return err;
         };
     }
@@ -3241,12 +3242,12 @@ pub fn handleClick(self: *Page, target: *Node) !void {
             // Check target attribute - don't navigate if opening in new window/tab
             const target_val = anchor.getTarget();
             if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
-                log.warn(.not_implemented, "a.target", .{ .type = self._type });
+                log.warn(.not_implemented, "a.target", .{ .type = self._type, .url = self.url });
                 return;
             }
 
             if (try element.hasAttribute(comptime .wrap("download"), self)) {
-                log.warn(.browser, "a.download", .{ .type = self._type });
+                log.warn(.browser, "a.download", .{ .type = self._type, .url = self.url });
                 return;
             }
 
