@@ -48,6 +48,10 @@ const Client = struct {
         };
     }
 
+    pub fn sendAllocator(self: *Client) Allocator {
+        return self.send_arena.allocator();
+    }
+
     pub fn sendJSON(self: *Client, message: anytype, opts: json.Stringify.Options) !void {
         var opts_copy = opts;
         opts_copy.whitespace = .indent_2;

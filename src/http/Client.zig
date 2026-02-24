@@ -1053,45 +1053,7 @@ pub const Request = struct {
     };
 };
 
-pub const AuthChallenge = struct {
-    status: u16,
-    source: enum { server, proxy },
-    scheme: enum { basic, digest },
-    realm: []const u8,
-
-    pub fn parse(status: u16, header: []const u8) !AuthChallenge {
-        var ac: AuthChallenge = .{
-            .status = status,
-            .source = undefined,
-            .realm = "TODO", // TODO parser and set realm
-            .scheme = undefined,
-        };
-
-        const sep = std.mem.indexOfPos(u8, header, 0, ": ") orelse return error.InvalidHeader;
-        const hname = header[0..sep];
-        const hvalue = header[sep + 2 ..];
-
-        if (std.ascii.eqlIgnoreCase("WWW-Authenticate", hname)) {
-            ac.source = .server;
-        } else if (std.ascii.eqlIgnoreCase("Proxy-Authenticate", hname)) {
-            ac.source = .proxy;
-        } else {
-            return error.InvalidAuthChallenge;
-        }
-
-        const pos = std.mem.indexOfPos(u8, std.mem.trim(u8, hvalue, std.ascii.whitespace[0..]), 0, " ") orelse hvalue.len;
-        const _scheme = hvalue[0..pos];
-        if (std.ascii.eqlIgnoreCase(_scheme, "basic")) {
-            ac.scheme = .basic;
-        } else if (std.ascii.eqlIgnoreCase(_scheme, "digest")) {
-            ac.scheme = .digest;
-        } else {
-            return error.UnknownAuthChallengeScheme;
-        }
-
-        return ac;
-    }
-};
+pub const AuthChallenge = @import("../Net.zig").AuthChallenge;
 
 pub const Transfer = struct {
     arena: ArenaAllocator,
@@ -1664,95 +1626,10 @@ pub const Transfer = struct {
     }
 };
 
-pub const ResponseHeader = struct {
-    const MAX_CONTENT_TYPE_LEN = 64;
+pub const ResponseHeader = @import("../Net.zig").ResponseHeader;
 
-    status: u16,
-    url: [*c]const u8,
-    redirect_count: u32,
-    _content_type_len: usize = 0,
-    _content_type: [MAX_CONTENT_TYPE_LEN]u8 = undefined,
-    // this is normally an empty list, but if the response is being injected
-    // than it'll be populated. It isn't meant to be used directly, but should
-    // be used through the transfer.responseHeaderIterator() which abstracts
-    // whether the headers are from a live curl easy handle, or injected.
-    _injected_headers: []const Http.Header = &.{},
+const HeaderIterator = Net.HeaderIterator;
 
-    pub fn contentType(self: *ResponseHeader) ?[]u8 {
-        if (self._content_type_len == 0) {
-            return null;
-        }
-        return self._content_type[0..self._content_type_len];
-    }
-};
-
-// In normal cases, the header iterator comes from the curl linked list.
-// But it's also possible to inject a response, via `transfer.fulfill`. In that
-// case, the resposne headers are a list, []const Http.Header.
-// This union, is an iterator that exposes the same API for either case.
-const HeaderIterator = union(enum) {
-    curl: CurlHeaderIterator,
-    list: ListHeaderIterator,
-
-    pub fn next(self: *HeaderIterator) ?Http.Header {
-        switch (self.*) {
-            inline else => |*it| return it.next(),
-        }
-    }
-
-    const CurlHeaderIterator = struct {
-        easy: *c.CURL,
-        prev: ?*c.curl_header = null,
-
-        pub fn next(self: *CurlHeaderIterator) ?Http.Header {
-            const h = c.curl_easy_nextheader(self.easy, c.CURLH_HEADER, -1, self.prev) orelse return null;
-            self.prev = h;
-
-            const header = h.*;
-            return .{
-                .name = std.mem.span(header.name),
-                .value = std.mem.span(header.value),
-            };
-        }
-    };
-
-    const ListHeaderIterator = struct {
-        index: usize = 0,
-        list: []const Http.Header,
-
-        pub fn next(self: *ListHeaderIterator) ?Http.Header {
-            const index = self.index;
-            if (index == self.list.len) {
-                return null;
-            }
-            self.index = index + 1;
-            return self.list[index];
-        }
-    };
-};
-
-const CurlHeaderValue = struct {
-    value: []const u8,
-    amount: usize,
-};
-
-fn getResponseHeader(easy: *c.CURL, name: [:0]const u8, index: usize) ?CurlHeaderValue {
-    var hdr: [*c]c.curl_header = null;
-    const result = c.curl_easy_header(easy, name, index, c.CURLH_HEADER, -1, &hdr);
-    if (result == c.CURLE_OK) {
-        return .{
-            .amount = hdr.*.amount,
-            .value = std.mem.span(hdr.*.value),
-        };
-    }
-
-    if (result == c.CURLE_FAILED_INIT) {
-        // seems to be what it returns if the header isn't found
-        return null;
-    }
-    log.err(.http, "get response header", .{
-        .name = name,
-        .err = @import("errors.zig").fromCode(result),
-    });
-    return null;
-}
+const Net = @import("../Net.zig");
+const CurlHeaderValue = Net.CurlHeaderValue;
+const getResponseHeader = Net.getResponseHeader;
