@@ -1,7 +1,8 @@
 const std = @import("std");
-const App = @import("../App.zig");
-const protocol = @import("protocol.zig");
+
 const lp = @import("lightpanda");
+
+const App = @import("../App.zig");
 const HttpClient = @import("../http/Client.zig");
 
 pub const McpServer = struct {

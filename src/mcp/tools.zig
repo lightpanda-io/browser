@@ -1,14 +1,14 @@
 const std = @import("std");
-const McpServer = @import("Server.zig").McpServer;
-const protocol = @import("protocol.zig");
+
 const lp = @import("lightpanda");
 const log = lp.log;
 const js = lp.js;
 
-const Node = @import("../browser/webapi/Node.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const Selector = @import("../browser/webapi/selector/Selector.zig");
 const String = @import("../string.zig").String;
+const McpServer = @import("Server.zig").McpServer;
+const protocol = @import("protocol.zig");
 
 pub fn handleList(server: *McpServer, arena: std.mem.Allocator, req: protocol.Request) !void {
     const tools = [_]protocol.Tool{

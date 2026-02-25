@@ -1,10 +1,12 @@
 const std = @import("std");
+
 const lp = @import("lightpanda");
+const log = lp.log;
+
 const McpServer = @import("Server.zig").McpServer;
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
 const tools = @import("tools.zig");
-const log = lp.log;
 
 pub fn processRequests(server: *McpServer) void {
     while (server.is_running.load(.seq_cst)) {
