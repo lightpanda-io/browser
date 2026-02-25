@@ -44,6 +44,7 @@ const Document = @This();
 
 _type: Type,
 _proto: *Node,
+_page: ?*Page = null,
 _location: ?*Location = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 _ready_state: ReadyState = .loading,

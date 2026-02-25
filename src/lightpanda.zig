@@ -36,7 +36,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
-    dump: dump.RootOpts,
+    dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
 };
