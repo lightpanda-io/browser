@@ -354,6 +354,30 @@ fn nextTextNode(node: *Node) ?*Node {
     }
 }
 
+fn nextTextNodeAfter(node: *Node) ?*Node {
+    var current = node;
+    while (true) {
+        if (current.nextSibling()) |sib| {
+            current = sib;
+        } else {
+            while (true) {
+                const parent = current.parentNode() orelse return null;
+                if (parent.nextSibling()) |uncle| {
+                    current = uncle;
+                    break;
+                }
+                current = parent;
+            }
+        }
+
+        var descend = current;
+        while (true) {
+            if (isTextNode(descend)) return descend;
+            descend = descend.firstChild() orelse break;
+        }
+    }
+}
+
 fn prevTextNode(node: *Node) ?*Node {
     var current = node;
 
@@ -413,10 +437,13 @@ fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range:
                     new_node = t;
                     new_offset = 0;
                 }
+            } else if (nextTextNodeAfter(focus_node)) |next| {
+                new_node = next;
+                new_offset = 1;
             }
         } else {
+            // backward element-node case
             var idx = focus_offset;
-
             while (idx > 0) {
                 idx -= 1;
                 const child = focus_node.getChildAt(idx) orelse break;
@@ -496,7 +523,7 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
 
         if (forward) {
             const child = focus_node.getChildAt(focus_offset) orelse {
-                if (nextTextNode(focus_node)) |next| {
+                if (nextTextNodeAfter(focus_node)) |next| {
                     new_node = next;
                     new_offset = nextWordEnd(next.getData(), 0);
                 }
