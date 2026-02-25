@@ -29,6 +29,9 @@ const Document = @import("Document.zig");
 
 const DOMParser = @This();
 
+// Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+_pad: bool = false,
+
 pub fn init() DOMParser {
     return .{};
 }
