@@ -290,16 +290,9 @@ const ModifyDirection = enum {
 const ModifyGranularity = enum {
     character,
     word,
-    line,
-    paragraph,
-    lineboundary,
-    // Firefox doesn't implement:
-    // - sentence
-    // - paragraph
-    // - sentenceboundary
-    // - paragraphboundary
-    // - documentboundary
-    // so we won't either for now.
+    // The rest are either:
+    // 1. Layout dependent.
+    // 2. Not widely supported across browsers.
 
     pub fn fromString(str: []const u8) ?ModifyGranularity {
         return std.meta.stringToEnum(ModifyGranularity, str);
@@ -311,18 +304,268 @@ pub fn modify(
     alter_str: []const u8,
     direction_str: []const u8,
     granularity_str: []const u8,
+    page: *Page,
 ) !void {
-    const alter = ModifyAlter.fromString(alter_str) orelse return error.InvalidParams;
-    const direction = ModifyDirection.fromString(direction_str) orelse return error.InvalidParams;
-    const granularity = ModifyGranularity.fromString(granularity_str) orelse return error.InvalidParams;
+    const alter = ModifyAlter.fromString(alter_str) orelse return;
+    const direction = ModifyDirection.fromString(direction_str) orelse return;
+    const granularity = ModifyGranularity.fromString(granularity_str) orelse return;
 
-    _ = self._range orelse return;
+    const range = self._range orelse return;
 
-    log.warn(.not_implemented, "Selection.modify", .{
-        .alter = alter,
-        .direction = direction,
-        .granularity = granularity,
-    });
+    const is_forward = switch (direction) {
+        .forward, .right => true,
+        .backward, .left => false,
+    };
+
+    switch (granularity) {
+        .character => try self.modifyByCharacter(alter, is_forward, range, page),
+        .word => try self.modifyByWord(alter, is_forward, range, page),
+    }
+}
+
+fn isTextNode(node: *const Node) bool {
+    return switch (node._type) {
+        .cdata => |cd| cd._type == .text,
+        else => false,
+    };
+}
+
+fn nextTextNode(node: *Node) ?*Node {
+    var current = node;
+
+    while (true) {
+        if (current.firstChild()) |child| {
+            current = child;
+        } else if (current.nextSibling()) |sib| {
+            current = sib;
+        } else {
+            while (true) {
+                const parent = current.parentNode() orelse return null;
+                if (parent.nextSibling()) |uncle| {
+                    current = uncle;
+                    break;
+                }
+                current = parent;
+            }
+        }
+
+        if (isTextNode(current)) return current;
+    }
+}
+
+fn nextTextNodeAfter(node: *Node) ?*Node {
+    var current = node;
+    while (true) {
+        if (current.nextSibling()) |sib| {
+            current = sib;
+        } else {
+            while (true) {
+                const parent = current.parentNode() orelse return null;
+                if (parent.nextSibling()) |uncle| {
+                    current = uncle;
+                    break;
+                }
+                current = parent;
+            }
+        }
+
+        var descend = current;
+        while (true) {
+            if (isTextNode(descend)) return descend;
+            descend = descend.firstChild() orelse break;
+        }
+    }
+}
+
+fn prevTextNode(node: *Node) ?*Node {
+    var current = node;
+
+    while (true) {
+        if (current.previousSibling()) |sib| {
+            current = sib;
+            while (current.lastChild()) |child| {
+                current = child;
+            }
+        } else {
+            current = current.parentNode() orelse return null;
+        }
+
+        if (isTextNode(current)) return current;
+    }
+}
+
+fn modifyByCharacter(self: *Selection, alter: ModifyAlter, forward: bool, range: *Range, page: *Page) !void {
+    const abstract = range.asAbstractRange();
+
+    const focus_node = switch (self._direction) {
+        .backward => abstract.getStartContainer(),
+        .forward, .none => abstract.getEndContainer(),
+    };
+    const focus_offset = switch (self._direction) {
+        .backward => abstract.getStartOffset(),
+        .forward, .none => abstract.getEndOffset(),
+    };
+
+    var new_node = focus_node;
+    var new_offset = focus_offset;
+
+    if (isTextNode(focus_node)) {
+        if (forward) {
+            const len = focus_node.getLength();
+            if (focus_offset < len) {
+                new_offset += 1;
+            } else if (nextTextNode(focus_node)) |next| {
+                new_node = next;
+                new_offset = 0;
+            }
+        } else {
+            if (focus_offset > 0) {
+                new_offset -= 1;
+            } else if (prevTextNode(focus_node)) |prev| {
+                new_node = prev;
+                new_offset = prev.getLength();
+            }
+        }
+    } else {
+        if (forward) {
+            if (focus_node.getChildAt(focus_offset)) |child| {
+                if (isTextNode(child)) {
+                    new_node = child;
+                    new_offset = 0;
+                } else if (nextTextNode(child)) |t| {
+                    new_node = t;
+                    new_offset = 0;
+                }
+            } else if (nextTextNodeAfter(focus_node)) |next| {
+                new_node = next;
+                new_offset = 1;
+            }
+        } else {
+            // backward element-node case
+            var idx = focus_offset;
+            while (idx > 0) {
+                idx -= 1;
+                const child = focus_node.getChildAt(idx) orelse break;
+                var bottom = child;
+                while (bottom.lastChild()) |c| bottom = c;
+                if (isTextNode(bottom)) {
+                    new_node = bottom;
+                    new_offset = bottom.getLength();
+                    break;
+                }
+            }
+        }
+    }
+
+    try self.applyModify(alter, new_node, new_offset, page);
+}
+
+fn isWordChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+fn nextWordEnd(text: []const u8, offset: u32) u32 {
+    var i = offset;
+    // consumes whitespace till next word
+    while (i < text.len and !isWordChar(text[i])) : (i += 1) {}
+    // consumes next word
+    while (i < text.len and isWordChar(text[i])) : (i += 1) {}
+    return i;
+}
+
+fn prevWordStart(text: []const u8, offset: u32) u32 {
+    var i = offset;
+    if (i > 0) i -= 1;
+    // consumes the white space
+    while (i > 0 and !isWordChar(text[i])) : (i -= 1) {}
+    // consumes the last word
+    while (i > 0 and isWordChar(text[i - 1])) : (i -= 1) {}
+    return i;
+}
+
+fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Range, page: *Page) !void {
+    const abstract = range.asAbstractRange();
+
+    const focus_node = switch (self._direction) {
+        .backward => abstract.getStartContainer(),
+        .forward, .none => abstract.getEndContainer(),
+    };
+    const focus_offset = switch (self._direction) {
+        .backward => abstract.getStartOffset(),
+        .forward, .none => abstract.getEndOffset(),
+    };
+
+    var new_node = focus_node;
+    var new_offset = focus_offset;
+
+    if (isTextNode(focus_node)) {
+        if (forward) {
+            const i = nextWordEnd(new_node.getData(), new_offset);
+            if (i > new_offset) {
+                new_offset = i;
+            } else if (nextTextNode(focus_node)) |next| {
+                new_node = next;
+                new_offset = nextWordEnd(next.getData(), 0);
+            }
+        } else {
+            const i = prevWordStart(new_node.getData(), new_offset);
+            if (i < new_offset) {
+                new_offset = i;
+            } else if (prevTextNode(focus_node)) |prev| {
+                new_node = prev;
+                new_offset = prevWordStart(prev.getData(), @intCast(prev.getData().len));
+            }
+        }
+    } else {
+        // Search and apply rules on the next Text Node.
+        // This is either next (on forward) or previous (on backward).
+
+        if (forward) {
+            const child = focus_node.getChildAt(focus_offset) orelse {
+                if (nextTextNodeAfter(focus_node)) |next| {
+                    new_node = next;
+                    new_offset = nextWordEnd(next.getData(), 0);
+                }
+                return self.applyModify(alter, new_node, new_offset, page);
+            };
+
+            const t = if (isTextNode(child)) child else nextTextNode(child) orelse {
+                return self.applyModify(alter, new_node, new_offset, page);
+            };
+
+            new_node = t;
+            new_offset = nextWordEnd(t.getData(), 0);
+        } else {
+            var idx = focus_offset;
+            while (idx > 0) {
+                idx -= 1;
+                const child = focus_node.getChildAt(idx) orelse break;
+                var bottom = child;
+                while (bottom.lastChild()) |c| bottom = c;
+                if (isTextNode(bottom)) {
+                    new_node = bottom;
+                    new_offset = prevWordStart(bottom.getData(), bottom.getLength());
+                    break;
+                }
+            }
+        }
+    }
+
+    try self.applyModify(alter, new_node, new_offset, page);
+}
+
+fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset: u32, page: *Page) !void {
+    switch (alter) {
+        .move => {
+            const new_range = try Range.init(page);
+            try new_range.setStart(new_node, new_offset);
+            try new_range.setEnd(new_node, new_offset);
+            self._range = new_range;
+            self._direction = .none;
+            try dispatchSelectionChangeEvent(page);
+        },
+        .extend => try self.extend(new_node, new_offset, page),
+    }
 }
 
 pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
