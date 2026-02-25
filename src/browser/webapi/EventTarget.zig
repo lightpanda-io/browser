@@ -43,6 +43,7 @@ pub const Type = union(enum) {
     screen: *@import("Screen.zig"),
     screen_orientation: *@import("Screen.zig").Orientation,
     visual_viewport: *@import("VisualViewport.zig"),
+    file_reader: *@import("FileReader.zig"),
 };
 
 pub fn init(page: *Page) !*EventTarget {
@@ -152,6 +153,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .screen => return "[object Screen]",
         .screen_orientation => return "[object ScreenOrientation]",
         .visual_viewport => return "[object VisualViewport]",
+        .file_reader => return "[object FileReader]",
     };
 }
 
