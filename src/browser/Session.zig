@@ -166,6 +166,7 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
                 error.JsError => {}, // already logged (with hopefully more context)
                 else => log.err(.browser, "session wait", .{
                     .err = err,
+                    .url = page.url,
                 }),
             }
             return .done;
