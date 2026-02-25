@@ -19,8 +19,6 @@
 const std = @import("std");
 const Net = @import("../Net.zig");
 
-const c = Net.c;
-
 const ENABLE_DEBUG = Net.ENABLE_DEBUG;
 pub const Client = @import("Client.zig");
 pub const Transfer = Client.Transfer;
@@ -45,7 +43,7 @@ const Http = @This();
 arena: ArenaAllocator,
 allocator: Allocator,
 config: *const Config,
-ca_blob: ?c.curl_blob,
+ca_blob: ?Net.Blob,
 robot_store: *RobotStore,
 
 pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Config) !Http {
@@ -53,13 +51,13 @@ pub fn init(allocator: Allocator, robot_store: *RobotStore, config: *const Confi
     errdefer Net.globalDeinit();
 
     if (comptime ENABLE_DEBUG) {
-        std.debug.print("curl version: {s}\n\n", .{c.curl_version()});
+        std.debug.print("curl version: {s}\n\n", .{Net.curl_version()});
     }
 
     var arena = ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
-    var ca_blob: ?c.curl_blob = null;
+    var ca_blob: ?Net.Blob = null;
     if (config.tlsVerifyHost()) {
         ca_blob = try Net.loadCerts(allocator);
     }

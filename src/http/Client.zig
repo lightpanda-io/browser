@@ -29,8 +29,6 @@ const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Robots = @import("../browser/Robots.zig");
 const RobotStore = Robots.RobotStore;
-
-const c = Net.c;
 const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
@@ -123,7 +121,7 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, robot_store: *RobotStore, config: *const Config) !*Client {
+pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, config: *const Config) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
@@ -718,13 +716,13 @@ fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
 
     var status = PerformStatus.normal;
     if (self.cdp_client) |cdp_client| {
-        var wait_fds = [_]c.curl_waitfd{.{
+        var wait_fds = [_]Net.WaitFd{.{
             .fd = cdp_client.socket,
-            .events = c.CURL_WAIT_POLLIN,
-            .revents = 0,
+            .events = .{ .pollin = true },
+            .revents = .{},
         }};
         try self.handles.poll(&wait_fds, timeout_ms);
-        if (wait_fds[0].revents != 0) {
+        if (wait_fds[0].revents.pollin or wait_fds[0].revents.pollpri or wait_fds[0].revents.pollout) {
             status = .cdp_socket;
         }
     } else if (running > 0) {
@@ -1195,7 +1193,7 @@ pub const Transfer = struct {
     }
 
     // headerCallback is called by curl on each request's header line read.
-    fn headerCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) callconv(.c) usize {
+    fn headerCallback(buffer: [*]const u8, header_count: usize, buf_len: usize, data: *anyopaque) usize {
         // libcurl should only ever emit 1 header at a time
         if (comptime IS_DEBUG) {
             std.debug.assert(header_count == 1);
@@ -1317,7 +1315,7 @@ pub const Transfer = struct {
         return buf_len;
     }
 
-    fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) callconv(.c) isize {
+    fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
         // libcurl should only ever emit 1 chunk at a time
         if (comptime IS_DEBUG) {
             std.debug.assert(chunk_count == 1);
@@ -1326,7 +1324,7 @@ pub const Transfer = struct {
         const conn: Net.Connection = .{ .easy = @ptrCast(@alignCast(data)) };
         var transfer = fromConnection(&conn) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "body callback" });
-            return c.CURL_WRITEFUNC_ERROR;
+            return Net.writefunc_error;
         };
 
         if (transfer._redirecting or transfer._auth_challenge != null) {
@@ -1336,11 +1334,11 @@ pub const Transfer = struct {
         if (!transfer._header_done_called) {
             const proceed = transfer.headerDoneCallback(&conn) catch |err| {
                 log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
-                return c.CURL_WRITEFUNC_ERROR;
+                return Net.writefunc_error;
             };
             if (!proceed) {
                 // signal abort to libcurl
-                return -1;
+                return Net.writefunc_error;
             }
         }
 
@@ -1348,14 +1346,14 @@ pub const Transfer = struct {
         if (transfer.max_response_size) |max_size| {
             if (transfer.bytes_received > max_size) {
                 requestFailed(transfer, error.ResponseTooLarge, true);
-                return -1;
+                return Net.writefunc_error;
             }
         }
 
         const chunk = buffer[0..chunk_len];
         transfer.req.data_callback(transfer, chunk) catch |err| {
             log.err(.http, "data_callback", .{ .err = err, .req = transfer });
-            return c.CURL_WRITEFUNC_ERROR;
+            return Net.writefunc_error;
         };
 
         transfer.req.notification.dispatch(.http_response_data, &.{
@@ -1364,7 +1362,7 @@ pub const Transfer = struct {
         });
 
         if (transfer.aborted) {
-            return -1;
+            return Net.writefunc_error;
         }
 
         return @intCast(chunk_len);
