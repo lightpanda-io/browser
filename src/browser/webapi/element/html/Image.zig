@@ -50,7 +50,10 @@ pub fn getSrc(self: *const Image, page: *Page) ![]const u8 {
 }
 
 pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
+    const element = self.asElement();
+    try element.setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
+    // No need to check if `Image` is connected to DOM; this is a special case.
+    return page.imageAddedCallback(self);
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
@@ -145,13 +148,7 @@ pub const JsApi = struct {
 pub const Build = struct {
     pub fn created(node: *Node, page: *Page) !void {
         const self = node.as(Image);
-        const image = self.asElement();
-        // Exit if src not set.
-        // TODO: We might want to check if src point to valid image.
-        _ = image.getAttributeSafe(comptime .wrap("src")) orelse return;
-
-        // Push to `_to_load` to dispatch load event just before window load event.
-        return page._to_load.append(page.arena, self._proto);
+        return page.imageAddedCallback(self);
     }
 };
 
