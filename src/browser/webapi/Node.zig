@@ -722,6 +722,7 @@ const CloneError = error{
     CloneError,
     IFrameLoadError,
     TooManyContexts,
+    LinkLoadError,
 };
 pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) CloneError!*Node {
     const deep = deep_ orelse false;
