@@ -723,21 +723,12 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
+    // Run load events before window.load.
+    try self.dispatchLoad();
+
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
-
-    {
-        // Dispatch `_to_load` events before window.load.
-        const has_dom_load_listener = self._event_manager.has_dom_load_listener;
-        for (self._to_load.items) |html_element| {
-            if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-                const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-                try self._event_manager.dispatch(html_element.asEventTarget(), event);
-            }
-        }
-    }
-    self._to_load.clearRetainingCapacity();
 
     // Dispatch window.load event.
     const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
@@ -1059,14 +1050,7 @@ pub fn linkAddedCallback(self: *Page, link: *Element.Html.Link) !void {
     const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
     if (href.len == 0) return;
 
-    // If `_to_load` len was 0, we have to schedule a callback on scheduler.
-    const loads = &self._to_load;
-    const not_scheduled = loads.items.len == 0;
-    try loads.append(self.arena, link._proto);
-
-    if (not_scheduled) {
-        try self.scheduleLoadEventDelivery();
-    }
+    try self._to_load.append(self.arena, link._proto);
 }
 
 pub fn domChanged(self: *Page) void {
@@ -1241,34 +1225,16 @@ pub fn checkIntersections(self: *Page) !void {
     }
 }
 
-pub fn scheduleLoadEventDelivery(self: *Page) !void {
-    // The dispatcher function.
-    const callback = struct {
-        fn callback(ptr: *anyopaque) anyerror!?u32 {
-            const page: *Page = @ptrCast(@alignCast(ptr));
-            const has_dom_load_listener = page._event_manager.has_dom_load_listener;
-            for (page._to_load.items) |html_element| {
-                if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, page)) {
-                    const event = try Event.initTrusted(comptime .wrap("load"), .{}, page);
-                    try page._event_manager.dispatch(html_element.asEventTarget(), event);
-                }
-            }
-            // We drained everything.
-            page._to_load.clearRetainingCapacity();
-
-            return null;
+pub fn dispatchLoad(self: *Page) !void {
+    const has_dom_load_listener = self._event_manager.has_dom_load_listener;
+    for (self._to_load.items) |html_element| {
+        if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
+            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+            try self._event_manager.dispatch(html_element.asEventTarget(), event);
         }
-    }.callback;
-
-    return self.js.scheduler.add(
-        self,
-        callback,
-        0,
-        .{
-            .low_priority = false,
-            .name = "scheduleLoadEventDelivery",
-        },
-    );
+    }
+    // We drained everything.
+    self._to_load.clearRetainingCapacity();
 }
 
 pub fn scheduleMutationDelivery(self: *Page) !void {
