@@ -471,28 +471,6 @@ pub const PerformanceTiming = struct {
     // Padding to avoid zero-size struct, which causes identity_map pointer collisions.
     _pad: bool = false,
 
-    pub fn getNavigationStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getUnloadEventStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getUnloadEventEnd(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getRedirectStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getRedirectEnd(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getFetchStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getDomainLookupStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getDomainLookupEnd(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getConnectStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getConnectEnd(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getSecureConnectionStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getRequestStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getResponseStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getResponseEnd(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getDomLoading(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getDomInteractive(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getDomContentLoadedEventStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getDomContentLoadedEventEnd(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getDomComplete(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getLoadEventStart(_: *const PerformanceTiming) f64 { return 0; }
-    pub fn getLoadEventEnd(_: *const PerformanceTiming) f64 { return 0; }
-
     pub const JsApi = struct {
         pub const bridge = js.Bridge(PerformanceTiming);
 
@@ -502,27 +480,27 @@ pub const PerformanceTiming = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const navigationStart = bridge.accessor(PerformanceTiming.getNavigationStart, null, .{});
-        pub const unloadEventStart = bridge.accessor(PerformanceTiming.getUnloadEventStart, null, .{});
-        pub const unloadEventEnd = bridge.accessor(PerformanceTiming.getUnloadEventEnd, null, .{});
-        pub const redirectStart = bridge.accessor(PerformanceTiming.getRedirectStart, null, .{});
-        pub const redirectEnd = bridge.accessor(PerformanceTiming.getRedirectEnd, null, .{});
-        pub const fetchStart = bridge.accessor(PerformanceTiming.getFetchStart, null, .{});
-        pub const domainLookupStart = bridge.accessor(PerformanceTiming.getDomainLookupStart, null, .{});
-        pub const domainLookupEnd = bridge.accessor(PerformanceTiming.getDomainLookupEnd, null, .{});
-        pub const connectStart = bridge.accessor(PerformanceTiming.getConnectStart, null, .{});
-        pub const connectEnd = bridge.accessor(PerformanceTiming.getConnectEnd, null, .{});
-        pub const secureConnectionStart = bridge.accessor(PerformanceTiming.getSecureConnectionStart, null, .{});
-        pub const requestStart = bridge.accessor(PerformanceTiming.getRequestStart, null, .{});
-        pub const responseStart = bridge.accessor(PerformanceTiming.getResponseStart, null, .{});
-        pub const responseEnd = bridge.accessor(PerformanceTiming.getResponseEnd, null, .{});
-        pub const domLoading = bridge.accessor(PerformanceTiming.getDomLoading, null, .{});
-        pub const domInteractive = bridge.accessor(PerformanceTiming.getDomInteractive, null, .{});
-        pub const domContentLoadedEventStart = bridge.accessor(PerformanceTiming.getDomContentLoadedEventStart, null, .{});
-        pub const domContentLoadedEventEnd = bridge.accessor(PerformanceTiming.getDomContentLoadedEventEnd, null, .{});
-        pub const domComplete = bridge.accessor(PerformanceTiming.getDomComplete, null, .{});
-        pub const loadEventStart = bridge.accessor(PerformanceTiming.getLoadEventStart, null, .{});
-        pub const loadEventEnd = bridge.accessor(PerformanceTiming.getLoadEventEnd, null, .{});
+        pub const navigationStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const unloadEventStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const unloadEventEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const redirectStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const redirectEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const fetchStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domainLookupStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domainLookupEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const connectStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const connectEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const secureConnectionStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const requestStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const responseStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const responseEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domLoading = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domInteractive = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domContentLoadedEventStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domContentLoadedEventEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domComplete = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const loadEventStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const loadEventEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
     };
 };
 
@@ -533,9 +511,6 @@ pub const PerformanceNavigation = struct {
     // Padding to avoid zero-size struct, which causes identity_map pointer collisions.
     _pad: bool = false,
 
-    pub fn getType(_: *const PerformanceNavigation) f64 { return 0; }
-    pub fn getRedirectCount(_: *const PerformanceNavigation) f64 { return 0; }
-
     pub const JsApi = struct {
         pub const bridge = js.Bridge(PerformanceNavigation);
 
@@ -545,8 +520,8 @@ pub const PerformanceNavigation = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const @"type" = bridge.accessor(PerformanceNavigation.getType, null, .{});
-        pub const redirectCount = bridge.accessor(PerformanceNavigation.getRedirectCount, null, .{});
+        pub const @"type" = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const redirectCount = bridge.property(0.0, .{ .template = false, .readonly = true });
     };
 };
 
