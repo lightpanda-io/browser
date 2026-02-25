@@ -172,3 +172,12 @@
   });
 }
 </script>
+
+<script id=url_encode>
+  {
+    let img = document.createElement('img');
+    img.src = 'over 9000!?hello=world !';
+    testing.expectEqual('over 9000!?hello=world !', img.getAttribute('src'));
+    testing.expectEqual(testing.BASE_URL + 'element/html/over%209000!?hello=world%20!', img.src);
+  }
+</script>
