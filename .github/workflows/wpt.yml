@@ -31,7 +31,7 @@ jobs:
       - uses: ./.github/actions/install
 
       - name: zig build release
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
@@ -71,7 +71,8 @@ jobs:
       - wpt-build-release
       - wpt-build-runner
 
-    runs-on: ubuntu-latest
+    # use a self host runner.
+    runs-on: lpd-bench-hetzner
     timeout-minutes: 90
 
     steps:
@@ -103,12 +104,10 @@ jobs:
 
       - name: run test with json output
         run: |
-          ./wpt serve & echo $! > WPT.pid
+          ./wpt serve 2> /dev/null & echo $! > WPT.pid
           sleep 10s
-          ./lightpanda serve --insecure_disable_tls_host_verification --log_level error & echo $! > LPD.pid
-          sleep 1s
-          ./wptrunner -json -concurrency 2 > wpt.json
-          kill `cat WPT.pid` `cat LPD.pid`
+          ./wptrunner -lpd-path ./lightpanda -json -concurrency 5 > wpt.json
+          kill `cat WPT.pid`
 
       - name: write commit
         run: |
