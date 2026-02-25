@@ -628,7 +628,12 @@ pub const Script = struct {
     node: std.DoublyLinkedList.Node,
     script_element: ?*Element.Html.Script,
     manager: *ScriptManager,
+
+    // for debugging a rare production issue
     header_callback_called: bool = false,
+
+    // for debugging a rare production issue
+    debug_transfer_id: u32 = 0,
 
     const Kind = enum {
         module,
@@ -697,8 +702,14 @@ pub const Script = struct {
             // temp debug, trying to figure out why the next assert sometimes
             // fails. Is the buffer just corrupt or is headerCallback really
             // being called twice?
-            lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{});
+            lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{
+                .thd = transfer._header_done_called,
+                .t1 = self.debug_transfer_id,
+                .t2 = transfer.id,
+                .tries = transfer._tries,
+            });
             self.header_callback_called = true;
+            self.debug_transfer_id = transfer.id;
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });
