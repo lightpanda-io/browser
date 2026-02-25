@@ -3,7 +3,7 @@ const Page = @import("../Page.zig");
 const datetime = @import("../../datetime.zig");
 
 pub fn registerTypes() []const type {
-    return &.{ Performance, Entry, Mark, Measure };
+    return &.{ Performance, Entry, Mark, Measure, PerformanceTiming, PerformanceNavigation };
 }
 
 const std = @import("std");
@@ -12,6 +12,8 @@ const Performance = @This();
 
 _time_origin: u64,
 _entries: std.ArrayList(*Entry) = .{},
+_timing: PerformanceTiming = .{},
+_navigation: PerformanceNavigation = .{},
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
@@ -27,7 +29,13 @@ pub fn init() Performance {
     return .{
         ._time_origin = highResTimestamp(),
         ._entries = .{},
+        ._timing = .{},
+        ._navigation = .{},
     };
+}
+
+pub fn getTiming(self: *Performance) *PerformanceTiming {
+    return &self._timing;
 }
 
 pub fn now(self: *const Performance) f64 {
@@ -40,6 +48,10 @@ pub fn now(self: *const Performance) f64 {
 pub fn getTimeOrigin(self: *const Performance) f64 {
     // Return as milliseconds
     return @as(f64, @floatFromInt(self._time_origin)) / 1000.0;
+}
+
+pub fn getNavigation(self: *Performance) *PerformanceNavigation {
+    return &self._navigation;
 }
 
 pub fn mark(
@@ -263,6 +275,8 @@ pub const JsApi = struct {
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
     pub const timeOrigin = bridge.accessor(Performance.getTimeOrigin, null, .{});
+    pub const timing = bridge.accessor(Performance.getTiming, null, .{});
+    pub const navigation = bridge.accessor(Performance.getNavigation, null, .{});
 };
 
 pub const Entry = struct {
@@ -446,6 +460,70 @@ pub const Measure = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const detail = bridge.accessor(Measure.getDetail, null, .{});
+    };
+};
+
+/// PerformanceTiming — Navigation Timing Level 1 (legacy, but widely used).
+/// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceTiming
+/// All properties return 0 as stub values; the object must not be undefined
+/// so that scripts accessing performance.timing.navigationStart don't crash.
+pub const PerformanceTiming = struct {
+    // Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+    _pad: bool = false,
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(PerformanceTiming);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceTiming";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
+        };
+
+        pub const navigationStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const unloadEventStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const unloadEventEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const redirectStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const redirectEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const fetchStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domainLookupStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domainLookupEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const connectStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const connectEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const secureConnectionStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const requestStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const responseStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const responseEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domLoading = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domInteractive = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domContentLoadedEventStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domContentLoadedEventEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const domComplete = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const loadEventStart = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const loadEventEnd = bridge.property(0.0, .{ .template = false, .readonly = true });
+    };
+};
+
+// PerformanceNavigation implements the Navigation Timing Level 1 API.
+// https://www.w3.org/TR/navigation-timing/#sec-navigation-navigation-timing-interface
+// Stub implementation — returns 0 for type (TYPE_NAVIGATE) and 0 for redirectCount.
+pub const PerformanceNavigation = struct {
+    // Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+    _pad: bool = false,
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(PerformanceNavigation);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceNavigation";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
+        };
+
+        pub const @"type" = bridge.property(0.0, .{ .template = false, .readonly = true });
+        pub const redirectCount = bridge.property(0.0, .{ .template = false, .readonly = true });
     };
 };
 

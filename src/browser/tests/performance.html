@@ -274,6 +274,50 @@
   }
 </script>
 
+<script id=performance_timing_exists>
+  {
+    // performance.timing must not be undefined (used by sites like Bing)
+    testing.expectEqual(true, performance.timing !== undefined);
+    testing.expectEqual(true, performance.timing !== null);
+  }
+</script>
+
+<script id=performance_timing_navigationStart>
+  {
+    // navigationStart must be a number (sites access performance.timing.navigationStart)
+    const timing = performance.timing;
+    testing.expectEqual('number', typeof timing.navigationStart);
+    testing.expectEqual(0, timing.navigationStart);
+  }
+</script>
+
+<script id=performance_timing_all_properties>
+  {
+    // All PerformanceTiming properties must be accessible and return numbers
+    const timing = performance.timing;
+    const props = [
+      'navigationStart', 'unloadEventStart', 'unloadEventEnd',
+      'redirectStart', 'redirectEnd', 'fetchStart',
+      'domainLookupStart', 'domainLookupEnd',
+      'connectStart', 'connectEnd', 'secureConnectionStart',
+      'requestStart', 'responseStart', 'responseEnd',
+      'domLoading', 'domInteractive',
+      'domContentLoadedEventStart', 'domContentLoadedEventEnd',
+      'domComplete', 'loadEventStart', 'loadEventEnd',
+    ];
+    for (const prop of props) {
+      testing.expectEqual('number', typeof timing[prop]);
+    }
+  }
+</script>
+
+<script id=performance_timing_same_object>
+  {
+    // performance.timing should return the same object on each access
+    testing.expectEqual(true, performance.timing === performance.timing);
+  }
+</script>
+
 <script id=mixed_marks_and_measures>
   {
     performance.clearMarks();
@@ -300,5 +344,52 @@
 
     const remainingMarks = performance.getEntriesByType("mark");
     testing.expectEqual(0, remainingMarks.length);
+  }
+</script>
+
+<script id=performance_timing_exists>
+  {
+    // Navigation Timing Level 1: performance.timing must be an object, not undefined
+    testing.expectEqual('object', typeof performance.timing);
+    testing.expectEqual(false, performance.timing === null);
+  }
+</script>
+
+<script id=performance_timing_navigationStart>
+  {
+    // The most commonly used property — must be a number (not undefined)
+    testing.expectEqual('number', typeof performance.timing.navigationStart);
+    testing.expectEqual(0, performance.timing.navigationStart);
+  }
+</script>
+
+<script id=performance_navigation_exists>
+  {
+    // Navigation Timing Level 1: performance.navigation must be an object, not undefined
+    testing.expectEqual('object', typeof performance.navigation);
+    testing.expectEqual(false, performance.navigation === null);
+    testing.expectEqual('number', typeof performance.navigation.type);
+    testing.expectEqual('number', typeof performance.navigation.redirectCount);
+    testing.expectEqual(0, performance.navigation.type);
+    testing.expectEqual(0, performance.navigation.redirectCount);
+  }
+</script>
+
+<script id=performance_timing_all_properties>
+  {
+    const t = performance.timing;
+    const props = [
+      'navigationStart', 'unloadEventStart', 'unloadEventEnd',
+      'redirectStart', 'redirectEnd', 'fetchStart',
+      'domainLookupStart', 'domainLookupEnd',
+      'connectStart', 'connectEnd', 'secureConnectionStart',
+      'requestStart', 'responseStart', 'responseEnd',
+      'domLoading', 'domInteractive',
+      'domContentLoadedEventStart', 'domContentLoadedEventEnd',
+      'domComplete', 'loadEventStart', 'loadEventEnd',
+    ];
+    for (const prop of props) {
+      testing.expectEqual('number', typeof t[prop]);
+    }
   }
 </script>
