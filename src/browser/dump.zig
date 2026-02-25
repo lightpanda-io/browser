@@ -172,7 +172,11 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             try writer.writeAll(">\n");
         },
         .document_fragment => try children(node, opts, writer, page),
-        .attribute => unreachable,
+        .attribute => {
+            // Not called normally, but can be called via XMLSerializer.serializeToString
+            // in which case it should return an empty string
+            try writer.writeAll("");
+        },
     }
 }
 
