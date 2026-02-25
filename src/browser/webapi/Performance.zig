@@ -478,6 +478,7 @@ pub const PerformanceTiming = struct {
             pub const name = "PerformanceTiming";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
         };
 
         pub const navigationStart = bridge.property(0.0, .{ .template = false, .readonly = true });
@@ -518,6 +519,7 @@ pub const PerformanceNavigation = struct {
             pub const name = "PerformanceNavigation";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
+            pub const empty_with_no_proto = true;
         };
 
         pub const @"type" = bridge.property(0.0, .{ .template = false, .readonly = true });
