@@ -257,7 +257,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                         std.debug.assert(http_client.intercepted == 0);
                     }
 
-                    const ms = ms_to_next_task orelse blk: {
+                    const ms: u64 = ms_to_next_task orelse blk: {
                         if (wait_ms - ms_remaining < 100) {
                             if (comptime builtin.is_test) {
                                 return .done;
@@ -267,6 +267,14 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                             // background jobs.
                             break :blk 50;
                         }
+
+                        if (browser.hasBackgroundTasks()) {
+                            // _we_ have nothing to run, but v8 is working on
+                            // background tasks. We'll wait for them.
+                            browser.waitForBackgroundTasks();
+                            break :blk 20;
+                        }
+
                         // No http transfers, no cdp extra socket, no
                         // scheduled tasks, we're done.
                         return .done;
@@ -292,8 +300,14 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                     // an cdp_socket registered with the http client).
                     // We should continue to run lowPriority tasks, so we
                     // minimize how long we'll poll for network I/O.
-                    const ms_to_wait = @min(200, @min(ms_remaining, ms_to_next_task orelse 200));
-                    if (try http_client.tick(ms_to_wait) == .cdp_socket) {
+                    var ms_to_wait = @min(200, ms_to_next_task orelse 200);
+                    if (ms_to_wait > 10 and browser.hasBackgroundTasks()) {
+                        // if we have bakcground tasks, we don't want ot wait too
+                        // long for a message from the client. We want to go back
+                        // to the top of the loop and run macrotasks.
+                        ms_to_wait = 10;
+                    }
+                    if (try http_client.tick(@min(ms_remaining, ms_to_wait)) == .cdp_socket) {
                         // data on a socket we aren't handling, return to caller
                         return .cdp_socket;
                     }

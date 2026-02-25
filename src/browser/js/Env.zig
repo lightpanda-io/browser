@@ -397,10 +397,23 @@ pub fn pumpMessageLoop(self: *const Env) void {
 
     const isolate = self.isolate.handle;
     const platform = self.platform.handle;
-    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {
-        if (comptime IS_DEBUG) {
-            log.debug(.browser, "pumpMessageLoop", .{});
-        }
+    while (v8.v8__Platform__PumpMessageLoop(platform, isolate, false)) {}
+}
+
+pub fn hasBackgroundTasks(self: *const Env) bool {
+    return v8.v8__Isolate__HasPendingBackgroundTasks(self.isolate.handle);
+}
+
+pub fn waitForBackgroundTasks(self: *Env) void {
+    var hs: v8.HandleScope = undefined;
+    v8.v8__HandleScope__CONSTRUCT(&hs, self.isolate.handle);
+    defer v8.v8__HandleScope__DESTRUCT(&hs);
+
+    const isolate = self.isolate.handle;
+    const platform = self.platform.handle;
+    while (v8.v8__Isolate__HasPendingBackgroundTasks(isolate)) {
+        _ = v8.v8__Platform__PumpMessageLoop(platform, isolate, true);
+        self.runMicrotasks();
     }
 }
 

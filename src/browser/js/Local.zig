@@ -82,6 +82,12 @@ pub fn createTypedArray(self: *const Local, comptime array_type: js.ArrayType, s
     return .init(self, size);
 }
 
+pub fn runMacrotasks(self: *const Local) void {
+    const env = self.ctx.env;
+    env.pumpMessageLoop();
+    env.runMicrotasks(); // macrotasks can cause microtasks to queue
+}
+
 pub fn runMicrotasks(self: *const Local) void {
     self.ctx.env.runMicrotasks();
 }

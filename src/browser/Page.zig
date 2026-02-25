@@ -311,12 +311,12 @@ pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
     if (comptime builtin.is_test == false) {
         // HTML test runner manually calls these as necessary
         try self.js.scheduler.add(session.browser, struct {
-            fn runMessageLoop(ctx: *anyopaque) !?u32 {
+            fn runIdleTasks(ctx: *anyopaque) !?u32 {
                 const b: *@import("Browser.zig") = @ptrCast(@alignCast(ctx));
-                b.runMessageLoop();
-                return 250;
+                b.runIdleTasks();
+                return 200;
             }
-        }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
+        }.runIdleTasks, 200, .{ .name = "page.runIdleTasks", .low_priority = true });
     }
 }
 
