@@ -600,9 +600,18 @@ pub fn dynamicModuleCallback(
         .isolate = self.isolate,
     };
 
-    const resource = js.String.toSliceZ(.{ .local = &local, .handle = resource_name.? }) catch |err| {
-        log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
-        return @constCast((local.rejectPromise("Out of memory") catch return null).handle);
+    const resource = blk: {
+        const resource_value = js.Value{ .handle = resource_name.?, .local = &local };
+        if (resource_value.isNullOrUndefined()) {
+            // will only be null / undefined in extreme cases (e.g. WPT tests)
+            // where you're
+            break :blk self.page.base();
+        }
+
+        break :blk js.String.toSliceZ(.{ .local = &local, .handle = resource_name.? }) catch |err| {
+            log.err(.app, "OOM", .{ .err = err, .src = "dynamicModuleCallback1" });
+            return @constCast((local.rejectPromise("Out of memory") catch return null).handle);
+        };
     };
 
     const specifier = js.String.toSliceZ(.{ .local = &local, .handle = v8_specifier.? }) catch |err| {
