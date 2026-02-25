@@ -3,7 +3,7 @@ const Page = @import("../Page.zig");
 const datetime = @import("../../datetime.zig");
 
 pub fn registerTypes() []const type {
-    return &.{ Performance, Entry, Mark, Measure };
+    return &.{ Performance, Entry, Mark, Measure, PerformanceTiming };
 }
 
 const std = @import("std");
@@ -12,6 +12,7 @@ const Performance = @This();
 
 _time_origin: u64,
 _entries: std.ArrayList(*Entry) = .{},
+_timing: PerformanceTiming = .{},
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
@@ -27,7 +28,12 @@ pub fn init() Performance {
     return .{
         ._time_origin = highResTimestamp(),
         ._entries = .{},
+        ._timing = .{},
     };
+}
+
+pub fn getTiming(self: *Performance) *PerformanceTiming {
+    return &self._timing;
 }
 
 pub fn now(self: *const Performance) f64 {
@@ -263,6 +269,7 @@ pub const JsApi = struct {
     pub const getEntriesByType = bridge.function(Performance.getEntriesByType, .{});
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
     pub const timeOrigin = bridge.accessor(Performance.getTimeOrigin, null, .{});
+    pub const timing = bridge.accessor(Performance.getTiming, null, .{});
 };
 
 pub const Entry = struct {
@@ -446,6 +453,69 @@ pub const Measure = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
         pub const detail = bridge.accessor(Measure.getDetail, null, .{});
+    };
+};
+
+/// PerformanceTiming — Navigation Timing Level 1 (legacy, but widely used).
+/// https://developer.mozilla.org/en-US/docs/Web/API/PerformanceTiming
+/// All properties return 0 as stub values; the object must not be undefined
+/// so that scripts accessing performance.timing.navigationStart don't crash.
+pub const PerformanceTiming = struct {
+    // Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+    _pad: bool = false,
+
+    pub fn getNavigationStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getUnloadEventStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getUnloadEventEnd(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getRedirectStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getRedirectEnd(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getFetchStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getDomainLookupStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getDomainLookupEnd(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getConnectStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getConnectEnd(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getSecureConnectionStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getRequestStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getResponseStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getResponseEnd(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getDomLoading(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getDomInteractive(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getDomContentLoadedEventStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getDomContentLoadedEventEnd(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getDomComplete(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getLoadEventStart(_: *const PerformanceTiming) f64 { return 0; }
+    pub fn getLoadEventEnd(_: *const PerformanceTiming) f64 { return 0; }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(PerformanceTiming);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceTiming";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const navigationStart = bridge.accessor(PerformanceTiming.getNavigationStart, null, .{});
+        pub const unloadEventStart = bridge.accessor(PerformanceTiming.getUnloadEventStart, null, .{});
+        pub const unloadEventEnd = bridge.accessor(PerformanceTiming.getUnloadEventEnd, null, .{});
+        pub const redirectStart = bridge.accessor(PerformanceTiming.getRedirectStart, null, .{});
+        pub const redirectEnd = bridge.accessor(PerformanceTiming.getRedirectEnd, null, .{});
+        pub const fetchStart = bridge.accessor(PerformanceTiming.getFetchStart, null, .{});
+        pub const domainLookupStart = bridge.accessor(PerformanceTiming.getDomainLookupStart, null, .{});
+        pub const domainLookupEnd = bridge.accessor(PerformanceTiming.getDomainLookupEnd, null, .{});
+        pub const connectStart = bridge.accessor(PerformanceTiming.getConnectStart, null, .{});
+        pub const connectEnd = bridge.accessor(PerformanceTiming.getConnectEnd, null, .{});
+        pub const secureConnectionStart = bridge.accessor(PerformanceTiming.getSecureConnectionStart, null, .{});
+        pub const requestStart = bridge.accessor(PerformanceTiming.getRequestStart, null, .{});
+        pub const responseStart = bridge.accessor(PerformanceTiming.getResponseStart, null, .{});
+        pub const responseEnd = bridge.accessor(PerformanceTiming.getResponseEnd, null, .{});
+        pub const domLoading = bridge.accessor(PerformanceTiming.getDomLoading, null, .{});
+        pub const domInteractive = bridge.accessor(PerformanceTiming.getDomInteractive, null, .{});
+        pub const domContentLoadedEventStart = bridge.accessor(PerformanceTiming.getDomContentLoadedEventStart, null, .{});
+        pub const domContentLoadedEventEnd = bridge.accessor(PerformanceTiming.getDomContentLoadedEventEnd, null, .{});
+        pub const domComplete = bridge.accessor(PerformanceTiming.getDomComplete, null, .{});
+        pub const loadEventStart = bridge.accessor(PerformanceTiming.getLoadEventStart, null, .{});
+        pub const loadEventEnd = bridge.accessor(PerformanceTiming.getLoadEventEnd, null, .{});
     };
 };
 
