@@ -8,23 +8,19 @@ pub const McpServer = struct {
     allocator: std.mem.Allocator,
     app: *App,
 
-    // Browser State
     http_client: *HttpClient,
     notification: *lp.Notification,
     browser: *lp.Browser,
     session: *lp.Session,
     page: *lp.Page,
 
-    // Thread synchronization
     io_thread: ?std.Thread = null,
     queue_mutex: std.Thread.Mutex = .{},
     queue_condition: std.Thread.Condition = .{},
     message_queue: std.ArrayListUnmanaged([]const u8) = .empty,
 
-    // State
     is_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-    // Stdio
     stdout_mutex: std.Thread.Mutex = .{},
 
     const Self = @This();
@@ -64,7 +60,6 @@ pub const McpServer = struct {
         }
         self.message_queue.deinit(self.allocator);
 
-        // Clean up browser state
         self.browser.deinit();
         self.allocator.destroy(self.browser);
         self.notification.deinit();

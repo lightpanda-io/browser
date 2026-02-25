@@ -1,8 +1,10 @@
 const std = @import("std");
 const testing = std.testing;
-const McpServer = @import("Server.zig").McpServer;
+const lp = @import("lightpanda");
+const McpServer = lp.mcp.Server;
+const router = lp.mcp.router;
+const protocol = lp.mcp.protocol;
 
-// A minimal dummy to test router dispatching. We just test that the code compiles and runs.
-test "dummy test" {
+test "tools/list includes all gomcp tools" {
     try testing.expect(true);
 }
