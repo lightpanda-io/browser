@@ -20,16 +20,15 @@ const std = @import("std");
 const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
+const IFrame = @import("webapi/element/html/IFrame.zig");
 
-pub const RootOpts = struct {
-    with_base: bool = false,
-    strip: Opts.Strip = .{},
-    shadow: Opts.Shadow = .rendered,
-};
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const Opts = struct {
-    strip: Strip = .{},
-    shadow: Shadow = .rendered,
+    with_base: bool = false,
+    with_frames: bool = false,
+    strip: Opts.Strip = .{},
+    shadow: Opts.Shadow = .rendered,
 
     pub const Strip = struct {
         js: bool = false,
@@ -49,7 +48,7 @@ pub const Opts = struct {
     };
 };
 
-pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
+pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
     if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
         blk: {
             // Ideally we just render the doctype which is part of the document
@@ -71,7 +70,7 @@ pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *
         }
     }
 
-    return deep(doc.asNode(), .{ .strip = opts.strip, .shadow = opts.shadow }, writer, page);
+    return deep(doc.asNode(), opts, writer, page);
 }
 
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
@@ -140,7 +139,24 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 }
             }
 
-            try children(node, opts, writer, page);
+            if (opts.with_frames and el.is(IFrame) != null) {
+                const frame = el.as(IFrame);
+                if (frame.getContentDocument()) |doc| {
+                    // A frame's document should always ahave a page, but
+                    // I'm not willing to crash a release build on that assertion.
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(doc._page != null);
+                    }
+                    if (doc._page) |frame_page| {
+                        try writer.writeByte('\n');
+                        root(doc, opts, writer, frame_page) catch return error.WriteFailed;
+                        try writer.writeByte('\n');
+                    }
+                }
+            } else {
+                try children(node, opts, writer, page);
+            }
+
             if (!isVoidElement(el)) {
                 try writer.writeAll("</");
                 try writer.writeAll(el.getTagNameDump());

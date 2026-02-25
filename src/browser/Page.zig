@@ -309,6 +309,8 @@ pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
     self.js = try browser.env.createContext(self);
     errdefer self.js.deinit();
 
+    document._page = self;
+
     if (comptime builtin.is_test == false) {
         // HTML test runner manually calls these as necessary
         try self.js.scheduler.add(session.browser, struct {
