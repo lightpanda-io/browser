@@ -3,7 +3,7 @@ const Page = @import("../Page.zig");
 const datetime = @import("../../datetime.zig");
 
 pub fn registerTypes() []const type {
-    return &.{ Performance, Entry, Mark, Measure, PerformanceTiming };
+    return &.{ Performance, Entry, Mark, Measure, PerformanceTiming, PerformanceNavigation };
 }
 
 const std = @import("std");
@@ -13,6 +13,7 @@ const Performance = @This();
 _time_origin: u64,
 _entries: std.ArrayList(*Entry) = .{},
 _timing: PerformanceTiming = .{},
+_navigation: PerformanceNavigation = .{},
 
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
@@ -29,6 +30,7 @@ pub fn init() Performance {
         ._time_origin = highResTimestamp(),
         ._entries = .{},
         ._timing = .{},
+        ._navigation = .{},
     };
 }
 
@@ -46,6 +48,10 @@ pub fn now(self: *const Performance) f64 {
 pub fn getTimeOrigin(self: *const Performance) f64 {
     // Return as milliseconds
     return @as(f64, @floatFromInt(self._time_origin)) / 1000.0;
+}
+
+pub fn getNavigation(self: *Performance) *PerformanceNavigation {
+    return &self._navigation;
 }
 
 pub fn mark(
@@ -270,6 +276,7 @@ pub const JsApi = struct {
     pub const getEntriesByName = bridge.function(Performance.getEntriesByName, .{});
     pub const timeOrigin = bridge.accessor(Performance.getTimeOrigin, null, .{});
     pub const timing = bridge.accessor(Performance.getTiming, null, .{});
+    pub const navigation = bridge.accessor(Performance.getNavigation, null, .{});
 };
 
 pub const Entry = struct {
@@ -516,6 +523,30 @@ pub const PerformanceTiming = struct {
         pub const domComplete = bridge.accessor(PerformanceTiming.getDomComplete, null, .{});
         pub const loadEventStart = bridge.accessor(PerformanceTiming.getLoadEventStart, null, .{});
         pub const loadEventEnd = bridge.accessor(PerformanceTiming.getLoadEventEnd, null, .{});
+    };
+};
+
+// PerformanceNavigation implements the Navigation Timing Level 1 API.
+// https://www.w3.org/TR/navigation-timing/#sec-navigation-navigation-timing-interface
+// Stub implementation — returns 0 for type (TYPE_NAVIGATE) and 0 for redirectCount.
+pub const PerformanceNavigation = struct {
+    // Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+    _pad: bool = false,
+
+    pub fn getType(_: *const PerformanceNavigation) f64 { return 0; }
+    pub fn getRedirectCount(_: *const PerformanceNavigation) f64 { return 0; }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(PerformanceNavigation);
+
+        pub const Meta = struct {
+            pub const name = "PerformanceNavigation";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const @"type" = bridge.accessor(PerformanceNavigation.getType, null, .{});
+        pub const redirectCount = bridge.accessor(PerformanceNavigation.getRedirectCount, null, .{});
     };
 };
 
