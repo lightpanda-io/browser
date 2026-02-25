@@ -1053,6 +1053,29 @@ pub fn linkAddedCallback(self: *Page, link: *Element.Html.Link) !void {
     try self._to_load.append(self.arena, link._proto);
 }
 
+pub fn styleAddedCallback(self: *Page, style: *Element.Html.Style) !void {
+    // if we're planning on navigating to another page, don't trigger load event.
+    if (self.isGoingAway()) {
+        return;
+    }
+
+    try self._to_load.append(self.arena, style._proto);
+}
+
+pub fn imageAddedCallback(self: *Page, image: *Element.Html.Image) !void {
+    // if we're planning on navigating to another page, don't trigger load event.
+    if (self.isGoingAway()) {
+        return;
+    }
+
+    const element = image.asElement();
+    // Exit if src not set.
+    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
+    if (src.len == 0) return;
+
+    try self._to_load.append(self.arena, image._proto);
+}
+
 pub fn domChanged(self: *Page) void {
     self.version += 1;
 
@@ -2866,6 +2889,11 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         self.linkAddedCallback(link) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
             return error.LinkLoadError;
+        };
+    } else if (node.is(Element.Html.Style)) |style| {
+        self.styleAddedCallback(style) catch |err| {
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
+            return error.StyleLoadError;
         };
     }
 }
