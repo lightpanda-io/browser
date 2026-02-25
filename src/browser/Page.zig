@@ -566,7 +566,7 @@ fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []con
         arena,
         self.base(),
         request_url,
-        .{ .always_dupe = true },
+        .{ .always_dupe = true, .encode = true },
     );
 
     const session = self._session;
@@ -1203,7 +1203,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         return;
     }
 
-    const src = try iframe.getSrc(self);
+    const src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse return;
     if (src.len == 0) {
         return;
     }
@@ -1225,8 +1225,16 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         .timestamp = timestamp(.monotonic),
     });
 
-    page_frame.navigate(src, .{ .reason = .initialFrameNavigation }) catch |err| {
-        log.warn(.page, "iframe navigate failure", .{ .url = src, .err = err });
+    // navigate will dupe the url
+    const url = try URL.resolve(
+        self.call_arena,
+        self.base(),
+        src,
+        .{ .encode = true },
+    );
+
+    page_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
+        log.warn(.page, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._content_window = null;
         page_frame.deinit();

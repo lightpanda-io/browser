@@ -245,3 +245,11 @@
   testing.expectEqual('', b.toString());
 }
 </script>
+
+<script id=url_encode>
+  {
+    let a = document.createElement('a');
+    a.href = 'over 9000!';
+    testing.expectEqual(testing.BASE_URL + 'element/html/over%209000!', a.href);
+  }
+</script>

@@ -44,7 +44,7 @@ pub fn getHref(self: *Anchor, page: *Page) ![]const u8 {
     if (href.len == 0) {
         return "";
     }
-    return URL.resolve(page.call_arena, page.base(), href, .{});
+    return URL.resolve(page.call_arena, page.base(), href, .{ .encode = true });
 }
 
 pub fn setHref(self: *Anchor, value: []const u8, page: *Page) !void {

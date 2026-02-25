@@ -7,7 +7,7 @@
   }
 </script>
 
-<iframe id=f1 onload="frame1Onload" src="support/sub1.html"></iframe>
+<iframe id=f1 onload="frame1Onload" src="support/sub 1.html"></iframe>
 <iframe id=f2 src="support/sub2.html"></iframe>
 
 <script id="basic">
@@ -25,6 +25,7 @@
 
     testing.expectEqual(0, $('#f1').childNodes.length);
 
+    testing.expectEqual(testing.BASE_URL + 'frames/support/sub%201.html', $('#f1').src);
     testing.expectEqual(window[0], $('#f1').contentWindow);
     testing.expectEqual(window[1], $('#f2').contentWindow);
 

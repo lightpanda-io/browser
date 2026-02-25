@@ -46,7 +46,7 @@ pub fn asNode(self: *Script) *Node {
 
 pub fn getSrc(self: *const Script, page: *Page) ![]const u8 {
     if (self._src.len == 0) return "";
-    return try URL.resolve(page.call_arena, page.base(), self._src, .{});
+    return try URL.resolve(page.call_arena, page.base(), self._src, .{ .encode = true });
 }
 
 pub fn setSrc(self: *Script, src: []const u8, page: *Page) !void {

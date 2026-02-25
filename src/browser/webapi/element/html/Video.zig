@@ -59,7 +59,7 @@ pub fn getPoster(self: *const Video, page: *Page) ![]const u8 {
     }
 
     const URL = @import("../../URL.zig");
-    return URL.resolve(page.call_arena, page.base(), poster, .{});
+    return URL.resolve(page.call_arena, page.base(), poster, .{ .encode = true });
 }
 
 pub fn setPoster(self: *Video, value: []const u8, page: *Page) !void {
