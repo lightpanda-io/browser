@@ -33,7 +33,7 @@ const assert = @import("lightpanda").assert;
 pub const ENABLE_DEBUG = false;
 const IS_DEBUG = builtin.mode == .Debug;
 
-pub const Error = error{
+const Error = error{
     UnsupportedProtocol,
     FailedInit,
     UrlMalformat,
@@ -122,7 +122,7 @@ pub const Error = error{
     Unknown,
 };
 
-pub fn fromCode(code: c.CURLcode) Error {
+fn errorFromCode(code: c.CURLcode) Error {
     if (comptime IS_DEBUG) {
         std.debug.assert(code != c.CURLE_OK);
     }
@@ -217,7 +217,7 @@ pub fn fromCode(code: c.CURLcode) Error {
     };
 }
 
-pub const ErrorMulti = error{
+const ErrorMulti = error{
     BadHandle,
     BadEasyHandle,
     OutOfMemory,
@@ -233,7 +233,7 @@ pub const ErrorMulti = error{
     Unknown,
 };
 
-fn fromMCode(code: c.CURLMcode) ErrorMulti {
+fn errorMFromCode(code: c.CURLMcode) ErrorMulti {
     if (comptime IS_DEBUG) {
         std.debug.assert(code != c.CURLM_OK);
     }
@@ -255,21 +255,21 @@ fn fromMCode(code: c.CURLMcode) ErrorMulti {
     };
 }
 
-pub fn errorCheck(code: c.CURLcode) Error!void {
+fn errorCheck(code: c.CURLcode) Error!void {
     if (code == c.CURLE_OK) {
         return;
     }
-    return fromCode(code);
+    return errorFromCode(code);
 }
 
-pub fn errorMCheck(code: c.CURLMcode) ErrorMulti!void {
+fn errorMCheck(code: c.CURLMcode) ErrorMulti!void {
     if (code == c.CURLM_OK) {
         return;
     }
     if (code == c.CURLM_CALL_MULTI_PERFORM) {
         return;
     }
-    return fromMCode(code);
+    return errorMFromCode(code);
 }
 
 pub const Method = enum(u8) {
@@ -316,7 +316,7 @@ pub const Headers = struct {
         self.headers = updated_headers;
     }
 
-    pub fn parseHeader(header_str: []const u8) ?Header {
+    fn parseHeader(header_str: []const u8) ?Header {
         const colon_pos = std.mem.indexOfScalar(u8, header_str, ':') orelse return null;
 
         const name = std.mem.trim(u8, header_str[0..colon_pos], " \t");
@@ -394,7 +394,7 @@ pub const HeaderIterator = union(enum) {
     };
 };
 
-pub const HeaderValue = struct {
+const HeaderValue = struct {
     value: []const u8,
     amount: usize,
 };
@@ -667,7 +667,7 @@ pub const Connection = struct {
         }
         log.err(.http, "get response header", .{
             .name = name,
-            .err = fromCode(result),
+            .err = errorFromCode(result),
         });
         return null;
     }
@@ -911,7 +911,7 @@ const backend_supports_vectors = switch (builtin.zig_backend) {
 };
 
 // Websocket messages from client->server are masked using a 4 byte XOR mask
-pub fn mask(m: []const u8, payload: []u8) void {
+fn mask(m: []const u8, payload: []u8) void {
     var data = payload;
 
     if (!comptime backend_supports_vectors) return simpleMask(m, data);
@@ -957,13 +957,13 @@ pub const Message = struct {
 };
 
 // These are the only websocket types that we're currently sending
-pub const OpCode = enum(u8) {
+const OpCode = enum(u8) {
     text = 128 | 1,
     close = 128 | 8,
     pong = 128 | 10,
 };
 
-pub fn fillWebsocketHeader(buf: std.ArrayList(u8)) []const u8 {
+fn fillWebsocketHeader(buf: std.ArrayList(u8)) []const u8 {
     // can't use buf[0..10] here, because the header length
     // is variable. If it's just 2 bytes, for example, we need the
     // framed message to be:
@@ -984,7 +984,7 @@ pub fn fillWebsocketHeader(buf: std.ArrayList(u8)) []const u8 {
 
 // makes the assumption that our caller reserved the first
 // 10 bytes for the header
-pub fn websocketHeader(buf: []u8, op_code: OpCode, payload_len: usize) []const u8 {
+fn websocketHeader(buf: []u8, op_code: OpCode, payload_len: usize) []const u8 {
     assert(buf.len == 10, "Websocket.Header", .{ .len = buf.len });
 
     const len = payload_len;
@@ -1241,7 +1241,7 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
         // 3 - We have part of the next message, but either it won't fight into the
         //     remaining buffer, or we don't know (because we don't have enough
         //     of the header to tell the length). We need to "compact" the buffer
-        pub fn compact(self: *Self) void {
+        fn compact(self: *Self) void {
             const pos = self.pos;
             const len = self.len;
 
@@ -1373,7 +1373,7 @@ pub const WsConnection = struct {
 
     const EMPTY_PONG = [_]u8{ 138, 0 };
 
-    pub fn sendPong(self: *WsConnection, data: []const u8) !void {
+    fn sendPong(self: *WsConnection, data: []const u8) !void {
         if (data.len == 0) {
             return self.send(&EMPTY_PONG);
         }

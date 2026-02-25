@@ -38,9 +38,6 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
-const errorCheck = Net.errorCheck;
-const errorMCheck = Net.errorMCheck;
-
 const Method = Net.Method;
 const ResponseHead = Net.ResponseHead;
 const HeaderIterator = Net.HeaderIterator;
