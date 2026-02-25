@@ -10,12 +10,12 @@ const Element = @import("../browser/webapi/Element.zig");
 const Selector = @import("../browser/webapi/selector/Selector.zig");
 const String = @import("../string.zig").String;
 
-pub fn handleList(server: *McpServer, req: protocol.Request) !void {
+pub fn handleList(server: *McpServer, arena: std.mem.Allocator, req: protocol.Request) !void {
     const tools = [_]protocol.Tool{
         .{
             .name = "goto",
             .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, server.allocator,
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena,
                 \\{
                 \\  "type": "object",
                 \\  "properties": {
@@ -28,7 +28,7 @@ pub fn handleList(server: *McpServer, req: protocol.Request) !void {
         .{
             .name = "search",
             .description = "Use a search engine to look for specific words, terms, sentences. The search page will then be loaded in memory.",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, server.allocator,
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena,
                 \\{
                 \\  "type": "object",
                 \\  "properties": {
@@ -41,17 +41,17 @@ pub fn handleList(server: *McpServer, req: protocol.Request) !void {
         .{
             .name = "markdown",
             .description = "Get the page content in markdown format.",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, server.allocator, "{\"type\":\"object\",\"properties\":{}}", .{}) catch unreachable,
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena, "{\"type\":\"object\",\"properties\":{}}", .{}) catch unreachable,
         },
         .{
             .name = "links",
             .description = "Extract all links in the opened page",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, server.allocator, "{\"type\":\"object\",\"properties\":{}}", .{}) catch unreachable,
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena, "{\"type\":\"object\",\"properties\":{}}", .{}) catch unreachable,
         },
         .{
             .name = "evaluate",
             .description = "Evaluate JavaScript in the current page context",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, server.allocator,
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena,
                 \\{
                 \\  "type": "object",
                 \\  "properties": {
@@ -64,7 +64,7 @@ pub fn handleList(server: *McpServer, req: protocol.Request) !void {
         .{
             .name = "over",
             .description = "Used to indicate that the task is over and give the final answer if there is any. This is the last tool to be called in a task.",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, server.allocator,
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena,
                 \\{
                 \\  "type": "object",
                 \\  "properties": {
@@ -82,7 +82,7 @@ pub fn handleList(server: *McpServer, req: protocol.Request) !void {
         .tools = &tools,
     };
 
-    try sendResult(server, req.id, result);
+    try sendResult(server, req.id.?, result);
 }
 
 const GotoParams = struct {
@@ -103,7 +103,7 @@ const OverParams = struct {
 
 pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
-        return sendError(server, req.id, -32602, "Missing params");
+        return sendError(server, req.id.?, -32602, "Missing params");
     }
 
     const CallParams = struct {
@@ -112,67 +112,79 @@ pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
     };
 
     const call_params = std.json.parseFromValueLeaky(CallParams, arena, req.params.?, .{}) catch {
-        return sendError(server, req.id, -32602, "Invalid params");
+        return sendError(server, req.id.?, -32602, "Invalid params");
     };
 
     if (std.mem.eql(u8, call_params.name, "goto") or std.mem.eql(u8, call_params.name, "navigate")) {
         if (call_params.arguments == null) {
-            return sendError(server, req.id, -32602, "Missing arguments for goto");
+            return sendError(server, req.id.?, -32602, "Missing arguments for goto");
         }
         const args = std.json.parseFromValueLeaky(GotoParams, arena, call_params.arguments.?, .{}) catch {
-            return sendError(server, req.id, -32602, "Invalid arguments for goto");
+            return sendError(server, req.id.?, -32602, "Invalid arguments for goto");
         };
 
-        try performGoto(server, arena, args.url);
+        performGoto(server, arena, args.url) catch {
+            return sendError(server, req.id.?, -32603, "Internal error during navigation");
+        };
 
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Navigated successfully." }};
-        try sendResult(server, req.id, .{ .content = &content });
+        try sendResult(server, req.id.?, .{ .content = &content });
     } else if (std.mem.eql(u8, call_params.name, "search")) {
         if (call_params.arguments == null) {
-            return sendError(server, req.id, -32602, "Missing arguments for search");
+            return sendError(server, req.id.?, -32602, "Missing arguments for search");
         }
         const args = std.json.parseFromValueLeaky(SearchParams, arena, call_params.arguments.?, .{}) catch {
-            return sendError(server, req.id, -32602, "Invalid arguments for search");
+            return sendError(server, req.id.?, -32602, "Invalid arguments for search");
         };
 
         const component: std.Uri.Component = .{ .raw = args.text };
         var url_aw = std.Io.Writer.Allocating.init(arena);
-        try component.formatQuery(&url_aw.writer);
-        const url = try std.fmt.allocPrint(arena, "https://duckduckgo.com/?q={s}", .{url_aw.written()});
+        component.formatQuery(&url_aw.writer) catch {
+            return sendError(server, req.id.?, -32603, "Internal error formatting query");
+        };
+        const url = std.fmt.allocPrint(arena, "https://duckduckgo.com/?q={s}", .{url_aw.written()}) catch {
+            return sendError(server, req.id.?, -32603, "Internal error formatting URL");
+        };
 
-        try performGoto(server, arena, url);
+        performGoto(server, arena, url) catch {
+            return sendError(server, req.id.?, -32603, "Internal error during search navigation");
+        };
 
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Search performed successfully." }};
-        try sendResult(server, req.id, .{ .content = &content });
+        try sendResult(server, req.id.?, .{ .content = &content });
     } else if (std.mem.eql(u8, call_params.name, "markdown")) {
         var aw = std.Io.Writer.Allocating.init(arena);
-        try lp.markdown.dump(server.page.document.asNode(), .{}, &aw.writer, server.page);
+        lp.markdown.dump(server.page.document.asNode(), .{}, &aw.writer, server.page) catch {
+            return sendError(server, req.id.?, -32603, "Internal error parsing markdown");
+        };
 
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = aw.written() }};
-        try sendResult(server, req.id, .{ .content = &content });
+        try sendResult(server, req.id.?, .{ .content = &content });
     } else if (std.mem.eql(u8, call_params.name, "links")) {
-        const list = try Selector.querySelectorAll(server.page.document.asNode(), "a[href]", server.page);
+        const list = Selector.querySelectorAll(server.page.document.asNode(), "a[href]", server.page) catch {
+            return sendError(server, req.id.?, -32603, "Internal error querying selector");
+        };
 
         var aw = std.Io.Writer.Allocating.init(arena);
         var first = true;
         for (list._nodes) |node| {
             if (node.is(Element)) |el| {
                 if (el.getAttributeSafe(String.wrap("href"))) |href| {
-                    if (!first) try aw.writer.writeByte('\n');
-                    try aw.writer.writeAll(href);
+                    if (!first) aw.writer.writeByte('\n') catch continue;
+                    aw.writer.writeAll(href) catch continue;
                     first = false;
                 }
             }
         }
 
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = aw.written() }};
-        try sendResult(server, req.id, .{ .content = &content });
+        try sendResult(server, req.id.?, .{ .content = &content });
     } else if (std.mem.eql(u8, call_params.name, "evaluate")) {
         if (call_params.arguments == null) {
-            return sendError(server, req.id, -32602, "Missing arguments for evaluate");
+            return sendError(server, req.id.?, -32602, "Missing arguments for evaluate");
         }
         const args = std.json.parseFromValueLeaky(EvaluateParams, arena, call_params.arguments.?, .{}) catch {
-            return sendError(server, req.id, -32602, "Invalid arguments for evaluate");
+            return sendError(server, req.id.?, -32602, "Invalid arguments for evaluate");
         };
 
         var ls: js.Local.Scope = undefined;
@@ -181,25 +193,25 @@ pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
 
         const js_result = ls.local.compileAndRun(args.script, null) catch {
             const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Script evaluation failed." }};
-            return sendResult(server, req.id, .{ .content = &content, .isError = true });
+            return sendResult(server, req.id.?, .{ .content = &content, .isError = true });
         };
 
         const str_result = js_result.toStringSliceWithAlloc(arena) catch "undefined";
 
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = str_result }};
-        try sendResult(server, req.id, .{ .content = &content });
+        try sendResult(server, req.id.?, .{ .content = &content });
     } else if (std.mem.eql(u8, call_params.name, "over")) {
         if (call_params.arguments == null) {
-            return sendError(server, req.id, -32602, "Missing arguments for over");
+            return sendError(server, req.id.?, -32602, "Missing arguments for over");
         }
         const args = std.json.parseFromValueLeaky(OverParams, arena, call_params.arguments.?, .{}) catch {
-            return sendError(server, req.id, -32602, "Invalid arguments for over");
+            return sendError(server, req.id.?, -32602, "Invalid arguments for over");
         };
 
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = args.result }};
-        try sendResult(server, req.id, .{ .content = &content });
+        try sendResult(server, req.id.?, .{ .content = &content });
     } else {
-        return sendError(server, req.id, -32601, "Tool not found");
+        return sendError(server, req.id.?, -32601, "Tool not found");
     }
 }
 

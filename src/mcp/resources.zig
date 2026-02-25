@@ -25,7 +25,7 @@ pub fn handleList(server: *McpServer, req: protocol.Request) !void {
         .resources = &resources,
     };
 
-    try sendResult(server, req.id, result);
+    try sendResult(server, req.id.?, result);
 }
 
 const ReadParams = struct {
@@ -34,16 +34,18 @@ const ReadParams = struct {
 
 pub fn handleRead(server: *McpServer, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
-        return sendError(server, req.id, -32602, "Missing params");
+        return sendError(server, req.id.?, -32602, "Missing params");
     }
 
     const params = std.json.parseFromValueLeaky(ReadParams, arena, req.params.?, .{}) catch {
-        return sendError(server, req.id, -32602, "Invalid params");
+        return sendError(server, req.id.?, -32602, "Invalid params");
     };
 
     if (std.mem.eql(u8, params.uri, "mcp://page/html")) {
         var aw = std.Io.Writer.Allocating.init(arena);
-        try lp.dump.root(server.page.window._document, .{}, &aw.writer, server.page);
+        lp.dump.root(server.page.document.asNode(), .{}, &aw.writer, server.page) catch {
+            return sendError(server, req.id.?, -32603, "Internal error reading HTML");
+        };
 
         const contents = [_]struct {
             uri: []const u8,
@@ -54,10 +56,12 @@ pub fn handleRead(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
             .mimeType = "text/html",
             .text = aw.written(),
         }};
-        try sendResult(server, req.id, .{ .contents = &contents });
+        try sendResult(server, req.id.?, .{ .contents = &contents });
     } else if (std.mem.eql(u8, params.uri, "mcp://page/markdown")) {
         var aw = std.Io.Writer.Allocating.init(arena);
-        try lp.markdown.dump(server.page.window._document.asNode(), .{}, &aw.writer, server.page);
+        lp.markdown.dump(server.page.document.asNode(), .{}, &aw.writer, server.page) catch {
+            return sendError(server, req.id.?, -32603, "Internal error reading Markdown");
+        };
 
         const contents = [_]struct {
             uri: []const u8,
@@ -68,9 +72,9 @@ pub fn handleRead(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
             .mimeType = "text/markdown",
             .text = aw.written(),
         }};
-        try sendResult(server, req.id, .{ .contents = &contents });
+        try sendResult(server, req.id.?, .{ .contents = &contents });
     } else {
-        return sendError(server, req.id, -32602, "Resource not found");
+        return sendError(server, req.id.?, -32602, "Resource not found");
     }
 }
 

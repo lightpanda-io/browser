@@ -25,8 +25,8 @@ test "protocol request parsing" {
     const req = parsed.value;
     try testing.expectEqualStrings("2.0", req.jsonrpc);
     try testing.expectEqualStrings("initialize", req.method);
-    try testing.expect(req.id == .integer);
-    try testing.expectEqual(@as(i64, 1), req.id.integer);
+    try testing.expect(req.id.? == .integer);
+    try testing.expectEqual(@as(i64, 1), req.id.?.integer);
     try testing.expect(req.params != null);
 
     // Test nested parsing of InitializeParams

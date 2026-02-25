@@ -31,6 +31,14 @@ fn handleMessage(server: *McpServer, arena: std.mem.Allocator, msg: []const u8) 
         return;
     };
 
+    if (parsed.id == null) {
+        // It's a notification
+        if (std.mem.eql(u8, parsed.method, "notifications/initialized")) {
+            log.info(.app, "MCP Client Initialized", .{});
+        }
+        return;
+    }
+
     if (std.mem.eql(u8, parsed.method, "initialize")) {
         try handleInitialize(server, parsed);
     } else if (std.mem.eql(u8, parsed.method, "resources/list")) {
@@ -38,12 +46,12 @@ fn handleMessage(server: *McpServer, arena: std.mem.Allocator, msg: []const u8) 
     } else if (std.mem.eql(u8, parsed.method, "resources/read")) {
         try resources.handleRead(server, arena, parsed);
     } else if (std.mem.eql(u8, parsed.method, "tools/list")) {
-        try tools.handleList(server, parsed);
+        try tools.handleList(server, arena, parsed);
     } else if (std.mem.eql(u8, parsed.method, "tools/call")) {
         try tools.handleCall(server, arena, parsed);
     } else {
         try server.sendResponse(protocol.Response{
-            .id = parsed.id,
+            .id = parsed.id.?,
             .@"error" = protocol.Error{
                 .code = -32601,
                 .message = "Method not found",
@@ -78,5 +86,5 @@ fn handleInitialize(server: *McpServer, req: protocol.Request) !void {
         },
     };
 
-    try sendResponseGeneric(server, req.id, result);
+    try sendResponseGeneric(server, req.id.?, result);
 }

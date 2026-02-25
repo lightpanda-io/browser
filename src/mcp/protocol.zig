@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const Request = struct {
     jsonrpc: []const u8 = "2.0",
-    id: std.json.Value,
+    id: ?std.json.Value = null,
     method: []const u8,
     params: ?std.json.Value = null,
 };

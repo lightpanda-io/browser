@@ -75,7 +75,9 @@ pub const McpServer = struct {
 
     pub fn stop(self: *Self) void {
         self.is_running.store(false, .seq_cst);
+        self.queue_mutex.lock();
         self.queue_condition.signal();
+        self.queue_mutex.unlock();
     }
 
     fn ioWorker(self: *Self) void {
@@ -93,7 +95,7 @@ pub const McpServer = struct {
 
                 self.queue_mutex.lock();
                 self.message_queue.append(self.allocator, msg) catch |err| {
-                    std.debug.print("MCP Error: Failed to queue message: {}\n", .{err});
+                    lp.log.err(.app, "MCP Error: Failed to queue message", .{ .err = err });
                     self.allocator.free(msg);
                 };
                 self.queue_mutex.unlock();
@@ -103,7 +105,7 @@ pub const McpServer = struct {
                     self.stop();
                     break;
                 }
-                std.debug.print("MCP IO Error: {}\n", .{err});
+                lp.log.err(.app, "MCP IO Error", .{ .err = err });
                 std.Thread.sleep(100 * std.time.ns_per_ms);
             }
         }
