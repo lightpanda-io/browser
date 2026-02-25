@@ -105,7 +105,7 @@ jobs:
         run: |
           ./wpt serve & echo $! > WPT.pid
           sleep 10s
-          ./lightpanda serve & echo $! > LPD.pid
+          ./lightpanda serve --insecure_disable_tls_host_verification --log_level error & echo $! > LPD.pid
           sleep 1s
           ./wptrunner -json -concurrency 2 > wpt.json
           kill `cat WPT.pid` `cat LPD.pid`

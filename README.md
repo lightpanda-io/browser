@@ -327,7 +327,7 @@ First start the WPT's HTTP server from your `wpt/` clone dir.
 Run a Lightpanda browser
 
 ```
-zig build run
+zig build run -- --insecure_disable_tls_host_verification
 ```
 
 Then you can start the wptrunner from the Demo's clone dir:
