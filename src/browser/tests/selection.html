@@ -675,3 +675,65 @@
     testing.expectEqual(0, sel.anchorOffset);
   }
 </script>
+
+<script id=modifyCharacterForwardFromElementNode>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    sel.collapse(p1, 1);
+
+    testing.expectEqual(p1, sel.anchorNode);
+    testing.expectEqual(1, sel.anchorOffset);
+    testing.expectEqual(true, sel.isCollapsed);
+
+    sel.modify("move", "forward", "character");
+
+    testing.expectEqual(3, sel.anchorNode.nodeType);
+    testing.expectEqual(true, sel.anchorNode !== p1.firstChild);
+  }
+</script>
+
+<script id=modifyCharacterForwardFromElementNodeMidChildren>
+  {
+    const sel = window.getSelection();
+    const nested = document.getElementById("nested");
+
+    sel.collapse(nested, nested.childNodes.length);
+
+    testing.expectEqual(nested, sel.anchorNode);
+    testing.expectEqual(nested.childNodes.length, sel.anchorOffset);
+
+    sel.modify("move", "forward", "character");
+
+    // Must land on a text node strictly after #nested
+    testing.expectEqual(3, sel.anchorNode.nodeType);
+    testing.expectEqual(false, nested.contains(sel.anchorNode));
+  }
+</script>
+
+<script id=modifyWordForwardFromElementNode>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    sel.collapse(p1, 1);
+
+    sel.modify("move", "forward", "word");
+
+    // Must land on a text node strictly after p1
+    testing.expectEqual(3, sel.anchorNode.nodeType);
+    testing.expectEqual(false, p1.contains(sel.anchorNode));
+    testing.expectEqual(true, sel.isCollapsed);
+  }
+</script>
+
+<script id=modifyCharacterForwardNewNodeOffsetNotElement>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+
+    sel.collapse(p1, 1);
+    sel.modify("move", "forward", "character");
+
+    testing.expectEqual(3, sel.anchorNode.nodeType);
+  }
+</script>
