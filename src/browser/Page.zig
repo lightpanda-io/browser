@@ -63,6 +63,7 @@ const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 
 const Http = App.Http;
+const Net = @import("../Net.zig");
 const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -1112,8 +1113,8 @@ fn printWaitAnalysis(self: *Page) void {
         std.debug.print("\nactive requests: {d}\n", .{self._session.browser.http_client.active});
         var n_ = self._session.browser.http_client.handles.in_use.first;
         while (n_) |n| {
-            const handle: *Http.Client.Handle = @fieldParentPtr("node", n);
-            const transfer = Http.Transfer.fromEasy(handle.conn.easy) catch |err| {
+            const conn: *Net.Connection = @fieldParentPtr("node", n);
+            const transfer = Http.Transfer.fromConnection(conn) catch |err| {
                 std.debug.print(" - failed to load transfer: {any}\n", .{err});
                 break;
             };

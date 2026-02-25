@@ -699,7 +699,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             };
 
             const cdp = self.cdp;
-            const allocator = cdp.client.send_arena.allocator();
+            const allocator = cdp.client.sendAllocator();
 
             const field = ",\"sessionId\":\"";
 

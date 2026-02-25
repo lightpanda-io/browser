@@ -22,7 +22,7 @@ const lp = @import("lightpanda");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
 
-const Http = @import("Http.zig");
+const Net = @import("../Net.zig");
 const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
@@ -30,18 +30,17 @@ const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Robots = @import("../browser/Robots.zig");
 const RobotStore = Robots.RobotStore;
 
-const c = Http.c;
+const c = Net.c;
 const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-const errorCheck = Http.errorCheck;
-const errorMCheck = Http.errorMCheck;
-
 const IS_DEBUG = builtin.mode == .Debug;
 
-const Method = Http.Method;
+const Method = Net.Method;
+const ResponseHead = Net.ResponseHead;
+const HeaderIterator = Net.HeaderIterator;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -68,14 +67,7 @@ active: usize,
 // 'networkAlmostIdle' Page.lifecycleEvent in CDP).
 intercepted: usize,
 
-// curl has 2 APIs: easy and multi. Multi is like a combination of some I/O block
-// (e.g. epoll) and a bunch of pools. You add/remove easys to the multiple and
-// then poll the multi.
-multi: *c.CURLM,
-
-// Our easy handles. Although the multi contains buffer pools and connections
-// pools, re-using the easys is still recommended. This acts as our own pool
-// of easys.
+// Our easy handles, managed by a curl multi.
 handles: Handles,
 
 // Use to generate the next request ID
@@ -111,10 +103,6 @@ config: *const Config,
 
 cdp_client: ?CDPClient = null,
 
-// keep track of when curl_multi_perform is happening so that we can avoid
-// recursive calls into curl (which it will fail)
-performing: bool = false,
-
 // libcurl can monitor arbitrary sockets, this lets us use libcurl to poll
 // both HTTP data as well as messages from an CDP connection.
 // Furthermore, we have some tension between blocking scripts and request
@@ -142,13 +130,13 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, robot_store: *RobotStor
     const client = try allocator.create(Client);
     errdefer allocator.destroy(client);
 
-    const multi = c.curl_multi_init() orelse return error.FailedToInitializeMulti;
-    errdefer _ = c.curl_multi_cleanup(multi);
-
-    try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, config.httpMaxHostOpen())));
-
-    var handles = try Handles.init(allocator, client, ca_blob, config);
+    var handles = try Handles.init(allocator, ca_blob, config);
     errdefer handles.deinit(allocator);
+
+    // Set transfer callbacks on each connection.
+    for (handles.connections) |*conn| {
+        try conn.setCallbacks(Transfer.headerCallback, Transfer.dataCallback);
+    }
 
     const http_proxy = config.httpProxy();
 
@@ -156,7 +144,6 @@ pub fn init(allocator: Allocator, ca_blob: ?c.curl_blob, robot_store: *RobotStor
         .queue = .{},
         .active = 0,
         .intercepted = 0,
-        .multi = multi,
         .handles = handles,
         .allocator = allocator,
         .robot_store = robot_store,
@@ -173,8 +160,6 @@ pub fn deinit(self: *Client) void {
     self.abort();
     self.handles.deinit(self.allocator);
 
-    _ = c.curl_multi_cleanup(self.multi);
-
     self.transfer_pool.deinit();
 
     var robots_iter = self.pending_robots_queue.iterator();
@@ -186,14 +171,14 @@ pub fn deinit(self: *Client) void {
     self.allocator.destroy(self);
 }
 
-pub fn newHeaders(self: *const Client) !Http.Headers {
-    return Http.Headers.init(self.config.http_headers.user_agent_header);
+pub fn newHeaders(self: *const Client) !Net.Headers {
+    return Net.Headers.init(self.config.http_headers.user_agent_header);
 }
 
 pub fn abort(self: *Client) void {
     while (self.handles.in_use.first) |node| {
-        const handle: *Handle = @fieldParentPtr("node", node);
-        var transfer = Transfer.fromEasy(handle.conn.easy) catch |err| {
+        const conn: *Net.Connection = @fieldParentPtr("node", node);
+        var transfer = Transfer.fromConnection(conn) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "abort" });
             continue;
         };
@@ -213,10 +198,11 @@ pub fn abort(self: *Client) void {
 
     if (comptime IS_DEBUG) {
         std.debug.assert(self.handles.in_use.first == null);
-        std.debug.assert(self.handles.available.len() == self.handles.handles.len);
+        std.debug.assert(self.handles.available.len() == self.handles.connections.len);
 
-        var running: c_int = undefined;
-        std.debug.assert(c.curl_multi_perform(self.multi, &running) == c.CURLE_OK);
+        const running = self.handles.perform() catch |err| {
+            lp.assert(false, "multi perform in abort", .{ .err = err });
+        };
         std.debug.assert(running == 0);
     }
 }
@@ -229,9 +215,9 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
         const queue_node = self.queue.popFirst() orelse break;
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
 
-        // we know this exists, because we checked isEmpty() above
-        const handle = self.handles.getFreeHandle().?;
-        try self.makeRequest(handle, transfer);
+        // we know this exists, because we checked hasAvailable() above
+        const conn = self.handles.get().?;
+        try self.makeRequest(conn, transfer);
     }
     return self.perform(@intCast(timeout_ms));
 }
@@ -354,7 +340,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
     try entry.value_ptr.append(self.allocator, req);
 }
 
-fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
+fn robotsHeaderCallback(transfer: *Transfer) !bool {
     const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
 
     if (transfer.response_header) |hdr| {
@@ -369,7 +355,7 @@ fn robotsHeaderCallback(transfer: *Http.Transfer) !bool {
     return true;
 }
 
-fn robotsDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+fn robotsDataCallback(transfer: *Transfer, data: []const u8) !void {
     const ctx: *RobotsRequestContext = @ptrCast(@alignCast(transfer.ctx));
     try ctx.buffer.appendSlice(ctx.client.allocator, data);
 }
@@ -512,8 +498,8 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 // cases, the interecptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    if (self.handles.getFreeHandle()) |handle| {
-        return self.makeRequest(handle, transfer);
+    if (self.handles.get()) |conn| {
+        return self.makeRequest(conn, transfer);
     }
 
     self.queue.append(&transfer._node);
@@ -548,7 +534,7 @@ pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
 }
 
 // For an intercepted request
-pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
     if (comptime IS_DEBUG) {
         std.debug.assert(transfer._intercept_state != .not_intercepted);
         log.debug(.http, "filfull transfer", .{ .intercepted = self.intercepted });
@@ -626,8 +612,8 @@ fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: 
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
 
-    for (self.handles.handles) |*h| {
-        try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy.ptr));
+    for (self.handles.connections) |*conn| {
+        try conn.setProxy(proxy.ptr);
     }
     self.use_proxy = true;
 }
@@ -638,8 +624,8 @@ pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
     const proxy = if (self.http_proxy) |p| p.ptr else null;
-    for (self.handles.handles) |*h| {
-        try errorCheck(c.curl_easy_setopt(h.conn.easy, c.CURLOPT_PROXY, proxy));
+    for (self.handles.connections) |*conn| {
+        try conn.setProxy(proxy);
     }
     self.use_proxy = proxy != null;
 }
@@ -649,16 +635,8 @@ pub fn enableTlsVerify(self: *const Client) !void {
     // Remove inflight connections check on enable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
-    for (self.handles.handles) |*h| {
-        const easy = h.conn.easy;
-
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1)));
-
-        if (self.use_proxy) {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 2)));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 1)));
-        }
+    for (self.handles.connections) |*conn| {
+        try conn.setTlsVerify(true, self.use_proxy);
     }
 }
 
@@ -667,26 +645,16 @@ pub fn disableTlsVerify(self: *const Client) !void {
     // Remove inflight connections check on disable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
-    for (self.handles.handles) |*h| {
-        const easy = h.conn.easy;
-
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
-
-        if (self.use_proxy) {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 0)));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 0)));
-        }
+    for (self.handles.connections) |*conn| {
+        try conn.setTlsVerify(false, self.use_proxy);
     }
 }
 
-fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!void {
-    const conn = handle.conn;
-    const easy = conn.easy;
+fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerror!void {
     const req = &transfer.req;
 
     {
-        transfer._handle = handle;
+        transfer._conn = conn;
         errdefer transfer.deinit();
 
         try conn.setURL(req.url);
@@ -694,23 +662,23 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!voi
         if (req.body) |b| {
             try conn.setBody(b);
         } else {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPGET, @as(c_long, 1)));
+            try conn.setGetMode();
         }
 
         var header_list = req.headers;
-        try conn.secretHeaders(&header_list); // Add headers that must be hidden from intercepts
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPHEADER, header_list.headers));
+        try conn.secretHeaders(&header_list, &self.config.http_headers); // Add headers that must be hidden from intercepts
+        try conn.setHeaders(&header_list);
 
         // Add cookies.
         if (header_list.cookies) |cookies| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, cookies));
+            try conn.setCookies(cookies);
         }
 
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PRIVATE, transfer));
+        try conn.setPrivate(transfer);
 
         // add credentials
         if (req.credentials) |creds| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXYUSERPWD, creds.ptr));
+            try conn.setProxyCredentials(creds);
         }
     }
 
@@ -719,11 +687,12 @@ fn makeRequest(self: *Client, handle: *Handle, transfer: *Transfer) anyerror!voi
     // fails BEFORE `curl_multi_add_handle` suceeds, the we still need to do
     // cleanup. But if things fail after `curl_multi_add_handle`, we expect
     // perfom to pickup the failure and cleanup.
-    try errorMCheck(c.curl_multi_add_handle(self.multi, easy));
+    try self.handles.add(conn);
 
     if (req.start_callback) |cb| {
         cb(transfer) catch |err| {
-            try errorMCheck(c.curl_multi_remove_handle(self.multi, easy));
+            self.handles.remove(conn);
+            transfer._conn = null;
             transfer.deinit();
             return err;
         };
@@ -739,14 +708,7 @@ pub const PerformStatus = enum {
 };
 
 fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
-    const multi = self.multi;
-    var running: c_int = undefined;
-
-    {
-        self.performing = true;
-        defer self.performing = false;
-        try errorMCheck(c.curl_multi_perform(multi, &running));
-    }
+    const running = try self.handles.perform();
 
     // We're potentially going to block for a while until we get data. Process
     // whatever messages we have waiting ahead of time.
@@ -756,18 +718,17 @@ fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
 
     var status = PerformStatus.normal;
     if (self.cdp_client) |cdp_client| {
-        var wait_fd = c.curl_waitfd{
+        var wait_fds = [_]c.curl_waitfd{.{
             .fd = cdp_client.socket,
             .events = c.CURL_WAIT_POLLIN,
             .revents = 0,
-        };
-        try errorMCheck(c.curl_multi_poll(multi, &wait_fd, 1, timeout_ms, null));
-        if (wait_fd.revents != 0) {
-            // the extra socket we passed in is ready, let's signal our caller
+        }};
+        try self.handles.poll(&wait_fds, timeout_ms);
+        if (wait_fds[0].revents != 0) {
             status = .cdp_socket;
         }
     } else if (running > 0) {
-        try errorMCheck(c.curl_multi_poll(multi, null, 0, timeout_ms, null));
+        try self.handles.poll(&.{}, timeout_ms);
     }
 
     _ = try self.processMessages();
@@ -775,18 +736,9 @@ fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
 }
 
 fn processMessages(self: *Client) !bool {
-    const multi = self.multi;
     var processed = false;
-    var messages_count: c_int = 0;
-    while (c.curl_multi_info_read(multi, &messages_count)) |msg_| {
-        const msg: *c.CURLMsg = @ptrCast(msg_);
-        // This is the only possible message type from CURL for now.
-        if (comptime IS_DEBUG) {
-            std.debug.assert(msg.msg == c.CURLMSG_DONE);
-        }
-
-        const easy = msg.easy_handle.?;
-        const transfer = try Transfer.fromEasy(easy);
+    while (self.handles.readMessage()) |msg| {
+        const transfer = try Transfer.fromConnection(&msg.conn);
 
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
@@ -836,11 +788,13 @@ fn processMessages(self: *Client) !bool {
 
         defer transfer.deinit();
 
-        if (errorCheck(msg.data.result)) blk: {
+        if (msg.err) |err| {
+            requestFailed(transfer, err, true);
+        } else blk: {
             // In case of request w/o data, we need to call the header done
             // callback now.
             if (!transfer._header_done_called) {
-                const proceed = transfer.headerDoneCallback(easy) catch |err| {
+                const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
                     log.err(.http, "header_done_callback", .{ .err = err });
                     requestFailed(transfer, err, true);
                     continue;
@@ -861,22 +815,15 @@ fn processMessages(self: *Client) !bool {
                 .transfer = transfer,
             });
             processed = true;
-        } else |err| {
-            requestFailed(transfer, err, true);
         }
     }
     return processed;
 }
 
 fn endTransfer(self: *Client, transfer: *Transfer) void {
-    const handle = transfer._handle.?;
-
-    errorMCheck(c.curl_multi_remove_handle(self.multi, handle.conn.easy)) catch |err| {
-        log.fatal(.http, "Failed to remove handle", .{ .err = err });
-    };
-
-    self.handles.release(handle);
-    transfer._handle = null;
+    const conn = transfer._conn.?;
+    self.handles.remove(conn);
+    transfer._conn = null;
     self.active -= 1;
 }
 
@@ -886,101 +833,7 @@ fn ensureNoActiveConnection(self: *const Client) !void {
     }
 }
 
-const Handles = struct {
-    handles: []Handle,
-    in_use: HandleList,
-    available: HandleList,
-
-    const HandleList = std.DoublyLinkedList;
-
-    fn init(
-        allocator: Allocator,
-        client: *Client,
-        ca_blob: ?c.curl_blob,
-        config: *const Config,
-    ) !Handles {
-        const count: usize = config.httpMaxConcurrent();
-        if (count == 0) return error.InvalidMaxConcurrent;
-
-        const handles = try allocator.alloc(Handle, count);
-        errdefer allocator.free(handles);
-
-        var available: HandleList = .{};
-        for (0..count) |i| {
-            handles[i] = try Handle.init(client, ca_blob, config);
-            available.append(&handles[i].node);
-        }
-
-        return .{
-            .in_use = .{},
-            .handles = handles,
-            .available = available,
-        };
-    }
-
-    fn deinit(self: *Handles, allocator: Allocator) void {
-        for (self.handles) |*h| {
-            h.deinit();
-        }
-        allocator.free(self.handles);
-    }
-
-    fn hasAvailable(self: *const Handles) bool {
-        return self.available.first != null;
-    }
-
-    fn getFreeHandle(self: *Handles) ?*Handle {
-        if (self.available.popFirst()) |node| {
-            node.prev = null;
-            node.next = null;
-            self.in_use.append(node);
-            return @as(*Handle, @fieldParentPtr("node", node));
-        }
-        return null;
-    }
-
-    fn release(self: *Handles, handle: *Handle) void {
-        var node = &handle.node;
-        self.in_use.remove(node);
-        node.prev = null;
-        node.next = null;
-        self.available.append(node);
-    }
-};
-
-// wraps a c.CURL (an easy handle)
-pub const Handle = struct {
-    client: *Client,
-    conn: Http.Connection,
-    node: Handles.HandleList.Node,
-
-    fn init(
-        client: *Client,
-        ca_blob: ?c.curl_blob,
-        config: *const Config,
-    ) !Handle {
-        const conn = try Http.Connection.init(ca_blob, config);
-        errdefer conn.deinit();
-
-        const easy = conn.easy;
-
-        // callbacks
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERDATA, easy));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HEADERFUNCTION, Transfer.headerCallback));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEDATA, easy));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_WRITEFUNCTION, Transfer.dataCallback));
-
-        return .{
-            .node = .{},
-            .conn = conn,
-            .client = client,
-        };
-    }
-
-    fn deinit(self: *const Handle) void {
-        self.conn.deinit();
-    }
-};
+const Handles = Net.Handles;
 
 pub const RequestCookie = struct {
     is_http: bool,
@@ -988,7 +841,7 @@ pub const RequestCookie = struct {
     is_navigation: bool,
     origin: [:0]const u8,
 
-    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
+    pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Net.Headers) !void {
         var arr: std.ArrayList(u8) = .{};
         try self.jar.forRequest(url, arr.writer(temp), .{
             .is_http = self.is_http,
@@ -1007,7 +860,7 @@ pub const Request = struct {
     page_id: u32,
     method: Method,
     url: [:0]const u8,
-    headers: Http.Headers,
+    headers: Net.Headers,
     body: ?[]const u8 = null,
     cookie_jar: ?*CookieJar,
     resource_type: ResourceType,
@@ -1053,45 +906,7 @@ pub const Request = struct {
     };
 };
 
-pub const AuthChallenge = struct {
-    status: u16,
-    source: enum { server, proxy },
-    scheme: enum { basic, digest },
-    realm: []const u8,
-
-    pub fn parse(status: u16, header: []const u8) !AuthChallenge {
-        var ac: AuthChallenge = .{
-            .status = status,
-            .source = undefined,
-            .realm = "TODO", // TODO parser and set realm
-            .scheme = undefined,
-        };
-
-        const sep = std.mem.indexOfPos(u8, header, 0, ": ") orelse return error.InvalidHeader;
-        const hname = header[0..sep];
-        const hvalue = header[sep + 2 ..];
-
-        if (std.ascii.eqlIgnoreCase("WWW-Authenticate", hname)) {
-            ac.source = .server;
-        } else if (std.ascii.eqlIgnoreCase("Proxy-Authenticate", hname)) {
-            ac.source = .proxy;
-        } else {
-            return error.InvalidAuthChallenge;
-        }
-
-        const pos = std.mem.indexOfPos(u8, std.mem.trim(u8, hvalue, std.ascii.whitespace[0..]), 0, " ") orelse hvalue.len;
-        const _scheme = hvalue[0..pos];
-        if (std.ascii.eqlIgnoreCase(_scheme, "basic")) {
-            ac.scheme = .basic;
-        } else if (std.ascii.eqlIgnoreCase(_scheme, "digest")) {
-            ac.scheme = .digest;
-        } else {
-            return error.UnknownAuthChallengeScheme;
-        }
-
-        return ac;
-    }
-};
+const AuthChallenge = Net.AuthChallenge;
 
 pub const Transfer = struct {
     arena: ArenaAllocator,
@@ -1109,14 +924,14 @@ pub const Transfer = struct {
     max_response_size: ?usize = null,
 
     // We'll store the response header here
-    response_header: ?ResponseHeader = null,
+    response_header: ?ResponseHead = null,
 
     // track if the header callbacks done have been called.
     _header_done_called: bool = false,
 
     _notified_fail: bool = false,
 
-    _handle: ?*Handle = null,
+    _conn: ?*Net.Connection = null,
 
     _redirecting: bool = false,
     _auth_challenge: ?AuthChallenge = null,
@@ -1159,41 +974,35 @@ pub const Transfer = struct {
 
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
-        if (self._handle) |handle| {
-            self.client.handles.release(handle);
+        if (self._conn) |conn| {
+            self.client.handles.remove(conn);
         }
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
     }
 
-    fn buildResponseHeader(self: *Transfer, easy: *c.CURL) !void {
+    fn buildResponseHeader(self: *Transfer, conn: *const Net.Connection) !void {
         if (comptime IS_DEBUG) {
             std.debug.assert(self.response_header == null);
         }
 
-        var url: [*c]u8 = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &url));
+        const url = try conn.getEffectiveUrl();
 
-        var status: c_long = undefined;
-        if (self._auth_challenge) |_| {
-            status = 407;
-        } else {
-            try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_RESPONSE_CODE, &status));
-        }
-
-        var redirect_count: c_long = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_REDIRECT_COUNT, &redirect_count));
+        const status: u16 = if (self._auth_challenge != null)
+            407
+        else
+            try conn.getResponseCode();
 
         self.response_header = .{
             .url = url,
-            .status = @intCast(status),
-            .redirect_count = @intCast(redirect_count),
+            .status = status,
+            .redirect_count = try conn.getRedirectCount(),
         };
 
-        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+        if (conn.getResponseHeader("content-type", 0)) |ct| {
             var hdr = &self.response_header.?;
             const value = ct.value;
-            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            const len = @min(value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
             hdr._content_type_len = len;
             @memcpy(hdr._content_type[0..len], value[0..len]);
         }
@@ -1202,10 +1011,6 @@ pub const Transfer = struct {
     pub fn format(self: *Transfer, writer: *std.Io.Writer) !void {
         const req = self.req;
         return writer.print("{s} {s}", .{ @tagName(req.method), req.url });
-    }
-
-    pub fn addHeader(self: *Transfer, value: [:0]const u8) !void {
-        self._request_header_list = c.curl_slist_append(self._request_header_list, value);
     }
 
     pub fn updateURL(self: *Transfer, url: [:0]const u8) !void {
@@ -1220,7 +1025,7 @@ pub const Transfer = struct {
         self.req.credentials = userpwd;
     }
 
-    pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Http.Header) !void {
+    pub fn replaceRequestHeaders(self: *Transfer, allocator: Allocator, headers: []const Net.Header) !void {
         self.req.headers.deinit();
 
         var buf: std.ArrayList(u8) = .empty;
@@ -1238,13 +1043,13 @@ pub const Transfer = struct {
 
     pub fn abort(self: *Transfer, err: anyerror) void {
         requestFailed(self, err, true);
-        if (self._handle == null) {
+        if (self._conn == null) {
             self.deinit();
             return;
         }
 
         const client = self.client;
-        if (client.performing) {
+        if (client.handles.performing) {
             // We're currently in a curl_multi_perform. We cannot call endTransfer
             // as that calls curl_multi_remove_handle, and you can't do that
             // from a curl callback. Instead, we flag this transfer and all of
@@ -1254,7 +1059,7 @@ pub const Transfer = struct {
             return;
         }
 
-        if (self._handle != null) {
+        if (self._conn != null) {
             client.endTransfer(self);
         }
         self.deinit();
@@ -1262,7 +1067,7 @@ pub const Transfer = struct {
 
     pub fn terminate(self: *Transfer) void {
         requestFailed(self, error.Shutdown, false);
-        if (self._handle != null) {
+        if (self._conn != null) {
             self.client.endTransfer(self);
         }
         self.deinit();
@@ -1271,7 +1076,7 @@ pub const Transfer = struct {
     // internal, when the page is shutting down. Doesn't have the same ceremony
     // as abort (doesn't send a notification, doesn't invoke an error callback)
     fn kill(self: *Transfer) void {
-        if (self._handle != null) {
+        if (self._conn != null) {
             self.client.endTransfer(self);
         }
         if (self.req.shutdown_callback) |cb| {
@@ -1299,7 +1104,7 @@ pub const Transfer = struct {
     // redirectionCookies manages cookies during redirections handled by Curl.
     // It sets the cookies from the current response to the cookie jar.
     // It also immediately sets cookies for the following request.
-    fn redirectionCookies(transfer: *Transfer, easy: *c.CURL) !void {
+    fn redirectionCookies(transfer: *Transfer, conn: *const Net.Connection) !void {
         const req = &transfer.req;
         const arena = transfer.arena.allocator();
 
@@ -1307,7 +1112,7 @@ pub const Transfer = struct {
         if (req.cookie_jar) |jar| {
             var i: usize = 0;
             while (true) {
-                const ct = getResponseHeader(easy, "set-cookie", i);
+                const ct = conn.getResponseHeader("set-cookie", i);
                 if (ct == null) break;
                 try jar.populateFromResponse(transfer.url, ct.?.value);
                 i += 1;
@@ -1316,12 +1121,11 @@ pub const Transfer = struct {
         }
 
         // set cookies for the following redirection's request.
-        const location = getResponseHeader(easy, "location", 0) orelse {
+        const location = conn.getResponseHeader("location", 0) orelse {
             return error.LocationNotFound;
         };
 
-        var base_url: [*c]u8 = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_EFFECTIVE_URL, &base_url));
+        const base_url = try conn.getEffectiveUrl();
 
         const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
         transfer.url = url;
@@ -1335,23 +1139,23 @@ pub const Transfer = struct {
                 .is_navigation = req.resource_type == .document,
             });
             try cookies.append(arena, 0); //null terminate
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COOKIE, @as([*c]const u8, @ptrCast(cookies.items.ptr))));
+            try conn.setCookies(@ptrCast(cookies.items.ptr));
         }
     }
 
     // headerDoneCallback is called once the headers have been read.
     // It can be called either on dataCallback or once the request for those
     // w/o body.
-    fn headerDoneCallback(transfer: *Transfer, easy: *c.CURL) !bool {
+    fn headerDoneCallback(transfer: *Transfer, conn: *const Net.Connection) !bool {
         lp.assert(transfer._header_done_called == false, "Transfer.headerDoneCallback", .{});
         defer transfer._header_done_called = true;
 
-        try transfer.buildResponseHeader(easy);
+        try transfer.buildResponseHeader(conn);
 
-        if (getResponseHeader(easy, "content-type", 0)) |ct| {
+        if (conn.getResponseHeader("content-type", 0)) |ct| {
             var hdr = &transfer.response_header.?;
             const value = ct.value;
-            const len = @min(value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+            const len = @min(value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
             hdr._content_type_len = len;
             @memcpy(hdr._content_type[0..len], value[0..len]);
         }
@@ -1359,7 +1163,7 @@ pub const Transfer = struct {
         if (transfer.req.cookie_jar) |jar| {
             var i: usize = 0;
             while (true) {
-                const ct = getResponseHeader(easy, "set-cookie", i);
+                const ct = conn.getResponseHeader("set-cookie", i);
                 if (ct == null) break;
                 jar.populateFromResponse(transfer.url, ct.?.value) catch |err| {
                     log.err(.http, "set cookie", .{ .err = err, .req = transfer });
@@ -1397,8 +1201,8 @@ pub const Transfer = struct {
             std.debug.assert(header_count == 1);
         }
 
-        const easy: *c.CURL = @ptrCast(@alignCast(data));
-        var transfer = fromEasy(easy) catch |err| {
+        const conn: Net.Connection = .{ .easy = @ptrCast(@alignCast(data)) };
+        var transfer = fromConnection(&conn) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "header callback" });
             return 0;
         };
@@ -1501,7 +1305,7 @@ pub const Transfer = struct {
 
         if (transfer._redirecting) {
             // parse and set cookies for the redirection.
-            redirectionCookies(transfer, easy) catch |err| {
+            redirectionCookies(transfer, &conn) catch |err| {
                 if (comptime IS_DEBUG) {
                     log.debug(.http, "redirection cookies", .{ .err = err });
                 }
@@ -1519,8 +1323,8 @@ pub const Transfer = struct {
             std.debug.assert(chunk_count == 1);
         }
 
-        const easy: *c.CURL = @ptrCast(@alignCast(data));
-        var transfer = fromEasy(easy) catch |err| {
+        const conn: Net.Connection = .{ .easy = @ptrCast(@alignCast(data)) };
+        var transfer = fromConnection(&conn) catch |err| {
             log.err(.http, "get private info", .{ .err = err, .source = "body callback" });
             return c.CURL_WRITEFUNC_ERROR;
         };
@@ -1530,7 +1334,7 @@ pub const Transfer = struct {
         }
 
         if (!transfer._header_done_called) {
-            const proceed = transfer.headerDoneCallback(easy) catch |err| {
+            const proceed = transfer.headerDoneCallback(&conn) catch |err| {
                 log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
                 return c.CURL_WRITEFUNC_ERROR;
             };
@@ -1567,10 +1371,10 @@ pub const Transfer = struct {
     }
 
     pub fn responseHeaderIterator(self: *Transfer) HeaderIterator {
-        if (self._handle) |handle| {
-            // If we have a handle, than this is a real curl request and we
+        if (self._conn) |conn| {
+            // If we have a connection, than this is a real curl request and we
             // iterate through the header that curl maintains.
-            return .{ .curl = .{ .easy = handle.conn.easy } };
+            return .{ .curl = .{ .conn = conn } };
         }
         // If there's no handle, it either means this is being called before
         // the request is even being made (which would be a bug in the code)
@@ -1579,15 +1383,13 @@ pub const Transfer = struct {
         return .{ .list = .{ .list = self.response_header.?._injected_headers } };
     }
 
-    // pub because Page.printWaitAnalysis uses it
-    pub fn fromEasy(easy: *c.CURL) !*Transfer {
-        var private: *anyopaque = undefined;
-        try errorCheck(c.curl_easy_getinfo(easy, c.CURLINFO_PRIVATE, &private));
+    pub fn fromConnection(conn: *const Net.Connection) !*Transfer {
+        const private = try conn.getPrivate();
         return @ptrCast(@alignCast(private));
     }
 
-    pub fn fulfill(transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
-        if (transfer._handle != null) {
+    pub fn fulfill(transfer: *Transfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
+        if (transfer._conn != null) {
             // should never happen, should have been intercepted/paused, and then
             // either continued, aborted or fulfilled once.
             @branchHint(.unlikely);
@@ -1600,7 +1402,7 @@ pub const Transfer = struct {
         };
     }
 
-    fn _fulfill(transfer: *Transfer, status: u16, headers: []const Http.Header, body: ?[]const u8) !void {
+    fn _fulfill(transfer: *Transfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
         const req = &transfer.req;
         if (req.start_callback) |cb| {
             try cb(transfer);
@@ -1614,7 +1416,7 @@ pub const Transfer = struct {
         };
         for (headers) |hdr| {
             if (std.ascii.eqlIgnoreCase(hdr.name, "content-type")) {
-                const len = @min(hdr.value.len, ResponseHeader.MAX_CONTENT_TYPE_LEN);
+                const len = @min(hdr.value.len, ResponseHead.MAX_CONTENT_TYPE_LEN);
                 @memcpy(transfer.response_header.?._content_type[0..len], hdr.value[0..len]);
                 transfer.response_header.?._content_type_len = len;
                 break;
@@ -1642,10 +1444,10 @@ pub const Transfer = struct {
     }
 
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
-        if (self._handle) |handle| {
-            // If we have a handle, than this is a normal request. We can get the
-            // header value from the easy handle.
-            const cl = getResponseHeader(handle.conn.easy, "content-length", 0) orelse return null;
+        if (self._conn) |conn| {
+            // If we have a connection, than this is a normal request. We can get the
+            // header value from the connection.
+            const cl = conn.getResponseHeader("content-length", 0) orelse return null;
             return cl.value;
         }
 
@@ -1663,96 +1465,3 @@ pub const Transfer = struct {
         return null;
     }
 };
-
-pub const ResponseHeader = struct {
-    const MAX_CONTENT_TYPE_LEN = 64;
-
-    status: u16,
-    url: [*c]const u8,
-    redirect_count: u32,
-    _content_type_len: usize = 0,
-    _content_type: [MAX_CONTENT_TYPE_LEN]u8 = undefined,
-    // this is normally an empty list, but if the response is being injected
-    // than it'll be populated. It isn't meant to be used directly, but should
-    // be used through the transfer.responseHeaderIterator() which abstracts
-    // whether the headers are from a live curl easy handle, or injected.
-    _injected_headers: []const Http.Header = &.{},
-
-    pub fn contentType(self: *ResponseHeader) ?[]u8 {
-        if (self._content_type_len == 0) {
-            return null;
-        }
-        return self._content_type[0..self._content_type_len];
-    }
-};
-
-// In normal cases, the header iterator comes from the curl linked list.
-// But it's also possible to inject a response, via `transfer.fulfill`. In that
-// case, the resposne headers are a list, []const Http.Header.
-// This union, is an iterator that exposes the same API for either case.
-const HeaderIterator = union(enum) {
-    curl: CurlHeaderIterator,
-    list: ListHeaderIterator,
-
-    pub fn next(self: *HeaderIterator) ?Http.Header {
-        switch (self.*) {
-            inline else => |*it| return it.next(),
-        }
-    }
-
-    const CurlHeaderIterator = struct {
-        easy: *c.CURL,
-        prev: ?*c.curl_header = null,
-
-        pub fn next(self: *CurlHeaderIterator) ?Http.Header {
-            const h = c.curl_easy_nextheader(self.easy, c.CURLH_HEADER, -1, self.prev) orelse return null;
-            self.prev = h;
-
-            const header = h.*;
-            return .{
-                .name = std.mem.span(header.name),
-                .value = std.mem.span(header.value),
-            };
-        }
-    };
-
-    const ListHeaderIterator = struct {
-        index: usize = 0,
-        list: []const Http.Header,
-
-        pub fn next(self: *ListHeaderIterator) ?Http.Header {
-            const index = self.index;
-            if (index == self.list.len) {
-                return null;
-            }
-            self.index = index + 1;
-            return self.list[index];
-        }
-    };
-};
-
-const CurlHeaderValue = struct {
-    value: []const u8,
-    amount: usize,
-};
-
-fn getResponseHeader(easy: *c.CURL, name: [:0]const u8, index: usize) ?CurlHeaderValue {
-    var hdr: [*c]c.curl_header = null;
-    const result = c.curl_easy_header(easy, name, index, c.CURLH_HEADER, -1, &hdr);
-    if (result == c.CURLE_OK) {
-        return .{
-            .amount = hdr.*.amount,
-            .value = std.mem.span(hdr.*.value),
-        };
-    }
-
-    if (result == c.CURLE_FAILED_INIT) {
-        // seems to be what it returns if the header isn't found
-        return null;
-    }
-    log.err(.http, "get response header", .{
-        .name = name,
-        .err = @import("errors.zig").fromCode(result),
-    });
-    return null;
-}

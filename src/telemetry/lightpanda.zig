@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("../log.zig");
 const App = @import("../App.zig");
-const Http = @import("../http/Http.zig");
+const Net = @import("../Net.zig");
 const Config = @import("../Config.zig");
 const telemetry = @import("telemetry.zig");
 
@@ -20,7 +20,8 @@ pub const LightPanda = struct {
     allocator: Allocator,
     mutex: std.Thread.Mutex,
     cond: Thread.Condition,
-    connection: Http.Connection,
+    connection: Net.Connection,
+    config: *const Config,
     pending: std.DoublyLinkedList,
     mem_pool: std.heap.MemoryPool(LightPandaEvent),
 
@@ -40,6 +41,7 @@ pub const LightPanda = struct {
             .running = true,
             .allocator = allocator,
             .connection = connection,
+            .config = app.config,
             .mem_pool = std.heap.MemoryPool(LightPandaEvent).init(allocator),
         };
     }
@@ -109,7 +111,7 @@ pub const LightPanda = struct {
         }
 
         try self.connection.setBody(aw.written());
-        const status = try self.connection.request();
+        const status = try self.connection.request(&self.config.http_headers);
 
         if (status != 200) {
             log.warn(.telemetry, "server error", .{ .status = status });
