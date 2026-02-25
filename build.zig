@@ -50,8 +50,11 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = enable_tsan,
         });
         mod.addImport("lightpanda", mod); // allow circular "lightpanda" import
+        mod.addImport("build_config", opts.createModule());
 
-        try addDependencies(b, mod, opts, enable_asan, enable_tsan, prebuilt_v8_path);
+        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
+        try linkCurl(b, mod);
+        try linkHtml5Ever(b, mod);
 
         break :blk mod;
     };
@@ -171,100 +174,102 @@ pub fn build(b: *Build) !void {
     }
 }
 
-fn addDependencies(
+fn linkV8(
     b: *Build,
     mod: *Build.Module,
-    opts: *Build.Step.Options,
     is_asan: bool,
     is_tsan: bool,
     prebuilt_v8_path: ?[]const u8,
 ) !void {
-    mod.addImport("build_config", opts.createModule());
-
     const target = mod.resolved_target.?;
-    const dep_opts = .{
+
+    const dep = b.dependency("v8", .{
         .target = target,
         .optimize = mod.optimize.?,
-        .cache_root = b.pathFromRoot(".lp-cache"),
-        .prebuilt_v8_path = prebuilt_v8_path,
         .is_asan = is_asan,
         .is_tsan = is_tsan,
+        .inspector_subtype = false,
         .v8_enable_sandbox = is_tsan,
+        .cache_root = b.pathFromRoot(".lp-cache"),
+        .prebuilt_v8_path = prebuilt_v8_path,
+    });
+    mod.addImport("v8", dep.module("v8"));
+}
+
+fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
+    // Build step to install html5ever dependency.
+    const html5ever_argv = blk: {
+        const argv: []const []const u8 = &.{
+            "cargo",
+            "build",
+            // Seems cargo can figure out required paths out of Cargo.toml.
+            "--manifest-path",
+            "src/html5ever/Cargo.toml",
+            // TODO: We can prefer `--artifact-dir` once it become stable.
+            "--target-dir",
+            b.getInstallPath(.prefix, "html5ever"),
+            // This must be the last argument.
+            "--release",
+        };
+
+        break :blk switch (mod.optimize.?) {
+            // Prefer dev build on debug option.
+            .Debug => argv[0 .. argv.len - 1],
+            else => argv,
+        };
+    };
+    const html5ever_exec_cargo = b.addSystemCommand(html5ever_argv);
+    const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
+    html5ever_step.dependOn(&html5ever_exec_cargo.step);
+
+    const html5ever_obj = switch (mod.optimize.?) {
+        .Debug => b.getInstallPath(.prefix, "html5ever/debug/liblitefetch_html5ever.a"),
+        // Release builds.
+        else => b.getInstallPath(.prefix, "html5ever/release/liblitefetch_html5ever.a"),
     };
 
-    {
-        // html5ever
+    mod.addObjectFile(.{ .cwd_relative = html5ever_obj });
+}
 
-        // Build step to install html5ever dependency.
-        const html5ever_argv = blk: {
-            const argv: []const []const u8 = &.{
-                "cargo",
-                "build",
-                // Seems cargo can figure out required paths out of Cargo.toml.
-                "--manifest-path",
-                "src/html5ever/Cargo.toml",
-                // TODO: We can prefer `--artifact-dir` once it become stable.
-                "--target-dir",
-                b.getInstallPath(.prefix, "html5ever"),
-                // This must be the last argument.
-                "--release",
-            };
+fn linkCurl(b: *Build, mod: *Build.Module) !void {
+    const target = mod.resolved_target.?;
 
-            break :blk switch (mod.optimize.?) {
-                // Prefer dev build on debug option.
-                .Debug => argv[0 .. argv.len - 1],
-                else => argv,
-            };
-        };
-        const html5ever_exec_cargo = b.addSystemCommand(html5ever_argv);
-        const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
-        html5ever_step.dependOn(&html5ever_exec_cargo.step);
-        opts.step.dependOn(html5ever_step);
+    const curl = buildCurl(b, target, mod.optimize.?);
+    mod.linkLibrary(curl);
 
-        const html5ever_obj = switch (mod.optimize.?) {
-            .Debug => b.getInstallPath(.prefix, "html5ever/debug/liblitefetch_html5ever.a"),
-            // Release builds.
-            else => b.getInstallPath(.prefix, "html5ever/release/liblitefetch_html5ever.a"),
-        };
+    const zlib = buildZlib(b, target, mod.optimize.?);
+    curl.root_module.linkLibrary(zlib);
 
-        mod.addObjectFile(.{ .cwd_relative = html5ever_obj });
-    }
+    const brotli = buildBrotli(b, target, mod.optimize.?);
+    for (brotli) |lib| curl.root_module.linkLibrary(lib);
 
-    {
-        // v8
-        const v8_opts = b.addOptions();
-        v8_opts.addOption(bool, "inspector_subtype", false);
+    const nghttp2 = buildNghttp2(b, target, mod.optimize.?);
+    curl.root_module.linkLibrary(nghttp2);
 
-        const v8_mod = b.dependency("v8", dep_opts).module("v8");
-        v8_mod.addOptions("default_exports", v8_opts);
-        mod.addImport("v8", v8_mod);
-    }
+    const boringssl = buildBoringSsl(b, target, mod.optimize.?);
+    for (boringssl) |lib| curl.root_module.linkLibrary(lib);
 
-    {
-        //curl
-        try buildZlib(b, mod);
-        try buildBrotli(b, mod);
-        try buildBoringSsl(b, mod);
-        try buildNghttp2(b, mod);
-        try buildCurl(b, mod);
-
-        switch (target.result.os.tag) {
-            .macos => {
-                // needed for proxying on mac
-                mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
-                mod.linkFramework("CoreFoundation", .{});
-                mod.linkFramework("SystemConfiguration", .{});
-            },
-            else => {},
-        }
+    switch (target.result.os.tag) {
+        .macos => {
+            // needed for proxying on mac
+            mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+            mod.linkFramework("CoreFoundation", .{});
+            mod.linkFramework("SystemConfiguration", .{});
+        },
+        else => {},
     }
 }
 
-fn buildZlib(b: *Build, m: *Build.Module) !void {
+fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
     const dep = b.dependency("zlib", .{});
 
-    const lib = b.addLibrary(.{ .name = "z", .root_module = m });
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
 
+    const lib = b.addLibrary(.{ .name = "z", .root_module = mod });
     lib.installHeadersDirectory(dep.path(""), "", .{});
     lib.addCSourceFiles(.{
         .root = dep.path(""),
@@ -272,6 +277,7 @@ fn buildZlib(b: *Build, m: *Build.Module) !void {
             "-DHAVE_SYS_TYPES_H",
             "-DHAVE_STDINT_H",
             "-DHAVE_STDDEF_H",
+            "-DHAVE_UNISTD_H",
         },
         .files = &.{
             "adler32.c", "compress.c", "crc32.c",
@@ -281,21 +287,25 @@ fn buildZlib(b: *Build, m: *Build.Module) !void {
             "trees.c",   "uncompr.c",  "zutil.c",
         },
     });
+
+    return lib;
 }
 
-fn buildBrotli(b: *Build, m: *Build.Module) !void {
+fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) [3]*Build.Step.Compile {
     const dep = b.dependency("brotli", .{});
 
-    const brotlicmn = b.addLibrary(.{ .name = "brotlicommon", .root_module = m });
-    const brotlidec = b.addLibrary(.{ .name = "brotlidec", .root_module = m });
-    const brotlienc = b.addLibrary(.{ .name = "brotlienc", .root_module = m });
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(dep.path("c/include"));
 
-    brotlicmn.addIncludePath(dep.path("c/include"));
+    const brotlicmn = b.addLibrary(.{ .name = "brotlicommon", .root_module = mod });
+    const brotlidec = b.addLibrary(.{ .name = "brotlidec", .root_module = mod });
+    const brotlienc = b.addLibrary(.{ .name = "brotlienc", .root_module = mod });
 
-    brotlicmn.addIncludePath(dep.path("c/include"));
-    brotlidec.addIncludePath(dep.path("c/include"));
-    brotlienc.addIncludePath(dep.path("c/include"));
-
+    brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
     brotlicmn.addCSourceFiles(.{
         .root = dep.path("c/common"),
         .files = &.{
@@ -323,27 +333,35 @@ fn buildBrotli(b: *Build, m: *Build.Module) !void {
             "static_init.c",                "utf8_util.c",
         },
     });
+
+    return .{ brotlicmn, brotlidec, brotlienc };
 }
 
-fn buildBoringSsl(b: *Build, m: *Build.Module) !void {
-    const boringssl_dep = b.dependency("boringssl-zig", .{
+fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) [2]*Build.Step.Compile {
+    const dep = b.dependency("boringssl-zig", .{
+        .target = target,
+        .optimize = optimize,
         .force_pic = true,
-        .optimize = m.optimize.?,
     });
 
-    const ssl = boringssl_dep.artifact("ssl");
+    const ssl = dep.artifact("ssl");
     ssl.bundle_ubsan_rt = false;
 
-    const crypto = boringssl_dep.artifact("crypto");
+    const crypto = dep.artifact("crypto");
     crypto.bundle_ubsan_rt = false;
 
-    m.linkLibrary(ssl);
-    m.linkLibrary(crypto);
+    return .{ ssl, crypto };
 }
 
-fn buildNghttp2(b: *Build, m: *Build.Module) !void {
+fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
     const dep = b.dependency("nghttp2", .{});
-    const lib = b.addLibrary(.{ .name = "nghttp2", .root_module = m });
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(dep.path("lib/includes"));
 
     const config = b.addConfigHeader(.{
         .include_path = "nghttp2ver.h",
@@ -352,15 +370,19 @@ fn buildNghttp2(b: *Build, m: *Build.Module) !void {
         .PACKAGE_VERSION = "1.68.90",
         .PACKAGE_VERSION_NUM = 0x016890,
     });
-    lib.addConfigHeader(config);
+    mod.addConfigHeader(config);
 
-    lib.addIncludePath(dep.path("lib/includes"));
+    const lib = b.addLibrary(.{ .name = "nghttp2", .root_module = mod });
+
+    lib.installConfigHeader(config);
+    lib.installHeadersDirectory(dep.path("lib/includes/nghttp2"), "nghttp2", .{});
     lib.addCSourceFiles(.{
         .root = dep.path("lib"),
         .flags = &.{
             "-DNGHTTP2_STATICLIB",
-            "-DHAVE_NETINET_IN",
             "-DHAVE_TIME_H",
+            "-DHAVE_ARPA_INET_H",
+            "-DHAVE_NETINET_IN_H",
         },
         .files = &.{
             "sfparse.c",                 "nghttp2_alpn.c",   "nghttp2_buf.c",
@@ -374,191 +396,200 @@ fn buildNghttp2(b: *Build, m: *Build.Module) !void {
             "nghttp2_ratelim.c",         "nghttp2_time.c",
         },
     });
+
+    return lib;
 }
 
-fn buildCurl(b: *Build, m: *Build.Module) !void {
-    const target = m.resolved_target.?;
-
+fn buildCurl(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Step.Compile {
     const dep = b.dependency("curl", .{});
-    const curl = b.addLibrary(.{ .name = "curl", .root_module = m });
 
-    curl.addIncludePath(dep.path("lib"));
-    curl.addIncludePath(dep.path("include"));
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(dep.path("lib"));
+    mod.addIncludePath(dep.path("include"));
 
     const is_linux = target.result.os.tag == .linux;
     if (is_linux) {
-        m.addCMacro("HAVE_LINUX_TCP_H", "1");
-        m.addCMacro("HAVE_MSG_NOSIGNAL", "1");
-        m.addCMacro("HAVE_GETHOSTBYNAME_R", "1");
+        mod.addCMacro("HAVE_LINUX_TCP_H", "1");
+        mod.addCMacro("HAVE_MSG_NOSIGNAL", "1");
+        mod.addCMacro("HAVE_GETHOSTBYNAME_R", "1");
     }
-    m.addCMacro("_FILE_OFFSET_BITS", "64");
-    m.addCMacro("BUILDING_LIBCURL", "1");
-    m.addCMacro("CURL_DISABLE_AWS", "1");
-    m.addCMacro("CURL_DISABLE_DICT", "1");
-    m.addCMacro("CURL_DISABLE_DOH", "1");
-    m.addCMacro("CURL_DISABLE_FILE", "1");
-    m.addCMacro("CURL_DISABLE_FTP", "1");
-    m.addCMacro("CURL_DISABLE_GOPHER", "1");
-    m.addCMacro("CURL_DISABLE_KERBEROS", "1");
-    m.addCMacro("CURL_DISABLE_IMAP", "1");
-    m.addCMacro("CURL_DISABLE_IPFS", "1");
-    m.addCMacro("CURL_DISABLE_LDAP", "1");
-    m.addCMacro("CURL_DISABLE_LDAPS", "1");
-    m.addCMacro("CURL_DISABLE_MQTT", "1");
-    m.addCMacro("CURL_DISABLE_NTLM", "1");
-    m.addCMacro("CURL_DISABLE_PROGRESS_METER", "1");
-    m.addCMacro("CURL_DISABLE_POP3", "1");
-    m.addCMacro("CURL_DISABLE_RTSP", "1");
-    m.addCMacro("CURL_DISABLE_SMB", "1");
-    m.addCMacro("CURL_DISABLE_SMTP", "1");
-    m.addCMacro("CURL_DISABLE_TELNET", "1");
-    m.addCMacro("CURL_DISABLE_TFTP", "1");
-    m.addCMacro("CURL_EXTERN_SYMBOL", "__attribute__ ((__visibility__ (\"default\"))");
-    m.addCMacro("CURL_OS", if (is_linux) "\"Linux\"" else "\"mac\"");
-    m.addCMacro("CURL_STATICLIB", "1");
-    m.addCMacro("ENABLE_IPV6", "1");
-    m.addCMacro("HAVE_ALARM", "1");
-    m.addCMacro("HAVE_ALLOCA_H", "1");
-    m.addCMacro("HAVE_ARPA_INET_H", "1");
-    m.addCMacro("HAVE_ARPA_TFTP_H", "1");
-    m.addCMacro("HAVE_ASSERT_H", "1");
-    m.addCMacro("HAVE_BASENAME", "1");
-    m.addCMacro("HAVE_BOOL_T", "1");
-    m.addCMacro("HAVE_BROTLI", "1");
-    m.addCMacro("HAVE_BUILTIN_AVAILABLE", "1");
-    m.addCMacro("HAVE_CLOCK_GETTIME_MONOTONIC", "1");
-    m.addCMacro("HAVE_DLFCN_H", "1");
-    m.addCMacro("HAVE_ERRNO_H", "1");
-    m.addCMacro("HAVE_FCNTL", "1");
-    m.addCMacro("HAVE_FCNTL_H", "1");
-    m.addCMacro("HAVE_FCNTL_O_NONBLOCK", "1");
-    m.addCMacro("HAVE_FREEADDRINFO", "1");
-    m.addCMacro("HAVE_FSETXATTR", "1");
-    m.addCMacro("HAVE_FSETXATTR_5", "1");
-    m.addCMacro("HAVE_FTRUNCATE", "1");
-    m.addCMacro("HAVE_GETADDRINFO", "1");
-    m.addCMacro("HAVE_GETEUID", "1");
-    m.addCMacro("HAVE_GETHOSTBYNAME", "1");
-    m.addCMacro("HAVE_GETHOSTBYNAME_R_6", "1");
-    m.addCMacro("HAVE_GETHOSTNAME", "1");
-    m.addCMacro("HAVE_GETPEERNAME", "1");
-    m.addCMacro("HAVE_GETPPID", "1");
-    m.addCMacro("HAVE_GETPPID", "1");
-    m.addCMacro("HAVE_GETPROTOBYNAME", "1");
-    m.addCMacro("HAVE_GETPWUID", "1");
-    m.addCMacro("HAVE_GETPWUID_R", "1");
-    m.addCMacro("HAVE_GETRLIMIT", "1");
-    m.addCMacro("HAVE_GETSOCKNAME", "1");
-    m.addCMacro("HAVE_GETTIMEOFDAY", "1");
-    m.addCMacro("HAVE_GMTIME_R", "1");
-    m.addCMacro("HAVE_IDN2_H", "1");
-    m.addCMacro("HAVE_IF_NAMETOINDEX", "1");
-    m.addCMacro("HAVE_IFADDRS_H", "1");
-    m.addCMacro("HAVE_INET_ADDR", "1");
-    m.addCMacro("HAVE_INET_PTON", "1");
-    m.addCMacro("HAVE_INTTYPES_H", "1");
-    m.addCMacro("HAVE_IOCTL", "1");
-    m.addCMacro("HAVE_IOCTL_FIONBIO", "1");
-    m.addCMacro("HAVE_IOCTL_SIOCGIFADDR", "1");
-    m.addCMacro("HAVE_LDAP_URL_PARSE", "1");
-    m.addCMacro("HAVE_LIBGEN_H", "1");
-    m.addCMacro("HAVE_LIBZ", "1");
-    m.addCMacro("HAVE_LL", "1");
-    m.addCMacro("HAVE_LOCALE_H", "1");
-    m.addCMacro("HAVE_LOCALTIME_R", "1");
-    m.addCMacro("HAVE_LONGLONG", "1");
-    m.addCMacro("HAVE_MALLOC_H", "1");
-    m.addCMacro("HAVE_MEMORY_H", "1");
-    m.addCMacro("HAVE_NET_IF_H", "1");
-    m.addCMacro("HAVE_NETDB_H", "1");
-    m.addCMacro("HAVE_NETINET_IN_H", "1");
-    m.addCMacro("HAVE_NETINET_TCP_H", "1");
-    m.addCMacro("HAVE_PIPE", "1");
-    m.addCMacro("HAVE_POLL", "1");
-    m.addCMacro("HAVE_POLL_FINE", "1");
-    m.addCMacro("HAVE_POLL_H", "1");
-    m.addCMacro("HAVE_POSIX_STRERROR_R", "1");
-    m.addCMacro("HAVE_PTHREAD_H", "1");
-    m.addCMacro("HAVE_PWD_H", "1");
-    m.addCMacro("HAVE_RECV", "1");
-    m.addCMacro("HAVE_SA_FAMILY_T", "1");
-    m.addCMacro("HAVE_SELECT", "1");
-    m.addCMacro("HAVE_SEND", "1");
-    m.addCMacro("HAVE_SETJMP_H", "1");
-    m.addCMacro("HAVE_SETLOCALE", "1");
-    m.addCMacro("HAVE_SETRLIMIT", "1");
-    m.addCMacro("HAVE_SETSOCKOPT", "1");
-    m.addCMacro("HAVE_SIGACTION", "1");
-    m.addCMacro("HAVE_SIGINTERRUPT", "1");
-    m.addCMacro("HAVE_SIGNAL", "1");
-    m.addCMacro("HAVE_SIGNAL_H", "1");
-    m.addCMacro("HAVE_SIGSETJMP", "1");
-    m.addCMacro("HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID", "1");
-    m.addCMacro("HAVE_SOCKET", "1");
-    m.addCMacro("HAVE_STDBOOL_H", "1");
-    m.addCMacro("HAVE_STDINT_H", "1");
-    m.addCMacro("HAVE_STDIO_H", "1");
-    m.addCMacro("HAVE_STDLIB_H", "1");
-    m.addCMacro("HAVE_STRCASECMP", "1");
-    m.addCMacro("HAVE_STRDUP", "1");
-    m.addCMacro("HAVE_STRERROR_R", "1");
-    m.addCMacro("HAVE_STRING_H", "1");
-    m.addCMacro("HAVE_STRINGS_H", "1");
-    m.addCMacro("HAVE_STRSTR", "1");
-    m.addCMacro("HAVE_STRTOK_R", "1");
-    m.addCMacro("HAVE_STRTOLL", "1");
-    m.addCMacro("HAVE_STRUCT_SOCKADDR_STORAGE", "1");
-    m.addCMacro("HAVE_STRUCT_TIMEVAL", "1");
-    m.addCMacro("HAVE_SYS_IOCTL_H", "1");
-    m.addCMacro("HAVE_SYS_PARAM_H", "1");
-    m.addCMacro("HAVE_SYS_POLL_H", "1");
-    m.addCMacro("HAVE_SYS_RESOURCE_H", "1");
-    m.addCMacro("HAVE_SYS_SELECT_H", "1");
-    m.addCMacro("HAVE_SYS_SOCKET_H", "1");
-    m.addCMacro("HAVE_SYS_STAT_H", "1");
-    m.addCMacro("HAVE_SYS_TIME_H", "1");
-    m.addCMacro("HAVE_SYS_TYPES_H", "1");
-    m.addCMacro("HAVE_SYS_UIO_H", "1");
-    m.addCMacro("HAVE_SYS_UN_H", "1");
-    m.addCMacro("HAVE_TERMIO_H", "1");
-    m.addCMacro("HAVE_TERMIOS_H", "1");
-    m.addCMacro("HAVE_TIME_H", "1");
-    m.addCMacro("HAVE_UNAME", "1");
-    m.addCMacro("HAVE_UNISTD_H", "1");
-    m.addCMacro("HAVE_UTIME", "1");
-    m.addCMacro("HAVE_UTIME_H", "1");
-    m.addCMacro("HAVE_UTIMES", "1");
-    m.addCMacro("HAVE_VARIADIC_MACROS_C99", "1");
-    m.addCMacro("HAVE_VARIADIC_MACROS_GCC", "1");
-    m.addCMacro("HAVE_ZLIB_H", "1");
-    m.addCMacro("RANDOM_FILE", "\"/dev/urandom\"");
-    m.addCMacro("RECV_TYPE_ARG1", "int");
-    m.addCMacro("RECV_TYPE_ARG2", "void *");
-    m.addCMacro("RECV_TYPE_ARG3", "size_t");
-    m.addCMacro("RECV_TYPE_ARG4", "int");
-    m.addCMacro("RECV_TYPE_RETV", "ssize_t");
-    m.addCMacro("SEND_QUAL_ARG2", "const");
-    m.addCMacro("SEND_TYPE_ARG1", "int");
-    m.addCMacro("SEND_TYPE_ARG2", "void *");
-    m.addCMacro("SEND_TYPE_ARG3", "size_t");
-    m.addCMacro("SEND_TYPE_ARG4", "int");
-    m.addCMacro("SEND_TYPE_RETV", "ssize_t");
-    m.addCMacro("SIZEOF_CURL_OFF_T", "8");
-    m.addCMacro("SIZEOF_INT", "4");
-    m.addCMacro("SIZEOF_LONG", "8");
-    m.addCMacro("SIZEOF_OFF_T", "8");
-    m.addCMacro("SIZEOF_SHORT", "2");
-    m.addCMacro("SIZEOF_SIZE_T", "8");
-    m.addCMacro("SIZEOF_TIME_T", "8");
-    m.addCMacro("STDC_HEADERS", "1");
-    m.addCMacro("TIME_WITH_SYS_TIME", "1");
-    m.addCMacro("USE_NGHTTP2", "1");
-    m.addCMacro("USE_OPENSSL", "1");
-    m.addCMacro("OPENSSL_IS_BORINGSSL", "1");
-    m.addCMacro("USE_THREADS_POSIX", "1");
-    m.addCMacro("USE_UNIX_SOCKETS", "1");
+    mod.addCMacro("_FILE_OFFSET_BITS", "64");
+    mod.addCMacro("BUILDING_LIBCURL", "1");
+    mod.addCMacro("CURL_DISABLE_AWS", "1");
+    mod.addCMacro("CURL_DISABLE_DICT", "1");
+    mod.addCMacro("CURL_DISABLE_DOH", "1");
+    mod.addCMacro("CURL_DISABLE_FILE", "1");
+    mod.addCMacro("CURL_DISABLE_FTP", "1");
+    mod.addCMacro("CURL_DISABLE_GOPHER", "1");
+    mod.addCMacro("CURL_DISABLE_KERBEROS", "1");
+    mod.addCMacro("CURL_DISABLE_IMAP", "1");
+    mod.addCMacro("CURL_DISABLE_IPFS", "1");
+    mod.addCMacro("CURL_DISABLE_LDAP", "1");
+    mod.addCMacro("CURL_DISABLE_LDAPS", "1");
+    mod.addCMacro("CURL_DISABLE_MQTT", "1");
+    mod.addCMacro("CURL_DISABLE_NTLM", "1");
+    mod.addCMacro("CURL_DISABLE_PROGRESS_METER", "1");
+    mod.addCMacro("CURL_DISABLE_POP3", "1");
+    mod.addCMacro("CURL_DISABLE_RTSP", "1");
+    mod.addCMacro("CURL_DISABLE_SMB", "1");
+    mod.addCMacro("CURL_DISABLE_SMTP", "1");
+    mod.addCMacro("CURL_DISABLE_TELNET", "1");
+    mod.addCMacro("CURL_DISABLE_TFTP", "1");
+    mod.addCMacro("CURL_EXTERN_SYMBOL", "__attribute__ ((__visibility__ (\"default\"))");
+    mod.addCMacro("CURL_OS", if (is_linux) "\"Linux\"" else "\"mac\"");
+    mod.addCMacro("CURL_STATICLIB", "1");
+    mod.addCMacro("ENABLE_IPV6", "1");
+    mod.addCMacro("HAVE_ALARM", "1");
+    mod.addCMacro("HAVE_ALLOCA_H", "1");
+    mod.addCMacro("HAVE_ARPA_INET_H", "1");
+    mod.addCMacro("HAVE_ARPA_TFTP_H", "1");
+    mod.addCMacro("HAVE_ASSERT_H", "1");
+    mod.addCMacro("HAVE_BASENAME", "1");
+    mod.addCMacro("HAVE_BOOL_T", "1");
+    mod.addCMacro("HAVE_BROTLI", "1");
+    mod.addCMacro("HAVE_BUILTIN_AVAILABLE", "1");
+    mod.addCMacro("HAVE_CLOCK_GETTIME_MONOTONIC", "1");
+    mod.addCMacro("HAVE_DLFCN_H", "1");
+    mod.addCMacro("HAVE_ERRNO_H", "1");
+    mod.addCMacro("HAVE_FCNTL", "1");
+    mod.addCMacro("HAVE_FCNTL_H", "1");
+    mod.addCMacro("HAVE_FCNTL_O_NONBLOCK", "1");
+    mod.addCMacro("HAVE_FREEADDRINFO", "1");
+    mod.addCMacro("HAVE_FSETXATTR", "1");
+    mod.addCMacro("HAVE_FSETXATTR_5", "1");
+    mod.addCMacro("HAVE_FTRUNCATE", "1");
+    mod.addCMacro("HAVE_GETADDRINFO", "1");
+    mod.addCMacro("HAVE_GETEUID", "1");
+    mod.addCMacro("HAVE_GETHOSTBYNAME", "1");
+    mod.addCMacro("HAVE_GETHOSTBYNAME_R_6", "1");
+    mod.addCMacro("HAVE_GETHOSTNAME", "1");
+    mod.addCMacro("HAVE_GETPEERNAME", "1");
+    mod.addCMacro("HAVE_GETPPID", "1");
+    mod.addCMacro("HAVE_GETPPID", "1");
+    mod.addCMacro("HAVE_GETPROTOBYNAME", "1");
+    mod.addCMacro("HAVE_GETPWUID", "1");
+    mod.addCMacro("HAVE_GETPWUID_R", "1");
+    mod.addCMacro("HAVE_GETRLIMIT", "1");
+    mod.addCMacro("HAVE_GETSOCKNAME", "1");
+    mod.addCMacro("HAVE_GETTIMEOFDAY", "1");
+    mod.addCMacro("HAVE_GMTIME_R", "1");
+    mod.addCMacro("HAVE_IDN2_H", "1");
+    mod.addCMacro("HAVE_IF_NAMETOINDEX", "1");
+    mod.addCMacro("HAVE_IFADDRS_H", "1");
+    mod.addCMacro("HAVE_INET_ADDR", "1");
+    mod.addCMacro("HAVE_INET_PTON", "1");
+    mod.addCMacro("HAVE_INTTYPES_H", "1");
+    mod.addCMacro("HAVE_IOCTL", "1");
+    mod.addCMacro("HAVE_IOCTL_FIONBIO", "1");
+    mod.addCMacro("HAVE_IOCTL_SIOCGIFADDR", "1");
+    mod.addCMacro("HAVE_LDAP_URL_PARSE", "1");
+    mod.addCMacro("HAVE_LIBGEN_H", "1");
+    mod.addCMacro("HAVE_LIBZ", "1");
+    mod.addCMacro("HAVE_LL", "1");
+    mod.addCMacro("HAVE_LOCALE_H", "1");
+    mod.addCMacro("HAVE_LOCALTIME_R", "1");
+    mod.addCMacro("HAVE_LONGLONG", "1");
+    mod.addCMacro("HAVE_MALLOC_H", "1");
+    mod.addCMacro("HAVE_MEMORY_H", "1");
+    mod.addCMacro("HAVE_NET_IF_H", "1");
+    mod.addCMacro("HAVE_NETDB_H", "1");
+    mod.addCMacro("HAVE_NETINET_IN_H", "1");
+    mod.addCMacro("HAVE_NETINET_TCP_H", "1");
+    mod.addCMacro("HAVE_PIPE", "1");
+    mod.addCMacro("HAVE_POLL", "1");
+    mod.addCMacro("HAVE_POLL_FINE", "1");
+    mod.addCMacro("HAVE_POLL_H", "1");
+    mod.addCMacro("HAVE_POSIX_STRERROR_R", "1");
+    mod.addCMacro("HAVE_PTHREAD_H", "1");
+    mod.addCMacro("HAVE_PWD_H", "1");
+    mod.addCMacro("HAVE_RECV", "1");
+    mod.addCMacro("HAVE_SA_FAMILY_T", "1");
+    mod.addCMacro("HAVE_SELECT", "1");
+    mod.addCMacro("HAVE_SEND", "1");
+    mod.addCMacro("HAVE_SETJMP_H", "1");
+    mod.addCMacro("HAVE_SETLOCALE", "1");
+    mod.addCMacro("HAVE_SETRLIMIT", "1");
+    mod.addCMacro("HAVE_SETSOCKOPT", "1");
+    mod.addCMacro("HAVE_SIGACTION", "1");
+    mod.addCMacro("HAVE_SIGINTERRUPT", "1");
+    mod.addCMacro("HAVE_SIGNAL", "1");
+    mod.addCMacro("HAVE_SIGNAL_H", "1");
+    mod.addCMacro("HAVE_SIGSETJMP", "1");
+    mod.addCMacro("HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID", "1");
+    mod.addCMacro("HAVE_SOCKET", "1");
+    mod.addCMacro("HAVE_STDBOOL_H", "1");
+    mod.addCMacro("HAVE_STDINT_H", "1");
+    mod.addCMacro("HAVE_STDIO_H", "1");
+    mod.addCMacro("HAVE_STDLIB_H", "1");
+    mod.addCMacro("HAVE_STRCASECMP", "1");
+    mod.addCMacro("HAVE_STRDUP", "1");
+    mod.addCMacro("HAVE_STRERROR_R", "1");
+    mod.addCMacro("HAVE_STRING_H", "1");
+    mod.addCMacro("HAVE_STRINGS_H", "1");
+    mod.addCMacro("HAVE_STRSTR", "1");
+    mod.addCMacro("HAVE_STRTOK_R", "1");
+    mod.addCMacro("HAVE_STRTOLL", "1");
+    mod.addCMacro("HAVE_STRUCT_SOCKADDR_STORAGE", "1");
+    mod.addCMacro("HAVE_STRUCT_TIMEVAL", "1");
+    mod.addCMacro("HAVE_SYS_IOCTL_H", "1");
+    mod.addCMacro("HAVE_SYS_PARAM_H", "1");
+    mod.addCMacro("HAVE_SYS_POLL_H", "1");
+    mod.addCMacro("HAVE_SYS_RESOURCE_H", "1");
+    mod.addCMacro("HAVE_SYS_SELECT_H", "1");
+    mod.addCMacro("HAVE_SYS_SOCKET_H", "1");
+    mod.addCMacro("HAVE_SYS_STAT_H", "1");
+    mod.addCMacro("HAVE_SYS_TIME_H", "1");
+    mod.addCMacro("HAVE_SYS_TYPES_H", "1");
+    mod.addCMacro("HAVE_SYS_UIO_H", "1");
+    mod.addCMacro("HAVE_SYS_UN_H", "1");
+    mod.addCMacro("HAVE_TERMIO_H", "1");
+    mod.addCMacro("HAVE_TERMIOS_H", "1");
+    mod.addCMacro("HAVE_TIME_H", "1");
+    mod.addCMacro("HAVE_UNAME", "1");
+    mod.addCMacro("HAVE_UNISTD_H", "1");
+    mod.addCMacro("HAVE_UTIME", "1");
+    mod.addCMacro("HAVE_UTIME_H", "1");
+    mod.addCMacro("HAVE_UTIMES", "1");
+    mod.addCMacro("HAVE_VARIADIC_MACROS_C99", "1");
+    mod.addCMacro("HAVE_VARIADIC_MACROS_GCC", "1");
+    mod.addCMacro("HAVE_ZLIB_H", "1");
+    mod.addCMacro("RANDOM_FILE", "\"/dev/urandom\"");
+    mod.addCMacro("RECV_TYPE_ARG1", "int");
+    mod.addCMacro("RECV_TYPE_ARG2", "void *");
+    mod.addCMacro("RECV_TYPE_ARG3", "size_t");
+    mod.addCMacro("RECV_TYPE_ARG4", "int");
+    mod.addCMacro("RECV_TYPE_RETV", "ssize_t");
+    mod.addCMacro("SEND_QUAL_ARG2", "const");
+    mod.addCMacro("SEND_TYPE_ARG1", "int");
+    mod.addCMacro("SEND_TYPE_ARG2", "void *");
+    mod.addCMacro("SEND_TYPE_ARG3", "size_t");
+    mod.addCMacro("SEND_TYPE_ARG4", "int");
+    mod.addCMacro("SEND_TYPE_RETV", "ssize_t");
+    mod.addCMacro("SIZEOF_CURL_OFF_T", "8");
+    mod.addCMacro("SIZEOF_INT", "4");
+    mod.addCMacro("SIZEOF_LONG", "8");
+    mod.addCMacro("SIZEOF_OFF_T", "8");
+    mod.addCMacro("SIZEOF_SHORT", "2");
+    mod.addCMacro("SIZEOF_SIZE_T", "8");
+    mod.addCMacro("SIZEOF_TIME_T", "8");
+    mod.addCMacro("STDC_HEADERS", "1");
+    mod.addCMacro("TIME_WITH_SYS_TIME", "1");
+    mod.addCMacro("USE_NGHTTP2", "1");
+    mod.addCMacro("USE_OPENSSL", "1");
+    mod.addCMacro("OPENSSL_IS_BORINGSSL", "1");
+    mod.addCMacro("USE_THREADS_POSIX", "1");
+    mod.addCMacro("USE_UNIX_SOCKETS", "1");
 
-    curl.addCSourceFiles(.{
+    const lib = b.addLibrary(.{ .name = "curl", .root_module = mod });
+    lib.addCSourceFiles(.{
         .root = dep.path("lib"),
         .flags = &.{},
         .files = &.{
@@ -619,6 +650,9 @@ fn buildCurl(b: *Build, m: *Build.Module) !void {
             "vtls/x509asn1.c",       "ws.c",
         },
     });
+
+    lib.installHeadersDirectory(dep.path("include/curl"), "curl", .{});
+    return lib;
 }
 
 const Manifest = struct {
