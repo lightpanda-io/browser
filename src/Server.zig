@@ -521,7 +521,7 @@ pub const Client = struct {
             return true;
         }
 
-        if (std.mem.eql(u8, url, "/json/version")) {
+        if (std.mem.eql(u8, url, "/json/version") or std.mem.eql(u8, url, "/json/version/")) {
             try self.send(self.json_version_response);
             // Chromedp (a Go driver) does an http request to /json/version
             // then to / (websocket upgrade) using a different connection.
