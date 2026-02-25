@@ -69,3 +69,18 @@
   testing.eventually(() => testing.expectEqual(false, fired));
 }
 </script>
+
+<script id="lazy-href-set">
+{
+  let result = false;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.onload = () => result = true;
+  // Append to DOM,
+  document.head.appendChild(link);
+  // then set href.
+  link.href = 'https://lightpanda.io/opensource-browser/15';
+
+  testing.eventually(() => testing.expectEqual(true, result));
+}
+</script>

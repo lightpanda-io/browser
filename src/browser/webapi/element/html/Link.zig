@@ -50,7 +50,12 @@ pub fn getHref(self: *Link, page: *Page) ![]const u8 {
 }
 
 pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
-    try self.asElement().setAttributeSafe(comptime .wrap("href"), .wrap(value), page);
+    const element = self.asElement();
+    try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), page);
+
+    if (element.asNode().isConnected()) {
+        try page.linkAddedCallback(self);
+    }
 }
 
 pub fn getRel(self: *Link) []const u8 {
