@@ -59,7 +59,10 @@ pub fn init(arena: Allocator) !*Factory {
 
 // this is a root object
 pub fn eventTarget(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
+    return self.eventTargetWithAllocator(self._slab.allocator(), child);
+}
+
+pub fn eventTargetWithAllocator(_: *const Factory, allocator: Allocator, child: anytype) !*@TypeOf(child) {
     const chain = try PrototypeChain(
         &.{ EventTarget, @TypeOf(child) },
     ).allocate(allocator);

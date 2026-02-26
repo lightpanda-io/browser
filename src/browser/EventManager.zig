@@ -234,6 +234,7 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
         .screen,
         .screen_orientation,
         .visual_viewport,
+        .file_reader,
         .generic,
         => {
             const list = self.lookup.get(.{
