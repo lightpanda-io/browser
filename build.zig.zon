@@ -6,7 +6,7 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/8c7e5df8b93e7cbd42f8f1c4ac24aaa7f05cd098.tar.gz",
+            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/refs/tags/v0.3.1.tar.gz",
             .hash = "v8-0.0.0-xddH64J7BAC81mkf6G9RbEJxS-W3TIRl5iFnShwbqCqy",
 
         },
