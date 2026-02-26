@@ -3069,7 +3069,7 @@ pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
 }
 
 pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
-    const keyboard_event = event.as(KeyboardEvent);
+    const keyboard_event = event.is(KeyboardEvent) orelse return;
     const key = keyboard_event.getKey();
 
     if (key == .Dead) {
