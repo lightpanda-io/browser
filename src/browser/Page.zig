@@ -723,22 +723,12 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
+    // Run load events before window.load.
+    try self.dispatchLoad();
+
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
-
-    {
-        // Dispatch `_to_load` events before window.load.
-        const has_dom_load_listener = self._event_manager.has_dom_load_listener;
-        for (self._to_load.items) |html_element| {
-            if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
-                const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-                try self._event_manager.dispatch(html_element.asEventTarget(), event);
-            }
-        }
-    }
-    // `_to_load` can be cleaned here.
-    self._to_load.clearAndFree(self.arena);
 
     // Dispatch window.load event.
     const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
@@ -1215,6 +1205,18 @@ pub fn checkIntersections(self: *Page) !void {
     for (self._intersection_observers.items) |observer| {
         try observer.checkIntersections(self);
     }
+}
+
+pub fn dispatchLoad(self: *Page) !void {
+    const has_dom_load_listener = self._event_manager.has_dom_load_listener;
+    for (self._to_load.items) |html_element| {
+        if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
+            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+            try self._event_manager.dispatch(html_element.asEventTarget(), event);
+        }
+    }
+    // We drained everything.
+    self._to_load.clearRetainingCapacity();
 }
 
 pub fn scheduleMutationDelivery(self: *Page) !void {
@@ -2841,6 +2843,16 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         self.iframeAddedCallback(iframe) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
             return err;
+        };
+    } else if (node.is(Element.Html.Link)) |link| {
+        link.linkAddedCallback(self) catch |err| {
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
+            return error.LinkLoadError;
+        };
+    } else if (node.is(Element.Html.Style)) |style| {
+        style.styleAddedCallback(self) catch |err| {
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
+            return error.StyleLoadError;
         };
     }
 }

@@ -97,6 +97,15 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     return sheet;
 }
 
+pub fn styleAddedCallback(self: *Style, page: *Page) !void {
+    // if we're planning on navigating to another page, don't trigger load event.
+    if (page.isGoingAway()) {
+        return;
+    }
+
+    try page._to_load.append(page.arena, self._proto);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Style);
 
@@ -111,13 +120,6 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Style.getType, Style.setType, .{});
     pub const disabled = bridge.accessor(Style.getDisabled, Style.setDisabled, .{});
     pub const sheet = bridge.accessor(Style.getSheet, null, .{});
-};
-
-pub const Build = struct {
-    pub fn created(node: *Node, page: *Page) !void {
-        // Push to `_to_load` to dispatch load event just before window load event.
-        return page._to_load.append(page.arena, node.as(Element.Html));
-    }
 };
 
 const testing = @import("../../../../testing.zig");

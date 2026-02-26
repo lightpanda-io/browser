@@ -241,6 +241,9 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                 // it AFTER.
                 const ms_to_next_task = try browser.runMacrotasks();
 
+                // Each call to this runs scheduled load events.
+                try page.dispatchLoad();
+
                 const http_active = http_client.active;
                 const total_network_activity = http_active + http_client.intercepted;
                 if (page._notified_network_almost_idle.check(total_network_activity <= 2)) {
