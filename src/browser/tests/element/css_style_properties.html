@@ -154,3 +154,11 @@
   testing.expectEqual(true, typeof div.style.getPropertyPriority === 'function');
 }
 </script>
+
+
+<div id=crash1 style="background-position: 5% .1em"></div>
+<script id="crash_case_1">
+{
+  testing.expectEqual('5% .1em', $('#crash1').style.backgroundPosition);
+}
+</script>

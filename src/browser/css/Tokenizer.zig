@@ -583,7 +583,7 @@ fn consumeNumeric(self: *Tokenizer) Token {
             };
 
             self.advance(2);
-        } else if (self.hasAtLeast(1) and std.ascii.isDigit(self.byteAt(2))) {
+        } else if (self.hasAtLeast(2) and std.ascii.isDigit(self.byteAt(2))) {
             self.advance(1);
         } else {
             break :blk;
