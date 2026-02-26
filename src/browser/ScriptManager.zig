@@ -634,6 +634,12 @@ pub const Script = struct {
 
     // for debugging a rare production issue
     debug_transfer_id: u32 = 0,
+    debug_transfer_tries: u8 = 0,
+    debug_transfer_aborted: bool = false,
+    debug_transfer_bytes_received: usize = 0,
+    debug_transfer_notified_fail: bool = false,
+    debug_transfer_redirecting: bool = false,
+    debug_transfer_intercept_state: u8 = 0,
 
     const Kind = enum {
         module,
@@ -703,13 +709,30 @@ pub const Script = struct {
             // fails. Is the buffer just corrupt or is headerCallback really
             // being called twice?
             lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{
-                .thd = transfer._header_done_called,
-                .t1 = self.debug_transfer_id,
-                .t2 = transfer.id,
-                .tries = transfer._tries,
+                .m = @tagName(std.meta.activeTag(self.mode)),
+                .a1 = self.debug_transfer_id,
+                .a2 = self.debug_transfer_tries,
+                .a3 = self.debug_transfer_aborted,
+                .a4 = self.debug_transfer_bytes_received,
+                .a5 = self.debug_transfer_notified_fail,
+                .a6 = self.debug_transfer_redirecting,
+                .a7 = self.debug_transfer_intercept_state,
+                .b1 = transfer.id,
+                .b2 = transfer._tries,
+                .b3 = transfer.aborted,
+                .b4 = transfer.bytes_received,
+                .b5 = transfer._notified_fail,
+                .b6 = transfer._redirecting,
+                .b7 = @intFromEnum(transfer._intercept_state),
             });
             self.header_callback_called = true;
             self.debug_transfer_id = transfer.id;
+            self.debug_transfer_tries = transfer._tries;
+            self.debug_transfer_aborted = transfer.aborted;
+            self.debug_transfer_bytes_received = transfer.bytes_received;
+            self.debug_transfer_notified_fail = transfer._notified_fail;
+            self.debug_transfer_redirecting = transfer._redirecting;
+            self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });
