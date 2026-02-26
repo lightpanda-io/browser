@@ -13,7 +13,7 @@ inputs:
   zig-v8:
     description: 'zig v8 version to install'
     required: false
-    default: 'v0.3.0'
+    default: 'v0.3.1'
   v8:
     description: 'v8 version to install'
     required: false
