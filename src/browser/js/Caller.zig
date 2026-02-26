@@ -251,7 +251,33 @@ fn _deleteNamedIndex(comptime T: type, local: *const Local, func: anytype, name:
     return handleIndexedReturn(T, F, false, local, ret, info, opts);
 }
 
-fn handleIndexedReturn(comptime T: type, comptime F: type, comptime getter: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+pub fn getEnumerator(self: *Caller, comptime T: type, func: anytype, handle: *const v8.PropertyCallbackInfo, comptime opts: CallOpts) u8 {
+    const local = &self.local;
+
+    var hs: js.HandleScope = undefined;
+    hs.init(local.isolate);
+    defer hs.deinit();
+
+    const info = PropertyCallbackInfo{ .handle = handle };
+    return _getEnumerator(T, local, func, info, opts) catch |err| {
+        handleError(T, @TypeOf(func), local, err, info, opts);
+        // not intercepted
+        return 0;
+    };
+}
+
+fn _getEnumerator(comptime T: type, local: *const Local, func: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
+    const F = @TypeOf(func);
+    var args: ParameterTypes(F) = undefined;
+    @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());
+    if (@typeInfo(F).@"fn".params.len == 2) {
+        @field(args, "1") = local.ctx.page;
+    }
+    const ret = @call(.auto, func, args);
+    return handleIndexedReturn(T, F, true, local, ret, info, opts);
+}
+
+fn handleIndexedReturn(comptime T: type, comptime F: type, comptime with_value: bool, local: *const Local, ret: anytype, info: PropertyCallbackInfo, comptime opts: CallOpts) !u8 {
     // need to unwrap this error immediately for when opts.null_as_undefined == true
     // and we need to compare it to null;
     const non_error_ret = switch (@typeInfo(@TypeOf(ret))) {
@@ -274,7 +300,7 @@ fn handleIndexedReturn(comptime T: type, comptime F: type, comptime getter: bool
         else => ret,
     };
 
-    if (comptime getter) {
+    if (comptime with_value) {
         info.getReturnValue().set(try local.zigValueToJs(non_error_ret, opts));
     }
     // intercepted

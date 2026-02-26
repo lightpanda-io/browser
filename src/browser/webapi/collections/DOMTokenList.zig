@@ -321,5 +321,5 @@ pub const JsApi = struct {
     pub const entries = bridge.function(DOMTokenList.entries, .{});
     pub const symbol_iterator = bridge.iterator(DOMTokenList.values, .{});
     pub const forEach = bridge.function(DOMTokenList.forEach, .{});
-    pub const @"[]" = bridge.indexed(DOMTokenList.item, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(DOMTokenList.item, null, .{ .null_as_undefined = true });
 };

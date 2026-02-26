@@ -102,7 +102,7 @@ pub const JsApi = struct {
     pub const length = bridge.accessor(HTMLOptionsCollection.length, null, .{});
 
     // Indexed access
-    pub const @"[int]" = bridge.indexed(HTMLOptionsCollection.getAtIndex, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(HTMLOptionsCollection.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLOptionsCollection.getByName, null, null, .{ .null_as_undefined = true });
 
     pub const selectedIndex = bridge.accessor(HTMLOptionsCollection.getSelectedIndex, HTMLOptionsCollection.setSelectedIndex, .{});

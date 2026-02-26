@@ -122,7 +122,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(RadioNodeList.getLength, null, .{});
-    pub const @"[]" = bridge.indexed(RadioNodeList.getAtIndex, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(RadioNodeList.getAtIndex, null, .{ .null_as_undefined = true });
     pub const item = bridge.function(RadioNodeList.getAtIndex, .{});
     pub const value = bridge.accessor(RadioNodeList.getValue, RadioNodeList.setValue, .{});
 };

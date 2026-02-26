@@ -180,7 +180,8 @@ fn encodeURL(allocator: Allocator, url: [:0]const u8, comptime opts: ResolveOpts
 
     if (encoded_path.ptr == path_to_encode.ptr and
         (encoded_query == null or encoded_query.?.ptr == url[query_start.? + 1 .. query_end].ptr) and
-        (encoded_fragment == null or encoded_fragment.?.ptr == url[fragment_start.? + 1 ..].ptr)) {
+        (encoded_fragment == null or encoded_fragment.?.ptr == url[fragment_start.? + 1 ..].ptr))
+    {
         // nothing has changed
         return url;
     }
