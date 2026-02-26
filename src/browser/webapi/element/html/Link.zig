@@ -54,7 +54,7 @@ pub fn setHref(self: *Link, value: []const u8, page: *Page) !void {
     try element.setAttributeSafe(comptime .wrap("href"), .wrap(value), page);
 
     if (element.asNode().isConnected()) {
-        try page.linkAddedCallback(self);
+        try self.linkAddedCallback(page);
     }
 }
 
@@ -84,6 +84,24 @@ pub fn setCrossOrigin(self: *Link, value: []const u8, page: *Page) !void {
         normalized = "use-credentials";
     }
     return self.asElement().setAttributeSafe(comptime .wrap("crossOrigin"), .wrap(normalized), page);
+}
+
+pub fn linkAddedCallback(self: *Link, page: *Page) !void {
+    // if we're planning on navigating to another page, don't trigger load event.
+    if (page.isGoingAway()) {
+        return;
+    }
+
+    const element = self.asElement();
+    // Exit if rel not set.
+    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
+    // Exit if rel is not stylesheet.
+    if (!std.mem.eql(u8, rel, "stylesheet")) return;
+    // Exit if href not set.
+    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
+    if (href.len == 0) return;
+
+    try page._to_load.append(page.arena, self._proto);
 }
 
 pub const JsApi = struct {

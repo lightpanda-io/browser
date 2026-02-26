@@ -1035,47 +1035,6 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
     }
 }
 
-pub fn linkAddedCallback(self: *Page, link: *Element.Html.Link) !void {
-    // if we're planning on navigating to another page, don't trigger load event.
-    if (self.isGoingAway()) {
-        return;
-    }
-
-    const element = link.asElement();
-    // Exit if rel not set.
-    const rel = element.getAttributeSafe(comptime .wrap("rel")) orelse return;
-    // Exit if rel is not stylesheet.
-    if (!std.mem.eql(u8, rel, "stylesheet")) return;
-    // Exit if href not set.
-    const href = element.getAttributeSafe(comptime .wrap("href")) orelse return;
-    if (href.len == 0) return;
-
-    try self._to_load.append(self.arena, link._proto);
-}
-
-pub fn styleAddedCallback(self: *Page, style: *Element.Html.Style) !void {
-    // if we're planning on navigating to another page, don't trigger load event.
-    if (self.isGoingAway()) {
-        return;
-    }
-
-    try self._to_load.append(self.arena, style._proto);
-}
-
-pub fn imageAddedCallback(self: *Page, image: *Element.Html.Image) !void {
-    // if we're planning on navigating to another page, don't trigger load event.
-    if (self.isGoingAway()) {
-        return;
-    }
-
-    const element = image.asElement();
-    // Exit if src not set.
-    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
-    if (src.len == 0) return;
-
-    try self._to_load.append(self.arena, image._proto);
-}
-
 pub fn domChanged(self: *Page) void {
     self.version += 1;
 
@@ -2886,12 +2845,12 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
             return err;
         };
     } else if (node.is(Element.Html.Link)) |link| {
-        self.linkAddedCallback(link) catch |err| {
+        link.linkAddedCallback(self) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
             return error.LinkLoadError;
         };
     } else if (node.is(Element.Html.Style)) |style| {
-        self.styleAddedCallback(style) catch |err| {
+        style.styleAddedCallback(self) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
             return error.StyleLoadError;
         };

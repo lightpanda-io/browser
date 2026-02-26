@@ -53,7 +53,7 @@ pub fn setSrc(self: *Image, value: []const u8, page: *Page) !void {
     const element = self.asElement();
     try element.setAttributeSafe(comptime .wrap("src"), .wrap(value), page);
     // No need to check if `Image` is connected to DOM; this is a special case.
-    return page.imageAddedCallback(self);
+    return self.imageAddedCallback(page);
 }
 
 pub fn getAlt(self: *const Image) []const u8 {
@@ -123,6 +123,21 @@ pub fn getComplete(_: *const Image) bool {
     return true;
 }
 
+/// Used in `Page.nodeIsReady`.
+pub fn imageAddedCallback(self: *Image, page: *Page) !void {
+    // if we're planning on navigating to another page, don't trigger load event.
+    if (page.isGoingAway()) {
+        return;
+    }
+
+    const element = self.asElement();
+    // Exit if src not set.
+    const src = element.getAttributeSafe(comptime .wrap("src")) orelse return;
+    if (src.len == 0) return;
+
+    try page._to_load.append(page.arena, self._proto);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Image);
 
@@ -148,7 +163,7 @@ pub const JsApi = struct {
 pub const Build = struct {
     pub fn created(node: *Node, page: *Page) !void {
         const self = node.as(Image);
-        return page.imageAddedCallback(self);
+        return self.imageAddedCallback(page);
     }
 };
 

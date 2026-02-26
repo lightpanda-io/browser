@@ -97,6 +97,15 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     return sheet;
 }
 
+pub fn styleAddedCallback(self: *Style, page: *Page) !void {
+    // if we're planning on navigating to another page, don't trigger load event.
+    if (page.isGoingAway()) {
+        return;
+    }
+
+    try page._to_load.append(page.arena, self._proto);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Style);
 
