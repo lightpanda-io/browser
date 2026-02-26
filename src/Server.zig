@@ -121,26 +121,53 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
     try posix.listen(listener, self.app.config.maxPendingConnections());
 
     log.info(.app, "server running", .{ .address = address });
-    while (!self.shutdown.load(.acquire)) {
-        const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
-            switch (err) {
-                error.SocketNotListening, error.ConnectionAborted => {
-                    log.info(.app, "server stopped", .{});
-                    break;
-                },
-                error.WouldBlock => {
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
-                    continue;
-                },
-                else => {
-                    log.err(.app, "CDP accept", .{ .err = err });
-                    std.Thread.sleep(std.time.ns_per_s);
-                    continue;
-                },
-            }
+
+    var runtime = try Net.Runtime.init(self.allocator);
+    defer runtime.deinit();
+
+    var accept_ctx: AcceptCtx = .{
+        .server = self,
+        .timeout_ms = timeout_ms,
+    };
+
+    try runtime.add(listener, Net.Runtime.READABLE, &accept_ctx, onListenerEvent);
+    defer runtime.remove(listener);
+
+    runtime.run(self, shouldStopRuntime) catch |err| switch (err) {
+        error.UnsupportedPlatform => return err,
+        else => return err,
+    };
+
+    log.info(.app, "server stopped", .{});
+}
+
+const AcceptCtx = struct {
+    server: *Server,
+    timeout_ms: u32,
+};
+
+fn shouldStopRuntime(ctx: *anyopaque) bool {
+    const self: *Server = @ptrCast(@alignCast(ctx));
+    return self.shutdown.load(.acquire);
+}
+
+fn onListenerEvent(ctx: *anyopaque, event: Net.RuntimeEvent) !void {
+    _ = event;
+    const accept_ctx: *AcceptCtx = @ptrCast(@alignCast(ctx));
+    const self = accept_ctx.server;
+    const listener = self.listener orelse return;
+
+    while (true) {
+        const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| switch (err) {
+            error.WouldBlock => return,
+            error.SocketNotListening, error.ConnectionAborted => return,
+            else => {
+                log.err(.app, "CDP accept", .{ .err = err });
+                return;
+            },
         };
 
-        self.spawnWorker(socket, timeout_ms) catch |err| {
+        self.spawnWorker(socket, accept_ctx.timeout_ms) catch |err| {
             log.err(.app, "CDP spawn", .{ .err = err });
             posix.close(socket);
         };

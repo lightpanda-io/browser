@@ -173,6 +173,14 @@ pub fn newHeaders(self: *const Client) !Net.Headers {
     return Net.Headers.init(self.config.http_headers.user_agent_header);
 }
 
+pub fn attachRuntime(self: *Client, runtime: *Net.Runtime, cdp_fd: ?posix.fd_t) !void {
+    try self.handles.attachRuntime(runtime, cdp_fd);
+}
+
+pub fn detachRuntime(self: *Client) void {
+    self.handles.detachRuntime();
+}
+
 pub fn abort(self: *Client) void {
     self._abort(true, 0);
 }

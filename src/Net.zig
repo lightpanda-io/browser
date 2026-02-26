@@ -19,6 +19,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
+const linux = std.os.linux;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const libcurl = @import("sys/libcurl.zig");
@@ -476,8 +477,16 @@ pub const Handles = struct {
     available: HandleList,
     multi: *libcurl.CurlM,
     performing: bool = false,
+    runtime_ctx: ?RuntimeContext = null,
 
     pub const HandleList = std.DoublyLinkedList;
+
+    const RuntimeContext = struct {
+        handles: *Handles,
+        runtime: *Runtime,
+        cdp_fd: ?posix.fd_t,
+        timer_deadline_ms: ?i64 = null,
+    };
 
     pub fn init(
         allocator: Allocator,
@@ -532,6 +541,9 @@ pub const Handles = struct {
 
     pub fn add(self: *Handles, conn: *const Connection) !void {
         try libcurl.curl_multi_add_handle(self.multi, conn.easy);
+        if (self.runtime_ctx != null) {
+            _ = try self.socketActionTimeout();
+        }
     }
 
     pub fn remove(self: *Handles, conn: *Connection) void {
@@ -554,6 +566,10 @@ pub const Handles = struct {
     }
 
     pub fn perform(self: *Handles) !c_int {
+        if (self.runtime_ctx != null) {
+            return self.socketActionTimeout();
+        }
+
         self.performing = true;
         defer self.performing = false;
 
@@ -579,6 +595,34 @@ pub const Handles = struct {
     }
 
     pub fn poll(self: *Handles, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
+        if (self.runtime_ctx) |*ctx| {
+            var wait_ms: i32 = @intCast(timeout_ms);
+            try self.runDueTimer();
+
+            if (ctx.timer_deadline_ms) |deadline| {
+                const now = std.time.milliTimestamp();
+                if (deadline > now) {
+                    const remaining: i32 = @intCast(@min(deadline - now, std.math.maxInt(i32)));
+                    wait_ms = @min(wait_ms, remaining);
+                } else {
+                    wait_ms = 0;
+                }
+            }
+
+            const watched_fd: ?posix.fd_t = if (extra_fds.len > 0) extra_fds[0].fd else ctx.cdp_fd;
+            const watched_ready = try ctx.runtime.dispatchFor(wait_ms, watched_fd);
+
+            if (extra_fds.len > 0) {
+                extra_fds[0].revents = .{};
+                if (watched_ready) {
+                    extra_fds[0].revents.pollin = true;
+                }
+            }
+
+            try self.runDueTimer();
+            return;
+        }
+
         try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
     }
 
@@ -597,6 +641,128 @@ pub const Handles = struct {
             },
             else => unreachable,
         };
+    }
+
+    pub fn attachRuntime(self: *Handles, runtime: *Runtime, cdp_fd: ?posix.fd_t) !void {
+        self.detachRuntime();
+        self.runtime_ctx = .{
+            .handles = self,
+            .runtime = runtime,
+            .cdp_fd = cdp_fd,
+            .timer_deadline_ms = null,
+        };
+
+        const ctx = &self.runtime_ctx.?;
+        try libcurl.curl_multi_setopt(self.multi, .socket_function, onCurlSocket);
+        try libcurl.curl_multi_setopt(self.multi, .socket_data, ctx);
+        try libcurl.curl_multi_setopt(self.multi, .timer_function, onCurlTimer);
+        try libcurl.curl_multi_setopt(self.multi, .timer_data, ctx);
+        _ = try self.socketActionTimeout();
+    }
+
+    pub fn detachRuntime(self: *Handles) void {
+        if (self.runtime_ctx) |*ctx| {
+            ctx.runtime.removeByCtx(ctx);
+        }
+        libcurl.curl_multi_setopt(self.multi, .socket_function, @as(?*const libcurl.CurlSocketCallback, null)) catch {};
+        libcurl.curl_multi_setopt(self.multi, .socket_data, @as(?*anyopaque, null)) catch {};
+        libcurl.curl_multi_setopt(self.multi, .timer_function, @as(?*const libcurl.CurlTimerCallback, null)) catch {};
+        libcurl.curl_multi_setopt(self.multi, .timer_data, @as(?*anyopaque, null)) catch {};
+        self.runtime_ctx = null;
+    }
+
+    fn runDueTimer(self: *Handles) !void {
+        const ctx = &(self.runtime_ctx orelse return);
+        const deadline = ctx.timer_deadline_ms orelse return;
+        if (std.time.milliTimestamp() < deadline) {
+            return;
+        }
+        ctx.timer_deadline_ms = null;
+        _ = try self.socketActionTimeout();
+    }
+
+    fn socketAction(self: *Handles, fd: posix.fd_t, events: u32) !c_int {
+        const select_mask = runtimeEventsToCurlSelect(events).toC();
+        var running: c_int = undefined;
+        self.performing = true;
+        defer self.performing = false;
+        try libcurl.curl_multi_socket_action(self.multi, @intCast(fd), select_mask, &running);
+        return running;
+    }
+
+    fn socketActionTimeout(self: *Handles) !c_int {
+        var running: c_int = undefined;
+        self.performing = true;
+        defer self.performing = false;
+        try libcurl.curl_multi_socket_action(self.multi, libcurl.CURL_SOCKET_TIMEOUT, 0, &running);
+        return running;
+    }
+
+    fn runtimeEventsToCurlSelect(events: u32) libcurl.CurlSelectMask {
+        return .{
+            .in = (events & Runtime.READABLE) != 0,
+            .out = (events & Runtime.WRITABLE) != 0,
+            .err = (events & Runtime.ERROR) != 0,
+        };
+    }
+
+    fn curlPollToRuntimeEvents(what: libcurl.CurlPoll) u32 {
+        return switch (what) {
+            .in => Runtime.READABLE | Runtime.ERROR,
+            .out => Runtime.WRITABLE | Runtime.ERROR,
+            .inout => Runtime.READABLE | Runtime.WRITABLE | Runtime.ERROR,
+            .remove => 0,
+        };
+    }
+
+    fn onRuntimeFdEvent(ctx_ptr: *anyopaque, event: RuntimeEvent) anyerror!void {
+        const ctx: *RuntimeContext = @ptrCast(@alignCast(ctx_ptr));
+        _ = try ctx.handles.socketAction(event.fd, event.events);
+    }
+
+    fn onCurlSocket(
+        easy: ?*libcurl.Curl,
+        s: libcurl.CurlSocket,
+        what_raw: c_int,
+        userp: ?*anyopaque,
+        socketp: ?*anyopaque,
+    ) callconv(.c) c_int {
+        _ = easy;
+        _ = socketp;
+        const ctx = userp orelse return 0;
+        const runtime_ctx: *RuntimeContext = @ptrCast(@alignCast(ctx));
+
+        const what = std.meta.intToEnum(libcurl.CurlPoll, what_raw) catch return 0;
+        if (what == .remove) {
+            runtime_ctx.runtime.remove(@intCast(s));
+            return 0;
+        }
+
+        runtime_ctx.runtime.add(
+            @intCast(s),
+            curlPollToRuntimeEvents(what),
+            runtime_ctx,
+            onRuntimeFdEvent,
+        ) catch {};
+        return 0;
+    }
+
+    fn onCurlTimer(
+        multi: ?*libcurl.CurlM,
+        timeout_ms: c_long,
+        userp: ?*anyopaque,
+    ) callconv(.c) c_int {
+        _ = multi;
+        const ctx = userp orelse return 0;
+        const runtime_ctx: *RuntimeContext = @ptrCast(@alignCast(ctx));
+
+        if (timeout_ms < 0) {
+            runtime_ctx.timer_deadline_ms = null;
+            return 0;
+        }
+
+        runtime_ctx.timer_deadline_ms = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+        return 0;
     }
 };
 
@@ -1378,6 +1544,168 @@ pub const WsConnection = struct {
         } else {
             _ = try posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags);
         }
+    }
+};
+
+pub const RuntimeEvent = struct {
+    fd: posix.fd_t,
+    events: u32,
+};
+
+pub const Runtime = if (builtin.target.os.tag == .linux) LinuxRuntime else struct {
+    pub const READABLE: u32 = 0;
+    pub const WRITABLE: u32 = 0;
+    pub const ERROR: u32 = 0;
+    pub const EventCallback = *const fn (ctx: *anyopaque, event: RuntimeEvent) anyerror!void;
+    pub fn init(_: Allocator) !@This() {
+        return error.UnsupportedPlatform;
+    }
+    pub fn deinit(_: *@This()) void {}
+    pub fn add(_: *@This(), _: posix.fd_t, _: u32, _: *anyopaque, _: EventCallback) !void {
+        return error.UnsupportedPlatform;
+    }
+    pub fn remove(_: *@This(), _: posix.fd_t) void {}
+    pub fn removeByCtx(_: *@This(), _: *anyopaque) void {}
+    pub fn dispatch(_: *@This(), _: i32) !usize {
+        return error.UnsupportedPlatform;
+    }
+    pub fn dispatchFor(_: *@This(), _: i32, _: ?posix.fd_t) !bool {
+        return error.UnsupportedPlatform;
+    }
+    pub fn run(_: *@This(), _: *anyopaque, _: *const fn (ctx: *anyopaque) bool) !void {
+        return error.UnsupportedPlatform;
+    }
+};
+
+var runtime_active = std.atomic.Value(bool).init(false);
+
+const LinuxRuntime = struct {
+    pub const READABLE: u32 = linux.EPOLL.IN;
+    pub const WRITABLE: u32 = linux.EPOLL.OUT;
+    pub const ERROR: u32 = linux.EPOLL.ERR | linux.EPOLL.HUP | linux.EPOLL.RDHUP;
+
+    allocator: Allocator,
+    epoll_fd: posix.fd_t,
+    watchers: std.AutoHashMapUnmanaged(posix.fd_t, Watcher) = .empty,
+    events: [64]posix.system.epoll_event = undefined,
+
+    const Self = @This();
+
+    pub const EventCallback = *const fn (ctx: *anyopaque, event: RuntimeEvent) anyerror!void;
+
+    const Watcher = struct {
+        events: u32,
+        ctx: *anyopaque,
+        cb: EventCallback,
+    };
+
+    pub fn init(allocator: Allocator) !Self {
+        if (runtime_active.swap(true, .acq_rel)) {
+            return error.RuntimeAlreadyActive;
+        }
+        errdefer _ = runtime_active.swap(false, .acq_rel);
+
+        const epoll_fd = try posix.epoll_create1(linux.EPOLL.CLOEXEC);
+        errdefer posix.close(epoll_fd);
+
+        return .{
+            .allocator = allocator,
+            .epoll_fd = epoll_fd,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.watchers.deinit(self.allocator);
+        posix.close(self.epoll_fd);
+        _ = runtime_active.swap(false, .acq_rel);
+    }
+
+    pub fn add(self: *Self, fd: posix.fd_t, events: u32, ctx: *anyopaque, cb: EventCallback) !void {
+        var ev = posix.system.epoll_event{
+            .events = events,
+            .data = .{ .fd = fd },
+        };
+
+        const gop = try self.watchers.getOrPut(self.allocator, fd);
+        if (gop.found_existing) {
+            gop.value_ptr.* = .{ .events = events, .ctx = ctx, .cb = cb };
+            try posix.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_MOD, fd, &ev);
+            return;
+        }
+
+        errdefer _ = self.watchers.remove(fd);
+        gop.value_ptr.* = .{ .events = events, .ctx = ctx, .cb = cb };
+        try posix.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_ADD, fd, &ev);
+    }
+
+    pub fn remove(self: *Self, fd: posix.fd_t) void {
+        _ = self.watchers.remove(fd);
+        posix.epoll_ctl(self.epoll_fd, linux.EPOLL.CTL_DEL, fd, null) catch {};
+    }
+
+    pub fn removeByCtx(self: *Self, ctx: *anyopaque) void {
+        while (true) {
+            var found: ?posix.fd_t = null;
+            var it = self.watchers.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.ctx == ctx) {
+                    found = entry.key_ptr.*;
+                    break;
+                }
+            }
+            const fd = found orelse break;
+            self.remove(fd);
+        }
+    }
+
+    pub fn run(self: *Self, stop_ctx: *anyopaque, should_stop: *const fn (ctx: *anyopaque) bool) !void {
+        while (!should_stop(stop_ctx)) {
+            _ = try self.dispatch(200);
+        }
+    }
+
+    pub fn dispatch(self: *Self, timeout_ms: i32) !usize {
+        const n = posix.epoll_wait(self.epoll_fd, self.events[0..], timeout_ms);
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const ev = self.events[i];
+            const fd = ev.data.fd;
+
+            const watcher = self.watchers.get(fd) orelse continue;
+            watcher.cb(watcher.ctx, .{
+                .fd = fd,
+                .events = ev.events,
+            }) catch |err| {
+                log.err(.app, "runtime callback", .{ .err = err, .fd = fd });
+                self.remove(fd);
+            };
+        }
+        return n;
+    }
+
+    pub fn dispatchFor(self: *Self, timeout_ms: i32, watched_fd: ?posix.fd_t) !bool {
+        const n = posix.epoll_wait(self.epoll_fd, self.events[0..], timeout_ms);
+        var watched_ready = false;
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const ev = self.events[i];
+            const fd = ev.data.fd;
+            if (watched_fd) |wfd| {
+                if (fd == wfd) {
+                    watched_ready = true;
+                }
+            }
+
+            const watcher = self.watchers.get(fd) orelse continue;
+            watcher.cb(watcher.ctx, .{
+                .fd = fd,
+                .events = ev.events,
+            }) catch |err| {
+                log.err(.app, "runtime callback", .{ .err = err, .fd = fd });
+                self.remove(fd);
+            };
+        }
+        return watched_ready;
     }
 };
 

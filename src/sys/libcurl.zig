@@ -39,7 +39,32 @@ pub const CurlOffT = c.curl_off_t;
 pub const CurlDebugFunction = fn (*Curl, CurlInfoType, [*c]u8, usize, *anyopaque) c_int;
 pub const CurlHeaderFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
 pub const CurlWriteFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
+pub const CurlSocketCallback = fn (?*Curl, CurlSocket, c_int, ?*anyopaque, ?*anyopaque) callconv(.c) c_int;
+pub const CurlTimerCallback = fn (?*CurlM, c_long, ?*anyopaque) callconv(.c) c_int;
 pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
+pub const CURL_SOCKET_TIMEOUT: CurlSocket = c.CURL_SOCKET_TIMEOUT;
+
+pub const CurlPoll = enum(c_int) {
+    in = c.CURL_POLL_IN,
+    out = c.CURL_POLL_OUT,
+    inout = c.CURL_POLL_INOUT,
+    remove = c.CURL_POLL_REMOVE,
+};
+
+pub const CurlSelectMask = packed struct(c_int) {
+    in: bool = false,
+    out: bool = false,
+    err: bool = false,
+    _reserved: std.meta.Int(.unsigned, @bitSizeOf(c_int) - 3) = 0,
+
+    pub fn toC(self: @This()) c_int {
+        var mask: c_int = 0;
+        if (self.in) mask |= c.CURL_CSELECT_IN;
+        if (self.out) mask |= c.CURL_CSELECT_OUT;
+        if (self.err) mask |= c.CURL_CSELECT_ERR;
+        return mask;
+    }
+};
 
 pub const CurlGlobalFlags = packed struct(u8) {
     ssl: bool = false,
@@ -156,6 +181,10 @@ pub const CurlOption = enum(c.CURLoption) {
 
 pub const CurlMOption = enum(c.CURLMoption) {
     max_host_connections = c.CURLMOPT_MAX_HOST_CONNECTIONS,
+    socket_function = c.CURLMOPT_SOCKETFUNCTION,
+    socket_data = c.CURLMOPT_SOCKETDATA,
+    timer_function = c.CURLMOPT_TIMERFUNCTION,
+    timer_data = c.CURLMOPT_TIMERDATA,
 };
 
 pub const CurlInfo = enum(c.CURLINFO) {
@@ -675,6 +704,10 @@ pub fn curl_multi_setopt(multi: *CurlM, comptime option: CurlMOption, value: any
             };
             break :blk c.curl_multi_setopt(multi, opt, n);
         },
+        .socket_function => c.curl_multi_setopt(multi, opt, value),
+        .socket_data => c.curl_multi_setopt(multi, opt, value),
+        .timer_function => c.curl_multi_setopt(multi, opt, value),
+        .timer_data => c.curl_multi_setopt(multi, opt, value),
     };
     try errorMCheck(code);
 }
@@ -699,6 +732,15 @@ pub fn curl_multi_poll(
 ) ErrorMulti!void {
     const raw_fds: [*c]c.curl_waitfd = if (extra_fds.len == 0) null else @ptrCast(extra_fds.ptr);
     try errorMCheck(c.curl_multi_poll(multi, raw_fds, @intCast(extra_fds.len), timeout_ms, numfds));
+}
+
+pub fn curl_multi_socket_action(
+    multi: *CurlM,
+    s: CurlSocket,
+    ev_bitmask: c_int,
+    running_handles: *c_int,
+) ErrorMulti!void {
+    try errorMCheck(c.curl_multi_socket_action(multi, s, ev_bitmask, running_handles));
 }
 
 pub fn curl_multi_info_read(multi: *CurlM, msgs_in_queue: *c_int) ?CurlMsg {
