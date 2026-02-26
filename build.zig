@@ -50,8 +50,11 @@ pub fn build(b: *Build) !void {
             .sanitize_thread = enable_tsan,
         });
         mod.addImport("lightpanda", mod); // allow circular "lightpanda" import
+        mod.addImport("build_config", opts.createModule());
 
-        try addDependencies(b, mod, opts, enable_asan, enable_tsan, prebuilt_v8_path);
+        try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
+        try linkCurl(b, mod);
+        try linkHtml5Ever(b, mod);
 
         break :blk mod;
     };
@@ -171,561 +174,539 @@ pub fn build(b: *Build) !void {
     }
 }
 
-fn addDependencies(
+fn linkV8(
     b: *Build,
     mod: *Build.Module,
-    opts: *Build.Step.Options,
     is_asan: bool,
     is_tsan: bool,
     prebuilt_v8_path: ?[]const u8,
 ) !void {
-    mod.addImport("build_config", opts.createModule());
-
     const target = mod.resolved_target.?;
-    const dep_opts = .{
+
+    const dep = b.dependency("v8", .{
         .target = target,
         .optimize = mod.optimize.?,
-        .cache_root = b.pathFromRoot(".lp-cache"),
-        .prebuilt_v8_path = prebuilt_v8_path,
         .is_asan = is_asan,
         .is_tsan = is_tsan,
+        .inspector_subtype = false,
         .v8_enable_sandbox = is_tsan,
-    };
+        .cache_root = b.pathFromRoot(".lp-cache"),
+        .prebuilt_v8_path = prebuilt_v8_path,
+    });
+    mod.addImport("v8", dep.module("v8"));
+}
 
-    mod.addIncludePath(b.path("vendor/lightpanda"));
+fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
+    const is_debug = if (mod.optimize.? == .Debug) true else false;
 
-    {
-        // html5ever
+    const exec_cargo = b.addSystemCommand(&.{
+        "cargo",           "build",
+        "--profile",       if (is_debug) "dev" else "release",
+        "--manifest-path", "src/html5ever/Cargo.toml",
+    });
 
-        // Build step to install html5ever dependency.
-        const html5ever_argv = blk: {
-            const argv: []const []const u8 = &.{
-                "cargo",
-                "build",
-                // Seems cargo can figure out required paths out of Cargo.toml.
-                "--manifest-path",
-                "src/html5ever/Cargo.toml",
-                // TODO: We can prefer `--artifact-dir` once it become stable.
-                "--target-dir",
-                b.getInstallPath(.prefix, "html5ever"),
-                // This must be the last argument.
-                "--release",
-            };
+    // TODO: We can prefer `--artifact-dir` once it become stable.
+    const out_dir = exec_cargo.addPrefixedOutputDirectoryArg("--target-dir=", "html5ever");
 
-            break :blk switch (mod.optimize.?) {
-                // Prefer dev build on debug option.
-                .Debug => argv[0 .. argv.len - 1],
-                else => argv,
-            };
-        };
-        const html5ever_exec_cargo = b.addSystemCommand(html5ever_argv);
-        const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
-        html5ever_step.dependOn(&html5ever_exec_cargo.step);
-        opts.step.dependOn(html5ever_step);
+    const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
+    html5ever_step.dependOn(&exec_cargo.step);
 
-        const html5ever_obj = switch (mod.optimize.?) {
-            .Debug => b.getInstallPath(.prefix, "html5ever/debug/liblitefetch_html5ever.a"),
-            // Release builds.
-            else => b.getInstallPath(.prefix, "html5ever/release/liblitefetch_html5ever.a"),
-        };
+    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblitefetch_html5ever.a");
+    mod.addObjectFile(obj);
+}
 
-        mod.addObjectFile(.{ .cwd_relative = html5ever_obj });
-    }
+fn linkCurl(b: *Build, mod: *Build.Module) !void {
+    const target = mod.resolved_target.?;
 
-    {
-        // v8
-        const v8_opts = b.addOptions();
-        v8_opts.addOption(bool, "inspector_subtype", false);
+    const curl = buildCurl(b, target, mod.optimize.?);
+    mod.linkLibrary(curl);
 
-        const v8_mod = b.dependency("v8", dep_opts).module("v8");
-        v8_mod.addOptions("default_exports", v8_opts);
-        mod.addImport("v8", v8_mod);
-    }
+    const zlib = buildZlib(b, target, mod.optimize.?);
+    curl.root_module.linkLibrary(zlib);
 
-    {
-        //curl
-        {
-            const is_linux = target.result.os.tag == .linux;
-            if (is_linux) {
-                mod.addCMacro("HAVE_LINUX_TCP_H", "1");
-                mod.addCMacro("HAVE_MSG_NOSIGNAL", "1");
-                mod.addCMacro("HAVE_GETHOSTBYNAME_R", "1");
-            }
-            mod.addCMacro("_FILE_OFFSET_BITS", "64");
-            mod.addCMacro("BUILDING_LIBCURL", "1");
-            mod.addCMacro("CURL_DISABLE_AWS", "1");
-            mod.addCMacro("CURL_DISABLE_DICT", "1");
-            mod.addCMacro("CURL_DISABLE_DOH", "1");
-            mod.addCMacro("CURL_DISABLE_FILE", "1");
-            mod.addCMacro("CURL_DISABLE_FTP", "1");
-            mod.addCMacro("CURL_DISABLE_GOPHER", "1");
-            mod.addCMacro("CURL_DISABLE_KERBEROS", "1");
-            mod.addCMacro("CURL_DISABLE_IMAP", "1");
-            mod.addCMacro("CURL_DISABLE_IPFS", "1");
-            mod.addCMacro("CURL_DISABLE_LDAP", "1");
-            mod.addCMacro("CURL_DISABLE_LDAPS", "1");
-            mod.addCMacro("CURL_DISABLE_MQTT", "1");
-            mod.addCMacro("CURL_DISABLE_NTLM", "1");
-            mod.addCMacro("CURL_DISABLE_PROGRESS_METER", "1");
-            mod.addCMacro("CURL_DISABLE_POP3", "1");
-            mod.addCMacro("CURL_DISABLE_RTSP", "1");
-            mod.addCMacro("CURL_DISABLE_SMB", "1");
-            mod.addCMacro("CURL_DISABLE_SMTP", "1");
-            mod.addCMacro("CURL_DISABLE_TELNET", "1");
-            mod.addCMacro("CURL_DISABLE_TFTP", "1");
-            mod.addCMacro("CURL_EXTERN_SYMBOL", "__attribute__ ((__visibility__ (\"default\"))");
-            mod.addCMacro("CURL_OS", if (is_linux) "\"Linux\"" else "\"mac\"");
-            mod.addCMacro("CURL_STATICLIB", "1");
-            mod.addCMacro("ENABLE_IPV6", "1");
-            mod.addCMacro("HAVE_ALARM", "1");
-            mod.addCMacro("HAVE_ALLOCA_H", "1");
-            mod.addCMacro("HAVE_ARPA_INET_H", "1");
-            mod.addCMacro("HAVE_ARPA_TFTP_H", "1");
-            mod.addCMacro("HAVE_ASSERT_H", "1");
-            mod.addCMacro("HAVE_BASENAME", "1");
-            mod.addCMacro("HAVE_BOOL_T", "1");
-            mod.addCMacro("HAVE_BROTLI", "1");
-            mod.addCMacro("HAVE_BUILTIN_AVAILABLE", "1");
-            mod.addCMacro("HAVE_CLOCK_GETTIME_MONOTONIC", "1");
-            mod.addCMacro("HAVE_DLFCN_H", "1");
-            mod.addCMacro("HAVE_ERRNO_H", "1");
-            mod.addCMacro("HAVE_FCNTL", "1");
-            mod.addCMacro("HAVE_FCNTL_H", "1");
-            mod.addCMacro("HAVE_FCNTL_O_NONBLOCK", "1");
-            mod.addCMacro("HAVE_FREEADDRINFO", "1");
-            mod.addCMacro("HAVE_FSETXATTR", "1");
-            mod.addCMacro("HAVE_FSETXATTR_5", "1");
-            mod.addCMacro("HAVE_FTRUNCATE", "1");
-            mod.addCMacro("HAVE_GETADDRINFO", "1");
-            mod.addCMacro("HAVE_GETEUID", "1");
-            mod.addCMacro("HAVE_GETHOSTBYNAME", "1");
-            mod.addCMacro("HAVE_GETHOSTBYNAME_R_6", "1");
-            mod.addCMacro("HAVE_GETHOSTNAME", "1");
-            mod.addCMacro("HAVE_GETPEERNAME", "1");
-            mod.addCMacro("HAVE_GETPPID", "1");
-            mod.addCMacro("HAVE_GETPPID", "1");
-            mod.addCMacro("HAVE_GETPROTOBYNAME", "1");
-            mod.addCMacro("HAVE_GETPWUID", "1");
-            mod.addCMacro("HAVE_GETPWUID_R", "1");
-            mod.addCMacro("HAVE_GETRLIMIT", "1");
-            mod.addCMacro("HAVE_GETSOCKNAME", "1");
-            mod.addCMacro("HAVE_GETTIMEOFDAY", "1");
-            mod.addCMacro("HAVE_GMTIME_R", "1");
-            mod.addCMacro("HAVE_IDN2_H", "1");
-            mod.addCMacro("HAVE_IF_NAMETOINDEX", "1");
-            mod.addCMacro("HAVE_IFADDRS_H", "1");
-            mod.addCMacro("HAVE_INET_ADDR", "1");
-            mod.addCMacro("HAVE_INET_PTON", "1");
-            mod.addCMacro("HAVE_INTTYPES_H", "1");
-            mod.addCMacro("HAVE_IOCTL", "1");
-            mod.addCMacro("HAVE_IOCTL_FIONBIO", "1");
-            mod.addCMacro("HAVE_IOCTL_SIOCGIFADDR", "1");
-            mod.addCMacro("HAVE_LDAP_URL_PARSE", "1");
-            mod.addCMacro("HAVE_LIBGEN_H", "1");
-            mod.addCMacro("HAVE_LIBZ", "1");
-            mod.addCMacro("HAVE_LL", "1");
-            mod.addCMacro("HAVE_LOCALE_H", "1");
-            mod.addCMacro("HAVE_LOCALTIME_R", "1");
-            mod.addCMacro("HAVE_LONGLONG", "1");
-            mod.addCMacro("HAVE_MALLOC_H", "1");
-            mod.addCMacro("HAVE_MEMORY_H", "1");
-            mod.addCMacro("HAVE_NET_IF_H", "1");
-            mod.addCMacro("HAVE_NETDB_H", "1");
-            mod.addCMacro("HAVE_NETINET_IN_H", "1");
-            mod.addCMacro("HAVE_NETINET_TCP_H", "1");
-            mod.addCMacro("HAVE_PIPE", "1");
-            mod.addCMacro("HAVE_POLL", "1");
-            mod.addCMacro("HAVE_POLL_FINE", "1");
-            mod.addCMacro("HAVE_POLL_H", "1");
-            mod.addCMacro("HAVE_POSIX_STRERROR_R", "1");
-            mod.addCMacro("HAVE_PTHREAD_H", "1");
-            mod.addCMacro("HAVE_PWD_H", "1");
-            mod.addCMacro("HAVE_RECV", "1");
-            mod.addCMacro("HAVE_SA_FAMILY_T", "1");
-            mod.addCMacro("HAVE_SELECT", "1");
-            mod.addCMacro("HAVE_SEND", "1");
-            mod.addCMacro("HAVE_SETJMP_H", "1");
-            mod.addCMacro("HAVE_SETLOCALE", "1");
-            mod.addCMacro("HAVE_SETRLIMIT", "1");
-            mod.addCMacro("HAVE_SETSOCKOPT", "1");
-            mod.addCMacro("HAVE_SIGACTION", "1");
-            mod.addCMacro("HAVE_SIGINTERRUPT", "1");
-            mod.addCMacro("HAVE_SIGNAL", "1");
-            mod.addCMacro("HAVE_SIGNAL_H", "1");
-            mod.addCMacro("HAVE_SIGSETJMP", "1");
-            mod.addCMacro("HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID", "1");
-            mod.addCMacro("HAVE_SOCKET", "1");
-            mod.addCMacro("HAVE_STDBOOL_H", "1");
-            mod.addCMacro("HAVE_STDINT_H", "1");
-            mod.addCMacro("HAVE_STDIO_H", "1");
-            mod.addCMacro("HAVE_STDLIB_H", "1");
-            mod.addCMacro("HAVE_STRCASECMP", "1");
-            mod.addCMacro("HAVE_STRDUP", "1");
-            mod.addCMacro("HAVE_STRERROR_R", "1");
-            mod.addCMacro("HAVE_STRING_H", "1");
-            mod.addCMacro("HAVE_STRINGS_H", "1");
-            mod.addCMacro("HAVE_STRSTR", "1");
-            mod.addCMacro("HAVE_STRTOK_R", "1");
-            mod.addCMacro("HAVE_STRTOLL", "1");
-            mod.addCMacro("HAVE_STRUCT_SOCKADDR_STORAGE", "1");
-            mod.addCMacro("HAVE_STRUCT_TIMEVAL", "1");
-            mod.addCMacro("HAVE_SYS_IOCTL_H", "1");
-            mod.addCMacro("HAVE_SYS_PARAM_H", "1");
-            mod.addCMacro("HAVE_SYS_POLL_H", "1");
-            mod.addCMacro("HAVE_SYS_RESOURCE_H", "1");
-            mod.addCMacro("HAVE_SYS_SELECT_H", "1");
-            mod.addCMacro("HAVE_SYS_SOCKET_H", "1");
-            mod.addCMacro("HAVE_SYS_STAT_H", "1");
-            mod.addCMacro("HAVE_SYS_TIME_H", "1");
-            mod.addCMacro("HAVE_SYS_TYPES_H", "1");
-            mod.addCMacro("HAVE_SYS_UIO_H", "1");
-            mod.addCMacro("HAVE_SYS_UN_H", "1");
-            mod.addCMacro("HAVE_TERMIO_H", "1");
-            mod.addCMacro("HAVE_TERMIOS_H", "1");
-            mod.addCMacro("HAVE_TIME_H", "1");
-            mod.addCMacro("HAVE_UNAME", "1");
-            mod.addCMacro("HAVE_UNISTD_H", "1");
-            mod.addCMacro("HAVE_UTIME", "1");
-            mod.addCMacro("HAVE_UTIME_H", "1");
-            mod.addCMacro("HAVE_UTIMES", "1");
-            mod.addCMacro("HAVE_VARIADIC_MACROS_C99", "1");
-            mod.addCMacro("HAVE_VARIADIC_MACROS_GCC", "1");
-            mod.addCMacro("HAVE_ZLIB_H", "1");
-            mod.addCMacro("RANDOM_FILE", "\"/dev/urandom\"");
-            mod.addCMacro("RECV_TYPE_ARG1", "int");
-            mod.addCMacro("RECV_TYPE_ARG2", "void *");
-            mod.addCMacro("RECV_TYPE_ARG3", "size_t");
-            mod.addCMacro("RECV_TYPE_ARG4", "int");
-            mod.addCMacro("RECV_TYPE_RETV", "ssize_t");
-            mod.addCMacro("SEND_QUAL_ARG2", "const");
-            mod.addCMacro("SEND_TYPE_ARG1", "int");
-            mod.addCMacro("SEND_TYPE_ARG2", "void *");
-            mod.addCMacro("SEND_TYPE_ARG3", "size_t");
-            mod.addCMacro("SEND_TYPE_ARG4", "int");
-            mod.addCMacro("SEND_TYPE_RETV", "ssize_t");
-            mod.addCMacro("SIZEOF_CURL_OFF_T", "8");
-            mod.addCMacro("SIZEOF_INT", "4");
-            mod.addCMacro("SIZEOF_LONG", "8");
-            mod.addCMacro("SIZEOF_OFF_T", "8");
-            mod.addCMacro("SIZEOF_SHORT", "2");
-            mod.addCMacro("SIZEOF_SIZE_T", "8");
-            mod.addCMacro("SIZEOF_TIME_T", "8");
-            mod.addCMacro("STDC_HEADERS", "1");
-            mod.addCMacro("TIME_WITH_SYS_TIME", "1");
-            mod.addCMacro("USE_NGHTTP2", "1");
-            mod.addCMacro("USE_OPENSSL", "1");
-            mod.addCMacro("OPENSSL_IS_BORINGSSL", "1");
-            mod.addCMacro("USE_THREADS_POSIX", "1");
-            mod.addCMacro("USE_UNIX_SOCKETS", "1");
-        }
+    const brotli = buildBrotli(b, target, mod.optimize.?);
+    for (brotli) |lib| curl.root_module.linkLibrary(lib);
 
-        try buildZlib(b, mod);
-        try buildBrotli(b, mod);
-        const boringssl_dep = b.dependency("boringssl-zig", .{
-            .target = target,
-            .optimize = mod.optimize.?,
-            .force_pic = true,
-        });
+    const nghttp2 = buildNghttp2(b, target, mod.optimize.?);
+    curl.root_module.linkLibrary(nghttp2);
 
-        const ssl = boringssl_dep.artifact("ssl");
-        ssl.bundle_ubsan_rt = false;
-        const crypto = boringssl_dep.artifact("crypto");
-        crypto.bundle_ubsan_rt = false;
+    const boringssl = buildBoringSsl(b, target, mod.optimize.?);
+    for (boringssl) |lib| curl.root_module.linkLibrary(lib);
 
-        mod.linkLibrary(ssl);
-        mod.linkLibrary(crypto);
-        try buildNghttp2(b, mod);
-        try buildCurl(b, mod);
-
-        switch (target.result.os.tag) {
-            .macos => {
-                // needed for proxying on mac
-                mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
-                mod.linkFramework("CoreFoundation", .{});
-                mod.linkFramework("SystemConfiguration", .{});
-            },
-            else => {},
-        }
+    switch (target.result.os.tag) {
+        .macos => {
+            // needed for proxying on mac
+            mod.addSystemFrameworkPath(.{ .cwd_relative = "/System/Library/Frameworks" });
+            mod.linkFramework("CoreFoundation", .{});
+            mod.linkFramework("SystemConfiguration", .{});
+        },
+        else => {},
     }
 }
 
-fn buildZlib(b: *Build, m: *Build.Module) !void {
-    const zlib = b.addLibrary(.{
-        .name = "zlib",
-        .root_module = m,
+fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
+    const dep = b.dependency("zlib", .{});
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
     });
 
-    const root = "vendor/zlib/";
-    zlib.installHeader(b.path(root ++ "zlib.h"), "zlib.h");
-    zlib.installHeader(b.path(root ++ "zconf.h"), "zconf.h");
-    zlib.addCSourceFiles(.{ .flags = &.{
-        "-DHAVE_SYS_TYPES_H",
-        "-DHAVE_STDINT_H",
-        "-DHAVE_STDDEF_H",
-    }, .files = &.{
-        root ++ "adler32.c",
-        root ++ "compress.c",
-        root ++ "crc32.c",
-        root ++ "deflate.c",
-        root ++ "gzclose.c",
-        root ++ "gzlib.c",
-        root ++ "gzread.c",
-        root ++ "gzwrite.c",
-        root ++ "inflate.c",
-        root ++ "infback.c",
-        root ++ "inftrees.c",
-        root ++ "inffast.c",
-        root ++ "trees.c",
-        root ++ "uncompr.c",
-        root ++ "zutil.c",
-    } });
-}
-
-fn buildBrotli(b: *Build, m: *Build.Module) !void {
-    const brotli = b.addLibrary(.{
-        .name = "brotli",
-        .root_module = m,
-    });
-
-    const root = "vendor/brotli/c/";
-    brotli.addIncludePath(b.path(root ++ "include"));
-    brotli.addCSourceFiles(.{ .flags = &.{}, .files = &.{
-        root ++ "common/constants.c",
-        root ++ "common/context.c",
-        root ++ "common/dictionary.c",
-        root ++ "common/platform.c",
-        root ++ "common/shared_dictionary.c",
-        root ++ "common/transform.c",
-        root ++ "dec/bit_reader.c",
-        root ++ "dec/decode.c",
-        root ++ "dec/huffman.c",
-        root ++ "dec/prefix.c",
-        root ++ "dec/state.c",
-        root ++ "dec/static_init.c",
-    } });
-}
-
-fn buildNghttp2(b: *Build, m: *Build.Module) !void {
-    const nghttp2 = b.addLibrary(.{
-        .name = "nghttp2",
-        .root_module = m,
-    });
-
-    const root = "vendor/nghttp2/";
-    nghttp2.addIncludePath(b.path(root ++ "lib"));
-    nghttp2.addIncludePath(b.path(root ++ "lib/includes"));
-    nghttp2.addCSourceFiles(.{ .flags = &.{
-        "-DNGHTTP2_STATICLIB",
-        "-DHAVE_NETINET_IN",
-        "-DHAVE_TIME_H",
-    }, .files = &.{
-        root ++ "lib/sfparse.c",
-        root ++ "lib/nghttp2_alpn.c",
-        root ++ "lib/nghttp2_buf.c",
-        root ++ "lib/nghttp2_callbacks.c",
-        root ++ "lib/nghttp2_debug.c",
-        root ++ "lib/nghttp2_extpri.c",
-        root ++ "lib/nghttp2_frame.c",
-        root ++ "lib/nghttp2_hd.c",
-        root ++ "lib/nghttp2_hd_huffman.c",
-        root ++ "lib/nghttp2_hd_huffman_data.c",
-        root ++ "lib/nghttp2_helper.c",
-        root ++ "lib/nghttp2_http.c",
-        root ++ "lib/nghttp2_map.c",
-        root ++ "lib/nghttp2_mem.c",
-        root ++ "lib/nghttp2_option.c",
-        root ++ "lib/nghttp2_outbound_item.c",
-        root ++ "lib/nghttp2_pq.c",
-        root ++ "lib/nghttp2_priority_spec.c",
-        root ++ "lib/nghttp2_queue.c",
-        root ++ "lib/nghttp2_rcbuf.c",
-        root ++ "lib/nghttp2_session.c",
-        root ++ "lib/nghttp2_stream.c",
-        root ++ "lib/nghttp2_submit.c",
-        root ++ "lib/nghttp2_version.c",
-        root ++ "lib/nghttp2_ratelim.c",
-        root ++ "lib/nghttp2_time.c",
-    } });
-}
-
-fn buildCurl(b: *Build, m: *Build.Module) !void {
-    const curl = b.addLibrary(.{
-        .name = "curl",
-        .root_module = m,
-    });
-
-    const root = "vendor/curl/";
-
-    curl.addIncludePath(b.path(root ++ "lib"));
-    curl.addIncludePath(b.path(root ++ "include"));
-    curl.addIncludePath(b.path("vendor/zlib"));
-
-    curl.addCSourceFiles(.{
-        .flags = &.{},
+    const lib = b.addLibrary(.{ .name = "z", .root_module = mod });
+    lib.installHeadersDirectory(dep.path(""), "", .{});
+    lib.addCSourceFiles(.{
+        .root = dep.path(""),
+        .flags = &.{
+            "-DHAVE_SYS_TYPES_H",
+            "-DHAVE_STDINT_H",
+            "-DHAVE_STDDEF_H",
+            "-DHAVE_UNISTD_H",
+        },
         .files = &.{
-            root ++ "lib/altsvc.c",
-            root ++ "lib/amigaos.c",
-            root ++ "lib/asyn-ares.c",
-            root ++ "lib/asyn-base.c",
-            root ++ "lib/asyn-thrdd.c",
-            root ++ "lib/bufq.c",
-            root ++ "lib/bufref.c",
-            root ++ "lib/cf-h1-proxy.c",
-            root ++ "lib/cf-h2-proxy.c",
-            root ++ "lib/cf-haproxy.c",
-            root ++ "lib/cf-https-connect.c",
-            root ++ "lib/cf-socket.c",
-            root ++ "lib/cfilters.c",
-            root ++ "lib/conncache.c",
-            root ++ "lib/connect.c",
-            root ++ "lib/content_encoding.c",
-            root ++ "lib/cookie.c",
-            root ++ "lib/cshutdn.c",
-            root ++ "lib/curl_addrinfo.c",
-            root ++ "lib/curl_des.c",
-            root ++ "lib/curl_endian.c",
-            root ++ "lib/curl_fnmatch.c",
-            root ++ "lib/curl_get_line.c",
-            root ++ "lib/curl_gethostname.c",
-            root ++ "lib/curl_gssapi.c",
-            root ++ "lib/curl_memrchr.c",
-            root ++ "lib/curl_ntlm_core.c",
-            root ++ "lib/curl_range.c",
-            root ++ "lib/curl_rtmp.c",
-            root ++ "lib/curl_sasl.c",
-            root ++ "lib/curl_sha512_256.c",
-            root ++ "lib/curl_sspi.c",
-            root ++ "lib/curl_threads.c",
-            root ++ "lib/curl_trc.c",
-            root ++ "lib/cw-out.c",
-            root ++ "lib/cw-pause.c",
-            root ++ "lib/dict.c",
-            root ++ "lib/doh.c",
-            root ++ "lib/dynhds.c",
-            root ++ "lib/easy.c",
-            root ++ "lib/easygetopt.c",
-            root ++ "lib/easyoptions.c",
-            root ++ "lib/escape.c",
-            root ++ "lib/fake_addrinfo.c",
-            root ++ "lib/file.c",
-            root ++ "lib/fileinfo.c",
-            root ++ "lib/fopen.c",
-            root ++ "lib/formdata.c",
-            root ++ "lib/ftp.c",
-            root ++ "lib/ftplistparser.c",
-            root ++ "lib/getenv.c",
-            root ++ "lib/getinfo.c",
-            root ++ "lib/gopher.c",
-            root ++ "lib/hash.c",
-            root ++ "lib/headers.c",
-            root ++ "lib/hmac.c",
-            root ++ "lib/hostip.c",
-            root ++ "lib/hostip4.c",
-            root ++ "lib/hostip6.c",
-            root ++ "lib/hsts.c",
-            root ++ "lib/http.c",
-            root ++ "lib/http1.c",
-            root ++ "lib/http2.c",
-            root ++ "lib/http_aws_sigv4.c",
-            root ++ "lib/http_chunks.c",
-            root ++ "lib/http_digest.c",
-            root ++ "lib/http_negotiate.c",
-            root ++ "lib/http_ntlm.c",
-            root ++ "lib/http_proxy.c",
-            root ++ "lib/httpsrr.c",
-            root ++ "lib/idn.c",
-            root ++ "lib/if2ip.c",
-            root ++ "lib/imap.c",
-            root ++ "lib/krb5.c",
-            root ++ "lib/ldap.c",
-            root ++ "lib/llist.c",
-            root ++ "lib/macos.c",
-            root ++ "lib/md4.c",
-            root ++ "lib/md5.c",
-            root ++ "lib/memdebug.c",
-            root ++ "lib/mime.c",
-            root ++ "lib/mprintf.c",
-            root ++ "lib/mqtt.c",
-            root ++ "lib/multi.c",
-            root ++ "lib/multi_ev.c",
-            root ++ "lib/netrc.c",
-            root ++ "lib/noproxy.c",
-            root ++ "lib/openldap.c",
-            root ++ "lib/parsedate.c",
-            root ++ "lib/pingpong.c",
-            root ++ "lib/pop3.c",
-            root ++ "lib/progress.c",
-            root ++ "lib/psl.c",
-            root ++ "lib/rand.c",
-            root ++ "lib/rename.c",
-            root ++ "lib/request.c",
-            root ++ "lib/rtsp.c",
-            root ++ "lib/select.c",
-            root ++ "lib/sendf.c",
-            root ++ "lib/setopt.c",
-            root ++ "lib/sha256.c",
-            root ++ "lib/share.c",
-            root ++ "lib/slist.c",
-            root ++ "lib/smb.c",
-            root ++ "lib/smtp.c",
-            root ++ "lib/socketpair.c",
-            root ++ "lib/socks.c",
-            root ++ "lib/socks_gssapi.c",
-            root ++ "lib/socks_sspi.c",
-            root ++ "lib/speedcheck.c",
-            root ++ "lib/splay.c",
-            root ++ "lib/strcase.c",
-            root ++ "lib/strdup.c",
-            root ++ "lib/strequal.c",
-            root ++ "lib/strerror.c",
-            root ++ "lib/system_win32.c",
-            root ++ "lib/telnet.c",
-            root ++ "lib/tftp.c",
-            root ++ "lib/transfer.c",
-            root ++ "lib/uint-bset.c",
-            root ++ "lib/uint-hash.c",
-            root ++ "lib/uint-spbset.c",
-            root ++ "lib/uint-table.c",
-            root ++ "lib/url.c",
-            root ++ "lib/urlapi.c",
-            root ++ "lib/version.c",
-            root ++ "lib/ws.c",
-            root ++ "lib/curlx/base64.c",
-            root ++ "lib/curlx/dynbuf.c",
-            root ++ "lib/curlx/inet_ntop.c",
-            root ++ "lib/curlx/nonblock.c",
-            root ++ "lib/curlx/strparse.c",
-            root ++ "lib/curlx/timediff.c",
-            root ++ "lib/curlx/timeval.c",
-            root ++ "lib/curlx/wait.c",
-            root ++ "lib/curlx/warnless.c",
-            root ++ "lib/vquic/curl_ngtcp2.c",
-            root ++ "lib/vquic/curl_osslq.c",
-            root ++ "lib/vquic/curl_quiche.c",
-            root ++ "lib/vquic/vquic.c",
-            root ++ "lib/vquic/vquic-tls.c",
-            root ++ "lib/vauth/cleartext.c",
-            root ++ "lib/vauth/cram.c",
-            root ++ "lib/vauth/digest.c",
-            root ++ "lib/vauth/digest_sspi.c",
-            root ++ "lib/vauth/gsasl.c",
-            root ++ "lib/vauth/krb5_gssapi.c",
-            root ++ "lib/vauth/krb5_sspi.c",
-            root ++ "lib/vauth/ntlm.c",
-            root ++ "lib/vauth/ntlm_sspi.c",
-            root ++ "lib/vauth/oauth2.c",
-            root ++ "lib/vauth/spnego_gssapi.c",
-            root ++ "lib/vauth/spnego_sspi.c",
-            root ++ "lib/vauth/vauth.c",
-            root ++ "lib/vtls/cipher_suite.c",
-            root ++ "lib/vtls/openssl.c",
-            root ++ "lib/vtls/hostcheck.c",
-            root ++ "lib/vtls/keylog.c",
-            root ++ "lib/vtls/vtls.c",
-            root ++ "lib/vtls/vtls_scache.c",
-            root ++ "lib/vtls/x509asn1.c",
+            "adler32.c", "compress.c", "crc32.c",
+            "deflate.c", "gzclose.c",  "gzlib.c",
+            "gzread.c",  "gzwrite.c",  "infback.c",
+            "inffast.c", "inflate.c",  "inftrees.c",
+            "trees.c",   "uncompr.c",  "zutil.c",
         },
     });
+
+    return lib;
+}
+
+fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) [3]*Build.Step.Compile {
+    const dep = b.dependency("brotli", .{});
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(dep.path("c/include"));
+
+    const brotlicmn = b.addLibrary(.{ .name = "brotlicommon", .root_module = mod });
+    const brotlidec = b.addLibrary(.{ .name = "brotlidec", .root_module = mod });
+    const brotlienc = b.addLibrary(.{ .name = "brotlienc", .root_module = mod });
+
+    brotlicmn.installHeadersDirectory(dep.path("c/include/brotli"), "brotli", .{});
+    brotlicmn.addCSourceFiles(.{
+        .root = dep.path("c/common"),
+        .files = &.{
+            "transform.c",  "shared_dictionary.c", "platform.c",
+            "dictionary.c", "context.c",           "constants.c",
+        },
+    });
+    brotlidec.addCSourceFiles(.{
+        .root = dep.path("c/dec"),
+        .files = &.{
+            "bit_reader.c", "decode.c", "huffman.c",
+            "prefix.c",     "state.c",  "static_init.c",
+        },
+    });
+    brotlienc.addCSourceFiles(.{
+        .root = dep.path("c/enc"),
+        .files = &.{
+            "backward_references.c",        "backward_references_hq.c", "bit_cost.c",
+            "block_splitter.c",             "brotli_bit_stream.c",      "cluster.c",
+            "command.c",                    "compound_dictionary.c",    "compress_fragment.c",
+            "compress_fragment_two_pass.c", "dictionary_hash.c",        "encode.c",
+            "encoder_dict.c",               "entropy_encode.c",         "fast_log.c",
+            "histogram.c",                  "literal_cost.c",           "memory.c",
+            "metablock.c",                  "static_dict.c",            "static_dict_lut.c",
+            "static_init.c",                "utf8_util.c",
+        },
+    });
+
+    return .{ brotlicmn, brotlidec, brotlienc };
+}
+
+fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) [2]*Build.Step.Compile {
+    const dep = b.dependency("boringssl-zig", .{
+        .target = target,
+        .optimize = optimize,
+        .force_pic = true,
+    });
+
+    const ssl = dep.artifact("ssl");
+    ssl.bundle_ubsan_rt = false;
+
+    const crypto = dep.artifact("crypto");
+    crypto.bundle_ubsan_rt = false;
+
+    return .{ ssl, crypto };
+}
+
+fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
+    const dep = b.dependency("nghttp2", .{});
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(dep.path("lib/includes"));
+
+    const config = b.addConfigHeader(.{
+        .include_path = "nghttp2ver.h",
+        .style = .{ .cmake = dep.path("lib/includes/nghttp2/nghttp2ver.h.in") },
+    }, .{
+        .PACKAGE_VERSION = "1.68.90",
+        .PACKAGE_VERSION_NUM = 0x016890,
+    });
+    mod.addConfigHeader(config);
+
+    const lib = b.addLibrary(.{ .name = "nghttp2", .root_module = mod });
+
+    lib.installConfigHeader(config);
+    lib.installHeadersDirectory(dep.path("lib/includes/nghttp2"), "nghttp2", .{});
+    lib.addCSourceFiles(.{
+        .root = dep.path("lib"),
+        .flags = &.{
+            "-DNGHTTP2_STATICLIB",
+            "-DHAVE_TIME_H",
+            "-DHAVE_ARPA_INET_H",
+            "-DHAVE_NETINET_IN_H",
+        },
+        .files = &.{
+            "sfparse.c",                 "nghttp2_alpn.c",   "nghttp2_buf.c",
+            "nghttp2_callbacks.c",       "nghttp2_debug.c",  "nghttp2_extpri.c",
+            "nghttp2_frame.c",           "nghttp2_hd.c",     "nghttp2_hd_huffman.c",
+            "nghttp2_hd_huffman_data.c", "nghttp2_helper.c", "nghttp2_http.c",
+            "nghttp2_map.c",             "nghttp2_mem.c",    "nghttp2_option.c",
+            "nghttp2_outbound_item.c",   "nghttp2_pq.c",     "nghttp2_priority_spec.c",
+            "nghttp2_queue.c",           "nghttp2_rcbuf.c",  "nghttp2_session.c",
+            "nghttp2_stream.c",          "nghttp2_submit.c", "nghttp2_version.c",
+            "nghttp2_ratelim.c",         "nghttp2_time.c",
+        },
+    });
+
+    return lib;
+}
+
+fn buildCurl(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *Build.Step.Compile {
+    const dep = b.dependency("curl", .{});
+
+    const mod = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    mod.addIncludePath(dep.path("lib"));
+    mod.addIncludePath(dep.path("include"));
+
+    const os = target.result.os.tag;
+    const abi = target.result.abi;
+
+    const is_gnu = abi.isGnu();
+    const is_ios = os == .ios;
+    const is_android = abi.isAndroid();
+    const is_linux = os == .linux;
+    const is_darwin = os.isDarwin();
+    const is_windows = os == .windows;
+    const is_netbsd = os == .netbsd;
+    const is_openbsd = os == .openbsd;
+    const is_freebsd = os == .freebsd;
+
+    const byte_size = struct {
+        fn it(b2: *std.Build, target2: Build.ResolvedTarget, name: []const u8, comptime ctype: std.Target.CType) []const u8 {
+            const size = target2.result.cTypeByteSize(ctype);
+            return std.fmt.allocPrint(b2.allocator, "#define SIZEOF_{s} {d}", .{ name, size }) catch @panic("OOM");
+        }
+    }.it;
+
+    const config = .{
+        .HAVE_LIBZ = true,
+        .HAVE_BROTLI = true,
+        .USE_NGHTTP2 = true,
+
+        .USE_OPENSSL = true,
+        .OPENSSL_IS_BORINGSSL = true,
+        .CURL_CA_PATH = null,
+        .CURL_CA_BUNDLE = null,
+        .CURL_CA_FALLBACK = false,
+        .CURL_CA_SEARCH_SAFE = false,
+        .CURL_DEFAULT_SSL_BACKEND = "openssl",
+
+        .CURL_DISABLE_AWS = true,
+        .CURL_DISABLE_DICT = true,
+        .CURL_DISABLE_DOH = true,
+        .CURL_DISABLE_FILE = true,
+        .CURL_DISABLE_FTP = true,
+        .CURL_DISABLE_GOPHER = true,
+        .CURL_DISABLE_KERBEROS_AUTH = true,
+        .CURL_DISABLE_IMAP = true,
+        .CURL_DISABLE_IPFS = true,
+        .CURL_DISABLE_LDAP = true,
+        .CURL_DISABLE_LDAPS = true,
+        .CURL_DISABLE_MQTT = true,
+        .CURL_DISABLE_NTLM = true,
+        .CURL_DISABLE_PROGRESS_METER = true,
+        .CURL_DISABLE_POP3 = true,
+        .CURL_DISABLE_RTSP = true,
+        .CURL_DISABLE_SMB = true,
+        .CURL_DISABLE_SMTP = true,
+        .CURL_DISABLE_TELNET = true,
+        .CURL_DISABLE_TFTP = true,
+
+        .ssize_t = null,
+        ._FILE_OFFSET_BITS = 64,
+
+        .USE_IPV6 = true,
+        .CURL_OS = switch (os) {
+            .linux => if (is_android) "\"android\"" else "\"linux\"",
+            else => std.fmt.allocPrint(b.allocator, "\"{s}\"", .{@tagName(os)}) catch @panic("OOM"),
+        },
+
+        // Adjusts the sizes of variables
+        .SIZEOF_INT_CODE = byte_size(b, target, "INT", .int),
+        .SIZEOF_LONG_CODE = byte_size(b, target, "LONG", .long),
+        .SIZEOF_LONG_LONG_CODE = byte_size(b, target, "LONG_LONG", .longlong),
+
+        .SIZEOF_OFF_T_CODE = byte_size(b, target, "OFF_T", .longlong),
+        .SIZEOF_CURL_OFF_T_CODE = byte_size(b, target, "CURL_OFF_T", .longlong),
+        .SIZEOF_CURL_SOCKET_T_CODE = byte_size(b, target, "CURL_SOCKET_T", .int),
+
+        .SIZEOF_SIZE_T_CODE = byte_size(b, target, "SIZE_T", .longlong),
+        .SIZEOF_TIME_T_CODE = byte_size(b, target, "TIME_T", .longlong),
+
+        // headers availability
+        .HAVE_ARPA_INET_H = !is_windows,
+        .HAVE_DIRENT_H = true,
+        .HAVE_FCNTL_H = true,
+        .HAVE_IFADDRS_H = !is_windows,
+        .HAVE_IO_H = is_windows,
+        .HAVE_LIBGEN_H = true,
+        .HAVE_LINUX_TCP_H = is_linux and is_gnu,
+        .HAVE_LOCALE_H = true,
+        .HAVE_NETDB_H = !is_windows,
+        .HAVE_NETINET_IN6_H = is_android,
+        .HAVE_NETINET_IN_H = !is_windows,
+        .HAVE_NETINET_TCP_H = !is_windows,
+        .HAVE_NETINET_UDP_H = !is_windows,
+        .HAVE_NET_IF_H = !is_windows,
+        .HAVE_POLL_H = !is_windows,
+        .HAVE_PWD_H = !is_windows,
+        .HAVE_STDATOMIC_H = true,
+        .HAVE_STDBOOL_H = true,
+        .HAVE_STDDEF_H = true,
+        .HAVE_STDINT_H = true,
+        .HAVE_STRINGS_H = true,
+        .HAVE_STROPTS_H = false,
+        .HAVE_SYS_EVENTFD_H = is_linux or is_freebsd or is_netbsd,
+        .HAVE_SYS_FILIO_H = !is_linux and !is_windows,
+        .HAVE_SYS_IOCTL_H = !is_windows,
+        .HAVE_SYS_PARAM_H = true,
+        .HAVE_SYS_POLL_H = !is_windows,
+        .HAVE_SYS_RESOURCE_H = !is_windows,
+        .HAVE_SYS_SELECT_H = !is_windows,
+        .HAVE_SYS_SOCKIO_H = !is_linux and !is_windows,
+        .HAVE_SYS_TYPES_H = true,
+        .HAVE_SYS_UN_H = !is_windows,
+        .HAVE_SYS_UTIME_H = is_windows,
+        .HAVE_TERMIOS_H = !is_windows,
+        .HAVE_TERMIO_H = is_linux,
+        .HAVE_UNISTD_H = true,
+        .HAVE_UTIME_H = true,
+        .STDC_HEADERS = true,
+
+        // general environment
+        .CURL_KRB5_VERSION = null,
+        .HAVE_ALARM = !is_windows,
+        .HAVE_ARC4RANDOM = is_android,
+        .HAVE_ATOMIC = true,
+        .HAVE_BOOL_T = true,
+        .HAVE_BUILTIN_AVAILABLE = true,
+        .HAVE_CLOCK_GETTIME_MONOTONIC = !is_darwin and !is_windows,
+        .HAVE_CLOCK_GETTIME_MONOTONIC_RAW = is_linux,
+        .HAVE_FILE_OFFSET_BITS = true,
+        .HAVE_GETEUID = !is_windows,
+        .HAVE_GETPPID = !is_windows,
+        .HAVE_GETTIMEOFDAY = true,
+        .HAVE_GLIBC_STRERROR_R = is_gnu,
+        .HAVE_GMTIME_R = !is_windows,
+        .HAVE_LOCALTIME_R = !is_windows,
+        .HAVE_LONGLONG = !is_windows,
+        .HAVE_MACH_ABSOLUTE_TIME = is_darwin,
+        .HAVE_MEMRCHR = !is_darwin and !is_windows,
+        .HAVE_POSIX_STRERROR_R = !is_gnu and !is_windows,
+        .HAVE_PTHREAD_H = !is_windows,
+        .HAVE_SETLOCALE = true,
+        .HAVE_SETRLIMIT = !is_windows,
+        .HAVE_SIGACTION = !is_windows,
+        .HAVE_SIGINTERRUPT = !is_windows,
+        .HAVE_SIGNAL = true,
+        .HAVE_SIGSETJMP = !is_windows,
+        .HAVE_SIZEOF_SA_FAMILY_T = false,
+        .HAVE_SIZEOF_SUSECONDS_T = false,
+        .HAVE_SNPRINTF = true,
+        .HAVE_STRCASECMP = !is_windows,
+        .HAVE_STRCMPI = false,
+        .HAVE_STRDUP = true,
+        .HAVE_STRERROR_R = !is_windows,
+        .HAVE_STRICMP = false,
+        .HAVE_STRUCT_TIMEVAL = true,
+        .HAVE_TIME_T_UNSIGNED = false,
+        .HAVE_UTIME = true,
+        .HAVE_UTIMES = !is_windows,
+        .HAVE_WRITABLE_ARGV = !is_windows,
+        .HAVE__SETMODE = is_windows,
+        .USE_THREADS_POSIX = !is_windows,
+
+        // filesystem, network
+        .HAVE_ACCEPT4 = is_linux or is_freebsd or is_netbsd or is_openbsd,
+        .HAVE_BASENAME = true,
+        .HAVE_CLOSESOCKET = is_windows,
+        .HAVE_DECL_FSEEKO = !is_windows,
+        .HAVE_EVENTFD = is_linux or is_freebsd or is_netbsd,
+        .HAVE_FCNTL = !is_windows,
+        .HAVE_FCNTL_O_NONBLOCK = !is_windows,
+        .HAVE_FNMATCH = !is_windows,
+        .HAVE_FREEADDRINFO = true,
+        .HAVE_FSEEKO = !is_windows,
+        .HAVE_FSETXATTR = is_darwin or is_linux or is_netbsd,
+        .HAVE_FSETXATTR_5 = is_linux or is_netbsd,
+        .HAVE_FSETXATTR_6 = is_darwin,
+        .HAVE_FTRUNCATE = true,
+        .HAVE_GETADDRINFO = true,
+        .HAVE_GETADDRINFO_THREADSAFE = is_linux or is_freebsd or is_netbsd,
+        .HAVE_GETHOSTBYNAME_R = is_linux or is_freebsd,
+        .HAVE_GETHOSTBYNAME_R_3 = false,
+        .HAVE_GETHOSTBYNAME_R_3_REENTRANT = false,
+        .HAVE_GETHOSTBYNAME_R_5 = false,
+        .HAVE_GETHOSTBYNAME_R_5_REENTRANT = false,
+        .HAVE_GETHOSTBYNAME_R_6 = is_linux,
+        .HAVE_GETHOSTBYNAME_R_6_REENTRANT = is_linux,
+        .HAVE_GETHOSTNAME = true,
+        .HAVE_GETIFADDRS = if (is_windows) false else !is_android or target.result.os.versionRange().linux.android >= 24,
+        .HAVE_GETPASS_R = is_netbsd,
+        .HAVE_GETPEERNAME = true,
+        .HAVE_GETPWUID = !is_windows,
+        .HAVE_GETPWUID_R = !is_windows,
+        .HAVE_GETRLIMIT = !is_windows,
+        .HAVE_GETSOCKNAME = true,
+        .HAVE_IF_NAMETOINDEX = !is_windows,
+        .HAVE_INET_NTOP = !is_windows,
+        .HAVE_INET_PTON = !is_windows,
+        .HAVE_IOCTLSOCKET = is_windows,
+        .HAVE_IOCTLSOCKET_CAMEL = false,
+        .HAVE_IOCTLSOCKET_CAMEL_FIONBIO = false,
+        .HAVE_IOCTLSOCKET_FIONBIO = is_windows,
+        .HAVE_IOCTL_FIONBIO = !is_windows,
+        .HAVE_IOCTL_SIOCGIFADDR = !is_windows,
+        .HAVE_MSG_NOSIGNAL = !is_windows,
+        .HAVE_OPENDIR = true,
+        .HAVE_PIPE = !is_windows,
+        .HAVE_PIPE2 = is_linux or is_freebsd or is_netbsd or is_openbsd,
+        .HAVE_POLL = !is_windows,
+        .HAVE_REALPATH = !is_windows,
+        .HAVE_RECV = true,
+        .HAVE_SA_FAMILY_T = !is_windows,
+        .HAVE_SCHED_YIELD = !is_windows,
+        .HAVE_SELECT = true,
+        .HAVE_SEND = true,
+        .HAVE_SENDMMSG = !is_darwin and !is_windows,
+        .HAVE_SENDMSG = !is_windows,
+        .HAVE_SETMODE = !is_linux,
+        .HAVE_SETSOCKOPT_SO_NONBLOCK = false,
+        .HAVE_SOCKADDR_IN6_SIN6_ADDR = !is_windows,
+        .HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID = true,
+        .HAVE_SOCKET = true,
+        .HAVE_SOCKETPAIR = !is_windows,
+        .HAVE_STRUCT_SOCKADDR_STORAGE = true,
+        .HAVE_SUSECONDS_T = is_android or is_ios,
+        .USE_UNIX_SOCKETS = !is_windows,
+    };
+
+    const curl_config = b.addConfigHeader(.{
+        .include_path = "curl_config.h",
+        .style = .{ .cmake = dep.path("lib/curl_config-cmake.h.in") },
+    }, .{
+        .CURL_EXTERN_SYMBOL = "__attribute__ ((__visibility__ (\"default\"))",
+    });
+    curl_config.addValues(config);
+
+    const lib = b.addLibrary(.{ .name = "curl", .root_module = mod });
+    lib.addConfigHeader(curl_config);
+    lib.installHeadersDirectory(dep.path("include/curl"), "curl", .{});
+    lib.addCSourceFiles(.{
+        .root = dep.path("lib"),
+        .flags = &.{
+            "-D_GNU_SOURCE",
+            "-DHAVE_CONFIG_H",
+            "-DCURL_STATICLIB",
+            "-DBUILDING_LIBCURL",
+        },
+        .files = &.{
+            // You can include all files from lib, libcurl uses #ifdef-guards to exclude code for disabled functions
+            "altsvc.c",              "amigaos.c",              "asyn-ares.c",
+            "asyn-base.c",           "asyn-thrdd.c",           "bufq.c",
+            "bufref.c",              "cf-h1-proxy.c",          "cf-h2-proxy.c",
+            "cf-haproxy.c",          "cf-https-connect.c",     "cf-ip-happy.c",
+            "cf-socket.c",           "cfilters.c",             "conncache.c",
+            "connect.c",             "content_encoding.c",     "cookie.c",
+            "cshutdn.c",             "curl_addrinfo.c",        "curl_endian.c",
+            "curl_fnmatch.c",        "curl_fopen.c",           "curl_get_line.c",
+            "curl_gethostname.c",    "curl_gssapi.c",          "curl_memrchr.c",
+            "curl_ntlm_core.c",      "curl_range.c",           "curl_rtmp.c",
+            "curl_sasl.c",           "curl_sha512_256.c",      "curl_share.c",
+            "curl_sspi.c",           "curl_threads.c",         "curl_trc.c",
+            "curlx/base64.c",        "curlx/dynbuf.c",         "curlx/fopen.c",
+            "curlx/inet_ntop.c",     "curlx/inet_pton.c",      "curlx/multibyte.c",
+            "curlx/nonblock.c",      "curlx/strcopy.c",        "curlx/strerr.c",
+            "curlx/strparse.c",      "curlx/timediff.c",       "curlx/timeval.c",
+            "curlx/version_win32.c", "curlx/wait.c",           "curlx/warnless.c",
+            "curlx/winapi.c",        "cw-out.c",               "cw-pause.c",
+            "dict.c",                "dllmain.c",              "doh.c",
+            "dynhds.c",              "easy.c",                 "easygetopt.c",
+            "easyoptions.c",         "escape.c",               "fake_addrinfo.c",
+            "file.c",                "fileinfo.c",             "formdata.c",
+            "ftp.c",                 "ftplistparser.c",        "getenv.c",
+            "getinfo.c",             "gopher.c",               "hash.c",
+            "headers.c",             "hmac.c",                 "hostip.c",
+            "hostip4.c",             "hostip6.c",              "hsts.c",
+            "http.c",                "http1.c",                "http2.c",
+            "http_aws_sigv4.c",      "http_chunks.c",          "http_digest.c",
+            "http_negotiate.c",      "http_ntlm.c",            "http_proxy.c",
+            "httpsrr.c",             "idn.c",                  "if2ip.c",
+            "imap.c",                "ldap.c",                 "llist.c",
+            "macos.c",               "md4.c",                  "md5.c",
+            "memdebug.c",            "mime.c",                 "mprintf.c",
+            "mqtt.c",                "multi.c",                "multi_ev.c",
+            "multi_ntfy.c",          "netrc.c",                "noproxy.c",
+            "openldap.c",            "parsedate.c",            "pingpong.c",
+            "pop3.c",                "progress.c",             "psl.c",
+            "rand.c",                "ratelimit.c",            "request.c",
+            "rtsp.c",                "select.c",               "sendf.c",
+            "setopt.c",              "sha256.c",               "slist.c",
+            "smb.c",                 "smtp.c",                 "socketpair.c",
+            "socks.c",               "socks_gssapi.c",         "socks_sspi.c",
+            "splay.c",               "strcase.c",              "strdup.c",
+            "strequal.c",            "strerror.c",             "system_win32.c",
+            "telnet.c",              "tftp.c",                 "transfer.c",
+            "uint-bset.c",           "uint-hash.c",            "uint-spbset.c",
+            "uint-table.c",          "url.c",                  "urlapi.c",
+            "vauth/cleartext.c",     "vauth/cram.c",           "vauth/digest.c",
+            "vauth/digest_sspi.c",   "vauth/gsasl.c",          "vauth/krb5_gssapi.c",
+            "vauth/krb5_sspi.c",     "vauth/ntlm.c",           "vauth/ntlm_sspi.c",
+            "vauth/oauth2.c",        "vauth/spnego_gssapi.c",  "vauth/spnego_sspi.c",
+            "vauth/vauth.c",         "version.c",              "vquic/curl_ngtcp2.c",
+            "vquic/curl_osslq.c",    "vquic/curl_quiche.c",    "vquic/vquic-tls.c",
+            "vquic/vquic.c",         "vssh/libssh.c",          "vssh/libssh2.c",
+            "vssh/vssh.c",           "vtls/apple.c",           "vtls/cipher_suite.c",
+            "vtls/gtls.c",           "vtls/hostcheck.c",       "vtls/keylog.c",
+            "vtls/mbedtls.c",        "vtls/openssl.c",         "vtls/rustls.c",
+            "vtls/schannel.c",       "vtls/schannel_verify.c", "vtls/vtls.c",
+            "vtls/vtls_scache.c",    "vtls/vtls_spack.c",      "vtls/wolfssl.c",
+            "vtls/x509asn1.c",       "ws.c",
+        },
+    });
+
+    return lib;
 }
 
 const Manifest = struct {
