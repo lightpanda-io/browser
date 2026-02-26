@@ -20,6 +20,7 @@ const std = @import("std");
 pub const App = @import("App.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
+pub const URL = @import("browser/URL.zig");
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
@@ -92,7 +93,8 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     //     }
     // }
 
-    _ = try page.navigate(url, .{
+    const encoded_url = try URL.ensureEncoded(page.call_arena, url);
+    _ = try page.navigate(encoded_url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     });

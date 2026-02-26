@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 
 const id = @import("../id.zig");
 const log = @import("../../log.zig");
+const URL = @import("../../browser/URL.zig");
 const js = @import("../../browser/js/js.zig");
 
 // TODO: hard coded IDs
@@ -218,8 +219,9 @@ fn createTarget(cmd: anytype) !void {
     }
 
     if (!std.mem.eql(u8, "about:blank", params.url)) {
+        const encoded_url = try URL.ensureEncoded(page.call_arena, params.url);
         try page.navigate(
-            params.url,
+            encoded_url,
             .{ .reason = .address_bar, .kind = .{ .push = null } },
         );
     }
