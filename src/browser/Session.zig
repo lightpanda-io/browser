@@ -302,7 +302,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                     // minimize how long we'll poll for network I/O.
                     var ms_to_wait = @min(200, ms_to_next_task orelse 200);
                     if (ms_to_wait > 10 and browser.hasBackgroundTasks()) {
-                        // if we have bakcground tasks, we don't want ot wait too
+                        // if we have background tasks, we don't want to wait too
                         // long for a message from the client. We want to go back
                         // to the top of the loop and run macrotasks.
                         ms_to_wait = 10;
