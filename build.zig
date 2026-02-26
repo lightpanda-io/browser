@@ -642,7 +642,7 @@ fn buildCurl(
             "-DBUILDING_LIBCURL",
         },
         .files = &.{
-            // You can include all files from lib, libcurl uses an #ifdef-guards to exclude code for disabled functions
+            // You can include all files from lib, libcurl uses #ifdef-guards to exclude code for disabled functions
             "altsvc.c",              "amigaos.c",              "asyn-ares.c",
             "asyn-base.c",           "asyn-thrdd.c",           "bufq.c",
             "bufref.c",              "cf-h1-proxy.c",          "cf-h2-proxy.c",
