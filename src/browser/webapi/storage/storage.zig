@@ -60,6 +60,9 @@ pub const Bucket = struct { local: Lookup = .{}, session: Lookup = .{} };
 
 pub const Lookup = struct {
     _data: std.StringHashMapUnmanaged([]const u8) = .empty,
+    _size: usize = 0,
+
+    const max_size = 5 * 1024 * 1024;
 
     pub fn getItem(self: *const Lookup, key_: ?[]const u8) ?[]const u8 {
         const k = key_ orelse return null;
@@ -68,6 +71,11 @@ pub const Lookup = struct {
 
     pub fn setItem(self: *Lookup, key_: ?[]const u8, value: []const u8, page: *Page) !void {
         const k = key_ orelse return;
+
+        if (self._size + value.len > max_size) {
+            return error.QuotaExceeded;
+        }
+        defer self._size += value.len;
 
         const key_owned = try page.dupeString(k);
         const value_owned = try page.dupeString(value);
@@ -112,7 +120,7 @@ pub const Lookup = struct {
 
         pub const length = bridge.accessor(Lookup.getLength, null, .{});
         pub const getItem = bridge.function(Lookup.getItem, .{});
-        pub const setItem = bridge.function(Lookup.setItem, .{});
+        pub const setItem = bridge.function(Lookup.setItem, .{ .dom_exception = true });
         pub const removeItem = bridge.function(Lookup.removeItem, .{});
         pub const clear = bridge.function(Lookup.clear, .{});
         pub const key = bridge.function(Lookup.key, .{});
