@@ -21,10 +21,7 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-
-pub const c = @cImport({
-    @cInclude("curl/curl.h");
-});
+const libcurl = @import("sys/libcurl.zig");
 
 const log = @import("log.zig");
 const Config = @import("Config.zig");
@@ -33,243 +30,19 @@ const assert = @import("lightpanda").assert;
 pub const ENABLE_DEBUG = false;
 const IS_DEBUG = builtin.mode == .Debug;
 
-const Error = error{
-    UnsupportedProtocol,
-    FailedInit,
-    UrlMalformat,
-    NotBuiltIn,
-    CouldntResolveProxy,
-    CouldntResolveHost,
-    CouldntConnect,
-    WeirdServerReply,
-    RemoteAccessDenied,
-    FtpAcceptFailed,
-    FtpWeirdPassReply,
-    FtpAcceptTimeout,
-    FtpWeirdPasvReply,
-    FtpWeird227Format,
-    FtpCantGetHost,
-    Http2,
-    FtpCouldntSetType,
-    PartialFile,
-    FtpCouldntRetrFile,
-    QuoteError,
-    HttpReturnedError,
-    WriteError,
-    UploadFailed,
-    ReadError,
-    OutOfMemory,
-    OperationTimedout,
-    FtpPortFailed,
-    FtpCouldntUseRest,
-    RangeError,
-    SslConnectError,
-    BadDownloadResume,
-    FileCouldntReadFile,
-    LdapCannotBind,
-    LdapSearchFailed,
-    AbortedByCallback,
-    BadFunctionArgument,
-    InterfaceFailed,
-    TooManyRedirects,
-    UnknownOption,
-    SetoptOptionSyntax,
-    GotNothing,
-    SslEngineNotfound,
-    SslEngineSetfailed,
-    SendError,
-    RecvError,
-    SslCertproblem,
-    SslCipher,
-    PeerFailedVerification,
-    BadContentEncoding,
-    FilesizeExceeded,
-    UseSslFailed,
-    SendFailRewind,
-    SslEngineInitfailed,
-    LoginDenied,
-    TftpNotfound,
-    TftpPerm,
-    RemoteDiskFull,
-    TftpIllegal,
-    TftpUnknownid,
-    RemoteFileExists,
-    TftpNosuchuser,
-    SslCacertBadfile,
-    RemoteFileNotFound,
-    Ssh,
-    SslShutdownFailed,
-    Again,
-    SslCrlBadfile,
-    SslIssuerError,
-    FtpPretFailed,
-    RtspCseqError,
-    RtspSessionError,
-    FtpBadFileList,
-    ChunkFailed,
-    NoConnectionAvailable,
-    SslPinnedpubkeynotmatch,
-    SslInvalidcertstatus,
-    Http2Stream,
-    RecursiveApiCall,
-    AuthError,
-    Http3,
-    QuicConnectError,
-    Proxy,
-    SslClientcert,
-    UnrecoverablePoll,
-    TooLarge,
-    Unknown,
-};
+pub const Blob = libcurl.CurlBlob;
+pub const WaitFd = libcurl.CurlWaitFd;
+pub const writefunc_error = libcurl.curl_writefunc_error;
 
-fn errorFromCode(code: c.CURLcode) Error {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(code != c.CURLE_OK);
-    }
+const Error = libcurl.Error;
+const ErrorMulti = libcurl.ErrorMulti;
+const errorFromCode = libcurl.errorFromCode;
+const errorMFromCode = libcurl.errorMFromCode;
+const errorCheck = libcurl.errorCheck;
+const errorMCheck = libcurl.errorMCheck;
 
-    return switch (code) {
-        c.CURLE_UNSUPPORTED_PROTOCOL => Error.UnsupportedProtocol,
-        c.CURLE_FAILED_INIT => Error.FailedInit,
-        c.CURLE_URL_MALFORMAT => Error.UrlMalformat,
-        c.CURLE_NOT_BUILT_IN => Error.NotBuiltIn,
-        c.CURLE_COULDNT_RESOLVE_PROXY => Error.CouldntResolveProxy,
-        c.CURLE_COULDNT_RESOLVE_HOST => Error.CouldntResolveHost,
-        c.CURLE_COULDNT_CONNECT => Error.CouldntConnect,
-        c.CURLE_WEIRD_SERVER_REPLY => Error.WeirdServerReply,
-        c.CURLE_REMOTE_ACCESS_DENIED => Error.RemoteAccessDenied,
-        c.CURLE_FTP_ACCEPT_FAILED => Error.FtpAcceptFailed,
-        c.CURLE_FTP_WEIRD_PASS_REPLY => Error.FtpWeirdPassReply,
-        c.CURLE_FTP_ACCEPT_TIMEOUT => Error.FtpAcceptTimeout,
-        c.CURLE_FTP_WEIRD_PASV_REPLY => Error.FtpWeirdPasvReply,
-        c.CURLE_FTP_WEIRD_227_FORMAT => Error.FtpWeird227Format,
-        c.CURLE_FTP_CANT_GET_HOST => Error.FtpCantGetHost,
-        c.CURLE_HTTP2 => Error.Http2,
-        c.CURLE_FTP_COULDNT_SET_TYPE => Error.FtpCouldntSetType,
-        c.CURLE_PARTIAL_FILE => Error.PartialFile,
-        c.CURLE_FTP_COULDNT_RETR_FILE => Error.FtpCouldntRetrFile,
-        c.CURLE_QUOTE_ERROR => Error.QuoteError,
-        c.CURLE_HTTP_RETURNED_ERROR => Error.HttpReturnedError,
-        c.CURLE_WRITE_ERROR => Error.WriteError,
-        c.CURLE_UPLOAD_FAILED => Error.UploadFailed,
-        c.CURLE_READ_ERROR => Error.ReadError,
-        c.CURLE_OUT_OF_MEMORY => Error.OutOfMemory,
-        c.CURLE_OPERATION_TIMEDOUT => Error.OperationTimedout,
-        c.CURLE_FTP_PORT_FAILED => Error.FtpPortFailed,
-        c.CURLE_FTP_COULDNT_USE_REST => Error.FtpCouldntUseRest,
-        c.CURLE_RANGE_ERROR => Error.RangeError,
-        c.CURLE_SSL_CONNECT_ERROR => Error.SslConnectError,
-        c.CURLE_BAD_DOWNLOAD_RESUME => Error.BadDownloadResume,
-        c.CURLE_FILE_COULDNT_READ_FILE => Error.FileCouldntReadFile,
-        c.CURLE_LDAP_CANNOT_BIND => Error.LdapCannotBind,
-        c.CURLE_LDAP_SEARCH_FAILED => Error.LdapSearchFailed,
-        c.CURLE_ABORTED_BY_CALLBACK => Error.AbortedByCallback,
-        c.CURLE_BAD_FUNCTION_ARGUMENT => Error.BadFunctionArgument,
-        c.CURLE_INTERFACE_FAILED => Error.InterfaceFailed,
-        c.CURLE_TOO_MANY_REDIRECTS => Error.TooManyRedirects,
-        c.CURLE_UNKNOWN_OPTION => Error.UnknownOption,
-        c.CURLE_SETOPT_OPTION_SYNTAX => Error.SetoptOptionSyntax,
-        c.CURLE_GOT_NOTHING => Error.GotNothing,
-        c.CURLE_SSL_ENGINE_NOTFOUND => Error.SslEngineNotfound,
-        c.CURLE_SSL_ENGINE_SETFAILED => Error.SslEngineSetfailed,
-        c.CURLE_SEND_ERROR => Error.SendError,
-        c.CURLE_RECV_ERROR => Error.RecvError,
-        c.CURLE_SSL_CERTPROBLEM => Error.SslCertproblem,
-        c.CURLE_SSL_CIPHER => Error.SslCipher,
-        c.CURLE_PEER_FAILED_VERIFICATION => Error.PeerFailedVerification,
-        c.CURLE_BAD_CONTENT_ENCODING => Error.BadContentEncoding,
-        c.CURLE_FILESIZE_EXCEEDED => Error.FilesizeExceeded,
-        c.CURLE_USE_SSL_FAILED => Error.UseSslFailed,
-        c.CURLE_SEND_FAIL_REWIND => Error.SendFailRewind,
-        c.CURLE_SSL_ENGINE_INITFAILED => Error.SslEngineInitfailed,
-        c.CURLE_LOGIN_DENIED => Error.LoginDenied,
-        c.CURLE_TFTP_NOTFOUND => Error.TftpNotfound,
-        c.CURLE_TFTP_PERM => Error.TftpPerm,
-        c.CURLE_REMOTE_DISK_FULL => Error.RemoteDiskFull,
-        c.CURLE_TFTP_ILLEGAL => Error.TftpIllegal,
-        c.CURLE_TFTP_UNKNOWNID => Error.TftpUnknownid,
-        c.CURLE_REMOTE_FILE_EXISTS => Error.RemoteFileExists,
-        c.CURLE_TFTP_NOSUCHUSER => Error.TftpNosuchuser,
-        c.CURLE_SSL_CACERT_BADFILE => Error.SslCacertBadfile,
-        c.CURLE_REMOTE_FILE_NOT_FOUND => Error.RemoteFileNotFound,
-        c.CURLE_SSH => Error.Ssh,
-        c.CURLE_SSL_SHUTDOWN_FAILED => Error.SslShutdownFailed,
-        c.CURLE_AGAIN => Error.Again,
-        c.CURLE_SSL_CRL_BADFILE => Error.SslCrlBadfile,
-        c.CURLE_SSL_ISSUER_ERROR => Error.SslIssuerError,
-        c.CURLE_FTP_PRET_FAILED => Error.FtpPretFailed,
-        c.CURLE_RTSP_CSEQ_ERROR => Error.RtspCseqError,
-        c.CURLE_RTSP_SESSION_ERROR => Error.RtspSessionError,
-        c.CURLE_FTP_BAD_FILE_LIST => Error.FtpBadFileList,
-        c.CURLE_CHUNK_FAILED => Error.ChunkFailed,
-        c.CURLE_NO_CONNECTION_AVAILABLE => Error.NoConnectionAvailable,
-        c.CURLE_SSL_PINNEDPUBKEYNOTMATCH => Error.SslPinnedpubkeynotmatch,
-        c.CURLE_SSL_INVALIDCERTSTATUS => Error.SslInvalidcertstatus,
-        c.CURLE_HTTP2_STREAM => Error.Http2Stream,
-        c.CURLE_RECURSIVE_API_CALL => Error.RecursiveApiCall,
-        c.CURLE_AUTH_ERROR => Error.AuthError,
-        c.CURLE_HTTP3 => Error.Http3,
-        c.CURLE_QUIC_CONNECT_ERROR => Error.QuicConnectError,
-        c.CURLE_PROXY => Error.Proxy,
-        c.CURLE_SSL_CLIENTCERT => Error.SslClientcert,
-        c.CURLE_UNRECOVERABLE_POLL => Error.UnrecoverablePoll,
-        c.CURLE_TOO_LARGE => Error.TooLarge,
-        else => Error.Unknown,
-    };
-}
-
-const ErrorMulti = error{
-    BadHandle,
-    BadEasyHandle,
-    OutOfMemory,
-    InternalError,
-    BadSocket,
-    UnknownOption,
-    AddedAlready,
-    RecursiveApiCall,
-    WakeupFailure,
-    BadFunctionArgument,
-    AbortedByCallback,
-    UnrecoverablePoll,
-    Unknown,
-};
-
-fn errorMFromCode(code: c.CURLMcode) ErrorMulti {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(code != c.CURLM_OK);
-    }
-
-    return switch (code) {
-        c.CURLM_BAD_HANDLE => ErrorMulti.BadHandle,
-        c.CURLM_BAD_EASY_HANDLE => ErrorMulti.BadEasyHandle,
-        c.CURLM_OUT_OF_MEMORY => ErrorMulti.OutOfMemory,
-        c.CURLM_INTERNAL_ERROR => ErrorMulti.InternalError,
-        c.CURLM_BAD_SOCKET => ErrorMulti.BadSocket,
-        c.CURLM_UNKNOWN_OPTION => ErrorMulti.UnknownOption,
-        c.CURLM_ADDED_ALREADY => ErrorMulti.AddedAlready,
-        c.CURLM_RECURSIVE_API_CALL => ErrorMulti.RecursiveApiCall,
-        c.CURLM_WAKEUP_FAILURE => ErrorMulti.WakeupFailure,
-        c.CURLM_BAD_FUNCTION_ARGUMENT => ErrorMulti.BadFunctionArgument,
-        c.CURLM_ABORTED_BY_CALLBACK => ErrorMulti.AbortedByCallback,
-        c.CURLM_UNRECOVERABLE_POLL => ErrorMulti.UnrecoverablePoll,
-        else => ErrorMulti.Unknown,
-    };
-}
-
-fn errorCheck(code: c.CURLcode) Error!void {
-    if (code == c.CURLE_OK) {
-        return;
-    }
-    return errorFromCode(code);
-}
-
-fn errorMCheck(code: c.CURLMcode) ErrorMulti!void {
-    if (code == c.CURLM_OK) {
-        return;
-    }
-    if (code == c.CURLM_CALL_MULTI_PERFORM) {
-        return;
-    }
-    return errorMFromCode(code);
+pub fn curl_version() [*c]const u8 {
+    return libcurl.curl_version();
 }
 
 pub const Method = enum(u8) {
@@ -289,11 +62,11 @@ pub const Header = struct {
 };
 
 pub const Headers = struct {
-    headers: ?*c.curl_slist,
+    headers: ?*libcurl.CurlSList,
     cookies: ?[*c]const u8,
 
     pub fn init(user_agent: [:0]const u8) !Headers {
-        const header_list = c.curl_slist_append(null, user_agent);
+        const header_list = libcurl.curl_slist_append(null, user_agent);
         if (header_list == null) {
             return error.OutOfMemory;
         }
@@ -302,13 +75,13 @@ pub const Headers = struct {
 
     pub fn deinit(self: *const Headers) void {
         if (self.headers) |hdr| {
-            c.curl_slist_free_all(hdr);
+            libcurl.curl_slist_free_all(hdr);
         }
     }
 
     pub fn add(self: *Headers, header: [*c]const u8) !void {
         // Copies the value
-        const updated_headers = c.curl_slist_append(self.headers, header);
+        const updated_headers = libcurl.curl_slist_append(self.headers, header);
         if (updated_headers == null) {
             return error.OutOfMemory;
         }
@@ -333,7 +106,7 @@ pub const Headers = struct {
     }
 
     const Iterator = struct {
-        header: [*c]c.curl_slist,
+        header: [*c]libcurl.CurlSList,
         cookies: ?[*c]const u8,
 
         pub fn next(self: *Iterator) ?Header {
@@ -365,10 +138,10 @@ pub const HeaderIterator = union(enum) {
 
     const CurlHeaderIterator = struct {
         conn: *const Connection,
-        prev: ?*c.curl_header = null,
+        prev: ?*libcurl.CurlHeader = null,
 
         pub fn next(self: *CurlHeaderIterator) ?Header {
-            const h = c.curl_easy_nextheader(self.conn.easy, c.CURLH_HEADER, -1, self.prev) orelse return null;
+            const h = libcurl.curl_easy_nextheader(self.conn.easy, .header, -1, self.prev) orelse return null;
             self.prev = h;
 
             const header = h.*;
@@ -462,72 +235,72 @@ pub const ResponseHead = struct {
 };
 
 pub fn globalInit() Error!void {
-    try errorCheck(c.curl_global_init(c.CURL_GLOBAL_SSL));
+    try libcurl.curl_global_init(.{ .ssl = true });
 }
 
 pub fn globalDeinit() void {
-    c.curl_global_cleanup();
+    libcurl.curl_global_cleanup();
 }
 
 pub const Connection = struct {
-    easy: *c.CURL,
+    easy: *libcurl.Curl,
     node: Handles.HandleList.Node = .{},
 
     pub fn init(
-        ca_blob_: ?c.curl_blob,
+        ca_blob_: ?libcurl.CurlBlob,
         config: *const Config,
     ) !Connection {
-        const easy = c.curl_easy_init() orelse return error.FailedToInitializeEasy;
-        errdefer _ = c.curl_easy_cleanup(easy);
+        const easy = libcurl.curl_easy_init() orelse return error.FailedToInitializeEasy;
+        errdefer libcurl.curl_easy_cleanup(easy);
 
         // timeouts
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_TIMEOUT_MS, @as(c_long, @intCast(config.httpTimeout()))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CONNECTTIMEOUT_MS, @as(c_long, @intCast(config.httpConnectTimeout()))));
+        try libcurl.curl_easy_setopt(easy, .timeout_ms, config.httpTimeout());
+        try libcurl.curl_easy_setopt(easy, .connect_timeout_ms, config.httpConnectTimeout());
 
         // redirect behavior
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_MAXREDIRS, @as(c_long, @intCast(config.httpMaxRedirects()))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 2)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_REDIR_PROTOCOLS_STR, "HTTP,HTTPS")); // remove FTP and FTPS from the default
+        try libcurl.curl_easy_setopt(easy, .max_redirs, config.httpMaxRedirects());
+        try libcurl.curl_easy_setopt(easy, .follow_location, 2);
+        try libcurl.curl_easy_setopt(easy, .redir_protocols_str, "HTTP,HTTPS"); // remove FTP and FTPS from the default
 
         // proxy
         const http_proxy = config.httpProxy();
         if (http_proxy) |proxy| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY, proxy.ptr));
+            try libcurl.curl_easy_setopt(easy, .proxy, proxy.ptr);
         }
 
         // tls
         if (ca_blob_) |ca_blob| {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CAINFO_BLOB, ca_blob));
+            try libcurl.curl_easy_setopt(easy, .ca_info_blob, ca_blob);
             if (http_proxy != null) {
-                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_CAINFO_BLOB, ca_blob));
+                try libcurl.curl_easy_setopt(easy, .proxy_ca_info_blob, ca_blob);
             }
         } else {
             assert(config.tlsVerifyHost() == false, "Http.init tls_verify_host", .{});
 
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0)));
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0)));
+            try libcurl.curl_easy_setopt(easy, .ssl_verify_host, false);
+            try libcurl.curl_easy_setopt(easy, .ssl_verify_peer, false);
 
             if (http_proxy != null) {
-                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, @as(c_long, 0)));
-                try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, @as(c_long, 0)));
+                try libcurl.curl_easy_setopt(easy, .proxy_ssl_verify_host, false);
+                try libcurl.curl_easy_setopt(easy, .proxy_ssl_verify_peer, false);
             }
         }
 
         // compression, don't remove this. CloudFront will send gzip content
         // even if we don't support it, and then it won't be decompressed.
         // empty string means: use whatever's available
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_ACCEPT_ENCODING, ""));
+        try libcurl.curl_easy_setopt(easy, .accept_encoding, "");
 
         // debug
         if (comptime ENABLE_DEBUG) {
-            try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_VERBOSE, @as(c_long, 1)));
+            try libcurl.curl_easy_setopt(easy, .verbose, true);
 
             // Sometimes the default debug output hides some useful data. You can
             // uncomment the following line (BUT KEEP THE LIVE ABOVE AS-IS), to
             // get more control over the data (specifically, the `CURLINFO_TEXT`
             // can include useful data).
 
-            // try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_DEBUGFUNCTION, debugCallback));
+            // try libcurl.curl_easy_setopt(easy, .debug_function, debugCallback);
         }
 
         return .{
@@ -536,11 +309,11 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *const Connection) void {
-        c.curl_easy_cleanup(self.easy);
+        libcurl.curl_easy_cleanup(self.easy);
     }
 
     pub fn setURL(self: *const Connection, url: [:0]const u8) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_URL, url.ptr));
+        try libcurl.curl_easy_setopt(self.easy, .url, url.ptr);
     }
 
     // a libcurl request has 2 methods. The first is the method that
@@ -574,71 +347,69 @@ pub const Connection = struct {
             .PATCH => "PATCH",
             .PROPFIND => "PROPFIND",
         };
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_CUSTOMREQUEST, m.ptr));
+        try libcurl.curl_easy_setopt(easy, .custom_request, m.ptr);
     }
 
     pub fn setBody(self: *const Connection, body: []const u8) !void {
         const easy = self.easy;
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_HTTPPOST, @as(c_long, 1)));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len))));
-        try errorCheck(c.curl_easy_setopt(easy, c.CURLOPT_COPYPOSTFIELDS, body.ptr));
+        try libcurl.curl_easy_setopt(easy, .post, true);
+        try libcurl.curl_easy_setopt(easy, .post_field_size, body.len);
+        try libcurl.curl_easy_setopt(easy, .copy_post_fields, body.ptr);
     }
 
     pub fn setGetMode(self: *const Connection) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_HTTPGET, @as(c_long, 1)));
+        try libcurl.curl_easy_setopt(self.easy, .http_get, true);
     }
 
     pub fn setHeaders(self: *const Connection, headers: *Headers) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_HTTPHEADER, headers.headers));
+        try libcurl.curl_easy_setopt(self.easy, .http_header, headers.headers);
     }
 
     pub fn setCookies(self: *const Connection, cookies: [*c]const u8) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_COOKIE, cookies));
+        try libcurl.curl_easy_setopt(self.easy, .cookie, cookies);
     }
 
     pub fn setPrivate(self: *const Connection, ptr: *anyopaque) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_PRIVATE, ptr));
+        try libcurl.curl_easy_setopt(self.easy, .private, ptr);
     }
 
     pub fn setProxyCredentials(self: *const Connection, creds: [:0]const u8) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_PROXYUSERPWD, creds.ptr));
+        try libcurl.curl_easy_setopt(self.easy, .proxy_user_pwd, creds.ptr);
     }
 
     pub fn setCallbacks(
         self: *const Connection,
-        header_cb: *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) usize,
-        data_cb: *const fn ([*]const u8, usize, usize, *anyopaque) callconv(.c) isize,
+        comptime header_cb: libcurl.CurlHeaderFunction,
+        comptime data_cb: libcurl.CurlWriteFunction,
     ) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_HEADERDATA, self.easy));
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_HEADERFUNCTION, header_cb));
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_WRITEDATA, self.easy));
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_WRITEFUNCTION, data_cb));
+        try libcurl.curl_easy_setopt(self.easy, .header_data, self.easy);
+        try libcurl.curl_easy_setopt(self.easy, .header_function, header_cb);
+        try libcurl.curl_easy_setopt(self.easy, .write_data, self.easy);
+        try libcurl.curl_easy_setopt(self.easy, .write_function, data_cb);
     }
 
     pub fn setProxy(self: *const Connection, proxy: ?[*:0]const u8) !void {
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_PROXY, proxy));
+        try libcurl.curl_easy_setopt(self.easy, .proxy, proxy);
     }
 
     pub fn setTlsVerify(self: *const Connection, verify: bool, use_proxy: bool) !void {
-        const host_val: c_long = if (verify) 2 else 0;
-        const peer_val: c_long = if (verify) 1 else 0;
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_SSL_VERIFYHOST, host_val));
-        try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_SSL_VERIFYPEER, peer_val));
+        try libcurl.curl_easy_setopt(self.easy, .ssl_verify_host, verify);
+        try libcurl.curl_easy_setopt(self.easy, .ssl_verify_peer, verify);
         if (use_proxy) {
-            try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_PROXY_SSL_VERIFYHOST, host_val));
-            try errorCheck(c.curl_easy_setopt(self.easy, c.CURLOPT_PROXY_SSL_VERIFYPEER, peer_val));
+            try libcurl.curl_easy_setopt(self.easy, .proxy_ssl_verify_host, verify);
+            try libcurl.curl_easy_setopt(self.easy, .proxy_ssl_verify_peer, verify);
         }
     }
 
     pub fn getEffectiveUrl(self: *const Connection) ![*c]const u8 {
         var url: [*c]u8 = undefined;
-        try errorCheck(c.curl_easy_getinfo(self.easy, c.CURLINFO_EFFECTIVE_URL, &url));
+        try libcurl.curl_easy_getinfo(self.easy, .effective_url, &url);
         return url;
     }
 
     pub fn getResponseCode(self: *const Connection) !u16 {
         var status: c_long = undefined;
-        try errorCheck(c.curl_easy_getinfo(self.easy, c.CURLINFO_RESPONSE_CODE, &status));
+        try libcurl.curl_easy_getinfo(self.easy, .response_code, &status);
         if (status < 0 or status > std.math.maxInt(u16)) {
             return 0;
         }
@@ -647,34 +418,31 @@ pub const Connection = struct {
 
     pub fn getRedirectCount(self: *const Connection) !u32 {
         var count: c_long = undefined;
-        try errorCheck(c.curl_easy_getinfo(self.easy, c.CURLINFO_REDIRECT_COUNT, &count));
+        try libcurl.curl_easy_getinfo(self.easy, .redirect_count, &count);
         return @intCast(count);
     }
 
     pub fn getResponseHeader(self: *const Connection, name: [:0]const u8, index: usize) ?HeaderValue {
-        var hdr: [*c]c.curl_header = null;
-        const result = c.curl_easy_header(self.easy, name, index, c.CURLH_HEADER, -1, &hdr);
-        if (result == c.CURLE_OK) {
-            return .{
-                .amount = hdr.*.amount,
-                .value = std.mem.span(hdr.*.value),
-            };
-        }
-
-        if (result == c.CURLE_FAILED_INIT) {
-            // seems to be what it returns if the header isn't found
+        var hdr: ?*libcurl.CurlHeader = null;
+        libcurl.curl_easy_header(self.easy, name, index, .header, -1, &hdr) catch |err| {
+            // ErrorHeader includes OutOfMemory — rare but real errors from curl internals.
+            // Logged and returned as null since callers don't expect errors.
+            log.err(.http, "get response header", .{
+                .name = name,
+                .err = err,
+            });
             return null;
-        }
-        log.err(.http, "get response header", .{
-            .name = name,
-            .err = errorFromCode(result),
-        });
-        return null;
+        };
+        const h = hdr orelse return null;
+        return .{
+            .amount = h.amount,
+            .value = std.mem.span(h.value),
+        };
     }
 
     pub fn getPrivate(self: *const Connection) !*anyopaque {
         var private: *anyopaque = undefined;
-        try errorCheck(c.curl_easy_getinfo(self.easy, c.CURLINFO_PRIVATE, &private));
+        try libcurl.curl_easy_getinfo(self.easy, .private, &private);
         return private;
     }
 
@@ -696,7 +464,7 @@ pub const Connection = struct {
             try self.setCookies(cookies);
         }
 
-        try errorCheck(c.curl_easy_perform(self.easy));
+        try libcurl.curl_easy_perform(self.easy);
         return self.getResponseCode();
     }
 };
@@ -705,23 +473,23 @@ pub const Handles = struct {
     connections: []Connection,
     in_use: HandleList,
     available: HandleList,
-    multi: *c.CURLM,
+    multi: *libcurl.CurlM,
     performing: bool = false,
 
     pub const HandleList = std.DoublyLinkedList;
 
     pub fn init(
         allocator: Allocator,
-        ca_blob: ?c.curl_blob,
+        ca_blob: ?libcurl.CurlBlob,
         config: *const Config,
     ) !Handles {
         const count: usize = config.httpMaxConcurrent();
         if (count == 0) return error.InvalidMaxConcurrent;
 
-        const multi = c.curl_multi_init() orelse return error.FailedToInitializeMulti;
-        errdefer _ = c.curl_multi_cleanup(multi);
+        const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
+        errdefer libcurl.curl_multi_cleanup(multi) catch {};
 
-        try errorMCheck(c.curl_multi_setopt(multi, c.CURLMOPT_MAX_HOST_CONNECTIONS, @as(c_long, config.httpMaxHostOpen())));
+        try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
 
         const connections = try allocator.alloc(Connection, count);
         errdefer allocator.free(connections);
@@ -745,7 +513,7 @@ pub const Handles = struct {
             conn.deinit();
         }
         allocator.free(self.connections);
-        _ = c.curl_multi_cleanup(self.multi);
+        libcurl.curl_multi_cleanup(self.multi) catch {};
     }
 
     pub fn hasAvailable(self: *const Handles) bool {
@@ -763,11 +531,11 @@ pub const Handles = struct {
     }
 
     pub fn add(self: *Handles, conn: *const Connection) !void {
-        try errorMCheck(c.curl_multi_add_handle(self.multi, conn.easy));
+        try libcurl.curl_multi_add_handle(self.multi, conn.easy);
     }
 
     pub fn remove(self: *Handles, conn: *Connection) void {
-        errorMCheck(c.curl_multi_remove_handle(self.multi, conn.easy)) catch |err| {
+        libcurl.curl_multi_remove_handle(self.multi, conn.easy) catch |err| {
             log.fatal(.http, "multi remove handle", .{ .err = err });
         };
         var node = &conn.node;
@@ -781,12 +549,12 @@ pub const Handles = struct {
         var running: c_int = undefined;
         self.performing = true;
         defer self.performing = false;
-        try errorMCheck(c.curl_multi_perform(self.multi, &running));
+        try libcurl.curl_multi_perform(self.multi, &running);
         return running;
     }
 
-    pub fn poll(self: *Handles, extra_fds: []c.curl_waitfd, timeout_ms: c_int) !void {
-        try errorMCheck(c.curl_multi_poll(self.multi, extra_fds.ptr, @intCast(extra_fds.len), timeout_ms, null));
+    pub fn poll(self: *Handles, extra_fds: []libcurl.CurlWaitFd, timeout_ms: c_int) !void {
+        try libcurl.curl_multi_poll(self.multi, extra_fds, timeout_ms, null);
     }
 
     pub const MultiMessage = struct {
@@ -796,11 +564,13 @@ pub const Handles = struct {
 
     pub fn readMessage(self: *Handles) ?MultiMessage {
         var messages_count: c_int = 0;
-        const msg_ = c.curl_multi_info_read(self.multi, &messages_count) orelse return null;
-        const msg: *c.CURLMsg = @ptrCast(msg_);
-        return .{
-            .conn = .{ .easy = msg.easy_handle.? },
-            .err = if (errorCheck(msg.data.result)) |_| null else |err| err,
+        const msg = libcurl.curl_multi_info_read(self.multi, &messages_count) orelse return null;
+        return switch (msg.data) {
+            .done => |err| .{
+                .conn = .{ .easy = msg.easy_handle },
+                .err = err,
+            },
+            else => unreachable,
         };
     }
 };
@@ -809,7 +579,7 @@ pub const Handles = struct {
 // This whole rescan + decode is really just needed for MacOS. On Linux
 // bundle.rescan does find the .pem file(s) which could be in a few different
 // places, so it's still useful, just not efficient.
-pub fn loadCerts(allocator: Allocator) !c.curl_blob {
+pub fn loadCerts(allocator: Allocator) !libcurl.CurlBlob {
     var bundle: std.crypto.Certificate.Bundle = .{};
     try bundle.rescan(allocator);
     defer bundle.deinit(allocator);
@@ -892,15 +662,16 @@ const LineWriter = struct {
     }
 };
 
-fn debugCallback(_: *c.CURL, msg_type: c.curl_infotype, raw: [*c]u8, len: usize, _: *anyopaque) callconv(.c) void {
+fn debugCallback(_: *libcurl.Curl, msg_type: libcurl.CurlInfoType, raw: [*c]u8, len: usize, _: *anyopaque) c_int {
     const data = raw[0..len];
     switch (msg_type) {
-        c.CURLINFO_TEXT => std.debug.print("libcurl [text]: {s}\n", .{data}),
-        c.CURLINFO_HEADER_OUT => std.debug.print("libcurl [req-h]: {s}\n", .{data}),
-        c.CURLINFO_HEADER_IN => std.debug.print("libcurl [res-h]: {s}\n", .{data}),
-        // c.CURLINFO_DATA_IN => std.debug.print("libcurl [res-b]: {s}\n", .{data}),
+        .text => std.debug.print("libcurl [text]: {s}\n", .{data}),
+        .header_out => std.debug.print("libcurl [req-h]: {s}\n", .{data}),
+        .header_in => std.debug.print("libcurl [res-h]: {s}\n", .{data}),
+        // .data_in => std.debug.print("libcurl [res-b]: {s}\n", .{data}),
         else => std.debug.print("libcurl ?? {d}\n", .{msg_type}),
     }
+    return 0;
 }
 
 // Zig is in a weird backend transition right now. Need to determine if
