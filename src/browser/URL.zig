@@ -30,10 +30,10 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     if (base.len == 0 or isCompleteHTTPUrl(path)) {
         if (comptime opts.always_dupe or !isNullTerminated(PT)) {
             const duped = try allocator.dupeZ(u8, path);
-            return encodeURL(allocator, duped, opts);
+            return processResolved(allocator, duped, opts);
         }
         if (comptime opts.encode) {
-            return encodeURL(allocator, path, opts);
+            return processResolved(allocator, path, opts);
         }
         return path;
     }
@@ -41,10 +41,10 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     if (path.len == 0) {
         if (comptime opts.always_dupe) {
             const duped = try allocator.dupeZ(u8, base);
-            return encodeURL(allocator, duped, opts);
+            return processResolved(allocator, duped, opts);
         }
         if (comptime opts.encode) {
-            return encodeURL(allocator, base, opts);
+            return processResolved(allocator, base, opts);
         }
         return base;
     }
@@ -52,12 +52,12 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     if (path[0] == '?') {
         const base_path_end = std.mem.indexOfAny(u8, base, "?#") orelse base.len;
         const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_path_end], path });
-        return encodeURL(allocator, result, opts);
+        return processResolved(allocator, result, opts);
     }
     if (path[0] == '#') {
         const base_fragment_start = std.mem.indexOfScalar(u8, base, '#') orelse base.len;
         const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_fragment_start], path });
-        return encodeURL(allocator, result, opts);
+        return processResolved(allocator, result, opts);
     }
 
     if (std.mem.startsWith(u8, path, "//")) {
@@ -65,16 +65,16 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
         const index = std.mem.indexOfScalar(u8, base, ':') orelse {
             if (comptime isNullTerminated(PT)) {
                 if (comptime opts.encode) {
-                    return encodeURL(allocator, path, opts);
+                    return processResolved(allocator, path, opts);
                 }
                 return path;
             }
             const duped = try allocator.dupeZ(u8, path);
-            return encodeURL(allocator, duped, opts);
+            return processResolved(allocator, duped, opts);
         };
         const protocol = base[0 .. index + 1];
         const result = try std.mem.joinZ(allocator, "", &.{ protocol, path });
-        return encodeURL(allocator, result, opts);
+        return processResolved(allocator, result, opts);
     }
 
     const scheme_end = std.mem.indexOf(u8, base, "://");
@@ -83,7 +83,7 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
 
     if (path[0] == '/') {
         const result = try std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
-        return encodeURL(allocator, result, opts);
+        return processResolved(allocator, result, opts);
     }
 
     var normalized_base: []const u8 = base[0..path_start];
@@ -145,14 +145,17 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
 
     // we always have an extra space
     out[out_i] = 0;
-    return encodeURL(allocator, out[0..out_i :0], opts);
+    return processResolved(allocator, out[0..out_i :0], opts);
 }
 
-fn encodeURL(allocator: Allocator, url: [:0]const u8, comptime opts: ResolveOpts) ![:0]const u8 {
+fn processResolved(allocator: Allocator, url: [:0]const u8, comptime opts: ResolveOpts) ![:0]const u8 {
     if (!comptime opts.encode) {
         return url;
     }
+    return ensureEncoded(allocator, url);
+}
 
+pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     const scheme_end = std.mem.indexOf(u8, url, "://");
     const authority_start = if (scheme_end) |end| end + 3 else 0;
     const path_start = std.mem.indexOfScalarPos(u8, url, authority_start, '/') orelse return url;
@@ -180,7 +183,8 @@ fn encodeURL(allocator: Allocator, url: [:0]const u8, comptime opts: ResolveOpts
 
     if (encoded_path.ptr == path_to_encode.ptr and
         (encoded_query == null or encoded_query.?.ptr == url[query_start.? + 1 .. query_end].ptr) and
-        (encoded_fragment == null or encoded_fragment.?.ptr == url[fragment_start.? + 1 ..].ptr)) {
+        (encoded_fragment == null or encoded_fragment.?.ptr == url[fragment_start.? + 1 ..].ptr))
+    {
         // nothing has changed
         return url;
     }
@@ -813,6 +817,127 @@ test "URL: resolve" {
 
     for (cases) |case| {
         const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
+        try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: ensureEncoded" {
+    defer testing.reset();
+
+    const Case = struct {
+        url: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        .{
+            .url = "https://example.com/over 9000!",
+            .expected = "https://example.com/over%209000!",
+        },
+        .{
+            .url = "http://example.com/hello world.html",
+            .expected = "http://example.com/hello%20world.html",
+        },
+        .{
+            .url = "https://example.com/file[1].html",
+            .expected = "https://example.com/file%5B1%5D.html",
+        },
+        .{
+            .url = "https://example.com/file{name}.html",
+            .expected = "https://example.com/file%7Bname%7D.html",
+        },
+        .{
+            .url = "https://example.com/page?query=hello world",
+            .expected = "https://example.com/page?query=hello%20world",
+        },
+        .{
+            .url = "https://example.com/page?a=1&b=value with spaces",
+            .expected = "https://example.com/page?a=1&b=value%20with%20spaces",
+        },
+        .{
+            .url = "https://example.com/page#section one",
+            .expected = "https://example.com/page#section%20one",
+        },
+        .{
+            .url = "https://example.com/my path?query=my value#my anchor",
+            .expected = "https://example.com/my%20path?query=my%20value#my%20anchor",
+        },
+        .{
+            .url = "https://example.com/already%20encoded",
+            .expected = "https://example.com/already%20encoded",
+        },
+        .{
+            .url = "https://example.com/file%5B1%5D.html",
+            .expected = "https://example.com/file%5B1%5D.html",
+        },
+        .{
+            .url = "https://example.com/caf%C3%A9",
+            .expected = "https://example.com/caf%C3%A9",
+        },
+        .{
+            .url = "https://example.com/page?query=already%20encoded",
+            .expected = "https://example.com/page?query=already%20encoded",
+        },
+        .{
+            .url = "https://example.com/page?a=1&b=value%20here",
+            .expected = "https://example.com/page?a=1&b=value%20here",
+        },
+        .{
+            .url = "https://example.com/page#section%20one",
+            .expected = "https://example.com/page#section%20one",
+        },
+        .{
+            .url = "https://example.com/part%20encoded and not",
+            .expected = "https://example.com/part%20encoded%20and%20not",
+        },
+        .{
+            .url = "https://example.com/page?a=encoded%20value&b=not encoded",
+            .expected = "https://example.com/page?a=encoded%20value&b=not%20encoded",
+        },
+        .{
+            .url = "https://example.com/my%20path?query=not encoded#encoded%20anchor",
+            .expected = "https://example.com/my%20path?query=not%20encoded#encoded%20anchor",
+        },
+        .{
+            .url = "https://example.com/fully%20encoded?query=also%20encoded#and%20this",
+            .expected = "https://example.com/fully%20encoded?query=also%20encoded#and%20this",
+        },
+        .{
+            .url = "https://example.com/path-with_under~tilde",
+            .expected = "https://example.com/path-with_under~tilde",
+        },
+        .{
+            .url = "https://example.com/sub-delims!$&'()*+,;=",
+            .expected = "https://example.com/sub-delims!$&'()*+,;=",
+        },
+        .{
+            .url = "https://example.com",
+            .expected = "https://example.com",
+        },
+        .{
+            .url = "https://example.com?query=value",
+            .expected = "https://example.com?query=value",
+        },
+        .{
+            .url = "https://example.com/clean/path",
+            .expected = "https://example.com/clean/path",
+        },
+        .{
+            .url = "https://example.com/path?clean=query#clean-fragment",
+            .expected = "https://example.com/path?clean=query#clean-fragment",
+        },
+        .{
+            .url = "https://example.com/100% complete",
+            .expected = "https://example.com/100%25%20complete",
+        },
+        .{
+            .url = "https://example.com/path?value=100% done",
+            .expected = "https://example.com/path?value=100%25%20done",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try ensureEncoded(testing.arena_allocator, case.url);
         try testing.expectString(case.expected, result);
     }
 }
