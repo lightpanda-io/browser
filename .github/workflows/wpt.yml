@@ -82,8 +82,9 @@ jobs:
           repository: 'lightpanda-io/wpt'
           fetch-depth: 0
 
-      - name: create custom hosts
-        run: ./wpt make-hosts-file | sudo tee -a /etc/hosts
+      # The hosts are configured manually on the self host runner.
+      # - name: create custom hosts
+      #   run: ./wpt make-hosts-file | sudo tee -a /etc/hosts
 
       - name: generate manifest
         run: ./wpt manifest
