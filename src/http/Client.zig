@@ -1275,7 +1275,7 @@ pub const Transfer = struct {
             }
             transfer._redirecting = false;
 
-            if (status == 401 or status == 407) {
+            if ((status == 401 or status == 407) and transfer.client.use_proxy) {
                 // The auth challenge must be parsed from a following
                 // WWW-Authenticate or Proxy-Authenticate header.
                 transfer._auth_challenge = .{
