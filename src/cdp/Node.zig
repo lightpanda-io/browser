@@ -400,20 +400,32 @@ test "cdp Node: search list" {
         defer page._session.removePage();
         var doc = page.window._document;
 
-        const s1 = try search_list.create((try doc.querySelectorAll(.wrap("a"), page))._nodes);
-        try testing.expectEqual("1", s1.name);
-        try testing.expectEqualSlices(u32, &.{ 1, 2 }, s1.node_ids);
+        {
+            const l1 = try doc.querySelectorAll(.wrap("a"), page);
+            defer l1.deinit(page);
+            const s1 = try search_list.create(l1._nodes);
+            try testing.expectEqual("1", s1.name);
+            try testing.expectEqualSlices(u32, &.{ 1, 2 }, s1.node_ids);
+        }
 
         try testing.expectEqual(2, registry.lookup_by_id.count());
         try testing.expectEqual(2, registry.lookup_by_node.count());
 
-        const s2 = try search_list.create((try doc.querySelectorAll(.wrap("#a1"), page))._nodes);
-        try testing.expectEqual("2", s2.name);
-        try testing.expectEqualSlices(u32, &.{1}, s2.node_ids);
+        {
+            const l2 = try doc.querySelectorAll(.wrap("#a1"), page);
+            defer l2.deinit(page);
+            const s2 = try search_list.create(l2._nodes);
+            try testing.expectEqual("2", s2.name);
+            try testing.expectEqualSlices(u32, &.{1}, s2.node_ids);
+        }
 
-        const s3 = try search_list.create((try doc.querySelectorAll(.wrap("#a2"), page))._nodes);
-        try testing.expectEqual("3", s3.name);
-        try testing.expectEqualSlices(u32, &.{2}, s3.node_ids);
+        {
+            const l3 = try doc.querySelectorAll(.wrap("#a2"), page);
+            defer l3.deinit(page);
+            const s3 = try search_list.create(l3._nodes);
+            try testing.expectEqual("3", s3.name);
+            try testing.expectEqualSlices(u32, &.{2}, s3.node_ids);
+        }
 
         try testing.expectEqual(2, registry.lookup_by_id.count());
         try testing.expectEqual(2, registry.lookup_by_node.count());

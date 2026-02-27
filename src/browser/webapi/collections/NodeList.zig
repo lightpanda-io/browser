@@ -28,24 +28,36 @@ const RadioNodeList = @import("RadioNodeList.zig");
 const SelectorList = @import("../selector/List.zig");
 const NodeLive = @import("node_live.zig").NodeLive;
 
-const Mode = enum {
-    child_nodes,
-    selector_list,
-    radio_node_list,
-    name,
-};
-
 const NodeList = @This();
 
-data: union(Mode) {
+_data: union(enum) {
     child_nodes: *ChildNodes,
     selector_list: *SelectorList,
     radio_node_list: *RadioNodeList,
     name: NodeLive(.name),
 },
+_rc: usize = 0,
+
+pub fn deinit(self: *NodeList, _: bool, page: *Page) void {
+    const rc = self._rc;
+    if (rc > 1) {
+        self._rc = rc - 1;
+        return;
+    }
+
+    switch (self._data) {
+        .selector_list => |list| list.deinit(page),
+        .child_nodes => |cn| cn.deinit(page),
+        else => {},
+    }
+}
+
+pub fn acquireRef(self: *NodeList) void {
+    self._rc += 1;
+}
 
 pub fn length(self: *NodeList, page: *Page) !u32 {
-    return switch (self.data) {
+    return switch (self._data) {
         .child_nodes => |impl| impl.length(page),
         .selector_list => |impl| @intCast(impl.getLength()),
         .radio_node_list => |impl| impl.getLength(),
@@ -58,7 +70,7 @@ pub fn indexedGet(self: *NodeList, index: usize, page: *Page) !*Node {
 }
 
 pub fn getAtIndex(self: *NodeList, index: usize, page: *Page) !?*Node {
-    return switch (self.data) {
+    return switch (self._data) {
         .child_nodes => |impl| impl.getAtIndex(index, page),
         .selector_list => |impl| impl.getAtIndex(index),
         .radio_node_list => |impl| impl.getAtIndex(index, page),
@@ -106,6 +118,14 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
+    pub fn deinit(self: *Iterator, shutdown: bool, page: *Page) void {
+        self.list.deinit(shutdown, page);
+    }
+
+    pub fn acquireRef(self: *Iterator) void {
+        self.list.acquireRef();
+    }
+
     pub fn next(self: *Iterator, page: *Page) !?Entry {
         const index = self.index;
         const node = try self.list.getAtIndex(index, page) orelse return null;
@@ -122,6 +142,8 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const enumerable = false;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(NodeList.deinit);
     };
 
     pub const length = bridge.accessor(NodeList.length, null, .{});

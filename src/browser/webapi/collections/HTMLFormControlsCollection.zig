@@ -85,7 +85,7 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Pag
                     ._name = try page.dupeString(name),
                 });
 
-                radio_node_list._proto = try page._factory.create(NodeList{ .data = .{ .radio_node_list = radio_node_list } });
+                radio_node_list._proto = try page._factory.create(NodeList{ ._data = .{ .radio_node_list = radio_node_list } });
 
                 return .{ .radio_node_list = radio_node_list };
             }
