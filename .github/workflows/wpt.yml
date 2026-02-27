@@ -107,7 +107,7 @@ jobs:
         run: |
           ./wpt serve 2> /dev/null & echo $! > WPT.pid
           sleep 10s
-          ./wptrunner -lpd-path ./lightpanda -json -concurrency 5 > wpt.json
+          ./wptrunner -lpd-path ./lightpanda -json -concurrency 1 > wpt.json
           kill `cat WPT.pid`
 
       - name: write commit
