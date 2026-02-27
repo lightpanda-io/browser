@@ -396,9 +396,28 @@ pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
 
 pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(trimmed) catch return error.InvalidCharacterError;
+    // Per HTML spec "forgiving-base64 decode" algorithm:
+    // https://infra.spec.whatwg.org/#forgiving-base64-decode
+    const padded: []const u8 = switch (trimmed.len % 4) {
+        1 => return error.InvalidCharacterError,
+        2 => blk: {
+            const buf = try page.call_arena.alloc(u8, trimmed.len + 2);
+            @memcpy(buf[0..trimmed.len], trimmed);
+            buf[trimmed.len] = '=';
+            buf[trimmed.len + 1] = '=';
+            break :blk buf;
+        },
+        3 => blk: {
+            const buf = try page.call_arena.alloc(u8, trimmed.len + 1);
+            @memcpy(buf[0..trimmed.len], trimmed);
+            buf[trimmed.len] = '=';
+            break :blk buf;
+        },
+        else => trimmed,
+    };
+    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(padded) catch return error.InvalidCharacterError;
     const decoded = try page.call_arena.alloc(u8, decoded_len);
-    std.base64.standard.Decoder.decode(decoded, trimmed) catch return error.InvalidCharacterError;
+    std.base64.standard.Decoder.decode(decoded, padded) catch return error.InvalidCharacterError;
     return decoded;
 }
 
