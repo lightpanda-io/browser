@@ -16,6 +16,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+const String = @import("../../../string.zig").String;
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const CData = @import("../CData.zig");
@@ -30,11 +31,11 @@ pub fn init(str: ?js.NullableString, page: *Page) !*Text {
 }
 
 pub fn getWholeText(self: *Text) []const u8 {
-    return self._proto._data;
+    return self._proto._data.str();
 }
 
 pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
-    const data = self._proto._data;
+    const data = self._proto._data.str();
 
     const byte_offset = CData.utf16OffsetToUtf8(data, offset) catch return error.IndexSizeError;
 

@@ -500,20 +500,20 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
 
     if (isTextNode(focus_node)) {
         if (forward) {
-            const i = nextWordEnd(new_node.getData(), new_offset);
+            const i = nextWordEnd(new_node.getData().str(), new_offset);
             if (i > new_offset) {
                 new_offset = i;
             } else if (nextTextNode(focus_node)) |next| {
                 new_node = next;
-                new_offset = nextWordEnd(next.getData(), 0);
+                new_offset = nextWordEnd(next.getData().str(), 0);
             }
         } else {
-            const i = prevWordStart(new_node.getData(), new_offset);
+            const i = prevWordStart(new_node.getData().str(), new_offset);
             if (i < new_offset) {
                 new_offset = i;
             } else if (prevTextNode(focus_node)) |prev| {
                 new_node = prev;
-                new_offset = prevWordStart(prev.getData(), @intCast(prev.getData().len));
+                new_offset = prevWordStart(prev.getData().str(), @intCast(prev.getData().len));
             }
         }
     } else {
@@ -524,7 +524,7 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
             const child = focus_node.getChildAt(focus_offset) orelse {
                 if (nextTextNodeAfter(focus_node)) |next| {
                     new_node = next;
-                    new_offset = nextWordEnd(next.getData(), 0);
+                    new_offset = nextWordEnd(next.getData().str(), 0);
                 }
                 return self.applyModify(alter, new_node, new_offset, page);
             };
@@ -534,7 +534,7 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
             };
 
             new_node = t;
-            new_offset = nextWordEnd(t.getData(), 0);
+            new_offset = nextWordEnd(t.getData().str(), 0);
         } else {
             var idx = focus_offset;
             while (idx > 0) {
@@ -544,7 +544,7 @@ fn modifyByWord(self: *Selection, alter: ModifyAlter, forward: bool, range: *Ran
                 while (bottom.lastChild()) |c| bottom = c;
                 if (isTextNode(bottom)) {
                     new_node = bottom;
-                    new_offset = prevWordStart(bottom.getData(), bottom.getLength());
+                    new_offset = prevWordStart(bottom.getData().str(), bottom.getLength());
                     break;
                 }
             }

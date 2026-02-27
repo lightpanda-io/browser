@@ -243,7 +243,7 @@ pub fn notifyAttributeChange(
 pub fn notifyCharacterDataChange(
     self: *MutationObserver,
     target: *Node,
-    old_value: ?[]const u8,
+    old_value: ?String,
     page: *Page,
 ) !void {
     for (self._observing.items) |obs| {
@@ -267,7 +267,7 @@ pub fn notifyCharacterDataChange(
             ._target = target,
             ._attribute_name = null,
             ._old_value = if (obs.options.characterDataOldValue and old_value != null)
-                try arena.dupe(u8, old_value.?)
+                try arena.dupe(u8, old_value.?.str())
             else
                 null,
             ._added_nodes = &.{},

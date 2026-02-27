@@ -1360,10 +1360,8 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
             if (parent.lastChild()) |sibling| {
                 if (sibling.is(CData.Text)) |tn| {
                     const cdata = tn._proto;
-                    const existing = cdata.getData();
-                    // @metric
-                    // Inefficient, but we don't expect this to happen often.
-                    cdata._data = try std.mem.concat(self.arena, u8, &.{ existing, txt });
+                    const existing = cdata.getData().str();
+                    cdata._data = try String.concat(self.arena, &.{ existing, txt });
                     return;
                 }
             }
@@ -2193,28 +2191,24 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
 }
 
 pub fn createTextNode(self: *Page, text: []const u8) !*Node {
-    // might seem unlikely that we get an intern hit, but we'll get some nodes
-    // with just '\n'
-    const owned_text = try self.dupeString(text);
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .text = .{
             ._proto = undefined,
         } },
-        ._data = owned_text,
+        ._data = try self.dupeSSO(text),
     });
     cd._type.text._proto = cd;
     return cd.asNode();
 }
 
 pub fn createComment(self: *Page, text: []const u8) !*Node {
-    const owned_text = try self.dupeString(text);
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .comment = .{
             ._proto = undefined,
         } },
-        ._data = owned_text,
+        ._data = try self.dupeSSO(text),
     });
     cd._type.comment._proto = cd;
     return cd.asNode();
@@ -2225,8 +2219,6 @@ pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
     if (std.mem.indexOf(u8, data, "]]>") != null) {
         return error.InvalidCharacterError;
     }
-
-    const owned_data = try self.dupeString(data);
 
     // First allocate the Text node separately
     const text_node = try self._factory.create(CData.Text{
@@ -2239,7 +2231,7 @@ pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
         ._type = .{ .cdata_section = .{
             ._proto = text_node,
         } },
-        ._data = owned_data,
+        ._data = try self.dupeSSO(data),
     });
 
     // Set up the back pointer from Text to CData
@@ -2261,7 +2253,6 @@ pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []cons
     try validateXmlName(target);
 
     const owned_target = try self.dupeString(target);
-    const owned_data = try self.dupeString(data);
 
     const pi = try self._factory.create(CData.ProcessingInstruction{
         ._proto = undefined,
@@ -2271,7 +2262,7 @@ pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []cons
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .processing_instruction = pi },
-        ._data = owned_data,
+        ._data = try self.dupeSSO(data),
     });
 
     // Set up the back pointer from ProcessingInstruction to CData
@@ -2342,6 +2333,10 @@ pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {
         return v;
     }
     return self.arena.dupe(u8, value);
+}
+
+pub fn dupeSSO(self: *Page, value: []const u8) !String {
+    return String.init(self.arena, value, .{ .dupe = true });
 }
 
 const RemoveNodeOpts = struct {
@@ -2747,7 +2742,7 @@ pub fn setCustomizedBuiltInDefinition(self: *Page, element: *Element, definition
 pub fn characterDataChange(
     self: *Page,
     target: *Node,
-    old_value: []const u8,
+    old_value: String,
 ) void {
     var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
     while (it) |node| : (it = node.next) {
