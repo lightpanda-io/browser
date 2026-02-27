@@ -75,6 +75,16 @@
   testing.expectEqual('abc', atob('YWJj'));
   testing.expectEqual('0123456789', atob('MDEyMzQ1Njc4OQ=='));
   testing.expectEqual('The quick brown fox jumps over the lazy dog', atob('VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw=='));
+
+  // atob must accept unpadded base64 (forgiving-base64 decode per HTML spec)
+  testing.expectEqual('a', atob('YQ'));      // 2 chars, len%4==2, needs '=='
+  testing.expectEqual('ab', atob('YWI'));    // 3 chars, len%4==3, needs '='
+  testing.expectEqual('ceil', atob('Y2VpbA'));  // 6 chars, len%4==2, needs '=='
+
+  // length % 4 == 1 must still throw
+  testing.expectError('Error: InvalidCharacterError', () => {
+    atob('Y');
+  });
 </script>
 
 <script id=btoa_atob_roundtrip>
