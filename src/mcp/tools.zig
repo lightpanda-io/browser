@@ -40,22 +40,37 @@ pub fn handleList(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
         },
         .{
             .name = "markdown",
-            .description = "Get the page content in markdown format.",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena, "{\"type\":\"object\",\"properties\":{}}", .{}) catch unreachable,
-        },
-        .{
-            .name = "links",
-            .description = "Extract all links in the opened page",
-            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena, "{\"type\":\"object\",\"properties\":{}}", .{}) catch unreachable,
-        },
-        .{
-            .name = "evaluate",
-            .description = "Evaluate JavaScript in the current page context",
+            .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
             .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena,
                 \\{
                 \\  "type": "object",
                 \\  "properties": {
-                \\    "script": { "type": "string" }
+                \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." }
+                \\  }
+                \\}
+            , .{}) catch unreachable,
+        },
+        .{
+            .name = "links",
+            .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena,
+                \\{
+                \\  "type": "object",
+                \\  "properties": {
+                \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." }
+                \\  }
+                \\}
+            , .{}) catch unreachable,
+        },
+        .{
+            .name = "evaluate",
+            .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
+            .inputSchema = std.json.parseFromSliceLeaky(std.json.Value, arena,
+                \\{
+                \\  "type": "object",
+                \\  "properties": {
+                \\    "script": { "type": "string" },
+                \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." }
                 \\  },
                 \\  "required": ["script"]
                 \\}
@@ -153,6 +168,18 @@ pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Search performed successfully." }};
         try sendResult(server, req.id.?, .{ .content = &content });
     } else if (std.mem.eql(u8, call_params.name, "markdown")) {
+        const MarkdownParams = struct {
+            url: ?[]const u8 = null,
+        };
+        if (call_params.arguments) |args_raw| {
+            if (std.json.parseFromValueLeaky(MarkdownParams, arena, args_raw, .{})) |args| {
+                if (args.url) |u| {
+                    performGoto(server, arena, u) catch {
+                        return sendError(server, req.id.?, -32603, "Internal error during navigation");
+                    };
+                }
+            } else |_| {}
+        }
         var aw = std.Io.Writer.Allocating.init(arena);
         lp.markdown.dump(server.page.document.asNode(), .{}, &aw.writer, server.page) catch {
             return sendError(server, req.id.?, -32603, "Internal error parsing markdown");
@@ -161,6 +188,18 @@ pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
         const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = aw.written() }};
         try sendResult(server, req.id.?, .{ .content = &content });
     } else if (std.mem.eql(u8, call_params.name, "links")) {
+        const LinksParams = struct {
+            url: ?[]const u8 = null,
+        };
+        if (call_params.arguments) |args_raw| {
+            if (std.json.parseFromValueLeaky(LinksParams, arena, args_raw, .{})) |args| {
+                if (args.url) |u| {
+                    performGoto(server, arena, u) catch {
+                        return sendError(server, req.id.?, -32603, "Internal error during navigation");
+                    };
+                }
+            } else |_| {}
+        }
         const list = Selector.querySelectorAll(server.page.document.asNode(), "a[href]", server.page) catch {
             return sendError(server, req.id.?, -32603, "Internal error querying selector");
         };
@@ -183,9 +222,21 @@ pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
         if (call_params.arguments == null) {
             return sendError(server, req.id.?, -32602, "Missing arguments for evaluate");
         }
-        const args = std.json.parseFromValueLeaky(EvaluateParams, arena, call_params.arguments.?, .{}) catch {
+
+        const EvaluateParamsEx = struct {
+            script: []const u8,
+            url: ?[]const u8 = null,
+        };
+
+        const args = std.json.parseFromValueLeaky(EvaluateParamsEx, arena, call_params.arguments.?, .{}) catch {
             return sendError(server, req.id.?, -32602, "Invalid arguments for evaluate");
         };
+
+        if (args.url) |url| {
+            performGoto(server, arena, url) catch {
+                return sendError(server, req.id.?, -32603, "Internal error during navigation");
+            };
+        }
 
         var ls: js.Local.Scope = undefined;
         server.page.js.localScope(&ls);

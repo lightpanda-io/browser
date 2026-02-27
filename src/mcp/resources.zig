@@ -43,7 +43,7 @@ pub fn handleRead(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
 
     if (std.mem.eql(u8, params.uri, "mcp://page/html")) {
         var aw = std.Io.Writer.Allocating.init(arena);
-        lp.dump.root(server.page.document.asNode(), .{}, &aw.writer, server.page) catch {
+        lp.dump.root(server.page.document, .{}, &aw.writer, server.page) catch {
             return sendError(server, req.id.?, -32603, "Internal error reading HTML");
         };
 

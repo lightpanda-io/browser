@@ -96,7 +96,7 @@ pub const McpServer = struct {
 
                 self.queue_mutex.lock();
                 self.message_queue.append(self.allocator, msg) catch |err| {
-                    lp.log.err(.app, "MCP Error: Failed to queue message", .{ .err = err });
+                    lp.log.err(.app, "MCP Queue failed", .{ .err = err });
                     self.allocator.free(msg);
                 };
                 self.queue_mutex.unlock();
