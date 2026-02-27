@@ -388,8 +388,8 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
 
     // Complex case: different containers
     // Handle start container - if it's a text node, truncate it
-    if (self._proto._start_container.is(Node.CData)) |_| {
-        const text_data = self._proto._start_container.getData().str();
+    if (self._proto._start_container.is(Node.CData)) |cdata| {
+        const text_data = cdata._data.str();
         if (self._proto._start_offset < text_data.len) {
             // Keep only the part before start_offset
             const new_text = text_data[0..self._proto._start_offset];
@@ -398,8 +398,8 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
     }
 
     // Handle end container - if it's a text node, truncate it
-    if (self._proto._end_container.is(Node.CData)) |_| {
-        const text_data = self._proto._end_container.getData().str();
+    if (self._proto._end_container.is(Node.CData)) |cdata| {
+        const text_data = cdata._data.str();
         if (self._proto._end_offset < text_data.len) {
             // Keep only the part from end_offset onwards
             const new_text = text_data[self._proto._end_offset..];

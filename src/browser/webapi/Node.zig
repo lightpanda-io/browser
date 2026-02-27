@@ -270,7 +270,7 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
                 try child.getTextContent(writer);
             }
         },
-        .cdata => |c| try writer.writeAll(c.getData().str()),
+        .cdata => |c| try writer.writeAll(c._data.str()),
         .document => {},
         .document_type => {},
         .attribute => |attr| try writer.writeAll(attr._value.str()),
@@ -1028,7 +1028,7 @@ pub const JsApi = struct {
                 try self.getTextContent(&buf.writer);
                 return buf.written();
             },
-            .cdata => |cdata| return cdata.getData().str(),
+            .cdata => |cdata| return cdata._data.str(),
             .attribute => |attr| return attr._value.str(),
             .document => return null,
             .document_type => return null,
