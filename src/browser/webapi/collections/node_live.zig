@@ -349,7 +349,7 @@ pub fn NodeLive(comptime mode: Mode) type {
 
         pub fn runtimeGenericWrap(self: Self, page: *Page) !if (mode == .name) *NodeList else *HTMLCollection {
             const collection = switch (mode) {
-                .name => return page._factory.create(NodeList{ .data = .{ .name = self } }),
+                .name => return page._factory.create(NodeList{ ._data = .{ .name = self } }),
                 .tag => HTMLCollection{ ._data = .{ .tag = self } },
                 .tag_name => HTMLCollection{ ._data = .{ .tag_name = self } },
                 .tag_name_ns => HTMLCollection{ ._data = .{ .tag_name_ns = self } },

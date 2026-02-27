@@ -442,3 +442,29 @@
 }
 </script>
 
+<script id=iterator_list_lifetime>
+  // This test is intended to ensure that a list remains alive as long as it
+  // must, i.e. as long as any iterator referencing the list is alive.
+  // This test depends on being able to force the v8 GC to cleanup, which
+  // we have no way of controlling. At worst, the test will pass without
+  // actually testing correct lifetime. But it was at least manually verified
+  // for me that this triggers plenty of GCs.
+  const expected = Array.from(document.querySelectorAll('*')).length;
+  {
+    let keys = [];
+
+    // Phase 1: Create many lists+iterators to fill up the arena pool
+    for (let i = 0; i < 1000; i++) {
+      let list = document.querySelectorAll('*');
+      keys.push(list.keys());
+
+      // Create an Event every iteration to compete for arenas
+      new Event('arena_compete');
+    }
+
+    for (let k of keys) {
+      const result = Array.from(k);
+      testing.expectEqual(expected, result.length);
+    }
+  }
+</script>

@@ -21,8 +21,7 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
 pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
-    const InnerStruct = Inner;
-    const R = reflect(InnerStruct, field);
+    const R = reflect(Inner, field);
 
     return struct {
         inner: Inner,
@@ -38,6 +37,18 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
 
         pub fn init(inner: Inner, page: *Page) !*Self {
             return page._factory.create(Self{ .inner = inner });
+        }
+
+        pub fn deinit(self: *Self, shutdown: bool, page: *Page) void {
+            if (@hasDecl(Inner, "deinit")) {
+                self.inner.deinit(shutdown, page);
+            }
+        }
+
+        pub fn acquireRef(self: *Self) void {
+            if (@hasDecl(Inner, "acquireRef")) {
+                self.inner.acquireRef();
+            }
         }
 
         pub fn next(self: *Self, page: *Page) if (R.has_error_return) anyerror!Result else Result {
@@ -61,6 +72,8 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
             pub const Meta = struct {
                 pub const prototype_chain = bridge.prototypeChain();
                 pub var class_id: bridge.ClassId = undefined;
+                pub const weak = true;
+                pub const finalizer = bridge.finalizer(Self.deinit);
             };
 
             pub const next = bridge.function(Self.next, .{ .null_as_undefined = true });

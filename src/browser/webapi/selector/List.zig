@@ -40,6 +40,10 @@ pub const EntryIterator = GenericIterator(Iterator, null);
 pub const KeyIterator = GenericIterator(Iterator, "0");
 pub const ValueIterator = GenericIterator(Iterator, "1");
 
+pub fn deinit(self: *const List, page: *Page) void {
+    page.releaseArena(self._arena);
+}
+
 pub fn collect(
     allocator: std.mem.Allocator,
     root: *Node,
@@ -207,8 +211,12 @@ pub fn getAtIndex(self: *const List, index: usize) !?*Node {
 }
 
 const NodeList = @import("../collections/NodeList.zig");
-pub fn runtimeGenericWrap(self: *List, page: *Page) !*NodeList {
-    return page._factory.create(NodeList{ .data = .{ .selector_list = self } });
+pub fn runtimeGenericWrap(self: *List, _: *const Page) !*NodeList {
+    const nl = try self._arena.create(NodeList);
+    nl.* = .{
+        ._data = .{ .selector_list = self },
+    };
+    return nl;
 }
 
 const IdAnchor = struct {
