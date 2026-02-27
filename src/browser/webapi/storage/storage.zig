@@ -86,11 +86,15 @@ pub const Lookup = struct {
 
     pub fn removeItem(self: *Lookup, key_: ?[]const u8) void {
         const k = key_ orelse return;
-        _ = self._data.remove(k);
+        if (self._data.get(k)) |value| {
+            self._size -= value.len;
+            _ = self._data.remove(k);
+        }
     }
 
     pub fn clear(self: *Lookup) void {
         self._data.clearRetainingCapacity();
+        self._size = 0;
     }
 
     pub fn key(self: *const Lookup, index: u32) ?[]const u8 {
