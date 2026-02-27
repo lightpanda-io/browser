@@ -15,11 +15,11 @@ on:
   workflow_dispatch:
 
 jobs:
-  wpt:
-    name: web platform tests json output
+  wpt-build-release:
+    name: zig build release
 
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -30,11 +30,85 @@ jobs:
 
       - uses: ./.github/actions/install
 
-      - name: build wpt
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -- version
+      - name: zig build release
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightpanda-build-release
+          path: |
+            zig-out/bin/lightpanda
+          retention-days: 1
+
+  wpt-build-runner:
+    name: build wpt runner
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: |
+          cd ./wptrunner
+          CGO_ENABLED=0 go build
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wptrunner
+          path: |
+            wptrunner/wptrunner
+          retention-days: 1
+
+  run-wpt:
+    name: web platform tests json output
+    needs:
+      - wpt-build-release
+      - wpt-build-runner
+
+    # use a self host runner.
+    runs-on: lpd-bench-hetzner
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fork
+          repository: 'lightpanda-io/wpt'
+          fetch-depth: 0
+
+      # The hosts are configured manually on the self host runner.
+      # - name: create custom hosts
+      #   run: ./wpt make-hosts-file | sudo tee -a /etc/hosts
+
+      - name: generate manifest
+        run: ./wpt manifest
+
+      - name: download lightpanda release
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - name: download wptrunner
+        uses: actions/download-artifact@v4
+        with:
+          name: wptrunner
+
+      - run: chmod a+x ./wptrunner
 
       - name: run test with json output
-        run:  zig-out/bin/lightpanda-wpt --json > wpt.json
+        run: |
+          ./wpt serve 2> /dev/null & echo $! > WPT.pid
+          sleep 10s
+          ./wptrunner -lpd-path ./lightpanda -json -concurrency 1 > wpt.json
+          kill `cat WPT.pid`
 
       - name: write commit
         run: |
@@ -51,7 +125,7 @@ jobs:
 
   perf-fmt:
     name: perf-fmt
-    needs: wpt
+    needs: run-wpt
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
