@@ -32,7 +32,7 @@ pub fn getRandomValues(_: *const Crypto, js_obj: js.Object) !js.Object {
     var into = try js_obj.toZig(RandomValues);
     const buf = into.asBuffer();
     if (buf.len > 65_536) {
-        return error.QuotaExceededError;
+        return error.QuotaExceeded;
     }
     std.crypto.random.bytes(buf);
     return js_obj;
@@ -82,7 +82,7 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const getRandomValues = bridge.function(Crypto.getRandomValues, .{});
+    pub const getRandomValues = bridge.function(Crypto.getRandomValues, .{ .dom_exception = true });
     pub const randomUUID = bridge.function(Crypto.randomUUID, .{});
     pub const subtle = bridge.accessor(Crypto.getSubtle, null, .{});
 };
