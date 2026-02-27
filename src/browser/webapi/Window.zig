@@ -534,6 +534,24 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     );
 }
 
+pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
+    // The scroll is relative to the current position. So compute to new
+    // absolute position.
+    var absx: i32 = undefined;
+    var absy: i32 = undefined;
+    switch (opts) {
+        .x => |x| {
+            absx = @as(i32, @intCast(self._scroll_pos.x)) + x;
+            absy = @as(i32, @intCast(self._scroll_pos.y)) + (y orelse 0);
+        },
+        .opts => |o| {
+            absx = @as(i32, @intCast(self._scroll_pos.x)) + o.left;
+            absy = @as(i32, @intCast(self._scroll_pos.y)) + o.top;
+        },
+    }
+    return self.scrollTo(.{ .x = absx }, absy, page);
+}
+
 pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, page: *Page) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
@@ -803,6 +821,7 @@ pub const JsApi = struct {
     pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{});
     pub const scrollTo = bridge.function(Window.scrollTo, .{});
     pub const scroll = bridge.function(Window.scrollTo, .{});
+    pub const scrollBy = bridge.function(Window.scrollBy, .{});
 
     // Return false since we don't have secure-context-only APIs implemented
     // (webcam, geolocation, clipboard, etc.)
@@ -836,4 +855,8 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
     try testing.htmlRunner("window", .{});
+}
+
+test "WebApi: Window scroll" {
+    try testing.htmlRunner("window_scroll.html", .{});
 }
