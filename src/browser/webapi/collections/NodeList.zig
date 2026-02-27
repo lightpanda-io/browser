@@ -125,11 +125,20 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(NodeList.length, null, .{});
-    pub const @"[]" = bridge.indexed(NodeList.indexedGet, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(NodeList.indexedGet, getIndexes, .{ .null_as_undefined = true });
     pub const item = bridge.function(NodeList.getAtIndex, .{});
     pub const keys = bridge.function(NodeList.keys, .{});
     pub const values = bridge.function(NodeList.values, .{});
     pub const entries = bridge.function(NodeList.entries, .{});
     pub const forEach = bridge.function(NodeList.forEach, .{});
     pub const symbol_iterator = bridge.iterator(NodeList.values, .{});
+
+    fn getIndexes(self: *NodeList, page: *Page) !js.Array {
+        const len = try self.length(page);
+        var arr = page.js.local.?.newArray(len);
+        for (0..len) |i| {
+            _ = try arr.set(@intCast(i), i, .{});
+        }
+        return arr;
+    }
 };

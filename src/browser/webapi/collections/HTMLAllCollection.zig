@@ -170,7 +170,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLAllCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(HTMLAllCollection.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLAllCollection.getByName, null, null, .{ .null_as_undefined = true });
 
     pub const item = bridge.function(_item, .{});

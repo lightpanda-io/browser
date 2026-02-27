@@ -776,7 +776,7 @@ pub const JsApi = struct {
     pub const getSelection = bridge.function(Window.getSelection, .{});
 
     pub const frames = bridge.accessor(Window.getWindow, null, .{});
-    pub const index = bridge.indexed(Window.getFrame, .{ .null_as_undefined = true });
+    pub const index = bridge.indexed(Window.getFrame, null, .{ .null_as_undefined = true });
     pub const length = bridge.accessor(Window.getFramesLength, null, .{});
     pub const scrollX = bridge.accessor(Window.getScrollX, null, .{});
     pub const scrollY = bridge.accessor(Window.getScrollY, null, .{});

@@ -329,6 +329,7 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 },
 
                 inline
+                js.Array,
                 js.Function,
                 js.Object,
                 js.Promise,

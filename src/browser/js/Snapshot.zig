@@ -308,13 +308,18 @@ fn countExternalReferences() comptime_int {
             const T = @TypeOf(value);
             if (T == bridge.Accessor) {
                 count += 1; // getter
-                if (value.setter != null) count += 1; // setter
+                if (value.setter != null) {
+                    count += 1;
+                }
             } else if (T == bridge.Function) {
                 count += 1;
             } else if (T == bridge.Iterator) {
                 count += 1;
             } else if (T == bridge.Indexed) {
                 count += 1;
+                if (value.enumerator != null) {
+                    count += 1;
+                }
             } else if (T == bridge.NamedIndexed) {
                 count += 1; // getter
                 if (value.setter != null) count += 1;
@@ -376,6 +381,10 @@ fn collectExternalReferences() [countExternalReferences()]isize {
             } else if (T == bridge.Indexed) {
                 references[idx] = @bitCast(@intFromPtr(value.getter));
                 idx += 1;
+                if (value.enumerator) |enumerator| {
+                    references[idx] = @bitCast(@intFromPtr(enumerator));
+                    idx += 1;
+                }
             } else if (T == bridge.NamedIndexed) {
                 references[idx] = @bitCast(@intFromPtr(value.getter));
                 idx += 1;
@@ -515,10 +524,10 @@ fn attachClass(comptime JsApi: type, isolate: *v8.Isolate, template: *v8.Functio
             bridge.Indexed => {
                 var configuration: v8.IndexedPropertyHandlerConfiguration = .{
                     .getter = value.getter,
+                    .enumerator = value.enumerator,
                     .setter = null,
                     .query = null,
                     .deleter = null,
-                    .enumerator = null,
                     .definer = null,
                     .descriptor = null,
                     .data = null,

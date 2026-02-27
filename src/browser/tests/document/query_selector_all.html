@@ -27,7 +27,9 @@
     testing.expectEqual(expected.length, result.length);
     testing.expectEqual(expected, Array.from(result).map((e) => e.textContent));
     testing.expectEqual(expected, Array.from(result.values()).map((e) => e.textContent));
+
     testing.expectEqual(expected.map((e, i) => i), Array.from(result.keys()));
+    testing.expectEqual(expected.map((e, i) => i.toString()), Object.keys(result));
   }
 </script>
 
