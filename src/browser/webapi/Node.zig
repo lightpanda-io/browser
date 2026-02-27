@@ -270,7 +270,7 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
                 try child.getTextContent(writer);
             }
         },
-        .cdata => |c| try writer.writeAll(c.getData()),
+        .cdata => |c| try writer.writeAll(c._data.str()),
         .document => {},
         .document_type => {},
         .attribute => |attr| try writer.writeAll(attr._value.str()),
@@ -293,7 +293,7 @@ pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
             }
             return el.replaceChildren(&.{.{ .text = data }}, page);
         },
-        .cdata => |c| c._data = try page.arena.dupe(u8, data),
+        .cdata => |c| c._data = try page.dupeSSO(data),
         .document => {},
         .document_type => {},
         .document_fragment => |frag| {
@@ -599,10 +599,10 @@ pub fn replaceChild(self: *Node, new_child: *Node, old_child: *Node, page: *Page
     return old_child;
 }
 
-pub fn getNodeValue(self: *const Node) ?[]const u8 {
+pub fn getNodeValue(self: *const Node) ?String {
     return switch (self._type) {
         .cdata => |c| c.getData(),
-        .attribute => |attr| attr._value.str(),
+        .attribute => |attr| attr._value,
         .element => null,
         .document => null,
         .document_type => null,
@@ -694,10 +694,10 @@ pub fn getChildAt(self: *Node, index: u32) ?*Node {
     return null;
 }
 
-pub fn getData(self: *const Node) []const u8 {
+pub fn getData(self: *const Node) String {
     return switch (self._type) {
         .cdata => |c| c.getData(),
-        else => "",
+        else => .empty,
     };
 }
 
@@ -729,7 +729,7 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) CloneError!*Node {
     const deep = deep_ orelse false;
     switch (self._type) {
         .cdata => |cd| {
-            const data = cd.getData();
+            const data = cd.getData().str();
             return switch (cd._type) {
                 .text => page.createTextNode(data),
                 .cdata_section => page.createCDATASection(data),
@@ -884,7 +884,7 @@ fn _normalize(self: *Node, allocator: Allocator, buffer: *std.ArrayList(u8), pag
                     next_node = node_to_merge.nextSibling();
                     page.removeNode(self, to_remove, .{ .will_be_reconnected = false });
                 }
-                text_node._proto._data = try page.dupeString(buffer.items);
+                text_node._proto._data = try page.dupeSSO(buffer.items);
                 buffer.clearRetainingCapacity();
             }
         }
@@ -1028,7 +1028,7 @@ pub const JsApi = struct {
                 try self.getTextContent(&buf.writer);
                 return buf.written();
             },
-            .cdata => |cdata| return cdata.getData(),
+            .cdata => |cdata| return cdata._data.str(),
             .attribute => |attr| return attr._value.str(),
             .document => return null,
             .document_type => return null,

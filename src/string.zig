@@ -111,6 +111,38 @@ pub const String = packed struct {
         return .init(allocator, self.str(), .{ .dupe = true });
     }
 
+    pub fn concat(allocator: Allocator, parts: []const []const u8) !String {
+        var total_len: usize = 0;
+        for (parts) |part| {
+            total_len += part.len;
+        }
+
+        if (total_len <= 12) {
+            var content: [12]u8 = @splat(0);
+            var pos: usize = 0;
+            for (parts) |part| {
+                @memcpy(content[pos..][0..part.len], part);
+                pos += part.len;
+            }
+            return .{ .len = @intCast(total_len), .payload = .{ .content = content } };
+        }
+
+        const result = try allocator.alloc(u8, total_len);
+        var pos: usize = 0;
+        for (parts) |part| {
+            @memcpy(result[pos..][0..part.len], part);
+            pos += part.len;
+        }
+
+        return .{
+            .len = @intCast(total_len),
+            .payload = .{ .heap = .{
+                .prefix = result[0..4].*,
+                .ptr = (intern(result) orelse result).ptr,
+            } },
+        };
+    }
+
     pub fn str(self: *const String) []const u8 {
         const l = self.len;
         if (l < 0) {
@@ -270,5 +302,120 @@ test "String" {
 
         try testing.expectEqual(false, str.eql(other_long));
         try testing.expectEqual(false, str.eqlSlice("other_long" ** 100));
+    }
+}
+
+test "String.concat" {
+    {
+        const result = try String.concat(testing.allocator, &.{});
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(@as(usize, 0), result.str().len);
+        try testing.expectEqual("", result.str());
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{"hello"});
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("hello", result.str());
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "foo", "bar" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("foobar", result.str());
+        try testing.expectEqual(@as(i32, 6), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "test", "ing", "1234" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("testing1234", result.str());
+        try testing.expectEqual(@as(i32, 11), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "foo", "bar", "baz", "qux" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("foobarbazqux", result.str());
+        try testing.expectEqual(@as(i32, 12), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "hello", " world!" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("hello world!", result.str());
+        try testing.expectEqual(@as(i32, 12), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "a", "b", "c", "d", "e" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("abcde", result.str());
+        try testing.expectEqual(@as(i32, 5), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "one", " ", "two", " ", "three", " ", "four" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("one two three four", result.str());
+        try testing.expectEqual(@as(i32, 18), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "hello", "", "world" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("helloworld", result.str());
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "", "", "" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("", result.str());
+        try testing.expectEqual(@as(i32, 0), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "café", " ☕" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("café ☕", result.str());
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "Hello ", "世界", " and ", "مرحبا" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("Hello 世界 and مرحبا", result.str());
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ " ", "test", " " });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(" test ", result.str());
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "  ", "  " });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("    ", result.str());
+        try testing.expectEqual(@as(i32, 4), result.len);
+    }
+
+    {
+        const result = try String.concat(testing.allocator, &.{ "Item ", "1", "2", "3" });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("Item 123", result.str());
+    }
+
+    {
+        const original = "Hello, world!";
+        const result = try String.concat(testing.allocator, &.{ original[0..5], original[7..] });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("Helloworld!", result.str());
+    }
+
+    {
+        const original = "Hello!";
+        const result = try String.concat(testing.allocator, &.{ original[0..5], " world", original[5..] });
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual("Hello world!", result.str());
     }
 }

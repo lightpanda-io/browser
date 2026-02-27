@@ -82,19 +82,19 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
         .cdata => |cd| {
             if (node.is(Node.CData.Comment)) |_| {
                 try writer.writeAll("<!--");
-                try writer.writeAll(cd.getData());
+                try writer.writeAll(cd.getData().str());
                 try writer.writeAll("-->");
             } else if (node.is(Node.CData.ProcessingInstruction)) |pi| {
                 try writer.writeAll("<?");
                 try writer.writeAll(pi._target);
                 try writer.writeAll(" ");
-                try writer.writeAll(cd.getData());
+                try writer.writeAll(cd.getData().str());
                 try writer.writeAll("?>");
             } else {
                 if (shouldEscapeText(node._parent)) {
-                    try writeEscapedText(cd.getData(), writer);
+                    try writeEscapedText(cd.getData().str(), writer);
                 } else {
-                    try writer.writeAll(cd.getData());
+                    try writer.writeAll(cd.getData().str());
                 }
             }
         },

@@ -17,9 +17,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const js = @import("../js/js.zig");
+const String = @import("../../string.zig").String;
 
+const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+
 const Node = @import("Node.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
 const AbstractRange = @import("AbstractRange.zig");
@@ -326,7 +328,7 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
         if (offset == 0) {
             _ = try parent.insertBefore(node, container, page);
         } else {
-            const text_data = container.getData();
+            const text_data = container.getData().str();
             if (offset >= text_data.len) {
                 _ = try parent.insertBefore(node, container.nextSibling(), page);
             } else {
@@ -362,15 +364,15 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
 
     // Simple case: same container
     if (self._proto._start_container == self._proto._end_container) {
-        if (self._proto._start_container.is(Node.CData)) |_| {
+        if (self._proto._start_container.is(Node.CData)) |cdata| {
             // Delete part of text node
-            const text_data = self._proto._start_container.getData();
-            const new_text = try std.mem.concat(
+            const old_value = cdata.getData();
+            const text_data = old_value.str();
+            cdata._data = try String.concat(
                 page.arena,
-                u8,
                 &.{ text_data[0..self._proto._start_offset], text_data[self._proto._end_offset..] },
             );
-            try self._proto._start_container.setData(new_text, page);
+            page.characterDataChange(self._proto._start_container, old_value);
         } else {
             // Delete child nodes in range
             var offset = self._proto._start_offset;
@@ -386,8 +388,8 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
 
     // Complex case: different containers
     // Handle start container - if it's a text node, truncate it
-    if (self._proto._start_container.is(Node.CData)) |_| {
-        const text_data = self._proto._start_container.getData();
+    if (self._proto._start_container.is(Node.CData)) |cdata| {
+        const text_data = cdata._data.str();
         if (self._proto._start_offset < text_data.len) {
             // Keep only the part before start_offset
             const new_text = text_data[0..self._proto._start_offset];
@@ -396,8 +398,8 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
     }
 
     // Handle end container - if it's a text node, truncate it
-    if (self._proto._end_container.is(Node.CData)) |_| {
-        const text_data = self._proto._end_container.getData();
+    if (self._proto._end_container.is(Node.CData)) |cdata| {
+        const text_data = cdata._data.str();
         if (self._proto._end_offset < text_data.len) {
             // Keep only the part from end_offset onwards
             const new_text = text_data[self._proto._end_offset..];
@@ -433,7 +435,7 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
     if (self._proto._start_container == self._proto._end_container) {
         if (self._proto._start_container.is(Node.CData)) |_| {
             // Clone part of text node
-            const text_data = self._proto._start_container.getData();
+            const text_data = self._proto._start_container.getData().str();
             if (self._proto._start_offset < text_data.len and self._proto._end_offset <= text_data.len) {
                 const cloned_text = text_data[self._proto._start_offset..self._proto._end_offset];
                 const text_node = try page.createTextNode(cloned_text);
@@ -453,7 +455,7 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
         // Complex case: different containers
         // Clone partial start container
         if (self._proto._start_container.is(Node.CData)) |_| {
-            const text_data = self._proto._start_container.getData();
+            const text_data = self._proto._start_container.getData().str();
             if (self._proto._start_offset < text_data.len) {
                 // Clone from start_offset to end of text
                 const cloned_text = text_data[self._proto._start_offset..];
@@ -474,7 +476,7 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
 
         // Clone partial end container
         if (self._proto._end_container.is(Node.CData)) |_| {
-            const text_data = self._proto._end_container.getData();
+            const text_data = self._proto._end_container.getData().str();
             if (self._proto._end_offset > 0 and self._proto._end_offset <= text_data.len) {
                 // Clone from start to end_offset
                 const cloned_text = text_data[0..self._proto._end_offset];
@@ -560,7 +562,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     if (start_node == end_node) {
         if (start_node.is(Node.CData)) |cdata| {
             if (!isCommentOrPI(cdata)) {
-                const data = cdata.getData();
+                const data = cdata.getData().str();
                 const s = @min(start_offset, data.len);
                 const e = @min(end_offset, data.len);
                 try writer.writeAll(data[s..e]);
@@ -574,7 +576,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     // Partial start: if start container is a text node, write from offset to end
     if (start_node.is(Node.CData)) |cdata| {
         if (!isCommentOrPI(cdata)) {
-            const data = cdata.getData();
+            const data = cdata.getData().str();
             const s = @min(start_offset, data.len);
             try writer.writeAll(data[s..]);
         }
@@ -601,7 +603,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
             }
             if (n.is(Node.CData)) |cdata| {
                 if (!isCommentOrPI(cdata)) {
-                    try writer.writeAll(cdata.getData());
+                    try writer.writeAll(cdata.getData().str());
                 }
             }
             current = nextInTreeOrder(n, root);
@@ -612,7 +614,7 @@ fn writeTextContent(self: *const Range, writer: *std.Io.Writer) !void {
     if (start_node != end_node) {
         if (end_node.is(Node.CData)) |cdata| {
             if (!isCommentOrPI(cdata)) {
-                const data = cdata.getData();
+                const data = cdata.getData().str();
                 const e = @min(end_offset, data.len);
                 try writer.writeAll(data[0..e]);
             }

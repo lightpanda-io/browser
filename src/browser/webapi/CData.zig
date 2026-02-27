@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -31,7 +32,7 @@ const CData = @This();
 
 _type: Type,
 _proto: *Node,
-_data: []const u8 = "",
+_data: String = .empty,
 
 /// Count UTF-16 code units in a UTF-8 string.
 /// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
@@ -157,7 +158,7 @@ pub fn is(self: *CData, comptime T: type) ?*T {
     return null;
 }
 
-pub fn getData(self: *const CData) []const u8 {
+pub fn getData(self: *const CData) String {
     return self._data;
 }
 
@@ -172,7 +173,7 @@ pub fn render(self: *const CData, writer: *std.io.Writer, opts: RenderOpts) !boo
     var start: usize = 0;
     var prev_w: ?bool = null;
     var is_w: bool = undefined;
-    const s = self._data;
+    const s = self._data.str();
 
     for (s, 0..) |c, i| {
         is_w = std.ascii.isWhitespace(c);
@@ -222,9 +223,9 @@ pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
     const old_value = self._data;
 
     if (value) |v| {
-        self._data = try page.dupeString(v);
+        self._data = try page.dupeSSO(v);
     } else {
-        self._data = "";
+        self._data = .empty;
     }
 
     page.characterDataChange(self.asNode(), old_value);
@@ -243,15 +244,15 @@ pub fn _setData(self: *CData, value: js.Value, page: *Page) !void {
 
 pub fn format(self: *const CData, writer: *std.io.Writer) !void {
     return switch (self._type) {
-        .text => writer.print("<text>{s}</text>", .{self._data}),
-        .comment => writer.print("<!-- {s} -->", .{self._data}),
-        .cdata_section => writer.print("<![CDATA[{s}]]>", .{self._data}),
-        .processing_instruction => |pi| writer.print("<?{s} {s}?>", .{ pi._target, self._data }),
+        .text => writer.print("<text>{f}</text>", .{self._data}),
+        .comment => writer.print("<!-- {f} -->", .{self._data}),
+        .cdata_section => writer.print("<![CDATA[{f}]]>", .{self._data}),
+        .processing_instruction => |pi| writer.print("<?{s} {f}?>", .{ pi._target, self._data }),
     };
 }
 
 pub fn getLength(self: *const CData) usize {
-    return utf16Len(self._data);
+    return utf16Len(self._data.str());
 }
 
 pub fn isEqualNode(self: *const CData, other: *const CData) bool {
@@ -267,58 +268,64 @@ pub fn isEqualNode(self: *const CData, other: *const CData) bool {
         // if the _targets are equal, we still want to compare the data
     }
 
-    return std.mem.eql(u8, self.getData(), other.getData());
+    return self._data.eql(other._data);
 }
 
 pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
-    const new_data = try std.mem.concat(page.arena, u8, &.{ self._data, data });
-    try self.setData(new_data, page);
+    const old_value = self._data;
+    self._data = try String.concat(page.arena, &.{ self._data.str(), data });
+    page.characterDataChange(self.asNode(), old_value);
 }
 
 pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
-    const range = try utf16RangeToUtf8(self._data, offset, end_utf16);
+    const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
 
-    // Just slice - original data stays in arena
-    const old_value = self._data;
+    const old_data = self._data;
+    const old_value = old_data.str();
     if (range.start == 0) {
-        self._data = self._data[range.end..];
-    } else if (range.end >= self._data.len) {
-        self._data = self._data[0..range.start];
+        self._data = try page.dupeSSO(old_value[range.end..]);
+    } else if (range.end >= old_value.len) {
+        self._data = try page.dupeSSO(old_value[0..range.start]);
     } else {
-        self._data = try std.mem.concat(page.arena, u8, &.{
-            self._data[0..range.start],
-            self._data[range.end..],
+        // Deleting from middle - concat prefix and suffix
+        self._data = try String.concat(page.arena, &.{
+            old_value[0..range.start],
+            old_value[range.end..],
         });
     }
-    page.characterDataChange(self.asNode(), old_value);
+    page.characterDataChange(self.asNode(), old_data);
 }
 
 pub fn insertData(self: *CData, offset: usize, data: []const u8, page: *Page) !void {
-    const byte_offset = try utf16OffsetToUtf8(self._data, offset);
-    const new_data = try std.mem.concat(page.arena, u8, &.{
-        self._data[0..byte_offset],
+    const byte_offset = try utf16OffsetToUtf8(self._data.str(), offset);
+    const old_value = self._data;
+    const existing = old_value.str();
+    self._data = try String.concat(page.arena, &.{
+        existing[0..byte_offset],
         data,
-        self._data[byte_offset..],
+        existing[byte_offset..],
     });
-    try self.setData(new_data, page);
+    page.characterDataChange(self.asNode(), old_value);
 }
 
 pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, page: *Page) !void {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
-    const range = try utf16RangeToUtf8(self._data, offset, end_utf16);
-    const new_data = try std.mem.concat(page.arena, u8, &.{
-        self._data[0..range.start],
+    const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
+    const old_value = self._data;
+    const existing = old_value.str();
+    self._data = try String.concat(page.arena, &.{
+        existing[0..range.start],
         data,
-        self._data[range.end..],
+        existing[range.end..],
     });
-    try self.setData(new_data, page);
+    page.characterDataChange(self.asNode(), old_value);
 }
 
 pub fn substringData(self: *const CData, offset: usize, count: usize) ![]const u8 {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
-    const range = try utf16RangeToUtf8(self._data, offset, end_utf16);
-    return self._data[range.start..range.end];
+    const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
+    return self._data.str()[range.start..range.end];
 }
 
 pub fn remove(self: *CData, page: *Page) !void {
@@ -451,7 +458,7 @@ test "WebApi: CData.render" {
         const cdata = CData{
             ._type = .{ .text = undefined },
             ._proto = undefined,
-            ._data = test_case.value,
+            ._data = .wrap(test_case.value),
         };
 
         const result = try cdata.render(&buffer.writer, test_case.opts);

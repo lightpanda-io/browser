@@ -88,18 +88,16 @@ pub fn getDefaultValue(self: *const TextArea) []const u8 {
 }
 
 pub fn setDefaultValue(self: *TextArea, value: []const u8, page: *Page) !void {
-    const owned = try page.dupeString(value);
-
     const node = self.asNode();
     if (node.firstChild()) |child| {
         if (child.is(Node.CData.Text)) |txt| {
-            txt._proto._data = owned;
+            txt._proto._data = try page.dupeSSO(value);
             return;
         }
     }
 
     // No text child exists, create one
-    const text_node = try page.createTextNode(owned);
+    const text_node = try page.createTextNode(value);
     _ = try node.appendChild(text_node, page);
 }
 

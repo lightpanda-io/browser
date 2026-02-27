@@ -307,7 +307,11 @@ pub const Writer = struct {
         try w.write(dom_node.getNodeName(&name_buf));
 
         try w.objectField("nodeValue");
-        try w.write(dom_node.getNodeValue() orelse "");
+        if (dom_node.getNodeValue()) |nv| {
+            try w.write(nv.str());
+        } else {
+            try w.write("");
+        }
 
         if (include_child_count) {
             try w.objectField("childNodeCount");
