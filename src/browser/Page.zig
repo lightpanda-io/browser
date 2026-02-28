@@ -236,7 +236,7 @@ version: usize = 0,
 // ScriptManager, so all scripts just count as 1 pending load.
 _pending_loads: u32,
 
-_parent_notified: if (IS_DEBUG) bool else void = if (IS_DEBUG) false else {},
+_parent_notified: bool = false,
 
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
@@ -754,11 +754,15 @@ fn _documentIsComplete(self: *Page) !void {
 }
 
 fn notifyParentLoadComplete(self: *Page) void {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(self._parent_notified == false);
-        self._parent_notified = true;
+    if (self._parent_notified == true) {
+        if (comptime IS_DEBUG) {
+            std.debug.assert(false);
+        }
+        // shouldn't happen, don't want to crash a release build over it
+        return;
     }
 
+    self._parent_notified = true;
     if (self.parent) |p| {
         p.iframeCompletedLoading(self.iframe.?);
     }
@@ -1022,6 +1026,10 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
 
     if (existing_window) |w| {
         const existing_page = w._page;
+        if (existing_page._parent_notified == false) {
+            self._pending_loads -= 1;
+        }
+
         for (self.frames.items, 0..) |p, i| {
             if (p == existing_page) {
                 self.frames.items[i] = page_frame;
