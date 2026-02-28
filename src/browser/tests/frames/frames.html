@@ -3,7 +3,7 @@
 
 <script>
   function frame1Onload() {
-    window.f1_onload = true;
+    window.f1_onload = 'f1_onload_loaded';
   }
 </script>
 
@@ -11,8 +11,8 @@
 <iframe id=f2 src="support/sub2.html"></iframe>
 
 <script id="basic">
-    // reload it
-    $('#f1').src = 'support/sub 1.html';
+   // reload it
+  $('#f2').src = 'support/sub2.html';
 
   testing.eventually(() => {
     testing.expectEqual(undefined, window[10]);
@@ -53,7 +53,8 @@
     // Todo: Context security tokens
     // testing.expectEqual(true, window.sub1_loaded);
     // testing.expectEqual(true, window.sub2_loaded);
-    // testing.expectEqual(2, window.sub1_count);
+    // testing.expectEqual(1, window.sub1_count);
+    // testing.expectEqual(2, window.sub2_count);
   });
 </script>
 
@@ -68,7 +69,7 @@
     document.documentElement.appendChild(f3);
 
     testing.eventually(() => {
-      testing.expectEqual(true, window.f1_onload);
+      testing.expectEqual('f1_onload_loaded', window.f1_onload);
       testing.expectEqual(true, f3_load_event);
     });
   }
