@@ -8,20 +8,30 @@ const resources = @import("resources.zig");
 const Server = @import("Server.zig");
 const tools = @import("tools.zig");
 
-pub fn processRequests(server: *Server) void {
+pub fn processRequests(server: *Server) !void {
+    var stdin_file = std.fs.File.stdin();
+    var stdin_buf: [8192]u8 = undefined;
+    var stdin = stdin_file.reader(&stdin_buf);
+
+    server.is_running.store(true, .seq_cst);
+
     while (server.is_running.load(.seq_cst)) {
-        if (server.getNextMessage()) |msg| {
-            defer server.allocator.free(msg);
+        const msg = stdin.interface.adaptToOldInterface().readUntilDelimiterAlloc(server.allocator, '\n', 1024 * 1024 * 10) catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
+        defer server.allocator.free(msg);
 
-            // Critical: Per-request Arena
-            var arena = std.heap.ArenaAllocator.init(server.allocator);
-            defer arena.deinit();
+        if (msg.len == 0) continue;
 
-            handleMessage(server, arena.allocator(), msg) catch |err| {
-                log.err(.app, "MCP Error processing message", .{ .err = err });
-                // We should ideally send a parse error response back, but it's hard to extract the ID if parsing failed entirely.
-            };
-        }
+        // Critical: Per-request Arena
+        var arena = std.heap.ArenaAllocator.init(server.allocator);
+        defer arena.deinit();
+
+        handleMessage(server, arena.allocator(), msg) catch |err| {
+            log.err(.app, "MCP Error processing message", .{ .err = err });
+            // We should ideally send a parse error response back, but it's hard to extract the ID if parsing failed entirely.
+        };
     }
 }
 
