@@ -3,12 +3,12 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = lp.log;
 
-const McpServer = @import("Server.zig").McpServer;
 const protocol = @import("protocol.zig");
 const resources = @import("resources.zig");
+const Server = @import("Server.zig");
 const tools = @import("tools.zig");
 
-pub fn processRequests(server: *McpServer) void {
+pub fn processRequests(server: *Server) void {
     while (server.is_running.load(.seq_cst)) {
         if (server.getNextMessage()) |msg| {
             defer server.allocator.free(msg);
@@ -25,7 +25,7 @@ pub fn processRequests(server: *McpServer) void {
     }
 }
 
-fn handleMessage(server: *McpServer, arena: std.mem.Allocator, msg: []const u8) !void {
+fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8) !void {
     const parsed = std.json.parseFromSliceLeaky(protocol.Request, arena, msg, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
@@ -62,7 +62,7 @@ fn handleMessage(server: *McpServer, arena: std.mem.Allocator, msg: []const u8) 
     }
 }
 
-fn sendResponseGeneric(server: *McpServer, id: std.json.Value, result: anytype) !void {
+fn sendResponseGeneric(server: *Server, id: std.json.Value, result: anytype) !void {
     const GenericResponse = struct {
         jsonrpc: []const u8 = "2.0",
         id: std.json.Value,
@@ -74,7 +74,7 @@ fn sendResponseGeneric(server: *McpServer, id: std.json.Value, result: anytype) 
     });
 }
 
-fn handleInitialize(server: *McpServer, req: protocol.Request) !void {
+fn handleInitialize(server: *Server, req: protocol.Request) !void {
     const result = protocol.InitializeResult{
         .protocolVersion = "2024-11-05",
         .capabilities = .{

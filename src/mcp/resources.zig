@@ -1,9 +1,11 @@
 const std = @import("std");
-const McpServer = @import("Server.zig").McpServer;
-const protocol = @import("protocol.zig");
+
 const lp = @import("lightpanda");
 
-pub fn handleList(server: *McpServer, req: protocol.Request) !void {
+const protocol = @import("protocol.zig");
+const Server = @import("Server.zig");
+
+pub fn handleList(server: *Server, req: protocol.Request) !void {
     const resources = [_]protocol.Resource{
         .{
             .uri = "mcp://page/html",
@@ -32,7 +34,7 @@ const ReadParams = struct {
     uri: []const u8,
 };
 
-pub fn handleRead(server: *McpServer, arena: std.mem.Allocator, req: protocol.Request) !void {
+pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
         return sendError(server, req.id.?, -32602, "Missing params");
     }
@@ -78,7 +80,7 @@ pub fn handleRead(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
     }
 }
 
-pub fn sendResult(server: *McpServer, id: std.json.Value, result: anytype) !void {
+pub fn sendResult(server: *Server, id: std.json.Value, result: anytype) !void {
     const GenericResponse = struct {
         jsonrpc: []const u8 = "2.0",
         id: std.json.Value,
@@ -90,7 +92,7 @@ pub fn sendResult(server: *McpServer, id: std.json.Value, result: anytype) !void
     });
 }
 
-pub fn sendError(server: *McpServer, id: std.json.Value, code: i64, message: []const u8) !void {
+pub fn sendError(server: *Server, id: std.json.Value, code: i64, message: []const u8) !void {
     try server.sendResponse(protocol.Response{
         .id = id,
         .@"error" = protocol.Error{

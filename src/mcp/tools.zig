@@ -7,10 +7,10 @@ const js = lp.js;
 const Element = @import("../browser/webapi/Element.zig");
 const Selector = @import("../browser/webapi/selector/Selector.zig");
 const String = @import("../string.zig").String;
-const McpServer = @import("Server.zig").McpServer;
 const protocol = @import("protocol.zig");
+const Server = @import("Server.zig");
 
-pub fn handleList(server: *McpServer, arena: std.mem.Allocator, req: protocol.Request) !void {
+pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     const tools = [_]protocol.Tool{
         .{
             .name = "goto",
@@ -116,7 +116,7 @@ const OverParams = struct {
     result: []const u8,
 };
 
-pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Request) !void {
+pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
         return sendError(server, req.id.?, -32602, "Missing params");
     }
@@ -266,7 +266,7 @@ pub fn handleCall(server: *McpServer, arena: std.mem.Allocator, req: protocol.Re
     }
 }
 
-fn performGoto(server: *McpServer, arena: std.mem.Allocator, url: []const u8) !void {
+fn performGoto(server: *Server, arena: std.mem.Allocator, url: []const u8) !void {
     const url_z = try arena.dupeZ(u8, url);
     _ = server.page.navigate(url_z, .{
         .reason = .address_bar,
@@ -278,7 +278,7 @@ fn performGoto(server: *McpServer, arena: std.mem.Allocator, url: []const u8) !v
     _ = server.session.wait(5000);
 }
 
-pub fn sendResult(server: *McpServer, id: std.json.Value, result: anytype) !void {
+pub fn sendResult(server: *Server, id: std.json.Value, result: anytype) !void {
     const GenericResponse = struct {
         jsonrpc: []const u8 = "2.0",
         id: std.json.Value,
@@ -290,7 +290,7 @@ pub fn sendResult(server: *McpServer, id: std.json.Value, result: anytype) !void
     });
 }
 
-pub fn sendError(server: *McpServer, id: std.json.Value, code: i64, message: []const u8) !void {
+pub fn sendError(server: *Server, id: std.json.Value, code: i64, message: []const u8) !void {
     try server.sendResponse(protocol.Response{
         .id = id,
         .@"error" = protocol.Error{

@@ -29,11 +29,7 @@ pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
-pub const mcp = struct {
-    pub const Server = @import("mcp/Server.zig").McpServer;
-    pub const protocol = @import("mcp/protocol.zig");
-    pub const router = @import("mcp/router.zig");
-};
+pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
