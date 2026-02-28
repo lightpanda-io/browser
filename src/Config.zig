@@ -559,7 +559,7 @@ fn parseMcpArgs(
             continue;
         }
 
-        log.fatal(.app, "unknown argument", .{ .mode = "mcp", .arg = opt });
+        log.fatal(.mcp, "unknown argument", .{ .mode = "mcp", .arg = opt });
         return error.UnkownOption;
     }
 

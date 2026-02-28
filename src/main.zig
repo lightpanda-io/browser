@@ -131,7 +131,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             };
         },
         .mcp => {
-            log.info(.app, "starting MCP server", .{});
+            log.info(.mcp, "starting server", .{});
 
             log.opts.format = .logfmt;
 

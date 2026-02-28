@@ -15,7 +15,7 @@ browser: *lp.Browser,
 session: *lp.Session,
 page: *lp.Page,
 
-is_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+is_running: std.atomic.Value(bool) = .init(false),
 
 stdout_mutex: std.Thread.Mutex = .{},
 
@@ -29,12 +29,12 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
     self.http_client = try app.http.createClient(allocator);
     errdefer self.http_client.deinit();
 
-    self.notification = try lp.Notification.init(allocator);
+    self.notification = try .init(allocator);
     errdefer self.notification.deinit();
 
     self.browser = try allocator.create(lp.Browser);
     errdefer allocator.destroy(self.browser);
-    self.browser.* = try lp.Browser.init(app, .{ .http_client = self.http_client });
+    self.browser.* = try .init(app, .{ .http_client = self.http_client });
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);

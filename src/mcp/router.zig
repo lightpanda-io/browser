@@ -28,7 +28,7 @@ pub fn processRequests(server: *Server) !void {
         defer arena.deinit();
 
         handleMessage(server, arena.allocator(), msg) catch |err| {
-            log.err(.app, "MCP Error processing message", .{ .err = err });
+            log.warn(.mcp, "Error processing message", .{ .err = err });
             // We should ideally send a parse error response back, but it's hard to extract the ID if parsing failed entirely.
         };
     }
@@ -38,14 +38,14 @@ fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8) !vo
     const parsed = std.json.parseFromSliceLeaky(protocol.Request, arena, msg, .{
         .ignore_unknown_fields = true,
     }) catch |err| {
-        log.err(.app, "MCP JSON Parse Error", .{ .err = err, .msg = msg });
+        log.warn(.mcp, "JSON Parse Error", .{ .err = err, .msg = msg });
         return;
     };
 
     if (parsed.id == null) {
         // It's a notification
         if (std.mem.eql(u8, parsed.method, "notifications/initialized")) {
-            log.info(.app, "MCP Client Initialized", .{});
+            log.info(.mcp, "Client Initialized", .{});
         }
         return;
     }
