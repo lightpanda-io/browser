@@ -15,6 +15,9 @@ pub fn processRequests(server: *Server) !void {
 
     server.is_running.store(true, .seq_cst);
 
+    var arena: std.heap.ArenaAllocator = .init(server.allocator);
+    defer arena.deinit();
+
     while (server.is_running.load(.seq_cst)) {
         const msg = stdin.interface.adaptToOldInterface().readUntilDelimiterAlloc(server.allocator, '\n', 1024 * 1024 * 10) catch |err| {
             if (err == error.EndOfStream) break;
@@ -24,13 +27,13 @@ pub fn processRequests(server: *Server) !void {
 
         if (msg.len == 0) continue;
 
-        var arena: std.heap.ArenaAllocator = .init(server.allocator);
-        defer arena.deinit();
-
         handleMessage(server, arena.allocator(), msg) catch |err| {
             log.warn(.mcp, "Error processing message", .{ .err = err });
             // We should ideally send a parse error response back, but it's hard to extract the ID if parsing failed entirely.
         };
+
+        // 32KB: avoid reallocations while keeping memory footprint low.
+        _ = arena.reset(.{ .retain_with_limit = 32 * 1024 });
     }
 }
 
