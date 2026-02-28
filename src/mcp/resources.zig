@@ -34,6 +34,41 @@ const ReadParams = struct {
     uri: []const u8,
 };
 
+const ResourceStreamingResult = struct {
+    contents: []const struct {
+        uri: []const u8,
+        mimeType: []const u8,
+        text: StreamingText,
+    },
+
+    const StreamingText = struct {
+        server: *Server,
+        uri: []const u8,
+        format: enum { html, markdown },
+
+        pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
+            try jw.beginObject();
+            try jw.objectField("uri");
+            try jw.write(self.uri);
+            try jw.objectField("mimeType");
+            try jw.write(if (self.format == .html) "text/html" else "text/markdown");
+            try jw.objectField("text");
+
+            try jw.beginWriteRaw();
+            try jw.writer.writeByte('"');
+            var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+            switch (self.format) {
+                .html => try lp.dump.root(self.server.page.document, .{}, &escaped.writer, self.server.page),
+                .markdown => try lp.markdown.dump(self.server.page.document.asNode(), .{}, &escaped.writer, self.server.page),
+            }
+            try jw.writer.writeByte('"');
+            jw.endWriteRaw();
+
+            try jw.endObject();
+        }
+    };
+};
+
 pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
         return sendError(server, req.id.?, -32602, "Missing params");
@@ -44,37 +79,23 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     };
 
     if (std.mem.eql(u8, params.uri, "mcp://page/html")) {
-        var aw = std.Io.Writer.Allocating.init(arena);
-        lp.dump.root(server.page.document, .{}, &aw.writer, server.page) catch {
-            return sendError(server, req.id.?, -32603, "Internal error reading HTML");
+        const result = ResourceStreamingResult{
+            .contents = &.{.{
+                .uri = params.uri,
+                .mimeType = "text/html",
+                .text = .{ .server = server, .uri = params.uri, .format = .html },
+            }},
         };
-
-        const contents = [_]struct {
-            uri: []const u8,
-            mimeType: []const u8,
-            text: []const u8,
-        }{.{
-            .uri = params.uri,
-            .mimeType = "text/html",
-            .text = aw.written(),
-        }};
-        try sendResult(server, req.id.?, .{ .contents = &contents });
+        try sendResult(server, req.id.?, result);
     } else if (std.mem.eql(u8, params.uri, "mcp://page/markdown")) {
-        var aw = std.Io.Writer.Allocating.init(arena);
-        lp.markdown.dump(server.page.document.asNode(), .{}, &aw.writer, server.page) catch {
-            return sendError(server, req.id.?, -32603, "Internal error reading Markdown");
+        const result = ResourceStreamingResult{
+            .contents = &.{.{
+                .uri = params.uri,
+                .mimeType = "text/markdown",
+                .text = .{ .server = server, .uri = params.uri, .format = .markdown },
+            }},
         };
-
-        const contents = [_]struct {
-            uri: []const u8,
-            mimeType: []const u8,
-            text: []const u8,
-        }{.{
-            .uri = params.uri,
-            .mimeType = "text/markdown",
-            .text = aw.written(),
-        }};
-        try sendResult(server, req.id.?, .{ .contents = &contents });
+        try sendResult(server, req.id.?, result);
     } else {
         return sendError(server, req.id.?, -32602, "Resource not found");
     }

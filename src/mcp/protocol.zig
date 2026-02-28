@@ -96,6 +96,40 @@ pub const Resource = struct {
     mimeType: ?[]const u8 = null,
 };
 
+pub const JsonEscapingWriter = struct {
+    inner_writer: *std.Io.Writer,
+    writer: std.Io.Writer,
+
+    pub fn init(inner_writer: *std.Io.Writer) JsonEscapingWriter {
+        return .{
+            .inner_writer = inner_writer,
+            .writer = .{
+                .vtable = &vtable,
+                .buffer = &.{},
+            },
+        };
+    }
+
+    const vtable = std.Io.Writer.VTable{
+        .drain = drain,
+    };
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *JsonEscapingWriter = @alignCast(@fieldParentPtr("writer", w));
+        var total: usize = 0;
+        for (data[0 .. data.len - 1]) |slice| {
+            std.json.Stringify.encodeJsonStringChars(slice, .{}, self.inner_writer) catch return error.WriteFailed;
+            total += slice.len;
+        }
+        const pattern = data[data.len - 1];
+        for (0..splat) |_| {
+            std.json.Stringify.encodeJsonStringChars(pattern, .{}, self.inner_writer) catch return error.WriteFailed;
+            total += pattern.len;
+        }
+        return total;
+    }
+};
+
 const testing = @import("../testing.zig");
 
 test "protocol request parsing" {

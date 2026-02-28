@@ -116,6 +116,39 @@ const OverParams = struct {
     result: []const u8,
 };
 
+const ToolStreamingText = struct {
+    server: *Server,
+    action: enum { markdown, links },
+
+    pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
+        try jw.beginWriteRaw();
+        try jw.writer.writeByte('"');
+        var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+        const w = &escaped.writer;
+        switch (self.action) {
+            .markdown => try lp.markdown.dump(self.server.page.document.asNode(), .{}, w, self.server.page),
+            .links => {
+                const list = Selector.querySelectorAll(self.server.page.document.asNode(), "a[href]", self.server.page) catch |err| {
+                    log.err(.mcp, "Error querying links: {s}", .{@errorName(err)});
+                    return;
+                };
+                var first = true;
+                for (list._nodes) |node| {
+                    if (node.is(Element)) |el| {
+                        if (el.getAttributeSafe(String.wrap("href"))) |href| {
+                            if (!first) try w.writeByte('\n');
+                            try w.writeAll(href);
+                            first = false;
+                        }
+                    }
+                }
+            },
+        }
+        try jw.writer.writeByte('"');
+        jw.endWriteRaw();
+    }
+};
+
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
         return sendError(server, req.id.?, -32602, "Missing params");
@@ -183,13 +216,16 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
                 }
             } else |_| {}
         }
-        var aw = std.Io.Writer.Allocating.init(arena);
-        lp.markdown.dump(server.page.document.asNode(), .{}, &aw.writer, server.page) catch {
-            return sendError(server, req.id.?, -32603, "Internal error parsing markdown");
-        };
 
-        const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = aw.written() }};
-        try sendResult(server, req.id.?, .{ .content = &content });
+        const result = struct {
+            content: []const struct { type: []const u8, text: ToolStreamingText },
+        }{
+            .content = &.{.{
+                .type = "text",
+                .text = .{ .server = server, .action = .markdown },
+            }},
+        };
+        try sendResult(server, req.id.?, result);
     } else if (std.mem.eql(u8, call_params.name, "links")) {
         const LinksParams = struct {
             url: ?[]const u8 = null,
@@ -203,24 +239,16 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
                 }
             } else |_| {}
         }
-        const list = Selector.querySelectorAll(server.page.document.asNode(), "a[href]", server.page) catch {
-            return sendError(server, req.id.?, -32603, "Internal error querying selector");
+
+        const result = struct {
+            content: []const struct { type: []const u8, text: ToolStreamingText },
+        }{
+            .content = &.{.{
+                .type = "text",
+                .text = .{ .server = server, .action = .links },
+            }},
         };
-
-        var aw = std.Io.Writer.Allocating.init(arena);
-        var first = true;
-        for (list._nodes) |node| {
-            if (node.is(Element)) |el| {
-                if (el.getAttributeSafe(String.wrap("href"))) |href| {
-                    if (!first) aw.writer.writeByte('\n') catch continue;
-                    aw.writer.writeAll(href) catch continue;
-                    first = false;
-                }
-            }
-        }
-
-        const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = aw.written() }};
-        try sendResult(server, req.id.?, .{ .content = &content });
+        try sendResult(server, req.id.?, result);
     } else if (std.mem.eql(u8, call_params.name, "evaluate")) {
         if (call_params.arguments == null) {
             return sendError(server, req.id.?, -32602, "Missing arguments for evaluate");
