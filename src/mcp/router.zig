@@ -24,8 +24,7 @@ pub fn processRequests(server: *Server) !void {
 
         if (msg.len == 0) continue;
 
-        // Critical: Per-request Arena
-        var arena = std.heap.ArenaAllocator.init(server.allocator);
+        var arena: std.heap.ArenaAllocator = .init(server.allocator);
         defer arena.deinit();
 
         handleMessage(server, arena.allocator(), msg) catch |err| {

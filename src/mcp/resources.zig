@@ -39,7 +39,7 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return sendError(server, req.id.?, -32602, "Missing params");
     }
 
-    const params = std.json.parseFromValueLeaky(ReadParams, arena, req.params.?, .{}) catch {
+    const params = std.json.parseFromValueLeaky(ReadParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
         return sendError(server, req.id.?, -32602, "Invalid params");
     };
 

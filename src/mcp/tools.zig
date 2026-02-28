@@ -126,15 +126,18 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         arguments: ?std.json.Value = null,
     };
 
-    const call_params = std.json.parseFromValueLeaky(CallParams, arena, req.params.?, .{}) catch {
-        return sendError(server, req.id.?, -32602, "Invalid params");
+    const call_params = std.json.parseFromValueLeaky(CallParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
+        var aw: std.Io.Writer.Allocating = .init(arena);
+        std.json.Stringify.value(req.params.?, .{}, &aw.writer) catch {};
+        const msg = std.fmt.allocPrint(arena, "Invalid params: {s}", .{aw.written()}) catch "Invalid params";
+        return sendError(server, req.id.?, -32602, msg);
     };
 
     if (std.mem.eql(u8, call_params.name, "goto") or std.mem.eql(u8, call_params.name, "navigate")) {
         if (call_params.arguments == null) {
             return sendError(server, req.id.?, -32602, "Missing arguments for goto");
         }
-        const args = std.json.parseFromValueLeaky(GotoParams, arena, call_params.arguments.?, .{}) catch {
+        const args = std.json.parseFromValueLeaky(GotoParams, arena, call_params.arguments.?, .{ .ignore_unknown_fields = true }) catch {
             return sendError(server, req.id.?, -32602, "Invalid arguments for goto");
         };
 
@@ -148,7 +151,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         if (call_params.arguments == null) {
             return sendError(server, req.id.?, -32602, "Missing arguments for search");
         }
-        const args = std.json.parseFromValueLeaky(SearchParams, arena, call_params.arguments.?, .{}) catch {
+        const args = std.json.parseFromValueLeaky(SearchParams, arena, call_params.arguments.?, .{ .ignore_unknown_fields = true }) catch {
             return sendError(server, req.id.?, -32602, "Invalid arguments for search");
         };
 
@@ -172,7 +175,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             url: ?[]const u8 = null,
         };
         if (call_params.arguments) |args_raw| {
-            if (std.json.parseFromValueLeaky(MarkdownParams, arena, args_raw, .{})) |args| {
+            if (std.json.parseFromValueLeaky(MarkdownParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
                 if (args.url) |u| {
                     performGoto(server, arena, u) catch {
                         return sendError(server, req.id.?, -32603, "Internal error during navigation");
@@ -192,7 +195,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             url: ?[]const u8 = null,
         };
         if (call_params.arguments) |args_raw| {
-            if (std.json.parseFromValueLeaky(LinksParams, arena, args_raw, .{})) |args| {
+            if (std.json.parseFromValueLeaky(LinksParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
                 if (args.url) |u| {
                     performGoto(server, arena, u) catch {
                         return sendError(server, req.id.?, -32603, "Internal error during navigation");
@@ -228,7 +231,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             url: ?[]const u8 = null,
         };
 
-        const args = std.json.parseFromValueLeaky(EvaluateParamsEx, arena, call_params.arguments.?, .{}) catch {
+        const args = std.json.parseFromValueLeaky(EvaluateParamsEx, arena, call_params.arguments.?, .{ .ignore_unknown_fields = true }) catch {
             return sendError(server, req.id.?, -32602, "Invalid arguments for evaluate");
         };
 
