@@ -800,7 +800,12 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         } orelse .unknown;
 
         if (comptime IS_DEBUG) {
-            log.debug(.page, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len, .type = self._type, .url = self.url });
+            log.debug(.page, "navigate first chunk", .{
+                .content_type = mime.content_type,
+                .len = data.len,
+                .type = self._type,
+                .url = self.url,
+            });
         }
 
         switch (mime.content_type) {
@@ -854,7 +859,11 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     try self._session.navigation.commitNavigation(self);
 
     defer if (comptime IS_DEBUG) {
-        log.debug(.page, "page.load.complete", .{ .url = self.url, .type = self._type });
+        log.debug(.page, "page load complete", .{
+            .url = self.url,
+            .type = self._type,
+            .state = std.meta.activeTag(self._parse_state),
+        });
     };
 
     const parse_arena = try self.getArena(.{ .debug = "Page.parse" });
@@ -971,21 +980,20 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
     }
 
     iframe._executed = true;
-
     const session = self._session;
-    const page_id = session.nextPageId();
+
+    // A frame can be re-navigated by setting the src.
+    const existing_window = iframe._content_window;
+
     const page_frame = try self.arena.create(Page);
+    const page_id = if (existing_window) |w| w._page.id else session.nextPageId();
     try Page.init(page_frame, page_id, session, self);
+    errdefer page_frame.deinit();
 
     self._pending_loads += 1;
     page_frame.iframe = iframe;
     iframe._content_window = page_frame.window;
-
-    self._session.notification.dispatch(.page_frame_created, &.{
-        .page_id = page_id,
-        .parent_id = self.id,
-        .timestamp = timestamp(.monotonic),
-    });
+    errdefer iframe._content_window = null;
 
     // navigate will dupe the url
     const url = try URL.resolve(
@@ -995,6 +1003,15 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         .{ .encode = true },
     );
 
+    if (existing_window == null) {
+        // on first load, dispatch frame_created evnet
+        self._session.notification.dispatch(.page_frame_created, &.{
+            .page_id = page_id,
+            .parent_id = self.id,
+            .timestamp = timestamp(.monotonic),
+        });
+    }
+
     page_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
         log.warn(.page, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
@@ -1002,6 +1019,21 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         page_frame.deinit();
         return error.IFrameLoadError;
     };
+
+    if (existing_window) |w| {
+        const existing_page = w._page;
+        for (self.frames.items, 0..) |p, i| {
+            if (p == existing_page) {
+                self.frames.items[i] = page_frame;
+                break;
+            }
+        } else {
+            lp.assert(false, "Existing frame not found", .{ .len = self.frames.items.len });
+        }
+
+        existing_page.deinit();
+        return;
+    }
 
     // window[N] is based on document order. For now we'll just append the frame
     // at the end of our list and set frames_sorted == false. window.getFrame
