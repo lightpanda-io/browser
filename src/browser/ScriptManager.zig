@@ -1051,23 +1051,35 @@ fn parseDataURI(allocator: Allocator, src: []const u8) !?[]const u8 {
 
     const uri = src[5..];
     const data_starts = std.mem.indexOfScalar(u8, uri, ',') orelse return null;
+    const data = uri[data_starts + 1 ..];
 
-    var data = uri[data_starts + 1 ..];
+    const unescaped = try URL.unescape(allocator, data);
 
-    // Extract the encoding.
     const metadata = uri[0..data_starts];
-    if (std.mem.endsWith(u8, metadata, ";base64")) {
-        const decoder = std.base64.standard.Decoder;
-        const decoded_size = try decoder.calcSizeForSlice(data);
-
-        const buffer = try allocator.alloc(u8, decoded_size);
-        errdefer allocator.free(buffer);
-
-        try decoder.decode(buffer, data);
-        data = buffer;
+    if (std.mem.endsWith(u8, metadata, ";base64") == false) {
+        return unescaped;
     }
 
-    return data;
+    // Forgiving base64 decode per WHATWG spec:
+    // https://infra.spec.whatwg.org/#forgiving-base64-decode
+    // Step 1: Remove all ASCII whitespace
+    var stripped = try std.ArrayList(u8).initCapacity(allocator, unescaped.len);
+    for (unescaped) |c| {
+        if (!std.ascii.isWhitespace(c)) {
+            stripped.appendAssumeCapacity(c);
+        }
+    }
+    const trimmed = std.mem.trimRight(u8, stripped.items, "=");
+
+    // Length % 4 == 1 is invalid
+    if (trimmed.len % 4 == 1) {
+        return error.InvalidCharacterError;
+    }
+
+    const decoded_size = std.base64.standard_no_pad.Decoder.calcSizeForSlice(trimmed) catch return error.InvalidCharacterError;
+    const buffer = try allocator.alloc(u8, decoded_size);
+    std.base64.standard_no_pad.Decoder.decode(buffer, trimmed) catch return error.InvalidCharacterError;
+    return buffer;
 }
 
 const testing = @import("../testing.zig");
