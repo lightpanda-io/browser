@@ -11,6 +11,9 @@
 <iframe id=f2 src="support/sub2.html"></iframe>
 
 <script id="basic">
+    // reload it
+    $('#f1').src = 'support/sub 1.html';
+
   testing.eventually(() => {
     testing.expectEqual(undefined, window[10]);
 
@@ -47,8 +50,10 @@
     // child frame's top.parent is itself (root has no parent)
     testing.expectEqual(window, window[0].top.parent);
 
+    // Todo: Context security tokens
     // testing.expectEqual(true, window.sub1_loaded);
     // testing.expectEqual(true, window.sub2_loaded);
+    // testing.expectEqual(2, window.sub1_count);
   });
 </script>
 

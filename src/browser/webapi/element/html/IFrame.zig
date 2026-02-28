@@ -58,6 +58,9 @@ pub fn setSrc(self: *IFrame, src: []const u8, page: *Page) !void {
     try element.setAttributeSafe(comptime .wrap("src"), .wrap(src), page);
     self._src = element.getAttributeSafe(comptime .wrap("src")) orelse unreachable;
     if (element.asNode().isConnected()) {
+        // unlike script, an iframe is reloaded every time the src is set
+        // even if it's set to the same URL.
+        self._executed = false;
         try page.iframeAddedCallback(self);
     }
 }
