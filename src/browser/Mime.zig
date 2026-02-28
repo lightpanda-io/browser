@@ -24,10 +24,11 @@ params: []const u8 = "",
 // IANA defines max. charset value length as 40.
 // We keep 41 for null-termination since HTML parser expects in this format.
 charset: [41]u8 = default_charset,
-charset_len: usize = 5,
+charset_len: usize = default_charset_len,
 
 /// String "UTF-8" continued by null characters.
-pub const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
+const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
+const default_charset_len = 5;
 
 /// Mime with unknown Content-Type, empty params and empty charset.
 pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
@@ -127,8 +128,8 @@ pub fn parse(input: []u8) !Mime {
 
     const params = trimLeft(normalized[type_len..]);
 
-    var charset: [41]u8 = undefined;
-    var charset_len: usize = undefined;
+    var charset: [41]u8 = default_charset;
+    var charset_len: usize = default_charset_len;
 
     var it = std.mem.splitScalar(u8, params, ';');
     while (it.next()) |attr| {
@@ -435,6 +436,12 @@ test "Mime: parse charset" {
         .charset = "custom-non-standard-charset-value",
         .params = "charset=\"custom-non-standard-charset-value\"",
     }, "text/xml;charset=\"custom-non-standard-charset-value\"");
+
+    try expect(.{
+        .content_type = .{ .text_html = {} },
+        .charset = "UTF-8",
+        .params = "x=\"",
+    }, "text/html;x=\"");
 }
 
 test "Mime: isHTML" {
