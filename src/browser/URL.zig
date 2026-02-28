@@ -642,6 +642,33 @@ pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
     );
 }
 
+pub fn unescape(arena: Allocator, input: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, input, '%') == null) {
+        return input;
+    }
+
+    var result = try std.ArrayList(u8).initCapacity(arena, input.len);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '%' and i + 2 < input.len) {
+            const hex = input[i + 1 .. i + 3];
+            const byte = std.fmt.parseInt(u8, hex, 16) catch {
+                result.appendAssumeCapacity(input[i]);
+                i += 1;
+                continue;
+            };
+            result.appendAssumeCapacity(byte);
+            i += 3;
+        } else {
+            result.appendAssumeCapacity(input[i]);
+            i += 1;
+        }
+    }
+
+    return result.items;
+}
+
 const testing = @import("../testing.zig");
 test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(true, isCompleteHTTPUrl("http://example.com/about"));
@@ -1231,5 +1258,70 @@ test "URL: getRobotsUrl" {
     {
         const url = try getRobotsUrl(arena, "https://user:pass@example.com/page");
         try testing.expectString("https://example.com/robots.txt", url);
+    }
+}
+
+test "URL: unescape" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    {
+        const result = try unescape(arena, "hello world");
+        try testing.expectEqual("hello world", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%20world");
+        try testing.expectEqual("hello world", result);
+    }
+
+    {
+        const result = try unescape(arena, "%48%65%6c%6c%6f");
+        try testing.expectEqual("Hello", result);
+    }
+
+    {
+        const result = try unescape(arena, "%48%65%6C%6C%6F");
+        try testing.expectEqual("Hello", result);
+    }
+
+    {
+        const result = try unescape(arena, "a%3Db");
+        try testing.expectEqual("a=b", result);
+    }
+
+    {
+        const result = try unescape(arena, "a%3DB");
+        try testing.expectEqual("a=B", result);
+    }
+
+    {
+        const result = try unescape(arena, "ZDIgPSAndHdvJzs%3D");
+        try testing.expectEqual("ZDIgPSAndHdvJzs=", result);
+    }
+
+    {
+        const result = try unescape(arena, "%5a%44%4d%67%50%53%41%6e%64%47%68%79%5a%57%55%6e%4f%77%3D%3D");
+        try testing.expectEqual("ZDMgPSAndGhyZWUnOw==", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%2world");
+        try testing.expectEqual("hello%2world", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%ZZworld");
+        try testing.expectEqual("hello%ZZworld", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%");
+        try testing.expectEqual("hello%", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%2");
+        try testing.expectEqual("hello%2", result);
     }
 }
