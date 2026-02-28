@@ -185,6 +185,7 @@ pub const Serve = struct {
 pub const DumpFormat = enum {
     html,
     markdown,
+    wpt,
 };
 
 pub const Fetch = struct {
