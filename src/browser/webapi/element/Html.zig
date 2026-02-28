@@ -415,7 +415,7 @@ fn setAttributeListener(
 ) !void {
     if (comptime IS_DEBUG) {
         log.debug(.event, "Html.setAttributeListener", .{
-            .type = self._type,
+            .type = std.meta.activeTag(self._type),
             .listener_type = listener_type,
         });
     }
