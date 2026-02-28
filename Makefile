@@ -102,13 +102,8 @@ end2end:
 # ------------
 .PHONY: install
 
-## Install and build dependencies for release
-install: install-submodule
+install: build
 
 data:
 	cd src/data && go run public_suffix_list_gen.go > public_suffix_list.zig
 
-## Init and update git submodule
-install-submodule:
-	@git submodule init && \
-	git submodule update
