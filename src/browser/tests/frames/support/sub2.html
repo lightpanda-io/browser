@@ -4,4 +4,5 @@
 <script>
   // should not have access to the parent's JS context
   window.top.sub2_loaded = window.testing == undefined;
+  window.top.sub2_count = (window.top.sub2_count || 0) + 1;
 </script>
