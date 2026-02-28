@@ -653,11 +653,13 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
         }
 
         if (html.len > 0) {
-            self._script_created_parser.?.read(html) catch |err| {
-                log.warn(.dom, "document.write parser error", .{ .err = err });
-                // was alrady closed
-                self._script_created_parser = null;
-            };
+            if (self._script_created_parser) |*parser| {
+                parser.read(html) catch |err| {
+                    log.warn(.dom, "document.write parser error", .{ .err = err });
+                    // was alrady closed
+                    self._script_created_parser = null;
+                };
+            }
         }
         return;
     }
