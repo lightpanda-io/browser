@@ -220,18 +220,6 @@ For **MacOS**, you need cmake and [Rust](https://rust-lang.org/tools/install/).
 brew install cmake
 ```
 
-### Install Git submodules
-
-The project uses git submodules for dependencies.
-
-To init or update the submodules in the `vendor/` directory:
-
-```
-make install-submodule
-```
-
-This is an alias for `git submodule init && git submodule update`.
-
 ### Build and run
 
 You an build the entire browser with `make build` or `make build-dev` for debug
