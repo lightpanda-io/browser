@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const URL = @import("browser/URL.zig");
 
 const TestHTTPServer = @This();
 
@@ -97,7 +98,10 @@ fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !voi
 }
 
 pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
-    var file = std.fs.cwd().openFile(file_path, .{}) catch |err| switch (err) {
+    var url_buf: [1024]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&url_buf);
+    const unescaped_file_path = try URL.unescape(fba.allocator(), file_path);
+    var file = std.fs.cwd().openFile(unescaped_file_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return req.respond("server error", .{ .status = .not_found }),
         else => return err,
     };
