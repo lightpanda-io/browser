@@ -30,6 +30,7 @@ pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
+pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
@@ -180,4 +181,5 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
 
 test {
     std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(mcp);
 }
