@@ -63,6 +63,6 @@ jobs:
 
       - name: run end to end integration tests
         run: |
-          ./lightpanda serve & echo $! > LPD.pid
+          ./lightpanda serve --log_level error & echo $! > LPD.pid
           go run integration/main.go
           kill `cat LPD.pid`
