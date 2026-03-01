@@ -582,12 +582,6 @@ fn evaluate(self: *ScriptManager) void {
     }
 }
 
-pub fn isDone(self: *const ScriptManager) bool {
-    return self.static_scripts_done and // page is done processing initial html
-        self.defer_scripts.first == null and // no deferred scripts
-        self.async_scripts.first == null; // no async scripts
-}
-
 fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
     const content = script.source.content();
 
