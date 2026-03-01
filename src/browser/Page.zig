@@ -866,11 +866,6 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         .html => |buf| {
             parser.parse(buf.items);
             self._script_manager.staticScriptsDone();
-            if (self._script_manager.isDone()) {
-                // No scripts, or just inline scripts that were already processed
-                // we need to trigger this ourselves
-                self.documentIsComplete();
-            }
             self._parse_state = .complete;
         },
         .text => |*buf| {
