@@ -183,7 +183,7 @@ pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void
 
     const page = self._page;
     self._method = try parseMethod(method_);
-    self._url = try URL.resolve(self._arena, page.base(), url, .{ .always_dupe = true });
+    self._url = try URL.resolve(self._arena, page.base(), url, .{ .always_dupe = true, .encode = true });
     try self.stateChanged(.opened, page.js.local.?, page);
 }
 

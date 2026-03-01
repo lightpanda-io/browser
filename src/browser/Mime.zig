@@ -133,12 +133,12 @@ pub fn parse(input: []u8) !Mime {
 
     var it = std.mem.splitScalar(u8, params, ';');
     while (it.next()) |attr| {
-        const i = std.mem.indexOfScalarPos(u8, attr, 0, '=') orelse return error.Invalid;
+        const i = std.mem.indexOfScalarPos(u8, attr, 0, '=') orelse continue;
         const name = trimLeft(attr[0..i]);
 
         const value = trimRight(attr[i + 1 ..]);
         if (value.len == 0) {
-            return error.Invalid;
+            continue;
         }
 
         const attribute_name = std.meta.stringToEnum(enum {
@@ -151,7 +151,7 @@ pub fn parse(input: []u8) !Mime {
                     break;
                 }
 
-                const attribute_value = try parseCharset(value);
+                const attribute_value = parseCharset(value) catch continue;
                 @memcpy(charset[0..attribute_value.len], attribute_value);
                 // Null-terminate right after attribute value.
                 charset[attribute_value.len] = 0;
@@ -335,6 +335,19 @@ test "Mime: invalid" {
         "text/ html",
         "text / html",
         "text/html other",
+    };
+
+    for (invalids) |invalid| {
+        const mutable_input = try testing.arena_allocator.dupe(u8, invalid);
+        try testing.expectError(error.Invalid, Mime.parse(mutable_input));
+    }
+}
+
+test "Mime: malformed parameters are ignored" {
+    defer testing.reset();
+
+    // These should all parse successfully as text/html with malformed params ignored
+    const valid_with_malformed_params = [_][]const u8{
         "text/html; x",
         "text/html; x=",
         "text/html; x=  ",
@@ -343,11 +356,13 @@ test "Mime: invalid" {
         "text/html; charset=\"\"",
         "text/html; charset=\"",
         "text/html; charset=\"\\",
+        "text/html;\"",
     };
 
-    for (invalids) |invalid| {
-        const mutable_input = try testing.arena_allocator.dupe(u8, invalid);
-        try testing.expectError(error.Invalid, Mime.parse(mutable_input));
+    for (valid_with_malformed_params) |input| {
+        const mutable_input = try testing.arena_allocator.dupe(u8, input);
+        const mime = try Mime.parse(mutable_input);
+        try testing.expectEqual(.text_html, std.meta.activeTag(mime.content_type));
     }
 }
 
