@@ -174,27 +174,59 @@ pub fn newHeaders(self: *const Client) !Net.Headers {
 }
 
 pub fn abort(self: *Client) void {
-    while (self.handles.in_use.first) |node| {
-        const conn: *Net.Connection = @fieldParentPtr("node", node);
-        var transfer = Transfer.fromConnection(conn) catch |err| {
-            log.err(.http, "get private info", .{ .err = err, .source = "abort" });
-            continue;
-        };
-        transfer.kill();
+    self._abort(true, 0);
+}
+
+pub fn abortFrame(self: *Client, frame_id: u32) void {
+    self._abort(false, frame_id);
+}
+
+// Written this way so that both abort and abortFrame can share the same code
+// but abort can avoid the frame_id check at comptime.
+fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
+    {
+        var q = &self.handles.in_use;
+        var n = q.first;
+        while (n) |node| {
+            n = node.next;
+            const conn: *Net.Connection = @fieldParentPtr("node", node);
+            var transfer = Transfer.fromConnection(conn) catch |err| {
+                log.err(.http, "get private info", .{ .err = err, .source = "abort" });
+                continue;
+            };
+            if (comptime abort_all) {
+                transfer.kill();
+            } else if (transfer.req.frame_id == frame_id) {
+                q.remove(node);
+                transfer.kill();
+            }
+        }
     }
-    if (comptime IS_DEBUG) {
+
+    if (comptime IS_DEBUG and abort_all) {
         std.debug.assert(self.active == 0);
     }
 
-    var n = self.queue.first;
-    while (n) |node| {
-        n = node.next;
-        const transfer: *Transfer = @fieldParentPtr("_node", node);
-        transfer.kill();
+    {
+        var q = &self.queue;
+        var n = q.first;
+        while (n) |node| {
+            n = node.next;
+            const transfer: *Transfer = @fieldParentPtr("_node", node);
+            if (comptime abort_all) {
+                transfer.kill();
+            } else if (transfer.req.frame_id == frame_id) {
+                q.remove(node);
+                transfer.kill();
+            }
+        }
     }
-    self.queue = .{};
 
-    if (comptime IS_DEBUG) {
+    if (comptime abort_all) {
+        self.queue = .{};
+    }
+
+    if (comptime IS_DEBUG and abort_all) {
         std.debug.assert(self.handles.in_use.first == null);
         std.debug.assert(self.handles.available.len() == self.handles.connections.len);
 
