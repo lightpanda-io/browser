@@ -174,27 +174,59 @@ pub fn newHeaders(self: *const Client) !Net.Headers {
 }
 
 pub fn abort(self: *Client) void {
-    while (self.handles.in_use.first) |node| {
-        const conn: *Net.Connection = @fieldParentPtr("node", node);
-        var transfer = Transfer.fromConnection(conn) catch |err| {
-            log.err(.http, "get private info", .{ .err = err, .source = "abort" });
-            continue;
-        };
-        transfer.kill();
+    self._abort(true, 0);
+}
+
+pub fn abortFrame(self: *Client, frame_id: u32) void {
+    self._abort(false, frame_id);
+}
+
+// Written this way so that both abort and abortFrame can share the same code
+// but abort can avoid the frame_id check at comptime.
+fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
+    {
+        var q = &self.handles.in_use;
+        var n = q.first;
+        while (n) |node| {
+            n = node.next;
+            const conn: *Net.Connection = @fieldParentPtr("node", node);
+            var transfer = Transfer.fromConnection(conn) catch |err| {
+                log.err(.http, "get private info", .{ .err = err, .source = "abort" });
+                continue;
+            };
+            if (comptime abort_all) {
+                transfer.kill();
+            } else if (transfer.req.frame_id == frame_id) {
+                q.remove(node);
+                transfer.kill();
+            }
+        }
     }
-    if (comptime IS_DEBUG) {
+
+    if (comptime IS_DEBUG and abort_all) {
         std.debug.assert(self.active == 0);
     }
 
-    var n = self.queue.first;
-    while (n) |node| {
-        n = node.next;
-        const transfer: *Transfer = @fieldParentPtr("_node", node);
-        transfer.kill();
+    {
+        var q = &self.queue;
+        var n = q.first;
+        while (n) |node| {
+            n = node.next;
+            const transfer: *Transfer = @fieldParentPtr("_node", node);
+            if (comptime abort_all) {
+                transfer.kill();
+            } else if (transfer.req.frame_id == frame_id) {
+                q.remove(node);
+                transfer.kill();
+            }
+        }
     }
-    self.queue = .{};
 
-    if (comptime IS_DEBUG) {
+    if (comptime abort_all) {
+        self.queue = .{};
+    }
+
+    if (comptime IS_DEBUG and abort_all) {
         std.debug.assert(self.handles.in_use.first == null);
         std.debug.assert(self.handles.available.len() == self.handles.connections.len);
 
@@ -320,7 +352,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .method = .GET,
             .headers = headers,
             .blocking = false,
-            .page_id = req.page_id,
+            .frame_id = req.frame_id,
             .cookie_jar = req.cookie_jar,
             .notification = req.notification,
             .resource_type = .fetch,
@@ -496,8 +528,12 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 // cases, the interecptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    if (self.handles.get()) |conn| {
-        return self.makeRequest(conn, transfer);
+    // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
+    // then we _have_ to queue this.
+    if (self.handles.performing == false) {
+        if (self.handles.get()) |conn| {
+            return self.makeRequest(conn, transfer);
+        }
     }
 
     self.queue.append(&transfer._node);
@@ -789,9 +825,14 @@ fn processMessages(self: *Client) !bool {
         if (msg.err) |err| {
             requestFailed(transfer, err, true);
         } else blk: {
-            // In case of request w/o data, we need to call the header done
-            // callback now.
+            // make sure the transfer can't be immediately aborted from a callback
+            // since we still need it here.
+            transfer._performing = true;
+            defer transfer._performing = false;
+
             if (!transfer._header_done_called) {
+                // In case of request w/o data, we need to call the header done
+                // callback now.
                 const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
                     log.err(.http, "header_done_callback", .{ .err = err });
                     requestFailed(transfer, err, true);
@@ -855,7 +896,7 @@ pub const RequestCookie = struct {
 };
 
 pub const Request = struct {
-    page_id: u32,
+    frame_id: u32,
     method: Method,
     url: [:0]const u8,
     headers: Net.Headers,
@@ -937,6 +978,7 @@ pub const Transfer = struct {
     // number of times the transfer has been tried.
     // incremented by reset func.
     _tries: u8 = 0,
+    _performing: bool = false,
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
@@ -1041,13 +1083,9 @@ pub const Transfer = struct {
 
     pub fn abort(self: *Transfer, err: anyerror) void {
         requestFailed(self, err, true);
-        if (self._conn == null) {
-            self.deinit();
-            return;
-        }
 
         const client = self.client;
-        if (client.handles.performing) {
+        if (self._performing or client.handles.performing) {
             // We're currently in a curl_multi_perform. We cannot call endTransfer
             // as that calls curl_multi_remove_handle, and you can't do that
             // from a curl callback. Instead, we flag this transfer and all of

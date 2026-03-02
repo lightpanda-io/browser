@@ -80,10 +80,10 @@ fn goInner(delta: i32, page: *Page) !void {
     if (entry._url) |url| {
         if (try page.isSameOrigin(url)) {
             const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, page)).asEvent();
-            try page._event_manager.dispatchWithFunction(
+            try page._event_manager.dispatchDirect(
                 page.window.asEventTarget(),
                 event,
-                page.js.toLocal(page.window._on_popstate),
+                page.window._on_popstate,
                 .{ .context = "Pop State" },
             );
         }

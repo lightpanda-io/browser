@@ -328,9 +328,13 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
 fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype, comptime opts: CallOpts) void {
     const isolate = local.isolate;
 
-    if (comptime @import("builtin").mode == .Debug and @TypeOf(info) == FunctionCallbackInfo) {
-        if (log.enabled(.js, .warn)) {
-            logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
+    if (comptime IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
+        if (log.enabled(.js, .debug)) {
+            const DOMException = @import("../webapi/DOMException.zig");
+            if (DOMException.fromError(err) == null) {
+                // This isn't a DOMException, let's log it
+                logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
+            }
         }
     }
 
@@ -360,7 +364,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
 // this can add as much as 10 seconds of compilation time.
 fn logFunctionCallError(local: *const Local, type_name: []const u8, func: []const u8, err: anyerror, info: FunctionCallbackInfo) void {
     const args_dump = serializeFunctionArgs(local, info) catch "failed to serialize args";
-    log.info(.js, "function call error", .{
+    log.debug(.js, "function call error", .{
         .type = type_name,
         .func = func,
         .err = err,

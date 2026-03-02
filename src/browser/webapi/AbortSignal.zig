@@ -57,7 +57,7 @@ pub fn asEventTarget(self: *AbortSignal) *EventTarget {
     return self._proto;
 }
 
-pub fn abort(self: *AbortSignal, reason_: ?Reason, local: *const js.Local, page: *Page) !void {
+pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     if (self._aborted) {
         return;
     }
@@ -77,10 +77,10 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, local: *const js.Local, page:
 
     // Dispatch abort event
     const event = try Event.initTrusted(comptime .wrap("abort"), .{}, page);
-    try page._event_manager.dispatchWithFunction(
+    try page._event_manager.dispatchDirect(
         self.asEventTarget(),
         event,
-        local.toLocal(self._on_abort),
+        self._on_abort,
         .{ .context = "abort signal" },
     );
 }
@@ -88,7 +88,7 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, local: *const js.Local, page:
 // Static method to create an already-aborted signal
 pub fn createAborted(reason_: ?js.Value.Global, page: *Page) !*AbortSignal {
     const signal = try init(page);
-    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, page.js.local.?, page);
+    try signal.abort(if (reason_) |r| .{ .js_val = r } else null, page);
     return signal;
 }
 
@@ -136,11 +136,7 @@ const TimeoutCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
-        var ls: js.Local.Scope = undefined;
-        self.page.js.localScope(&ls);
-        defer ls.deinit();
-
-        self.signal.abort(.{ .string = "TimeoutError" }, &ls.local, self.page) catch |err| {
+        self.signal.abort(.{ .string = "TimeoutError" }, self.page) catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };
         return null;

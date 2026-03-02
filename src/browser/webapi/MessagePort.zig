@@ -131,14 +131,10 @@ const PostMessageCallback = struct {
             return null;
         }).asEvent();
 
-        var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
-        defer ls.deinit();
-
-        page._event_manager.dispatchWithFunction(
+        page._event_manager.dispatchDirect(
             self.port.asEventTarget(),
             event,
-            ls.toLocal(self.port._on_message),
+            self.port._on_message,
             .{ .context = "MessagePort message" },
         ) catch |err| {
             log.err(.dom, "MessagePort.postMessage", .{ .err = err });
