@@ -496,8 +496,10 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 // cases, the interecptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    if (self.handles.get()) |conn| {
-        return self.makeRequest(conn, transfer);
+    if (self.handles.performing == false) {
+        if (self.handles.get()) |conn| {
+            return self.makeRequest(conn, transfer);
+        }
     }
 
     self.queue.append(&transfer._node);
