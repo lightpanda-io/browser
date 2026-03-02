@@ -58,6 +58,7 @@ pub fn sendResponse(self: *Self, response: anytype) !void {
     try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &aw.writer);
     try aw.writer.writeByte('\n');
     try self.writer.writeAll(aw.writer.buffered());
+    try self.writer.flush();
 }
 
 pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
