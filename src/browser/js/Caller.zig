@@ -60,6 +60,11 @@ fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) 
     ctx.local = &self.local;
 }
 
+pub fn initFromHandle(self: *Caller, handle: ?*const v8.FunctionCallbackInfo) void {
+    const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+    self.init(isolate);
+}
+
 pub fn deinit(self: *Caller) void {
     const ctx = self.local.ctx;
     const call_depth = ctx.call_depth - 1;
@@ -439,6 +444,11 @@ pub const FunctionCallbackInfo = struct {
 
     pub fn getArg(self: FunctionCallbackInfo, index: u32, local: *const js.Local) js.Value {
         return .{ .local = local, .handle = v8.v8__FunctionCallbackInfo__INDEX(self.handle, @intCast(index)).? };
+    }
+
+    pub fn getData(self: FunctionCallbackInfo) ?*anyopaque {
+        const data = v8.v8__FunctionCallbackInfo__Data(self.handle) orelse return null;
+        return v8.v8__External__Value(@ptrCast(data));
     }
 
     pub fn getThis(self: FunctionCallbackInfo) *const v8.Object {

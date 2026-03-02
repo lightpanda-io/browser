@@ -20,7 +20,6 @@ const std = @import("std");
 const log = @import("../../../log.zig");
 
 const js = @import("../../js/js.zig");
-const v8 = js.v8;
 const Page = @import("../../Page.zig");
 
 const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
@@ -310,22 +309,21 @@ const PipeState = struct {
         const read_promise = try state.reader.read(state.page);
 
         // Create JS callback functions for .then() and .catch()
-        const then_fn = newFunctionWithData(local, &onReadFulfilled, state);
-        const catch_fn = newFunctionWithData(local, &onReadRejected, state);
+        const then_fn = local.newFunctionWithData(&onReadFulfilled, state);
+        const catch_fn = local.newFunctionWithData(&onReadRejected, state);
 
         _ = read_promise.thenAndCatch(then_fn, catch_fn) catch {
             state.finish(local);
         };
     }
 
-    fn onReadFulfilled(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-        const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
+    fn onReadFulfilled(callback_handle: ?*const js.v8.FunctionCallbackInfo) callconv(.c) void {
         var c: js.Caller = undefined;
-        c.init(isolate);
+        c.initFromHandle(callback_handle);
         defer c.deinit();
 
-        const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
-        const state: *PipeState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
+        const info = js.Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
+        const state: *PipeState = @ptrCast(@alignCast(info.getData() orelse return));
 
         if (state.context_id != c.local.ctx.id) return;
 
@@ -333,10 +331,7 @@ const PipeState = struct {
         defer l.runMicrotasks();
 
         // Get the read result argument {done, value}
-        const result_val = js.Value{
-            .local = l,
-            .handle = v8.v8__FunctionCallbackInfo__INDEX(callback_handle, 0) orelse return,
-        };
+        const result_val = info.getArg(0, l);
 
         if (!result_val.isObject()) {
             state.finish(l);
@@ -374,14 +369,13 @@ const PipeState = struct {
         };
     }
 
-    fn onReadRejected(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-        const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
+    fn onReadRejected(callback_handle: ?*const js.v8.FunctionCallbackInfo) callconv(.c) void {
         var c: js.Caller = undefined;
-        c.init(isolate);
+        c.initFromHandle(callback_handle);
         defer c.deinit();
 
-        const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
-        const state: *PipeState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
+        const info = js.Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
+        const state: *PipeState = @ptrCast(@alignCast(info.getData() orelse return));
 
         if (state.context_id != c.local.ctx.id) return;
 
@@ -403,19 +397,6 @@ const PipeState = struct {
         if (state.resolver) |r| {
             local.toLocal(r).resolve("pipe finished", {});
         }
-    }
-
-    fn newFunctionWithData(
-        local: *const js.Local,
-        comptime callback: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
-        data: *anyopaque,
-    ) js.Function {
-        const external = local.isolate.createExternal(data);
-        const handle = v8.v8__Function__New__DEFAULT2(local.handle, callback, @ptrCast(external)).?;
-        return .{
-            .local = local,
-            .handle = handle,
-        };
     }
 };
 

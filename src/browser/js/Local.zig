@@ -82,6 +82,16 @@ pub fn createTypedArray(self: *const Local, comptime array_type: js.ArrayType, s
     return .init(self, size);
 }
 
+pub fn newFunctionWithData(
+    self: *const Local,
+    comptime callback: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
+    data: *anyopaque,
+) js.Function {
+    const external = self.isolate.createExternal(data);
+    const handle = v8.v8__Function__New__DEFAULT2(self.handle, callback, @ptrCast(external)).?;
+    return .{ .local = self, .handle = handle };
+}
+
 pub fn runMacrotasks(self: *const Local) void {
     const env = self.ctx.env;
     env.pumpMessageLoop();
