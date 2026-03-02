@@ -136,10 +136,16 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
 
             log.opts.format = .logfmt;
 
-            var mcp_server = try lp.mcp.Server.init(allocator, app, std.fs.File.stdout());
+            var stdout_buf: [4096]u8 = undefined;
+            var stdout = std.fs.File.stdout().writer(&stdout_buf);
+
+            var mcp_server = try lp.mcp.Server.init(allocator, app, &stdout.interface);
             defer mcp_server.deinit();
 
-            try lp.mcp.router.processRequests(mcp_server, std.fs.File.stdin());
+            var stdin_buf: [4096]u8 = undefined;
+            var stdin = std.fs.File.stdin().reader(&stdin_buf);
+
+            try lp.mcp.router.processRequests(mcp_server, &stdin.interface);
         },
         else => unreachable,
     }
