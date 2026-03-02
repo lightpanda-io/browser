@@ -34,9 +34,6 @@ pub fn processRequests(server: *Server) !void {
         // Process any pending network I/O
         _ = try server.http_client.tick(0);
 
-        // Run V8 microtasks and internal message loop
-        server.browser.runMessageLoop();
-
         // Process all complete lines available in the buffer
         while (true) {
             const buffered = reader.buffered();
