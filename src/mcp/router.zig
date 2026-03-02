@@ -17,24 +17,36 @@ pub fn processRequests(server: *Server) !void {
 
     const reader = poller.reader(.stdin);
 
-    var arena: std.heap.ArenaAllocator = .init(server.allocator);
-    defer arena.deinit();
+    var arena_instance = std.heap.ArenaAllocator.init(server.allocator);
+    defer arena_instance.deinit();
+    const arena = arena_instance.allocator();
 
     while (server.is_running.load(.acquire)) {
+        // Run ready browser tasks and get time to next one
         const ms_to_next_task = (try server.browser.runMacrotasks()) orelse 10_000;
 
-        // Poll until the next macrotask is scheduled. This will block if no data is available.
-        const poll_ok = try poller.pollTimeout(ms_to_next_task * std.time.ns_per_ms);
+        // Keep the loop responsive to network events and stdin.
+        const ms_to_wait: u64 = @min(50, ms_to_next_task);
 
+        // Wait for stdin activity for up to ms_to_wait.
+        const poll_result = try poller.pollTimeout(ms_to_wait * @as(u64, std.time.ns_per_ms));
+
+        // Process any pending network I/O
+        _ = try server.http_client.tick(0);
+
+        // Run V8 microtasks and internal message loop
+        server.browser.runMessageLoop();
+
+        // Process all complete lines available in the buffer
         while (true) {
             const buffered = reader.buffered();
             if (std.mem.indexOfScalar(u8, buffered, '\n')) |idx| {
                 const line = buffered[0..idx];
                 if (line.len > 0) {
-                    handleMessage(server, arena.allocator(), line) catch |err| {
+                    handleMessage(server, arena, line) catch |err| {
                         log.warn(.mcp, "Error processing message", .{ .err = err });
                     };
-                    _ = arena.reset(.{ .retain_with_limit = 32 * 1024 });
+                    _ = arena_instance.reset(.{ .retain_with_limit = 32 * 1024 });
                 }
                 reader.toss(idx + 1);
             } else {
@@ -42,18 +54,14 @@ pub fn processRequests(server: *Server) !void {
             }
         }
 
-        if (!poll_ok) {
-            // Check if we have any data left in the buffer that didn't end with a newline
+        // pollTimeout returns false when all streams are closed (EOF on stdin)
+        if (!poll_result) {
             const buffered = reader.buffered();
             if (buffered.len > 0) {
-                handleMessage(server, arena.allocator(), buffered) catch |err| {
-                    log.warn(.mcp, "Error processing last message", .{ .err = err });
-                };
+                handleMessage(server, arena, buffered) catch {};
             }
             break;
         }
-
-        server.browser.runMessageLoop();
     }
 }
 
@@ -90,9 +98,10 @@ fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8) !vo
 
 fn handleInitialize(server: *Server, req: protocol.Request) !void {
     const result = protocol.InitializeResult{
-        .protocolVersion = "2024-11-05",
+        .protocolVersion = "2025-11-25",
         .capabilities = .{
             .logging = .{},
+            .prompts = .{ .listChanged = false },
             .resources = .{ .subscribe = false, .listChanged = false },
             .tools = .{ .listChanged = false },
         },

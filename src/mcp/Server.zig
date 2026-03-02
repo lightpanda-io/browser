@@ -12,7 +12,7 @@ app: *App,
 
 http_client: *HttpClient,
 notification: *lp.Notification,
-browser: lp.Browser,
+browser: *lp.Browser,
 session: *lp.Session,
 page: *lp.Page,
 
@@ -53,12 +53,12 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-pub fn sendResponse(_: *Self, response: anytype) !void {
-    var buffer: [8192]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buffer);
-    try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &stdout.interface);
-    try stdout.interface.writeByte('\n');
-    try stdout.interface.flush();
+pub fn sendResponse(self: *Self, response: anytype) !void {
+    var aw: std.Io.Writer.Allocating = .init(self.allocator);
+    defer aw.deinit();
+    try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &aw.writer);
+    try aw.writer.writeByte('\n');
+    try std.fs.File.stdout().writeAll(aw.written());
 }
 
 pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
