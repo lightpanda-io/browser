@@ -132,6 +132,7 @@ const ToolStreamingText = struct {
             },
             .links => {
                 if (Selector.querySelectorAll(self.server.page.document.asNode(), "a[href]", self.server.page)) |list| {
+                    defer list.deinit(self.server.page);
                     var first = true;
                     for (list._nodes) |node| {
                         if (node.is(Element.Html.Anchor)) |anchor| {
