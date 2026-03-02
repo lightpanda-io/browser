@@ -177,7 +177,7 @@ fn createTarget(cmd: anytype) !void {
     const page = try bc.session.createPage();
 
     // the target_id == the frame_id of the "root" page
-    const frame_id = id.toFrameId(page.id);
+    const frame_id = id.toFrameId(page._frame_id);
     bc.target_id = frame_id;
     const target_id = &bc.target_id.?;
     {
@@ -421,7 +421,7 @@ fn setAutoAttach(cmd: anytype) !void {
         if (bc.target_id == null) {
             if (bc.session.currentPage()) |page| {
                 // the target_id == the frame_id of the "root" page
-                bc.target_id = id.toFrameId(page.id);
+                bc.target_id = id.toFrameId(page._frame_id);
                 try doAttachtoTarget(cmd, &bc.target_id.?);
             }
         }

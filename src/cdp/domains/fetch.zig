@@ -193,7 +193,7 @@ pub fn requestIntercept(bc: anytype, intercept: *const Notification.RequestInter
 
     try bc.cdp.sendEvent("Fetch.requestPaused", .{
         .requestId = &id.toInterceptId(transfer.id),
-        .frameId = &id.toFrameId(transfer.req.page_id),
+        .frameId = &id.toFrameId(transfer.req.frame_id),
         .request = network.TransferAsRequestWriter.init(transfer),
         .resourceType = switch (transfer.req.resource_type) {
             .script => "Script",
@@ -397,7 +397,7 @@ pub fn requestAuthRequired(bc: anytype, intercept: *const Notification.RequestAu
 
     try bc.cdp.sendEvent("Fetch.authRequired", .{
         .requestId = &id.toInterceptId(transfer.id),
-        .frameId = &id.toFrameId(transfer.req.page_id),
+        .frameId = &id.toFrameId(transfer.req.frame_id),
         .request = network.TransferAsRequestWriter.init(transfer),
         .resourceType = switch (transfer.req.resource_type) {
             .script => "Script",

@@ -223,9 +223,9 @@ pub fn send(self: *XMLHttpRequest, body_: ?[]const u8) !void {
     try http_client.request(.{
         .ctx = self,
         .url = self._url,
-        .page_id = page.id,
         .method = self._method,
         .headers = headers,
+        .frame_id = page._frame_id,
         .body = self._request_body,
         .cookie_jar = if (cookie_support) &page._session.cookie_jar else null,
         .resource_type = .xhr,

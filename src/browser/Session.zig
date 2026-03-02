@@ -54,7 +54,7 @@ navigation: Navigation,
 
 page: ?Page,
 
-page_id_gen: u32,
+frame_id_gen: u32,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
@@ -65,7 +65,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .page = null,
         .arena = arena,
         .history = .{},
-        .page_id_gen = 0,
+        .frame_id_gen = 0,
         // The prototype (EventTarget) for Navigation is created when a Page is created.
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
@@ -93,7 +93,7 @@ pub fn createPage(self: *Session) !*Page {
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, self.nextPageId(), self, null);
+    try Page.init(page, self.nextFrameId(), self, null);
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -131,7 +131,7 @@ pub fn replacePage(self: *Session) !*Page {
     lp.assert(self.page != null, "Session.replacePage null page", .{});
 
     var current = self.page.?;
-    const page_id = current.id;
+    const frame_id = current._frame_id;
     const parent = current.parent;
     current.deinit();
 
@@ -139,7 +139,7 @@ pub fn replacePage(self: *Session) !*Page {
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, page_id, self, parent);
+    try Page.init(page, frame_id, self, parent);
     return page;
 }
 
@@ -153,9 +153,9 @@ pub const WaitResult = enum {
     cdp_socket,
 };
 
-pub fn findPage(self: *Session, id: u32) ?*Page {
+pub fn findPage(self: *Session, frame_id: u32) ?*Page {
     const page = self.currentPage() orelse return null;
-    return if (page.id == id) page else null;
+    return if (page._frame_id == frame_id) page else null;
 }
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
@@ -347,20 +347,20 @@ fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
     current_page._queued_navigation = null;
     defer browser.arena_pool.release(qn.arena);
 
-    const page_id, const parent = blk: {
+    const frame_id, const parent = blk: {
         const page = &self.page.?;
-        const page_id = page.id;
+        const frame_id = page._frame_id;
         const parent = page.parent;
 
         browser.http_client.abort();
         self.removePage();
 
-        break :blk .{ page_id, parent };
+        break :blk .{ frame_id, parent };
     };
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, page_id, self, parent);
+    try Page.init(page, frame_id, self, parent);
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -377,8 +377,8 @@ fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
     return page;
 }
 
-pub fn nextPageId(self: *Session) u32 {
-    const id = self.page_id_gen +% 1;
-    self.page_id_gen = id;
+pub fn nextFrameId(self: *Session) u32 {
+    const id = self.frame_id_gen +% 1;
+    self.frame_id_gen = id;
     return id;
 }

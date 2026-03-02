@@ -320,7 +320,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .method = .GET,
             .headers = headers,
             .blocking = false,
-            .page_id = req.page_id,
+            .frame_id = req.frame_id,
             .cookie_jar = req.cookie_jar,
             .notification = req.notification,
             .resource_type = .fetch,
@@ -855,7 +855,7 @@ pub const RequestCookie = struct {
 };
 
 pub const Request = struct {
-    page_id: u32,
+    frame_id: u32,
     method: Method,
     url: [:0]const u8,
     headers: Net.Headers,
