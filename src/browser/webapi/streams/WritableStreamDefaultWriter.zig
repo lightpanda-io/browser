@@ -79,6 +79,15 @@ pub fn getClosed(self: *WritableStreamDefaultWriter, page: *Page) !js.Promise {
     return page.js.local.?.resolvePromise(.{});
 }
 
+pub fn getDesiredSize(self: *const WritableStreamDefaultWriter) ?i32 {
+    const stream = self._stream orelse return null;
+    return switch (stream._state) {
+        .writable => 1,
+        .closed => 0,
+        .errored => null,
+    };
+}
+
 pub fn getReady(self: *WritableStreamDefaultWriter, page: *Page) !js.Promise {
     _ = self;
     return page.js.local.?.resolvePromise(.{});
@@ -98,4 +107,5 @@ pub const JsApi = struct {
     pub const releaseLock = bridge.function(WritableStreamDefaultWriter.releaseLock, .{});
     pub const closed = bridge.accessor(WritableStreamDefaultWriter.getClosed, null, .{});
     pub const ready = bridge.accessor(WritableStreamDefaultWriter.getReady, null, .{});
+    pub const desiredSize = bridge.accessor(WritableStreamDefaultWriter.getDesiredSize, null, .{});
 };

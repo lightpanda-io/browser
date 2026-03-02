@@ -50,6 +50,14 @@
   }
 </script>
 
+<script id=writable_stream_writer_desired_size>
+  {
+    const ws = new WritableStream();
+    const writer = ws.getWriter();
+    testing.expectEqual(1, writer.desiredSize);
+  }
+</script>
+
 <script id=text_encoder_stream_encoding>
   {
     const tes = new TextEncoderStream();
