@@ -44,17 +44,9 @@ const ResourceStreamingResult = struct {
 
     const StreamingText = struct {
         server: *Server,
-        uri: []const u8,
         format: enum { html, markdown },
 
         pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
-            try jw.beginObject();
-            try jw.objectField("uri");
-            try jw.write(self.uri);
-            try jw.objectField("mimeType");
-            try jw.write(if (self.format == .html) "text/html" else "text/markdown");
-            try jw.objectField("text");
-
             try jw.beginWriteRaw();
             try jw.writer.writeByte('"');
             var escaped = protocol.JsonEscapingWriter.init(jw.writer);
@@ -68,8 +60,6 @@ const ResourceStreamingResult = struct {
             }
             try jw.writer.writeByte('"');
             jw.endWriteRaw();
-
-            try jw.endObject();
         }
     };
 };
@@ -88,7 +78,7 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .contents = &.{.{
                 .uri = params.uri,
                 .mimeType = "text/html",
-                .text = .{ .server = server, .uri = params.uri, .format = .html },
+                .text = .{ .server = server, .format = .html },
             }},
         };
         try server.sendResult(req.id.?, result);
@@ -97,7 +87,7 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
             .contents = &.{.{
                 .uri = params.uri,
                 .mimeType = "text/markdown",
-                .text = .{ .server = server, .uri = params.uri, .format = .markdown },
+                .text = .{ .server = server, .format = .markdown },
             }},
         };
         try server.sendResult(req.id.?, result);

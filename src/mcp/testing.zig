@@ -18,6 +18,26 @@ pub const McpHarness = struct {
     server_out: std.fs.File, // Server writes to this (client's stdin)
 
     thread: ?std.Thread = null,
+    test_error: ?anyerror = null,
+    buffer: std.ArrayListUnmanaged(u8) = .empty,
+
+    const Pipe = struct {
+        read: std.fs.File,
+        write: std.fs.File,
+
+        fn init() !Pipe {
+            const fds = try std.posix.pipe();
+            return .{
+                .read = .{ .handle = fds[0] },
+                .write = .{ .handle = fds[1] },
+            };
+        }
+
+        fn close(self: Pipe) void {
+            self.read.close();
+            self.write.close();
+        }
+    };
 
     pub fn init(allocator: std.mem.Allocator, app: *App) !*McpHarness {
         const self = try allocator.create(McpHarness);
@@ -26,26 +46,22 @@ pub const McpHarness = struct {
         self.allocator = allocator;
         self.app = app;
         self.thread = null;
+        self.test_error = null;
+        self.buffer = .empty;
 
-        // Pipe for Server Stdin (Client writes, Server reads)
-        const server_stdin_pipe = try std.posix.pipe();
-        errdefer {
-            std.posix.close(server_stdin_pipe[0]);
-            std.posix.close(server_stdin_pipe[1]);
-        }
-        self.server_in = .{ .handle = server_stdin_pipe[0] };
-        self.client_out = .{ .handle = server_stdin_pipe[1] };
+        const stdin_pipe = try Pipe.init();
+        errdefer stdin_pipe.close();
 
-        // Pipe for Server Stdout (Server writes, Client reads)
-        const server_stdout_pipe = try std.posix.pipe();
+        const stdout_pipe = try Pipe.init();
         errdefer {
-            std.posix.close(server_stdout_pipe[0]);
-            std.posix.close(server_stdout_pipe[1]);
-            self.server_in.close();
-            self.client_out.close();
+            stdin_pipe.close();
+            stdout_pipe.close();
         }
-        self.client_in = .{ .handle = server_stdout_pipe[0] };
-        self.server_out = .{ .handle = server_stdout_pipe[1] };
+
+        self.server_in = stdin_pipe.read;
+        self.client_out = stdin_pipe.write;
+        self.client_in = stdout_pipe.read;
+        self.server_out = stdout_pipe.write;
 
         self.server = try Server.init(allocator, app, self.server_out);
         errdefer self.server.deinit();
@@ -56,23 +72,29 @@ pub const McpHarness = struct {
     pub fn deinit(self: *McpHarness) void {
         self.server.is_running.store(false, .release);
 
-        // Unblock poller if it's waiting for stdin
+        // Wake up the server's poll loop by writing a newline
         self.client_out.writeAll("\n") catch {};
+
+        // Closing the client's output will also send EOF to the server
+        self.client_out.close();
 
         if (self.thread) |t| t.join();
 
         self.server.deinit();
 
+        // Server handles are closed here if they weren't already
         self.server_in.close();
         self.server_out.close();
         self.client_in.close();
-        self.client_out.close();
+        // self.client_out is already closed above
 
+        self.buffer.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
     pub fn runServer(self: *McpHarness) !void {
         try router.processRequests(self.server, self.server_in);
+        if (self.test_error) |err| return err;
     }
 
     pub fn sendRequest(self: *McpHarness, request_json: []const u8) !void {
@@ -87,18 +109,31 @@ pub const McpHarness = struct {
         var poller = std.io.poll(self.allocator, Streams, .{ .stdout = self.client_in });
         defer poller.deinit();
 
-        var timeout_count: usize = 0;
-        while (timeout_count < 20) : (timeout_count += 1) {
-            const poll_result = try poller.pollTimeout(100 * std.time.ns_per_ms);
-            const r = poller.reader(.stdout);
-            const buffered = r.buffered();
-            if (std.mem.indexOfScalar(u8, buffered, '\n')) |idx| {
-                const line = try arena.dupe(u8, buffered[0..idx]);
-                r.toss(idx + 1);
+        const timeout_ns = 2 * std.time.ns_per_s;
+        var timer = try std.time.Timer.start();
+
+        while (timer.read() < timeout_ns) {
+            const remaining = timeout_ns - timer.read();
+            const poll_result = try poller.pollTimeout(remaining);
+
+            if (poll_result) {
+                const data = try poller.toOwnedSlice(.stdout);
+                if (data.len == 0) return error.EndOfStream;
+                try self.buffer.appendSlice(self.allocator, data);
+                self.allocator.free(data);
+            }
+
+            if (std.mem.indexOfScalar(u8, self.buffer.items, '\n')) |newline_idx| {
+                const line = try arena.dupe(u8, self.buffer.items[0..newline_idx]);
+                const remaining_bytes = self.buffer.items.len - (newline_idx + 1);
+                std.mem.copyForwards(u8, self.buffer.items[0..remaining_bytes], self.buffer.items[newline_idx + 1 ..]);
+                self.buffer.items.len = remaining_bytes;
                 return line;
             }
-            if (!poll_result) return error.EndOfStream;
+
+            if (!poll_result and timer.read() >= timeout_ns) break;
         }
+
         return error.Timeout;
     }
 };
