@@ -94,22 +94,86 @@ pub const ToolsCapability = struct {
 pub const Tool = struct {
     name: []const u8,
     description: ?[]const u8 = null,
-    inputSchema: RawJson,
-};
-
-pub const RawJson = struct {
-    json: []const u8,
+    inputSchema: []const u8,
 
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
-        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
-        defer arena.deinit();
-
-        const parsed = std.json.parseFromSlice(std.json.Value, arena.allocator(), self.json, .{}) catch return error.WriteFailed;
-        defer parsed.deinit();
-
-        try jw.write(parsed.value);
+        try jw.beginObject();
+        try jw.objectField("name");
+        try jw.write(self.name);
+        if (self.description) |d| {
+            try jw.objectField("description");
+            try jw.write(d);
+        }
+        try jw.objectField("inputSchema");
+        _ = try jw.beginWriteRaw();
+        try jw.writer.writeAll(self.inputSchema);
+        jw.endWriteRaw();
+        try jw.endObject();
     }
 };
+
+pub fn minify(comptime json: []const u8) []const u8 {
+    @setEvalBranchQuota(100000);
+    const minified = comptime blk: {
+        var len: usize = 0;
+        var in_string = false;
+        var escaped = false;
+        for (json) |c| {
+            if (in_string) {
+                len += 1;
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    in_string = false;
+                }
+            } else {
+                switch (c) {
+                    ' ', '\n', '\r', '\t' => continue,
+                    '"' => {
+                        in_string = true;
+                        len += 1;
+                    },
+                    else => len += 1,
+                }
+            }
+        }
+
+        var res: [len]u8 = undefined;
+        var pos: usize = 0;
+        in_string = false;
+        escaped = false;
+        for (json) |c| {
+            if (in_string) {
+                res[pos] = c;
+                pos += 1;
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    in_string = false;
+                }
+            } else {
+                switch (c) {
+                    ' ', '\n', '\r', '\t' => continue,
+                    '"' => {
+                        in_string = true;
+                        res[pos] = c;
+                        pos += 1;
+                    },
+                    else => {
+                        res[pos] = c;
+                        pos += 1;
+                    },
+                }
+            }
+        }
+        break :blk res;
+    };
+    return &minified;
+}
 
 pub const Resource = struct {
     uri: []const u8,
@@ -232,13 +296,23 @@ test "JsonEscapingWriter" {
     try testing.expectString("hello\\n\\\"world\\\"", aw.written());
 }
 
-test "RawJson serialization" {
-    const raw = RawJson{ .json = "{\"test\": 123}" };
+test "Tool serialization" {
+    const t = Tool{
+        .name = "test",
+        .inputSchema = minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "foo": { "type": "string" }
+            \\  }
+            \\}
+        ),
+    };
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
-    try std.json.Stringify.value(raw, .{}, &aw.writer);
+    try std.json.Stringify.value(t, .{}, &aw.writer);
 
-    try testing.expectString("{\"test\":123}", aw.written());
+    try testing.expectString("{\"name\":\"test\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"foo\":{\"type\":\"string\"}}}}", aw.written());
 }

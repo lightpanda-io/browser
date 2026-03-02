@@ -19,7 +19,6 @@ pub const McpHarness = struct {
 
     thread: ?std.Thread = null,
     test_error: ?anyerror = null,
-    buffer: std.ArrayListUnmanaged(u8) = .empty,
 
     const Pipe = struct {
         read: std.fs.File,
@@ -47,7 +46,6 @@ pub const McpHarness = struct {
         self.app = app;
         self.thread = null;
         self.test_error = null;
-        self.buffer = .empty;
 
         const stdin_pipe = try Pipe.init();
         errdefer stdin_pipe.close();
@@ -88,7 +86,6 @@ pub const McpHarness = struct {
         self.client_in.close();
         // self.client_out is already closed above
 
-        self.buffer.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -109,29 +106,23 @@ pub const McpHarness = struct {
         var poller = std.io.poll(self.allocator, Streams, .{ .stdout = self.client_in });
         defer poller.deinit();
 
+        const r = poller.reader(.stdout);
+
         const timeout_ns = 2 * std.time.ns_per_s;
         var timer = try std.time.Timer.start();
 
         while (timer.read() < timeout_ns) {
-            const remaining = timeout_ns - timer.read();
-            const poll_result = try poller.pollTimeout(remaining);
+            const poll_result = try poller.pollTimeout(timeout_ns - timer.read());
 
-            if (poll_result) {
-                const data = try poller.toOwnedSlice(.stdout);
-                if (data.len == 0) return error.EndOfStream;
-                try self.buffer.appendSlice(self.allocator, data);
-                self.allocator.free(data);
+            if (!poll_result) return error.EndOfStream;
+
+            const buffered = r.buffered();
+            if (std.mem.indexOfScalar(u8, buffered, '\n')) |newline_idx| {
+                const line = buffered[0 .. newline_idx + 1];
+                const result = try arena.dupe(u8, std.mem.trim(u8, line, " \r\n\t"));
+                r.toss(line.len);
+                return result;
             }
-
-            if (std.mem.indexOfScalar(u8, self.buffer.items, '\n')) |newline_idx| {
-                const line = try arena.dupe(u8, self.buffer.items[0..newline_idx]);
-                const remaining_bytes = self.buffer.items.len - (newline_idx + 1);
-                std.mem.copyForwards(u8, self.buffer.items[0..remaining_bytes], self.buffer.items[newline_idx + 1 ..]);
-                self.buffer.items.len = remaining_bytes;
-                return line;
-            }
-
-            if (!poll_result and timer.read() >= timeout_ns) break;
         }
 
         return error.Timeout;

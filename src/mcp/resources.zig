@@ -64,6 +64,16 @@ const ResourceStreamingResult = struct {
     };
 };
 
+const ResourceUri = enum {
+    @"mcp://page/html",
+    @"mcp://page/markdown",
+};
+
+const resource_map = std.StaticStringMap(ResourceUri).initComptime(.{
+    .{ "mcp://page/html", .@"mcp://page/html" },
+    .{ "mcp://page/markdown", .@"mcp://page/markdown" },
+});
+
 pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
         return server.sendError(req.id.?, .InvalidParams, "Missing params");
@@ -73,26 +83,31 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         return server.sendError(req.id.?, .InvalidParams, "Invalid params");
     };
 
-    if (std.mem.eql(u8, params.uri, "mcp://page/html")) {
-        const result: ResourceStreamingResult = .{
-            .contents = &.{.{
-                .uri = params.uri,
-                .mimeType = "text/html",
-                .text = .{ .server = server, .format = .html },
-            }},
-        };
-        try server.sendResult(req.id.?, result);
-    } else if (std.mem.eql(u8, params.uri, "mcp://page/markdown")) {
-        const result: ResourceStreamingResult = .{
-            .contents = &.{.{
-                .uri = params.uri,
-                .mimeType = "text/markdown",
-                .text = .{ .server = server, .format = .markdown },
-            }},
-        };
-        try server.sendResult(req.id.?, result);
-    } else {
+    const uri = resource_map.get(params.uri) orelse {
         return server.sendError(req.id.?, .InvalidRequest, "Resource not found");
+    };
+
+    switch (uri) {
+        .@"mcp://page/html" => {
+            const result: ResourceStreamingResult = .{
+                .contents = &.{.{
+                    .uri = params.uri,
+                    .mimeType = "text/html",
+                    .text = .{ .server = server, .format = .html },
+                }},
+            };
+            try server.sendResult(req.id.?, result);
+        },
+        .@"mcp://page/markdown" => {
+            const result: ResourceStreamingResult = .{
+                .contents = &.{.{
+                    .uri = params.uri,
+                    .mimeType = "text/markdown",
+                    .text = .{ .server = server, .format = .markdown },
+                }},
+            };
+            try server.sendResult(req.id.?, result);
+        },
     }
 }
 

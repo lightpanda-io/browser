@@ -13,79 +13,79 @@ pub const tool_list = [_]protocol.Tool{
     .{
         .name = "goto",
         .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-        .inputSchema = .{ .json = 
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." }
-        \\  },
-        \\  "required": ["url"]
-        \\}
-    },
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." }
+            \\  },
+            \\  "required": ["url"]
+            \\}
+        ),
     },
     .{
         .name = "search",
         .description = "Use a search engine to look for specific words, terms, sentences. The search page will then be loaded in memory.",
-        .inputSchema = .{ .json = 
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "text": { "type": "string", "description": "The text to search for, must be a valid search query." }
-        \\  },
-        \\  "required": ["text"]
-        \\}
-    },
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "text": { "type": "string", "description": "The text to search for, must be a valid search query." }
+            \\  },
+            \\  "required": ["text"]
+            \\}
+        ),
     },
     .{
         .name = "markdown",
         .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
-        .inputSchema = .{ .json = 
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." }
-        \\  }
-        \\}
-    },
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." }
+            \\  }
+            \\}
+        ),
     },
     .{
         .name = "links",
         .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = .{ .json = 
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." }
-        \\  }
-        \\}
-    },
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." }
+            \\  }
+            \\}
+        ),
     },
     .{
         .name = "evaluate",
         .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
-        .inputSchema = .{ .json = 
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "script": { "type": "string" },
-        \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." }
-        \\  },
-        \\  "required": ["script"]
-        \\}
-    },
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "script": { "type": "string" },
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." }
+            \\  },
+            \\  "required": ["script"]
+            \\}
+        ),
     },
     .{
         .name = "over",
         .description = "Used to indicate that the task is over and give the final answer if there is any. This is the last tool to be called in a task.",
-        .inputSchema = .{ .json = 
-        \\{
-        \\  "type": "object",
-        \\  "properties": {
-        \\    "result": { "type": "string", "description": "The final result of the task." }
-        \\  },
-        \\  "required": ["result"]
-        \\}
-    },
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "result": { "type": "string", "description": "The final result of the task." }
+            \\  },
+            \\  "required": ["result"]
+            \\}
+        ),
     },
 };
 
@@ -158,6 +158,26 @@ const ToolStreamingText = struct {
     }
 };
 
+const ToolAction = enum {
+    goto,
+    navigate,
+    search,
+    markdown,
+    links,
+    evaluate,
+    over,
+};
+
+const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
+    .{ "goto", .goto },
+    .{ "navigate", .navigate },
+    .{ "search", .search },
+    .{ "markdown", .markdown },
+    .{ "links", .links },
+    .{ "evaluate", .evaluate },
+    .{ "over", .over },
+});
+
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
     if (req.params == null) {
         return server.sendError(req.id.?, .InvalidParams, "Missing params");
@@ -169,26 +189,20 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
     };
 
     const call_params = std.json.parseFromValueLeaky(CallParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
-        var aw: std.Io.Writer.Allocating = .init(arena);
-        std.json.Stringify.value(req.params.?, .{}, &aw.writer) catch {};
-        const msg = std.fmt.allocPrint(arena, "Invalid params: {s}", .{aw.written()}) catch "Invalid params";
-        return server.sendError(req.id.?, .InvalidParams, msg);
+        return server.sendError(req.id.?, .InvalidParams, "Invalid params");
     };
 
-    if (std.mem.eql(u8, call_params.name, "goto") or std.mem.eql(u8, call_params.name, "navigate")) {
-        try handleGoto(server, arena, req.id.?, call_params.arguments);
-    } else if (std.mem.eql(u8, call_params.name, "search")) {
-        try handleSearch(server, arena, req.id.?, call_params.arguments);
-    } else if (std.mem.eql(u8, call_params.name, "markdown")) {
-        try handleMarkdown(server, arena, req.id.?, call_params.arguments);
-    } else if (std.mem.eql(u8, call_params.name, "links")) {
-        try handleLinks(server, arena, req.id.?, call_params.arguments);
-    } else if (std.mem.eql(u8, call_params.name, "evaluate")) {
-        try handleEvaluate(server, arena, req.id.?, call_params.arguments);
-    } else if (std.mem.eql(u8, call_params.name, "over")) {
-        try handleOver(server, arena, req.id.?, call_params.arguments);
-    } else {
+    const action = tool_map.get(call_params.name) orelse {
         return server.sendError(req.id.?, .MethodNotFound, "Tool not found");
+    };
+
+    switch (action) {
+        .goto, .navigate => try handleGoto(server, arena, req.id.?, call_params.arguments),
+        .search => try handleSearch(server, arena, req.id.?, call_params.arguments),
+        .markdown => try handleMarkdown(server, arena, req.id.?, call_params.arguments),
+        .links => try handleLinks(server, arena, req.id.?, call_params.arguments),
+        .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
+        .over => try handleOver(server, arena, req.id.?, call_params.arguments),
     }
 }
 
