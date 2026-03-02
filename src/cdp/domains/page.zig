@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const js = @import("../../browser/js/js.zig");
+const URL = @import("../../browser/URL.zig");
 const Page = @import("../../browser/Page.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
@@ -224,7 +225,8 @@ fn navigate(cmd: anytype) !void {
         page = try session.replacePage();
     }
 
-    try page.navigate(params.url, .{
+    const encoded_url = try URL.ensureEncoded(page.call_arena, params.url);
+    try page.navigate(encoded_url, .{
         .reason = .address_bar,
         .cdp_id = cmd.input.id,
         .kind = .{ .push = null },

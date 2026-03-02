@@ -145,7 +145,7 @@ fn render(node: *Node, state: *State, writer: *std.Io.Writer, page: *Page) error
         },
         .cdata => |cd| {
             if (node.is(Node.CData.Text)) |_| {
-                var text = cd.getData();
+                var text = cd.getData().str();
                 if (state.pre_node) |pre| {
                     if (node.parentNode() == pre and node.nextSibling() == null) {
                         text = std.mem.trimRight(u8, text, " \t\r\n");

@@ -129,8 +129,14 @@ pub fn isNullOrUndefined(self: Object) bool {
     return v8.v8__Value__IsNullOrUndefined(@ptrCast(self.handle));
 }
 
-pub fn getOwnPropertyNames(self: Object) js.Array {
-    const handle = v8.v8__Object__GetOwnPropertyNames(self.handle, self.local.handle).?;
+pub fn getOwnPropertyNames(self: Object) !js.Array {
+    const handle = v8.v8__Object__GetOwnPropertyNames(self.handle, self.local.handle) orelse {
+        // This is almost always a fatal error case. Either we're in some exception
+        // and things are messy, or we're shutting down, or someone has messed up
+        // the object (like some WPT tests do).
+        return error.TypeError;
+    };
+
     return .{
         .local = self.local,
         .handle = handle,
@@ -145,8 +151,11 @@ pub fn getPropertyNames(self: Object) js.Array {
     };
 }
 
-pub fn nameIterator(self: Object) NameIterator {
-    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.local.handle).?;
+pub fn nameIterator(self: Object) !NameIterator {
+    const handle = v8.v8__Object__GetPropertyNames(self.handle, self.local.handle) orelse {
+        // see getOwnPropertyNames above
+        return error.TypeError;
+    };
     const count = v8.v8__Array__Length(handle);
 
     return .{

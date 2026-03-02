@@ -24,9 +24,10 @@ const URL = @import("../URL.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
-
+const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
+
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // https://developer.mozilla.org/en-US/docs/Web/API/Navigation
 const Navigation = @This();
@@ -203,15 +204,17 @@ pub fn pushEntry(
     try self._entries.append(arena, entry);
     self._index = index;
 
-    if (previous) |prev| {
-        if (should_dispatch) {
-            const event = try NavigationCurrentEntryChangeEvent.initTrusted(
-                .wrap("currententrychange"),
-                .{ .from = prev, .navigationType = @tagName(.push) },
-                page,
-            );
-            try self.dispatch(.{ .currententrychange = event }, page);
-        }
+    if (previous == null or should_dispatch == false) {
+        return entry;
+    }
+
+    if (self._on_currententrychange) |cec| {
+        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+            .wrap("currententrychange"),
+            .{ .from = previous.?, .navigationType = @tagName(.push) },
+            page,
+        )).asEvent();
+        try self.dispatch(cec, event, page);
     }
 
     return entry;
@@ -243,13 +246,17 @@ pub fn replaceEntry(
 
     self._entries.items[self._index] = entry;
 
-    if (should_dispatch) {
-        const event = try NavigationCurrentEntryChangeEvent.initTrusted(
+    if (should_dispatch == false) {
+        return entry;
+    }
+
+    if (self._on_currententrychange) |cec| {
+        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
             .wrap("currententrychange"),
             .{ .from = previous, .navigationType = @tagName(.replace) },
             page,
-        );
-        try self.dispatch(.{ .currententrychange = event }, page);
+        )).asEvent();
+        try self.dispatch(cec, event, page);
     }
 
     return entry;
@@ -335,13 +342,15 @@ pub fn navigateInner(
         },
     }
 
-    // If we haven't navigated off, let us fire off an a currententrychange.
-    const event = try NavigationCurrentEntryChangeEvent.initTrusted(
-        .wrap("currententrychange"),
-        .{ .from = previous, .navigationType = @tagName(kind) },
-        page,
-    );
-    try self.dispatch(.{ .currententrychange = event }, page);
+    if (self._on_currententrychange) |cec| {
+        // If we haven't navigated off, let us fire off an a currententrychange.
+        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+            .wrap("currententrychange"),
+            .{ .from = previous, .navigationType = @tagName(kind) },
+            page,
+        )).asEvent();
+        try self.dispatch(cec, event, page);
+    }
 
     _ = try committed.persist();
     _ = try finished.persist();
@@ -420,35 +429,17 @@ pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions,
         .value = options.state.toJson(arena) catch return error.DataClone,
     };
 
-    const event = try NavigationCurrentEntryChangeEvent.initTrusted(
-        .wrap("currententrychange"),
-        .{ .from = previous, .navigationType = null },
-        page,
-    );
-    try self.dispatch(.{ .currententrychange = event }, page);
+    if (self._on_currententrychange) |cec| {
+        const event = (try NavigationCurrentEntryChangeEvent.initTrusted(
+            .wrap("currententrychange"),
+            .{ .from = previous, .navigationType = null },
+            page,
+        )).asEvent();
+        try self.dispatch(cec, event, page);
+    }
 }
 
-const DispatchType = union(enum) {
-    currententrychange: *NavigationCurrentEntryChangeEvent,
-};
-
-pub fn dispatch(self: *Navigation, event_type: DispatchType, page: *Page) !void {
-    const event, const field = blk: {
-        break :blk switch (event_type) {
-            .currententrychange => |cec| .{ cec.asEvent(), "_on_currententrychange" },
-        };
-    };
-    defer if (!event._v8_handoff) event.deinit(false);
-
-    if (comptime IS_DEBUG) {
-        if (page.js.local == null) {
-            log.fatal(.bug, "null context scope", .{ .src = "Navigation.dispatch", .url = page.url });
-            std.debug.assert(page.js.local != null);
-        }
-    }
-
-    const func = @field(self, field) orelse return;
-
+pub fn dispatch(self: *Navigation, func: js.Function.Global, event: *Event, page: *Page) !void {
     var ls: js.Local.Scope = undefined;
     page.js.localScope(&ls);
     defer ls.deinit();

@@ -63,7 +63,7 @@ pub const JsApi = struct {
 
     pub const length = bridge.property(0, .{ .template = false });
     pub const refresh = bridge.function(PluginArray.refresh, .{});
-    pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, .{ .null_as_undefined = true });
     pub const item = bridge.function(_item, .{});
     fn _item(self: *const PluginArray, index: i32) ?*Plugin {

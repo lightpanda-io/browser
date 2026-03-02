@@ -20,44 +20,61 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const ResolveOpts = struct {
+    encode: bool = false,
     always_dupe: bool = false,
 };
+
 // path is anytype, so that it can be used with both []const u8 and [:0]const u8
 pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime opts: ResolveOpts) ![:0]const u8 {
     const PT = @TypeOf(path);
     if (base.len == 0 or isCompleteHTTPUrl(path)) {
         if (comptime opts.always_dupe or !isNullTerminated(PT)) {
-            return allocator.dupeZ(u8, path);
+            const duped = try allocator.dupeZ(u8, path);
+            return processResolved(allocator, duped, opts);
+        }
+        if (comptime opts.encode) {
+            return processResolved(allocator, path, opts);
         }
         return path;
     }
 
     if (path.len == 0) {
         if (comptime opts.always_dupe) {
-            return allocator.dupeZ(u8, base);
+            const duped = try allocator.dupeZ(u8, base);
+            return processResolved(allocator, duped, opts);
+        }
+        if (comptime opts.encode) {
+            return processResolved(allocator, base, opts);
         }
         return base;
     }
 
     if (path[0] == '?') {
         const base_path_end = std.mem.indexOfAny(u8, base, "?#") orelse base.len;
-        return std.mem.joinZ(allocator, "", &.{ base[0..base_path_end], path });
+        const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_path_end], path });
+        return processResolved(allocator, result, opts);
     }
     if (path[0] == '#') {
         const base_fragment_start = std.mem.indexOfScalar(u8, base, '#') orelse base.len;
-        return std.mem.joinZ(allocator, "", &.{ base[0..base_fragment_start], path });
+        const result = try std.mem.joinZ(allocator, "", &.{ base[0..base_fragment_start], path });
+        return processResolved(allocator, result, opts);
     }
 
     if (std.mem.startsWith(u8, path, "//")) {
         // network-path reference
         const index = std.mem.indexOfScalar(u8, base, ':') orelse {
             if (comptime isNullTerminated(PT)) {
+                if (comptime opts.encode) {
+                    return processResolved(allocator, path, opts);
+                }
                 return path;
             }
-            return allocator.dupeZ(u8, path);
+            const duped = try allocator.dupeZ(u8, path);
+            return processResolved(allocator, duped, opts);
         };
         const protocol = base[0 .. index + 1];
-        return std.mem.joinZ(allocator, "", &.{ protocol, path });
+        const result = try std.mem.joinZ(allocator, "", &.{ protocol, path });
+        return processResolved(allocator, result, opts);
     }
 
     const scheme_end = std.mem.indexOf(u8, base, "://");
@@ -65,7 +82,8 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
     const path_start = std.mem.indexOfScalarPos(u8, base, authority_start, '/') orelse base.len;
 
     if (path[0] == '/') {
-        return std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
+        const result = try std.mem.joinZ(allocator, "", &.{ base[0..path_start], path });
+        return processResolved(allocator, result, opts);
     }
 
     var normalized_base: []const u8 = base[0..path_start];
@@ -127,7 +145,119 @@ pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime
 
     // we always have an extra space
     out[out_i] = 0;
-    return out[0..out_i :0];
+    return processResolved(allocator, out[0..out_i :0], opts);
+}
+
+fn processResolved(allocator: Allocator, url: [:0]const u8, comptime opts: ResolveOpts) ![:0]const u8 {
+    if (!comptime opts.encode) {
+        return url;
+    }
+    return ensureEncoded(allocator, url);
+}
+
+pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
+    const scheme_end = std.mem.indexOf(u8, url, "://");
+    const authority_start = if (scheme_end) |end| end + 3 else 0;
+    const path_start = std.mem.indexOfScalarPos(u8, url, authority_start, '/') orelse return url;
+
+    const query_start = std.mem.indexOfScalarPos(u8, url, path_start, '?');
+    const fragment_start = std.mem.indexOfScalarPos(u8, url, query_start orelse path_start, '#');
+
+    const path_end = query_start orelse fragment_start orelse url.len;
+    const query_end = if (query_start) |_| (fragment_start orelse url.len) else path_end;
+
+    const path_to_encode = url[path_start..path_end];
+    const encoded_path = try percentEncodeSegment(allocator, path_to_encode, true);
+
+    const encoded_query = if (query_start) |qs| blk: {
+        const query_to_encode = url[qs + 1 .. query_end];
+        const encoded = try percentEncodeSegment(allocator, query_to_encode, false);
+        break :blk encoded;
+    } else null;
+
+    const encoded_fragment = if (fragment_start) |fs| blk: {
+        const fragment_to_encode = url[fs + 1 ..];
+        const encoded = try percentEncodeSegment(allocator, fragment_to_encode, false);
+        break :blk encoded;
+    } else null;
+
+    if (encoded_path.ptr == path_to_encode.ptr and
+        (encoded_query == null or encoded_query.?.ptr == url[query_start.? + 1 .. query_end].ptr) and
+        (encoded_fragment == null or encoded_fragment.?.ptr == url[fragment_start.? + 1 ..].ptr))
+    {
+        // nothing has changed
+        return url;
+    }
+
+    var buf = try std.ArrayList(u8).initCapacity(allocator, url.len + 20);
+    try buf.appendSlice(allocator, url[0..path_start]);
+    try buf.appendSlice(allocator, encoded_path);
+    if (encoded_query) |eq| {
+        try buf.append(allocator, '?');
+        try buf.appendSlice(allocator, eq);
+    }
+    if (encoded_fragment) |ef| {
+        try buf.append(allocator, '#');
+        try buf.appendSlice(allocator, ef);
+    }
+    try buf.append(allocator, 0);
+    return buf.items[0 .. buf.items.len - 1 :0];
+}
+
+fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime is_path: bool) ![]const u8 {
+    // Check if encoding is needed
+    var needs_encoding = false;
+    for (segment) |c| {
+        if (shouldPercentEncode(c, is_path)) {
+            needs_encoding = true;
+            break;
+        }
+    }
+    if (!needs_encoding) {
+        return segment;
+    }
+
+    var buf = try std.ArrayList(u8).initCapacity(allocator, segment.len + 10);
+
+    var i: usize = 0;
+    while (i < segment.len) : (i += 1) {
+        const c = segment[i];
+
+        // Check if this is an already-encoded sequence (%XX)
+        if (c == '%' and i + 2 < segment.len) {
+            const end = i + 2;
+            const h1 = segment[i + 1];
+            const h2 = segment[end];
+            if (std.ascii.isHex(h1) and std.ascii.isHex(h2)) {
+                try buf.appendSlice(allocator, segment[i .. end + 1]);
+                i = end;
+                continue;
+            }
+        }
+
+        if (shouldPercentEncode(c, is_path)) {
+            try buf.writer(allocator).print("%{X:0>2}", .{c});
+        } else {
+            try buf.append(allocator, c);
+        }
+    }
+
+    return buf.items;
+}
+
+fn shouldPercentEncode(c: u8, comptime is_path: bool) bool {
+    return switch (c) {
+        // Unreserved characters (RFC 3986)
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => false,
+        // sub-delims allowed in both path and query
+        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => false,
+        // Separators allowed in both path and query
+        '/', ':', '@' => false,
+        // Query-specific: '?' is allowed in queries but not in paths
+        '?' => comptime is_path,
+        // Everything else needs encoding (including space)
+        else => true,
+    };
 }
 
 fn isNullTerminated(comptime value: type) bool {
@@ -512,6 +642,33 @@ pub fn getRobotsUrl(arena: Allocator, url: [:0]const u8) ![:0]const u8 {
     );
 }
 
+pub fn unescape(arena: Allocator, input: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, input, '%') == null) {
+        return input;
+    }
+
+    var result = try std.ArrayList(u8).initCapacity(arena, input.len);
+
+    var i: usize = 0;
+    while (i < input.len) {
+        if (input[i] == '%' and i + 2 < input.len) {
+            const hex = input[i + 1 .. i + 3];
+            const byte = std.fmt.parseInt(u8, hex, 16) catch {
+                result.appendAssumeCapacity(input[i]);
+                i += 1;
+                continue;
+            };
+            result.appendAssumeCapacity(byte);
+            i += 3;
+        } else {
+            result.appendAssumeCapacity(input[i]);
+            i += 1;
+        }
+    }
+
+    return result.items;
+}
+
 const testing = @import("../testing.zig");
 test "URL: isCompleteHTTPUrl" {
     try testing.expectEqual(true, isCompleteHTTPUrl("http://example.com/about"));
@@ -691,6 +848,293 @@ test "URL: resolve" {
     }
 }
 
+test "URL: ensureEncoded" {
+    defer testing.reset();
+
+    const Case = struct {
+        url: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        .{
+            .url = "https://example.com/over 9000!",
+            .expected = "https://example.com/over%209000!",
+        },
+        .{
+            .url = "http://example.com/hello world.html",
+            .expected = "http://example.com/hello%20world.html",
+        },
+        .{
+            .url = "https://example.com/file[1].html",
+            .expected = "https://example.com/file%5B1%5D.html",
+        },
+        .{
+            .url = "https://example.com/file{name}.html",
+            .expected = "https://example.com/file%7Bname%7D.html",
+        },
+        .{
+            .url = "https://example.com/page?query=hello world",
+            .expected = "https://example.com/page?query=hello%20world",
+        },
+        .{
+            .url = "https://example.com/page?a=1&b=value with spaces",
+            .expected = "https://example.com/page?a=1&b=value%20with%20spaces",
+        },
+        .{
+            .url = "https://example.com/page#section one",
+            .expected = "https://example.com/page#section%20one",
+        },
+        .{
+            .url = "https://example.com/my path?query=my value#my anchor",
+            .expected = "https://example.com/my%20path?query=my%20value#my%20anchor",
+        },
+        .{
+            .url = "https://example.com/already%20encoded",
+            .expected = "https://example.com/already%20encoded",
+        },
+        .{
+            .url = "https://example.com/file%5B1%5D.html",
+            .expected = "https://example.com/file%5B1%5D.html",
+        },
+        .{
+            .url = "https://example.com/caf%C3%A9",
+            .expected = "https://example.com/caf%C3%A9",
+        },
+        .{
+            .url = "https://example.com/page?query=already%20encoded",
+            .expected = "https://example.com/page?query=already%20encoded",
+        },
+        .{
+            .url = "https://example.com/page?a=1&b=value%20here",
+            .expected = "https://example.com/page?a=1&b=value%20here",
+        },
+        .{
+            .url = "https://example.com/page#section%20one",
+            .expected = "https://example.com/page#section%20one",
+        },
+        .{
+            .url = "https://example.com/part%20encoded and not",
+            .expected = "https://example.com/part%20encoded%20and%20not",
+        },
+        .{
+            .url = "https://example.com/page?a=encoded%20value&b=not encoded",
+            .expected = "https://example.com/page?a=encoded%20value&b=not%20encoded",
+        },
+        .{
+            .url = "https://example.com/my%20path?query=not encoded#encoded%20anchor",
+            .expected = "https://example.com/my%20path?query=not%20encoded#encoded%20anchor",
+        },
+        .{
+            .url = "https://example.com/fully%20encoded?query=also%20encoded#and%20this",
+            .expected = "https://example.com/fully%20encoded?query=also%20encoded#and%20this",
+        },
+        .{
+            .url = "https://example.com/path-with_under~tilde",
+            .expected = "https://example.com/path-with_under~tilde",
+        },
+        .{
+            .url = "https://example.com/sub-delims!$&'()*+,;=",
+            .expected = "https://example.com/sub-delims!$&'()*+,;=",
+        },
+        .{
+            .url = "https://example.com",
+            .expected = "https://example.com",
+        },
+        .{
+            .url = "https://example.com?query=value",
+            .expected = "https://example.com?query=value",
+        },
+        .{
+            .url = "https://example.com/clean/path",
+            .expected = "https://example.com/clean/path",
+        },
+        .{
+            .url = "https://example.com/path?clean=query#clean-fragment",
+            .expected = "https://example.com/path?clean=query#clean-fragment",
+        },
+        .{
+            .url = "https://example.com/100% complete",
+            .expected = "https://example.com/100%25%20complete",
+        },
+        .{
+            .url = "https://example.com/path?value=100% done",
+            .expected = "https://example.com/path?value=100%25%20done",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try ensureEncoded(testing.arena_allocator, case.url);
+        try testing.expectString(case.expected, result);
+    }
+}
+
+test "URL: resolve with encoding" {
+    defer testing.reset();
+
+    const Case = struct {
+        base: [:0]const u8,
+        path: [:0]const u8,
+        expected: [:0]const u8,
+    };
+
+    const cases = [_]Case{
+        // Spaces should be encoded as %20, but ! is allowed
+        .{
+            .base = "https://example.com/dir/",
+            .path = "over 9000!",
+            .expected = "https://example.com/dir/over%209000!",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "hello world.html",
+            .expected = "https://example.com/hello%20world.html",
+        },
+        // Multiple spaces
+        .{
+            .base = "https://example.com/",
+            .path = "path with  multiple   spaces",
+            .expected = "https://example.com/path%20with%20%20multiple%20%20%20spaces",
+        },
+        // Special characters that need encoding
+        .{
+            .base = "https://example.com/",
+            .path = "file[1].html",
+            .expected = "https://example.com/file%5B1%5D.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file{name}.html",
+            .expected = "https://example.com/file%7Bname%7D.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file<test>.html",
+            .expected = "https://example.com/file%3Ctest%3E.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file\"quote\".html",
+            .expected = "https://example.com/file%22quote%22.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file|pipe.html",
+            .expected = "https://example.com/file%7Cpipe.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file\\backslash.html",
+            .expected = "https://example.com/file%5Cbackslash.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file^caret.html",
+            .expected = "https://example.com/file%5Ecaret.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file`backtick`.html",
+            .expected = "https://example.com/file%60backtick%60.html",
+        },
+        // Characters that should NOT be encoded
+        .{
+            .base = "https://example.com/",
+            .path = "path-with_under~tilde.html",
+            .expected = "https://example.com/path-with_under~tilde.html",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "path/with/slashes",
+            .expected = "https://example.com/path/with/slashes",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "sub-delims!$&'()*+,;=.html",
+            .expected = "https://example.com/sub-delims!$&'()*+,;=.html",
+        },
+        // Already encoded characters should not be double-encoded
+        .{
+            .base = "https://example.com/",
+            .path = "already%20encoded",
+            .expected = "https://example.com/already%20encoded",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file%5B1%5D.html",
+            .expected = "https://example.com/file%5B1%5D.html",
+        },
+        // Mix of encoded and unencoded
+        .{
+            .base = "https://example.com/",
+            .path = "part%20encoded and not",
+            .expected = "https://example.com/part%20encoded%20and%20not",
+        },
+        // Query strings and fragments ARE encoded
+        .{
+            .base = "https://example.com/",
+            .path = "file name.html?query=value with spaces",
+            .expected = "https://example.com/file%20name.html?query=value%20with%20spaces",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file name.html#anchor with spaces",
+            .expected = "https://example.com/file%20name.html#anchor%20with%20spaces",
+        },
+        .{
+            .base = "https://example.com/",
+            .path = "file.html?hello=world !",
+            .expected = "https://example.com/file.html?hello=world%20!",
+        },
+        // Query structural characters should NOT be encoded
+        .{
+            .base = "https://example.com/",
+            .path = "file.html?a=1&b=2",
+            .expected = "https://example.com/file.html?a=1&b=2",
+        },
+        // Relative paths with encoding
+        .{
+            .base = "https://example.com/dir/page.html",
+            .path = "../other dir/file.html",
+            .expected = "https://example.com/other%20dir/file.html",
+        },
+        .{
+            .base = "https://example.com/dir/",
+            .path = "./sub dir/file.html",
+            .expected = "https://example.com/dir/sub%20dir/file.html",
+        },
+        // Absolute paths with encoding
+        .{
+            .base = "https://example.com/some/path",
+            .path = "/absolute path/file.html",
+            .expected = "https://example.com/absolute%20path/file.html",
+        },
+        // Unicode/high bytes (though ideally these should be UTF-8 encoded first)
+        .{
+            .base = "https://example.com/",
+            .path = "café",
+            .expected = "https://example.com/caf%C3%A9",
+        },
+        // Empty path
+        .{
+            .base = "https://example.com/",
+            .path = "",
+            .expected = "https://example.com/",
+        },
+        // Complete URL as path (should not be encoded)
+        .{
+            .base = "https://example.com/",
+            .path = "https://other.com/path with spaces",
+            .expected = "https://other.com/path%20with%20spaces",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try resolve(testing.arena_allocator, case.base, case.path, .{ .encode = true });
+        try testing.expectString(case.expected, result);
+    }
+}
+
 test "URL: eqlDocument" {
     defer testing.reset();
     {
@@ -814,5 +1258,70 @@ test "URL: getRobotsUrl" {
     {
         const url = try getRobotsUrl(arena, "https://user:pass@example.com/page");
         try testing.expectString("https://example.com/robots.txt", url);
+    }
+}
+
+test "URL: unescape" {
+    defer testing.reset();
+    const arena = testing.arena_allocator;
+
+    {
+        const result = try unescape(arena, "hello world");
+        try testing.expectEqual("hello world", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%20world");
+        try testing.expectEqual("hello world", result);
+    }
+
+    {
+        const result = try unescape(arena, "%48%65%6c%6c%6f");
+        try testing.expectEqual("Hello", result);
+    }
+
+    {
+        const result = try unescape(arena, "%48%65%6C%6C%6F");
+        try testing.expectEqual("Hello", result);
+    }
+
+    {
+        const result = try unescape(arena, "a%3Db");
+        try testing.expectEqual("a=b", result);
+    }
+
+    {
+        const result = try unescape(arena, "a%3DB");
+        try testing.expectEqual("a=B", result);
+    }
+
+    {
+        const result = try unescape(arena, "ZDIgPSAndHdvJzs%3D");
+        try testing.expectEqual("ZDIgPSAndHdvJzs=", result);
+    }
+
+    {
+        const result = try unescape(arena, "%5a%44%4d%67%50%53%41%6e%64%47%68%79%5a%57%55%6e%4f%77%3D%3D");
+        try testing.expectEqual("ZDMgPSAndGhyZWUnOw==", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%2world");
+        try testing.expectEqual("hello%2world", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%ZZworld");
+        try testing.expectEqual("hello%ZZworld", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%");
+        try testing.expectEqual("hello%", result);
+    }
+
+    {
+        const result = try unescape(arena, "hello%2");
+        try testing.expectEqual("hello%2", result);
     }
 }

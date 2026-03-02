@@ -308,12 +308,10 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
         .cancelable = true,
     }, page);
 
-    const event = error_event.asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
-
     // Invoke window.onerror callback if set (per WHATWG spec, this is called
     // with 5 arguments: message, source, lineno, colno, error)
     // If it returns true, the event is cancelled.
+    var prevent_default = false;
     if (self._on_error) |on_error| {
         var ls: js.Local.Scope = undefined;
         page.js.localScope(&ls);
@@ -330,12 +328,12 @@ pub fn reportError(self: *Window, err: js.Value, page: *Page) !void {
 
         // Per spec: returning true from onerror cancels the event
         if (result) |r| {
-            if (r.isTrue()) {
-                event._prevent_default = true;
-            }
+            prevent_default = r.isTrue();
         }
     }
 
+    const event = error_event.asEvent();
+    event._prevent_default = prevent_default;
     try page._event_manager.dispatch(self.asEventTarget(), event);
 
     if (comptime builtin.is_test == false) {
@@ -398,9 +396,19 @@ pub fn btoa(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
 
 pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
-    const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(trimmed) catch return error.InvalidCharacterError;
+    // Forgiving base64 decode per WHATWG spec:
+    // https://infra.spec.whatwg.org/#forgiving-base64-decode
+    // Remove trailing padding to use standard_no_pad decoder
+    const unpadded = std.mem.trimRight(u8, trimmed, "=");
+
+    // Length % 4 == 1 is invalid (can't represent valid base64)
+    if (unpadded.len % 4 == 1) {
+        return error.InvalidCharacterError;
+    }
+
+    const decoded_len = std.base64.standard_no_pad.Decoder.calcSizeForSlice(unpadded) catch return error.InvalidCharacterError;
     const decoded = try page.call_arena.alloc(u8, decoded_len);
-    std.base64.standard.Decoder.decode(decoded, trimmed) catch return error.InvalidCharacterError;
+    std.base64.standard_no_pad.Decoder.decode(decoded, unpadded) catch return error.InvalidCharacterError;
     return decoded;
 }
 
@@ -478,7 +486,6 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                 }
 
                 const event = try Event.initTrusted(comptime .wrap("scroll"), .{ .bubbles = true }, p);
-                defer if (!event._v8_handoff) event.deinit(false);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .end;
@@ -506,7 +513,6 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
                     .done => return null,
                 }
                 const event = try Event.initTrusted(comptime .wrap("scrollend"), .{ .bubbles = true }, p);
-                defer if (!event._v8_handoff) event.deinit(false);
                 try p._event_manager.dispatch(p.document.asEventTarget(), event);
 
                 pos.state = .done;
@@ -519,6 +525,24 @@ pub fn scrollTo(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
     );
 }
 
+pub fn scrollBy(self: *Window, opts: ScrollToOpts, y: ?i32, page: *Page) !void {
+    // The scroll is relative to the current position. So compute to new
+    // absolute position.
+    var absx: i32 = undefined;
+    var absy: i32 = undefined;
+    switch (opts) {
+        .x => |x| {
+            absx = @as(i32, @intCast(self._scroll_pos.x)) + x;
+            absy = @as(i32, @intCast(self._scroll_pos.y)) + (y orelse 0);
+        },
+        .opts => |o| {
+            absx = @as(i32, @intCast(self._scroll_pos.x)) + o.left;
+            absy = @as(i32, @intCast(self._scroll_pos.y)) + o.top;
+        },
+    }
+    return self.scrollTo(.{ .x = absx }, absy, page);
+}
+
 pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, page: *Page) !void {
     if (comptime IS_DEBUG) {
         log.debug(.js, "unhandled rejection", .{
@@ -527,11 +551,10 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
         });
     }
 
-    var event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
+    const event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
         .reason = if (rejection.reason()) |r| try r.temp() else null,
         .promise = try rejection.promise().temp(),
     }, page)).asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
 
     try page._event_manager.dispatchWithFunction(
         self.asEventTarget(),
@@ -705,7 +728,6 @@ const PostMessageCallback = struct {
             .bubbles = false,
             .cancelable = false,
         }, page)).asEvent();
-        defer if (!event._v8_handoff) event.deinit(false);
         try page._event_manager.dispatch(window.asEventTarget(), event);
 
         return null;
@@ -782,7 +804,7 @@ pub const JsApi = struct {
     pub const getSelection = bridge.function(Window.getSelection, .{});
 
     pub const frames = bridge.accessor(Window.getWindow, null, .{});
-    pub const index = bridge.indexed(Window.getFrame, .{ .null_as_undefined = true });
+    pub const index = bridge.indexed(Window.getFrame, null, .{ .null_as_undefined = true });
     pub const length = bridge.accessor(Window.getFramesLength, null, .{});
     pub const scrollX = bridge.accessor(Window.getScrollX, null, .{});
     pub const scrollY = bridge.accessor(Window.getScrollY, null, .{});
@@ -790,6 +812,7 @@ pub const JsApi = struct {
     pub const pageYOffset = bridge.accessor(Window.getScrollY, null, .{});
     pub const scrollTo = bridge.function(Window.scrollTo, .{});
     pub const scroll = bridge.function(Window.scrollTo, .{});
+    pub const scrollBy = bridge.function(Window.scrollBy, .{});
 
     // Return false since we don't have secure-context-only APIs implemented
     // (webcam, geolocation, clipboard, etc.)
@@ -807,7 +830,7 @@ pub const JsApi = struct {
 
     pub const alert = bridge.function(struct {
         fn alert(_: *const Window, _: ?[]const u8) void {}
-    }.alert, .{});
+    }.alert, .{ .noop = true });
     pub const confirm = bridge.function(struct {
         fn confirm(_: *const Window, _: ?[]const u8) bool {
             return false;
@@ -823,4 +846,8 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Window" {
     try testing.htmlRunner("window", .{});
+}
+
+test "WebApi: Window scroll" {
+    try testing.htmlRunner("window_scroll.html", .{});
 }

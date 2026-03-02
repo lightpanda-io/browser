@@ -111,7 +111,7 @@
 <script id=legacy>
   {
     let request = new Request("flower.png");
-    testing.expectEqual("http://127.0.0.1:9582/src/browser/tests/net/flower.png", request.url);
+    testing.expectEqual(testing.BASE_URL + 'net/flower.png', request.url);
     testing.expectEqual("GET", request.method);
 
     let request2 = new Request("https://google.com", {

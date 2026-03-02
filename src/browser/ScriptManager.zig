@@ -20,13 +20,14 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
-const js = @import("js/js.zig");
 const log = @import("../log.zig");
+const Http = @import("../http/Http.zig");
+const String = @import("../string.zig").String;
 
+const js = @import("js/js.zig");
 const URL = @import("URL.zig");
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
-const Http = @import("../http/Http.zig");
 
 const Element = @import("webapi/Element.zig");
 
@@ -581,12 +582,6 @@ fn evaluate(self: *ScriptManager) void {
     }
 }
 
-pub fn isDone(self: *const ScriptManager) bool {
-    return self.static_scripts_done and // page is done processing initial html
-        self.defer_scripts.first == null and // no deferred scripts
-        self.async_scripts.first == null; // no async scripts
-}
-
 fn parseImportmap(self: *ScriptManager, script: *const Script) !void {
     const content = script.source.content();
 
@@ -627,7 +622,18 @@ pub const Script = struct {
     node: std.DoublyLinkedList.Node,
     script_element: ?*Element.Html.Script,
     manager: *ScriptManager,
+
+    // for debugging a rare production issue
     header_callback_called: bool = false,
+
+    // for debugging a rare production issue
+    debug_transfer_id: u32 = 0,
+    debug_transfer_tries: u8 = 0,
+    debug_transfer_aborted: bool = false,
+    debug_transfer_bytes_received: usize = 0,
+    debug_transfer_notified_fail: bool = false,
+    debug_transfer_redirecting: bool = false,
+    debug_transfer_intercept_state: u8 = 0,
 
     const Kind = enum {
         module,
@@ -696,8 +702,31 @@ pub const Script = struct {
             // temp debug, trying to figure out why the next assert sometimes
             // fails. Is the buffer just corrupt or is headerCallback really
             // being called twice?
-            lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{});
+            lp.assert(self.header_callback_called == false, "ScriptManager.Header recall", .{
+                .m = @tagName(std.meta.activeTag(self.mode)),
+                .a1 = self.debug_transfer_id,
+                .a2 = self.debug_transfer_tries,
+                .a3 = self.debug_transfer_aborted,
+                .a4 = self.debug_transfer_bytes_received,
+                .a5 = self.debug_transfer_notified_fail,
+                .a6 = self.debug_transfer_redirecting,
+                .a7 = self.debug_transfer_intercept_state,
+                .b1 = transfer.id,
+                .b2 = transfer._tries,
+                .b3 = transfer.aborted,
+                .b4 = transfer.bytes_received,
+                .b5 = transfer._notified_fail,
+                .b6 = transfer._redirecting,
+                .b7 = @intFromEnum(transfer._intercept_state),
+            });
             self.header_callback_called = true;
+            self.debug_transfer_id = transfer.id;
+            self.debug_transfer_tries = transfer._tries;
+            self.debug_transfer_aborted = transfer.aborted;
+            self.debug_transfer_bytes_received = transfer.bytes_received;
+            self.debug_transfer_notified_fail = transfer._notified_fail;
+            self.debug_transfer_redirecting = transfer._redirecting;
+            self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });
@@ -830,12 +859,14 @@ pub const Script = struct {
                     .kind = self.kind,
                     .cacheable = cacheable,
                 });
-                self.executeCallback("error", local.toLocal(script_element._on_error), page);
+                self.executeCallback(comptime .wrap("error"), page);
                 return;
             };
-            self.executeCallback("load", local.toLocal(script_element._on_load), page);
+            self.executeCallback(comptime .wrap("load"), page);
             return;
         }
+
+        defer page._event_manager.clearIgnoreList();
 
         var try_catch: js.TryCatch = undefined;
         try_catch.init(local);
@@ -855,19 +886,18 @@ pub const Script = struct {
         };
 
         if (comptime IS_DEBUG) {
-            log.debug(.browser, "executed script", .{ .src = url, .success = success, .on_load = script_element._on_load != null });
+            log.debug(.browser, "executed script", .{ .src = url, .success = success });
         }
 
         defer {
-            // We should run microtasks even if script execution fails.
-            local.runMicrotasks();
+            local.runMacrotasks(); // also runs microtasks
             _ = page.js.scheduler.run() catch |err| {
                 log.err(.page, "scheduler", .{ .err = err });
             };
         }
 
         if (success) {
-            self.executeCallback("load", local.toLocal(script_element._on_load), page);
+            self.executeCallback(comptime .wrap("load"), page);
             return;
         }
 
@@ -878,14 +908,12 @@ pub const Script = struct {
             .cacheable = cacheable,
         });
 
-        self.executeCallback("error", local.toLocal(script_element._on_error), page);
+        self.executeCallback(comptime .wrap("error"), page);
     }
 
-    fn executeCallback(self: *const Script, comptime typ: []const u8, cb_: ?js.Function, page: *Page) void {
-        const cb = cb_ orelse return;
-
+    fn executeCallback(self: *const Script, typ: String, page: *Page) void {
         const Event = @import("webapi/Event.zig");
-        const event = Event.initTrusted(comptime .wrap(typ), .{}, page) catch |err| {
+        const event = Event.initTrusted(typ, .{}, page) catch |err| {
             log.warn(.js, "script internal callback", .{
                 .url = self.url,
                 .type = typ,
@@ -893,14 +921,11 @@ pub const Script = struct {
             });
             return;
         };
-        defer if (!event._v8_handoff) event.deinit(false);
-
-        var caught: js.TryCatch.Caught = undefined;
-        cb.tryCall(void, .{event}, &caught) catch {
+        page._event_manager.dispatchOpts(self.script_element.?.asNode().asEventTarget(), event, .{ .apply_ignore = true }) catch |err| {
             log.warn(.js, "script callback", .{
                 .url = self.url,
                 .type = typ,
-                .caught = caught,
+                .err = err,
             });
         };
     }
@@ -1020,23 +1045,35 @@ fn parseDataURI(allocator: Allocator, src: []const u8) !?[]const u8 {
 
     const uri = src[5..];
     const data_starts = std.mem.indexOfScalar(u8, uri, ',') orelse return null;
+    const data = uri[data_starts + 1 ..];
 
-    var data = uri[data_starts + 1 ..];
+    const unescaped = try URL.unescape(allocator, data);
 
-    // Extract the encoding.
     const metadata = uri[0..data_starts];
-    if (std.mem.endsWith(u8, metadata, ";base64")) {
-        const decoder = std.base64.standard.Decoder;
-        const decoded_size = try decoder.calcSizeForSlice(data);
-
-        const buffer = try allocator.alloc(u8, decoded_size);
-        errdefer allocator.free(buffer);
-
-        try decoder.decode(buffer, data);
-        data = buffer;
+    if (std.mem.endsWith(u8, metadata, ";base64") == false) {
+        return unescaped;
     }
 
-    return data;
+    // Forgiving base64 decode per WHATWG spec:
+    // https://infra.spec.whatwg.org/#forgiving-base64-decode
+    // Step 1: Remove all ASCII whitespace
+    var stripped = try std.ArrayList(u8).initCapacity(allocator, unescaped.len);
+    for (unescaped) |c| {
+        if (!std.ascii.isWhitespace(c)) {
+            stripped.appendAssumeCapacity(c);
+        }
+    }
+    const trimmed = std.mem.trimRight(u8, stripped.items, "=");
+
+    // Length % 4 == 1 is invalid
+    if (trimmed.len % 4 == 1) {
+        return error.InvalidCharacterError;
+    }
+
+    const decoded_size = std.base64.standard_no_pad.Decoder.calcSizeForSlice(trimmed) catch return error.InvalidCharacterError;
+    const buffer = try allocator.alloc(u8, decoded_size);
+    std.base64.standard_no_pad.Decoder.decode(buffer, trimmed) catch return error.InvalidCharacterError;
+    return buffer;
 }
 
 const testing = @import("../testing.zig");

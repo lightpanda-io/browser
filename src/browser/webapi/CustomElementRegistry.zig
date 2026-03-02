@@ -24,6 +24,7 @@ const Page = @import("../Page.zig");
 
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
+const DOMException = @import("DOMException.zig");
 const Custom = @import("element/html/Custom.zig");
 const CustomElementDefinition = @import("CustomElementDefinition.zig");
 
@@ -124,6 +125,10 @@ pub fn whenDefined(self: *CustomElementRegistry, name: []const u8, page: *Page) 
         return local.resolvePromise(definition.constructor);
     }
 
+    validateName(name) catch |err| {
+        return local.rejectPromise(DOMException.fromError(err) orelse unreachable);
+    };
+
     const gop = try self._when_defined.getOrPut(page.arena, name);
     if (gop.found_existing) {
         return local.toLocal(gop.value_ptr.*).promise();
@@ -200,15 +205,15 @@ pub fn upgradeCustomElement(custom: *Custom, definition: *CustomElementDefinitio
 
 fn validateName(name: []const u8) !void {
     if (name.len == 0) {
-        return error.InvalidCustomElementName;
+        return error.SyntaxError;
     }
 
     if (std.mem.indexOf(u8, name, "-") == null) {
-        return error.InvalidCustomElementName;
+        return error.SyntaxError;
     }
 
     if (name[0] < 'a' or name[0] > 'z') {
-        return error.InvalidCustomElementName;
+        return error.SyntaxError;
     }
 
     const reserved_names = [_][]const u8{
@@ -224,16 +229,20 @@ fn validateName(name: []const u8) !void {
 
     for (reserved_names) |reserved| {
         if (std.mem.eql(u8, name, reserved)) {
-            return error.InvalidCustomElementName;
+            return error.SyntaxError;
         }
     }
 
     for (name) |c| {
-        const valid = (c >= 'a' and c <= 'z') or
-            (c >= '0' and c <= '9') or
-            c == '-';
-        if (!valid) {
-            return error.InvalidCustomElementName;
+        if (c >= 'A' and c <= 'Z') {
+            return error.SyntaxError;
+        }
+
+        // Reject control characters and specific invalid characters
+        // per elementLocalNameRegex: [^\0\t\n\f\r\u0020/>]*
+        switch (c) {
+            0, '\t', '\n', '\r', 0x0C, ' ', '/', '>' => return error.SyntaxError,
+            else => {},
         }
     }
 }
@@ -250,7 +259,7 @@ pub const JsApi = struct {
     pub const define = bridge.function(CustomElementRegistry.define, .{ .dom_exception = true });
     pub const get = bridge.function(CustomElementRegistry.get, .{ .null_as_undefined = true });
     pub const upgrade = bridge.function(CustomElementRegistry.upgrade, .{});
-    pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{});
+    pub const whenDefined = bridge.function(CustomElementRegistry.whenDefined, .{ .dom_exception = true });
 };
 
 const testing = @import("../../testing.zig");

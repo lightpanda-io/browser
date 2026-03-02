@@ -103,3 +103,16 @@
   document.dispatchEvent(new KeyboardEvent('keytest', {key: 'b'}));
   testing.expectEqual(false, keyIsTrusted);
 </script>
+
+<script id=non_keyboard_keydown>
+  // this used to crash
+  {
+    let called = false;
+    const div = document.createElement('div')
+    div.addEventListener('keydown', () => {
+      called = true;
+    });
+    div.dispatchEvent(new Event('keydown'));
+    testing.expectEqual(true, called);
+  }
+</script>

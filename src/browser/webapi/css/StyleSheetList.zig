@@ -30,5 +30,5 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(StyleSheetList.length, null, .{});
-    pub const @"[]" = bridge.indexed(StyleSheetList.item, .{ .null_as_undefined = true });
+    pub const @"[]" = bridge.indexed(StyleSheetList.item, null, .{ .null_as_undefined = true });
 };

@@ -79,12 +79,11 @@ fn initWithTrusted(arena: Allocator, typ: String, opts_: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *ErrorEvent, shutdown: bool) void {
-    const proto = self._proto;
+pub fn deinit(self: *ErrorEvent, shutdown: bool, page: *Page) void {
     if (self._error) |e| {
-        proto._page.js.release(e);
+        page.js.release(e);
     }
-    proto.deinit(shutdown);
+    self._proto.deinit(shutdown, page);
 }
 
 pub fn asEvent(self: *ErrorEvent) *Event {

@@ -129,3 +129,14 @@
   testing.expectEqual(original, serialized);
 }
 </script>
+
+<script id=serializeAttribute>
+{
+  const div = document.createElement('div');
+  div.setAttribute('over', '9000');
+
+  const serializer = new XMLSerializer();
+  const serialized = serializer.serializeToString(div.getAttributeNode('over'));
+  testing.expectEqual('', serialized);
+}
+</script>

@@ -29,6 +29,12 @@
   testing.expectEqual('Text 3', $('#opt3').text)
 </script>
 
+<script id="text_set">
+  $('#opt1').text = 'New Text 1'
+  testing.expectEqual('New Text 1', $('#opt1').text)
+  testing.expectEqual('New Text 1', $('#opt1').textContent)
+</script>
+
 <script id="selected">
   testing.expectEqual(false, $('#opt1').selected)
   testing.expectEqual(true, $('#opt2').selected)

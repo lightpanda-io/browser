@@ -62,7 +62,9 @@ pub fn querySelectorAll(root: *Node, input: []const u8, page: *Page) !*List {
         return error.SyntaxError;
     }
 
-    const arena = page.arena;
+    const arena = try page.getArena(.{ .debug = "querySelectorAll" });
+    errdefer page.releaseArena(arena);
+
     var nodes: std.AutoArrayHashMapUnmanaged(*Node, void) = .empty;
 
     const selectors = try Parser.parseList(arena, input, page);
@@ -70,10 +72,12 @@ pub fn querySelectorAll(root: *Node, input: []const u8, page: *Page) !*List {
         try List.collect(arena, root, selector, &nodes, page);
     }
 
-    return page._factory.create(List{
+    const list = try arena.create(List);
+    list.* = .{
         ._arena = arena,
         ._nodes = nodes.keys(),
-    });
+    };
+    return list;
 }
 
 pub fn matches(el: *Node.Element, input: []const u8, page: *Page) !bool {

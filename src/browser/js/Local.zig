@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const Page = @import("../Page.zig");
 const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
@@ -81,8 +82,14 @@ pub fn createTypedArray(self: *const Local, comptime array_type: js.ArrayType, s
     return .init(self, size);
 }
 
+pub fn runMacrotasks(self: *const Local) void {
+    const env = self.ctx.env;
+    env.pumpMessageLoop();
+    env.runMicrotasks(); // macrotasks can cause microtasks to queue
+}
+
 pub fn runMicrotasks(self: *const Local) void {
-    self.isolate.performMicrotasksCheckpoint();
+    self.ctx.env.runMicrotasks();
 }
 
 // == Executors ==
@@ -216,7 +223,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                     try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), fc);
                 }
 
-                conditionallyFlagHandoff(value);
+                conditionallyReference(value);
                 if (@hasDecl(JsApi.Meta, "weak")) {
                     if (comptime IS_DEBUG) {
                         std.debug.assert(JsApi.Meta.weak == true);
@@ -322,6 +329,7 @@ pub fn zigValueToJs(self: *const Local, value: anytype, comptime opts: CallOpts)
                 },
 
                 inline
+                js.Array,
                 js.Function,
                 js.Object,
                 js.Promise,
@@ -1061,7 +1069,7 @@ const Resolved = struct {
     class_id: u16,
     prototype_chain: []const @import("TaggedOpaque.zig").PrototypeChainEntry,
     finalizer_from_v8: ?*const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void = null,
-    finalizer_from_zig: ?*const fn (ptr: *anyopaque) void = null,
+    finalizer_from_zig: ?*const fn (ptr: *anyopaque, page: *Page) void = null,
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
@@ -1100,14 +1108,14 @@ fn resolveT(comptime T: type, value: *anyopaque) Resolved {
     };
 }
 
-fn conditionallyFlagHandoff(value: anytype) void {
+fn conditionallyReference(value: anytype) void {
     const T = bridge.Struct(@TypeOf(value));
-    if (@hasField(T, "_v8_handoff")) {
-        value._v8_handoff = true;
+    if (@hasDecl(T, "acquireRef")) {
+        value.acquireRef();
         return;
     }
     if (@hasField(T, "_proto")) {
-        conditionallyFlagHandoff(value._proto);
+        conditionallyReference(value._proto);
     }
 }
 
@@ -1208,13 +1216,20 @@ fn _debugValue(self: *const Local, js_val: js.Value, seen: *std.AutoHashMapUnman
         gop.value_ptr.* = {};
     }
 
-    const names_arr = js_obj.getOwnPropertyNames();
-    const len = names_arr.len();
-
     if (depth > 20) {
         return writer.writeAll("...deeply nested object...");
     }
-    const own_len = js_obj.getOwnPropertyNames().len();
+
+    const names_arr = js_obj.getOwnPropertyNames() catch {
+        return writer.writeAll("...invalid object...");
+    };
+    const len = names_arr.len();
+
+    const own_len = blk: {
+        const own_names = js_obj.getOwnPropertyNames() catch break :blk 0;
+        break :blk own_names.len();
+    };
+
     if (own_len == 0) {
         const js_val_str = try js_val.toStringSlice();
         if (js_val_str.len > 2000) {

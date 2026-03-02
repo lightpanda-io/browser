@@ -72,12 +72,11 @@ pub fn initCustomEvent(
     self._detail = detail_;
 }
 
-pub fn deinit(self: *CustomEvent, shutdown: bool) void {
-    const proto = self._proto;
+pub fn deinit(self: *CustomEvent, shutdown: bool, page: *Page) void {
     if (self._detail) |d| {
-        proto._page.js.release(d);
+        page.js.release(d);
     }
-    proto.deinit(shutdown);
+    self._proto.deinit(shutdown, page);
 }
 
 pub fn asEvent(self: *CustomEvent) *Event {

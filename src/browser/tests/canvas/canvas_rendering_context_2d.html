@@ -88,3 +88,15 @@
   ctx.putImageData(imageData, 0, 0, 0, 0, 5, 5);
 }
 </script>
+
+
+<script id="getter">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual('10px sans-serif', ctx.font);
+  ctx.font = 'bold 48px serif'
+  testing.expectEqual('bold 48px serif', ctx.font);
+
+}
+</script>

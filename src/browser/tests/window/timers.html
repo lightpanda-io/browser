@@ -23,7 +23,6 @@
   });
 </script>
 
-
 <script id=setTimeout>
   testing.expectEqual(1, window.setTimeout.length);
   let wst2 = 1;
@@ -31,4 +30,12 @@
     wst2 = a + b;
   }, 1, 2, 3);
   testing.eventually(() => testing.expectEqual(5, wst2));
+</script>
+
+<script id=invalid-timer-clear>
+  // Surprisingly, these don't fail but silently ignored.
+  clearTimeout(-1);
+  clearInterval(-2);
+  clearImmediate(-3);
+  testing.expectEqual(true, true);
 </script>

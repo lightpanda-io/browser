@@ -46,8 +46,8 @@ pub fn Builder(comptime T: type) type {
             return Function.init(T, func, opts);
         }
 
-        pub fn indexed(comptime getter_func: anytype, comptime opts: Indexed.Opts) Indexed {
-            return Indexed.init(T, getter_func, opts);
+        pub fn indexed(comptime getter_func: anytype, comptime enumerator_func: anytype, comptime opts: Indexed.Opts) Indexed {
+            return Indexed.init(T, getter_func, enumerator_func, opts);
         }
 
         pub fn namedIndexed(comptime getter_func: anytype, setter_func: anytype, deleter_func: anytype, comptime opts: NamedIndexed.Opts) NamedIndexed {
@@ -104,11 +104,11 @@ pub fn Builder(comptime T: type) type {
             return entries;
         }
 
-        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool) void) Finalizer {
+        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool, page: *Page) void) Finalizer {
             return .{
                 .from_zig = struct {
-                    fn wrap(ptr: *anyopaque) void {
-                        func(@ptrCast(@alignCast(ptr)), true);
+                    fn wrap(ptr: *anyopaque, page: *Page) void {
+                        func(@ptrCast(@alignCast(ptr)), true, page);
                     }
                 }.wrap,
 
@@ -120,7 +120,7 @@ pub fn Builder(comptime T: type) type {
                         const ctx = fc.ctx;
                         const value_ptr = fc.ptr;
                         if (ctx.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
-                            func(@ptrCast(@alignCast(value_ptr)), false);
+                            func(@ptrCast(@alignCast(value_ptr)), false, ctx.page);
                             ctx.release(value_ptr);
                         } else {
                             // A bit weird, but v8 _requires_ that we release it
@@ -160,6 +160,7 @@ pub const Constructor = struct {
 pub const Function = struct {
     static: bool,
     arity: usize,
+    noop: bool = false,
     cache: ?Caller.Function.Opts.Caching = null,
     func: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
 
@@ -168,13 +169,15 @@ pub const Function = struct {
             .cache = opts.cache,
             .static = opts.static,
             .arity = getArity(@TypeOf(func)),
-            .func = struct {
+            .func = if (opts.noop) noopFunction else struct {
                 fn wrap(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
                     Caller.Function.call(T, handle.?, func, opts);
                 }
             }.wrap,
         };
     }
+
+    pub fn noopFunction(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
 
     fn getArity(comptime T: type) usize {
         var count: usize = 0;
@@ -227,26 +230,44 @@ pub const Accessor = struct {
 
 pub const Indexed = struct {
     getter: *const fn (idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8,
+    enumerator: ?*const fn (handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8,
 
     const Opts = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
     };
 
-    fn init(comptime T: type, comptime getter: anytype, comptime opts: Opts) Indexed {
-        return .{ .getter = struct {
-            fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
-                const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
-                var caller: Caller = undefined;
-                caller.init(v8_isolate);
-                defer caller.deinit();
+    fn init(comptime T: type, comptime getter: anytype, comptime enumerator: anytype, comptime opts: Opts) Indexed {
+        var indexed = Indexed{
+            .enumerator = null,
+            .getter = struct {
+                fn wrap(idx: u32, handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    caller.init(v8_isolate);
+                    defer caller.deinit();
 
-                return caller.getIndex(T, getter, idx, handle.?, .{
-                    .as_typed_array = opts.as_typed_array,
-                    .null_as_undefined = opts.null_as_undefined,
-                });
-            }
-        }.wrap };
+                    return caller.getIndex(T, getter, idx, handle.?, .{
+                        .as_typed_array = opts.as_typed_array,
+                        .null_as_undefined = opts.null_as_undefined,
+                    });
+                }
+            }.wrap,
+        };
+
+        if (@typeInfo(@TypeOf(enumerator)) != .null) {
+            indexed.enumerator = struct {
+                fn wrap(handle: ?*const v8.PropertyCallbackInfo) callconv(.c) u8 {
+                    const v8_isolate = v8.v8__PropertyCallbackInfo__GetIsolate(handle).?;
+                    var caller: Caller = undefined;
+                    caller.init(v8_isolate);
+                    defer caller.deinit();
+                    return caller.getEnumerator(T, enumerator, handle.?, .{});
+                }
+            }.wrap;
+        }
+
+        return indexed;
     }
 };
 
@@ -367,6 +388,7 @@ pub const Callable = struct {
 pub const Property = struct {
     value: Value,
     template: bool,
+    readonly: bool,
 
     const Value = union(enum) {
         null,
@@ -378,27 +400,22 @@ pub const Property = struct {
 
     const Opts = struct {
         template: bool,
+        readonly: bool = true,
     };
 
     fn init(value: Value, opts: Opts) Property {
         return .{
             .value = value,
             .template = opts.template,
+            .readonly = opts.readonly,
         };
-    }
-
-    pub fn getter(handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-        const value = v8.v8__FunctionCallbackInfo__Data(handle.?);
-        var rv: v8.ReturnValue = undefined;
-        v8.v8__FunctionCallbackInfo__GetReturnValue(handle.?, &rv);
-        v8.v8__ReturnValue__Set(rv, value);
     }
 };
 
 const Finalizer = struct {
     // The finalizer wrapper when called fro Zig. This is only called on
     // Context.deinit
-    from_zig: *const fn (ctx: *anyopaque) void,
+    from_zig: *const fn (ctx: *anyopaque, page: *Page) void,
 
     // The finalizer wrapper when called from V8. This may never be called
     // (hence why we fallback to calling in Context.denit). If it is called,
@@ -713,6 +730,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/css/CSSStyleRule.zig"),
     @import("../webapi/css/CSSStyleSheet.zig"),
     @import("../webapi/css/CSSStyleProperties.zig"),
+    @import("../webapi/css/FontFaceSet.zig"),
     @import("../webapi/css/MediaQueryList.zig"),
     @import("../webapi/css/StyleSheetList.zig"),
     @import("../webapi/Document.zig"),
@@ -857,6 +875,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/IdleDeadline.zig"),
     @import("../webapi/Blob.zig"),
     @import("../webapi/File.zig"),
+    @import("../webapi/FileReader.zig"),
     @import("../webapi/Screen.zig"),
     @import("../webapi/VisualViewport.zig"),
     @import("../webapi/PerformanceObserver.zig"),
@@ -865,6 +884,8 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/navigation/NavigationActivation.zig"),
     @import("../webapi/canvas/CanvasRenderingContext2D.zig"),
     @import("../webapi/canvas/WebGLRenderingContext.zig"),
+    @import("../webapi/canvas/OffscreenCanvas.zig"),
+    @import("../webapi/canvas/OffscreenCanvasRenderingContext2D.zig"),
     @import("../webapi/SubtleCrypto.zig"),
     @import("../webapi/Selection.zig"),
     @import("../webapi/ImageData.zig"),

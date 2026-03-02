@@ -24,10 +24,11 @@ params: []const u8 = "",
 // IANA defines max. charset value length as 40.
 // We keep 41 for null-termination since HTML parser expects in this format.
 charset: [41]u8 = default_charset,
-charset_len: usize = 5,
+charset_len: usize = default_charset_len,
 
 /// String "UTF-8" continued by null characters.
-pub const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
+const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
+const default_charset_len = 5;
 
 /// Mime with unknown Content-Type, empty params and empty charset.
 pub const unknown = Mime{ .content_type = .{ .unknown = {} } };
@@ -127,17 +128,17 @@ pub fn parse(input: []u8) !Mime {
 
     const params = trimLeft(normalized[type_len..]);
 
-    var charset: [41]u8 = undefined;
-    var charset_len: usize = undefined;
+    var charset: [41]u8 = default_charset;
+    var charset_len: usize = default_charset_len;
 
     var it = std.mem.splitScalar(u8, params, ';');
     while (it.next()) |attr| {
-        const i = std.mem.indexOfScalarPos(u8, attr, 0, '=') orelse return error.Invalid;
+        const i = std.mem.indexOfScalarPos(u8, attr, 0, '=') orelse continue;
         const name = trimLeft(attr[0..i]);
 
         const value = trimRight(attr[i + 1 ..]);
         if (value.len == 0) {
-            return error.Invalid;
+            continue;
         }
 
         const attribute_name = std.meta.stringToEnum(enum {
@@ -150,7 +151,7 @@ pub fn parse(input: []u8) !Mime {
                     break;
                 }
 
-                const attribute_value = try parseCharset(value);
+                const attribute_value = parseCharset(value) catch continue;
                 @memcpy(charset[0..attribute_value.len], attribute_value);
                 // Null-terminate right after attribute value.
                 charset[attribute_value.len] = 0;
@@ -334,6 +335,19 @@ test "Mime: invalid" {
         "text/ html",
         "text / html",
         "text/html other",
+    };
+
+    for (invalids) |invalid| {
+        const mutable_input = try testing.arena_allocator.dupe(u8, invalid);
+        try testing.expectError(error.Invalid, Mime.parse(mutable_input));
+    }
+}
+
+test "Mime: malformed parameters are ignored" {
+    defer testing.reset();
+
+    // These should all parse successfully as text/html with malformed params ignored
+    const valid_with_malformed_params = [_][]const u8{
         "text/html; x",
         "text/html; x=",
         "text/html; x=  ",
@@ -342,11 +356,13 @@ test "Mime: invalid" {
         "text/html; charset=\"\"",
         "text/html; charset=\"",
         "text/html; charset=\"\\",
+        "text/html;\"",
     };
 
-    for (invalids) |invalid| {
-        const mutable_input = try testing.arena_allocator.dupe(u8, invalid);
-        try testing.expectError(error.Invalid, Mime.parse(mutable_input));
+    for (valid_with_malformed_params) |input| {
+        const mutable_input = try testing.arena_allocator.dupe(u8, input);
+        const mime = try Mime.parse(mutable_input);
+        try testing.expectEqual(.text_html, std.meta.activeTag(mime.content_type));
     }
 }
 
@@ -435,6 +451,12 @@ test "Mime: parse charset" {
         .charset = "custom-non-standard-charset-value",
         .params = "charset=\"custom-non-standard-charset-value\"",
     }, "text/xml;charset=\"custom-non-standard-charset-value\"");
+
+    try expect(.{
+        .content_type = .{ .text_html = {} },
+        .charset = "UTF-8",
+        .params = "x=\"",
+    }, "text/html;x=\"");
 }
 
 test "Mime: isHTML" {

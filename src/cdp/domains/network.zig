@@ -300,29 +300,19 @@ pub const TransferAsRequestWriter = struct {
         self._jsonStringify(jws) catch return error.WriteFailed;
     }
     fn _jsonStringify(self: *const TransferAsRequestWriter, jws: anytype) !void {
-        const writer = jws.writer;
         const transfer = self.transfer;
 
         try jws.beginObject();
         {
             try jws.objectField("url");
-            try jws.beginWriteRaw();
-            try writer.writeByte('\"');
-            // #ZIGDOM shouldn't include the hash?
-            try writer.writeAll(transfer.url);
-            try writer.writeByte('\"');
-            jws.endWriteRaw();
+            try jws.write(transfer.url);
         }
 
         {
             const frag = URL.getHash(transfer.url);
             if (frag.len > 0) {
                 try jws.objectField("urlFragment");
-                try jws.beginWriteRaw();
-                try writer.writeAll("\"#");
-                try writer.writeAll(frag);
-                try writer.writeByte('\"');
-                jws.endWriteRaw();
+                try jws.write(frag);
             }
         }
 
@@ -366,18 +356,12 @@ const TransferAsResponseWriter = struct {
     }
 
     fn _jsonStringify(self: *const TransferAsResponseWriter, jws: anytype) !void {
-        const writer = jws.writer;
         const transfer = self.transfer;
 
         try jws.beginObject();
         {
             try jws.objectField("url");
-            try jws.beginWriteRaw();
-            try writer.writeByte('\"');
-            // #ZIGDOM shouldn't include the hash?
-            try writer.writeAll(transfer.url);
-            try writer.writeByte('\"');
-            jws.endWriteRaw();
+            try jws.write(transfer.url);
         }
 
         if (transfer.response_header) |*rh| {

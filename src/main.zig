@@ -115,7 +115,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 .dump_mode = opts.dump_mode,
                 .dump = .{
                     .strip = opts.strip,
-                    .with_base = opts.withbase,
+                    .with_base = opts.with_base,
+                    .with_frames = opts.with_frames,
                 },
             };
 

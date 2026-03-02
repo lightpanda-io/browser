@@ -20,6 +20,7 @@ const std = @import("std");
 pub const App = @import("App.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
+pub const URL = @import("browser/URL.zig");
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
@@ -37,7 +38,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
-    dump: dump.RootOpts,
+    dump: dump.Opts,
     dump_mode: ?Config.DumpFormat = null,
     writer: ?*std.Io.Writer = null,
 };
@@ -93,7 +94,8 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     //     }
     // }
 
-    _ = try page.navigate(url, .{
+    const encoded_url = try URL.ensureEncoded(page.call_arena, url);
+    _ = try page.navigate(encoded_url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     });
@@ -104,9 +106,60 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         switch (mode) {
             .html => try dump.root(page.window._document, opts.dump, writer, page),
             .markdown => try markdown.dump(page.window._document.asNode(), .{}, writer, page),
+            .wpt => try dumpWPT(page, writer),
         }
     }
     try writer.flush();
+}
+
+fn dumpWPT(page: *Page, writer: *std.Io.Writer) !void {
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    // return the detailed result.
+    const dump_script =
+        \\ JSON.stringify((() => {
+        \\   const statuses = ['Pass', 'Fail', 'Timeout', 'Not Run', 'Optional Feature Unsupported'];
+        \\   const parse = (raw) => {
+        \\     for (const status of statuses) {
+        \\       const idx = raw.indexOf('|' + status);
+        \\       if (idx !== -1) {
+        \\         const name = raw.slice(0, idx);
+        \\         const rest = raw.slice(idx + status.length + 1);
+        \\         const message = rest.length > 0 && rest[0] === '|' ? rest.slice(1) : null;
+        \\         return { name, status, message };
+        \\       }
+        \\     }
+        \\     return { name: raw, status: 'Unknown', message: null };
+        \\   };
+        \\   const cases = Object.values(report.cases).map(parse);
+        \\   return {
+        \\     url: window.location.href,
+        \\     status: report.status,
+        \\     message: report.message,
+        \\     summary: {
+        \\       total: cases.length,
+        \\       passed: cases.filter(c => c.status === 'Pass').length,
+        \\       failed: cases.filter(c => c.status === 'Fail').length,
+        \\       timeout: cases.filter(c => c.status === 'Timeout').length,
+        \\       notrun: cases.filter(c => c.status === 'Not Run').length,
+        \\       unsupported: cases.filter(c => c.status === 'Optional Feature Unsupported').length
+        \\     },
+        \\     cases
+        \\   };
+        \\ })(), null, 2)
+    ;
+    const value = ls.local.exec(dump_script, "dump_script") catch |err| {
+        const caught = try_catch.caughtOrError(page.call_arena, err);
+        return writer.print("Caught error trying to access WPT's report: {f}\n", .{caught});
+    };
+    try writer.writeAll("== WPT Results==\n");
+    try writer.writeAll(try value.toStringSliceWithAlloc(page.call_arena));
 }
 
 pub inline fn assert(ok: bool, comptime ctx: []const u8, args: anytype) void {

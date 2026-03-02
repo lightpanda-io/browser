@@ -143,6 +143,29 @@
 }
 </script>
 
+<script id="js_setter_null_clears_listener">
+{
+    // Setting an event handler property to null must silently clear it (not throw).
+    // Browsers also accept undefined and non-function values without throwing.
+    const div = document.createElement('div');
+
+    div.onload = () => 42;
+    testing.expectEqual('function', typeof div.onload);
+
+    // Setting to null removes the listener; getter returns null
+    div.onload = null;
+    testing.expectEqual(null, div.onload);
+
+    div.onerror = () => {};
+    div.onerror = null;
+    testing.expectEqual(null, div.onerror);
+
+    div.onclick = () => {};
+    div.onclick = null;
+    testing.expectEqual(null, div.onclick);
+}
+</script>
+
 <script id="different_event_types_independent">
 {
     // Test that different event types are stored independently

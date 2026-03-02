@@ -27,6 +27,10 @@ const public_suffix_list = @import("../../../data/public_suffix_list.zig").looku
 
 const Cookie = @This();
 
+const max_cookie_size = 4 * 1024;
+const max_cookie_header_size = 8 * 1024;
+const max_jar_size = 1024;
+
 arena: ArenaAllocator,
 name: []const u8,
 value: []const u8,
@@ -62,6 +66,10 @@ pub fn deinit(self: *const Cookie) void {
 // Duplicate attributes - use the last valid
 // Value-less attributes with a value? Ignore the value
 pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
+    if (str.len > max_cookie_header_size) {
+        return error.CookieHeaderSizeExceeded;
+    }
+
     try validateCookieString(str);
 
     const cookie_name, const cookie_value, const rest = parseNameValue(str) catch {
@@ -117,6 +125,10 @@ pub fn parse(allocator: Allocator, url: [:0]const u8, str: []const u8) !Cookie {
 
     if (same_site == .none and secure == null) {
         return error.InsecureSameSite;
+    }
+
+    if (cookie_value.len > max_cookie_size) {
+        return error.CookieSizeExceeded;
     }
 
     var arena = ArenaAllocator.init(allocator);
@@ -415,6 +427,13 @@ pub const Jar = struct {
             cookie.deinit();
         };
 
+        if (self.cookies.items.len >= max_jar_size) {
+            return error.CookieJarQuotaExceeded;
+        }
+        if (cookie.value.len > max_cookie_size) {
+            return error.CookieSizeExceeded;
+        }
+
         for (self.cookies.items, 0..) |*c, i| {
             if (areCookiesEqual(&cookie, c)) {
                 c.deinit();
@@ -633,6 +652,57 @@ test "Jar: add" {
 
     try jar.add(try Cookie.parse(testing.allocator, test_url, "over=x;Path=/other;Max-Age=-200"), now);
     try expectCookies(&.{ .{ "over", "9000!!" }, .{ "spice", "flows" }, .{ "over", "9002" } }, jar);
+}
+
+test "Jar: add limit" {
+    var jar = Jar.init(testing.allocator);
+    defer jar.deinit();
+
+    const now = std.time.timestamp();
+
+    // add a too big cookie value.
+    try testing.expectError(error.CookieSizeExceeded, jar.add(.{
+        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .name = "v",
+        .domain = "lightpanda.io",
+        .path = "/",
+        .expires = null,
+        .value = "v" ** 4096 ++ "v",
+    }, now));
+
+    // generate unique names.
+    const names = comptime blk: {
+        @setEvalBranchQuota(max_jar_size);
+        var result: [max_jar_size][]const u8 = undefined;
+        for (0..max_jar_size) |i| {
+            result[i] = "v" ** i;
+        }
+        break :blk result;
+    };
+
+    // test the max number limit
+    var i: usize = 0;
+    while (i < max_jar_size) : (i += 1) {
+        const c = Cookie{
+            .arena = std.heap.ArenaAllocator.init(testing.allocator),
+            .name = names[i],
+            .domain = "lightpanda.io",
+            .path = "/",
+            .expires = null,
+            .value = "v",
+        };
+
+        try jar.add(c, now);
+    }
+
+    try testing.expectError(error.CookieJarQuotaExceeded, jar.add(.{
+        .arena = std.heap.ArenaAllocator.init(testing.allocator),
+        .name = "last",
+        .domain = "lightpanda.io",
+        .path = "/",
+        .expires = null,
+        .value = "v",
+    }, now));
 }
 
 test "Jar: forRequest" {
@@ -957,6 +1027,11 @@ test "Cookie: parse domain" {
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.io");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.lightpanda.com");
     try expectError(error.InvalidDomain, "http://lightpanda.io/", "b;domain=other.example.com");
+}
+
+test "Cookie: parse limit" {
+    try expectError(error.CookieHeaderSizeExceeded, "http://lightpanda.io/", "v" ** 8192 ++ ";domain=lightpanda.io");
+    try expectError(error.CookieSizeExceeded, "http://lightpanda.io/", "v" ** 4096 ++ "v;domain=lightpanda.io");
 }
 
 const ExpectedCookie = struct {

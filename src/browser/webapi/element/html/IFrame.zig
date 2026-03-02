@@ -50,7 +50,7 @@ pub fn getContentDocument(self: *const IFrame) ?*Document {
 
 pub fn getSrc(self: *const IFrame, page: *Page) ![:0]const u8 {
     if (self._src.len == 0) return "";
-    return try URL.resolve(page.call_arena, page.base(), self._src, .{});
+    return try URL.resolve(page.call_arena, page.base(), self._src, .{ .encode = true });
 }
 
 pub fn setSrc(self: *IFrame, src: []const u8, page: *Page) !void {

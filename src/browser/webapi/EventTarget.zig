@@ -43,6 +43,7 @@ pub const Type = union(enum) {
     screen: *@import("Screen.zig"),
     screen_orientation: *@import("Screen.zig").Orientation,
     visual_viewport: *@import("VisualViewport.zig"),
+    file_reader: *@import("FileReader.zig"),
 };
 
 pub fn init(page: *Page) !*EventTarget {
@@ -55,7 +56,10 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
     if (event._event_phase != .none) {
         return error.InvalidStateError;
     }
-    event._isTrusted = false;
+    event._is_trusted = false;
+
+    event.acquireRef();
+    defer event.deinit(false, page);
     try page._event_manager.dispatch(self, event);
     return !event._cancelable or !event._prevent_default;
 }
@@ -151,6 +155,7 @@ pub fn toString(self: *EventTarget) []const u8 {
         .screen => return "[object Screen]",
         .screen_orientation => return "[object ScreenOrientation]",
         .visual_viewport => return "[object VisualViewport]",
+        .file_reader => return "[object FileReader]",
     };
 }
 

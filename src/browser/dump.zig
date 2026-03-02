@@ -20,16 +20,15 @@ const std = @import("std");
 const Page = @import("Page.zig");
 const Node = @import("webapi/Node.zig");
 const Slot = @import("webapi/element/html/Slot.zig");
+const IFrame = @import("webapi/element/html/IFrame.zig");
 
-pub const RootOpts = struct {
-    with_base: bool = false,
-    strip: Opts.Strip = .{},
-    shadow: Opts.Shadow = .rendered,
-};
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const Opts = struct {
-    strip: Strip = .{},
-    shadow: Shadow = .rendered,
+    with_base: bool = false,
+    with_frames: bool = false,
+    strip: Opts.Strip = .{},
+    shadow: Opts.Shadow = .rendered,
 
     pub const Strip = struct {
         js: bool = false,
@@ -49,7 +48,7 @@ pub const Opts = struct {
     };
 };
 
-pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *Page) !void {
+pub fn root(doc: *Node.Document, opts: Opts, writer: *std.Io.Writer, page: *Page) !void {
     if (doc.is(Node.Document.HTMLDocument)) |html_doc| {
         blk: {
             // Ideally we just render the doctype which is part of the document
@@ -71,7 +70,7 @@ pub fn root(doc: *Node.Document, opts: RootOpts, writer: *std.Io.Writer, page: *
         }
     }
 
-    return deep(doc.asNode(), .{ .strip = opts.strip, .shadow = opts.shadow }, writer, page);
+    return deep(doc.asNode(), opts, writer, page);
 }
 
 pub fn deep(node: *Node, opts: Opts, writer: *std.Io.Writer, page: *Page) error{WriteFailed}!void {
@@ -83,19 +82,19 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
         .cdata => |cd| {
             if (node.is(Node.CData.Comment)) |_| {
                 try writer.writeAll("<!--");
-                try writer.writeAll(cd.getData());
+                try writer.writeAll(cd.getData().str());
                 try writer.writeAll("-->");
             } else if (node.is(Node.CData.ProcessingInstruction)) |pi| {
                 try writer.writeAll("<?");
                 try writer.writeAll(pi._target);
                 try writer.writeAll(" ");
-                try writer.writeAll(cd.getData());
+                try writer.writeAll(cd.getData().str());
                 try writer.writeAll("?>");
             } else {
                 if (shouldEscapeText(node._parent)) {
-                    try writeEscapedText(cd.getData(), writer);
+                    try writeEscapedText(cd.getData().str(), writer);
                 } else {
-                    try writer.writeAll(cd.getData());
+                    try writer.writeAll(cd.getData().str());
                 }
             }
         },
@@ -140,7 +139,24 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
                 }
             }
 
-            try children(node, opts, writer, page);
+            if (opts.with_frames and el.is(IFrame) != null) {
+                const frame = el.as(IFrame);
+                if (frame.getContentDocument()) |doc| {
+                    // A frame's document should always ahave a page, but
+                    // I'm not willing to crash a release build on that assertion.
+                    if (comptime IS_DEBUG) {
+                        std.debug.assert(doc._page != null);
+                    }
+                    if (doc._page) |frame_page| {
+                        try writer.writeByte('\n');
+                        root(doc, opts, writer, frame_page) catch return error.WriteFailed;
+                        try writer.writeByte('\n');
+                    }
+                }
+            } else {
+                try children(node, opts, writer, page);
+            }
+
             if (!isVoidElement(el)) {
                 try writer.writeAll("</");
                 try writer.writeAll(el.getTagNameDump());
@@ -172,7 +188,11 @@ fn _deep(node: *Node, opts: Opts, comptime force_slot: bool, writer: *std.Io.Wri
             try writer.writeAll(">\n");
         },
         .document_fragment => try children(node, opts, writer, page),
-        .attribute => unreachable,
+        .attribute => {
+            // Not called normally, but can be called via XMLSerializer.serializeToString
+            // in which case it should return an empty string
+            try writer.writeAll("");
+        },
     }
 }
 
@@ -293,6 +313,12 @@ fn shouldEscapeText(node_: ?*Node) bool {
     const node = node_ orelse return true;
     if (node.is(Node.Element.Html.Script) != null) {
         return false;
+    }
+    // When scripting is enabled, <noscript> is a raw text element per the HTML spec
+    // (https://html.spec.whatwg.org/multipage/parsing.html#serialising-html-fragments).
+    // Its text content must not be HTML-escaped during serialization.
+    if (node.is(Node.Element.Html.Generic)) |generic| {
+        if (generic._tag == .noscript) return false;
     }
     return true;
 }

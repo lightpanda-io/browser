@@ -52,7 +52,6 @@ pub fn setOnSelectionChange(self: *TextArea, listener: ?js.Function) !void {
 
 fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
     const event = try Event.init("selectionchange", .{ .bubbles = true }, page);
-    defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
@@ -89,18 +88,16 @@ pub fn getDefaultValue(self: *const TextArea) []const u8 {
 }
 
 pub fn setDefaultValue(self: *TextArea, value: []const u8, page: *Page) !void {
-    const owned = try page.dupeString(value);
-
     const node = self.asNode();
     if (node.firstChild()) |child| {
         if (child.is(Node.CData.Text)) |txt| {
-            txt._proto._data = owned;
+            txt._proto._data = try page.dupeSSO(value);
             return;
         }
     }
 
     // No text child exists, create one
-    const text_node = try page.createTextNode(owned);
+    const text_node = try page.createTextNode(value);
     _ = try node.appendChild(text_node, page);
 }
 
@@ -140,7 +137,6 @@ pub fn select(self: *TextArea, page: *Page) !void {
     const len = if (self._value) |v| @as(u32, @intCast(v.len)) else 0;
     try self.setSelectionRange(0, len, null, page);
     const event = try Event.init("select", .{ .bubbles = true }, page);
-    defer if (!event._v8_handoff) event.deinit(false);
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 

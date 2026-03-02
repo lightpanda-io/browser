@@ -122,14 +122,6 @@ pub const Extension = union(enum) {
             pub const UNMASKED_VENDOR_WEBGL: u64 = 0x9245;
             pub const UNMASKED_RENDERER_WEBGL: u64 = 0x9246;
 
-            pub fn getUnmaskedVendorWebGL(_: *const WEBGL_debug_renderer_info) u64 {
-                return UNMASKED_VENDOR_WEBGL;
-            }
-
-            pub fn getUnmaskedRendererWebGL(_: *const WEBGL_debug_renderer_info) u64 {
-                return UNMASKED_RENDERER_WEBGL;
-            }
-
             pub const JsApi = struct {
                 pub const bridge = js.Bridge(WEBGL_debug_renderer_info);
 
@@ -140,8 +132,8 @@ pub const Extension = union(enum) {
                     pub var class_id: bridge.ClassId = undefined;
                 };
 
-                pub const UNMASKED_VENDOR_WEBGL = bridge.accessor(WEBGL_debug_renderer_info.getUnmaskedVendorWebGL, null, .{});
-                pub const UNMASKED_RENDERER_WEBGL = bridge.accessor(WEBGL_debug_renderer_info.getUnmaskedRendererWebGL, null, .{});
+                pub const UNMASKED_VENDOR_WEBGL = bridge.property(WEBGL_debug_renderer_info.UNMASKED_VENDOR_WEBGL, .{ .template = false, .readonly = true });
+                pub const UNMASKED_RENDERER_WEBGL = bridge.property(WEBGL_debug_renderer_info.UNMASKED_RENDERER_WEBGL, .{ .template = false, .readonly = true });
             };
         };
 
@@ -160,8 +152,8 @@ pub const Extension = union(enum) {
                     pub var class_id: bridge.ClassId = undefined;
                 };
 
-                pub const loseContext = bridge.function(WEBGL_lose_context.loseContext, .{});
-                pub const restoreContext = bridge.function(WEBGL_lose_context.restoreContext, .{});
+                pub const loseContext = bridge.function(WEBGL_lose_context.loseContext, .{ .noop = true });
+                pub const restoreContext = bridge.function(WEBGL_lose_context.restoreContext, .{ .noop = true });
             };
         };
     };

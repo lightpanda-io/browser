@@ -546,14 +546,14 @@
   {
     const sel = window.getSelection();
     sel.removeAllRanges();
-
     let eventCount = 0;
     let lastEvent = null;
 
-    document.addEventListener('selectionchange', (e) => {
+    const listener = (e) => {
       eventCount++;
       lastEvent = e;
-    });
+    };
+    document.addEventListener('selectionchange', listener);
 
     const p1 = document.getElementById("p1");
     const textNode = p1.firstChild;
@@ -563,26 +563,24 @@
     sel.extend(textNode, 10);
     sel.collapseToStart();
     sel.collapseToEnd();
-
     sel.removeAllRanges();
     const range = document.createRange();
     range.setStart(textNode, 4);
     range.setEnd(textNode, 15);
     sel.addRange(range);
-
     sel.removeRange(range);
-
     const newRange = document.createRange();
     newRange.selectNodeContents(p1);
     sel.addRange(newRange);
     sel.removeAllRanges();
-
     sel.selectAllChildren(nested);
     sel.setBaseAndExtent(textNode, 4, textNode, 15);
-
     sel.collapse(textNode, 5);
     sel.extend(textNode, 10);
     sel.deleteFromDocument();
+
+    document.removeEventListener('selectionchange', listener);
+    textNode.textContent = "The quick brown fox";
 
     testing.eventually(() => {
       testing.expectEqual(14, eventCount);
@@ -591,5 +589,151 @@
       testing.expectEqual(false, lastEvent.bubbles);
       testing.expectEqual(false, lastEvent.cancelable);
     });
+  }
+</script>
+
+<script id=modifyCharacterForward>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    const textNode = p1.firstChild; // "The quick brown fox"
+
+    // Collapse to position 4 (after "The ")
+    sel.collapse(textNode, 4);
+    testing.expectEqual(4, sel.anchorOffset);
+
+    // Move forward one character
+    sel.modify("move", "forward", "character");
+    testing.expectEqual(5, sel.anchorOffset);
+    testing.expectEqual(true, sel.isCollapsed);
+    testing.expectEqual("none", sel.direction);
+
+    // Move forward again
+    sel.modify("move", "forward", "character");
+    testing.expectEqual(6, sel.anchorOffset);
+  }
+</script>
+
+<script id=modifyWordForward>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    const textNode = p1.firstChild; // "The quick brown fox"
+
+    // Collapse to start
+    sel.collapse(textNode, 0);
+
+    // Move forward one word - should land at end of "The"
+    sel.modify("move", "forward", "word");
+    testing.expectEqual(3, sel.anchorOffset);
+    testing.expectEqual(true, sel.isCollapsed);
+
+    // Move forward again - should skip space and land at end of "quick"
+    sel.modify("move", "forward", "word");
+    testing.expectEqual(9, sel.anchorOffset);
+  }
+</script>
+
+<script id=modifyCharacterBackward>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    const textNode = p1.firstChild; // "The quick brown fox"
+
+    // Collapse to position 6
+    sel.collapse(textNode, 6);
+    testing.expectEqual(6, sel.anchorOffset);
+
+    // Move backward one character
+    sel.modify("move", "backward", "character");
+    testing.expectEqual(5, sel.anchorOffset);
+    testing.expectEqual(true, sel.isCollapsed);
+    testing.expectEqual("none", sel.direction);
+
+    // Move backward again
+    sel.modify("move", "backward", "character");
+    testing.expectEqual(4, sel.anchorOffset);
+  }
+</script>
+
+<script id=modifyWordBackward>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    const textNode = p1.firstChild; // "The quick brown fox"
+
+    // Collapse to end of "quick" (offset 9)
+    sel.collapse(textNode, 9);
+
+    // Move backward one word - should land at start of "quick"
+    sel.modify("move", "backward", "word");
+    testing.expectEqual(4, sel.anchorOffset);
+    testing.expectEqual(true, sel.isCollapsed);
+
+    // Move backward again - should land at start of "The"
+    sel.modify("move", "backward", "word");
+    testing.expectEqual(0, sel.anchorOffset);
+  }
+</script>
+
+<script id=modifyCharacterForwardFromElementNode>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    sel.collapse(p1, 1);
+
+    testing.expectEqual(p1, sel.anchorNode);
+    testing.expectEqual(1, sel.anchorOffset);
+    testing.expectEqual(true, sel.isCollapsed);
+
+    sel.modify("move", "forward", "character");
+
+    testing.expectEqual(3, sel.anchorNode.nodeType);
+    testing.expectEqual(true, sel.anchorNode !== p1.firstChild);
+  }
+</script>
+
+<script id=modifyCharacterForwardFromElementNodeMidChildren>
+  {
+    const sel = window.getSelection();
+    const nested = document.getElementById("nested");
+
+    sel.collapse(nested, nested.childNodes.length);
+
+    testing.expectEqual(nested, sel.anchorNode);
+    testing.expectEqual(nested.childNodes.length, sel.anchorOffset);
+
+    sel.modify("move", "forward", "character");
+
+    // Must land on a text node strictly after #nested
+    testing.expectEqual(3, sel.anchorNode.nodeType);
+    testing.expectEqual(false, nested.contains(sel.anchorNode));
+  }
+</script>
+
+<script id=modifyWordForwardFromElementNode>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+    sel.collapse(p1, 1);
+
+    sel.modify("move", "forward", "word");
+
+    // Must land on a text node strictly after p1
+    testing.expectEqual(3, sel.anchorNode.nodeType);
+    testing.expectEqual(false, p1.contains(sel.anchorNode));
+    testing.expectEqual(true, sel.isCollapsed);
+  }
+</script>
+
+<script id=modifyCharacterForwardNewNodeOffsetNotElement>
+  {
+    const sel = window.getSelection();
+    const p1 = document.getElementById("p1");
+
+    sel.collapse(p1, 1);
+    sel.modify("move", "forward", "character");
+
+    testing.expectEqual(3, sel.anchorNode.nodeType);
   }
 </script>

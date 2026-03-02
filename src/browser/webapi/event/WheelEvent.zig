@@ -86,8 +86,8 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*WheelEvent {
     return event;
 }
 
-pub fn deinit(self: *WheelEvent, shutdown: bool) void {
-    self._proto.deinit(shutdown);
+pub fn deinit(self: *WheelEvent, shutdown: bool, page: *Page) void {
+    self._proto.deinit(shutdown, page);
 }
 
 pub fn asEvent(self: *WheelEvent) *Event {

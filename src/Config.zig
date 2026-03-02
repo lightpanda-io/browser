@@ -191,13 +191,15 @@ pub const Mcp = struct {
 pub const DumpFormat = enum {
     html,
     markdown,
+    wpt,
 };
 
 pub const Fetch = struct {
     url: [:0]const u8,
     dump_mode: ?DumpFormat = null,
     common: Common = .{},
-    withbase: bool = false,
+    with_base: bool = false,
+    with_frames: bool = false,
     strip: dump.Opts.Strip = .{},
 };
 
@@ -348,6 +350,8 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\--with_base     Add a <base> tag in dump. Defaults to false.
         \\
+        \\--with_frames   Includes the contents of iframes. Defaults to false.
+        \\
     ++ common_options ++
         \\
         \\serve command
@@ -451,6 +455,10 @@ fn inferMode(opt: []const u8) ?RunMode {
     }
 
     if (std.mem.eql(u8, opt, "--with_base")) {
+        return .fetch;
+    }
+
+    if (std.mem.eql(u8, opt, "--with_frames")) {
         return .fetch;
     }
 
@@ -571,7 +579,8 @@ fn parseFetchArgs(
     args: *std.process.ArgIterator,
 ) !Fetch {
     var dump_mode: ?DumpFormat = null;
-    var withbase: bool = false;
+    var with_base: bool = false;
+    var with_frames: bool = false;
     var url: ?[:0]const u8 = null;
     var common: Common = .{};
     var strip: dump.Opts.Strip = .{};
@@ -602,7 +611,12 @@ fn parseFetchArgs(
         }
 
         if (std.mem.eql(u8, "--with_base", opt)) {
-            withbase = true;
+            with_base = true;
+            continue;
+        }
+
+        if (std.mem.eql(u8, "--with_frames", opt)) {
+            with_frames = true;
             continue;
         }
 
@@ -658,7 +672,8 @@ fn parseFetchArgs(
         .dump_mode = dump_mode,
         .strip = strip,
         .common = common,
-        .withbase = withbase,
+        .with_base = with_base,
+        .with_frames = with_frames,
     };
 }
 

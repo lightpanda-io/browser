@@ -57,7 +57,7 @@ pub noinline fn crash(
                 std.debug.dumpCurrentStackTraceToWriter(begin_addr, writer) catch abort();
             }
 
-            report(reason, begin_addr) catch {};
+            report(reason, begin_addr, args) catch {};
         },
         1 => {
             panic_level = 2;
@@ -71,7 +71,7 @@ pub noinline fn crash(
     abort();
 }
 
-fn report(reason: []const u8, begin_addr: usize) !void {
+fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
     if (comptime IS_DEBUG) {
         return;
     }
@@ -99,18 +99,24 @@ fn report(reason: []const u8, begin_addr: usize) !void {
         break :blk writer.buffered();
     };
 
-    var stack_buffer: [4096]u8 = undefined;
-    const stack = blk: {
-        var writer: std.Io.Writer = .fixed(stack_buffer[0..4095]); // reserve 1 space
+    var body_buffer: [8192]u8 = undefined;
+    const body = blk: {
+        var writer: std.Io.Writer = .fixed(body_buffer[0..8191]); // reserve 1 space
+        inline for (@typeInfo(@TypeOf(args)).@"struct".fields) |f| {
+            writer.writeAll(f.name ++ ": ") catch break;
+            @import("log.zig").writeValue(.pretty, @field(args, f.name), &writer) catch {};
+            writer.writeByte('\n') catch {};
+        }
+
         std.debug.dumpCurrentStackTraceToWriter(begin_addr, &writer) catch {};
         const written = writer.buffered();
         if (written.len == 0) {
             break :blk "???";
         }
         // Overwrite the last character with our null terminator
-        // stack_buffer always has to be > written
-        stack_buffer[written.len] = 0;
-        break :blk stack_buffer[0 .. written.len + 1];
+        // body_buffer always has to be > written
+        body_buffer[written.len] = 0;
+        break :blk body_buffer[0 .. written.len + 1];
     };
 
     var argv = [_:null]?[*:0]const u8{
@@ -119,7 +125,7 @@ fn report(reason: []const u8, begin_addr: usize) !void {
         "-H",
         "Content-Type: application/octet-stream",
         "--data-binary",
-        stack[0 .. stack.len - 1 :0],
+        body[0 .. body.len - 1 :0],
         url[0 .. url.len - 1 :0],
     };
 

@@ -98,6 +98,8 @@ fn performSearch(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     const list = try Selector.querySelectorAll(page.window._document.asNode(), params.query, page);
+    defer list.deinit(page);
+
     const search = try bc.node_search_list.create(list._nodes);
 
     // dispatch setChildNodesEvents to inform the client of the subpart of node
@@ -247,6 +249,8 @@ fn querySelectorAll(cmd: anytype) !void {
     };
 
     const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, page);
+    defer selected_nodes.deinit(page);
+
     const nodes = selected_nodes._nodes;
 
     const node_ids = try cmd.arena.alloc(Node.Id, nodes.len);

@@ -53,8 +53,8 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*CompositionEvent {
     return event;
 }
 
-pub fn deinit(self: *CompositionEvent, shutdown: bool) void {
-    self._proto.deinit(shutdown);
+pub fn deinit(self: *CompositionEvent, shutdown: bool, page: *Page) void {
+    self._proto.deinit(shutdown, page);
 }
 
 pub fn asEvent(self: *CompositionEvent) *Event {

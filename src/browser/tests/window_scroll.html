@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=scrollBy_exists>
+  testing.expectEqual('function', typeof window.scrollBy);
+</script>
+
+<script id=scrollBy_xy>
+  window.scrollTo(0, 0);
+  testing.expectEqual(0, window.scrollX);
+  testing.expectEqual(0, window.scrollY);
+  window.scrollBy(100, 200);
+  testing.expectEqual(100, window.scrollX);
+  testing.expectEqual(200, window.scrollY);
+</script>
+
+<script id=scrollBy_relative>
+  window.scrollTo(100, 100);
+  window.scrollBy(50, 50);
+  testing.expectEqual(150, window.scrollX);
+  testing.expectEqual(150, window.scrollY);
+</script>
+
+<script id=scrollBy_opts>
+  window.scrollTo(0, 0);
+  window.scrollBy({ left: 30, top: 40 });
+  testing.expectEqual(30, window.scrollX);
+  testing.expectEqual(40, window.scrollY);
+</script>
+
+<script id=scrollBy_negative_clamp>
+  window.scrollTo(10, 10);
+  window.scrollBy(-100, -100);
+  testing.expectEqual(0, window.scrollX);
+  testing.expectEqual(0, window.scrollY);
+</script>

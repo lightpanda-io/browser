@@ -87,19 +87,29 @@ pub fn closeSession(self: *Browser) void {
     }
 }
 
-pub fn runMicrotasks(self: *const Browser) void {
+pub fn runMicrotasks(self: *Browser) void {
     self.env.runMicrotasks();
 }
 
 pub fn runMacrotasks(self: *Browser) !?u64 {
-    return try self.env.runMacrotasks();
+    const env = &self.env;
+
+    const time_to_next = try self.env.runMacrotasks();
+    env.pumpMessageLoop();
+
+    // either of the above could have queued more microtasks
+    env.runMicrotasks();
+
+    return time_to_next;
 }
 
-pub fn runMessageLoop(self: *const Browser) void {
-    while (self.env.pumpMessageLoop()) {
-        if (comptime IS_DEBUG) {
-            log.debug(.browser, "pumpMessageLoop", .{});
-        }
-    }
+pub fn hasBackgroundTasks(self: *Browser) bool {
+    return self.env.hasBackgroundTasks();
+}
+pub fn waitForBackgroundTasks(self: *Browser) void {
+    self.env.waitForBackgroundTasks();
+}
+
+pub fn runIdleTasks(self: *const Browser) void {
     self.env.runIdleTasks();
 }

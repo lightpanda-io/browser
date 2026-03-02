@@ -868,12 +868,10 @@ pub fn focus(self: *Element, page: *Page) !void {
 
         // Dispatch blur on old element (no bubble, composed)
         const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true, .relatedTarget = new_target }, page);
-        defer if (!blur_event.asEvent()._v8_handoff) blur_event.deinit(false);
         try page._event_manager.dispatch(old_target, blur_event.asEvent());
 
         // Dispatch focusout on old element (bubbles, composed)
         const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, page);
-        defer if (!focusout_event.asEvent()._v8_handoff) focusout_event.deinit(false);
         try page._event_manager.dispatch(old_target, focusout_event.asEvent());
     }
 
@@ -881,12 +879,10 @@ pub fn focus(self: *Element, page: *Page) !void {
 
     // Dispatch focus on new element (no bubble, composed)
     const focus_event = try FocusEvent.initTrusted(comptime .wrap("focus"), .{ .composed = true, .relatedTarget = old_related }, page);
-    defer if (!focus_event.asEvent()._v8_handoff) focus_event.deinit(false);
     try page._event_manager.dispatch(new_target, focus_event.asEvent());
 
     // Dispatch focusin on new element (bubbles, composed)
     const focusin_event = try FocusEvent.initTrusted(comptime .wrap("focusin"), .{ .bubbles = true, .composed = true, .relatedTarget = old_related }, page);
-    defer if (!focusin_event.asEvent()._v8_handoff) focusin_event.deinit(false);
     try page._event_manager.dispatch(new_target, focusin_event.asEvent());
 }
 
@@ -900,12 +896,10 @@ pub fn blur(self: *Element, page: *Page) !void {
 
     // Dispatch blur (no bubble, composed)
     const blur_event = try FocusEvent.initTrusted(comptime .wrap("blur"), .{ .composed = true }, page);
-    defer if (!blur_event.asEvent()._v8_handoff) blur_event.deinit(false);
     try page._event_manager.dispatch(old_target, blur_event.asEvent());
 
     // Dispatch focusout (bubbles, composed)
     const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true }, page);
-    defer if (!focusout_event.asEvent()._v8_handoff) focusout_event.deinit(false);
     try page._event_manager.dispatch(old_target, focusout_event.asEvent());
 }
 

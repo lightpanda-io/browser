@@ -2,24 +2,24 @@
 <script src="../testing.js"></script>
 
 <script id=location>
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/window/location.html', window.location.href);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html', window.location.href);
   testing.expectEqual(document.location, window.location);
 </script>
 
 <script id=location_hash>
   location.hash = "";
   testing.expectEqual("", location.hash);
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/window/location.html', location.href);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
 
   location.hash = "#abcdef";
   testing.expectEqual("#abcdef", location.hash);
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/window/location.html#abcdef', location.href);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html#abcdef', location.href);
 
   location.hash = "xyzxyz";
   testing.expectEqual("#xyzxyz", location.hash);
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/window/location.html#xyzxyz', location.href);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html#xyzxyz', location.href);
 
   location.hash = "";
   testing.expectEqual("", location.hash);
-  testing.expectEqual('http://127.0.0.1:9582/src/browser/tests/window/location.html', location.href);
+  testing.expectEqual(testing.BASE_URL + 'window/location.html', location.href);
 </script>

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<!-- When scripting is enabled the HTML parser treats <noscript> as a raw text
+     element: its entire content is stored as a single text node containing the
+     raw markup.  Serializing it back (outerHTML / innerHTML) must output that
+     markup as-is without HTML-escaping the angle brackets. -->
+<noscript id="ns1"><h1>Hello</h1><p>World</p></noscript>
+<noscript id="ns2"><div id="bsky_post_summary"><h3>Post</h3><p id="bsky_display_name">Henri Helvetica</p></div></noscript>
+
+<script id="noscript-outerHTML">
+  const ns1 = document.getElementById('ns1');
+  testing.expectEqual('<noscript id="ns1"><h1>Hello</h1><p>World</p></noscript>', ns1.outerHTML);
+</script>
+
+<script id="noscript-innerHTML">
+  const ns2 = document.getElementById('ns2');
+  testing.expectEqual('<div id="bsky_post_summary"><h3>Post</h3><p id="bsky_display_name">Henri Helvetica</p></div>', ns2.innerHTML);
+</script>
+
+<script id="noscript-textContent">
+  // The raw text node content must be the literal HTML markup (not parsed DOM)
+  testing.expectEqual('<h1>Hello</h1><p>World</p>', ns1.firstChild.nodeValue);
+</script>

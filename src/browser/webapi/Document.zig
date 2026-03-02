@@ -34,6 +34,7 @@ const DOMTreeWalker = @import("DOMTreeWalker.zig");
 const DOMNodeIterator = @import("DOMNodeIterator.zig");
 const DOMImplementation = @import("DOMImplementation.zig");
 const StyleSheetList = @import("css/StyleSheetList.zig");
+const FontFaceSet = @import("css/FontFaceSet.zig");
 const Selection = @import("Selection.zig");
 
 pub const XMLDocument = @import("XMLDocument.zig");
@@ -43,6 +44,7 @@ const Document = @This();
 
 _type: Type,
 _proto: *Node,
+_page: ?*Page = null,
 _location: ?*Location = null,
 _url: ?[:0]const u8 = null, // URL for documents created via DOMImplementation (about:blank)
 _ready_state: ReadyState = .loading,
@@ -52,6 +54,8 @@ _elements_by_id: std.StringHashMapUnmanaged(*Element) = .empty,
 _removed_ids: std.StringHashMapUnmanaged(void) = .empty,
 _active_element: ?*Element = null,
 _style_sheets: ?*StyleSheetList = null,
+_implementation: ?*DOMImplementation = null,
+_fonts: ?*FontFaceSet = null,
 _write_insertion_point: ?*Node = null,
 _script_created_parser: ?Parser.Streaming = null,
 _adopted_style_sheets: ?js.Object.Global = null,
@@ -272,8 +276,11 @@ pub fn querySelectorAll(self: *Document, input: String, page: *Page) !*Selector.
     return Selector.querySelectorAll(self.asNode(), input.str(), page);
 }
 
-pub fn getImplementation(_: *const Document) DOMImplementation {
-    return .{};
+pub fn getImplementation(self: *Document, page: *Page) !*DOMImplementation {
+    if (self._implementation) |impl| return impl;
+    const impl = try page._factory.create(DOMImplementation{});
+    self._implementation = impl;
+    return impl;
 }
 
 pub fn createDocumentFragment(self: *Document, page: *Page) !*Node.DocumentFragment {
@@ -428,6 +435,15 @@ pub fn getStyleSheets(self: *Document, page: *Page) !*StyleSheetList {
     const sheets = try StyleSheetList.init(page);
     self._style_sheets = sheets;
     return sheets;
+}
+
+pub fn getFonts(self: *Document, page: *Page) !*FontFaceSet {
+    if (self._fonts) |fonts| {
+        return fonts;
+    }
+    const fonts = try FontFaceSet.init(page);
+    self._fonts = fonts;
+    return fonts;
 }
 
 pub fn adoptNode(_: *const Document, node: *Node, page: *Page) !*Node {
@@ -637,11 +653,13 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
         }
 
         if (html.len > 0) {
-            self._script_created_parser.?.read(html) catch |err| {
-                log.warn(.dom, "document.write parser error", .{ .err = err });
-                // was alrady closed
-                self._script_created_parser = null;
-            };
+            if (self._script_created_parser) |*parser| {
+                parser.read(html) catch |err| {
+                    log.warn(.dom, "document.write parser error", .{ .err = err });
+                    // was alrady closed
+                    self._script_created_parser = null;
+                };
+            }
         }
         return;
     }
@@ -726,6 +744,7 @@ pub fn open(self: *Document, page: *Page) !*Document {
     self._elements_by_id.clearAndFree(page.arena);
     self._active_element = null;
     self._style_sheets = null;
+    self._implementation = null;
     self._ready_state = .loading;
 
     self._script_created_parser = Parser.Streaming.init(page.arena, doc_node, page);
@@ -803,17 +822,6 @@ pub fn hasFocus(_: *Document) bool {
 
 pub fn setAdoptedStyleSheets(self: *Document, sheets: js.Object) !void {
     self._adopted_style_sheets = try sheets.persist();
-}
-
-pub fn getHidden(_: *const Document) bool {
-    // it's hidden when, for example, the decive is locked, or user is on a
-    // a different tab.
-    return false;
-}
-
-pub fn getVisibilityState(_: *const Document) []const u8 {
-    // See getHidden above, possible options are "visible" or "hidden"
-    return "visible";
 }
 
 // Validates that nodes can be inserted into a Document, respecting Document constraints:
@@ -963,6 +971,7 @@ pub const JsApi = struct {
     pub const implementation = bridge.accessor(Document.getImplementation, null, .{});
     pub const activeElement = bridge.accessor(Document.getActiveElement, null, .{});
     pub const styleSheets = bridge.accessor(Document.getStyleSheets, null, .{});
+    pub const fonts = bridge.accessor(Document.getFonts, null, .{});
     pub const contentType = bridge.accessor(Document.getContentType, null, .{});
     pub const domain = bridge.accessor(Document.getDomain, null, .{});
     pub const createElement = bridge.function(Document.createElement, .{ .dom_exception = true });
@@ -1011,8 +1020,8 @@ pub const JsApi = struct {
     pub const lastElementChild = bridge.accessor(Document.getLastElementChild, null, .{});
     pub const childElementCount = bridge.accessor(Document.getChildElementCount, null, .{});
     pub const adoptedStyleSheets = bridge.accessor(Document.getAdoptedStyleSheets, Document.setAdoptedStyleSheets, .{});
-    pub const hidden = bridge.accessor(Document.getHidden, null, .{});
-    pub const visibilityState = bridge.accessor(Document.getVisibilityState, null, .{});
+    pub const hidden = bridge.property(false, .{ .template = false, .readonly = true });
+    pub const visibilityState = bridge.property("visible", .{ .template = false, .readonly = true });
     pub const defaultView = bridge.accessor(struct {
         fn defaultView(_: *const Document, page: *Page) *@import("Window.zig") {
             return page.window;

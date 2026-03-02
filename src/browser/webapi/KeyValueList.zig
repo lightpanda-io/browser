@@ -62,7 +62,7 @@ pub fn copy(arena: Allocator, original: KeyValueList) !KeyValueList {
 }
 
 pub fn fromJsObject(arena: Allocator, js_obj: js.Object, comptime normalizer: ?Normalizer, page: *Page) !KeyValueList {
-    var it = js_obj.nameIterator();
+    var it = try js_obj.nameIterator();
     var list = KeyValueList.init();
     try list.ensureTotalCapacity(arena, it.count);
 

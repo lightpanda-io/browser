@@ -67,6 +67,10 @@ pub fn getText(self: *const Option) []const u8 {
     return node.getTextContentAlloc(allocator) catch "";
 }
 
+pub fn setText(self: *Option, value: []const u8, page: *Page) !void {
+    try self.asNode().setTextContent(value, page);
+}
+
 pub fn getSelected(self: *const Option) bool {
     return self._selected;
 }
@@ -113,7 +117,7 @@ pub const JsApi = struct {
     };
 
     pub const value = bridge.accessor(Option.getValue, Option.setValue, .{});
-    pub const text = bridge.accessor(Option.getText, null, .{});
+    pub const text = bridge.accessor(Option.getText, Option.setText, .{});
     pub const selected = bridge.accessor(Option.getSelected, Option.setSelected, .{});
     pub const defaultSelected = bridge.accessor(Option.getDefaultSelected, null, .{});
     pub const disabled = bridge.accessor(Option.getDisabled, Option.setDisabled, .{});

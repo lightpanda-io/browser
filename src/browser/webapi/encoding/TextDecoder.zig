@@ -25,7 +25,6 @@ const Allocator = std.mem.Allocator;
 const TextDecoder = @This();
 
 _fatal: bool,
-_page: *Page,
 _arena: Allocator,
 _ignore_bom: bool,
 _stream: std.ArrayList(u8),
@@ -52,7 +51,6 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
     const opts = opts_ orelse InitOpts{};
     const self = try arena.create(TextDecoder);
     self.* = .{
-        ._page = page,
         ._arena = arena,
         ._stream = .empty,
         ._fatal = opts.fatal,
@@ -61,8 +59,8 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
     return self;
 }
 
-pub fn deinit(self: *TextDecoder, _: bool) void {
-    self._page.releaseArena(self._arena);
+pub fn deinit(self: *TextDecoder, _: bool, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
 pub fn getIgnoreBOM(self: *const TextDecoder) bool {

@@ -36,7 +36,6 @@ pub const Type = enum {
     opaqueredirect,
 };
 
-_page: *Page,
 _status: u16,
 _arena: Allocator,
 _headers: *Headers,
@@ -65,7 +64,6 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
 
     const self = try arena.create(Response);
     self.* = .{
-        ._page = page,
         ._arena = arena,
         ._status = opts.status,
         ._status_text = status_text,
@@ -78,7 +76,7 @@ pub fn init(body_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*Response {
     return self;
 }
 
-pub fn deinit(self: *Response, shutdown: bool) void {
+pub fn deinit(self: *Response, shutdown: bool, page: *Page) void {
     if (self._transfer) |transfer| {
         if (shutdown) {
             transfer.terminate();
@@ -87,7 +85,7 @@ pub fn deinit(self: *Response, shutdown: bool) void {
         }
         self._transfer = null;
     }
-    self._page.releaseArena(self._arena);
+    page.releaseArena(self._arena);
 }
 
 pub fn getStatus(self: *const Response) u16 {
@@ -145,6 +143,10 @@ pub fn getJson(self: *Response, page: *Page) !js.Promise {
     return local.resolvePromise(try value.persist());
 }
 
+pub fn arrayBuffer(self: *const Response, page: *Page) !js.Promise {
+    return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Response);
 
@@ -167,6 +169,7 @@ pub const JsApi = struct {
     pub const body = bridge.accessor(Response.getBody, null, .{});
     pub const url = bridge.accessor(Response.getURL, null, .{});
     pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
+    pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
 };
 
 const testing = @import("../../../testing.zig");

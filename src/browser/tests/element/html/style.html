@@ -106,3 +106,28 @@
     testing.expectEqual(true, style.disabled);
   }
 </script>
+
+<script id="style-load-event">
+{
+  // A style element fires a load event when appended to the DOM.
+  const style = document.createElement("style");
+  let result = false;
+  testing.async(async () => {
+    await new Promise(resolve => {
+      style.addEventListener("load", ({ bubbles, cancelBubble, cancelable, composed, isTrusted, target }) => {
+        testing.expectEqual(false, bubbles);
+        testing.expectEqual(false, cancelBubble);
+        testing.expectEqual(false, cancelable);
+        testing.expectEqual(false, composed);
+        testing.expectEqual(true, isTrusted);
+        testing.expectEqual(style, target);
+        result = true;
+        return resolve();
+      });
+      document.head.appendChild(style);
+    });
+  });
+
+  testing.eventually(() => testing.expectEqual(true, result));
+}
+</script>

@@ -88,3 +88,12 @@
   localStorage.clear();
   testing.expectEqual(0, localStorage.length)
 </script>
+
+<script id="localstorage_limits">
+  localStorage.clear();
+  for (i = 0; i < 5; i++) {
+    const v =  "v".repeat(1024 * 1024);
+    localStorage.setItem(v, v);
+  }
+  testing.expectError("QuotaExceededError", () => localStorage.setItem("last", "v"));
+</script>

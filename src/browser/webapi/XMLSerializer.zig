@@ -25,6 +25,9 @@ const dump = @import("../dump.zig");
 
 const XMLSerializer = @This();
 
+// Padding to avoid zero-size struct, which causes identity_map pointer collisions.
+_pad: bool = false,
+
 pub fn init() XMLSerializer {
     return .{};
 }

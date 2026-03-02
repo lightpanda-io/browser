@@ -47,7 +47,7 @@ help:
 
 # $(ZIG) commands
 # ------------
-.PHONY: build build-v8-snapshot build-dev run run-release shell test bench wpt data end2end
+.PHONY: build build-v8-snapshot build-dev run run-release shell test bench data end2end
 
 ## Build v8 snapshot
 build-v8-snapshot:
@@ -82,15 +82,6 @@ shell:
 	@printf "\033[36mBuilding shell...\033[0m\n"
 	@$(ZIG) build shell || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
 
-## Run WPT tests
-wpt:
-	@printf "\033[36mBuilding wpt...\033[0m\n"
-	@$(ZIG) build wpt -- $(filter-out $@,$(MAKECMDGOALS)) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
-
-wpt-summary:
-	@printf "\033[36mBuilding wpt...\033[0m\n"
-	@$(ZIG) build wpt -- --summary $(filter-out $@,$(MAKECMDGOALS)) || (printf "\033[33mBuild ERROR\033[0m\n"; exit 1;)
-
 ## Test - `grep` is used to filter out the huge compile command on build
 ifeq ($(OS), macos)
 test:
@@ -111,13 +102,8 @@ end2end:
 # ------------
 .PHONY: install
 
-## Install and build dependencies for release
-install: install-submodule
+install: build
 
 data:
 	cd src/data && go run public_suffix_list_gen.go > public_suffix_list.zig
 
-## Init and update git submodule
-install-submodule:
-	@git submodule init && \
-	git submodule update

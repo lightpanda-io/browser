@@ -36,7 +36,6 @@ pub fn registerTypes() []const type {
 
 const IntersectionObserver = @This();
 
-_page: *Page,
 _arena: Allocator,
 _callback: js.Function.Temp,
 _observing: std.ArrayList(*Element) = .{},
@@ -83,7 +82,6 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
 
     const self = try arena.create(IntersectionObserver);
     self.* = .{
-        ._page = page,
         ._arena = arena,
         ._callback = callback,
         ._root = opts.root,
@@ -93,8 +91,7 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
     return self;
 }
 
-pub fn deinit(self: *IntersectionObserver, shutdown: bool) void {
-    const page = self._page;
+pub fn deinit(self: *IntersectionObserver, shutdown: bool, page: *Page) void {
     page.js.release(self._callback);
     if ((comptime IS_DEBUG) and !shutdown) {
         std.debug.assert(self._observing.items.len == 0);
@@ -140,7 +137,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinit(false);
+                    entry.deinit(false, page);
                 } else {
                     j += 1;
                 }
@@ -160,7 +157,7 @@ pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
     self._previous_states.clearRetainingCapacity();
 
     for (self._pending_entries.items) |entry| {
-        entry.deinit(false);
+        entry.deinit(false, page);
     }
     self._pending_entries.clearRetainingCapacity();
     page.js.safeWeakRef(self);
@@ -245,7 +242,6 @@ fn checkIntersection(self: *IntersectionObserver, target: *Element, page: *Page)
 
         const entry = try arena.create(IntersectionObserverEntry);
         entry.* = .{
-            ._page = page,
             ._arena = arena,
             ._target = target,
             ._time = page.window._performance.now(),
@@ -297,7 +293,6 @@ pub fn deliverEntries(self: *IntersectionObserver, page: *Page) !void {
 }
 
 pub const IntersectionObserverEntry = struct {
-    _page: *Page,
     _arena: Allocator,
     _time: f64,
     _target: *Element,
@@ -307,8 +302,8 @@ pub const IntersectionObserverEntry = struct {
     _intersection_ratio: f64,
     _is_intersecting: bool,
 
-    pub fn deinit(self: *const IntersectionObserverEntry, _: bool) void {
-        self._page.releaseArena(self._arena);
+    pub fn deinit(self: *const IntersectionObserverEntry, _: bool, page: *Page) void {
+        page.releaseArena(self._arena);
     }
 
     pub fn getTarget(self: *const IntersectionObserverEntry) *Element {

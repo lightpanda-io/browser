@@ -45,7 +45,7 @@ pub const InitOpts = Request.InitOpts;
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
     const response = try Response.init(null, .{ .status = 0 }, page);
-    errdefer response.deinit(true);
+    errdefer response.deinit(true, page);
 
     const resolver = page.js.local.?.createPromiseResolver();
 
@@ -184,7 +184,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     // clear this. (defer since `self is in the response's arena).
 
     defer if (self._owns_response) {
-        response.deinit(err == error.Abort);
+        response.deinit(err == error.Abort, self._page);
         self._owns_response = false;
     };
 
@@ -205,7 +205,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
     if (self._owns_response) {
         var response = self._response;
         response._transfer = null;
-        response.deinit(true);
+        response.deinit(true, self._page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
     }

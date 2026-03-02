@@ -85,7 +85,7 @@ pub fn namedItem(self: *HTMLFormControlsCollection, name: []const u8, page: *Pag
                     ._name = try page.dupeString(name),
                 });
 
-                radio_node_list._proto = try page._factory.create(NodeList{ .data = .{ .radio_node_list = radio_node_list } });
+                radio_node_list._proto = try page._factory.create(NodeList{ ._data = .{ .radio_node_list = radio_node_list } });
 
                 return .{ .radio_node_list = radio_node_list };
             }
@@ -138,7 +138,7 @@ pub const JsApi = struct {
     };
 
     pub const length = bridge.accessor(HTMLFormControlsCollection.length, null, .{});
-    pub const @"[int]" = bridge.indexed(HTMLFormControlsCollection.getAtIndex, .{ .null_as_undefined = true });
+    pub const @"[int]" = bridge.indexed(HTMLFormControlsCollection.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(HTMLFormControlsCollection.namedItem, null, null, .{ .null_as_undefined = true });
     pub const namedItem = bridge.function(HTMLFormControlsCollection.namedItem, .{});
 };

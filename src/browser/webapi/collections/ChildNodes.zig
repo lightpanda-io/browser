@@ -26,6 +26,7 @@ const GenericIterator = @import("iterator.zig").Entry;
 // No need to go through a TreeWalker or add any filtering.
 const ChildNodes = @This();
 
+_arena: std.mem.Allocator,
 _last_index: usize,
 _last_length: ?u32,
 _last_node: ?*std.DoublyLinkedList.Node,
@@ -37,13 +38,23 @@ pub const ValueIterator = GenericIterator(Iterator, "1");
 pub const EntryIterator = GenericIterator(Iterator, null);
 
 pub fn init(node: *Node, page: *Page) !*ChildNodes {
-    return page._factory.create(ChildNodes{
+    const arena = try page.getArena(.{ .debug = "ChildNodes" });
+    errdefer page.releaseArena(arena);
+
+    const self = try arena.create(ChildNodes);
+    self.* = .{
         ._node = node,
+        ._arena = arena,
         ._last_index = 0,
         ._last_node = null,
         ._last_length = null,
         ._cached_version = page.version,
-    });
+    };
+    return self;
+}
+
+pub fn deinit(self: *const ChildNodes, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
 pub fn length(self: *ChildNodes, page: *Page) !u32 {
@@ -115,7 +126,7 @@ fn versionCheck(self: *ChildNodes, page: *Page) bool {
 
 const NodeList = @import("NodeList.zig");
 pub fn runtimeGenericWrap(self: *ChildNodes, page: *Page) !*NodeList {
-    return page._factory.create(NodeList{ .data = .{ .child_nodes = self } });
+    return page._factory.create(NodeList{ ._data = .{ .child_nodes = self } });
 }
 
 const Iterator = struct {

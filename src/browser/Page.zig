@@ -63,15 +63,14 @@ const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 
 const Http = App.Http;
+const Net = @import("../Net.zig");
 const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const WebApiURL = @import("webapi/URL.zig");
-const global_event_handlers = @import("webapi/global_event_handlers.zig");
-const GlobalEventHandlersLookup = global_event_handlers.Lookup;
-const GlobalEventHandler = global_event_handlers.Handler;
+const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
 var default_url = WebApiURL{ ._raw = "about:blank" };
 pub var default_location: Location = Location{ ._url = &default_url };
@@ -139,7 +138,7 @@ _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 
 /// `load` events that'll be fired before window's `load` event.
 /// A call to `documentIsComplete` (which calls `_documentIsComplete`) resets it.
-_to_load: std.ArrayList(*Element) = .{},
+_to_load: std.ArrayList(*Element.Html) = .{},
 
 _script_manager: ScriptManager,
 
@@ -175,7 +174,7 @@ _upgrading_element: ?*Node = null,
 _undefined_custom_elements: std.ArrayList(*Element.Html.Custom) = .{},
 
 // for heap allocations and managing WebAPI objects
-_factory: Factory,
+_factory: *Factory,
 
 _load_state: LoadState = .waiting,
 
@@ -249,13 +248,14 @@ pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
     }
     const browser = session.browser;
     const arena_pool = browser.arena_pool;
-    const page_arena = try arena_pool.acquire();
-    errdefer arena_pool.release(page_arena);
+
+    const page_arena = if (parent) |p| p.arena else try arena_pool.acquire();
+    errdefer if (parent == null) arena_pool.release(page_arena);
+
+    var factory = if (parent) |p| p._factory else try Factory.init(page_arena);
 
     const call_arena = try arena_pool.acquire();
     errdefer arena_pool.release(call_arena);
-
-    var factory = Factory.init(page_arena, self);
 
     const document = (try factory.document(Node.Document.HTMLDocument{
         ._proto = undefined,
@@ -309,15 +309,17 @@ pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
     self.js = try browser.env.createContext(self);
     errdefer self.js.deinit();
 
+    document._page = self;
+
     if (comptime builtin.is_test == false) {
         // HTML test runner manually calls these as necessary
         try self.js.scheduler.add(session.browser, struct {
-            fn runMessageLoop(ctx: *anyopaque) !?u32 {
+            fn runIdleTasks(ctx: *anyopaque) !?u32 {
                 const b: *@import("Browser.zig") = @ptrCast(@alignCast(ctx));
-                b.runMessageLoop();
-                return 250;
+                b.runIdleTasks();
+                return 200;
             }
-        }.runMessageLoop, 250, .{ .name = "page.messageLoop" });
+        }.runIdleTasks, 200, .{ .name = "page.runIdleTasks", .low_priority = true });
     }
 }
 
@@ -351,13 +353,16 @@ pub fn deinit(self: *Page) void {
         var it = self._arena_pool_leak_track.valueIterator();
         while (it.next()) |value_ptr| {
             if (value_ptr.count > 0) {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type });
+                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type, .url = self.url });
             }
         }
     }
 
     self.arena_pool.release(self.call_arena);
-    self.arena_pool.release(self.arena);
+
+    if (self.parent == null) {
+        self.arena_pool.release(self.arena);
+    }
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
@@ -420,7 +425,7 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
     if (comptime IS_DEBUG) {
         const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
         if (found.count != 1) {
-            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type });
+            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type, .url = self.url });
             return;
         }
         found.count = 0;
@@ -564,7 +569,7 @@ fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []con
         arena,
         self.base(),
         request_url,
-        .{ .always_dupe = true },
+        .{ .always_dupe = true, .encode = true },
     );
 
     const session = self._session;
@@ -637,13 +642,12 @@ pub fn documentIsLoaded(self: *Page) void {
     self._load_state = .load;
     self.document._ready_state = .interactive;
     self._documentIsLoaded() catch |err| {
-        log.err(.page, "document is loaded", .{ .err = err, .type = self._type });
+        log.err(.page, "document is loaded", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
 pub fn _documentIsLoaded(self: *Page) !void {
     const event = try Event.initTrusted(.wrap("DOMContentLoaded"), .{ .bubbles = true }, self);
-    defer if (!event._v8_handoff) event.deinit(false);
     try self._event_manager.dispatch(
         self.document.asEventTarget(),
         event,
@@ -661,10 +665,9 @@ pub fn iframeCompletedLoading(self: *Page, iframe: *Element.Html.IFrame) void {
         defer ls.deinit();
 
         const event = Event.initTrusted(comptime .wrap("load"), .{}, self) catch |err| {
-            log.err(.page, "iframe event init", .{ .err = err });
+            log.err(.page, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
         };
-        defer if (!event._v8_handoff) event.deinit(false);
         self._event_manager.dispatch(iframe.asNode().asEventTarget(), event) catch |err| {
             log.warn(.js, "iframe onload", .{ .err = err, .url = iframe._src });
         };
@@ -701,7 +704,7 @@ pub fn documentIsComplete(self: *Page) void {
 
     self._load_state = .complete;
     self._documentIsComplete() catch |err| {
-        log.err(.page, "document is complete", .{ .err = err, .type = self._type });
+        log.err(.page, "document is complete", .{ .err = err, .type = self._type, .url = self.url });
     };
 
     if (IS_DEBUG) {
@@ -720,23 +723,15 @@ pub fn documentIsComplete(self: *Page) void {
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
 
+    // Run load events before window.load.
+    try self.dispatchLoad();
+
     var ls: JS.Local.Scope = undefined;
     self.js.localScope(&ls);
     defer ls.deinit();
 
-    // Dispatch `_to_load` events before window.load.
-    for (self._to_load.items) |element| {
-        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-        defer if (!event._v8_handoff) event.deinit(false);
-        try self._event_manager.dispatch(element.asEventTarget(), event);
-    }
-
-    // `_to_load` can be cleaned here.
-    self._to_load.clearAndFree(self.arena);
-
     // Dispatch window.load event.
     const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-    defer if (!event._v8_handoff) event.deinit(false);
     // This event is weird, it's dispatched directly on the window, but
     // with the document as the target.
     event._target = self.document.asEventTarget();
@@ -748,7 +743,6 @@ fn _documentIsComplete(self: *Page) !void {
     );
 
     const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
-    defer if (!pageshow_event._v8_handoff) pageshow_event.deinit(false);
     try self._event_manager.dispatchWithFunction(
         self.window.asEventTarget(),
         pageshow_event,
@@ -806,7 +800,7 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         } orelse .unknown;
 
         if (comptime IS_DEBUG) {
-            log.debug(.page, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len, .type = self._type });
+            log.debug(.page, "navigate first chunk", .{ .content_type = mime.content_type, .len = data.len, .type = self._type, .url = self.url });
         }
 
         switch (mime.content_type) {
@@ -853,7 +847,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
     var self: *Page = @ptrCast(@alignCast(ctx));
 
     if (comptime IS_DEBUG) {
-        log.debug(.page, "navigate done", .{ .type = self._type });
+        log.debug(.page, "navigate done", .{ .type = self._type, .url = self.url });
     }
 
     //We need to handle different navigation types differently.
@@ -872,11 +866,6 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         .html => |buf| {
             parser.parse(buf.items);
             self._script_manager.staticScriptsDone();
-            if (self._script_manager.isDone()) {
-                // No scripts, or just inline scripts that were already processed
-                // we need to trigger this ourselves
-                self.documentIsComplete();
-            }
             self._parse_state = .complete;
         },
         .text => |*buf| {
@@ -931,246 +920,15 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Page = @ptrCast(@alignCast(ctx));
 
-    log.err(.page, "navigate failed", .{ .err = err, .type = self._type });
+    log.err(.page, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
     self._parse_state = .{ .err = err };
 
     // In case of error, we want to complete the page with a custom HTML
     // containing the error.
     pageDoneCallback(ctx) catch |e| {
-        log.err(.browser, "pageErrorCallback", .{ .err = e, .type = self._type });
+        log.err(.browser, "pageErrorCallback", .{ .err = e, .type = self._type, .url = self.url });
         return;
     };
-}
-
-pub fn wait(self: *Page, wait_ms: u32) Session.WaitResult {
-    return self._wait(wait_ms) catch |err| {
-        switch (err) {
-            error.JsError => {}, // already logged (with hopefully more context)
-            else => {
-                // There may be errors from the http/client or ScriptManager
-                // that we should not treat as an error like this. Will need
-                // to run this through more real-world sites and see if we need
-                // to expand the switch (err) to have more customized logs for
-                // specific messages.
-                log.err(.browser, "page wait", .{ .err = err, .type = self._type });
-            },
-        }
-        return .done;
-    };
-}
-
-fn _wait(self: *Page, wait_ms: u32) !Session.WaitResult {
-    if (comptime IS_DEBUG) {
-        std.debug.assert(self._type == .root);
-    }
-
-    var timer = try std.time.Timer.start();
-    var ms_remaining = wait_ms;
-
-    const browser = self._session.browser;
-    var http_client = browser.http_client;
-
-    // I'd like the page to know NOTHING about cdp_socket / CDP, but the
-    // fact is that the behavior of wait changes depending on whether or
-    // not we're using CDP.
-    // If we aren't using CDP, as soon as we think there's nothing left
-    // to do, we can exit - we'de done.
-    // But if we are using CDP, we should wait for the whole `wait_ms`
-    // because the http_click.tick() also monitors the CDP socket. And while
-    // we could let CDP poll http (like it does for HTTP requests), the fact
-    // is that we know more about the timing of stuff (e.g. how long to
-    // poll/sleep) in the page.
-    const exit_when_done = http_client.cdp_client == null;
-
-    // for debugging
-    // defer self.printWaitAnalysis();
-
-    while (true) {
-        switch (self._parse_state) {
-            .pre, .raw, .text, .image => {
-                // The main page hasn't started/finished navigating.
-                // There's no JS to run, and no reason to run the scheduler.
-                if (http_client.active == 0 and exit_when_done) {
-                    // haven't started navigating, I guess.
-                    return .done;
-                }
-                // Either we have active http connections, or we're in CDP
-                // mode with an extra socket. Either way, we're waiting
-                // for http traffic
-                if (try http_client.tick(@intCast(ms_remaining)) == .cdp_socket) {
-                    // exit_when_done is explicitly set when there isn't
-                    // an extra socket, so it should not be possibl to
-                    // get an cdp_socket message when exit_when_done
-                    // is true.
-                    if (IS_DEBUG) {
-                        std.debug.assert(exit_when_done == false);
-                    }
-
-                    // data on a socket we aren't handling, return to caller
-                    return .cdp_socket;
-                }
-            },
-            .html, .complete => {
-                if (self._queued_navigation != null) {
-                    return .done;
-                }
-
-                // The HTML page was parsed. We now either have JS scripts to
-                // download, or scheduled tasks to execute, or both.
-
-                // scheduler.run could trigger new http transfers, so do not
-                // store http_client.active BEFORE this call and then use
-                // it AFTER.
-                const ms_to_next_task = try browser.runMacrotasks();
-
-                const http_active = http_client.active;
-                const total_network_activity = http_active + http_client.intercepted;
-                if (self._notified_network_almost_idle.check(total_network_activity <= 2)) {
-                    self.notifyNetworkAlmostIdle();
-                }
-                if (self._notified_network_idle.check(total_network_activity == 0)) {
-                    self.notifyNetworkIdle();
-                }
-
-                if (http_active == 0 and exit_when_done) {
-                    // we don't need to consider http_client.intercepted here
-                    // because exit_when_done is true, and that can only be
-                    // the case when interception isn't possible.
-                    if (comptime IS_DEBUG) {
-                        std.debug.assert(http_client.intercepted == 0);
-                    }
-
-                    const ms = ms_to_next_task orelse blk: {
-                        if (wait_ms - ms_remaining < 100) {
-                            if (comptime builtin.is_test) {
-                                return .done;
-                            }
-                            // Look, we want to exit ASAP, but we don't want
-                            // to exit so fast that we've run none of the
-                            // background jobs.
-                            break :blk 50;
-                        }
-                        // No http transfers, no cdp extra socket, no
-                        // scheduled tasks, we're done.
-                        return .done;
-                    };
-
-                    if (ms > ms_remaining) {
-                        // Same as above, except we have a scheduled task,
-                        // it just happens to be too far into the future
-                        // compared to how long we were told to wait.
-                        return .done;
-                    }
-
-                    // We have a task to run in the not-so-distant future.
-                    // You might think we can just sleep until that task is
-                    // ready, but we should continue to run lowPriority tasks
-                    // in the meantime, and that could unblock things. So
-                    // we'll just sleep for a bit, and then restart our wait
-                    // loop to see if anything new can be processed.
-                    std.Thread.sleep(std.time.ns_per_ms * @as(u64, @intCast(@min(ms, 20))));
-                } else {
-                    // We're here because we either have active HTTP
-                    // connections, or exit_when_done == false (aka, there's
-                    // an cdp_socket registered with the http client).
-                    // We should continue to run lowPriority tasks, so we
-                    // minimize how long we'll poll for network I/O.
-                    const ms_to_wait = @min(200, @min(ms_remaining, ms_to_next_task orelse 200));
-                    if (try http_client.tick(ms_to_wait) == .cdp_socket) {
-                        // data on a socket we aren't handling, return to caller
-                        return .cdp_socket;
-                    }
-                }
-            },
-            .err => |err| {
-                self._parse_state = .{ .raw_done = @errorName(err) };
-                return err;
-            },
-            .raw_done => {
-                if (exit_when_done) {
-                    return .done;
-                }
-                // we _could_ http_client.tick(ms_to_wait), but this has
-                // the same result, and I feel is more correct.
-                return .no_page;
-            },
-        }
-
-        const ms_elapsed = timer.lap() / 1_000_000;
-        if (ms_elapsed >= ms_remaining) {
-            return .done;
-        }
-        ms_remaining -= @intCast(ms_elapsed);
-    }
-}
-
-fn printWaitAnalysis(self: *Page) void {
-    std.debug.print("load_state: {s}\n", .{@tagName(self._load_state)});
-    std.debug.print("parse_state: {s}\n", .{@tagName(std.meta.activeTag(self._parse_state))});
-    {
-        std.debug.print("\nactive requests: {d}\n", .{self._session.browser.http_client.active});
-        var n_ = self._session.browser.http_client.handles.in_use.first;
-        while (n_) |n| {
-            const handle: *Http.Client.Handle = @fieldParentPtr("node", n);
-            const transfer = Http.Transfer.fromEasy(handle.conn.easy) catch |err| {
-                std.debug.print(" - failed to load transfer: {any}\n", .{err});
-                break;
-            };
-            std.debug.print(" - {f}\n", .{transfer});
-            n_ = n.next;
-        }
-    }
-
-    {
-        std.debug.print("\nqueued requests: {d}\n", .{self._session.browser.http_client.queue.len()});
-        var n_ = self._session.browser.http_client.queue.first;
-        while (n_) |n| {
-            const transfer: *Http.Transfer = @fieldParentPtr("_node", n);
-            std.debug.print(" - {f}\n", .{transfer});
-            n_ = n.next;
-        }
-    }
-
-    {
-        std.debug.print("\ndeferreds: {d}\n", .{self._script_manager.defer_scripts.len()});
-        var n_ = self._script_manager.defer_scripts.first;
-        while (n_) |n| {
-            const script: *ScriptManager.Script = @fieldParentPtr("node", n);
-            std.debug.print(" - {s} complete: {any}\n", .{ script.url, script.complete });
-            n_ = n.next;
-        }
-    }
-
-    {
-        std.debug.print("\nasyncs: {d}\n", .{self._script_manager.async_scripts.len()});
-    }
-
-    {
-        std.debug.print("\nasyncs ready: {d}\n", .{self._script_manager.ready_scripts.len()});
-        var n_ = self._script_manager.ready_scripts.first;
-        while (n_) |n| {
-            const script: *ScriptManager.Script = @fieldParentPtr("node", n);
-            std.debug.print(" - {s} complete: {any}\n", .{ script.url, script.complete });
-            n_ = n.next;
-        }
-    }
-
-    const now = milliTimestamp(.monotonic);
-    {
-        std.debug.print("\nhigh_priority schedule: {d}\n", .{self.js.scheduler.high_priority.count()});
-        var it = self.js.scheduler.high_priority.iterator();
-        while (it.next()) |task| {
-            std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.run_at - now });
-        }
-    }
-
-    {
-        std.debug.print("\nlow_priority schedule: {d}\n", .{self.js.scheduler.low_priority.count()});
-        var it = self.js.scheduler.low_priority.iterator();
-        while (it.next()) |task| {
-            std.debug.print(" - {s} schedule: {d}ms\n", .{ task.name, task.run_at - now });
-        }
-    }
 }
 
 pub fn isGoingAway(self: *const Page) bool {
@@ -1186,6 +944,7 @@ pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Ele
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
+            .url = self.url,
             .src = script.asElement().getAttributeSafe(comptime .wrap("src")),
             .type = self._type,
         });
@@ -1201,7 +960,7 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         return;
     }
 
-    const src = try iframe.getSrc(self);
+    const src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse return;
     if (src.len == 0) {
         return;
     }
@@ -1223,8 +982,16 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         .timestamp = timestamp(.monotonic),
     });
 
-    page_frame.navigate(src, .{ .reason = .initialFrameNavigation }) catch |err| {
-        log.warn(.page, "iframe navigate failure", .{ .url = src, .err = err });
+    // navigate will dupe the url
+    const url = try URL.resolve(
+        self.call_arena,
+        self.base(),
+        src,
+        .{ .encode = true },
+    );
+
+    page_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
+        log.warn(.page, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._content_window = null;
         page_frame.deinit();
@@ -1272,7 +1039,7 @@ pub fn domChanged(self: *Page) void {
 
     self._intersection_check_scheduled = true;
     self.js.queueIntersectionChecks() catch |err| {
-        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type });
+        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
@@ -1351,29 +1118,6 @@ pub fn getElementByIdFromNode(self: *Page, node: *Node, id: []const u8) ?*Elemen
     return null;
 }
 
-/// Sets an inline event listener (`onload`, `onclick`, `onwheel` etc.);
-/// overrides the listener if there's already one.
-pub fn setAttrListener(
-    self: *Page,
-    element: *Element,
-    listener_type: GlobalEventHandler,
-    listener_callback: JS.Function.Global,
-) !void {
-    if (comptime IS_DEBUG) {
-        log.debug(.event, "Page.setAttrListener", .{
-            .element = element,
-            .listener_type = listener_type,
-            .type = self._type,
-        });
-    }
-
-    const gop = try self._element_attr_listeners.getOrPut(self.arena, .{
-        .target = element.asEventTarget(),
-        .handler = listener_type,
-    });
-    gop.value_ptr.* = listener_callback;
-}
-
 pub fn registerPerformanceObserver(self: *Page, observer: *PerformanceObserver) !void {
     return self._performance_observers.append(self.arena, observer);
 }
@@ -1393,7 +1137,7 @@ pub fn notifyPerformanceObservers(self: *Page, entry: *Performance.Entry) !void 
     for (self._performance_observers.items) |observer| {
         if (observer.interested(entry)) {
             observer._entries.append(self.arena, entry) catch |err| {
-                log.err(.page, "notifyPerformanceObservers", .{ .err = err, .type = self._type });
+                log.err(.page, "notifyPerformanceObservers", .{ .err = err, .type = self._type, .url = self.url });
             };
         }
     }
@@ -1458,6 +1202,18 @@ pub fn checkIntersections(self: *Page) !void {
     }
 }
 
+pub fn dispatchLoad(self: *Page) !void {
+    const has_dom_load_listener = self._event_manager.has_dom_load_listener;
+    for (self._to_load.items) |html_element| {
+        if (has_dom_load_listener or html_element.hasAttributeFunction(.onload, self)) {
+            const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+            try self._event_manager.dispatch(html_element.asEventTarget(), event);
+        }
+    }
+    // We drained everything.
+    self._to_load.clearRetainingCapacity();
+}
+
 pub fn scheduleMutationDelivery(self: *Page) !void {
     if (self._mutation_delivery_scheduled) {
         return;
@@ -1488,7 +1244,7 @@ pub fn performScheduledIntersectionChecks(self: *Page) void {
     }
     self._intersection_check_scheduled = false;
     self.checkIntersections() catch |err| {
-        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type });
+        log.err(.page, "page.schedIntersectChecks", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
@@ -1504,7 +1260,7 @@ pub fn deliverIntersections(self: *Page) void {
         i -= 1;
         const observer = self._intersection_observers.items[i];
         observer.deliverEntries(self) catch |err| {
-            log.err(.page, "page.deliverIntersections", .{ .err = err, .type = self._type });
+            log.err(.page, "page.deliverIntersections", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1522,7 +1278,7 @@ pub fn deliverMutations(self: *Page) void {
     };
 
     if (self._mutation_delivery_depth > 100) {
-        log.err(.page, "page.MutationLimit", .{ .type = self._type });
+        log.err(.page, "page.MutationLimit", .{ .type = self._type, .url = self.url });
         self._mutation_delivery_depth = 0;
         return;
     }
@@ -1531,7 +1287,7 @@ pub fn deliverMutations(self: *Page) void {
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.deliverRecords(self) catch |err| {
-            log.err(.page, "page.deliverMutations", .{ .err = err, .type = self._type });
+            log.err(.page, "page.deliverMutations", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1549,7 +1305,7 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 
     var i: usize = 0;
     var slots = self.call_arena.alloc(*Element.Html.Slot, pending) catch |err| {
-        log.err(.page, "deliverSlotchange.append", .{ .err = err, .type = self._type });
+        log.err(.page, "deliverSlotchange.append", .{ .err = err, .type = self._type, .url = self.url });
         return;
     };
 
@@ -1562,14 +1318,12 @@ pub fn deliverSlotchangeEvents(self: *Page) void {
 
     for (slots) |slot| {
         const event = Event.initTrusted(comptime .wrap("slotchange"), .{ .bubbles = true }, self) catch |err| {
-            log.err(.page, "deliverSlotchange.init", .{ .err = err, .type = self._type });
+            log.err(.page, "deliverSlotchange.init", .{ .err = err, .type = self._type, .url = self.url });
             continue;
         };
-        defer if (!event._v8_handoff) event.deinit(false);
-
         const target = slot.asNode().asEventTarget();
         _ = target.dispatchEvent(event, self) catch |err| {
-            log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type });
+            log.err(.page, "deliverSlotchange.dispatch", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -1601,10 +1355,8 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
             if (parent.lastChild()) |sibling| {
                 if (sibling.is(CData.Text)) |tn| {
                     const cdata = tn._proto;
-                    const existing = cdata.getData();
-                    // @metric
-                    // Inefficient, but we don't expect this to happen often.
-                    cdata._data = try std.mem.concat(self.arena, u8, &.{ existing, txt });
+                    const existing = cdata.getData().str();
+                    cdata._data = try String.concat(self.arena, &.{ existing, txt });
                     return;
                 }
             }
@@ -1624,7 +1376,7 @@ pub fn appendNew(self: *Page, parent: *Node, child: Node.NodeOrText) !void {
 // called from the parser when the node and all its children have been added
 pub fn nodeComplete(self: *Page, node: *Node) !void {
     Node.Build.call(node, "complete", .{ node, self }) catch |err| {
-        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type });
+        log.err(.bug, "build.complete", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
         return err;
     };
     return self.nodeIsReady(true, node);
@@ -2323,7 +2075,7 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
 
                 var caught: JS.TryCatch.Caught = undefined;
                 _ = ls.toLocal(def.constructor).newInstance(&caught) catch |err| {
-                    log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = self._type });
+                    log.warn(.js, "custom element constructor", .{ .name = name, .err = err, .caught = caught, .type = self._type, .url = self.url });
                     return node;
                 };
 
@@ -2381,7 +2133,7 @@ fn createHtmlElementT(self: *Page, comptime E: type, namespace: Element.Namespac
     const node = element.asNode();
     if (@hasDecl(E, "Build") and @hasDecl(E.Build, "created")) {
         @call(.auto, @field(E.Build, "created"), .{ node, self }) catch |err| {
-            log.err(.page, "build.created", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type });
+            log.err(.page, "build.created", .{ .tag = node.getNodeName(&self.buf), .err = err, .type = self._type, .url = self.url });
             return err;
         };
     }
@@ -2434,28 +2186,24 @@ fn populateElementAttributes(self: *Page, element: *Element, list: anytype) !voi
 }
 
 pub fn createTextNode(self: *Page, text: []const u8) !*Node {
-    // might seem unlikely that we get an intern hit, but we'll get some nodes
-    // with just '\n'
-    const owned_text = try self.dupeString(text);
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .text = .{
             ._proto = undefined,
         } },
-        ._data = owned_text,
+        ._data = try self.dupeSSO(text),
     });
     cd._type.text._proto = cd;
     return cd.asNode();
 }
 
 pub fn createComment(self: *Page, text: []const u8) !*Node {
-    const owned_text = try self.dupeString(text);
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .comment = .{
             ._proto = undefined,
         } },
-        ._data = owned_text,
+        ._data = try self.dupeSSO(text),
     });
     cd._type.comment._proto = cd;
     return cd.asNode();
@@ -2466,8 +2214,6 @@ pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
     if (std.mem.indexOf(u8, data, "]]>") != null) {
         return error.InvalidCharacterError;
     }
-
-    const owned_data = try self.dupeString(data);
 
     // First allocate the Text node separately
     const text_node = try self._factory.create(CData.Text{
@@ -2480,7 +2226,7 @@ pub fn createCDATASection(self: *Page, data: []const u8) !*Node {
         ._type = .{ .cdata_section = .{
             ._proto = text_node,
         } },
-        ._data = owned_data,
+        ._data = try self.dupeSSO(data),
     });
 
     // Set up the back pointer from Text to CData
@@ -2502,7 +2248,6 @@ pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []cons
     try validateXmlName(target);
 
     const owned_target = try self.dupeString(target);
-    const owned_data = try self.dupeString(data);
 
     const pi = try self._factory.create(CData.ProcessingInstruction{
         ._proto = undefined,
@@ -2512,7 +2257,7 @@ pub fn createProcessingInstruction(self: *Page, target: []const u8, data: []cons
     const cd = try self._factory.node(CData{
         ._proto = undefined,
         ._type = .{ .processing_instruction = pi },
-        ._data = owned_data,
+        ._data = try self.dupeSSO(data),
     });
 
     // Set up the back pointer from ProcessingInstruction to CData
@@ -2583,6 +2328,10 @@ pub fn dupeString(self: *Page, value: []const u8) ![]const u8 {
         return v;
     }
     return self.arena.dupe(u8, value);
+}
+
+pub fn dupeSSO(self: *Page, value: []const u8) !String {
+    return String.init(self.arena, value, .{ .dupe = true });
 }
 
 const RemoveNodeOpts = struct {
@@ -2851,7 +2600,7 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
 
 pub fn attributeChange(self: *Page, element: *Element, name: String, value: String, old_value: ?String) void {
     _ = Element.Build.call(element, "attributeChange", .{ element, name, value, self }) catch |err| {
-        log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err, .type = self._type });
+        log.err(.bug, "build.attributeChange", .{ .tag = element.getTag(), .name = name, .value = value, .err = err, .type = self._type, .url = self.url });
     };
 
     Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, value, self);
@@ -2860,7 +2609,7 @@ pub fn attributeChange(self: *Page, element: *Element, name: String, value: Stri
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
-            log.err(.page, "attributeChange.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "attributeChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 
@@ -2877,7 +2626,7 @@ pub fn attributeChange(self: *Page, element: *Element, name: String, value: Stri
 
 pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: String) void {
     _ = Element.Build.call(element, "attributeRemove", .{ element, name, self }) catch |err| {
-        log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err, .type = self._type });
+        log.err(.bug, "build.attributeRemove", .{ .tag = element.getTag(), .name = name, .err = err, .type = self._type, .url = self.url });
     };
 
     Element.Html.Custom.invokeAttributeChangedCallbackOnElement(element, name, old_value, null, self);
@@ -2886,7 +2635,7 @@ pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: 
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyAttributeChange(element, name, old_value, self) catch |err| {
-            log.err(.page, "attributeRemove.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "attributeRemove.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 
@@ -2903,11 +2652,11 @@ pub fn attributeRemove(self: *Page, element: *Element, name: String, old_value: 
 
 fn signalSlotChange(self: *Page, slot: *Element.Html.Slot) void {
     self._slots_pending_slotchange.put(self.arena, slot, {}) catch |err| {
-        log.err(.page, "signalSlotChange.put", .{ .err = err, .type = self._type });
+        log.err(.page, "signalSlotChange.put", .{ .err = err, .type = self._type, .url = self.url });
         return;
     };
     self.scheduleSlotchangeDelivery() catch |err| {
-        log.err(.page, "signalSlotChange.schedule", .{ .err = err, .type = self._type });
+        log.err(.page, "signalSlotChange.schedule", .{ .err = err, .type = self._type, .url = self.url });
     };
 }
 
@@ -2947,7 +2696,7 @@ fn updateElementAssignedSlot(self: *Page, element: *Element) void {
     // Recursively search through the shadow root for a matching slot
     if (findMatchingSlot(shadow_root.asNode(), slot_name)) |slot| {
         self._element_assigned_slots.put(self.arena, element, slot) catch |err| {
-            log.err(.page, "updateElementAssignedSlot.put", .{ .err = err, .type = self._type });
+            log.err(.page, "updateElementAssignedSlot.put", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -2988,13 +2737,13 @@ pub fn setCustomizedBuiltInDefinition(self: *Page, element: *Element, definition
 pub fn characterDataChange(
     self: *Page,
     target: *Node,
-    old_value: []const u8,
+    old_value: String,
 ) void {
     var it: ?*std.DoublyLinkedList.Node = self._mutation_observers.first;
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyCharacterDataChange(target, old_value, self) catch |err| {
-            log.err(.page, "cdataChange.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "cdataChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -3021,7 +2770,7 @@ pub fn childListChange(
     while (it) |node| : (it = node.next) {
         const observer: *MutationObserver = @fieldParentPtr("node", node);
         observer.notifyChildListChange(target, added_nodes, removed_nodes, previous_sibling, next_sibling, self) catch |err| {
-            log.err(.page, "childListChange.notifyObserver", .{ .err = err, .type = self._type });
+            log.err(.page, "childListChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
 }
@@ -3072,7 +2821,7 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         }
 
         self.scriptAddedCallback(from_parser, script) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "script", .type = self._type });
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "script", .type = self._type, .url = self.url });
             return err;
         };
     } else if (node.is(Element.Html.IFrame)) |iframe| {
@@ -3082,8 +2831,18 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
         }
 
         self.iframeAddedCallback(iframe) catch |err| {
-            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type });
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
             return err;
+        };
+    } else if (node.is(Element.Html.Link)) |link| {
+        link.linkAddedCallback(self) catch |err| {
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "link", .type = self._type });
+            return error.LinkLoadError;
+        };
+    } else if (node.is(Element.Html.Style)) |style| {
+        style.styleAddedCallback(self) catch |err| {
+            log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "style", .type = self._type });
+            return error.StyleLoadError;
         };
     }
 }
@@ -3242,8 +3001,6 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
         .clientX = x,
         .clientY = y,
     }, self)).asEvent();
-
-    defer if (!event._v8_handoff) event.deinit(false);
     try self._event_manager.dispatch(target.asEventTarget(), event);
 }
 
@@ -3267,12 +3024,12 @@ pub fn handleClick(self: *Page, target: *Node) !void {
             // Check target attribute - don't navigate if opening in new window/tab
             const target_val = anchor.getTarget();
             if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
-                log.warn(.not_implemented, "a.target", .{ .type = self._type });
+                log.warn(.not_implemented, "a.target", .{ .type = self._type, .url = self.url });
                 return;
             }
 
             if (try element.hasAttribute(comptime .wrap("download"), self)) {
-                log.warn(.browser, "a.download", .{ .type = self._type });
+                log.warn(.browser, "a.download", .{ .type = self._type, .url = self.url });
                 return;
             }
 
@@ -3301,8 +3058,6 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
-    defer if (!event._v8_handoff) event.deinit(false);
-
     const element = self.window._document._active_element orelse return;
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{
@@ -3316,7 +3071,7 @@ pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
 }
 
 pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
-    const keyboard_event = event.as(KeyboardEvent);
+    const keyboard_event = event.is(KeyboardEvent) orelse return;
     const key = keyboard_event.getKey();
 
     if (key == .Dead) {
@@ -3372,10 +3127,8 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const form_element = form.asElement();
 
     if (submit_opts.fire_event) {
-        const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
-        defer if (!submit_event._v8_handoff) submit_event.deinit(false);
-
         const onsubmit_handler = try form.asHtmlElement().getOnSubmit(self);
+        const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
 
         var ls: JS.Local.Scope = undefined;
         self.js.localScope(&ls);
