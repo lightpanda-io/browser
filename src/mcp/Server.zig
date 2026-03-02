@@ -12,7 +12,7 @@ app: *App,
 
 http_client: *HttpClient,
 notification: *lp.Notification,
-browser: *lp.Browser,
+browser: lp.Browser,
 session: *lp.Session,
 page: *lp.Page,
 
@@ -31,9 +31,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
     self.notification = try .init(allocator);
     errdefer self.notification.deinit();
 
-    self.browser = try allocator.create(lp.Browser);
-    errdefer allocator.destroy(self.browser);
-    self.browser.* = try .init(app, .{ .http_client = self.http_client });
+    self.browser = try lp.Browser.init(app, .{ .http_client = self.http_client });
     errdefer self.browser.deinit();
 
     self.session = try self.browser.newSession(self.notification);
@@ -46,7 +44,6 @@ pub fn deinit(self: *Self) void {
     self.is_running.store(false, .release);
 
     self.browser.deinit();
-    self.allocator.destroy(self.browser);
     self.notification.deinit();
     self.http_client.deinit();
 
