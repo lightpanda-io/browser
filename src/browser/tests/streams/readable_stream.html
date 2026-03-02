@@ -301,3 +301,74 @@
     testing.expectEqual(false, data3.done);
   })();
 </script>
+
+<script id=enqueue_preserves_number>
+  (async function() {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(42);
+        controller.enqueue(0);
+        controller.enqueue(3.14);
+        controller.close();
+      }
+    });
+
+    const reader = stream.getReader();
+
+    const r1 = await reader.read();
+    testing.expectEqual(false, r1.done);
+    testing.expectEqual('number', typeof r1.value);
+    testing.expectEqual(42, r1.value);
+
+    const r2 = await reader.read();
+    testing.expectEqual('number', typeof r2.value);
+    testing.expectEqual(0, r2.value);
+
+    const r3 = await reader.read();
+    testing.expectEqual('number', typeof r3.value);
+    testing.expectEqual(3.14, r3.value);
+
+    const r4 = await reader.read();
+    testing.expectEqual(true, r4.done);
+  })();
+</script>
+
+<script id=enqueue_preserves_bool>
+  (async function() {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(true);
+        controller.enqueue(false);
+        controller.close();
+      }
+    });
+
+    const reader = stream.getReader();
+
+    const r1 = await reader.read();
+    testing.expectEqual('boolean', typeof r1.value);
+    testing.expectEqual(true, r1.value);
+
+    const r2 = await reader.read();
+    testing.expectEqual('boolean', typeof r2.value);
+    testing.expectEqual(false, r2.value);
+  })();
+</script>
+
+<script id=enqueue_preserves_object>
+  (async function() {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue({ key: 'value', num: 7 });
+        controller.close();
+      }
+    });
+
+    const reader = stream.getReader();
+
+    const r1 = await reader.read();
+    testing.expectEqual('object', typeof r1.value);
+    testing.expectEqual('value', r1.value.key);
+    testing.expectEqual(7, r1.value.num);
+  })();
+</script>

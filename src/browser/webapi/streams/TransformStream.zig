@@ -178,6 +178,11 @@ pub const TransformStreamDefaultController = struct {
         try self._stream._readable._controller.enqueue(chunk);
     }
 
+    /// Enqueue a raw JS value, preserving its type. Used by the JS-facing API.
+    pub fn enqueueValue(self: *TransformStreamDefaultController, value: js.Value) !void {
+        try self._stream._readable._controller.enqueueValue(value);
+    }
+
     pub fn doError(self: *TransformStreamDefaultController, reason: []const u8) !void {
         try self._stream._readable._controller.doError(reason);
     }
@@ -195,7 +200,7 @@ pub const TransformStreamDefaultController = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
-        pub const enqueue = bridge.function(TransformStreamDefaultController.enqueue, .{});
+        pub const enqueue = bridge.function(TransformStreamDefaultController.enqueueValue, .{});
         pub const @"error" = bridge.function(TransformStreamDefaultController.doError, .{});
         pub const terminate = bridge.function(TransformStreamDefaultController.terminate, .{});
     };
