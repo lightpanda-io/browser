@@ -12,7 +12,7 @@ app: *App,
 
 http_client: *HttpClient,
 notification: *lp.Notification,
-browser: *lp.Browser,
+browser: lp.Browser,
 session: *lp.Session,
 page: *lp.Page,
 
