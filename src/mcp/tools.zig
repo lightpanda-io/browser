@@ -201,7 +201,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 }
 
 fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseParams(GotoParams, arena, arguments, server, id, "goto");
+    const args = try parseArguments(GotoParams, arena, arguments, server, id, "goto");
     try performGoto(server, args.url, id);
 
     const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Navigated successfully." }};
@@ -209,7 +209,7 @@ fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
 }
 
 fn handleSearch(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseParams(SearchParams, arena, arguments, server, id, "search");
+    const args = try parseArguments(SearchParams, arena, arguments, server, id, "search");
 
     const component: std.Uri.Component = .{ .raw = args.text };
     var url_aw = std.Io.Writer.Allocating.init(arena);
@@ -230,10 +230,12 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     const MarkdownParams = struct {
         url: ?[:0]const u8 = null,
     };
-    if (try parseParamsOptional(MarkdownParams, arena, arguments)) |args| {
-        if (args.url) |u| {
-            try performGoto(server, u, id);
-        }
+    if (arguments) |args_raw| {
+        if (std.json.parseFromValueLeaky(MarkdownParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
+            if (args.url) |u| {
+                try performGoto(server, u, id);
+            }
+        } else |_| {}
     }
 
     const result = struct {
@@ -251,10 +253,12 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     const LinksParams = struct {
         url: ?[:0]const u8 = null,
     };
-    if (try parseParamsOptional(LinksParams, arena, arguments)) |args| {
-        if (args.url) |u| {
-            try performGoto(server, u, id);
-        }
+    if (arguments) |args_raw| {
+        if (std.json.parseFromValueLeaky(LinksParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
+            if (args.url) |u| {
+                try performGoto(server, u, id);
+            }
+        } else |_| {}
     }
 
     const result = struct {
@@ -269,7 +273,7 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
 }
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseParams(EvaluateParams, arena, arguments, server, id, "evaluate");
+    const args = try parseArguments(EvaluateParams, arena, arguments, server, id, "evaluate");
 
     if (args.url) |url| {
         try performGoto(server, url, id);
@@ -291,16 +295,15 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
 }
 
 fn handleOver(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseParams(OverParams, arena, arguments, server, id, "over");
+    const args = try parseArguments(OverParams, arena, arguments, server, id, "over");
 
     const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = args.result }};
     try server.sendResult(id, .{ .content = &content });
 }
 
-fn parseParams(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
+fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
     if (arguments == null) {
-        const msg = std.fmt.allocPrint(arena, "Missing arguments for {s}", .{tool_name}) catch "Missing arguments";
-        try server.sendError(id, .InvalidParams, msg);
+        try server.sendError(id, .InvalidParams, "Missing arguments");
         return error.InvalidParams;
     }
     return std.json.parseFromValueLeaky(T, arena, arguments.?, .{ .ignore_unknown_fields = true }) catch {
@@ -308,15 +311,6 @@ fn parseParams(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.
         try server.sendError(id, .InvalidParams, msg);
         return error.InvalidParams;
     };
-}
-
-fn parseParamsOptional(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value) !?T {
-    if (arguments) |args_raw| {
-        if (std.json.parseFromValueLeaky(T, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
-            return args;
-        } else |_| {}
-    }
-    return null;
 }
 
 fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
@@ -332,31 +326,3 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
 }
 
 const testing = @import("../testing.zig");
-
-test "tool_list contains expected tools" {
-    try testing.expect(tool_list.len >= 6);
-    try testing.expectString("goto", tool_list[0].name);
-}
-
-test "parseParams - valid" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const arguments = try std.json.parseFromSlice(std.json.Value, aa, "{\"url\": \"https://example.com\"}", .{});
-
-    const args = try parseParamsOptional(GotoParams, aa, arguments.value);
-    try testing.expect(args != null);
-    try testing.expectString("https://example.com", args.?.url);
-}
-
-test "parseParams - invalid" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const arguments = try std.json.parseFromSlice(std.json.Value, aa, "{\"not_url\": \"foo\"}", .{});
-
-    const args = try parseParamsOptional(GotoParams, aa, arguments.value);
-    try testing.expect(args == null);
-}

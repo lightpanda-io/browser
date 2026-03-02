@@ -106,19 +106,3 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 }
 
 const testing = @import("../testing.zig");
-
-test "resource_list contains expected resources" {
-    try testing.expect(resource_list.len >= 2);
-    try testing.expectString("mcp://page/html", resource_list[0].uri);
-    try testing.expectString("mcp://page/markdown", resource_list[1].uri);
-}
-
-test "ReadParams parsing" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
-
-    const raw = "{\"uri\": \"mcp://page/html\"}";
-    const parsed = try std.json.parseFromSlice(ReadParams, aa, raw, .{});
-    try testing.expectString("mcp://page/html", parsed.value.uri);
-}

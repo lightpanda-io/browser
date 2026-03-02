@@ -108,23 +108,31 @@ test "handleMessage - synchronous unit tests" {
     defer arena.deinit();
     const aa = arena.allocator();
 
-    // 1. Valid request
+    // 1. Valid handshake
     try handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
     );
     try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"id\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"name\":\"lightpanda\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"tools\":{}") != null);
     out_alloc.writer.end = 0;
 
-    // 2. Method not found
+    // 2. Tools list
     try handleMessage(server, aa,
-        \\{"jsonrpc":"2.0","id":2,"method":"unknown_method"}
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
     );
     try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"id\":2") != null);
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"name\":\"goto\"") != null);
+    out_alloc.writer.end = 0;
+
+    // 3. Method not found
+    try handleMessage(server, aa,
+        \\{"jsonrpc":"2.0","id":3,"method":"unknown_method"}
+    );
+    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"id\":3") != null);
     try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"code\":-32601") != null);
     out_alloc.writer.end = 0;
 
-    // 3. Parse error
+    // 4. Parse error
     {
         const old_filter = log.opts.filter_scopes;
         log.opts.filter_scopes = &.{.mcp};

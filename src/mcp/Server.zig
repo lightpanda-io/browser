@@ -89,21 +89,17 @@ test "MCP Integration: synchronous smoke test" {
 
     const input =
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
-        \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
     ;
 
-    var in_reader: std.io.Reader = .fixed(input);
-    var out_alloc: std.io.Writer.Allocating = .init(allocator);
+    var in_reader = std.io.Reader.fixed(input);
+    var out_alloc = std.io.Writer.Allocating.init(allocator);
     defer out_alloc.deinit();
 
-    var server: *Self = try .init(allocator, app, &out_alloc.writer);
+    var server = try Self.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
 
     try router.processRequests(server, &in_reader);
 
     const output = out_alloc.writer.buffered();
     try testing.expect(std.mem.indexOf(u8, output, "\"id\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "\"tools\":{}") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "\"id\":2") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "\"name\":\"goto\"") != null);
 }
