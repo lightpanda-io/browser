@@ -99,3 +99,114 @@ pub fn reset(_: *const ArenaPool, allocator: Allocator, retain: usize) void {
     const arena: *std.heap.ArenaAllocator = @ptrCast(@alignCast(allocator.ptr));
     _ = arena.reset(.{ .retain_with_limit = retain });
 }
+
+const testing = std.testing;
+
+test "arena pool - basic acquire and use" {
+    var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
+    defer pool.deinit();
+
+    const alloc = try pool.acquire();
+    const buf = try alloc.alloc(u8, 64);
+    @memset(buf, 0xAB);
+    try testing.expectEqual(@as(u8, 0xAB), buf[0]);
+
+    pool.release(alloc);
+}
+
+test "arena pool - reuse entry after release" {
+    var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
+    defer pool.deinit();
+
+    const alloc1 = try pool.acquire();
+    try testing.expectEqual(@as(u16, 0), pool.free_list_len);
+
+    pool.release(alloc1);
+    try testing.expectEqual(@as(u16, 1), pool.free_list_len);
+
+    // The same entry should be returned from the free list.
+    const alloc2 = try pool.acquire();
+    try testing.expectEqual(@as(u16, 0), pool.free_list_len);
+    try testing.expectEqual(alloc1.ptr, alloc2.ptr);
+
+    pool.release(alloc2);
+}
+
+test "arena pool - multiple concurrent arenas" {
+    var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
+    defer pool.deinit();
+
+    const a1 = try pool.acquire();
+    const a2 = try pool.acquire();
+    const a3 = try pool.acquire();
+
+    // All three must be distinct arenas.
+    try testing.expect(a1.ptr != a2.ptr);
+    try testing.expect(a2.ptr != a3.ptr);
+    try testing.expect(a1.ptr != a3.ptr);
+
+    _ = try a1.alloc(u8, 16);
+    _ = try a2.alloc(u8, 32);
+    _ = try a3.alloc(u8, 48);
+
+    pool.release(a1);
+    pool.release(a2);
+    pool.release(a3);
+
+    try testing.expectEqual(@as(u16, 3), pool.free_list_len);
+}
+
+test "arena pool - free list respects max limit" {
+    // Cap the free list at 1 so the second release discards its arena.
+    var pool = ArenaPool.init(testing.allocator, 1, 1024 * 16);
+    defer pool.deinit();
+
+    const a1 = try pool.acquire();
+    const a2 = try pool.acquire();
+
+    pool.release(a1);
+    try testing.expectEqual(@as(u16, 1), pool.free_list_len);
+
+    // The free list is full; a2's arena should be destroyed, not queued.
+    pool.release(a2);
+    try testing.expectEqual(@as(u16, 1), pool.free_list_len);
+}
+
+test "arena pool - reset clears memory without releasing" {
+    var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
+    defer pool.deinit();
+
+    const alloc = try pool.acquire();
+
+    const buf = try alloc.alloc(u8, 128);
+    @memset(buf, 0xFF);
+
+    // reset() frees arena memory but keeps the allocator in-flight.
+    pool.reset(alloc, 0);
+
+    // The free list must stay empty; the allocator was not released.
+    try testing.expectEqual(@as(u16, 0), pool.free_list_len);
+
+    // Allocating again through the same arena must still work.
+    const buf2 = try alloc.alloc(u8, 64);
+    @memset(buf2, 0x00);
+    try testing.expectEqual(@as(u8, 0x00), buf2[0]);
+
+    pool.release(alloc);
+}
+
+test "arena pool - deinit with entries in free list" {
+    // Verifies that deinit properly cleans up free-listed arenas (no leaks
+    // detected by the test allocator).
+    var pool = ArenaPool.init(testing.allocator, 512, 1024 * 16);
+
+    const a1 = try pool.acquire();
+    const a2 = try pool.acquire();
+    _ = try a1.alloc(u8, 256);
+    _ = try a2.alloc(u8, 512);
+    pool.release(a1);
+    pool.release(a2);
+    try testing.expectEqual(@as(u16, 2), pool.free_list_len);
+
+    pool.deinit();
+}
