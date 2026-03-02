@@ -8,11 +8,11 @@ const resources = @import("resources.zig");
 const Server = @import("Server.zig");
 const tools = @import("tools.zig");
 
-pub fn processRequests(server: *Server) !void {
+pub fn processRequests(server: *Server, in_stream: std.fs.File) !void {
     server.is_running.store(true, .release);
 
     const Streams = enum { stdin };
-    var poller = std.io.poll(server.allocator, Streams, .{ .stdin = std.fs.File.stdin() });
+    var poller = std.io.poll(server.allocator, Streams, .{ .stdin = in_stream });
     defer poller.deinit();
 
     const reader = poller.reader(.stdin);
@@ -67,6 +67,7 @@ fn handleMessage(server: *Server, arena: std.mem.Allocator, msg: []const u8) !vo
         .ignore_unknown_fields = true,
     }) catch |err| {
         log.warn(.mcp, "JSON Parse Error", .{ .err = err, .msg = msg });
+        try server.sendError(.null, .ParseError, "Parse error");
         return;
     };
 
@@ -109,4 +110,28 @@ fn handleInitialize(server: *Server, req: protocol.Request) !void {
     };
 
     try server.sendResult(req.id.?, result);
+}
+
+const testing = @import("../testing.zig");
+const McpHarness = @import("testing.zig").McpHarness;
+
+test "handleMessage - ParseError" {
+    const harness = try McpHarness.init(testing.allocator, testing.test_app);
+    defer harness.deinit();
+
+    harness.thread = try std.Thread.spawn(.{}, testParseError, .{harness});
+    try harness.runServer();
+}
+
+fn testParseError(harness: *McpHarness) void {
+    defer harness.server.is_running.store(false, .release);
+
+    var arena = std.heap.ArenaAllocator.init(harness.allocator);
+    defer arena.deinit();
+
+    harness.sendRequest("invalid json") catch return;
+
+    const response = harness.readResponse(arena.allocator()) catch return;
+    testing.expect(std.mem.indexOf(u8, response, "\"id\":null") != null) catch return;
+    testing.expect(std.mem.indexOf(u8, response, "\"code\":-32700") != null) catch return;
 }

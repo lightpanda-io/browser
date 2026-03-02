@@ -218,3 +218,27 @@ test "protocol error formatting" {
 
     try testing.expectString("{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}", aw.written());
 }
+
+test "JsonEscapingWriter" {
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    var escaping_writer = JsonEscapingWriter.init(&aw.writer);
+
+    // test newlines and quotes
+    try escaping_writer.writer.writeAll("hello\n\"world\"");
+
+    // the writer outputs escaped string chars without surrounding quotes
+    try testing.expectString("hello\\n\\\"world\\\"", aw.written());
+}
+
+test "RawJson serialization" {
+    const raw = RawJson{ .json = "{\"test\": 123}" };
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+
+    try std.json.Stringify.value(raw, .{}, &aw.writer);
+
+    try testing.expectString("{\"test\":123}", aw.written());
+}

@@ -322,3 +322,33 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
 
     _ = server.session.wait(5000);
 }
+
+const testing = @import("../testing.zig");
+
+test "tool_list contains expected tools" {
+    try testing.expect(tool_list.len >= 6);
+    try testing.expectString("goto", tool_list[0].name);
+}
+
+test "parseParams - valid" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const arguments = try std.json.parseFromSlice(std.json.Value, aa, "{\"url\": \"https://example.com\"}", .{});
+
+    const args = try parseParamsOptional(GotoParams, aa, arguments.value);
+    try testing.expect(args != null);
+    try testing.expectString("https://example.com", args.?.url);
+}
+
+test "parseParams - invalid" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const arguments = try std.json.parseFromSlice(std.json.Value, aa, "{\"not_url\": \"foo\"}", .{});
+
+    const args = try parseParamsOptional(GotoParams, aa, arguments.value);
+    try testing.expect(args == null);
+}
