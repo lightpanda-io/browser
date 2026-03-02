@@ -1012,8 +1012,8 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
     if (existing_window == null) {
         // on first load, dispatch frame_created evnet
         self._session.notification.dispatch(.page_frame_created, &.{
-            .page_id = page_id,
-            .parent_id = self.id,
+            .frame_id = frame_id,
+            .parent_id = self._frame_id,
             .timestamp = timestamp(.monotonic),
         });
     }
