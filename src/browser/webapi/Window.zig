@@ -556,10 +556,10 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
         .promise = try rejection.promise().temp(),
     }, page)).asEvent();
 
-    try page._event_manager.dispatchWithFunction(
+    try page._event_manager.dispatchDirect(
         self.asEventTarget(),
         event,
-        rejection.local.toLocal(self._on_unhandled_rejection),
+        self._on_unhandled_rejection,
         .{ .inject_target = true, .context = "window.unhandledrejection" },
     );
 }

@@ -440,14 +440,10 @@ pub fn updateCurrentEntry(self: *Navigation, options: UpdateCurrentEntryOptions,
 }
 
 pub fn dispatch(self: *Navigation, func: js.Function.Global, event: *Event, page: *Page) !void {
-    var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
-    defer ls.deinit();
-
-    return page._event_manager.dispatchWithFunction(
+    return page._event_manager.dispatchDirect(
         self.asEventTarget(),
         event,
-        ls.toLocal(func),
+        func,
         .{ .context = "Navigation" },
     );
 }

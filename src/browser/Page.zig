@@ -131,7 +131,7 @@ _element_namespace_uris: Element.NamespaceUriLookup = .empty,
 /// ```js
 /// img.setAttribute("onload", "(() => { ... })()");
 /// ```
-_element_attr_listeners: GlobalEventHandlersLookup = .empty,
+_event_target_attr_listeners: GlobalEventHandlersLookup = .empty,
 
 // Blob URL registry for URL.createObjectURL/revokeObjectURL
 _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
@@ -726,27 +726,23 @@ fn _documentIsComplete(self: *Page) !void {
     // Run load events before window.load.
     try self.dispatchLoad();
 
-    var ls: JS.Local.Scope = undefined;
-    self.js.localScope(&ls);
-    defer ls.deinit();
-
     // Dispatch window.load event.
     const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
     // This event is weird, it's dispatched directly on the window, but
     // with the document as the target.
     event._target = self.document.asEventTarget();
-    try self._event_manager.dispatchWithFunction(
+    try self._event_manager.dispatchDirect(
         self.window.asEventTarget(),
         event,
-        ls.toLocal(self.window._on_load),
+        self.window._on_load,
         .{ .inject_target = false, .context = "page load" },
     );
 
     const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
-    try self._event_manager.dispatchWithFunction(
+    try self._event_manager.dispatchDirect(
         self.window.asEventTarget(),
         pageshow_event,
-        ls.toLocal(self.window._on_pageshow),
+        self.window._on_pageshow,
         .{ .context = "page show" },
     );
 
@@ -3127,20 +3123,13 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const form_element = form.asElement();
 
     if (submit_opts.fire_event) {
-        const onsubmit_handler = try form.asHtmlElement().getOnSubmit(self);
         const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
 
-        var ls: JS.Local.Scope = undefined;
-        self.js.localScope(&ls);
-        defer ls.deinit();
+        // so submit_event is still valid when we check _prevent_default
+        submit_event.acquireRef();
+        defer submit_event.deinit(false, self);
 
-        try self._event_manager.dispatchWithFunction(
-            form_element.asEventTarget(),
-            submit_event,
-            ls.toLocal(onsubmit_handler),
-            .{ .context = "form submit" },
-        );
-
+        try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
         // If the submit event was prevented, don't submit the form
         if (submit_event._prevent_default) {
             return;

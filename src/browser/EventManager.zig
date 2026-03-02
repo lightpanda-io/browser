@@ -211,38 +211,9 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
     }
 
-    event._target = target;
-    event._dispatch_target = target; // Store original target for composedPath()
-    var was_handled = false;
-
-    defer if (was_handled) {
-        var ls: js.Local.Scope = undefined;
-        self.page.js.localScope(&ls);
-        defer ls.deinit();
-        ls.local.runMicrotasks();
-    };
-
     switch (target._type) {
-        .node => |node| try self.dispatchNode(node, event, &was_handled, opts),
-        .xhr,
-        .window,
-        .abort_signal,
-        .media_query_list,
-        .message_port,
-        .text_track_cue,
-        .navigation,
-        .screen,
-        .screen_orientation,
-        .visual_viewport,
-        .file_reader,
-        .generic,
-        => {
-            const list = self.lookup.get(.{
-                .event_target = @intFromPtr(target),
-                .type_string = event._type_string,
-            }) orelse return;
-            try self.dispatchAll(list, target, event, &was_handled, opts);
-        },
+        .node => |node| try self.dispatchNode(node, event, opts),
+        else => try self.dispatchDirect(target, event, null, .{ .context = "dispatch" }),
     }
 }
 
@@ -251,16 +222,22 @@ pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, co
 // property is just a shortcut for calling addEventListener, but they are distinct.
 // An event set via property cannot be removed by removeEventListener. If you
 // set both the property and add a listener, they both execute.
-const DispatchWithFunctionOptions = struct {
+const DispatchDirectOptions = struct {
     context: []const u8,
     inject_target: bool = true,
 };
-pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *Event, function_: ?js.Function, comptime opts: DispatchWithFunctionOptions) !void {
+
+// Direct dispatch for non-DOM targets (Window, XHR, AbortSignal) or DOM nodes with
+// property handlers. No propagation - just calls the handler and registered listeners.
+// Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
+pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, handler: anytype, comptime opts: DispatchDirectOptions) !void {
+    const page = self.page;
+
     event.acquireRef();
-    defer event.deinit(false, self.page);
+    defer event.deinit(false, page);
 
     if (comptime IS_DEBUG) {
-        log.debug(.event, "dispatchWithFunction", .{ .type = event._type_string.str(), .context = opts.context, .has_function = function_ != null });
+        log.debug(.event, "dispatchDirect", .{ .type = event._type_string, .context = opts.context });
     }
 
     if (comptime opts.inject_target) {
@@ -269,14 +246,15 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
     }
 
     var was_dispatched = false;
-    defer if (was_dispatched) {
-        var ls: js.Local.Scope = undefined;
-        self.page.js.localScope(&ls);
-        defer ls.deinit();
-        ls.local.runMicrotasks();
-    };
 
-    if (function_) |func| {
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer {
+        ls.local.runMicrotasks();
+        ls.deinit();
+    }
+
+    if (getFunction(handler, &ls.local)) |func| {
         event._current_target = target;
         if (func.callWithThis(void, target, .{event})) {
             was_dispatched = true;
@@ -286,17 +264,126 @@ pub fn dispatchWithFunction(self: *EventManager, target: *EventTarget, event: *E
         }
     }
 
+    // listeners reigstered via addEventListener
     const list = self.lookup.get(.{
         .event_target = @intFromPtr(target),
         .type_string = event._type_string,
     }) orelse return;
-    try self.dispatchAll(list, target, event, &was_dispatched, .{});
+
+    // This is a slightly simplified version of what you'll find in dispatchPhase
+    // It is simpler because, for direct dispatching, we know there's no ancestors
+    // and only the single target phase.
+
+    // Track dispatch depth for deferred removal
+    self.dispatch_depth += 1;
+    defer {
+        const dispatch_depth = self.dispatch_depth;
+        // Only destroy deferred listeners when we exit the outermost dispatch
+        if (dispatch_depth == 1) {
+            for (self.deferred_removals.items) |removal| {
+                removal.list.remove(&removal.listener.node);
+                self.listener_pool.destroy(removal.listener);
+            }
+            self.deferred_removals.clearRetainingCapacity();
+        } else {
+            self.dispatch_depth = dispatch_depth - 1;
+        }
+    }
+
+    // Use the last listener in the list as sentinel - listeners added during dispatch will be after it
+    const last_node = list.last orelse return;
+    const last_listener: *Listener = @alignCast(@fieldParentPtr("node", last_node));
+
+    // Iterate through the list, stopping after we've encountered the last_listener
+    var node = list.first;
+    var is_done = false;
+    while (node) |n| {
+        if (is_done) {
+            break;
+        }
+
+        const listener: *Listener = @alignCast(@fieldParentPtr("node", n));
+        is_done = (listener == last_listener);
+        node = n.next;
+
+        // Skip removed listeners
+        if (listener.removed) {
+            continue;
+        }
+
+        // If the listener has an aborted signal, remove it and skip
+        if (listener.signal) |signal| {
+            if (signal.getAborted()) {
+                self.removeListener(list, listener);
+                continue;
+            }
+        }
+
+        // Remove "once" listeners BEFORE calling them so nested dispatches don't see them
+        if (listener.once) {
+            self.removeListener(list, listener);
+        }
+
+        was_dispatched = true;
+        event._current_target = target;
+
+        switch (listener.function) {
+            .value => |value| try ls.toLocal(value).callWithThis(void, target, .{event}),
+            .string => |string| {
+                const str = try page.call_arena.dupeZ(u8, string.str());
+                try ls.local.eval(str, null);
+            },
+            .object => |obj_global| {
+                const obj = ls.toLocal(obj_global);
+                if (try obj.getFunction("handleEvent")) |handleEvent| {
+                    try handleEvent.callWithThis(void, obj, .{event});
+                }
+            },
+        }
+
+        if (event._stop_immediate_propagation) {
+            return;
+        }
+    }
 }
 
-fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: *bool, comptime opts: DispatchOpts) !void {
+fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
+    const T = @TypeOf(handler);
+    const ti = @typeInfo(T);
+
+    if (ti == .null) {
+        return null;
+    }
+    if (ti == .optional) {
+        return getFunction(handler orelse return null, local);
+    }
+    return switch (T) {
+        js.Function => handler,
+        js.Function.Temp => local.toLocal(handler),
+        js.Function.Global => local.toLocal(handler),
+        else => @compileError("handler must be null or \\??js.Function(\\.(Temp|Global))?"),
+    };
+}
+
+fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts: DispatchOpts) !void {
     const ShadowRoot = @import("webapi/ShadowRoot.zig");
 
+    {
+        const et = target.asEventTarget();
+        event._target = et;
+        event._dispatch_target = et; // Store original target for composedPath()
+    }
+
     const page = self.page;
+    var was_handled = false;
+
+    defer if (was_handled) {
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
+        ls.local.runMicrotasks();
+    };
+
     const activation_state = ActivationState.create(event, target, page);
 
     // Defer runs even on early return - ensures event phase is reset
@@ -374,7 +461,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
             .event_target = @intFromPtr(current_target),
             .type_string = event._type_string,
         })) |list| {
-            try self.dispatchPhase(list, current_target, event, was_handled, comptime .init(true, opts));
+            try self.dispatchPhase(list, current_target, event, &was_handled, comptime .init(true, opts));
         }
     }
 
@@ -386,7 +473,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
     blk: {
         // Get inline handler (e.g., onclick property) for this target
         if (self.getInlineHandler(target_et, event)) |inline_handler| {
-            was_handled.* = true;
+            was_handled = true;
             event._current_target = target_et;
 
             var ls: js.Local.Scope = undefined;
@@ -408,7 +495,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
             .type_string = event._type_string,
             .event_target = @intFromPtr(target_et),
         })) |list| {
-            try self.dispatchPhase(list, target_et, event, was_handled, comptime .init(null, opts));
+            try self.dispatchPhase(list, target_et, event, &was_handled, comptime .init(null, opts));
             if (event._stop_propagation) {
                 return;
             }
@@ -425,7 +512,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, was_handled: 
                 .type_string = event._type_string,
                 .event_target = @intFromPtr(current_target),
             })) |list| {
-                try self.dispatchPhase(list, current_target, event, was_handled, comptime .init(false, opts));
+                try self.dispatchPhase(list, current_target, event, &was_handled, comptime .init(false, opts));
             }
         }
     }
@@ -547,11 +634,6 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             return;
         }
     }
-}
-
-//  Non-Node dispatching (XHR, Window without propagation)
-fn dispatchAll(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime opts: DispatchOpts) !void {
-    return self.dispatchPhase(list, current_target, event, was_handled, comptime .init(null, opts));
 }
 
 fn getInlineHandler(self: *EventManager, target: *EventTarget, event: *Event) ?js.Function.Global {
