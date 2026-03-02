@@ -18,8 +18,6 @@ page: *lp.Page,
 
 is_running: std.atomic.Value(bool) = .init(false),
 
-stdout_mutex: std.Thread.Mutex = .{},
-
 pub fn init(allocator: std.mem.Allocator, app: *App) !*Self {
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
@@ -55,13 +53,9 @@ pub fn deinit(self: *Self) void {
     self.allocator.destroy(self);
 }
 
-pub fn sendResponse(self: *Self, response: anytype) !void {
-    self.stdout_mutex.lock();
-    defer self.stdout_mutex.unlock();
-
-    var stdout_file = std.fs.File.stdout();
-    var stdout_buf: [8192]u8 = undefined;
-    var stdout = stdout_file.writer(&stdout_buf);
+pub fn sendResponse(_: *Self, response: anytype) !void {
+    var buffer: [8192]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buffer);
     try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &stdout.interface);
     try stdout.interface.writeByte('\n');
     try stdout.interface.flush();

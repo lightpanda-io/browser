@@ -9,40 +9,51 @@ const Server = @import("Server.zig");
 const tools = @import("tools.zig");
 
 pub fn processRequests(server: *Server) !void {
-    var stdin_file = std.fs.File.stdin();
-    var stdin_buf: [8192]u8 = undefined;
-    var stdin = stdin_file.reader(&stdin_buf);
-
     server.is_running.store(true, .release);
+
+    const Streams = enum { stdin };
+    var poller = std.io.poll(server.allocator, Streams, .{ .stdin = std.fs.File.stdin() });
+    defer poller.deinit();
+
+    const reader = poller.reader(.stdin);
 
     var arena: std.heap.ArenaAllocator = .init(server.allocator);
     defer arena.deinit();
 
-    var msg_buf = std.Io.Writer.Allocating.init(server.allocator);
-    defer msg_buf.deinit();
-
     while (server.is_running.load(.acquire)) {
-        msg_buf.clearRetainingCapacity();
-        const n = try stdin.interface.streamDelimiterLimit(&msg_buf.writer, '\n', .limited(1024 * 1024 * 10));
+        const ms_to_next_task = (try server.browser.runMacrotasks()) orelse 10_000;
 
-        var found_newline = true;
-        _ = stdin.interface.discardDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream => found_newline = false,
-            else => return err,
-        };
+        // Poll until the next macrotask is scheduled. This will block if no data is available.
+        const poll_ok = try poller.pollTimeout(ms_to_next_task * std.time.ns_per_ms);
 
-        if (n == 0 and !found_newline) break;
+        while (true) {
+            const buffered = reader.buffered();
+            if (std.mem.indexOfScalar(u8, buffered, '\n')) |idx| {
+                const line = buffered[0..idx];
+                if (line.len > 0) {
+                    handleMessage(server, arena.allocator(), line) catch |err| {
+                        log.warn(.mcp, "Error processing message", .{ .err = err });
+                    };
+                    _ = arena.reset(.{ .retain_with_limit = 32 * 1024 });
+                }
+                reader.toss(idx + 1);
+            } else {
+                break;
+            }
+        }
 
-        const msg = msg_buf.written();
-        if (msg.len == 0) continue;
+        if (!poll_ok) {
+            // Check if we have any data left in the buffer that didn't end with a newline
+            const buffered = reader.buffered();
+            if (buffered.len > 0) {
+                handleMessage(server, arena.allocator(), buffered) catch |err| {
+                    log.warn(.mcp, "Error processing last message", .{ .err = err });
+                };
+            }
+            break;
+        }
 
-        handleMessage(server, arena.allocator(), msg) catch |err| {
-            log.warn(.mcp, "Error processing message", .{ .err = err });
-            // We should ideally send a parse error response back, but it's hard to extract the ID if parsing failed entirely.
-        };
-
-        // 32KB: avoid reallocations while keeping memory footprint low.
-        _ = arena.reset(.{ .retain_with_limit = 32 * 1024 });
+        server.browser.runMessageLoop();
     }
 }
 
