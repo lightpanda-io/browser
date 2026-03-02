@@ -36,12 +36,12 @@ const Entry = struct {
     arena: ArenaAllocator,
 };
 
-pub fn init(allocator: Allocator) ArenaPool {
+pub fn init(allocator: Allocator, free_list_max: u16, retain_bytes: usize) ArenaPool {
     return .{
         .allocator = allocator,
-        .free_list_max = 512, //  TODO make configurable
-        .retain_bytes = 1024 * 16, // TODO make configurable
-        .entry_pool = std.heap.MemoryPool(Entry).init(allocator),
+        .free_list_max = free_list_max,
+        .retain_bytes = retain_bytes,
+        .entry_pool = .init(allocator),
     };
 }
 
