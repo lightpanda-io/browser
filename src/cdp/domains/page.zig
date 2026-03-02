@@ -105,7 +105,7 @@ fn setLifecycleEventsEnabled(cmd: anytype) !void {
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
     if (page._load_state == .complete) {
-        const frame_id = &id.toFrameId(page.id);
+        const frame_id = &id.toFrameId(page._frame_id);
         const loader_id = &id.toLoaderId(page._req_id);
 
         const now = timestampF(.monotonic);
@@ -239,7 +239,7 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
     const session_id = bc.session_id orelse return;
     bc.reset();
 
-    const frame_id = &id.toFrameId(event.page_id);
+    const frame_id = &id.toFrameId(event.frame_id);
     const loader_id = &id.toLoaderId(event.req_id);
 
     var cdp = bc.cdp;
@@ -308,7 +308,7 @@ pub fn pageFrameCreated(bc: anytype, event: *const Notification.PageFrameCreated
     const session_id = bc.session_id orelse return;
 
     const cdp = bc.cdp;
-    const frame_id = &id.toFrameId(event.page_id);
+    const frame_id = &id.toFrameId(event.frame_id);
 
     try cdp.sendEvent("Page.frameAttached", .{ .params = .{
         .frameId = frame_id,
@@ -319,7 +319,7 @@ pub fn pageFrameCreated(bc: anytype, event: *const Notification.PageFrameCreated
         try cdp.sendEvent("Page.lifecycleEvent", LifecycleEvent{
             .name = "init",
             .frameId = frame_id,
-            .loaderId = &id.toLoaderId(event.page_id),
+            .loaderId = &id.toLoaderId(event.frame_id),
             .timestamp = event.timestamp,
         }, .{ .session_id = session_id });
     }
@@ -331,7 +331,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
     const session_id = bc.session_id orelse return;
 
     const timestamp = event.timestamp;
-    const frame_id = &id.toFrameId(event.page_id);
+    const frame_id = &id.toFrameId(event.frame_id);
     const loader_id = &id.toLoaderId(event.req_id);
 
     var cdp = bc.cdp;
@@ -478,11 +478,11 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
 }
 
 pub fn pageNetworkIdle(bc: anytype, event: *const Notification.PageNetworkIdle) !void {
-    return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.page_id), &id.toLoaderId(event.req_id));
+    return sendPageLifecycle(bc, "networkIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.req_id));
 }
 
 pub fn pageNetworkAlmostIdle(bc: anytype, event: *const Notification.PageNetworkAlmostIdle) !void {
-    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.page_id), &id.toLoaderId(event.req_id));
+    return sendPageLifecycle(bc, "networkAlmostIdle", event.timestamp, &id.toFrameId(event.frame_id), &id.toLoaderId(event.req_id));
 }
 
 fn sendPageLifecycle(bc: anytype, name: []const u8, timestamp: u64, frame_id: []const u8, loader_id: []const u8) !void {

@@ -237,8 +237,8 @@ pub fn httpRequestStart(bc: anytype, msg: *const Notification.RequestStart) !voi
 
     const transfer = msg.transfer;
     const req = &transfer.req;
-    const page_id = req.page_id;
-    const page = bc.session.findPage(page_id) orelse return;
+    const frame_id = req.frame_id;
+    const page = bc.session.findPage(frame_id) orelse return;
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {
@@ -249,7 +249,7 @@ pub fn httpRequestStart(bc: anytype, msg: *const Notification.RequestStart) !voi
     try bc.cdp.sendEvent("Network.requestWillBeSent", .{
         .loaderId = &id.toLoaderId(transfer.id),
         .requestId = &id.toRequestId(transfer.id),
-        .frameId = &id.toFrameId(page_id),
+        .frameId = &id.toFrameId(frame_id),
         .type = req.resource_type.string(),
         .documentURL = page.url,
         .request = TransferAsRequestWriter.init(transfer),
@@ -270,7 +270,7 @@ pub fn httpResponseHeaderDone(arena: Allocator, bc: anytype, msg: *const Notific
     try bc.cdp.sendEvent("Network.responseReceived", .{
         .loaderId = &id.toLoaderId(transfer.id),
         .requestId = &id.toRequestId(transfer.id),
-        .frameId = &id.toFrameId(transfer.req.page_id),
+        .frameId = &id.toFrameId(transfer.req.frame_id),
         .response = TransferAsResponseWriter.init(arena, msg.transfer),
         .hasExtraInfo = false, // TODO change after adding Network.responseReceivedExtraInfo
     }, .{ .session_id = session_id });
