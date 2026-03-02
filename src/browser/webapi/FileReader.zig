@@ -183,12 +183,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
 
     const page = self._page;
 
-    var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
-    defer ls.deinit();
-    const local = &ls.local;
-
-    try self.dispatch(.load_start, .{ .loaded = 0, .total = blob.getSize() }, local, page);
+    try self.dispatch(.load_start, .{ .loaded = 0, .total = blob.getSize() }, page);
     if (self._aborted) {
         return;
     }
@@ -196,7 +191,7 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
     // Perform the read (synchronous since data is in memory)
     const data = blob._slice;
     const size = data.len;
-    try self.dispatch(.progress, .{ .loaded = size, .total = size }, local, page);
+    try self.dispatch(.progress, .{ .loaded = size, .total = size }, page);
     if (self._aborted) {
         return;
     }
@@ -216,8 +211,8 @@ fn readInternal(self: *FileReader, blob: *Blob, read_type: ReadType) !void {
 
     self._ready_state = .done;
 
-    try self.dispatch(.load, .{ .loaded = size, .total = size }, local, page);
-    try self.dispatch(.load_end, .{ .loaded = size, .total = size }, local, page);
+    try self.dispatch(.load, .{ .loaded = size, .total = size }, page);
+    try self.dispatch(.load_end, .{ .loaded = size, .total = size }, page);
 }
 
 pub fn abort(self: *FileReader) !void {
@@ -231,17 +226,12 @@ pub fn abort(self: *FileReader) !void {
 
     const page = self._page;
 
-    var ls: js.Local.Scope = undefined;
-    page.js.localScope(&ls);
-    defer ls.deinit();
-    const local = &ls.local;
+    try self.dispatch(.abort, null, page);
 
-    try self.dispatch(.abort, null, local, page);
-
-    try self.dispatch(.load_end, null, local, page);
+    try self.dispatch(.load_end, null, page);
 }
 
-fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Progress, local: *const js.Local, page: *Page) !void {
+fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Progress, page: *Page) !void {
     const field, const typ = comptime blk: {
         break :blk switch (event_type) {
             .abort => .{ "_on_abort", "abort" },
@@ -260,10 +250,10 @@ fn dispatch(self: *FileReader, comptime event_type: DispatchType, progress_: ?Pr
         page,
     )).asEvent();
 
-    return page._event_manager.dispatchWithFunction(
+    return page._event_manager.dispatchDirect(
         self.asEventTarget(),
         event,
-        local.toLocal(@field(self, field)),
+        @field(self, field),
         .{ .context = "FileReader " ++ typ },
     );
 }
