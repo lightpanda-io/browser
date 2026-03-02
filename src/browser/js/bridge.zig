@@ -827,6 +827,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/encoding/TextDecoder.zig"),
     @import("../webapi/encoding/TextEncoder.zig"),
     @import("../webapi/encoding/TextEncoderStream.zig"),
+    @import("../webapi/encoding/TextDecoderStream.zig"),
     @import("../webapi/Event.zig"),
     @import("../webapi/event/CompositionEvent.zig"),
     @import("../webapi/event/CustomEvent.zig"),
