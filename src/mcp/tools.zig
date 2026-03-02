@@ -13,32 +13,79 @@ pub const tool_list = [_]protocol.Tool{
     .{
         .name = "goto",
         .description = "Navigate to a specified URL and load the page in memory so it can be reused later for info extraction.",
-        .inputSchema = .{ .json = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\",\"description\":\"The URL to navigate to, must be a valid URL.\"}},\"required\":[\"url\"]}" },
+        .inputSchema = .{ .json = 
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "url": { "type": "string", "description": "The URL to navigate to, must be a valid URL." }
+        \\  },
+        \\  "required": ["url"]
+        \\}
+    },
     },
     .{
         .name = "search",
         .description = "Use a search engine to look for specific words, terms, sentences. The search page will then be loaded in memory.",
-        .inputSchema = .{ .json = "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"The text to search for, must be a valid search query.\"}},\"required\":[\"text\"]}" },
+        .inputSchema = .{ .json = 
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "text": { "type": "string", "description": "The text to search for, must be a valid search query." }
+        \\  },
+        \\  "required": ["text"]
+        \\}
+    },
     },
     .{
         .name = "markdown",
         .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
-        .inputSchema = .{ .json = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\",\"description\":\"Optional URL to navigate to before fetching markdown.\"}}}" },
+        .inputSchema = .{ .json = 
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching markdown." }
+        \\  }
+        \\}
+    },
     },
     .{
         .name = "links",
         .description = "Extract all links in the opened page. If a url is provided, it navigates to that url first.",
-        .inputSchema = .{ .json = "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\",\"description\":\"Optional URL to navigate to before extracting links.\"}}}" },
+        .inputSchema = .{ .json = 
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting links." }
+        \\  }
+        \\}
+    },
     },
     .{
         .name = "evaluate",
         .description = "Evaluate JavaScript in the current page context. If a url is provided, it navigates to that url first.",
-        .inputSchema = .{ .json = "{\"type\":\"object\",\"properties\":{\"script\":{\"type\":\"string\"},\"url\":{\"type\":\"string\",\"description\":\"Optional URL to navigate to before evaluating.\"}},\"required\":[\"script\"]}" },
+        .inputSchema = .{ .json = 
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "script": { "type": "string" },
+        \\    "url": { "type": "string", "description": "Optional URL to navigate to before evaluating." }
+        \\  },
+        \\  "required": ["script"]
+        \\}
+    },
     },
     .{
         .name = "over",
         .description = "Used to indicate that the task is over and give the final answer if there is any. This is the last tool to be called in a task.",
-        .inputSchema = .{ .json = "{\"type\":\"object\",\"properties\":{\"result\":{\"type\":\"string\",\"description\":\"The final result of the task.\"}},\"required\":[\"result\"]}" },
+        .inputSchema = .{ .json = 
+        \\{
+        \\  "type": "object",
+        \\  "properties": {
+        \\    "result": { "type": "string", "description": "The final result of the task." }
+        \\  },
+        \\  "required": ["result"]
+        \\}
+    },
     },
 };
 

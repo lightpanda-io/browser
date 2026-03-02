@@ -101,9 +101,13 @@ pub const RawJson = struct {
     json: []const u8,
 
     pub fn jsonStringify(self: @This(), jw: anytype) !void {
-        try jw.beginWriteRaw();
-        try jw.writer.writeAll(self.json);
-        jw.endWriteRaw();
+        var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+        defer arena.deinit();
+
+        const parsed = std.json.parseFromSlice(std.json.Value, arena.allocator(), self.json, .{}) catch return error.WriteFailed;
+        defer parsed.deinit();
+
+        try jw.write(parsed.value);
     }
 };
 
