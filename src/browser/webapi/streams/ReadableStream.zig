@@ -47,6 +47,8 @@ _page: *Page,
 _state: State,
 _reader: ?*ReadableStreamDefaultReader,
 _controller: *ReadableStreamDefaultController,
+// The arena is used by the builtin controller.
+_arena: std.mem.Allocator,
 _stored_error: ?[]const u8,
 _pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
@@ -68,9 +70,13 @@ const QueueingStrategy = struct {
 pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) !*ReadableStream {
     const strategy: QueueingStrategy = strategy_ orelse .{};
 
+    const arena = try page.getArena(.{ .debug = "Animation" });
+    errdefer page.releaseArena(arena);
+
     const self = try page._factory.create(ReadableStream{
         ._page = page,
         ._state = .readable,
+        ._arena = arena,
         ._reader = null,
         ._controller = undefined,
         ._stored_error = null,
@@ -106,6 +112,10 @@ pub fn initWithData(data: []const u8, page: *Page) !*ReadableStream {
     try stream._controller.close();
 
     return stream;
+}
+
+pub fn deinit(self: *ReadableStream, _: bool, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
 pub fn getReader(self: *ReadableStream, page: *Page) !*ReadableStreamDefaultReader {
@@ -367,6 +377,8 @@ pub const JsApi = struct {
         pub const name = "ReadableStream";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(ReadableStream.deinit);
     };
 
     pub const constructor = bridge.constructor(ReadableStream.init, .{});
