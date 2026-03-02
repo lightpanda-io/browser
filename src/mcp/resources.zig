@@ -22,13 +22,7 @@ pub const resource_list = [_]protocol.Resource{
 };
 
 pub fn handleList(server: *Server, req: protocol.Request) !void {
-    const result = struct {
-        resources: []const protocol.Resource,
-    }{
-        .resources = &resource_list,
-    };
-
-    try server.sendResult(req.id.?, result);
+    try server.sendResult(req.id.?, .{ .resources = &resource_list });
 }
 
 const ReadParams = struct {
