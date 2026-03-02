@@ -438,15 +438,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const browser = &self.cdp.browser;
             const env = &browser.env;
 
-            // Drain microtasks makes sure we don't have inspector's callback
-            // in progress before deinit.
-            env.runMicrotasks();
-
             // resetContextGroup detach the inspector from all contexts.
-            // It append async tasks, so we make sure we run the message loop
+            // It appends async tasks, so we make sure we run the message loop
             // before deinit it.
             env.inspector.?.resetContextGroup();
-            _ = env.pumpMessageLoop();
             env.inspector.?.stopSession();
 
             // abort all intercepted requests before closing the sesion/page
