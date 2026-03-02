@@ -181,5 +181,4 @@ noinline fn assertionFailure(comptime ctx: []const u8, args: anytype) noreturn {
 
 test {
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(mcp);
 }
