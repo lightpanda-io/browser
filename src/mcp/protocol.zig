@@ -115,12 +115,12 @@ pub const Tool = struct {
 pub fn minify(comptime json: []const u8) []const u8 {
     @setEvalBranchQuota(100000);
     const minified = comptime blk: {
-        var len: usize = 0;
+        var res: []const u8 = "";
         var in_string = false;
         var escaped = false;
         for (json) |c| {
             if (in_string) {
-                len += 1;
+                res = res ++ [1]u8{c};
                 if (escaped) {
                     escaped = false;
                 } else if (c == '\\') {
@@ -133,46 +133,15 @@ pub fn minify(comptime json: []const u8) []const u8 {
                     ' ', '\n', '\r', '\t' => continue,
                     '"' => {
                         in_string = true;
-                        len += 1;
+                        res = res ++ [1]u8{c};
                     },
-                    else => len += 1,
-                }
-            }
-        }
-
-        var res: [len]u8 = undefined;
-        var pos: usize = 0;
-        in_string = false;
-        escaped = false;
-        for (json) |c| {
-            if (in_string) {
-                res[pos] = c;
-                pos += 1;
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    in_string = false;
-                }
-            } else {
-                switch (c) {
-                    ' ', '\n', '\r', '\t' => continue,
-                    '"' => {
-                        in_string = true;
-                        res[pos] = c;
-                        pos += 1;
-                    },
-                    else => {
-                        res[pos] = c;
-                        pos += 1;
-                    },
+                    else => res = res ++ [1]u8{c},
                 }
             }
         }
         break :blk res;
     };
-    return &minified;
+    return minified;
 }
 
 pub const Resource = struct {
