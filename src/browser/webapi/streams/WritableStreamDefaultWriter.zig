@@ -22,12 +22,10 @@ const WritableStream = @import("WritableStream.zig");
 
 const WritableStreamDefaultWriter = @This();
 
-_page: *Page,
 _stream: ?*WritableStream,
 
 pub fn init(stream: *WritableStream, page: *Page) !*WritableStreamDefaultWriter {
     return page._factory.create(WritableStreamDefaultWriter{
-        ._page = page,
         ._stream = stream,
     });
 }

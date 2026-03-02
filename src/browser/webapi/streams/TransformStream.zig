@@ -29,7 +29,6 @@ pub const DefaultController = TransformStreamDefaultController;
 
 pub const ZigTransformFn = *const fn (*TransformStreamDefaultController, js.Value) anyerror!void;
 
-_page: *Page,
 _readable: *ReadableStream,
 _writable: *WritableStream,
 _controller: *TransformStreamDefaultController,
@@ -44,7 +43,6 @@ pub fn init(transformer_: ?Transformer, page: *Page) !*TransformStream {
     const readable = try ReadableStream.init(null, null, page);
 
     const self = try page._factory.create(TransformStream{
-        ._page = page,
         ._readable = readable,
         ._writable = undefined,
         ._controller = undefined,
@@ -74,7 +72,6 @@ pub fn initWithZigTransform(zig_transform: ZigTransformFn, page: *Page) !*Transf
     const readable = try ReadableStream.init(null, null, page);
 
     const self = try page._factory.create(TransformStream{
-        ._page = page,
         ._readable = readable,
         ._writable = undefined,
         ._controller = undefined,
@@ -152,7 +149,6 @@ pub fn registerTypes() []const type {
 }
 
 pub const TransformStreamDefaultController = struct {
-    _page: *Page,
     _stream: *TransformStream,
     _transform_fn: ?js.Function.Global,
     _flush_fn: ?js.Function.Global,
@@ -166,7 +162,6 @@ pub const TransformStreamDefaultController = struct {
         page: *Page,
     ) !*TransformStreamDefaultController {
         return page._factory.create(TransformStreamDefaultController{
-            ._page = page,
             ._stream = stream,
             ._transform_fn = transform_fn,
             ._flush_fn = flush_fn,

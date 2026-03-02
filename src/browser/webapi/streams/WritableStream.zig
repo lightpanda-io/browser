@@ -31,7 +31,6 @@ pub const State = enum {
     errored,
 };
 
-_page: *Page,
 _state: State,
 _writer: ?*WritableStreamDefaultWriter,
 _controller: *WritableStreamDefaultController,
@@ -50,7 +49,6 @@ const UnderlyingSink = struct {
 
 pub fn init(sink_: ?UnderlyingSink, page: *Page) !*WritableStream {
     const self = try page._factory.create(WritableStream{
-        ._page = page,
         ._state = .writable,
         ._writer = null,
         ._controller = undefined,
@@ -75,7 +73,6 @@ pub fn init(sink_: ?UnderlyingSink, page: *Page) !*WritableStream {
 
 pub fn initForTransform(transform_stream: *TransformStream, page: *Page) !*WritableStream {
     const self = try page._factory.create(WritableStream{
-        ._page = page,
         ._state = .writable,
         ._writer = null,
         ._controller = undefined,
