@@ -496,6 +496,8 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 // cases, the interecptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
+    // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
+    // then we _have_ to queue this.
     if (self.handles.performing == false) {
         if (self.handles.get()) |conn| {
             return self.makeRequest(conn, transfer);
@@ -791,30 +793,30 @@ fn processMessages(self: *Client) !bool {
         if (msg.err) |err| {
             requestFailed(transfer, err, true);
         } else blk: {
-            {
-                self.handles.performing = true;
-                defer self.handles.performing = false;
+            // make sure the transfer can't be immediately aborted from a callback
+            // since we still need it here.
+            transfer._performing = true;
+            defer transfer._performing = false;
 
+            if (!transfer._header_done_called) {
                 // In case of request w/o data, we need to call the header done
                 // callback now.
-                if (!transfer._header_done_called) {
-                    const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
-                        log.err(.http, "header_done_callback", .{ .err = err });
-                        requestFailed(transfer, err, true);
-                        continue;
-                    };
-                    if (!proceed) {
-                        requestFailed(transfer, error.Abort, true);
-                        break :blk;
-                    }
-                }
-                transfer.req.done_callback(transfer.ctx) catch |err| {
-                    // transfer isn't valid at this point, don't use it.
-                    log.err(.http, "done_callback", .{ .err = err });
+                const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
+                    log.err(.http, "header_done_callback", .{ .err = err });
                     requestFailed(transfer, err, true);
                     continue;
                 };
+                if (!proceed) {
+                    requestFailed(transfer, error.Abort, true);
+                    break :blk;
+                }
             }
+            transfer.req.done_callback(transfer.ctx) catch |err| {
+                // transfer isn't valid at this point, don't use it.
+                log.err(.http, "done_callback", .{ .err = err });
+                requestFailed(transfer, err, true);
+                continue;
+            };
 
             transfer.req.notification.dispatch(.http_request_done, &.{
                 .transfer = transfer,
@@ -944,6 +946,7 @@ pub const Transfer = struct {
     // number of times the transfer has been tried.
     // incremented by reset func.
     _tries: u8 = 0,
+    _performing: bool = false,
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
@@ -1050,7 +1053,7 @@ pub const Transfer = struct {
         requestFailed(self, err, true);
 
         const client = self.client;
-        if (client.handles.performing) {
+        if (self._performing or client.handles.performing) {
             // We're currently in a curl_multi_perform. We cannot call endTransfer
             // as that calls curl_multi_remove_handle, and you can't do that
             // from a curl callback. Instead, we flag this transfer and all of
