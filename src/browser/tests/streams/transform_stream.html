@@ -81,3 +81,76 @@
     testing.expectEqual(true, result2.done);
   })();
 </script>
+
+<script id=pipe_through_basic>
+  (async function() {
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue('hello');
+        controller.close();
+      }
+    });
+
+    const ts = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.toUpperCase());
+      }
+    });
+
+    const output = input.pipeThrough(ts);
+    const reader = output.getReader();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('HELLO', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=pipe_to_basic>
+  (async function() {
+    const chunks = [];
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue('a');
+        controller.enqueue('b');
+        controller.close();
+      }
+    });
+
+    const ws = new WritableStream({
+      write(chunk) {
+        chunks.push(chunk);
+      }
+    });
+
+    await input.pipeTo(ws);
+    testing.expectEqual(2, chunks.length);
+    testing.expectEqual('a', chunks[0]);
+    testing.expectEqual('b', chunks[1]);
+  })();
+</script>
+
+<script id=pipe_through_text_decoder>
+  (async function() {
+    const bytes = new Uint8Array([104, 101, 108, 108, 111]);
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      }
+    });
+
+    const output = input.pipeThrough(new TextDecoderStream());
+    const reader = output.getReader();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hello', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
