@@ -789,25 +789,30 @@ fn processMessages(self: *Client) !bool {
         if (msg.err) |err| {
             requestFailed(transfer, err, true);
         } else blk: {
-            // In case of request w/o data, we need to call the header done
-            // callback now.
-            if (!transfer._header_done_called) {
-                const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
-                    log.err(.http, "header_done_callback", .{ .err = err });
+            {
+                self.handles.performing = true;
+                defer self.handles.performing = false;
+
+                // In case of request w/o data, we need to call the header done
+                // callback now.
+                if (!transfer._header_done_called) {
+                    const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
+                        log.err(.http, "header_done_callback", .{ .err = err });
+                        requestFailed(transfer, err, true);
+                        continue;
+                    };
+                    if (!proceed) {
+                        requestFailed(transfer, error.Abort, true);
+                        break :blk;
+                    }
+                }
+                transfer.req.done_callback(transfer.ctx) catch |err| {
+                    // transfer isn't valid at this point, don't use it.
+                    log.err(.http, "done_callback", .{ .err = err });
                     requestFailed(transfer, err, true);
                     continue;
                 };
-                if (!proceed) {
-                    requestFailed(transfer, error.Abort, true);
-                    break :blk;
-                }
             }
-            transfer.req.done_callback(transfer.ctx) catch |err| {
-                // transfer isn't valid at this point, don't use it.
-                log.err(.http, "done_callback", .{ .err = err });
-                requestFailed(transfer, err, true);
-                continue;
-            };
 
             transfer.req.notification.dispatch(.http_request_done, &.{
                 .transfer = transfer,
@@ -1041,10 +1046,6 @@ pub const Transfer = struct {
 
     pub fn abort(self: *Transfer, err: anyerror) void {
         requestFailed(self, err, true);
-        if (self._conn == null) {
-            self.deinit();
-            return;
-        }
 
         const client = self.client;
         if (client.handles.performing) {
