@@ -59,3 +59,24 @@
     testing.expectEqual(true, result2.done);
   })();
 </script>
+
+<script id=text_decoder_stream_empty_chunk>
+  (async function() {
+    const tds = new TextDecoderStream();
+    const writer = tds.writable.getWriter();
+    const reader = tds.readable.getReader();
+
+    // Write an empty chunk followed by real data
+    await writer.write(new Uint8Array([]));
+    await writer.write(new Uint8Array([104, 105]));
+    await writer.close();
+
+    // Empty chunk should be filtered out; first read gets "hi"
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hi', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>

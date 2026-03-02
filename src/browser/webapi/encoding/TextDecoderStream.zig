@@ -65,6 +65,9 @@ fn decodeTransform(controller: *TransformStream.DefaultController, chunk: js.Val
         input = input[3..];
     }
 
+    // Per spec, empty chunks produce no output
+    if (input.len == 0) return;
+
     try controller.enqueue(.{ .string = input });
 }
 
