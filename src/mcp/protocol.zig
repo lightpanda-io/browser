@@ -113,8 +113,7 @@ pub const Tool = struct {
 };
 
 pub fn minify(comptime json: []const u8) []const u8 {
-    @setEvalBranchQuota(100000);
-    const minified = comptime blk: {
+    return comptime blk: {
         var res: []const u8 = "";
         var in_string = false;
         var escaped = false;
@@ -141,7 +140,6 @@ pub fn minify(comptime json: []const u8) []const u8 {
         }
         break :blk res;
     };
-    return minified;
 }
 
 pub const Resource = struct {
