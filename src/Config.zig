@@ -28,6 +28,7 @@ pub const RunMode = enum {
     fetch,
     serve,
     version,
+    mcp,
 };
 
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
@@ -59,56 +60,56 @@ pub fn deinit(self: *const Config, allocator: Allocator) void {
 
 pub fn tlsVerifyHost(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.tls_verify_host,
+        inline .serve, .fetch, .mcp => |opts| opts.common.tls_verify_host,
         else => unreachable,
     };
 }
 
 pub fn obeyRobots(self: *const Config) bool {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.obey_robots,
+        inline .serve, .fetch, .mcp => |opts| opts.common.obey_robots,
         else => unreachable,
     };
 }
 
 pub fn httpProxy(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.http_proxy,
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_proxy,
         else => unreachable,
     };
 }
 
 pub fn proxyBearerToken(self: *const Config) ?[:0]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.proxy_bearer_token,
+        inline .serve, .fetch, .mcp => |opts| opts.common.proxy_bearer_token,
         .help, .version => null,
     };
 }
 
 pub fn httpMaxConcurrent(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.http_max_concurrent orelse 10,
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_max_concurrent orelse 10,
         else => unreachable,
     };
 }
 
 pub fn httpMaxHostOpen(self: *const Config) u8 {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.http_max_host_open orelse 4,
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_max_host_open orelse 4,
         else => unreachable,
     };
 }
 
 pub fn httpConnectTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.http_connect_timeout orelse 0,
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_connect_timeout orelse 0,
         else => unreachable,
     };
 }
 
 pub fn httpTimeout(self: *const Config) u31 {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.http_timeout orelse 5000,
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_timeout orelse 5000,
         else => unreachable,
     };
 }
@@ -119,35 +120,35 @@ pub fn httpMaxRedirects(_: *const Config) u8 {
 
 pub fn httpMaxResponseSize(self: *const Config) ?usize {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.http_max_response_size,
+        inline .serve, .fetch, .mcp => |opts| opts.common.http_max_response_size,
         else => unreachable,
     };
 }
 
 pub fn logLevel(self: *const Config) ?log.Level {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.log_level,
+        inline .serve, .fetch, .mcp => |opts| opts.common.log_level,
         else => unreachable,
     };
 }
 
 pub fn logFormat(self: *const Config) ?log.Format {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.log_format,
+        inline .serve, .fetch, .mcp => |opts| opts.common.log_format,
         else => unreachable,
     };
 }
 
 pub fn logFilterScopes(self: *const Config) ?[]const log.Scope {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.log_filter_scopes,
+        inline .serve, .fetch, .mcp => |opts| opts.common.log_filter_scopes,
         else => unreachable,
     };
 }
 
 pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
-        inline .serve, .fetch => |opts| opts.common.user_agent_suffix,
+        inline .serve, .fetch, .mcp => |opts| opts.common.user_agent_suffix,
         .help, .version => null,
     };
 }
@@ -171,6 +172,7 @@ pub const Mode = union(RunMode) {
     fetch: Fetch,
     serve: Serve,
     version: void,
+    mcp: Mcp,
 };
 
 pub const Serve = struct {
@@ -179,6 +181,10 @@ pub const Serve = struct {
     timeout: u31 = 10,
     cdp_max_connections: u16 = 16,
     cdp_max_pending_connections: u16 = 128,
+    common: Common = .{},
+};
+
+pub const Mcp = struct {
     common: Common = .{},
 };
 
@@ -324,7 +330,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     const usage =
         \\usage: {s} command [options] [URL]
         \\
-        \\Command can be either 'fetch', 'serve' or 'help'
+        \\Command can be either 'fetch', 'serve', 'mcp' or 'help'
         \\
         \\fetch command
         \\Fetches the specified URL
@@ -372,6 +378,12 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
     ++ common_options ++
         \\
+        \\mcp command
+        \\Starts an MCP (Model Context Protocol) server over stdio
+        \\Example: {s} mcp
+        \\
+    ++ common_options ++
+        \\
         \\version command
         \\Displays the version of {s}
         \\
@@ -379,7 +391,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\Displays this message
         \\
     ;
-    std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name });
+    std.debug.print(usage, .{ self.exec_name, self.exec_name, self.exec_name, self.exec_name, self.exec_name });
     if (success) {
         return std.process.cleanExit();
     }
@@ -413,6 +425,8 @@ pub fn parseArgs(allocator: Allocator) !Config {
         .serve => .{ .serve = parseServeArgs(allocator, &args) catch
             return init(allocator, exec_name, .{ .help = false }) },
         .fetch => .{ .fetch = parseFetchArgs(allocator, &args) catch
+            return init(allocator, exec_name, .{ .help = false }) },
+        .mcp => .{ .mcp = parseMcpArgs(allocator, &args) catch
             return init(allocator, exec_name, .{ .help = false }) },
         .version => .{ .version = {} },
     };
@@ -540,6 +554,24 @@ fn parseServeArgs(
     }
 
     return serve;
+}
+
+fn parseMcpArgs(
+    allocator: Allocator,
+    args: *std.process.ArgIterator,
+) !Mcp {
+    var mcp: Mcp = .{};
+
+    while (args.next()) |opt| {
+        if (try parseCommonArg(allocator, opt, args, &mcp.common)) {
+            continue;
+        }
+
+        log.fatal(.mcp, "unknown argument", .{ .mode = "mcp", .arg = opt });
+        return error.UnkownOption;
+    }
+
+    return mcp;
 }
 
 fn parseFetchArgs(
