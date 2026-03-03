@@ -27,7 +27,7 @@ const TransformStream = @This();
 
 pub const DefaultController = TransformStreamDefaultController;
 
-const ZigTransformFn = *const fn (*TransformStreamDefaultController, js.Value) anyerror!void;
+pub const ZigTransformFn = *const fn (*TransformStreamDefaultController, js.Value) anyerror!void;
 
 _readable: *ReadableStream,
 _writable: *WritableStream,

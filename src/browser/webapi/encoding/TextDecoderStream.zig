@@ -47,7 +47,24 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !TextDecoderStre
     }
 
     const opts = opts_ orelse InitOpts{};
-    const transform = try TransformStream.initWithZigTransform(&decodeTransform, page);
+    const decodeFn: TransformStream.ZigTransformFn = blk: {
+        if (opts.ignoreBOM) {
+            break :blk struct {
+                fn decode(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+                    return decodeTransform(controller, chunk, true);
+                }
+            }.decode;
+        } else {
+            break :blk struct {
+                fn decode(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+                    return decodeTransform(controller, chunk, false);
+                }
+            }.decode;
+        }
+    };
+
+    const transform = try TransformStream.initWithZigTransform(decodeFn, page);
+
     return .{
         ._transform = transform,
         ._fatal = opts.fatal,
@@ -55,13 +72,13 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !TextDecoderStre
     };
 }
 
-fn decodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
+fn decodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value, ignoreBOM: bool) !void {
     // chunk should be a Uint8Array; decode it as UTF-8 string
     const typed_array = try chunk.toZig(js.TypedArray(u8));
     var input = typed_array.values;
 
     // Strip UTF-8 BOM if present
-    if (std.mem.startsWith(u8, input, &.{ 0xEF, 0xBB, 0xBF })) {
+    if (ignoreBOM == false and std.mem.startsWith(u8, input, &.{ 0xEF, 0xBB, 0xBF })) {
         input = input[3..];
     }
 
