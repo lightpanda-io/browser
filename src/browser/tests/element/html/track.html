@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<script src="../../testing.js"></script>
+
+<video id="video1">
+  <track id="track1" kind="subtitles">
+  <track id="track2" kind="captions">
+  <track id="track3" kind="invalid-kind">
+</video>
+
+<script id="instanceof">
+{
+  const track = document.createElement("track");
+  testing.expectEqual(true, track instanceof HTMLTrackElement);
+  testing.expectEqual("[object HTMLTrackElement]", track.toString());
+}
+</script>
+
+<script id="kind_default">
+{
+  const track = document.createElement("track");
+  testing.expectEqual("subtitles", track.kind);
+}
+</script>
+
+<script id="kind_valid_values">
+{
+  const track = document.createElement("track");
+
+  track.kind = "captions";
+  testing.expectEqual("captions", track.kind);
+
+  track.kind = "descriptions";
+  testing.expectEqual("descriptions", track.kind);
+
+  track.kind = "chapters";
+  testing.expectEqual("chapters", track.kind);
+
+  track.kind = "metadata";
+  testing.expectEqual("metadata", track.kind);
+}
+</script>
+
+<script id="kind_invalid">
+{
+  const track = document.createElement("track");
+
+  track.kind = null;
+  testing.expectEqual("metadata", track.kind);
+
+  track.kind = "Subtitles";
+  testing.expectEqual("subtitles", track.kind);
+
+  track.kind = "";
+  testing.expectEqual("metadata", track.kind);
+}
+</script>
+
+<script id="constants">
+{
+  const track = document.createElement("track");
+  testing.expectEqual(0, track.NONE);
+  testing.expectEqual(1, track.LOADING);
+  testing.expectEqual(2, track.LOADED);
+  testing.expectEqual(3, track.ERROR);
+}
+</script>
+
+<script id="constants_static">
+{
+  testing.expectEqual(0, HTMLTrackElement.NONE);
+  testing.expectEqual(1, HTMLTrackElement.LOADING);
+  testing.expectEqual(2, HTMLTrackElement.LOADED);
+  testing.expectEqual(3, HTMLTrackElement.ERROR);
+}
+</script>
