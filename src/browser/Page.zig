@@ -1942,10 +1942,10 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined, ._tag_name = String.init(undefined, "article", .{}) catch unreachable, ._tag = .article },
                     ),
                     asUint("details") => return self.createHtmlElementT(
-                        Element.Html.Generic,
+                        Element.Html.Details,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined, ._tag_name = String.init(undefined, "details", .{}) catch unreachable, ._tag = .details },
+                        .{ ._proto = undefined },
                     ),
                     asUint("summary") => return self.createHtmlElementT(
                         Element.Html.Generic,

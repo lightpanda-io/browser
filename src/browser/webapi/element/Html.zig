@@ -39,6 +39,7 @@ pub const Canvas = @import("html/Canvas.zig");
 pub const Custom = @import("html/Custom.zig");
 pub const Data = @import("html/Data.zig");
 pub const DataList = @import("html/DataList.zig");
+pub const Details = @import("html/Details.zig");
 pub const Dialog = @import("html/Dialog.zig");
 pub const Directory = @import("html/Directory.zig");
 pub const Div = @import("html/Div.zig");
@@ -119,6 +120,7 @@ pub const Type = union(enum) {
     custom: *Custom,
     data: *Data,
     datalist: *DataList,
+    details: *Details,
     dialog: *Dialog,
     directory: *Directory,
     div: *Div,
