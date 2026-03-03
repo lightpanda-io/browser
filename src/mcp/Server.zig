@@ -20,6 +20,8 @@ session: *lp.Session,
 page: *lp.Page,
 
 writer: *std.io.Writer,
+mutex: std.Thread.Mutex = .{},
+aw: std.io.Writer.Allocating,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
     const self = try allocator.create(Self);
@@ -28,6 +30,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
     self.allocator = allocator;
     self.app = app;
     self.writer = writer;
+    self.aw = .init(allocator);
 
     self.http_client = try app.http.createClient(allocator);
     errdefer self.http_client.deinit();
@@ -45,6 +48,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
 }
 
 pub fn deinit(self: *Self) void {
+    self.aw.deinit();
     self.browser.deinit();
     self.notification.deinit();
     self.http_client.deinit();
@@ -53,11 +57,13 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn sendResponse(self: *Self, response: anytype) !void {
-    var aw: std.io.Writer.Allocating = .init(self.allocator);
-    defer aw.deinit();
-    try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &aw.writer);
-    try aw.writer.writeByte('\n');
-    try self.writer.writeAll(aw.writer.buffered());
+    self.mutex.lock();
+    defer self.mutex.unlock();
+
+    self.aw.clearRetainingCapacity();
+    try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &self.aw.writer);
+    try self.aw.writer.writeByte('\n');
+    try self.writer.writeAll(self.aw.writer.buffered());
     try self.writer.flush();
 }
 
