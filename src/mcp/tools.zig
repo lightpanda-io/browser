@@ -24,19 +24,6 @@ pub const tool_list = [_]protocol.Tool{
         ),
     },
     .{
-        .name = "search",
-        .description = "Use a search engine to look for specific words, terms, sentences. The search page will then be loaded in memory.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "text": { "type": "string", "description": "The text to search for, must be a valid search query." }
-            \\  },
-            \\  "required": ["text"]
-            \\}
-        ),
-    },
-    .{
         .name = "markdown",
         .description = "Get the page content in markdown format. If a url is provided, it navigates to that url first.",
         .inputSchema = protocol.minify(
@@ -74,19 +61,6 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
-    .{
-        .name = "over",
-        .description = "Used to indicate that the task is over and give the final answer if there is any. This is the last tool to be called in a task.",
-        .inputSchema = protocol.minify(
-            \\{
-            \\  "type": "object",
-            \\  "properties": {
-            \\    "result": { "type": "string", "description": "The final result of the task." }
-            \\  },
-            \\  "required": ["result"]
-            \\}
-        ),
-    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -98,17 +72,9 @@ const GotoParams = struct {
     url: [:0]const u8,
 };
 
-const SearchParams = struct {
-    text: [:0]const u8,
-};
-
 const EvaluateParams = struct {
     script: [:0]const u8,
     url: ?[:0]const u8 = null,
-};
-
-const OverParams = struct {
-    result: [:0]const u8,
 };
 
 const ToolStreamingText = struct {
@@ -155,21 +121,17 @@ const ToolStreamingText = struct {
 const ToolAction = enum {
     goto,
     navigate,
-    search,
     markdown,
     links,
     evaluate,
-    over,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "goto", .goto },
     .{ "navigate", .navigate },
-    .{ "search", .search },
     .{ "markdown", .markdown },
     .{ "links", .links },
     .{ "evaluate", .evaluate },
-    .{ "over", .over },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -192,11 +154,9 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
 
     switch (action) {
         .goto, .navigate => try handleGoto(server, arena, req.id.?, call_params.arguments),
-        .search => try handleSearch(server, arena, req.id.?, call_params.arguments),
         .markdown => try handleMarkdown(server, arena, req.id.?, call_params.arguments),
         .links => try handleLinks(server, arena, req.id.?, call_params.arguments),
         .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
-        .over => try handleOver(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -205,24 +165,6 @@ fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     try performGoto(server, args.url, id);
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Navigated successfully." }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleSearch(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArguments(SearchParams, arena, arguments, server, id, "search");
-
-    const component: std.Uri.Component = .{ .raw = args.text };
-    var url_aw = std.Io.Writer.Allocating.init(arena);
-    component.formatQuery(&url_aw.writer) catch {
-        return server.sendError(id, .InternalError, "Internal error formatting query");
-    };
-    const url = std.fmt.allocPrintSentinel(arena, "https://duckduckgo.com/?q={s}", .{url_aw.written()}, 0) catch {
-        return server.sendError(id, .InternalError, "Internal error formatting URL");
-    };
-
-    try performGoto(server, url, id);
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = "Search performed successfully." }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
@@ -289,13 +231,6 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     const str_result = js_result.toStringSliceWithAlloc(arena) catch "undefined";
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = str_result }};
-    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
-}
-
-fn handleOver(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
-    const args = try parseArguments(OverParams, arena, arguments, server, id, "over");
-
-    const content = [_]protocol.TextContent([]const u8){.{ .text = args.result }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
