@@ -101,6 +101,5 @@ test "MCP.Server - Integration: synchronous smoke test" {
 
     try router.processRequests(server, &in_reader);
 
-    const output = out_alloc.writer.buffered();
-    try testing.expect(std.mem.indexOf(u8, output, "\"id\":1") != null);
+    try testing.expectJson(.{ .id = 1 }, out_alloc.writer.buffered());
 }

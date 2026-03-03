@@ -111,15 +111,16 @@ test "MCP.router - handleMessage - synchronous unit tests" {
     try handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
     );
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"id\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"tools\":{}") != null);
+    try testing.expectJson(
+        \\{ "id": 1, "result": { "capabilities": { "tools": {} } } }
+    , out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 
     // 2. Tools list
     try handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
     );
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"id\":2") != null);
+    try testing.expectJson(.{ .id = 2 }, out_alloc.writer.buffered());
     try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"name\":\"goto\"") != null);
     out_alloc.writer.end = 0;
 
@@ -127,8 +128,7 @@ test "MCP.router - handleMessage - synchronous unit tests" {
     try handleMessage(server, aa,
         \\{"jsonrpc":"2.0","id":3,"method":"unknown_method"}
     );
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"id\":3") != null);
-    try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"code\":-32601") != null);
+    try testing.expectJson(.{ .id = 3, .@"error" = .{ .code = -32601 } }, out_alloc.writer.buffered());
     out_alloc.writer.end = 0;
 
     // 4. Parse error
@@ -138,7 +138,6 @@ test "MCP.router - handleMessage - synchronous unit tests" {
         defer log.opts.filter_scopes = old_filter;
 
         try handleMessage(server, aa, "invalid json");
-        try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"id\":null") != null);
-        try testing.expect(std.mem.indexOf(u8, out_alloc.writer.buffered(), "\"code\":-32700") != null);
+        try testing.expectJson("{\"id\": null, \"error\": {\"code\": -32700}}", out_alloc.writer.buffered());
     }
 }
