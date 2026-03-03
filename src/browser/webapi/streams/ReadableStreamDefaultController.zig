@@ -62,6 +62,14 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, page: *Page) !*Readab
     });
 }
 
+pub fn acquireRef(self: *ReadableStreamDefaultController) void {
+    self._stream.acquireRef();
+}
+
+pub fn deinit(self: *ReadableStreamDefaultController, shutdown: bool, page: *Page) void {
+    self._stream.deinit(shutdown, page);
+}
+
 pub fn addPendingRead(self: *ReadableStreamDefaultController, page: *Page) !js.Promise {
     const resolver = page.js.local.?.createPromiseResolver();
     try self._pending_reads.append(self._stream._arena, try resolver.persist());
@@ -210,6 +218,8 @@ pub const JsApi = struct {
         pub const name = "ReadableStreamDefaultController";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(ReadableStreamDefaultController.deinit);
     };
 
     pub const enqueue = bridge.function(ReadableStreamDefaultController.enqueueValue, .{});
