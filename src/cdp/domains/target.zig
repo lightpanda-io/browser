@@ -243,9 +243,7 @@ fn attachToTarget(cmd: anytype) !void {
         return error.UnknownTargetId;
     }
 
-    if (bc.session_id == null) {
-        try doAttachtoTarget(cmd, target_id);
-    }
+    try doAttachtoTarget(cmd, target_id);
 
     return cmd.sendResult(
         .{ .sessionId = bc.session_id },
@@ -451,22 +449,23 @@ fn setAutoAttach(cmd: anytype) !void {
 
 fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
     const bc = cmd.browser_context.?;
-    lp.assert(bc.session_id == null, "CDP.target.doAttachtoTarget not null session_id", .{});
-    const session_id = cmd.cdp.session_id_gen.next();
+    const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
 
-    // extra_headers should not be kept on a new page or tab,
-    // currently we have only 1 page, we clear it just in case
-    bc.extra_headers.clearRetainingCapacity();
+    if (bc.session_id == null) {
+        // extra_headers should not be kept on a new page or tab,
+        // currently we have only 1 page, we clear it just in case
+        bc.extra_headers.clearRetainingCapacity();
+    }
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
         .targetInfo = TargetInfo{
             .targetId = target_id,
-            .title = "about:blank",
-            .url = "chrome://newtab/",
+            .title = bc.getTitle() orelse "about:blank",
+            .url = bc.getURL() orelse "chrome://newtab/",
             .browserContextId = bc.id,
         },
-    }, .{});
+    }, .{ .session_id = bc.session_id });
 
     bc.session_id = session_id;
 }
