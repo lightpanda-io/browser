@@ -38,16 +38,12 @@ fn getMarkdown(cmd: anytype) !void {
     const params = (try cmd.params(Params)) orelse Params{};
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
-
-    const dom_node = if (params.nodeId) |nodeId| blk: {
-        const node = bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId;
-        break :blk node.dom;
-    } else blk: {
-        const page = bc.session.currentPage() orelse return error.PageNotLoaded;
-        break :blk page.window._document.asNode();
-    };
-
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const dom_node = if (params.nodeId) |nodeId|
+        (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
+    else
+        page.window._document.asNode();
 
     var aw = std.Io.Writer.Allocating.init(cmd.arena);
     defer aw.deinit();
