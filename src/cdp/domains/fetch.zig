@@ -406,10 +406,10 @@ pub fn requestAuthRequired(bc: anytype, intercept: *const Notification.RequestAu
             .fetch => "Fetch",
         },
         .authChallenge = .{
-            .source = if (challenge.source == .server) "Server" else "Proxy",
             .origin = "", // TODO get origin, could be the proxy address for example.
-            .scheme = if (challenge.scheme == .digest) "digest" else "basic",
-            .realm = challenge.realm,
+            .source = if (challenge.source) |s| (if (s == .server) "Server" else "Proxy") else "",
+            .scheme = if (challenge.scheme) |s| (if (s == .digest) "digest" else "basic") else "",
+            .realm = challenge.realm orelse "",
         },
         .networkId = &id.toRequestId(transfer.id),
     }, .{ .session_id = session_id });
