@@ -509,6 +509,7 @@ pub const Function = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
         cache: ?Caching = null,
+        embedded_receiver: bool = false,
 
         // We support two ways to cache a value directly into a v8::Object. The
         // difference between the two is like the difference between a Map
@@ -579,6 +580,9 @@ pub const Function = struct {
         var args: ParameterTypes(F) = undefined;
         if (comptime opts.static) {
             args = try getArgs(F, 0, local, info);
+        } else if (comptime opts.embedded_receiver) {
+            args = try getArgs(F, 1, local, info);
+            @field(args, "0") = @ptrCast(@alignCast(info.getData() orelse unreachable));
         } else {
             args = try getArgs(F, 1, local, info);
             @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());

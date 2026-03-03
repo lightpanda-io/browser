@@ -539,6 +539,15 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
     }
 }
 
+fn newFunctionWithData(local: *const js.Local, comptime callback: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void, data: *anyopaque) js.Function {
+    const external = local.isolate.createExternal(data);
+    const handle = v8.v8__Function__New__DEFAULT2(local.handle, callback, @ptrCast(external)).?;
+    return .{
+        .local = local,
+        .handle = handle,
+    };
+}
+
 // == Callbacks ==
 // Callback from V8, asking us to load a module. The "specifier" is
 // the src of the module to load.
@@ -857,7 +866,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
     // last value of the module. But, for module loading, we need to
     // resolve to the module's namespace.
 
-    const then_callback = local.newFunctionWithData(struct {
+    const then_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
             var c: Caller = undefined;
             c.initFromHandle(callback_handle);
@@ -881,7 +890,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
         }
     }.callback, @ptrCast(state));
 
-    const catch_callback = local.newFunctionWithData(struct {
+    const catch_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
             var c: Caller = undefined;
             c.initFromHandle(callback_handle);

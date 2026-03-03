@@ -82,13 +82,17 @@ pub fn createTypedArray(self: *const Local, comptime array_type: js.ArrayType, s
     return .init(self, size);
 }
 
-pub fn newFunctionWithData(
+pub fn newCallback(
     self: *const Local,
-    comptime callback: *const fn (?*const v8.FunctionCallbackInfo) callconv(.c) void,
-    data: *anyopaque,
+    callback: anytype,
+    data: anytype,
 ) js.Function {
     const external = self.isolate.createExternal(data);
-    const handle = v8.v8__Function__New__DEFAULT2(self.handle, callback, @ptrCast(external)).?;
+    const handle = v8.v8__Function__New__DEFAULT2(self.handle, struct {
+        fn wrap(info_handle: ?*const js.v8.FunctionCallbackInfo) callconv(.c) void {
+            Caller.Function.call(@TypeOf(data), info_handle.?, callback, .{ .embedded_receiver = true });
+        }
+    }.wrap, @ptrCast(external)).?;
     return .{ .local = self, .handle = handle };
 }
 
