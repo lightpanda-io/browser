@@ -249,7 +249,7 @@ fn attachToTarget(cmd: anytype) !void {
 
     return cmd.sendResult(
         .{ .sessionId = bc.session_id },
-        .{ .include_session_id = false },
+        .{},
     );
 }
 
