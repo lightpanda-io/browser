@@ -1825,7 +1825,7 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         Element.Html.Track,
                         namespace,
                         attribute_iterator,
-                        .{ ._proto = undefined },
+                        .{ ._proto = undefined, ._kind = comptime .wrap("subtitles"), ._ready_state = .none },
                     ),
                     else => {},
                 },
