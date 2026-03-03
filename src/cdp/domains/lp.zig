@@ -43,7 +43,7 @@ fn getMarkdown(cmd: anytype) !void {
     const dom_node = if (params.nodeId) |nodeId|
         (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
     else
-        page.window._document.asNode();
+        page.document.asNode();
 
     var aw = std.Io.Writer.Allocating.init(cmd.arena);
     defer aw.deinit();
