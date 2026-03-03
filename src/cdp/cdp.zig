@@ -219,6 +219,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
             };
 
             switch (domain.len) {
+                2 => switch (@as(u16, @bitCast(domain[0..2].*))) {
+                    asUint(u16, "LP") => return @import("domains/lp.zig").processMessage(command),
+                    else => {},
+                },
                 3 => switch (@as(u24, @bitCast(domain[0..3].*))) {
                     asUint(u24, "DOM") => return @import("domains/dom.zig").processMessage(command),
                     asUint(u24, "Log") => return @import("domains/log.zig").processMessage(command),
@@ -977,4 +981,20 @@ test "cdp: STARTUP sessionId" {
         try ctx.processMessage(.{ .id = 4, .method = "Hi", .sessionId = "STARTUP" });
         try ctx.expectSentResult(null, .{ .id = 4, .index = 0, .session_id = "STARTUP" });
     }
+}
+
+test "cdp: LP.getMarkdown" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.getMarkdown",
+    });
+
+    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    try testing.expect(result.get("markdown") != null);
 }
