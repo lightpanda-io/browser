@@ -99,11 +99,7 @@ pub fn transformWrite(self: *TransformStream, chunk: js.Value, page: *Page) !voi
 
         try ls.toLocal(transform_fn).call(void, .{ chunk, self._controller });
     } else {
-        // Default transform: pass through
-        if (chunk.isString()) |str| {
-            const slice = try str.toSlice();
-            try self._readable._controller.enqueue(.{ .string = slice });
-        }
+        try self._readable._controller.enqueue(.{ .string = try chunk.toStringSlice() });
     }
 }
 
