@@ -81,7 +81,7 @@ fn getTargets(cmd: anytype) !void {
         .targetInfos = [_]TargetInfo{.{
             .targetId = target_id,
             .type = "page",
-            .title = bc.getTitle() orelse "about:blank",
+            .title = bc.getTitle() orelse "",
             .url = bc.getURL() orelse "about:blank",
             .attached = true,
             .canAccessOpener = false,
@@ -209,7 +209,7 @@ fn createTarget(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .attached = false,
             .targetId = target_id,
-            .title = "about:blank",
+            .title = "",
             .browserContextId = bc.id,
             .url = "about:blank",
         },
@@ -330,7 +330,7 @@ fn getTargetInfo(cmd: anytype) !void {
             .targetInfo = TargetInfo{
                 .targetId = target_id,
                 .type = "page",
-                .title = bc.getTitle() orelse "about:blank",
+                .title = bc.getTitle() orelse "",
                 .url = bc.getURL() orelse "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
@@ -342,7 +342,7 @@ fn getTargetInfo(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .targetId = "TID-STARTUP-B",
             .type = "browser",
-            .title = "about:blank",
+            .title = "",
             .url = "about:blank",
             .attached = true,
             .canAccessOpener = false,
@@ -461,8 +461,8 @@ fn setAutoAttach(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .type = "page",
             .targetId = "TID-STARTUP-P",
-            .title = "New Private Tab",
-            .url = "chrome://newtab/",
+            .title = "",
+            .url = "about:blank",
             .browserContextId = "BID-STARTUP",
         },
     }, .{});
@@ -482,8 +482,8 @@ fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
         .sessionId = session_id,
         .targetInfo = TargetInfo{
             .targetId = target_id,
-            .title = bc.getTitle() orelse "about:blank",
-            .url = bc.getURL() orelse "chrome://newtab/",
+            .title = bc.getTitle() orelse "",
+            .url = bc.getURL() orelse "about:blank",
             .browserContextId = bc.id,
         },
     }, .{ .session_id = bc.session_id });
@@ -588,7 +588,7 @@ test "cdp.target: createTarget" {
 
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
     }
 
     {
@@ -600,8 +600,8 @@ test "cdp.target: createTarget" {
 
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
     }
 
     var ctx = testing.context();
@@ -616,7 +616,7 @@ test "cdp.target: createTarget" {
         try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
         try testing.expectEqual(true, bc.target_id != null);
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
     }
 }
 
@@ -678,7 +678,7 @@ test "cdp.target: attachToTarget" {
         try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-000000000B" } });
         const session_id = bc.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
     }
 }
 
@@ -691,7 +691,7 @@ test "cdp.target: getTargetInfo" {
         try ctx.expectSentResult(.{
             .targetInfo = .{
                 .type = "browser",
-                .title = "about:blank",
+                .title = "",
                 .url = "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
