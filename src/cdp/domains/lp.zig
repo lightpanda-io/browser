@@ -57,3 +57,20 @@ fn getMarkdown(cmd: anytype) !void {
         .markdown = aw.written(),
     }, .{});
 }
+
+const testing = @import("../testing.zig");
+test "cdp.lp: getMarkdown" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.getMarkdown",
+    });
+
+    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    try testing.expect(result.get("markdown") != null);
+}

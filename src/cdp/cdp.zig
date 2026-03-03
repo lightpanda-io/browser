@@ -982,19 +982,3 @@ test "cdp: STARTUP sessionId" {
         try ctx.expectSentResult(null, .{ .id = 4, .index = 0, .session_id = "STARTUP" });
     }
 }
-
-test "cdp: LP.getMarkdown" {
-    var ctx = testing.context();
-    defer ctx.deinit();
-
-    const bc = try ctx.loadBrowserContext(.{});
-    _ = try bc.session.createPage();
-
-    try ctx.processMessage(.{
-        .id = 1,
-        .method = "LP.getMarkdown",
-    });
-
-    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
-    try testing.expect(result.get("markdown") != null);
-}
