@@ -236,26 +236,19 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
 
 /// pipeThrough(transform) — pipes this readable stream through a transform stream,
 /// returning the readable side. `transform` is a JS object with `readable` and `writable` properties.
-pub fn pipeThrough(self: *ReadableStream, transform: js.Value, page: *Page) !*ReadableStream {
+const PipeTransform = struct {
+    writable: *WritableStream,
+    readable: *ReadableStream,
+};
+pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, page: *Page) !*ReadableStream {
     if (self.getLocked()) {
         return error.ReaderLocked;
     }
 
-    if (!transform.isObject()) {
-        return error.InvalidArgument;
-    }
-
-    const obj = transform.toObject();
-    const writable_val = try obj.get("writable");
-    const readable_val = try obj.get("readable");
-
-    const writable = try writable_val.toZig(*WritableStream);
-    const output_readable = try readable_val.toZig(*ReadableStream);
-
     // Start async piping from this stream to the writable side
-    try PipeState.startPipe(self, writable, null, page);
+    try PipeState.startPipe(self, transform.writable, null, page);
 
-    return output_readable;
+    return transform.readable;
 }
 
 /// pipeTo(writable) — pipes this readable stream to a writable stream.
