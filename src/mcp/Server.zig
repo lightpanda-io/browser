@@ -84,6 +84,7 @@ pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, mess
 }
 
 test "MCP.Server - Integration: synchronous smoke test" {
+    defer testing.reset();
     const allocator = testing.allocator;
     const app = testing.test_app;
 
@@ -91,8 +92,8 @@ test "MCP.Server - Integration: synchronous smoke test" {
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
     ;
 
-    var in_reader = std.io.Reader.fixed(input);
-    var out_alloc = std.io.Writer.Allocating.init(allocator);
+    var in_reader: std.io.Reader = .fixed(input);
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
     defer out_alloc.deinit();
 
     var server = try Self.init(allocator, app, &out_alloc.writer);

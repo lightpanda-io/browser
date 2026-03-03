@@ -186,6 +186,7 @@ pub const JsonEscapingWriter = struct {
 const testing = @import("../testing.zig");
 
 test "MCP.protocol - request parsing" {
+    defer testing.reset();
     const raw_json =
         \\{
         \\  "jsonrpc": "2.0",
@@ -202,7 +203,7 @@ test "MCP.protocol - request parsing" {
         \\}
     ;
 
-    const parsed = try std.json.parseFromSlice(Request, testing.allocator, raw_json, .{ .ignore_unknown_fields = true });
+    const parsed = try std.json.parseFromSlice(Request, testing.arena_allocator, raw_json, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 
     const req = parsed.value;
@@ -213,7 +214,7 @@ test "MCP.protocol - request parsing" {
     try testing.expect(req.params != null);
 
     // Test nested parsing of InitializeParams
-    const init_params = try std.json.parseFromValue(InitializeParams, testing.allocator, req.params.?, .{ .ignore_unknown_fields = true });
+    const init_params = try std.json.parseFromValue(InitializeParams, testing.arena_allocator, req.params.?, .{ .ignore_unknown_fields = true });
     defer init_params.deinit();
 
     try testing.expectString("2024-11-05", init_params.value.protocolVersion);
@@ -222,12 +223,13 @@ test "MCP.protocol - request parsing" {
 }
 
 test "MCP.protocol - response formatting" {
+    defer testing.reset();
     const response = Response{
         .id = .{ .integer = 42 },
         .result = .{ .string = "success" },
     };
 
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     defer aw.deinit();
     try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &aw.writer);
 
@@ -235,6 +237,7 @@ test "MCP.protocol - response formatting" {
 }
 
 test "MCP.protocol - error formatting" {
+    defer testing.reset();
     const response = Response{
         .id = .{ .string = "abc" },
         .@"error" = .{
@@ -243,7 +246,7 @@ test "MCP.protocol - error formatting" {
         },
     };
 
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     defer aw.deinit();
     try std.json.Stringify.value(response, .{ .emit_null_optional_fields = false }, &aw.writer);
 
@@ -251,7 +254,8 @@ test "MCP.protocol - error formatting" {
 }
 
 test "MCP.protocol - JsonEscapingWriter" {
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer testing.reset();
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     defer aw.deinit();
 
     var escaping_writer = JsonEscapingWriter.init(&aw.writer);
@@ -264,6 +268,7 @@ test "MCP.protocol - JsonEscapingWriter" {
 }
 
 test "MCP.protocol - Tool serialization" {
+    defer testing.reset();
     const t = Tool{
         .name = "test",
         .inputSchema = minify(
@@ -276,7 +281,7 @@ test "MCP.protocol - Tool serialization" {
         ),
     };
 
-    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    var aw: std.Io.Writer.Allocating = .init(testing.arena_allocator);
     defer aw.deinit();
 
     try std.json.Stringify.value(t, .{}, &aw.writer);

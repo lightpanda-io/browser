@@ -95,18 +95,17 @@ fn handleInitialize(server: *Server, req: protocol.Request) !void {
 const testing = @import("../testing.zig");
 
 test "MCP.router - handleMessage - synchronous unit tests" {
+    defer testing.reset();
     const allocator = testing.allocator;
     const app = testing.test_app;
 
-    var out_alloc = std.io.Writer.Allocating.init(allocator);
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
     defer out_alloc.deinit();
 
     var server = try Server.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const aa = arena.allocator();
+    const aa = testing.arena_allocator;
 
     // 1. Valid handshake
     try handleMessage(server, aa,
