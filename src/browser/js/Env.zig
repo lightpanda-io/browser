@@ -470,6 +470,10 @@ pub fn dumpMemoryStats(self: *Env) void {
     , .{ stats.total_heap_size, stats.total_heap_size_executable, stats.total_physical_size, stats.total_available_size, stats.used_heap_size, stats.heap_size_limit, stats.malloced_memory, stats.external_memory, stats.peak_malloced_memory, stats.number_of_native_contexts, stats.number_of_detached_contexts, stats.total_global_handles_size, stats.used_global_handles_size, stats.does_zap_garbage });
 }
 
+pub fn terminate(self: *const Env) void {
+    v8.v8__Isolate__TerminateExecution(self.isolate.handle);
+}
+
 fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) void {
     const promise_handle = v8.v8__PromiseRejectMessage__GetPromise(&message_handle).?;
     const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
