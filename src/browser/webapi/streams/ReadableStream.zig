@@ -279,7 +279,6 @@ pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, page: *Page) 
 const PipeState = struct {
     reader: *ReadableStreamDefaultReader,
     writable: *WritableStream,
-    page: *Page,
     context_id: usize,
     resolver: ?js.PromiseResolver.Global,
 
@@ -294,107 +293,69 @@ const PipeState = struct {
         state.* = .{
             .reader = reader,
             .writable = writable,
-            .page = page,
             .context_id = page.js.id,
             .resolver = resolver,
         };
-
-        try state.pumpRead();
+        try state.pumpRead(page);
     }
 
-    fn pumpRead(state: *PipeState) !void {
-        const local = state.page.js.local.?;
+    fn pumpRead(state: *PipeState, page: *Page) !void {
+        const local = page.js.local.?;
 
         // Call reader.read() which returns a Promise
-        const read_promise = try state.reader.read(state.page);
+        const read_promise = try state.reader.read(page);
 
         // Create JS callback functions for .then() and .catch()
-        const then_fn = local.newFunctionWithData(&onReadFulfilled, state);
-        const catch_fn = local.newFunctionWithData(&onReadRejected, state);
+        const then_fn = local.newCallback(onReadFulfilled, state);
+        const catch_fn = local.newCallback(onReadRejected, state);
 
         _ = read_promise.thenAndCatch(then_fn, catch_fn) catch {
             state.finish(local);
         };
     }
 
-    fn onReadFulfilled(callback_handle: ?*const js.v8.FunctionCallbackInfo) callconv(.c) void {
-        var c: js.Caller = undefined;
-        c.initFromHandle(callback_handle);
-        defer c.deinit();
-
-        const info = js.Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
-        const state: *PipeState = @ptrCast(@alignCast(info.getData() orelse return));
-
-        if (state.context_id != c.local.ctx.id) return;
-
-        const l = &c.local;
-        defer l.runMicrotasks();
-
-        // Get the read result argument {done, value}
-        const result_val = info.getArg(0, l);
-
-        if (!result_val.isObject()) {
-            state.finish(l);
-            return;
-        }
-
-        const result_obj = result_val.toObject();
-        const done_val = result_obj.get("done") catch {
-            state.finish(l);
-            return;
+    const ReadData = struct {
+        done: bool,
+        value: js.Value,
+    };
+    fn onReadFulfilled(self: *PipeState, data_: ?ReadData, page: *Page) void {
+        const local = page.js.local.?;
+        const data = data_ orelse {
+            return self.finish(local);
         };
-        const done = done_val.toBool();
 
-        if (done) {
+        if (data.done) {
             // Stream is finished, close the writable side
-            state.writable.closeStream(state.page) catch {};
-            state.finishResolve(l);
+            self.writable.closeStream(page) catch {};
+            self.reader.releaseLock();
+            if (self.resolver) |r| {
+                local.toLocal(r).resolve("pipeTo complete", {});
+            }
             return;
         }
 
-        // Get the chunk value and write it to the writable side
-        const chunk_val = result_obj.get("value") catch {
-            state.finish(l);
-            return;
-        };
+        const value = data.value;
+        if (value.isUndefined()) {
+            return self.finish(local);
+        }
 
-        state.writable.writeChunk(chunk_val, state.page) catch {
-            state.finish(l);
-            return;
+        self.writable.writeChunk(value, page) catch {
+            return self.finish(local);
         };
 
         // Continue reading the next chunk
-        state.pumpRead() catch {
-            state.finish(l);
+        self.pumpRead(page) catch {
+            self.finish(local);
         };
     }
 
-    fn onReadRejected(callback_handle: ?*const js.v8.FunctionCallbackInfo) callconv(.c) void {
-        var c: js.Caller = undefined;
-        c.initFromHandle(callback_handle);
-        defer c.deinit();
-
-        const info = js.Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
-        const state: *PipeState = @ptrCast(@alignCast(info.getData() orelse return));
-
-        if (state.context_id != c.local.ctx.id) return;
-
-        const l = &c.local;
-        defer l.runMicrotasks();
-
-        state.finish(l);
+    fn onReadRejected(self: *PipeState, page: *Page) void {
+        self.finish(page.js.local.?);
     }
 
-    fn finishResolve(state: *PipeState, local: *const js.Local) void {
-        state.reader.releaseLock();
-        if (state.resolver) |r| {
-            local.toLocal(r).resolve("pipeTo complete", {});
-        }
-    }
-
-    fn finish(state: *PipeState, local: *const js.Local) void {
-        state.reader.releaseLock();
-        if (state.resolver) |r| {
+    fn finish(self: *PipeState, local: *const js.Local) void {
+        self.reader.releaseLock();
+        if (self.resolver) |r| {
             local.toLocal(r).resolve("pipe finished", {});
         }
     }
