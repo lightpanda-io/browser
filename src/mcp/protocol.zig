@@ -149,6 +149,20 @@ pub const Resource = struct {
     mimeType: ?[]const u8 = null,
 };
 
+pub fn TextContent(comptime T: type) type {
+    return struct {
+        type: []const u8 = "text",
+        text: T,
+    };
+}
+
+pub fn CallToolResult(comptime T: type) type {
+    return struct {
+        content: []const TextContent(T),
+        isError: bool = false,
+    };
+}
+
 pub const JsonEscapingWriter = struct {
     inner_writer: *std.Io.Writer,
     writer: std.Io.Writer,

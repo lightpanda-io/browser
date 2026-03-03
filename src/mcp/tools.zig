@@ -204,8 +204,8 @@ fn handleGoto(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
     const args = try parseArguments(GotoParams, arena, arguments, server, id, "goto");
     try performGoto(server, args.url, id);
 
-    const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Navigated successfully." }};
-    try server.sendResult(id, .{ .content = &content });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = "Navigated successfully." }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleSearch(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -222,8 +222,8 @@ fn handleSearch(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
 
     try performGoto(server, url, id);
 
-    const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Search performed successfully." }};
-    try server.sendResult(id, .{ .content = &content });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = "Search performed successfully." }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -238,15 +238,10 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
         } else |_| {}
     }
 
-    const result = struct {
-        content: []const struct { type: []const u8, text: ToolStreamingText },
-    }{
-        .content = &.{.{
-            .type = "text",
-            .text = .{ .server = server, .action = .markdown },
-        }},
-    };
-    try server.sendResult(id, result);
+    const content = [_]protocol.TextContent(ToolStreamingText){.{
+        .text = .{ .server = server, .action = .markdown },
+    }};
+    try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
 
 fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -261,15 +256,10 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         } else |_| {}
     }
 
-    const result = struct {
-        content: []const struct { type: []const u8, text: ToolStreamingText },
-    }{
-        .content = &.{.{
-            .type = "text",
-            .text = .{ .server = server, .action = .links },
-        }},
-    };
-    try server.sendResult(id, result);
+    const content = [_]protocol.TextContent(ToolStreamingText){.{
+        .text = .{ .server = server, .action = .links },
+    }};
+    try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
@@ -283,22 +273,30 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     server.page.js.localScope(&ls);
     defer ls.deinit();
 
-    const js_result = ls.local.compileAndRun(args.script, null) catch {
-        const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = "Script evaluation failed." }};
-        return server.sendResult(id, .{ .content = &content, .isError = true });
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const js_result = ls.local.compileAndRun(args.script, null) catch |err| {
+        const caught = try_catch.caughtOrError(arena, err);
+        var aw: std.Io.Writer.Allocating = .init(arena);
+        try caught.format(&aw.writer);
+
+        const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
+        return server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content, .isError = true });
     };
 
     const str_result = js_result.toStringSliceWithAlloc(arena) catch "undefined";
 
-    const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = str_result }};
-    try server.sendResult(id, .{ .content = &content });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = str_result }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleOver(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
     const args = try parseArguments(OverParams, arena, arguments, server, id, "over");
 
-    const content = [_]struct { type: []const u8, text: []const u8 }{.{ .type = "text", .text = args.result }};
-    try server.sendResult(id, .{ .content = &content });
+    const content = [_]protocol.TextContent([]const u8){.{ .text = args.result }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
@@ -326,3 +324,47 @@ fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
 }
 
 const testing = @import("../testing.zig");
+const router = @import("router.zig");
+
+test "MCP - evaluate error reporting" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+
+    // Call evaluate with a script that throws an error
+    const msg =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": 1,
+        \\  "method": "tools/call",
+        \\  "params": {
+        \\    "name": "evaluate",
+        \\    "arguments": {
+        \\      "script": "throw new Error('test error')"
+        \\    }
+        \\  }
+        \\}
+    ;
+
+    try router.handleMessage(server, aa, msg);
+
+    try testing.expectJson(
+        \\{
+        \\  "id": 1,
+        \\  "result": {
+        \\    "isError": true,
+        \\    "content": [
+        \\      { "type": "text" }
+        \\    ]
+        \\  }
+        \\}
+    , out_alloc.writer.buffered());
+}
