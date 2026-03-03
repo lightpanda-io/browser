@@ -256,3 +256,22 @@
     testing.expectTrue(!html.includes('opacity:0'));
 }
 </script>
+
+<script id="CSSStyleDeclaration_non_ascii_custom_property">
+{
+    // Regression test: accessing element.style must not crash when the inline
+    // style attribute contains CSS custom properties with non-ASCII (UTF-8
+    // multibyte) names, such as French accented characters.
+    // The CSS Tokenizer's consumeName() must advance over whole UTF-8 sequences
+    // rather than byte-by-byte to avoid landing on a continuation byte.
+    const div = document.createElement('div');
+    div.setAttribute('style',
+        '--color-store-bulles-\u00e9t\u00e9-fg: #6a818f;' +
+        '--color-store-soir\u00e9es-odl-fg: #56b3b3;' +
+        'color: red;'
+    );
+
+    // Must not crash, and ASCII properties that follow non-ASCII ones must be readable.
+    testing.expectEqual('red', div.style.getPropertyValue('color'));
+}
+</script>

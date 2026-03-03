@@ -480,10 +480,11 @@ fn consumeName(self: *Tokenizer) []const u8 {
                 self.consumeEscape();
             },
             0x0 => self.advance(1),
-            '\x80'...'\xBF', '\xC0'...'\xEF', '\xF0'...'\xFF' => {
-                // This byte *is* part of a multi-byte code point,
-                // we’ll end up copying the whole code point before this loop does something else.
-                self.advance(1);
+            '\x80'...'\xFF' => {
+                // Non-ASCII: advance over the complete UTF-8 code point in one step.
+                // Using consumeChar() instead of advance(1) ensures we never land on
+                // a continuation byte, which advance() asserts against.
+                self.consumeChar();
             },
             else => {
                 if (self.hasNonAsciiAt(0)) {
