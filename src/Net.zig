@@ -174,16 +174,16 @@ const HeaderValue = struct {
 
 pub const AuthChallenge = struct {
     status: u16,
-    source: enum { server, proxy },
-    scheme: enum { basic, digest },
-    realm: []const u8,
+    source: ?enum { server, proxy },
+    scheme: ?enum { basic, digest },
+    realm: ?[]const u8,
 
     pub fn parse(status: u16, header: []const u8) !AuthChallenge {
         var ac: AuthChallenge = .{
             .status = status,
-            .source = undefined,
-            .realm = "TODO", // TODO parser and set realm
-            .scheme = undefined,
+            .source = null,
+            .realm = null,
+            .scheme = null,
         };
 
         const sep = std.mem.indexOfPos(u8, header, 0, ": ") orelse return error.InvalidHeader;
@@ -471,6 +471,7 @@ pub const Connection = struct {
 
 pub const Handles = struct {
     connections: []Connection,
+    dirty: HandleList,
     in_use: HandleList,
     available: HandleList,
     multi: *libcurl.CurlM,
@@ -501,6 +502,7 @@ pub const Handles = struct {
         }
 
         return .{
+            .dirty = .{},
             .in_use = .{},
             .connections = connections,
             .available = available,
@@ -522,8 +524,6 @@ pub const Handles = struct {
 
     pub fn get(self: *Handles) ?*Connection {
         if (self.available.popFirst()) |node| {
-            node.prev = null;
-            node.next = null;
             self.in_use.append(node);
             return @as(*Connection, @fieldParentPtr("node", node));
         }
@@ -535,21 +535,46 @@ pub const Handles = struct {
     }
 
     pub fn remove(self: *Handles, conn: *Connection) void {
-        libcurl.curl_multi_remove_handle(self.multi, conn.easy) catch |err| {
-            log.fatal(.http, "multi remove handle", .{ .err = err });
-        };
-        var node = &conn.node;
+        if (libcurl.curl_multi_remove_handle(self.multi, conn.easy)) {
+            self.isAvailable(conn);
+        } else |err| {
+            // can happen if we're in a perform() call, so we'll queue this
+            // for cleanup later.
+            const node = &conn.node;
+            self.in_use.remove(node);
+            self.dirty.append(node);
+            log.warn(.http, "multi remove handle", .{ .err = err });
+        }
+    }
+
+    pub fn isAvailable(self: *Handles, conn: *Connection) void {
+        const node = &conn.node;
         self.in_use.remove(node);
-        node.prev = null;
-        node.next = null;
         self.available.append(node);
     }
 
     pub fn perform(self: *Handles) !c_int {
-        var running: c_int = undefined;
         self.performing = true;
         defer self.performing = false;
+
+        const multi = self.multi;
+        var running: c_int = undefined;
         try libcurl.curl_multi_perform(self.multi, &running);
+
+        {
+            const list = &self.dirty;
+            while (list.first) |node| {
+                list.remove(node);
+                const conn: *Connection = @fieldParentPtr("node", node);
+                if (libcurl.curl_multi_remove_handle(multi, conn.easy)) {
+                    self.available.append(node);
+                } else |err| {
+                    log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
+                    @panic("multi_remove_handle");
+                }
+            }
+        }
+
         return running;
     }
 

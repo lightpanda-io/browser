@@ -66,7 +66,7 @@ active: usize,
 intercepted: usize,
 
 // Our easy handles, managed by a curl multi.
-handles: Handles,
+handles: Net.Handles,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -128,7 +128,7 @@ pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, 
     const client = try allocator.create(Client);
     errdefer allocator.destroy(client);
 
-    var handles = try Handles.init(allocator, ca_blob, config);
+    var handles = try Net.Handles.init(allocator, ca_blob, config);
     errdefer handles.deinit(allocator);
 
     // Set transfer callbacks on each connection.
@@ -191,6 +191,8 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
             n = node.next;
             const conn: *Net.Connection = @fieldParentPtr("node", node);
             var transfer = Transfer.fromConnection(conn) catch |err| {
+                // Let's cleanup what we can
+                self.handles.remove(conn);
                 log.err(.http, "get private info", .{ .err = err, .source = "abort" });
                 continue;
             };
@@ -665,7 +667,7 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 }
 
 // Enable TLS verification on all connections.
-pub fn enableTlsVerify(self: *const Client) !void {
+pub fn enableTlsVerify(self: *Client) !void {
     // Remove inflight connections check on enable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
@@ -675,7 +677,7 @@ pub fn enableTlsVerify(self: *const Client) !void {
 }
 
 // Disable TLS verification on all connections.
-pub fn disableTlsVerify(self: *const Client) !void {
+pub fn disableTlsVerify(self: *Client) !void {
     // Remove inflight connections check on disable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
@@ -689,7 +691,11 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
 
     {
         transfer._conn = conn;
-        errdefer transfer.deinit();
+        errdefer {
+            transfer._conn = null;
+            transfer.deinit();
+            self.handles.isAvailable(conn);
+        }
 
         try conn.setURL(req.url);
         try conn.setMethod(req.method);
@@ -716,17 +722,20 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         }
     }
 
-    // Once soon as this is called, our "perform" loop is responsible for
+    // As soon as this is called, our "perform" loop is responsible for
     // cleaning things up. That's why the above code is in a block. If anything
-    // fails BEFORE `curl_multi_add_handle` suceeds, the we still need to do
+    // fails BEFORE `curl_multi_add_handle` succeeds, the we still need to do
     // cleanup. But if things fail after `curl_multi_add_handle`, we expect
     // perfom to pickup the failure and cleanup.
-    try self.handles.add(conn);
+    self.handles.add(conn) catch |err| {
+        transfer._conn = null;
+        transfer.deinit();
+        self.handles.isAvailable(conn);
+        return err;
+    };
 
     if (req.start_callback) |cb| {
         cb(transfer) catch |err| {
-            self.handles.remove(conn);
-            transfer._conn = null;
             transfer.deinit();
             return err;
         };
@@ -834,7 +843,7 @@ fn processMessages(self: *Client) !bool {
                 // In case of request w/o data, we need to call the header done
                 // callback now.
                 const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
-                    log.err(.http, "header_done_callback", .{ .err = err });
+                    log.err(.http, "header_done_callback2", .{ .err = err });
                     requestFailed(transfer, err, true);
                     continue;
                 };
@@ -871,8 +880,6 @@ fn ensureNoActiveConnection(self: *const Client) !void {
         return error.InflightConnection;
     }
 }
-
-const Handles = Net.Handles;
 
 pub const RequestCookie = struct {
     is_http: bool,
@@ -1300,9 +1307,9 @@ pub const Transfer = struct {
                 // WWW-Authenticate or Proxy-Authenticate header.
                 transfer._auth_challenge = .{
                     .status = status,
-                    .source = undefined,
-                    .scheme = undefined,
-                    .realm = undefined,
+                    .source = null,
+                    .scheme = null,
+                    .realm = null,
                 };
                 return buf_len;
             }
