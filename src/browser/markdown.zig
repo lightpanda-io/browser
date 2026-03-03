@@ -464,35 +464,35 @@ fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
     try testing.expectString(expected, aw.written());
 }
 
-test "markdown: basic" {
+test "browser.markdown: basic" {
     try testMarkdownHTML("Hello world", "Hello world\n");
 }
 
-test "markdown: whitespace" {
+test "browser.markdown: whitespace" {
     try testMarkdownHTML("<span>A</span> <span>B</span>", "A B\n");
 }
 
-test "markdown: escaping" {
+test "browser.markdown: escaping" {
     try testMarkdownHTML("<p># Not a header</p>", "\n\\# Not a header\n");
 }
 
-test "markdown: strikethrough" {
+test "browser.markdown: strikethrough" {
     try testMarkdownHTML("<s>deleted</s>", "~~deleted~~\n");
 }
 
-test "markdown: task list" {
+test "browser.markdown: task list" {
     try testMarkdownHTML(
         \\<input type="checkbox" checked><input type="checkbox">
     , "[x] [ ] \n");
 }
 
-test "markdown: ordered list" {
+test "browser.markdown: ordered list" {
     try testMarkdownHTML(
         \\<ol><li>First</li><li>Second</li></ol>
     , "1. First\n2. Second\n");
 }
 
-test "markdown: table" {
+test "browser.markdown: table" {
     try testMarkdownHTML(
         \\<table><thead><tr><th>Head 1</th><th>Head 2</th></tr></thead>
         \\<tbody><tr><td>Cell 1</td><td>Cell 2</td></tr></tbody></table>
@@ -505,7 +505,7 @@ test "markdown: table" {
     );
 }
 
-test "markdown: nested lists" {
+test "browser.markdown: nested lists" {
     try testMarkdownHTML(
         \\<ul><li>Parent<ul><li>Child</li></ul></li></ul>
     ,
@@ -515,19 +515,19 @@ test "markdown: nested lists" {
     );
 }
 
-test "markdown: blockquote" {
+test "browser.markdown: blockquote" {
     try testMarkdownHTML("<blockquote>Hello world</blockquote>", "\n> Hello world\n");
 }
 
-test "markdown: links" {
+test "browser.markdown: links" {
     try testMarkdownHTML("<a href=\"https://lightpanda.io\">Lightpanda</a>", "[Lightpanda](https://lightpanda.io)\n");
 }
 
-test "markdown: images" {
+test "browser.markdown: images" {
     try testMarkdownHTML("<img src=\"logo.png\" alt=\"Logo\">", "![Logo](logo.png)\n");
 }
 
-test "markdown: headings" {
+test "browser.markdown: headings" {
     try testMarkdownHTML("<h1>Title</h1><h2>Subtitle</h2>",
         \\
         \\# Title
@@ -537,7 +537,7 @@ test "markdown: headings" {
     );
 }
 
-test "markdown: code" {
+test "browser.markdown: code" {
     try testMarkdownHTML(
         \\<p>Use git push</p>
         \\<pre><code>line 1
@@ -554,7 +554,7 @@ test "markdown: code" {
     );
 }
 
-test "markdown: block link" {
+test "browser.markdown: block link" {
     try testMarkdownHTML(
         \\<a href="https://example.com">
         \\  <h3>Title</h3>
@@ -570,7 +570,7 @@ test "markdown: block link" {
     );
 }
 
-test "markdown: inline link" {
+test "browser.markdown: inline link" {
     try testMarkdownHTML(
         \\<p>Visit <a href="https://example.com">Example</a>.</p>
     ,
@@ -580,7 +580,7 @@ test "markdown: inline link" {
     );
 }
 
-test "markdown: standalone anchors" {
+test "browser.markdown: standalone anchors" {
     // Inside main, with whitespace between anchors -> treated as blocks
     try testMarkdownHTML(
         \\<main>
@@ -594,7 +594,7 @@ test "markdown: standalone anchors" {
     );
 }
 
-test "markdown: mixed anchors in main" {
+test "browser.markdown: mixed anchors in main" {
     // Anchors surrounded by text should remain inline
     try testMarkdownHTML(
         \\<main>
