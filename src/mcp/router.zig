@@ -94,7 +94,7 @@ fn handleInitialize(server: *Server, req: protocol.Request) !void {
 
 const testing = @import("../testing.zig");
 
-test "handleMessage - synchronous unit tests" {
+test "MCP.router - handleMessage - synchronous unit tests" {
     const allocator = testing.allocator;
     const app = testing.test_app;
 

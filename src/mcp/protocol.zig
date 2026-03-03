@@ -185,7 +185,7 @@ pub const JsonEscapingWriter = struct {
 
 const testing = @import("../testing.zig");
 
-test "protocol request parsing" {
+test "MCP.protocol - request parsing" {
     const raw_json =
         \\{
         \\  "jsonrpc": "2.0",
@@ -221,7 +221,7 @@ test "protocol request parsing" {
     try testing.expectString("1.0.0", init_params.value.clientInfo.version);
 }
 
-test "protocol response formatting" {
+test "MCP.protocol - response formatting" {
     const response = Response{
         .id = .{ .integer = 42 },
         .result = .{ .string = "success" },
@@ -234,7 +234,7 @@ test "protocol response formatting" {
     try testing.expectString("{\"jsonrpc\":\"2.0\",\"id\":42,\"result\":\"success\"}", aw.written());
 }
 
-test "protocol error formatting" {
+test "MCP.protocol - error formatting" {
     const response = Response{
         .id = .{ .string = "abc" },
         .@"error" = .{
@@ -250,7 +250,7 @@ test "protocol error formatting" {
     try testing.expectString("{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}", aw.written());
 }
 
-test "JsonEscapingWriter" {
+test "MCP.protocol - JsonEscapingWriter" {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
     defer aw.deinit();
 
@@ -263,7 +263,7 @@ test "JsonEscapingWriter" {
     try testing.expectString("hello\\n\\\"world\\\"", aw.written());
 }
 
-test "Tool serialization" {
+test "MCP.protocol - Tool serialization" {
     const t = Tool{
         .name = "test",
         .inputSchema = minify(

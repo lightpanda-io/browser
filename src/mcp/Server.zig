@@ -83,7 +83,7 @@ pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, mess
     });
 }
 
-test "MCP Integration: synchronous smoke test" {
+test "MCP.Server - Integration: synchronous smoke test" {
     const allocator = testing.allocator;
     const app = testing.test_app;
 
