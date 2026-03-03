@@ -247,10 +247,7 @@ fn attachToTarget(cmd: anytype) !void {
 
     try doAttachtoTarget(cmd, target_id);
 
-    return cmd.sendResult(
-        .{ .sessionId = bc.session_id },
-        .{},
-    );
+    return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
 }
 
 fn attachToBrowserTarget(cmd: anytype) !void {
@@ -272,7 +269,7 @@ fn attachToBrowserTarget(cmd: anytype) !void {
 
     bc.session_id = session_id;
 
-    return cmd.sendResult(null, .{});
+    return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
 }
 
 fn closeTarget(cmd: anytype) !void {
