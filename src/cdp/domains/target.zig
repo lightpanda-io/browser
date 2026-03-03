@@ -31,6 +31,7 @@ pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         getTargets,
         attachToTarget,
+        attachToBrowserTarget,
         closeTarget,
         createBrowserContext,
         createTarget,
@@ -47,6 +48,7 @@ pub fn processMessage(cmd: anytype) !void {
     switch (action) {
         .getTargets => return getTargets(cmd),
         .attachToTarget => return attachToTarget(cmd),
+        .attachToBrowserTarget => return attachToBrowserTarget(cmd),
         .closeTarget => return closeTarget(cmd),
         .createBrowserContext => return createBrowserContext(cmd),
         .createTarget => return createTarget(cmd),
@@ -249,6 +251,28 @@ fn attachToTarget(cmd: anytype) !void {
         .{ .sessionId = bc.session_id },
         .{ .include_session_id = false },
     );
+}
+
+fn attachToBrowserTarget(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
+
+    try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+        .sessionId = session_id,
+        .targetInfo = TargetInfo{
+            .targetId = bc.id, // We use the browser context is as browser's target id.
+            .title = "",
+            .url = "",
+            .type = "browser",
+            // Chrome doesn't send a browserContextId in this case.
+            .browserContextId = null,
+        },
+    }, .{});
+
+    bc.session_id = session_id;
+
+    return cmd.sendResult(null, .{});
 }
 
 fn closeTarget(cmd: anytype) !void {
