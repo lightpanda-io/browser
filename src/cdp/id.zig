@@ -46,7 +46,7 @@ pub fn toLoaderId(page_id: u32) [14]u8 {
 
 pub fn toRequestId(page_id: u32) [14]u8 {
     var buf: [14]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "RID-{d:0>10}", .{page_id}) catch unreachable;
+    _ = std.fmt.bufPrint(&buf, "REQ-{d:0>10}", .{page_id}) catch unreachable;
     return buf;
 }
 
@@ -174,8 +174,8 @@ test "id: toLoaderId" {
 }
 
 test "id: toRequestId" {
-    try testing.expectEqual("RID-0000000000", toRequestId(0));
-    try testing.expectEqual("RID-4294967295", toRequestId(4294967295));
+    try testing.expectEqual("REQ-0000000000", toRequestId(0));
+    try testing.expectEqual("REQ-4294967295", toRequestId(4294967295));
 }
 
 test "id: toInterceptId" {
