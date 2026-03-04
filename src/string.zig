@@ -462,3 +462,128 @@ test "String.concat" {
         try testing.expectEqual("Hello world!", result.str());
     }
 }
+
+pub const Case = enum {
+    snake,
+    camel,
+    kebab,
+    pascal,
+};
+
+fn isSeparator(c: u8) bool {
+    return c == '_' or c == '-' or c == ' ';
+}
+
+fn isWordBoundary(str: []const u8, i: usize) bool {
+    const c = str[i];
+    if (isSeparator(c)) return true;
+    if (!std.ascii.isUpper(c)) return false;
+
+    // lowercase -> uppercase (normal camel boundary: "httpResponse")
+    if (i > 0 and std.ascii.isLower(str[i - 1])) return true;
+
+    // uppercase followed by lowercase (acronym end: "XMLParser")
+    if (i + 1 < str.len and std.ascii.isLower(str[i + 1])) return true;
+
+    return false;
+}
+
+pub fn countCase(comptime str: []const u8, comptime target: Case) usize {
+    if (str.len == 0) return 0;
+
+    var count: usize = 0;
+    var is_first_word = true;
+    var i: usize = 0;
+
+    while (i < str.len) {
+        if (isSeparator(str[i])) {
+            i += 1;
+            continue;
+        }
+
+        if (!is_first_word and (target == .snake or target == .kebab)) {
+            count += 1; // separator
+        }
+
+        const start = i;
+        i += 1;
+        while (i < str.len and !isWordBoundary(str, i)) i += 1;
+
+        count += i - start;
+        is_first_word = false;
+    }
+    return count;
+}
+
+pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(str, target)]u8 {
+    var result: [countCase(str, target)]u8 = undefined;
+    if (str.len == 0) return result;
+
+    var res_idx: usize = 0;
+    var is_first_word = true;
+    var i: usize = 0;
+
+    while (i < str.len) {
+        if (isSeparator(str[i])) {
+            i += 1;
+            continue;
+        }
+
+        if (!is_first_word) {
+            switch (target) {
+                .snake => {
+                    result[res_idx] = '_';
+                    res_idx += 1;
+                },
+                .kebab => {
+                    result[res_idx] = '-';
+                    res_idx += 1;
+                },
+                else => {},
+            }
+        }
+
+        const start = i;
+        i += 1;
+        while (i < str.len and !isWordBoundary(str, i)) i += 1;
+
+        const word = str[start..i];
+        for (word, 0..) |c, word_idx| {
+            if (word_idx == 0) {
+                switch (target) {
+                    .pascal => result[res_idx] = std.ascii.toUpper(c),
+                    .camel => result[res_idx] = if (is_first_word) std.ascii.toLower(c) else std.ascii.toUpper(c),
+                    else => result[res_idx] = std.ascii.toLower(c),
+                }
+            } else {
+                result[res_idx] = std.ascii.toLower(c);
+            }
+            res_idx += 1;
+        }
+        is_first_word = false;
+    }
+
+    return result;
+}
+
+test "String.convertCase" {
+    // 1. To Snake
+    try testing.expectEqual("id", &convertCase("id", .snake));
+    try testing.expectEqual("network_idle", &convertCase("networkIdle", .snake));
+    try testing.expectEqual("xhr_request", &convertCase("XHRRequest", .snake));
+    try testing.expectEqual("ready_state_change", &convertCase("readyStateChange", .snake));
+
+    // 2. To Camel
+    try testing.expectEqual("networkIdle", &convertCase("network_idle", .camel));
+    try testing.expectEqual("xhrRequest", &convertCase("xhr_request", .camel));
+    try testing.expectEqual("url", &convertCase("URL", .camel));
+    try testing.expectEqual("readyStateChange", &convertCase("ready-state-change", .camel));
+
+    // 3. To Kebab
+    try testing.expectEqual("network-idle", &convertCase("network_idle", .kebab));
+    try testing.expectEqual("xhr-request", &convertCase("XHRRequest", .kebab));
+
+    // 4. To Pascal
+    try testing.expectEqual("NetworkIdle", &convertCase("network_idle", .pascal));
+    try testing.expectEqual("XhrRequest", &convertCase("xhr_request", .pascal));
+}
