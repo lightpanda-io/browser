@@ -25,18 +25,18 @@ const Notification = @import("../../Notification.zig");
 const Allocator = std.mem.Allocator;
 
 pub const LpState = struct {
-    pending_wait_for_network_idle_id: ?i64 = null,
+    pending_wait_for_network_idle: ?i64 = null,
 };
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         getMarkdown,
-        waitForNetworkIdle,
+        waitFor,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .getMarkdown => return getMarkdown(cmd),
-        .waitForNetworkIdle => return waitForNetworkIdle(cmd),
+        .waitFor => return waitFor(cmd),
     }
 }
 
@@ -63,22 +63,31 @@ fn getMarkdown(cmd: anytype) !void {
     }, .{});
 }
 
-fn waitForNetworkIdle(cmd: anytype) !void {
+fn waitFor(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
 
-    // If network is already idle, we can return immediately
-    const http_client = bc.cdp.browser.http_client;
-    if (http_client.active == 0 and http_client.intercepted == 0) {
-        return cmd.sendResult(null, .{});
-    }
+    const Params = struct {
+        condition: []const u8,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParams;
 
-    // Otherwise, we store the ID and wait for the notification.
-    bc.lp_state.pending_wait_for_network_idle_id = cmd.input.id;
+    if (std.mem.eql(u8, params.condition, "networkIdle")) {
+        // If network is already idle, we can return immediately
+        const http_client = bc.cdp.browser.http_client;
+        if (http_client.active == 0 and http_client.intercepted == 0) {
+            return cmd.sendResult(null, .{});
+        }
+
+        // Otherwise, we store the ID and wait for the notification.
+        bc.lp_state.pending_wait_for_network_idle = cmd.input.id;
+    } else {
+        return error.InvalidParams;
+    }
 }
 
 pub fn onPageNetworkIdle(bc: anytype, _: *const Notification.PageNetworkIdle) !void {
-    const id = bc.lp_state.pending_wait_for_network_idle_id orelse return;
-    bc.lp_state.pending_wait_for_network_idle_id = null;
+    const id = bc.lp_state.pending_wait_for_network_idle orelse return;
+    bc.lp_state.pending_wait_for_network_idle = null;
 
     try bc.cdp.client.sendJSON(.{
         .id = id,
@@ -104,7 +113,7 @@ test "cdp.lp: getMarkdown" {
     try testing.expect(result.get("markdown") != null);
 }
 
-test "cdp.lp: waitForNetworkIdle" {
+test "cdp.lp: waitFor" {
     var ctx = testing.context();
     defer ctx.deinit();
 
@@ -114,12 +123,13 @@ test "cdp.lp: waitForNetworkIdle" {
     // 1. Test immediate return when idle
     try ctx.processMessage(.{
         .id = 1,
-        .method = "LP.waitForNetworkIdle",
+        .method = "LP.waitFor",
+        .params = .{ .condition = "networkIdle" },
     });
     try ctx.expectSentResult(null, .{ .id = 1 });
 
     // 2. Test waiting when not idle
-    bc.lp_state.pending_wait_for_network_idle_id = 2;
+    bc.lp_state.pending_wait_for_network_idle = 2;
 
     try onPageNetworkIdle(bc, &.{ .req_id = 0, .frame_id = 0, .timestamp = 0 });
     try ctx.expectSentResult(null, .{ .id = 2 });
