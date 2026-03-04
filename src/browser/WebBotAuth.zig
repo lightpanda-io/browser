@@ -41,20 +41,9 @@ fn parsePemPrivateKey(pem: []const u8) !*crypto.EVP_PKEY {
 
     const b64 = std.mem.trim(u8, pem[start_idx + begin.len .. end_idx], &std.ascii.whitespace);
 
-    // Ed25519 PKCS#8 DER is always 48 bytes, which base64-encodes to exactly 64 chars
-    var clean: [64]u8 = undefined;
-    var clean_len: usize = 0;
-    for (b64) |ch| {
-        if (ch != '\n' and ch != '\r') {
-            clean[clean_len] = ch;
-            clean_len += 1;
-        }
-    }
-
     // decode base64 into 48-byte DER buffer
     var der: [48]u8 = undefined;
-    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(clean[0..clean_len]);
-    try std.base64.standard.Decoder.decode(der[0..decoded_len], clean[0..clean_len]);
+    try std.base64.standard.Decoder.decode(der[0..48], b64);
 
     // Ed25519 PKCS#8 structure always places the 32-byte raw private key at offset 16.
     const key_bytes = der[16..48];
