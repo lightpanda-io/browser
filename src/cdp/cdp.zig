@@ -378,7 +378,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         extra_headers: std.ArrayList([*c]const u8) = .empty,
 
         intercept_state: InterceptState,
-        lp_state: @import("domains/lp.zig").LPState,
+        lp_state: @import("domains/lp.zig").LpState,
 
         // When network is enabled, we'll capture the transfer.id -> body
         // This is awfully memory intensive, but our underlying http client and
@@ -426,7 +426,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .arena = cdp.browser_context_arena.allocator(),
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
-                .lp_state = try @import("domains/lp.zig").LPState.init(allocator),
+                .lp_state = .{},
                 .captured_responses = .empty,
                 .notification = notification,
             };
@@ -481,7 +481,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 };
             }
             self.intercept_state.deinit();
-            self.lp_state.deinit();
         }
 
         pub fn reset(self: *Self) void {
