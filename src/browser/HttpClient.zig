@@ -706,7 +706,7 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         // If we have WebBotAuth, sign our request.
         if (self.network.web_bot_auth) |*wba| {
             const authority = URL.getHost(req.url);
-            try wba.signRequest(self.allocator, &header_list, authority);
+            try wba.signRequest(transfer.arena.allocator(), &header_list, authority);
         }
 
         // Add cookies.
