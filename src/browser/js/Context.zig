@@ -786,9 +786,16 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
             entry.module_promise = try module_resolver.promise().persist();
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
+            if (status == .kUninstantiated) {
+                if (try mod.instantiate(resolveModuleCallback) == false) {
+                    _ = resolver.reject("module instantiation", local.newString("Module instantiation failed"));
+                    return promise;
+                }
+            }
+
             const evaluated = mod.evaluate() catch {
                 if (comptime IS_DEBUG) {
-                    std.debug.assert(status == .kErrored);
+                    std.debug.assert(mod.getStatus() == .kErrored);
                 }
                 _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
                 return promise;
