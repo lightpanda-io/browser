@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const log = @import("../../log.zig");
+const string = @import("../../string.zig");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
@@ -272,7 +273,7 @@ const ModifyAlter = enum {
     extend,
 
     pub fn fromString(str: []const u8) ?ModifyAlter {
-        return std.meta.stringToEnum(ModifyAlter, str);
+        return string.meta.stringToEnum(ModifyAlter, str, .camel);
     }
 };
 
@@ -283,7 +284,7 @@ const ModifyDirection = enum {
     right,
 
     pub fn fromString(str: []const u8) ?ModifyDirection {
-        return std.meta.stringToEnum(ModifyDirection, str);
+        return string.meta.stringToEnum(ModifyDirection, str, .camel);
     }
 };
 
@@ -295,7 +296,7 @@ const ModifyGranularity = enum {
     // 2. Not widely supported across browsers.
 
     pub fn fromString(str: []const u8) ?ModifyGranularity {
-        return std.meta.stringToEnum(ModifyGranularity, str);
+        return string.meta.stringToEnum(ModifyGranularity, str, .camel);
     }
 };
 

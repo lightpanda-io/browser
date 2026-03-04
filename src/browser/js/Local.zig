@@ -598,7 +598,10 @@ pub fn jsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !T {
         .@"enum" => |e| {
             if (@hasDecl(T, "js_enum_from_string")) {
                 const js_str = js_val.isString() orelse return error.InvalidArgument;
-                return std.meta.stringToEnum(T, try js_str.toSlice()) orelse return error.InvalidArgument;
+                const str = try js_str.toSlice();
+                return std.meta.stringToEnum(T, str) orelse
+                    string.meta.stringToEnum(T, str, .camel) orelse
+                    return error.InvalidArgument;
             }
             switch (@typeInfo(e.tag_type)) {
                 .int => return std.meta.intToEnum(T, try jsIntToZig(e.tag_type, js_val)),

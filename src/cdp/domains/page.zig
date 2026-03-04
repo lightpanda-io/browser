@@ -26,29 +26,32 @@ const URL = @import("../../browser/URL.zig");
 const Page = @import("../../browser/Page.zig");
 const timestampF = @import("../../datetime.zig").timestamp;
 const Notification = @import("../../Notification.zig");
+const string = @import("../../string.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: anytype) !void {
-    const action = std.meta.stringToEnum(enum {
+    const Action = enum {
         enable,
-        getFrameTree,
-        setLifecycleEventsEnabled,
-        addScriptToEvaluateOnNewDocument,
-        createIsolatedWorld,
+        get_frame_tree,
+        set_lifecycle_events_enabled,
+        add_script_to_evaluate_on_new_document,
+        create_isolated_world,
         navigate,
-        stopLoading,
+        stop_loading,
         close,
-    }, cmd.input.action) orelse return error.UnknownMethod;
+    };
+    const action = string.meta.stringToEnum(Action, cmd.input.action, .camel) orelse
+        return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
-        .getFrameTree => return getFrameTree(cmd),
-        .setLifecycleEventsEnabled => return setLifecycleEventsEnabled(cmd),
-        .addScriptToEvaluateOnNewDocument => return addScriptToEvaluateOnNewDocument(cmd),
-        .createIsolatedWorld => return createIsolatedWorld(cmd),
+        .get_frame_tree => return getFrameTree(cmd),
+        .set_lifecycle_events_enabled => return setLifecycleEventsEnabled(cmd),
+        .add_script_to_evaluate_on_new_document => return addScriptToEvaluateOnNewDocument(cmd),
+        .create_isolated_world => return createIsolatedWorld(cmd),
         .navigate => return navigate(cmd),
-        .stopLoading => return cmd.sendResult(null, .{}),
+        .stop_loading => return cmd.sendResult(null, .{}),
         .close => return close(cmd),
     }
 }

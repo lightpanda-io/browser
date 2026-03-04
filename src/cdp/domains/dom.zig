@@ -25,46 +25,49 @@ const Selector = @import("../../browser/webapi/selector/Selector.zig");
 
 const dump = @import("../../browser/dump.zig");
 const js = @import("../../browser/js/js.zig");
+const string = @import("../../string.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub fn processMessage(cmd: anytype) !void {
-    const action = std.meta.stringToEnum(enum {
+    const Action = enum {
         enable,
-        getDocument,
-        performSearch,
-        getSearchResults,
-        discardSearchResults,
-        querySelector,
-        querySelectorAll,
-        resolveNode,
-        describeNode,
-        scrollIntoViewIfNeeded,
-        getContentQuads,
-        getBoxModel,
-        requestChildNodes,
-        getFrameOwner,
-        getOuterHTML,
-        requestNode,
-    }, cmd.input.action) orelse return error.UnknownMethod;
+        get_document,
+        perform_search,
+        get_search_results,
+        discard_search_results,
+        query_selector,
+        query_selector_all,
+        resolve_node,
+        describe_node,
+        scroll_into_view_if_needed,
+        get_content_quads,
+        get_box_model,
+        request_child_nodes,
+        get_frame_owner,
+        get_outer_html,
+        request_node,
+    };
+    const action = string.meta.stringToEnum(Action, cmd.input.action, .camel) orelse
+        return error.UnknownMethod;
 
     switch (action) {
         .enable => return cmd.sendResult(null, .{}),
-        .getDocument => return getDocument(cmd),
-        .performSearch => return performSearch(cmd),
-        .getSearchResults => return getSearchResults(cmd),
-        .discardSearchResults => return discardSearchResults(cmd),
-        .querySelector => return querySelector(cmd),
-        .querySelectorAll => return querySelectorAll(cmd),
-        .resolveNode => return resolveNode(cmd),
-        .describeNode => return describeNode(cmd),
-        .scrollIntoViewIfNeeded => return scrollIntoViewIfNeeded(cmd),
-        .getContentQuads => return getContentQuads(cmd),
-        .getBoxModel => return getBoxModel(cmd),
-        .requestChildNodes => return requestChildNodes(cmd),
-        .getFrameOwner => return getFrameOwner(cmd),
-        .getOuterHTML => return getOuterHTML(cmd),
-        .requestNode => return requestNode(cmd),
+        .get_document => return getDocument(cmd),
+        .perform_search => return performSearch(cmd),
+        .get_search_results => return getSearchResults(cmd),
+        .discard_search_results => return discardSearchResults(cmd),
+        .query_selector => return querySelector(cmd),
+        .query_selector_all => return querySelectorAll(cmd),
+        .resolve_node => return resolveNode(cmd),
+        .describe_node => return describeNode(cmd),
+        .scroll_into_view_if_needed => return scrollIntoViewIfNeeded(cmd),
+        .get_content_quads => return getContentQuads(cmd),
+        .get_box_model => return getBoxModel(cmd),
+        .request_child_nodes => return requestChildNodes(cmd),
+        .get_frame_owner => return getFrameOwner(cmd),
+        .get_outer_html => return getOuterHTML(cmd),
+        .request_node => return requestNode(cmd),
     }
 }
 

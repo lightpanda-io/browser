@@ -18,20 +18,23 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const string = @import("../../string.zig");
 
 pub fn processMessage(cmd: anytype) !void {
-    const action = std.meta.stringToEnum(enum {
+    const Action = enum {
         enable,
-        runIfWaitingForDebugger,
+        run_if_waiting_for_debugger,
         evaluate,
-        addBinding,
-        callFunctionOn,
-        releaseObject,
-        getProperties,
-    }, cmd.input.action) orelse return error.UnknownMethod;
+        add_binding,
+        call_function_on,
+        release_object,
+        get_properties,
+    };
+    const action = string.meta.stringToEnum(Action, cmd.input.action, .camel) orelse
+        return error.UnknownMethod;
 
     switch (action) {
-        .runIfWaitingForDebugger => return cmd.sendResult(null, .{}),
+        .run_if_waiting_for_debugger => return cmd.sendResult(null, .{}),
         else => return sendInspector(cmd, action),
     }
 }
@@ -61,7 +64,7 @@ fn logInspector(cmd: anytype, action: anytype) !void {
 
             break :blk params.expression;
         },
-        .callFunctionOn => blk: {
+        .call_function_on => blk: {
             const params = (try cmd.params(struct {
                 functionDeclaration: []const u8,
                 // objectId: ?[]const u8 = null,

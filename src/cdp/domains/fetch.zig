@@ -25,24 +25,27 @@ const network = @import("network.zig");
 
 const Http = @import("../../http/Http.zig");
 const Notification = @import("../../Notification.zig");
+const string = @import("../../string.zig");
 
 pub fn processMessage(cmd: anytype) !void {
-    const action = std.meta.stringToEnum(enum {
+    const Action = enum {
         disable,
         enable,
-        continueRequest,
-        failRequest,
-        fulfillRequest,
-        continueWithAuth,
-    }, cmd.input.action) orelse return error.UnknownMethod;
+        continue_request,
+        fail_request,
+        fulfill_request,
+        continue_with_auth,
+    };
+    const action = string.meta.stringToEnum(Action, cmd.input.action, .camel) orelse
+        return error.UnknownMethod;
 
     switch (action) {
         .disable => return disable(cmd),
         .enable => return enable(cmd),
-        .continueRequest => return continueRequest(cmd),
-        .continueWithAuth => return continueWithAuth(cmd),
-        .failRequest => return failRequest(cmd),
-        .fulfillRequest => return fulfillRequest(cmd),
+        .continue_request => return continueRequest(cmd),
+        .continue_with_auth => return continueWithAuth(cmd),
+        .fail_request => return failRequest(cmd),
+        .fulfill_request => return fulfillRequest(cmd),
     }
 }
 

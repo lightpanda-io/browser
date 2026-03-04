@@ -23,43 +23,46 @@ const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const URL = @import("../../browser/URL.zig");
 const js = @import("../../browser/js/js.zig");
+const string = @import("../../string.zig");
 
 // TODO: hard coded IDs
 const LOADER_ID = "LOADERID42AA389647D702B4D805F49A";
 
 pub fn processMessage(cmd: anytype) !void {
-    const action = std.meta.stringToEnum(enum {
-        getTargets,
-        attachToTarget,
-        attachToBrowserTarget,
-        closeTarget,
-        createBrowserContext,
-        createTarget,
-        detachFromTarget,
-        disposeBrowserContext,
-        getBrowserContexts,
-        getTargetInfo,
-        sendMessageToTarget,
-        setAutoAttach,
-        setDiscoverTargets,
-        activateTarget,
-    }, cmd.input.action) orelse return error.UnknownMethod;
+    const Action = enum {
+        get_targets,
+        attach_to_target,
+        attach_to_browser_target,
+        close_target,
+        create_browser_context,
+        create_target,
+        detach_from_target,
+        dispose_browser_context,
+        get_browser_contexts,
+        get_target_info,
+        send_message_to_target,
+        set_auto_attach,
+        set_discover_targets,
+        activate_target,
+    };
+    const action = string.meta.stringToEnum(Action, cmd.input.action, .camel) orelse
+        return error.UnknownMethod;
 
     switch (action) {
-        .getTargets => return getTargets(cmd),
-        .attachToTarget => return attachToTarget(cmd),
-        .attachToBrowserTarget => return attachToBrowserTarget(cmd),
-        .closeTarget => return closeTarget(cmd),
-        .createBrowserContext => return createBrowserContext(cmd),
-        .createTarget => return createTarget(cmd),
-        .detachFromTarget => return detachFromTarget(cmd),
-        .disposeBrowserContext => return disposeBrowserContext(cmd),
-        .getBrowserContexts => return getBrowserContexts(cmd),
-        .getTargetInfo => return getTargetInfo(cmd),
-        .sendMessageToTarget => return sendMessageToTarget(cmd),
-        .setAutoAttach => return setAutoAttach(cmd),
-        .setDiscoverTargets => return setDiscoverTargets(cmd),
-        .activateTarget => return cmd.sendResult(null, .{}),
+        .get_targets => return getTargets(cmd),
+        .attach_to_target => return attachToTarget(cmd),
+        .attach_to_browser_target => return attachToBrowserTarget(cmd),
+        .close_target => return closeTarget(cmd),
+        .create_browser_context => return createBrowserContext(cmd),
+        .create_target => return createTarget(cmd),
+        .detach_from_target => return detachFromTarget(cmd),
+        .dispose_browser_context => return disposeBrowserContext(cmd),
+        .get_browser_contexts => return getBrowserContexts(cmd),
+        .get_target_info => return getTargetInfo(cmd),
+        .send_message_to_target => return sendMessageToTarget(cmd),
+        .set_auto_attach => return setAutoAttach(cmd),
+        .set_discover_targets => return setDiscoverTargets(cmd),
+        .activate_target => return cmd.sendResult(null, .{}),
     }
 }
 

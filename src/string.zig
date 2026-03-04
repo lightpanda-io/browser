@@ -571,6 +571,33 @@ pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(s
     return result;
 }
 
+pub const meta = struct {
+    pub fn stringToEnum(comptime T: type, str: []const u8, comptime target: Case) ?T {
+        inline for (std.meta.fields(T)) |field| {
+            if (std.ascii.eqlIgnoreCase(str, &convertCase(field.name, target))) {
+                return @enumFromInt(field.value);
+            }
+        }
+        return null;
+    }
+};
+
+test "String.meta.stringToEnum" {
+    const MyEnum = enum {
+        first_value,
+        second_value,
+        get_outer_html,
+    };
+
+    try testing.expectEqual(MyEnum.first_value, meta.stringToEnum(MyEnum, "firstValue", .camel));
+    try testing.expectEqual(MyEnum.second_value, meta.stringToEnum(MyEnum, "secondValue", .camel));
+    try testing.expectEqual(MyEnum.get_outer_html, meta.stringToEnum(MyEnum, "getOuterHTML", .camel));
+    try testing.expectEqual(null, meta.stringToEnum(MyEnum, "thirdValue", .camel));
+
+    try testing.expectEqual(MyEnum.first_value, meta.stringToEnum(MyEnum, "first-value", .kebab));
+    try testing.expectEqual(MyEnum.second_value, meta.stringToEnum(MyEnum, "second-value", .kebab));
+}
+
 test "String.convertCase" {
     // 1. To Snake
     try testing.expectEqual("id", &convertCase("id", .snake));

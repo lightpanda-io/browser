@@ -27,34 +27,37 @@ const URL = @import("../../browser/URL.zig");
 const Transfer = @import("../../http/Client.zig").Transfer;
 const Notification = @import("../../Notification.zig");
 const Mime = @import("../../browser/Mime.zig");
+const string = @import("../../string.zig");
 
 pub fn processMessage(cmd: anytype) !void {
-    const action = std.meta.stringToEnum(enum {
+    const Action = enum {
         enable,
         disable,
-        setCacheDisabled,
-        setExtraHTTPHeaders,
-        setUserAgentOverride,
-        deleteCookies,
-        clearBrowserCookies,
-        setCookie,
-        setCookies,
-        getCookies,
-        getResponseBody,
-    }, cmd.input.action) orelse return error.UnknownMethod;
+        set_cache_disabled,
+        set_extra_http_headers,
+        set_user_agent_override,
+        delete_cookies,
+        clear_browser_cookies,
+        set_cookie,
+        set_cookies,
+        get_cookies,
+        get_response_body,
+    };
+    const action = string.meta.stringToEnum(Action, cmd.input.action, .camel) orelse
+        return error.UnknownMethod;
 
     switch (action) {
         .enable => return enable(cmd),
         .disable => return disable(cmd),
-        .setCacheDisabled => return cmd.sendResult(null, .{}),
-        .setUserAgentOverride => return cmd.sendResult(null, .{}),
-        .setExtraHTTPHeaders => return setExtraHTTPHeaders(cmd),
-        .deleteCookies => return deleteCookies(cmd),
-        .clearBrowserCookies => return clearBrowserCookies(cmd),
-        .setCookie => return setCookie(cmd),
-        .setCookies => return setCookies(cmd),
-        .getCookies => return getCookies(cmd),
-        .getResponseBody => return getResponseBody(cmd),
+        .set_cache_disabled => return cmd.sendResult(null, .{}),
+        .set_user_agent_override => return cmd.sendResult(null, .{}),
+        .set_extra_http_headers => return setExtraHTTPHeaders(cmd),
+        .delete_cookies => return deleteCookies(cmd),
+        .clear_browser_cookies => return clearBrowserCookies(cmd),
+        .set_cookie => return setCookie(cmd),
+        .set_cookies => return setCookies(cmd),
+        .get_cookies => return getCookies(cmd),
+        .get_response_body => return getResponseBody(cmd),
     }
 }
 
