@@ -463,8 +463,12 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
 
-        // We do not processHTMLDoc here as we know we don't have any scripts
-        // This assumption may be false when CDP Page.addScriptToEvaluateOnNewDocument is implemented
+        {
+            const parse_arena = try self.getArena(.{ .debug = "about:blank parse" });
+            defer self.releaseArena(parse_arena);
+            var parser = Parser.init(parse_arena, self.document.asNode(), self);
+            parser.parse("<html><head></head><body></body></html>");
+        }
         self.documentIsComplete();
 
         session.notification.dispatch(.page_navigate, &.{
@@ -710,17 +714,18 @@ pub fn documentIsComplete(self: *Page) void {
         log.err(.page, "document is complete", .{ .err = err, .type = self._type, .url = self.url });
     };
 
-    if (IS_DEBUG) {
-        std.debug.assert(self._navigated_options != null);
+    if (self._navigated_options) |no| {
+        // _navigated_options will be null in special short-circuit cases, like
+        // "navigating" to about:blank, in which case this notification has
+        // already been sent
+        self._session.notification.dispatch(.page_navigated, &.{
+            .frame_id = self._frame_id,
+            .req_id = self._req_id,
+            .opts = no,
+            .url = self.url,
+            .timestamp = timestamp(.monotonic),
+        });
     }
-
-    self._session.notification.dispatch(.page_navigated, &.{
-        .frame_id = self._frame_id,
-        .req_id = self._req_id,
-        .opts = self._navigated_options.?,
-        .url = self.url,
-        .timestamp = timestamp(.monotonic),
-    });
 }
 
 fn _documentIsComplete(self: *Page) !void {
@@ -1001,13 +1006,17 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
     iframe._content_window = page_frame.window;
     errdefer iframe._content_window = null;
 
-    // navigate will dupe the url
-    const url = try URL.resolve(
-        self.call_arena,
-        self.base(),
-        src,
-        .{ .encode = true },
-    );
+    const url = blk: {
+        if (std.mem.eql(u8, src, "about:blank")) {
+            break :blk "about:blank"; // navigate will handle this special case
+        }
+        break :blk try URL.resolve(
+            self.call_arena, // ok to use, page.navigate dupes this
+            self.base(),
+            src,
+            .{ .encode = true },
+        );
+    };
 
     if (existing_window == null) {
         // on first load, dispatch frame_created evnet
@@ -2520,7 +2529,7 @@ pub fn insertNodeRelative(self: *Page, parent: *Node, child: *Node, relative: In
 pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Node, child: *Node, relative: InsertNodeRelative, opts: InsertNodeOpts) !void {
     // caller should have made sure this was the case
 
-    lp.assert(child._parent == null, "Page.insertNodeRelative parent", .{ .url = self.url });
+    lp.assert(child._parent == null, "Page.insertNodeRelative parent", .{});
 
     const children = blk: {
         // expand parent._children so that it can take another child

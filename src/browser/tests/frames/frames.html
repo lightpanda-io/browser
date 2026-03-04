@@ -75,8 +75,20 @@
   }
 </script>
 
+<script id=onload>
+  {
+    let f4 = document.createElement('iframe');
+    f4.src = "about:blank";
+    document.documentElement.appendChild(f4);
+
+    testing.eventually(() => {
+      testing.expectEqual("<html><head></head><body></body></html>", f4.contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
+
 <script id=count>
   testing.eventually(() => {
-    testing.expectEqual(3, window.length);
+    testing.expectEqual(4, window.length);
   });
 </script>
