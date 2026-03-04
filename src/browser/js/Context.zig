@@ -1007,6 +1007,13 @@ fn enqueueMicrotask(self: *Context, callback: anytype) void {
     }.run, self);
 }
 
+// There's an assumption here: the js.Function will be alive when microtasks are
+// run. If we're Env.runMicrotasks in all the places that we're supposed to, then
+// this should be safe (I think). In whatever HandleScope a microtask is enqueued,
+// PerformCheckpoint should be run. So the v8::Local<v8::Function> should remain
+// valid. If we have problems with this, a simple solution is to provide a Zig
+// wrapper for these callbacks which references a js.Function.Temp, on callback
+// it executes the function and then releases the global.
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     // Use context-specific microtask queue instead of isolate queue
     v8.v8__MicrotaskQueue__EnqueueMicrotaskFunc(self.microtask_queue, self.isolate.handle, cb.handle);

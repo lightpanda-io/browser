@@ -377,12 +377,17 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     const page = self.page;
     var was_handled = false;
 
-    defer if (was_handled) {
-        var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
-        defer ls.deinit();
-        ls.local.runMicrotasks();
-    };
+    // Create a single scope for all event handlers in this dispatch.
+    // This ensures function handles passed to queueMicrotask remain valid
+    // throughout the entire dispatch, preventing crashes when microtasks run.
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer {
+        if (was_handled) {
+            ls.local.runMicrotasks();
+        }
+        ls.deinit();
+    }
 
     const activation_state = ActivationState.create(event, target, page);
 
@@ -461,7 +466,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             .event_target = @intFromPtr(current_target),
             .type_string = event._type_string,
         })) |list| {
-            try self.dispatchPhase(list, current_target, event, &was_handled, comptime .init(true, opts));
+            try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, comptime .init(true, opts));
         }
     }
 
@@ -475,10 +480,6 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
         if (self.getInlineHandler(target_et, event)) |inline_handler| {
             was_handled = true;
             event._current_target = target_et;
-
-            var ls: js.Local.Scope = undefined;
-            self.page.js.localScope(&ls);
-            defer ls.deinit();
 
             try ls.toLocal(inline_handler).callWithThis(void, target_et, .{event});
 
@@ -495,7 +496,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             .type_string = event._type_string,
             .event_target = @intFromPtr(target_et),
         })) |list| {
-            try self.dispatchPhase(list, target_et, event, &was_handled, comptime .init(null, opts));
+            try self.dispatchPhase(list, target_et, event, &was_handled, &ls.local, comptime .init(null, opts));
             if (event._stop_propagation) {
                 return;
             }
@@ -512,7 +513,7 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
                 .type_string = event._type_string,
                 .event_target = @intFromPtr(current_target),
             })) |list| {
-                try self.dispatchPhase(list, current_target, event, &was_handled, comptime .init(false, opts));
+                try self.dispatchPhase(list, current_target, event, &was_handled, &ls.local, comptime .init(false, opts));
             }
         }
     }
@@ -530,7 +531,7 @@ const DispatchPhaseOpts = struct {
     }
 };
 
-fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, comptime opts: DispatchPhaseOpts) !void {
+fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_target: *EventTarget, event: *Event, was_handled: *bool, local: *const js.Local, comptime opts: DispatchPhaseOpts) !void {
     const page = self.page;
 
     // Track dispatch depth for deferred removal
@@ -607,18 +608,14 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
             event._target = getAdjustedTarget(original_target, current_target);
         }
 
-        var ls: js.Local.Scope = undefined;
-        page.js.localScope(&ls);
-        defer ls.deinit();
-
         switch (listener.function) {
-            .value => |value| try ls.toLocal(value).callWithThis(void, current_target, .{event}),
+            .value => |value| try local.toLocal(value).callWithThis(void, current_target, .{event}),
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
-                try ls.local.eval(str, null);
+                try local.eval(str, null);
             },
             .object => |obj_global| {
-                const obj = ls.toLocal(obj_global);
+                const obj = local.toLocal(obj_global);
                 if (try obj.getFunction("handleEvent")) |handleEvent| {
                     try handleEvent.callWithThis(void, obj, .{event});
                 }
