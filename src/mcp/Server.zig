@@ -3,7 +3,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
-const HttpClient = @import("../http/Client.zig");
+const HttpClient = @import("../browser/HttpClient.zig");
 const testing = @import("../testing.zig");
 const protocol = @import("protocol.zig");
 const router = @import("router.zig");
@@ -32,7 +32,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
     self.writer = writer;
     self.aw = .init(allocator);
 
-    self.http_client = try app.http.createClient(allocator);
+    self.http_client = try HttpClient.init(allocator, &app.network);
     errdefer self.http_client.deinit();
 
     self.notification = try .init(allocator);

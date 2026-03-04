@@ -24,7 +24,7 @@ const CdpStorage = @import("storage.zig");
 
 const id = @import("../id.zig");
 const URL = @import("../../browser/URL.zig");
-const Transfer = @import("../../http/Client.zig").Transfer;
+const Transfer = @import("../../browser/HttpClient.zig").Transfer;
 const Notification = @import("../../Notification.zig");
 const Mime = @import("../../browser/Mime.zig");
 

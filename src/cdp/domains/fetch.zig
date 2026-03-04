@@ -23,7 +23,8 @@ const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const network = @import("network.zig");
 
-const Http = @import("../../http/Http.zig");
+const HttpClient = @import("../../browser/HttpClient.zig");
+const net_http = @import("../../network/http.zig");
 const Notification = @import("../../Notification.zig");
 
 pub fn processMessage(cmd: anytype) !void {
@@ -49,7 +50,7 @@ pub fn processMessage(cmd: anytype) !void {
 // Stored in CDP
 pub const InterceptState = struct {
     allocator: Allocator,
-    waiting: std.AutoArrayHashMapUnmanaged(u32, *Http.Transfer),
+    waiting: std.AutoArrayHashMapUnmanaged(u32, *HttpClient.Transfer),
 
     pub fn init(allocator: Allocator) !InterceptState {
         return .{
@@ -62,11 +63,11 @@ pub const InterceptState = struct {
         return self.waiting.count() == 0;
     }
 
-    pub fn put(self: *InterceptState, transfer: *Http.Transfer) !void {
+    pub fn put(self: *InterceptState, transfer: *HttpClient.Transfer) !void {
         return self.waiting.put(self.allocator, transfer.id, transfer);
     }
 
-    pub fn remove(self: *InterceptState, request_id: u32) ?*Http.Transfer {
+    pub fn remove(self: *InterceptState, request_id: u32) ?*HttpClient.Transfer {
         const entry = self.waiting.fetchSwapRemove(request_id) orelse return null;
         return entry.value;
     }
@@ -75,7 +76,7 @@ pub const InterceptState = struct {
         self.waiting.deinit(self.allocator);
     }
 
-    pub fn pendingTransfers(self: *const InterceptState) []*Http.Transfer {
+    pub fn pendingTransfers(self: *const InterceptState) []*HttpClient.Transfer {
         return self.waiting.values();
     }
 };
@@ -221,7 +222,7 @@ fn continueRequest(cmd: anytype) !void {
         url: ?[]const u8 = null,
         method: ?[]const u8 = null,
         postData: ?[]const u8 = null,
-        headers: ?[]const Http.Header = null,
+        headers: ?[]const net_http.Header = null,
         interceptResponse: bool = false,
     })) orelse return error.InvalidParams;
 
@@ -246,7 +247,7 @@ fn continueRequest(cmd: anytype) !void {
         try transfer.updateURL(try arena.dupeZ(u8, url));
     }
     if (params.method) |method| {
-        transfer.req.method = std.meta.stringToEnum(Http.Method, method) orelse return error.InvalidParams;
+        transfer.req.method = std.meta.stringToEnum(net_http.Method, method) orelse return error.InvalidParams;
     }
 
     if (params.headers) |headers| {
@@ -323,7 +324,7 @@ fn fulfillRequest(cmd: anytype) !void {
     const params = (try cmd.params(struct {
         requestId: []const u8, // "INT-{d}"
         responseCode: u16,
-        responseHeaders: ?[]const Http.Header = null,
+        responseHeaders: ?[]const net_http.Header = null,
         binaryResponseHeaders: ?[]const u8 = null,
         body: ?[]const u8 = null,
         responsePhrase: ?[]const u8 = null,

@@ -30,9 +30,8 @@ const log = @import("log.zig");
 const App = @import("App.zig");
 const Config = @import("Config.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
-const Net = @import("Net.zig");
-const Http = @import("http/Http.zig");
-const HttpClient = @import("http/Client.zig");
+const Net = @import("network/websocket.zig");
+const HttpClient = @import("browser/HttpClient.zig");
 
 const Server = @This();
 
@@ -283,7 +282,7 @@ pub const Client = struct {
             log.info(.app, "client connected", .{ .ip = client_address });
         }
 
-        const http = try app.http.createClient(allocator);
+        const http = try HttpClient.init(allocator, &app.network);
         errdefer http.deinit();
 
         return .{
