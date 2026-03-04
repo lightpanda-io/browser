@@ -111,3 +111,15 @@
   const containerDataTest = document.querySelector('#container [data-test]');
   testing.expectEqual('First', containerDataTest.innerText);
 </script>
+
+<link rel="preload" as="image" imagesrcset="url1.png 1x, url2.png 2x" id="preload-link">
+
+<script id="commaInAttrValue">
+  // Commas inside quoted attribute values must not be treated as selector separators
+  const el = document.querySelector('link[rel="preload"][as="image"][imagesrcset="url1.png 1x, url2.png 2x"]');
+  testing.expectEqual('preload-link', el.id);
+
+  // Also test with single quotes inside selector
+  const el2 = document.querySelector("link[imagesrcset='url1.png 1x, url2.png 2x']");
+  testing.expectEqual('preload-link', el2.id);
+</script>
