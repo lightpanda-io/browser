@@ -26,6 +26,7 @@ const Allocator = std.mem.Allocator;
 
 pub const LpState = struct {
     pending_wait_for_network_idle: ?i64 = null,
+    pending_wait_for_load: ?i64 = null,
 };
 
 pub fn processMessage(cmd: anytype) !void {
@@ -71,23 +72,41 @@ fn waitFor(cmd: anytype) !void {
     };
     const params = (try cmd.params(Params)) orelse return error.InvalidParams;
 
-    if (std.mem.eql(u8, params.condition, "networkIdle")) {
-        // If network is already idle, we can return immediately
-        const http_client = bc.cdp.browser.http_client;
-        if (http_client.active == 0 and http_client.intercepted == 0) {
-            return cmd.sendResult(null, .{});
-        }
+    const Condition = enum { networkIdle, load };
+    const cond = std.meta.stringToEnum(Condition, params.condition) orelse return error.InvalidParams;
 
-        // Otherwise, we store the ID and wait for the notification.
-        bc.lp_state.pending_wait_for_network_idle = cmd.input.id;
-    } else {
-        return error.InvalidParams;
+    switch (cond) {
+        .networkIdle => {
+            const http_client = bc.cdp.browser.http_client;
+            if (http_client.active == 0 and http_client.intercepted == 0) {
+                return cmd.sendResult(null, .{});
+            }
+            bc.lp_state.pending_wait_for_network_idle = cmd.input.id;
+        },
+        .load => {
+            const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+            if (page._load_state == .complete) {
+                return cmd.sendResult(null, .{});
+            }
+            bc.lp_state.pending_wait_for_load = cmd.input.id;
+        },
     }
 }
 
 pub fn onPageNetworkIdle(bc: anytype, _: *const Notification.PageNetworkIdle) !void {
     const id = bc.lp_state.pending_wait_for_network_idle orelse return;
     bc.lp_state.pending_wait_for_network_idle = null;
+
+    try bc.cdp.client.sendJSON(.{
+        .id = id,
+        .result = struct {}{},
+        .sessionId = bc.session_id,
+    }, .{ .emit_null_optional_fields = false });
+}
+
+pub fn onPageNavigated(bc: anytype, _: *const Notification.PageNavigated) !void {
+    const id = bc.lp_state.pending_wait_for_load orelse return;
+    bc.lp_state.pending_wait_for_load = null;
 
     try bc.cdp.client.sendJSON(.{
         .id = id,
@@ -133,4 +152,21 @@ test "cdp.lp: waitFor" {
 
     try onPageNetworkIdle(bc, &.{ .req_id = 0, .frame_id = 0, .timestamp = 0 });
     try ctx.expectSentResult(null, .{ .id = 2 });
+
+    // 3. Test waiting for load
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.waitFor",
+        .params = .{ .condition = "load" },
+    });
+    try testing.expectEqual(@as(?i64, 3), bc.lp_state.pending_wait_for_load);
+
+    try onPageNavigated(bc, &.{
+        .req_id = 0,
+        .frame_id = 0,
+        .timestamp = 0,
+        .url = "",
+        .opts = .{},
+    });
+    try ctx.expectSentResult(null, .{ .id = 3 });
 }
