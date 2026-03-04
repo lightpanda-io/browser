@@ -53,3 +53,22 @@
     testing.expectEqual('NO-CONSTRUCTOR-ELEMENT', el.tagName);
 }
 </script>
+
+<div id=clone_container></div>
+
+<script id=clone>
+    {
+        let calls = 0;
+        class MyCloneElementA extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+                $('#clone_container').appendChild(this);
+            }
+        }
+        customElements.define('my-clone_element_a', MyCloneElementA);
+        const original = document.createElement('my-clone_element_a');
+         $('#clone_container').cloneNode(true);
+        testing.expectEqual(2, calls);
+    }
+</script>

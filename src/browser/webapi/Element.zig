@@ -1329,9 +1329,18 @@ pub fn clone(self: *Element, deep: bool, page: *Page) !*Node {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
             const cloned_child = try child.cloneNode(true, page);
+            if (cloned_child._parent != null) {
+                // This is almost always false, the only case where a cloned
+                // node would already have a parent is with a custom element
+                // that has a constructor (which is called during cloning) which
+                // inserts it somewhere. In that case, whatever parent was set
+                // in the constructor should not be changed.
+                continue;
+            }
+
             // We pass `true` to `child_already_connected` as a hacky optimization
-            // We _know_ this child isn't connected (Becasue the parent isn't connected)
-            // setting this to `true` skips all connection checks and just assumes t
+            // We _know_ this child isn't connected (Because the parent isn't connected)
+            // setting this to `true` skips all connection checks.
             try page.appendNode(node, cloned_child, .{ .child_already_connected = true });
         }
     }
