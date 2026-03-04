@@ -133,9 +133,8 @@ pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
     try runtime.add(listener, Net.Runtime.READABLE, &accept_ctx, onListenerEvent);
     defer runtime.remove(listener);
 
-    runtime.run(self, shouldStopRuntime) catch |err| switch (err) {
-        error.UnsupportedPlatform => return err,
-        else => return err,
+    runtime.run(self, shouldStopRuntime) catch |err| {
+        return err;
     };
 
     log.info(.app, "server stopped", .{});
