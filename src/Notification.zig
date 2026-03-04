@@ -21,7 +21,7 @@ const lp = @import("lightpanda");
 
 const log = @import("log.zig");
 const Page = @import("browser/Page.zig");
-const Transfer = @import("http/Client.zig").Transfer;
+const Transfer = @import("browser/HttpClient.zig").Transfer;
 
 const Allocator = std.mem.Allocator;
 

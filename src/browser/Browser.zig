@@ -24,7 +24,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const App = @import("../App.zig");
-const HttpClient = @import("../http/Client.zig");
+const HttpClient = @import("HttpClient.zig");
 
 const ArenaPool = App.ArenaPool;
 

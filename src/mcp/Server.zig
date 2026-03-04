@@ -3,7 +3,7 @@ const std = @import("std");
 const lp = @import("lightpanda");
 
 const App = @import("../App.zig");
-const HttpClient = @import("../http/Client.zig");
+const HttpClient = @import("../browser/HttpClient.zig");
 const testing = @import("../testing.zig");
 const protocol = @import("protocol.zig");
 const router = @import("router.zig");
@@ -23,7 +23,7 @@ mutex: std.Thread.Mutex = .{},
 aw: std.io.Writer.Allocating,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
-    const http_client = try app.http.createClient(allocator);
+    const http_client = try HttpClient.init(allocator, &app.network);
     errdefer http_client.deinit();
 
     const notification = try lp.Notification.init(allocator);

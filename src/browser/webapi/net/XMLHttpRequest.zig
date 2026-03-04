@@ -20,7 +20,8 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const log = @import("../../../log.zig");
-const Http = @import("../../../http/Http.zig");
+const HttpClient = @import("../../HttpClient.zig");
+const net_http = @import("../../../network/http.zig");
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -38,10 +39,10 @@ const XMLHttpRequest = @This();
 _page: *Page,
 _proto: *XMLHttpRequestEventTarget,
 _arena: Allocator,
-_transfer: ?*Http.Transfer = null,
+_transfer: ?*HttpClient.Transfer = null,
 
 _url: [:0]const u8 = "",
-_method: Http.Method = .GET,
+_method: net_http.Method = .GET,
 _request_headers: *Headers,
 _request_body: ?[]const u8 = null,
 
@@ -341,7 +342,7 @@ pub fn getResponseXML(self: *XMLHttpRequest, page: *Page) !?*Node.Document {
     };
 }
 
-fn httpStartCallback(transfer: *Http.Transfer) !void {
+fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     if (comptime IS_DEBUG) {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
@@ -349,13 +350,13 @@ fn httpStartCallback(transfer: *Http.Transfer) !void {
     self._transfer = transfer;
 }
 
-fn httpHeaderCallback(transfer: *Http.Transfer, header: Http.Header) !void {
+fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: net_http.Header) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
     try self._response_headers.append(self._arena, joined);
 }
 
-fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
+fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
 
     const header = &transfer.response_header.?;
@@ -405,7 +406,7 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     return true;
 }
 
-fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
     try self._response_data.appendSlice(self._arena, data);
 
@@ -517,7 +518,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
     );
 }
 
-fn parseMethod(method: []const u8) !Http.Method {
+fn parseMethod(method: []const u8) !net_http.Method {
     if (std.ascii.eqlIgnoreCase(method, "get")) {
         return .GET;
     }

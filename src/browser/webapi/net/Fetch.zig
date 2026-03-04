@@ -19,7 +19,7 @@
 const std = @import("std");
 
 const log = @import("../../../log.zig");
-const Http = @import("../../../http/Http.zig");
+const HttpClient = @import("../../HttpClient.zig");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
@@ -90,7 +90,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     return resolver.promise();
 }
 
-fn httpStartCallback(transfer: *Http.Transfer) !void {
+fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
     if (comptime IS_DEBUG) {
         log.debug(.http, "request start", .{ .url = self._url, .source = "fetch" });
@@ -98,7 +98,7 @@ fn httpStartCallback(transfer: *Http.Transfer) !void {
     self._response._transfer = transfer;
 }
 
-fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
+fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
 
     const arena = self._response._arena;
@@ -148,7 +148,7 @@ fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     return true;
 }
 
-fn httpDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
     try self._buf.appendSlice(self._response._arena, data);
 }
