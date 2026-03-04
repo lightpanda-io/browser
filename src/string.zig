@@ -462,7 +462,6 @@ test "String.concat" {
         try testing.expectEqual("Hello world!", result.str());
     }
 }
-
 pub const Case = enum {
     snake,
     camel,
@@ -479,38 +478,47 @@ fn isWordBoundary(str: []const u8, i: usize) bool {
     if (isSeparator(c)) return true;
     if (!std.ascii.isUpper(c)) return false;
 
-    // lowercase -> uppercase (normal camel boundary: "httpResponse")
+    // "aB" boundary
     if (i > 0 and std.ascii.isLower(str[i - 1])) return true;
-
-    // uppercase followed by lowercase (acronym end: "XMLParser")
+    // "XMLP" boundary
     if (i + 1 < str.len and std.ascii.isLower(str[i + 1])) return true;
 
     return false;
 }
 
+const WordIterator = struct {
+    str: []const u8,
+    i: usize = 0,
+
+    pub fn next(self: *WordIterator) ?[]const u8 {
+        // Skip any separators
+        while (self.i < self.str.len and isSeparator(self.str[self.i])) {
+            self.i += 1;
+        }
+        if (self.i >= self.str.len) return null;
+
+        const start = self.i;
+        self.i += 1;
+        while (self.i < self.str.len and !isWordBoundary(self.str, self.i)) {
+            self.i += 1;
+        }
+        return self.str[start..self.i];
+    }
+};
+
 pub fn countCase(comptime str: []const u8, comptime target: Case) usize {
     if (str.len == 0) return 0;
 
     var count: usize = 0;
-    var is_first_word = true;
-    var i: usize = 0;
+    var iter = WordIterator{ .str = str };
+    var is_first = true;
 
-    while (i < str.len) {
-        if (isSeparator(str[i])) {
-            i += 1;
-            continue;
+    while (iter.next()) |word| {
+        if (!is_first and (target == .snake or target == .kebab)) {
+            count += 1;
         }
-
-        if (!is_first_word and (target == .snake or target == .kebab)) {
-            count += 1; // separator
-        }
-
-        const start = i;
-        i += 1;
-        while (i < str.len and !isWordBoundary(str, i)) i += 1;
-
-        count += i - start;
-        is_first_word = false;
+        count += word.len;
+        is_first = false;
     }
     return count;
 }
@@ -520,16 +528,11 @@ pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(s
     if (str.len == 0) return result;
 
     var res_idx: usize = 0;
-    var is_first_word = true;
-    var i: usize = 0;
+    var iter = WordIterator{ .str = str };
+    var is_first = true;
 
-    while (i < str.len) {
-        if (isSeparator(str[i])) {
-            i += 1;
-            continue;
-        }
-
-        if (!is_first_word) {
+    while (iter.next()) |word| {
+        if (!is_first) {
             switch (target) {
                 .snake => {
                     result[res_idx] = '_';
@@ -543,16 +546,11 @@ pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(s
             }
         }
 
-        const start = i;
-        i += 1;
-        while (i < str.len and !isWordBoundary(str, i)) i += 1;
-
-        const word = str[start..i];
         for (word, 0..) |c, word_idx| {
             if (word_idx == 0) {
                 switch (target) {
                     .pascal => result[res_idx] = std.ascii.toUpper(c),
-                    .camel => result[res_idx] = if (is_first_word) std.ascii.toLower(c) else std.ascii.toUpper(c),
+                    .camel => result[res_idx] = if (is_first) std.ascii.toLower(c) else std.ascii.toUpper(c),
                     else => result[res_idx] = std.ascii.toLower(c),
                 }
             } else {
@@ -560,9 +558,8 @@ pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(s
             }
             res_idx += 1;
         }
-        is_first_word = false;
+        is_first = false;
     }
-
     return result;
 }
 
