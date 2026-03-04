@@ -469,6 +469,11 @@ pub const Case = enum {
     pascal,
 };
 
+const Word = struct {
+    slice: []const u8,
+    is_first: bool,
+};
+
 fn isSeparator(c: u8) bool {
     return c == '_' or c == '-' or c == ' ';
 }
@@ -489,8 +494,9 @@ fn isWordBoundary(str: []const u8, i: usize) bool {
 const WordIterator = struct {
     str: []const u8,
     i: usize = 0,
+    is_first: bool = true,
 
-    pub fn next(self: *WordIterator) ?[]const u8 {
+    pub fn next(self: *WordIterator) ?Word {
         // Skip any separators
         while (self.i < self.str.len and isSeparator(self.str[self.i])) {
             self.i += 1;
@@ -502,7 +508,13 @@ const WordIterator = struct {
         while (self.i < self.str.len and !isWordBoundary(self.str, self.i)) {
             self.i += 1;
         }
-        return self.str[start..self.i];
+
+        const res = Word{
+            .slice = self.str[start..self.i],
+            .is_first = self.is_first,
+        };
+        self.is_first = false;
+        return res;
     }
 };
 
@@ -510,15 +522,13 @@ pub fn countCase(comptime str: []const u8, comptime target: Case) usize {
     if (str.len == 0) return 0;
 
     var count: usize = 0;
-    var iter = WordIterator{ .str = str };
-    var is_first = true;
+    var iter: WordIterator = .{ .str = str };
 
     while (iter.next()) |word| {
-        if (!is_first and (target == .snake or target == .kebab)) {
+        if (!word.is_first and (target == .snake or target == .kebab)) {
             count += 1;
         }
-        count += word.len;
-        is_first = false;
+        count += word.slice.len;
     }
     return count;
 }
@@ -528,11 +538,10 @@ pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(s
     if (str.len == 0) return result;
 
     var res_idx: usize = 0;
-    var iter = WordIterator{ .str = str };
-    var is_first = true;
+    var iter: WordIterator = .{ .str = str };
 
     while (iter.next()) |word| {
-        if (!is_first) {
+        if (!word.is_first) {
             switch (target) {
                 .snake => {
                     result[res_idx] = '_';
@@ -546,11 +555,11 @@ pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(s
             }
         }
 
-        for (word, 0..) |c, word_idx| {
+        for (word.slice, 0..) |c, word_idx| {
             if (word_idx == 0) {
                 switch (target) {
                     .pascal => result[res_idx] = std.ascii.toUpper(c),
-                    .camel => result[res_idx] = if (is_first) std.ascii.toLower(c) else std.ascii.toUpper(c),
+                    .camel => result[res_idx] = if (word.is_first) std.ascii.toLower(c) else std.ascii.toUpper(c),
                     else => result[res_idx] = std.ascii.toLower(c),
                 }
             } else {
@@ -558,7 +567,6 @@ pub fn convertCase(comptime str: []const u8, comptime target: Case) [countCase(s
             }
             res_idx += 1;
         }
-        is_first = false;
     }
     return result;
 }
