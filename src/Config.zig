@@ -22,6 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const log = @import("log.zig");
 const dump = @import("browser/dump.zig");
+const string = @import("string.zig");
 
 pub const RunMode = enum {
     help,
@@ -266,62 +267,62 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
     //                                                                     MAX_HELP_LEN|
     const common_options =
         \\
-        \\--insecure_disable_tls_host_verification
+        \\--insecure-disable-tls-host-verification
         \\                Disables host verification on all HTTP requests. This is an
         \\                advanced option which should only be set if you understand
         \\                and accept the risk of disabling host verification.
         \\
-        \\--obey_robots
+        \\--obey-robots
         \\                Fetches and obeys the robots.txt (if available) of the web pages
         \\                we make requests towards.
         \\                Defaults to false.
         \\
-        \\--http_proxy    The HTTP proxy to use for all HTTP requests.
+        \\--http-proxy    The HTTP proxy to use for all HTTP requests.
         \\                A username:password can be included for basic authentication.
         \\                Defaults to none.
         \\
-        \\--proxy_bearer_token
+        \\--proxy-bearer-token
         \\                The <token> to send for bearer authentication with the proxy
         \\                Proxy-Authorization: Bearer <token>
         \\
-        \\--http_max_concurrent
+        \\--http-max-concurrent
         \\                The maximum number of concurrent HTTP requests.
         \\                Defaults to 10.
         \\
-        \\--http_max_host_open
+        \\--http-max-host-open
         \\                The maximum number of open connection to a given host:port.
         \\                Defaults to 4.
         \\
-        \\--http_connect_timeout
+        \\--http-connect-timeout
         \\                The time, in milliseconds, for establishing an HTTP connection
         \\                before timing out. 0 means it never times out.
         \\                Defaults to 0.
         \\
-        \\--http_timeout
+        \\--http-timeout
         \\                The maximum time, in milliseconds, the transfer is allowed
         \\                to complete. 0 means it never times out.
         \\                Defaults to 10000.
         \\
-        \\--http_max_response_size
+        \\--http-max-response-size
         \\                Limits the acceptable response size for any request
         \\                (e.g. XHR, fetch, script loading, ...).
         \\                Defaults to no limit.
         \\
-        \\--log_level     The log level: debug, info, warn, error or fatal.
+        \\--log-level     The log level: debug, info, warn, error or fatal.
         \\                Defaults to
     ++ (if (builtin.mode == .Debug) " info." else "warn.") ++
         \\
         \\
-        \\--log_format    The log format: pretty or logfmt.
+        \\--log-format    The log format: pretty or logfmt.
         \\                Defaults to
     ++ (if (builtin.mode == .Debug) " pretty." else " logfmt.") ++
         \\
         \\
-        \\--log_filter_scopes
+        \\--log-filter-scopes
         \\                Filter out too verbose logs per scope:
         \\                http, unknown_prop, event, ...
         \\
-        \\--user_agent_suffix
+        \\--user-agent-suffix
         \\                Suffix to append to the Lightpanda/X.Y User-Agent
         \\
     ;
@@ -341,16 +342,16 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\                Argument must be 'html' or 'markdown'.
         \\                Defaults to no dump.
         \\
-        \\--strip_mode    Comma separated list of tag groups to remove from dump
-        \\                the dump. e.g. --strip_mode js,css
+        \\--strip-mode    Comma separated list of tag groups to remove from dump
+        \\                the dump. e.g. --strip-mode js,css
         \\                  - "js" script and link[as=script, rel=preload]
         \\                  - "ui" includes img, picture, video, css and svg
         \\                  - "css" includes style and link[rel=stylesheet]
         \\                  - "full" includes js, ui and css
         \\
-        \\--with_base     Add a <base> tag in dump. Defaults to false.
+        \\--with-base     Add a <base> tag in dump. Defaults to false.
         \\
-        \\--with_frames   Includes the contents of iframes. Defaults to false.
+        \\--with-frames   Includes the contents of iframes. Defaults to false.
         \\
     ++ common_options ++
         \\
@@ -368,11 +369,11 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--timeout       Inactivity timeout in seconds before disconnecting clients
         \\                Defaults to 10 (seconds). Limited to 604800 (1 week).
         \\
-        \\--cdp_max_connections
+        \\--cdp-max-connections
         \\                Maximum number of simultaneous CDP connections.
         \\                Defaults to 16.
         \\
-        \\--cdp_max_pending_connections
+        \\--cdp-max-pending-connections
         \\                Maximum pending connections in the accept queue.
         \\                Defaults to 128.
         \\
@@ -484,73 +485,80 @@ fn parseServeArgs(
     var serve: Serve = .{};
 
     while (args.next()) |opt| {
-        if (std.mem.eql(u8, "--host", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--host" });
-                return error.InvalidArgument;
-            };
-            serve.host = try allocator.dupe(u8, str);
-            continue;
+        if (!std.mem.startsWith(u8, opt, "--")) {
+            log.fatal(.app, "unknown argument", .{ .mode = "serve", .arg = opt });
+            return error.UnkownOption;
         }
 
-        if (std.mem.eql(u8, "--port", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--port" });
-                return error.InvalidArgument;
-            };
+        const Option = enum {
+            host,
+            port,
+            timeout,
+            cdp_max_connections,
+            cdp_max_pending_connections,
+        };
 
-            serve.port = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--port", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
+        const option = string.meta.stringToEnum(Option, opt[2..], .kebab) orelse {
+            if (try parseCommonArg(allocator, opt, args, &serve.common)) {
+                continue;
+            }
+            log.fatal(.app, "unknown argument", .{ .mode = "serve", .arg = opt });
+            return error.UnkownOption;
+        };
+
+        switch (option) {
+            .host => {
+                const str = args.next() orelse {
+                    log.fatal(.app, "missing argument value", .{ .arg = opt });
+                    return error.InvalidArgument;
+                };
+                serve.host = try allocator.dupe(u8, str);
+            },
+            .port => {
+                const str = args.next() orelse {
+                    log.fatal(.app, "missing argument value", .{ .arg = opt });
+                    return error.InvalidArgument;
+                };
+
+                serve.port = std.fmt.parseInt(u16, str, 10) catch |err| {
+                    log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                    return error.InvalidArgument;
+                };
+            },
+            .timeout => {
+                const str = args.next() orelse {
+                    log.fatal(.app, "missing argument value", .{ .arg = opt });
+                    return error.InvalidArgument;
+                };
+
+                serve.timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
+                    log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                    return error.InvalidArgument;
+                };
+            },
+            .cdp_max_connections => {
+                const str = args.next() orelse {
+                    log.fatal(.app, "missing argument value", .{ .arg = opt });
+                    return error.InvalidArgument;
+                };
+
+                serve.cdp_max_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
+                    log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                    return error.InvalidArgument;
+                };
+            },
+            .cdp_max_pending_connections => {
+                const str = args.next() orelse {
+                    log.fatal(.app, "missing argument value", .{ .arg = opt });
+                    return error.InvalidArgument;
+                };
+
+                serve.cdp_max_pending_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
+                    log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                    return error.InvalidArgument;
+                };
+            },
         }
-
-        if (std.mem.eql(u8, "--timeout", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--timeout" });
-                return error.InvalidArgument;
-            };
-
-            serve.timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--timeout", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--cdp_max_connections", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--cdp_max_connections" });
-                return error.InvalidArgument;
-            };
-
-            serve.cdp_max_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--cdp_max_connections", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--cdp_max_pending_connections", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--cdp_max_pending_connections" });
-                return error.InvalidArgument;
-            };
-
-            serve.cdp_max_pending_connections = std.fmt.parseInt(u16, str, 10) catch |err| {
-                log.fatal(.app, "invalid argument value", .{ .arg = "--cdp_max_pending_connections", .err = err });
-                return error.InvalidArgument;
-            };
-            continue;
-        }
-
-        if (try parseCommonArg(allocator, opt, args, &serve.common)) {
-            continue;
-        }
-
-        log.fatal(.app, "unknown argument", .{ .mode = "serve", .arg = opt });
-        return error.UnkownOption;
     }
 
     return serve;
@@ -586,80 +594,83 @@ fn parseFetchArgs(
     var strip: dump.Opts.Strip = .{};
 
     while (args.next()) |opt| {
-        if (std.mem.eql(u8, "--dump", opt)) {
-            var peek_args = args.*;
-            if (peek_args.next()) |next_arg| {
-                if (std.meta.stringToEnum(DumpFormat, next_arg)) |mode| {
-                    dump_mode = mode;
-                    _ = args.next();
+        if (!std.mem.startsWith(u8, opt, "--")) {
+            if (url != null) {
+                log.fatal(.app, "duplicate fetch url", .{ .help = "only 1 URL can be specified" });
+                return error.TooManyURLs;
+            }
+            url = try allocator.dupeZ(u8, opt);
+            continue;
+        }
+
+        const Option = enum {
+            dump,
+            noscript,
+            with_base,
+            with_frames,
+            strip_mode,
+        };
+
+        const option = string.meta.stringToEnum(Option, opt[2..], .kebab) orelse {
+            if (try parseCommonArg(allocator, opt, args, &common)) {
+                continue;
+            }
+            log.fatal(.app, "unknown argument", .{ .mode = "fetch", .arg = opt });
+            return error.UnkownOption;
+        };
+
+        switch (option) {
+            .dump => {
+                var peek_args = args.*;
+                if (peek_args.next()) |next_arg| {
+                    if (std.meta.stringToEnum(DumpFormat, next_arg)) |mode| {
+                        dump_mode = mode;
+                        _ = args.next();
+                    } else {
+                        dump_mode = .html;
+                    }
                 } else {
                     dump_mode = .html;
                 }
-            } else {
-                dump_mode = .html;
-            }
-            continue;
-        }
+            },
+            .noscript => {
+                log.warn(.app, "deprecation warning", .{
+                    .feature = "--noscript argument",
+                    .hint = "use '--strip_mode js' instead",
+                });
+                strip.js = true;
+            },
+            .with_base => {
+                with_base = true;
+            },
+            .with_frames => {
+                with_frames = true;
+            },
+            .strip_mode => {
+                const str = args.next() orelse {
+                    log.fatal(.app, "missing argument value", .{ .arg = opt });
+                    return error.InvalidArgument;
+                };
 
-        if (std.mem.eql(u8, "--noscript", opt)) {
-            log.warn(.app, "deprecation warning", .{
-                .feature = "--noscript argument",
-                .hint = "use '--strip_mode js' instead",
-            });
-            strip.js = true;
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--with_base", opt)) {
-            with_base = true;
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--with_frames", opt)) {
-            with_frames = true;
-            continue;
-        }
-
-        if (std.mem.eql(u8, "--strip_mode", opt)) {
-            const str = args.next() orelse {
-                log.fatal(.app, "missing argument value", .{ .arg = "--strip_mode" });
-                return error.InvalidArgument;
-            };
-
-            var it = std.mem.splitScalar(u8, str, ',');
-            while (it.next()) |part| {
-                const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
-                if (std.mem.eql(u8, trimmed, "js")) {
-                    strip.js = true;
-                } else if (std.mem.eql(u8, trimmed, "ui")) {
-                    strip.ui = true;
-                } else if (std.mem.eql(u8, trimmed, "css")) {
-                    strip.css = true;
-                } else if (std.mem.eql(u8, trimmed, "full")) {
-                    strip.js = true;
-                    strip.ui = true;
-                    strip.css = true;
-                } else {
-                    log.fatal(.app, "invalid option choice", .{ .arg = "--strip_mode", .value = trimmed });
+                var it = std.mem.splitScalar(u8, str, ',');
+                while (it.next()) |part| {
+                    const trimmed = std.mem.trim(u8, part, &std.ascii.whitespace);
+                    if (std.mem.eql(u8, trimmed, "js")) {
+                        strip.js = true;
+                    } else if (std.mem.eql(u8, trimmed, "ui")) {
+                        strip.ui = true;
+                    } else if (std.mem.eql(u8, trimmed, "css")) {
+                        strip.css = true;
+                    } else if (std.mem.eql(u8, trimmed, "full")) {
+                        strip.js = true;
+                        strip.ui = true;
+                        strip.css = true;
+                    } else {
+                        log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = trimmed });
+                    }
                 }
-            }
-            continue;
+            },
         }
-
-        if (try parseCommonArg(allocator, opt, args, &common)) {
-            continue;
-        }
-
-        if (std.mem.startsWith(u8, opt, "--")) {
-            log.fatal(.app, "unknown argument", .{ .mode = "fetch", .arg = opt });
-            return error.UnkownOption;
-        }
-
-        if (url != null) {
-            log.fatal(.app, "duplicate fetch url", .{ .help = "only 1 URL can be specified" });
-            return error.TooManyURLs;
-        }
-        url = try allocator.dupeZ(u8, opt);
     }
 
     if (url == null) {
@@ -683,167 +694,166 @@ fn parseCommonArg(
     args: *std.process.ArgIterator,
     common: *Common,
 ) !bool {
-    if (std.mem.eql(u8, "--insecure_disable_tls_host_verification", opt)) {
-        common.tls_verify_host = false;
-        return true;
+    if (!std.mem.startsWith(u8, opt, "--")) {
+        return false;
     }
 
-    if (std.mem.eql(u8, "--obey_robots", opt)) {
-        common.obey_robots = true;
-        return true;
-    }
+    const Option = enum {
+        insecure_disable_tls_host_verification,
+        obey_robots,
+        http_proxy,
+        proxy_bearer_token,
+        http_max_concurrent,
+        http_max_host_open,
+        http_connect_timeout,
+        http_timeout,
+        http_max_response_size,
+        log_level,
+        log_format,
+        log_filter_scopes,
+        user_agent_suffix,
+    };
 
-    if (std.mem.eql(u8, "--http_proxy", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_proxy" });
-            return error.InvalidArgument;
-        };
-        common.http_proxy = try allocator.dupeZ(u8, str);
-        return true;
-    }
+    const option = string.meta.stringToEnum(Option, opt[2..], .kebab) orelse return false;
 
-    if (std.mem.eql(u8, "--proxy_bearer_token", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--proxy_bearer_token" });
-            return error.InvalidArgument;
-        };
-        common.proxy_bearer_token = try allocator.dupeZ(u8, str);
-        return true;
-    }
+    switch (option) {
+        .insecure_disable_tls_host_verification => {
+            common.tls_verify_host = false;
+        },
+        .obey_robots => {
+            common.obey_robots = true;
+        },
+        .http_proxy => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            common.http_proxy = try allocator.dupeZ(u8, str);
+        },
+        .proxy_bearer_token => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            common.proxy_bearer_token = try allocator.dupeZ(u8, str);
+        },
+        .http_max_concurrent => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
 
-    if (std.mem.eql(u8, "--http_max_concurrent", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_concurrent" });
-            return error.InvalidArgument;
-        };
+            common.http_max_concurrent = std.fmt.parseInt(u8, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                return error.InvalidArgument;
+            };
+        },
+        .http_max_host_open => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
 
-        common.http_max_concurrent = std.fmt.parseInt(u8, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_concurrent", .err = err });
-            return error.InvalidArgument;
-        };
-        return true;
-    }
+            common.http_max_host_open = std.fmt.parseInt(u8, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                return error.InvalidArgument;
+            };
+        },
+        .http_connect_timeout => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
 
-    if (std.mem.eql(u8, "--http_max_host_open", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_host_open" });
-            return error.InvalidArgument;
-        };
+            common.http_connect_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                return error.InvalidArgument;
+            };
+        },
+        .http_timeout => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
 
-        common.http_max_host_open = std.fmt.parseInt(u8, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_host_open", .err = err });
-            return error.InvalidArgument;
-        };
-        return true;
-    }
+            common.http_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                return error.InvalidArgument;
+            };
+        },
+        .http_max_response_size => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
 
-    if (std.mem.eql(u8, "--http_connect_timeout", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_connect_timeout" });
-            return error.InvalidArgument;
-        };
+            common.http_max_response_size = std.fmt.parseInt(usize, str, 10) catch |err| {
+                log.fatal(.app, "invalid argument value", .{ .arg = opt, .err = err });
+                return error.InvalidArgument;
+            };
+        },
+        .log_level => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
 
-        common.http_connect_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_connect_timeout", .err = err });
-            return error.InvalidArgument;
-        };
-        return true;
-    }
+            common.log_level = std.meta.stringToEnum(log.Level, str) orelse blk: {
+                if (std.mem.eql(u8, str, "error")) {
+                    break :blk .err;
+                }
+                log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = str });
+                return error.InvalidArgument;
+            };
+        },
+        .log_format => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
 
-    if (std.mem.eql(u8, "--http_timeout", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_timeout" });
-            return error.InvalidArgument;
-        };
-
-        common.http_timeout = std.fmt.parseInt(u31, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_timeout", .err = err });
-            return error.InvalidArgument;
-        };
-        return true;
-    }
-
-    if (std.mem.eql(u8, "--http_max_response_size", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--http_max_response_size" });
-            return error.InvalidArgument;
-        };
-
-        common.http_max_response_size = std.fmt.parseInt(usize, str, 10) catch |err| {
-            log.fatal(.app, "invalid argument value", .{ .arg = "--http_max_response_size", .err = err });
-            return error.InvalidArgument;
-        };
-        return true;
-    }
-
-    if (std.mem.eql(u8, "--log_level", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--log_level" });
-            return error.InvalidArgument;
-        };
-
-        common.log_level = std.meta.stringToEnum(log.Level, str) orelse blk: {
-            if (std.mem.eql(u8, str, "error")) {
-                break :blk .err;
-            }
-            log.fatal(.app, "invalid option choice", .{ .arg = "--log_level", .value = str });
-            return error.InvalidArgument;
-        };
-        return true;
-    }
-
-    if (std.mem.eql(u8, "--log_format", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--log_format" });
-            return error.InvalidArgument;
-        };
-
-        common.log_format = std.meta.stringToEnum(log.Format, str) orelse {
-            log.fatal(.app, "invalid option choice", .{ .arg = "--log_format", .value = str });
-            return error.InvalidArgument;
-        };
-        return true;
-    }
-
-    if (std.mem.eql(u8, "--log_filter_scopes", opt)) {
-        if (builtin.mode != .Debug) {
-            log.fatal(.app, "experimental", .{ .help = "log scope filtering is only available in debug builds" });
-            return false;
-        }
-
-        const str = args.next() orelse {
-            // disables the default filters
-            common.log_filter_scopes = &.{};
-            return true;
-        };
-
-        var arr: std.ArrayList(log.Scope) = .empty;
-
-        var it = std.mem.splitScalar(u8, str, ',');
-        while (it.next()) |part| {
-            try arr.append(allocator, std.meta.stringToEnum(log.Scope, part) orelse {
-                log.fatal(.app, "invalid option choice", .{ .arg = "--log_filter_scopes", .value = part });
-                return false;
-            });
-        }
-        common.log_filter_scopes = arr.items;
-        return true;
-    }
-
-    if (std.mem.eql(u8, "--user_agent_suffix", opt)) {
-        const str = args.next() orelse {
-            log.fatal(.app, "missing argument value", .{ .arg = "--user_agent_suffix" });
-            return error.InvalidArgument;
-        };
-        for (str) |c| {
-            if (!std.ascii.isPrint(c)) {
-                log.fatal(.app, "not printable character", .{ .arg = "--user_agent_suffix" });
+            common.log_format = std.meta.stringToEnum(log.Format, str) orelse {
+                log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = str });
+                return error.InvalidArgument;
+            };
+        },
+        .log_filter_scopes => {
+            if (builtin.mode != .Debug) {
+                log.fatal(.app, "experimental", .{ .help = "log scope filtering is only available in debug builds" });
                 return error.InvalidArgument;
             }
-        }
-        common.user_agent_suffix = try allocator.dupe(u8, str);
-        return true;
+
+            const str = args.next() orelse {
+                // disables the default filters
+                common.log_filter_scopes = &.{};
+                return true;
+            };
+
+            var arr: std.ArrayList(log.Scope) = .empty;
+
+            var it = std.mem.splitScalar(u8, str, ',');
+            while (it.next()) |part| {
+                try arr.append(allocator, std.meta.stringToEnum(log.Scope, part) orelse {
+                    log.fatal(.app, "invalid option choice", .{ .arg = opt, .value = part });
+                    return error.InvalidArgument;
+                });
+            }
+            common.log_filter_scopes = arr.items;
+        },
+        .user_agent_suffix => {
+            const str = args.next() orelse {
+                log.fatal(.app, "missing argument value", .{ .arg = opt });
+                return error.InvalidArgument;
+            };
+            for (str) |c| {
+                if (!std.ascii.isPrint(c)) {
+                    log.fatal(.app, "not printable character", .{ .arg = opt });
+                    return error.InvalidArgument;
+                }
+            }
+            common.user_agent_suffix = try allocator.dupe(u8, str);
+        },
     }
 
-    return false;
+    return true;
 }
