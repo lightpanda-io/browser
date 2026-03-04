@@ -868,13 +868,12 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 
     const then_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-            const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
             var c: Caller = undefined;
-            c.init(isolate);
+            c.initFromHandle(callback_handle);
             defer c.deinit();
 
-            const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
+            const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getData() orelse return));
 
             if (s.context_id != c.local.ctx.id) {
                 // The microtask is tied to the isolate, not the context
@@ -893,17 +892,15 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 
     const catch_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-            const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
             var c: Caller = undefined;
-            c.init(isolate);
+            c.initFromHandle(callback_handle);
             defer c.deinit();
 
-            const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
+            const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getData() orelse return));
 
             const l = &c.local;
-            const ctx = l.ctx;
-            if (s.context_id != ctx.id) {
+            if (s.context_id != l.ctx.id) {
                 return;
             }
 

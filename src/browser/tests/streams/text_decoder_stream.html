@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=text_decoder_stream_encoding>
+  {
+    const tds = new TextDecoderStream();
+    testing.expectEqual('utf-8', tds.encoding);
+    testing.expectEqual('object', typeof tds.readable);
+    testing.expectEqual('object', typeof tds.writable);
+    testing.expectEqual(false, tds.fatal);
+    testing.expectEqual(false, tds.ignoreBOM);
+  }
+</script>
+
+<script id=text_decoder_stream_with_label>
+  {
+    const tds = new TextDecoderStream('utf-8');
+    testing.expectEqual('utf-8', tds.encoding);
+  }
+</script>
+
+<script id=text_decoder_stream_with_opts>
+  {
+    const tds = new TextDecoderStream('utf-8', { fatal: true, ignoreBOM: true });
+    testing.expectEqual(true, tds.fatal);
+    testing.expectEqual(true, tds.ignoreBOM);
+  }
+</script>
+
+<script id=text_decoder_stream_invalid_label>
+  {
+    let errorThrown = false;
+    try {
+      new TextDecoderStream('windows-1252');
+    } catch (e) {
+      errorThrown = true;
+    }
+    testing.expectEqual(true, errorThrown);
+  }
+</script>
+
+<script id=text_decoder_stream_decode>
+  (async function() {
+    const tds = new TextDecoderStream();
+
+    const writer = tds.writable.getWriter();
+    const reader = tds.readable.getReader();
+
+    // 'hello' in UTF-8 bytes
+    const bytes = new Uint8Array([104, 101, 108, 108, 111]);
+    await writer.write(bytes);
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hello', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=text_decoder_stream_empty_chunk>
+  (async function() {
+    const tds = new TextDecoderStream();
+    const writer = tds.writable.getWriter();
+    const reader = tds.readable.getReader();
+
+    // Write an empty chunk followed by real data
+    await writer.write(new Uint8Array([]));
+    await writer.write(new Uint8Array([104, 105]));
+    await writer.close();
+
+    // Empty chunk should be filtered out; first read gets "hi"
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hi', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>

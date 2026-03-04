@@ -33,11 +33,13 @@ pub const Chunk = union(enum) {
     // the order matters, sorry.
     uint8array: js.TypedArray(u8),
     string: []const u8,
+    js_value: js.Value.Global,
 
     pub fn dupe(self: Chunk, allocator: std.mem.Allocator) !Chunk {
         return switch (self) {
             .string => |str| .{ .string = try allocator.dupe(u8, str) },
             .uint8array => |arr| .{ .uint8array = try arr.dupe(allocator) },
+            .js_value => |val| .{ .js_value = val },
         };
     }
 };
@@ -96,6 +98,40 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
     defer ls.deinit();
 
     ls.toLocal(resolver).resolve("stream enqueue", result);
+}
+
+/// Enqueue a raw JS value, preserving its type (number, bool, object, etc.).
+/// Used by the JS-facing API; internal Zig callers should use enqueue(Chunk).
+pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !void {
+    if (self._stream._state != .readable) {
+        return error.StreamNotReadable;
+    }
+
+    if (self._pending_reads.items.len == 0) {
+        const persisted = try value.persist();
+        try self._queue.append(self._arena, .{ .js_value = persisted });
+        return;
+    }
+
+    const resolver = self._pending_reads.orderedRemove(0);
+    const persisted = try value.persist();
+    const result = ReadableStreamDefaultReader.ReadResult{
+        .done = false,
+        .value = .{ .js_value = persisted },
+    };
+
+    if (comptime IS_DEBUG) {
+        if (self._page.js.local == null) {
+            log.fatal(.bug, "null context scope", .{ .src = "ReadableStreamDefaultController.enqueueValue", .url = self._page.url });
+            std.debug.assert(self._page.js.local != null);
+        }
+    }
+
+    var ls: js.Local.Scope = undefined;
+    self._page.js.localScope(&ls);
+    defer ls.deinit();
+
+    ls.toLocal(resolver).resolve("stream enqueue value", result);
 }
 
 pub fn close(self: *ReadableStreamDefaultController) !void {
@@ -176,7 +212,7 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const enqueue = bridge.function(ReadableStreamDefaultController.enqueue, .{});
+    pub const enqueue = bridge.function(ReadableStreamDefaultController.enqueueValue, .{});
     pub const close = bridge.function(ReadableStreamDefaultController.close, .{});
     pub const @"error" = bridge.function(ReadableStreamDefaultController.doError, .{});
     pub const desiredSize = bridge.accessor(ReadableStreamDefaultController.getDesiredSize, null, .{});
