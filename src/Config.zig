@@ -347,7 +347,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\--web_bot_auth_keyid
         \\                The JWK thumbprint of your public key.
         \\
-        \\--web_bot_auth_directory
+        \\--web_bot_auth_domain
         \\                Your domain e.g. yourdomain.com
     ;
 
