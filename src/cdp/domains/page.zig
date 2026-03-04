@@ -379,13 +379,22 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         }, .{ .session_id = session_id });
     }
 
-    // When we actually recreated the context we should have the inspector send this event, see: resetContextGroup
-    // Sending this event will tell the client that the context ids they had are invalid and the context shouls be dropped
-    // The client will expect us to send new contextCreated events, such that the client has new id's for the active contexts.
-    try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    // When we actually recreated the context we should have the inspector send
+    // this event, see: resetContextGroup Sending this event will tell the
+    // client that the context ids they had are invalid and the context shouls
+    // be dropped The client will expect us to send new contextCreated events,
+    // such that the client has new id's for the active contexts.
+    // Only send executionContextsCleared for main frame navigations. For child
+    // frames (iframes), clearing all contexts would destroy the main frame's
+    // context, causing Puppeteer's page.evaluate()/page.content() to hang
+    // forever.
+    if (event.frame_id == page._frame_id) {
+        try cdp.sendEvent("Runtime.executionContextsCleared", null, .{ .session_id = session_id });
+    }
 
     {
-        const page = bc.session.currentPage() orelse return error.PageNotLoaded;
         const aux_data = try std.fmt.allocPrint(arena, "{{\"isDefault\":true,\"type\":\"default\",\"frameId\":\"{s}\",\"loaderId\":\"{s}\"}}", .{ frame_id, loader_id });
 
         var ls: js.Local.Scope = undefined;
