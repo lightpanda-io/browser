@@ -104,6 +104,10 @@ fn isVisibleElement(el: *Element) bool {
     };
 }
 
+fn getAnchorLabel(el: *Element) ?[]const u8 {
+    return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
+}
+
 fn isAllWhitespace(text: []const u8) bool {
     return for (text) |c| {
         if (!std.ascii.isWhitespace(c)) break false;
@@ -302,17 +306,20 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             return;
         },
         .anchor => {
-            if (!hasVisibleContent(el.asNode())) return;
+            const has_content = hasVisibleContent(el.asNode());
+            const label = getAnchorLabel(el);
+            const href_raw = el.getAttributeSafe(comptime .wrap("href"));
+
+            if (!has_content and label == null and href_raw == null) return;
 
             const has_block = hasBlockDescendant(el.asNode());
-            const href_raw = el.getAttributeSafe(comptime .wrap("href"));
             const href = if (href_raw) |h| URL.resolve(page.call_arena, page.base(), h, .{}) catch h else null;
 
             if (has_block) {
                 try renderChildren(el.asNode(), state, writer, page);
                 if (href) |h| {
                     if (!state.last_char_was_newline) try writer.writeByte('\n');
-                    try writer.writeAll("([Link](");
+                    try writer.writeAll("([](");
                     try writer.writeAll(h);
                     try writer.writeAll("))\n");
                     state.last_char_was_newline = true;
@@ -323,7 +330,11 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             if (isStandaloneAnchor(el)) {
                 if (!state.last_char_was_newline) try writer.writeByte('\n');
                 try writer.writeByte('[');
-                try renderChildren(el.asNode(), state, writer, page);
+                if (has_content) {
+                    try renderChildren(el.asNode(), state, writer, page);
+                } else {
+                    try writer.writeAll(label orelse "");
+                }
                 try writer.writeAll("](");
                 if (href) |h| {
                     try writer.writeAll(h);
@@ -334,7 +345,11 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             }
 
             try writer.writeByte('[');
-            try renderChildren(el.asNode(), state, writer, page);
+            if (has_content) {
+                try renderChildren(el.asNode(), state, writer, page);
+            } else {
+                try writer.writeAll(label orelse "");
+            }
             try writer.writeAll("](");
             if (href) |h| {
                 try writer.writeAll(h);
@@ -589,7 +604,7 @@ test "browser.markdown: block link" {
         \\### Title
         \\
         \\Description
-        \\([Link](https://example.com))
+        \\([](https://example.com))
         \\
     );
 }
@@ -634,7 +649,11 @@ test "browser.markdown: skip empty links" {
     try testMarkdownHTML(
         \\<a href="/"></a>
         \\<a href="/"><svg></svg></a>
-    , "");
+    ,
+        \\[](http://localhost/)
+        \\[](http://localhost/)
+        \\
+    );
 }
 
 test "browser.markdown: resolve links" {
@@ -659,4 +678,18 @@ test "browser.markdown: resolve links" {
         \\![Img](https://example.com/c.png)
         \\
     , aw.written());
+}
+
+test "browser.markdown: anchor fallback label" {
+    try testMarkdownHTML(
+        \\<a href="/discord" aria-label="Discord Server"><svg></svg></a>
+    , "[Discord Server](http://localhost/discord)\n");
+
+    try testMarkdownHTML(
+        \\<a href="/search" title="Search Site"><svg></svg></a>
+    , "[Search Site](http://localhost/search)\n");
+
+    try testMarkdownHTML(
+        \\<a href="/no-label"><svg></svg></a>
+    , "[](http://localhost/no-label)\n");
 }
