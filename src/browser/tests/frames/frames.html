@@ -62,6 +62,7 @@
   {
     let f3_load_event = false;
     let f3 = document.createElement('iframe');
+    f3.id = 'f3';
     f3.addEventListener('load', () => {
       f3_load_event = true;
     });
@@ -75,9 +76,10 @@
   }
 </script>
 
-<script id=onload>
+<script id=about_blank>
   {
     let f4 = document.createElement('iframe');
+    f4.id = 'f4';
     f4.src = "about:blank";
     document.documentElement.appendChild(f4);
 
@@ -87,8 +89,43 @@
   }
 </script>
 
+<script id=about_blank_renavigate>
+  {
+    let f5 = document.createElement('iframe');
+    f5.id = 'f5';
+    f5.src = "support/sub 1.html";
+    document.documentElement.appendChild(f5);
+    f5.src = "about:blank";
+
+    testing.eventually(() => {
+      testing.expectEqual("<html><head></head><body></body></html>", f5.contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
+
+<!--
+Need correct _target support
+<script id=link_click>
+  {
+    let f6 = document.createElement('iframe');
+    f6.id = 'f6';
+    f6.addEventListener('load', () => {
+      f6.contentDocument.querySelector('#link').click();
+    }, {once: true});
+    f6.src = "support/with_link.html";
+    document.documentElement.appendChild(f6);
+
+    testing.eventually(() => {
+      console.warn(f6.contentDocument);
+      testing.expectEqual("<html><head></head><body></body></html>", f6.contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
+ -->
+
 <script id=count>
   testing.eventually(() => {
-    testing.expectEqual(4, window.length);
+    testing.expectEqual(5, window.length);
   });
 </script>
+

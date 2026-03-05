@@ -323,9 +323,9 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     }
 }
 
-pub fn deinit(self: *Page) void {
+pub fn deinit(self: *Page, abort_http: bool) void {
     for (self.frames.items) |frame| {
-        frame.deinit();
+        frame.deinit(abort_http);
     }
 
     if (comptime IS_DEBUG) {
@@ -346,10 +346,16 @@ pub fn deinit(self: *Page) void {
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
+
     if (self.parent == null) {
-        // only the root frame needs to abort this. It's more efficient this way
         session.browser.http_client.abort();
+    } else if (abort_http) {
+        // a small optimization, it's faster to abort _everything_ on the root
+        // page, so we prefer that. But if it's just the frame that's going
+        // away (a frame navigation) then we'll abort the frame-related requests
+        session.browser.http_client.abortFrame(self._frame_id);
     }
+
     self._script_manager.deinit();
 
     if (comptime IS_DEBUG) {
@@ -459,6 +465,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     // if the url is about:blank, we load an empty HTML document in the
     // page and dispatch the events.
     if (std.mem.eql(u8, "about:blank", request_url)) {
+        self.url = "about:blank";
         // Assume we parsed the document.
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
@@ -572,31 +579,49 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
 }
 
 fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
-    const resolved_url = try URL.resolve(
-        arena,
-        self.base(),
-        request_url,
-        .{ .always_dupe = true, .encode = true },
-    );
+    const resolved_url = blk: {
+        if (std.mem.eql(u8, request_url, "about:blank")) {
+            break :blk "about:blank"; // navigate will handle this special case
+        }
+        break :blk try URL.resolve(
+            arena,
+            self.base(),
+            request_url,
+            .{ .always_dupe = true, .encode = true },
+        );
+    };
 
     const session = self._session;
     if (!opts.force and URL.eqlDocument(self.url, resolved_url)) {
-        self.arena_pool.release(arena);
-
         self.url = try self.arena.dupeZ(u8, resolved_url);
         self.window._location = try Location.init(self.url, self);
         self.document._location = self.window._location;
-        return session.navigation.updateEntries(self.url, opts.kind, self, true);
+        if (self.parent == null) {
+            try session.navigation.updateEntries(self.url, opts.kind, self, true);
+        }
+        // doin't defer this, the caller, the caller is responsible for freeing
+        // it on error
+        self.arena_pool.release(arena);
+        return;
     }
 
     log.info(.browser, "schedule navigation", .{
         .url = resolved_url,
         .reason = opts.reason,
-        .target = resolved_url,
         .type = self._type,
     });
 
-    session.browser.http_client.abort();
+    // This is a micro-optimization. Terminate any inflight request as early
+    // as we can. This will be more propery shutdown when we process the
+    // scheduled navigation.
+    if (self.parent == null) {
+        session.browser.http_client.abort();
+    } else {
+        // This doesn't terminate any inflight requests for nested frames, but
+        // again, this is just an optimization. We'll correctly shut down all
+        // nested inflight requests when we process the navigation.
+        session.browser.http_client.abortFrame(self._frame_id);
+    }
 
     const qn = try arena.create(QueuedNavigation);
     qn.* = .{
@@ -604,12 +629,11 @@ fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []con
         .arena = arena,
         .url = resolved_url,
         .priority = priority,
+        .iframe = self.iframe,
     };
 
-    if (self._queued_navigation) |existing| {
-        self.arena_pool.release(existing.arena);
-    }
     self._queued_navigation = qn;
+    return session.scheduleNavigation(qn);
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -623,6 +647,12 @@ fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []con
 // 3 - anchor clicks
 // Within, each category, it's last-one-wins.
 fn canScheduleNavigation(self: *Page, priority: NavigationPriority) bool {
+    if (self.parent) |parent| {
+        if (parent.isGoingAway()) {
+            return false;
+        }
+    }
+
     const existing = self._queued_navigation orelse return true;
 
     if (existing.priority == priority) {
@@ -631,7 +661,8 @@ fn canScheduleNavigation(self: *Page, priority: NavigationPriority) bool {
     }
 
     return switch (existing.priority) {
-        .anchor => true, // everything is higher priority than an anchor
+        .iframe => true, // everything is higher priority than iframe.src = "x"
+        .anchor => priority != .iframe, // an anchor is only higher priority than an iframe
         .form => false, // nothing is higher priority than a form
         .script => priority == .form, // a form is higher priority than a script
     };
@@ -758,6 +789,8 @@ fn _documentIsComplete(self: *Page) !void {
 }
 
 fn notifyParentLoadComplete(self: *Page) void {
+    const parent = self.parent orelse return;
+
     if (self._parent_notified == true) {
         if (comptime IS_DEBUG) {
             std.debug.assert(false);
@@ -767,9 +800,7 @@ fn notifyParentLoadComplete(self: *Page) void {
     }
 
     self._parent_notified = true;
-    if (self.parent) |p| {
-        p.iframeCompletedLoading(self.iframe.?);
-    }
+    parent.iframeCompletedLoading(self.iframe.?);
 }
 
 fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
@@ -949,7 +980,11 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
 }
 
 pub fn isGoingAway(self: *const Page) bool {
-    return self._queued_navigation != null;
+    if (self._queued_navigation != null) {
+        return true;
+    }
+    const parent = self.parent orelse return false;
+    return parent.isGoingAway();
 }
 
 pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Element.Html.Script) !void {
@@ -982,29 +1017,38 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         return;
     }
 
+    if (iframe._content_window) |cw| {
+        // This frame is being re-navigated. We need to do this through a
+        // scheduleNavigation phase. We can't navigate immediately here, for
+        // the same reason that a "root" page can't immediately navigate:
+        // we could be in the middle of a JS callback or something else that
+        // doesn't exit the page to just suddenly go away.
+        return cw._page.scheduleNavigation(src, .{
+            .reason = .script,
+            .kind = .{ .push = null },
+        }, .iframe);
+    }
+
     iframe._executed = true;
     const session = self._session;
 
-    // A frame can be re-navigated by setting the src.
-    const existing_window = iframe._content_window;
-
     const page_frame = try self.arena.create(Page);
-    const frame_id = blk: {
-        if (existing_window) |w| {
-            const existing_frame_id = w._page._frame_id;
-            session.browser.http_client.abortFrame(existing_frame_id);
-            break :blk existing_frame_id;
-        }
-        break :blk session.nextFrameId();
-    };
+    const frame_id = session.nextFrameId();
 
     try Page.init(page_frame, frame_id, session, self);
-    errdefer page_frame.deinit();
+    errdefer page_frame.deinit(true);
 
     self._pending_loads += 1;
     page_frame.iframe = iframe;
     iframe._content_window = page_frame.window;
     errdefer iframe._content_window = null;
+
+    // on first load, dispatch frame_created evnet
+    self._session.notification.dispatch(.page_frame_created, &.{
+        .frame_id = frame_id,
+        .parent_id = self._frame_id,
+        .timestamp = timestamp(.monotonic),
+    });
 
     const url = blk: {
         if (std.mem.eql(u8, src, "about:blank")) {
@@ -1018,41 +1062,13 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         );
     };
 
-    if (existing_window == null) {
-        // on first load, dispatch frame_created evnet
-        self._session.notification.dispatch(.page_frame_created, &.{
-            .frame_id = frame_id,
-            .parent_id = self._frame_id,
-            .timestamp = timestamp(.monotonic),
-        });
-    }
-
     page_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
         log.warn(.page, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._content_window = null;
-        page_frame.deinit();
+        page_frame.deinit(true);
         return error.IFrameLoadError;
     };
-
-    if (existing_window) |w| {
-        const existing_page = w._page;
-        if (existing_page._parent_notified == false) {
-            self._pending_loads -= 1;
-        }
-
-        for (self.frames.items, 0..) |p, i| {
-            if (p == existing_page) {
-                self.frames.items[i] = page_frame;
-                break;
-            }
-        } else {
-            lp.assert(false, "Existing frame not found", .{ .len = self.frames.items.len });
-        }
-
-        existing_page.deinit();
-        return;
-    }
 
     // window[N] is based on document order. For now we'll just append the frame
     // at the end of our list and set frames_sorted == false. window.getFrame
@@ -3030,6 +3046,7 @@ const NavigationPriority = enum {
     form,
     script,
     anchor,
+    iframe,
 };
 
 pub const QueuedNavigation = struct {
@@ -3037,6 +3054,7 @@ pub const QueuedNavigation = struct {
     url: [:0]const u8,
     opts: NavigateOpts,
     priority: NavigationPriority,
+    iframe: ?*Element.Html.IFrame,
 };
 
 pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {

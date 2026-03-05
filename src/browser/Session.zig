@@ -30,6 +30,7 @@ const History = @import("webapi/History.zig");
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
 const Notification = @import("../Notification.zig");
+const QueuedNavigation = Page.QueuedNavigation;
 
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -42,6 +43,14 @@ const Session = @This();
 
 browser: *Browser,
 notification: *Notification,
+
+queued_navigation: std.ArrayList(*QueuedNavigation),
+// It's possible (but unlikely) that a queued navigation happens when we're
+// processessing queued navigations (thank you WPT). This causes a lot of issues
+// including possibly invalidating `queued_navigation` and endless loops.
+// We use a double queue to avoid this.
+processing_queued_navigation: bool,
+queued_queued_navigation: std.ArrayList(*QueuedNavigation),
 
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
@@ -70,6 +79,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
         .browser = browser,
+        .queued_navigation = .{},
+        .queued_queued_navigation = .{},
+        .processing_queued_navigation = false,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
     };
@@ -79,9 +91,9 @@ pub fn deinit(self: *Session) void {
     if (self.page != null) {
         self.removePage();
     }
-    const browser = self.browser;
-
     self.cookie_jar.deinit();
+
+    const browser = self.browser;
     self.storage_shed.deinit(browser.app.allocator);
     browser.arena_pool.release(self.arena);
 }
@@ -113,7 +125,7 @@ pub fn removePage(self: *Session) void {
     self.notification.dispatch(.page_remove, .{});
     lp.assert(self.page != null, "Session.removePage - page is null", .{});
 
-    self.page.?.deinit();
+    self.page.?.deinit(false);
     self.page = null;
 
     self.navigation.onRemovePage();
@@ -133,7 +145,7 @@ pub fn replacePage(self: *Session) !*Page {
     var current = self.page.?;
     const frame_id = current._frame_id;
     const parent = current.parent;
-    current.deinit();
+    current.deinit(false);
 
     self.browser.env.memoryPressureNotification(.moderate);
 
@@ -174,10 +186,11 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
 
         switch (wait_result) {
             .done => {
-                if (page._queued_navigation == null) {
+                if (self.queued_navigation.items.len == 0) {
                     return .done;
                 }
-                page = self.processScheduledNavigation(page) catch return .done;
+                self.processQueuedNavigation() catch return .done;
+                page = &self.page.?; // might have changed
             },
             else => |result| return result,
         }
@@ -229,7 +242,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                 }
             },
             .html, .complete => {
-                if (page._queued_navigation != null) {
+                if (self.queued_navigation.items.len != 0) {
                     return .done;
                 }
 
@@ -339,42 +352,112 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     }
 }
 
-fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
+pub fn scheduleNavigation(self: *Session, qn: *QueuedNavigation) !void {
+    const iframe = qn.iframe;
+    const list = if (self.processing_queued_navigation) &self.queued_queued_navigation else &self.queued_navigation;
+    for (list.items, 0..) |existing, i| {
+        if (existing.iframe == iframe) {
+            self.browser.arena_pool.release(existing.arena);
+            list.items[i] = qn;
+            return;
+        }
+    } else {
+        return list.append(self.arena, qn);
+    }
+}
+
+fn processQueuedNavigation(self: *Session) !void {
+    const navigations = &self.queued_navigation;
+    defer {
+        navigations.clearRetainingCapacity();
+        const copy = navigations.*;
+        self.queued_navigation = self.queued_queued_navigation;
+        self.queued_queued_navigation = copy;
+    }
+
+    if (self.page.?._queued_navigation != null) {
+        // This is both an optimization and a simplification of sorts. If the
+        // root page is navigating, then we don't need to process any other
+        // navigation. Also, the navigation for the root page and for a frame
+        // is different enough that have two distinct code blocks is, imo,
+        // better. Yes, there will be duplication.
+        return self.processRootQueuedNavigation();
+    }
+    self.processing_queued_navigation = true;
+    defer self.processing_queued_navigation = false;
+
     const browser = self.browser;
+    for (navigations.items) |qn| {
+        const iframe = qn.iframe.?;
+        const current_page = iframe._content_window.?._page; // Get the CURRENT page from iframe
+        lp.assert(current_page.parent != null, "root queued navigation", .{});
 
+        current_page._queued_navigation = null;
+        defer browser.arena_pool.release(qn.arena);
+
+        const parent = current_page.parent.?;
+        errdefer iframe._content_window = null;
+
+        if (current_page._parent_notified) {
+            // we already notified the parent that we had loaded
+            parent._pending_loads += 1;
+        }
+
+        const frame_id = current_page._frame_id;
+        defer current_page.deinit(true);
+
+        const new_page = try parent.arena.create(Page);
+        try Page.init(new_page, frame_id, self, parent);
+        errdefer new_page.deinit(true);
+
+        new_page.iframe = iframe;
+        iframe._content_window = new_page.window;
+
+        new_page.navigate(qn.url, qn.opts) catch |err| {
+            log.err(.browser, "queued frame navigation error", .{ .err = err });
+            return err;
+        };
+
+        for (parent.frames.items, 0..) |p, i| {
+            // Page.frames may or may not be sorted (depending on the
+            // Page.frames_sorted flag). Putting this new page at the same
+            // position as the one it's replacing is the simplest, safest and
+            // probably most efficient option.
+            if (p == current_page) {
+                parent.frames.items[i] = new_page;
+                break;
+            }
+        } else {
+            lp.assert(false, "Existing frame not found", .{ .len = parent.frames.items.len });
+        }
+    }
+}
+
+fn processRootQueuedNavigation(self: *Session) !void {
+    const current_page = &self.page.?;
+    const frame_id = current_page._frame_id;
+
+    // create a copy before the page is cleared
     const qn = current_page._queued_navigation.?;
-    // take ownership of the page's queued navigation
     current_page._queued_navigation = null;
-    defer browser.arena_pool.release(qn.arena);
+    defer self.browser.arena_pool.release(qn.arena);
 
-    const frame_id, const parent = blk: {
-        const page = &self.page.?;
-        const frame_id = page._frame_id;
-        const parent = page.parent;
-
-        browser.http_client.abort();
-        self.removePage();
-
-        break :blk .{ frame_id, parent };
-    };
-
+    self.removePage();
     self.page = @as(Page, undefined);
-    const page = &self.page.?;
-    try Page.init(page, frame_id, self, parent);
+    const new_page = &self.page.?;
+    try Page.init(new_page, frame_id, self, null);
 
     // Creates a new NavigationEventTarget for this page.
-    try self.navigation.onNewPage(page);
+    try self.navigation.onNewPage(new_page);
 
     // start JS env
     // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
-    self.notification.dispatch(.page_created, page);
+    self.notification.dispatch(.page_created, new_page);
 
-    page.navigate(qn.url, qn.opts) catch |err| {
-        log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
+    new_page.navigate(qn.url, qn.opts) catch |err| {
+        log.err(.browser, "queued navigation error", .{ .err = err });
         return err;
     };
-
-    return page;
 }
 
 pub fn nextFrameId(self: *Session) u32 {
