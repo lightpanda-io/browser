@@ -19,6 +19,8 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Page = @import("../../Page.zig");
 const ReadableStream = @import("ReadableStream.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
@@ -33,6 +35,21 @@ pub fn init(stream: *ReadableStream, page: *Page) !*ReadableStreamDefaultReader 
         ._stream = stream,
         ._page = page,
     });
+}
+
+pub fn acquireRef(self: *ReadableStreamDefaultReader) void {
+    const stream = self._stream orelse {
+        if (comptime IS_DEBUG) {
+            std.debug.assert(false);
+        }
+        return;
+    };
+    stream.acquireRef();
+}
+
+pub fn deinit(self: *ReadableStreamDefaultReader, shutdown: bool, page: *Page) void {
+    const stream = self._stream orelse return;
+    stream.deinit(shutdown, page);
 }
 
 pub const ReadResult = struct {
@@ -110,6 +127,8 @@ pub const JsApi = struct {
         pub const name = "ReadableStreamDefaultReader";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(ReadableStreamDefaultReader.deinit);
     };
 
     pub const read = bridge.function(ReadableStreamDefaultReader.read, .{});

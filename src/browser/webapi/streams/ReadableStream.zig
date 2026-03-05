@@ -52,6 +52,8 @@ _pull_fn: ?js.Function.Global = null,
 _pulling: bool = false,
 _pull_again: bool = false,
 _cancel: ?Cancel = null,
+_arena: std.mem.Allocator,
+_rc: usize = 0,
 
 const UnderlyingSource = struct {
     start: ?js.Function = null,
@@ -68,13 +70,18 @@ const QueueingStrategy = struct {
 pub fn init(src_: ?UnderlyingSource, strategy_: ?QueueingStrategy, page: *Page) !*ReadableStream {
     const strategy: QueueingStrategy = strategy_ orelse .{};
 
-    const self = try page._factory.create(ReadableStream{
+    const arena = try page.getArena(.{ .debug = "ReadableStream" });
+    errdefer page.releaseArena(arena);
+
+    const self = try arena.create(ReadableStream);
+    self.* = .{
         ._page = page,
         ._state = .readable,
+        ._arena = arena,
         ._reader = null,
         ._controller = undefined,
         ._stored_error = null,
-    });
+    };
 
     self._controller = try ReadableStreamDefaultController.init(self, strategy.highWaterMark, page);
 
@@ -108,6 +115,23 @@ pub fn initWithData(data: []const u8, page: *Page) !*ReadableStream {
     return stream;
 }
 
+pub fn deinit(self: *ReadableStream, _: bool, page: *Page) void {
+    const rc = self._rc;
+    if (comptime IS_DEBUG) {
+        std.debug.assert(rc != 0);
+    }
+
+    if (rc == 1) {
+        page.releaseArena(self._arena);
+    } else {
+        self._rc = rc - 1;
+    }
+}
+
+pub fn acquireRef(self: *ReadableStream) void {
+    self._rc += 1;
+}
+
 pub fn getReader(self: *ReadableStream, page: *Page) !*ReadableStreamDefaultReader {
     if (self.getLocked()) {
         return error.ReaderLocked;
@@ -120,6 +144,12 @@ pub fn getReader(self: *ReadableStream, page: *Page) !*ReadableStreamDefaultRead
 
 pub fn releaseReader(self: *ReadableStream) void {
     self._reader = null;
+
+    const rc = self._rc;
+    if (comptime IS_DEBUG) {
+        std.debug.assert(rc != 0);
+    }
+    self._rc = rc - 1;
 }
 
 pub fn getAsyncIterator(self: *ReadableStream, page: *Page) !*AsyncIterator {
@@ -367,6 +397,8 @@ pub const JsApi = struct {
         pub const name = "ReadableStream";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(ReadableStream.deinit);
     };
 
     pub const constructor = bridge.constructor(ReadableStream.init, .{});
@@ -390,6 +422,14 @@ pub const AsyncIterator = struct {
         });
     }
 
+    pub fn acquireRef(self: *AsyncIterator) void {
+        self._stream.acquireRef();
+    }
+
+    pub fn deinit(self: *AsyncIterator, shutdown: bool, page: *Page) void {
+        self._stream.deinit(shutdown, page);
+    }
+
     pub fn next(self: *AsyncIterator, page: *Page) !js.Promise {
         return self._reader.read(page);
     }
@@ -406,6 +446,8 @@ pub const AsyncIterator = struct {
             pub const name = "ReadableStreamAsyncIterator";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
+            pub const weak = true;
+            pub const finalizer = bridge.finalizer(AsyncIterator.deinit);
         };
 
         pub const next = bridge.function(ReadableStream.AsyncIterator.next, .{});
