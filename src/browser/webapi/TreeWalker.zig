@@ -31,6 +31,7 @@ const Mode = enum {
 
 pub fn TreeWalker(comptime mode: Mode) type {
     return struct {
+        _current: ?*Node = null,
         _next: ?*Node,
         _root: *Node,
 
@@ -47,37 +48,74 @@ pub fn TreeWalker(comptime mode: Mode) type {
 
         pub fn next(self: *Self) ?*Node {
             const node = self._next orelse return null;
+            self._current = node;
 
             if (comptime mode == .children) {
                 self._next = Node.linkToNodeOrNull(node._child_link.next);
                 return node;
             }
 
-            if (node._children) |children| {
-                self._next = children.first();
-            } else if (node._child_link.next) |n| {
-                self._next = Node.linkToNode(n);
-            } else {
-                // No children, no next sibling - walk up until we find a next sibling or hit root
-                var current = node._parent;
-                while (current) |parent| {
-                    if (parent == self._root) {
-                        self._next = null;
-                        break;
-                    }
-                    if (parent._child_link.next) |next_sibling| {
-                        self._next = Node.linkToNode(next_sibling);
-                        break;
-                    }
-                    current = parent._parent;
-                } else {
-                    self._next = null;
-                }
-            }
+            self._next = self.computeNextInDocumentOrder(node);
             return node;
         }
 
+        pub fn skipChildren(self: *Self) void {
+            if (comptime mode == .children) return;
+            const current = self._current orelse return;
+            self._next = self.computeNextSiblingOrUncle(current);
+        }
+
+        pub fn nextSibling(self: *Self) ?*Node {
+            const current = self._current orelse return null;
+            const sibling = Node.linkToNodeOrNull(current._child_link.next) orelse return null;
+
+            self._current = sibling;
+            if (comptime mode == .children) {
+                self._next = Node.linkToNodeOrNull(sibling._child_link.next);
+            } else {
+                self._next = self.computeNextInDocumentOrder(sibling);
+            }
+            return sibling;
+        }
+
+        pub fn previousSibling(self: *Self) ?*Node {
+            const current = self._current orelse return null;
+            const sibling = Node.linkToNodeOrNull(current._child_link.prev) orelse return null;
+
+            self._current = sibling;
+            if (comptime mode == .children) {
+                self._next = Node.linkToNodeOrNull(sibling._child_link.next);
+            } else {
+                self._next = self.computeNextInDocumentOrder(sibling);
+            }
+            return sibling;
+        }
+
+        fn computeNextInDocumentOrder(self: *Self, node: *Node) ?*Node {
+            if (node._children) |children| {
+                return children.first();
+            }
+            return self.computeNextSiblingOrUncle(node);
+        }
+
+        fn computeNextSiblingOrUncle(self: *Self, node: *Node) ?*Node {
+            if (node._child_link.next) |n| {
+                return Node.linkToNode(n);
+            }
+
+            var current = node._parent;
+            while (current) |parent| {
+                if (parent == self._root) return null;
+                if (parent._child_link.next) |next_sibling| {
+                    return Node.linkToNode(next_sibling);
+                }
+                current = parent._parent;
+            }
+            return null;
+        }
+
         pub fn reset(self: *Self) void {
+            self._current = null;
             self._next = firstNext(self._root);
         }
 
@@ -146,4 +184,68 @@ pub fn TreeWalker(comptime mode: Mode) type {
             }
         };
     };
+}
+
+test "TreeWalker: skipChildren" {
+    const testing = @import("../../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    // <div>
+    //   <span>
+    //     <b>A</b>
+    //   </span>
+    //   <p>B</p>
+    // </div>
+    const div = try doc.createElement("div", null, page);
+    const span = try doc.createElement("span", null, page);
+    const b = try doc.createElement("b", null, page);
+    const p = try doc.createElement("p", null, page);
+    _ = try span.asNode().appendChild(b.asNode(), page);
+    _ = try div.asNode().appendChild(span.asNode(), page);
+    _ = try div.asNode().appendChild(p.asNode(), page);
+
+    var tw = Full.init(div.asNode(), .{});
+
+    // root (div)
+    try testing.expect(tw.next() == div.asNode());
+
+    // span
+    try testing.expect(tw.next() == span.asNode());
+
+    // skip children of span (should jump over <b> to <p>)
+    tw.skipChildren();
+    try testing.expect(tw.next() == p.asNode());
+
+    try testing.expect(tw.next() == null);
+}
+
+test "TreeWalker: sibling navigation" {
+    const testing = @import("../../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    // <div>
+    //   <span>A</span>
+    //   <p>B</p>
+    // </div>
+    const div = try doc.createElement("div", null, page);
+    const span = try doc.createElement("span", null, page);
+    const p = try doc.createElement("p", null, page);
+    _ = try div.asNode().appendChild(span.asNode(), page);
+    _ = try div.asNode().appendChild(p.asNode(), page);
+
+    var tw = Full.init(div.asNode(), .{});
+
+    // Move to span
+    _ = tw.next(); // div
+    _ = tw.next(); // span
+
+    // nextSibling -> p
+    try testing.expect(tw.nextSibling() == p.asNode());
+
+    // previousSibling -> span
+    try testing.expect(tw.previousSibling() == span.asNode());
 }
