@@ -44,13 +44,11 @@ const Session = @This();
 browser: *Browser,
 notification: *Notification,
 
-queued_navigation: std.ArrayList(*QueuedNavigation),
-// It's possible (but unlikely) that a queued navigation happens when we're
-// processessing queued navigations (thank you WPT). This causes a lot of issues
-// including possibly invalidating `queued_navigation` and endless loops.
-// We use a double queue to avoid this.
-processing_queued_navigation: bool,
-queued_queued_navigation: std.ArrayList(*QueuedNavigation),
+queued_navigation: std.ArrayList(*Page),
+// Temporary buffer for about:blank navigations during processing.
+// We process async navigations first (safe from re-entrance), then sync
+// about:blank navigations (which may add to queued_navigation).
+queued_queued_navigation: std.ArrayList(*Page),
 
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
@@ -81,7 +79,6 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .browser = browser,
         .queued_navigation = .{},
         .queued_queued_navigation = .{},
-        .processing_queued_navigation = false,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
     };
@@ -352,28 +349,22 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     }
 }
 
-pub fn scheduleNavigation(self: *Session, qn: *QueuedNavigation) !void {
-    const iframe = qn.iframe;
-    const list = if (self.processing_queued_navigation) &self.queued_queued_navigation else &self.queued_navigation;
-    for (list.items, 0..) |existing, i| {
-        if (existing.iframe == iframe) {
-            self.browser.arena_pool.release(existing.arena);
-            list.items[i] = qn;
+pub fn scheduleNavigation(self: *Session, page: *Page) !void {
+    const list = &self.queued_navigation;
+
+    // Check if page is already queued
+    for (list.items) |existing| {
+        if (existing == page) {
+            // Already queued
             return;
         }
-    } else {
-        return list.append(self.arena, qn);
     }
+
+    return list.append(self.arena, page);
 }
 
 fn processQueuedNavigation(self: *Session) !void {
     const navigations = &self.queued_navigation;
-    defer {
-        navigations.clearRetainingCapacity();
-        const copy = navigations.*;
-        self.queued_navigation = self.queued_queued_navigation;
-        self.queued_queued_navigation = copy;
-    }
 
     if (self.page.?._queued_navigation != null) {
         // This is both an optimization and a simplification of sorts. If the
@@ -381,55 +372,96 @@ fn processQueuedNavigation(self: *Session) !void {
         // navigation. Also, the navigation for the root page and for a frame
         // is different enough that have two distinct code blocks is, imo,
         // better. Yes, there will be duplication.
+        navigations.clearRetainingCapacity();
         return self.processRootQueuedNavigation();
     }
-    self.processing_queued_navigation = true;
-    defer self.processing_queued_navigation = false;
+
+    const about_blank_queue = &self.queued_queued_navigation;
+    defer about_blank_queue.clearRetainingCapacity();
+
+    // First pass: process async navigations (non-about:blank)
+    // These cannot cause re-entrant navigation scheduling
+    for (navigations.items) |page| {
+        const qn = page._queued_navigation.?;
+
+        if (qn.is_about_blank) {
+            // Defer about:blank to second pass
+            try about_blank_queue.append(self.arena, page);
+            continue;
+        }
+
+        try self.processFrameNavigation(page, qn);
+    }
+
+    // Clear the queue after first pass
+    navigations.clearRetainingCapacity();
+
+    // Second pass: process synchronous navigations (about:blank)
+    // These may trigger new navigations which go into queued_navigation
+    for (about_blank_queue.items) |page| {
+        const qn = page._queued_navigation.?;
+        try self.processFrameNavigation(page, qn);
+    }
+
+    // Safety: Remove any about:blank navigations that were queued during the
+    // second pass to prevent infinite loops
+    var i: usize = 0;
+    while (i < navigations.items.len) {
+        const page = navigations.items[i];
+        if (page._queued_navigation) |qn| {
+            if (qn.is_about_blank) {
+                log.warn(.page, "recursive about blank", .{});
+                _ = navigations.swapRemove(i);
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+fn processFrameNavigation(self: *Session, current_page: *Page, qn: *QueuedNavigation) !void {
+    lp.assert(current_page.parent != null, "root queued navigation", .{});
 
     const browser = self.browser;
-    for (navigations.items) |qn| {
-        const iframe = qn.iframe.?;
-        const current_page = iframe._content_window.?._page; // Get the CURRENT page from iframe
-        lp.assert(current_page.parent != null, "root queued navigation", .{});
+    const iframe = current_page.iframe.?;
+    const parent = current_page.parent.?;
 
-        current_page._queued_navigation = null;
-        defer browser.arena_pool.release(qn.arena);
+    current_page._queued_navigation = null;
+    defer browser.arena_pool.release(qn.arena);
 
-        const parent = current_page.parent.?;
-        errdefer iframe._content_window = null;
+    errdefer iframe._content_window = null;
 
-        if (current_page._parent_notified) {
-            // we already notified the parent that we had loaded
-            parent._pending_loads += 1;
+    if (current_page._parent_notified) {
+        // we already notified the parent that we had loaded
+        parent._pending_loads += 1;
+    }
+
+    const frame_id = current_page._frame_id;
+    defer current_page.deinit(true);
+
+    const new_page = try parent.arena.create(Page);
+    try Page.init(new_page, frame_id, self, parent);
+    errdefer new_page.deinit(true);
+
+    new_page.iframe = iframe;
+    iframe._content_window = new_page.window;
+
+    new_page.navigate(qn.url, qn.opts) catch |err| {
+        log.err(.browser, "queued frame navigation error", .{ .err = err });
+        return err;
+    };
+
+    for (parent.frames.items, 0..) |p, i| {
+        // Page.frames may or may not be sorted (depending on the
+        // Page.frames_sorted flag). Putting this new page at the same
+        // position as the one it's replacing is the simplest, safest and
+        // probably most efficient option.
+        if (p == current_page) {
+            parent.frames.items[i] = new_page;
+            break;
         }
-
-        const frame_id = current_page._frame_id;
-        defer current_page.deinit(true);
-
-        const new_page = try parent.arena.create(Page);
-        try Page.init(new_page, frame_id, self, parent);
-        errdefer new_page.deinit(true);
-
-        new_page.iframe = iframe;
-        iframe._content_window = new_page.window;
-
-        new_page.navigate(qn.url, qn.opts) catch |err| {
-            log.err(.browser, "queued frame navigation error", .{ .err = err });
-            return err;
-        };
-
-        for (parent.frames.items, 0..) |p, i| {
-            // Page.frames may or may not be sorted (depending on the
-            // Page.frames_sorted flag). Putting this new page at the same
-            // position as the one it's replacing is the simplest, safest and
-            // probably most efficient option.
-            if (p == current_page) {
-                parent.frames.items[i] = new_page;
-                break;
-            }
-        } else {
-            lp.assert(false, "Existing frame not found", .{ .len = parent.frames.items.len });
-        }
+    } else {
+        lp.assert(false, "Existing frame not found", .{ .len = parent.frames.items.len });
     }
 }
 

@@ -579,16 +579,17 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
 }
 
 fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
-    const resolved_url = blk: {
+    const resolved_url, const is_about_blank = blk: {
         if (std.mem.eql(u8, request_url, "about:blank")) {
-            break :blk "about:blank"; // navigate will handle this special case
+            break :blk .{ "about:blank", true }; // navigate will handle this special case
         }
-        break :blk try URL.resolve(
+        const u = try URL.resolve(
             arena,
             self.base(),
             request_url,
             .{ .always_dupe = true, .encode = true },
         );
+        break :blk .{ u, false };
     };
 
     const session = self._session;
@@ -629,11 +630,11 @@ fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []con
         .arena = arena,
         .url = resolved_url,
         .priority = priority,
-        .iframe = self.iframe,
+        .is_about_blank = is_about_blank,
     };
 
     self._queued_navigation = qn;
-    return session.scheduleNavigation(qn);
+    return session.scheduleNavigation(self);
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -3054,7 +3055,7 @@ pub const QueuedNavigation = struct {
     url: [:0]const u8,
     opts: NavigateOpts,
     priority: NavigationPriority,
-    iframe: ?*Element.Html.IFrame,
+    is_about_blank: bool,
 };
 
 pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
