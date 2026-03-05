@@ -298,7 +298,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             }
             try writer.writeAll("](");
             if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
-                const absolute_src = URL.resolve(page.call_arena, page.base(), src, .{}) catch src;
+                const absolute_src = URL.resolve(page.call_arena, page.base(), src, .{ .encode = true }) catch src;
                 try writer.writeAll(absolute_src);
             }
             try writer.writeAll(")");
@@ -313,7 +313,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             if (!has_content and label == null and href_raw == null) return;
 
             const has_block = hasBlockDescendant(el.asNode());
-            const href = if (href_raw) |h| URL.resolve(page.call_arena, page.base(), h, .{}) catch h else null;
+            const href = if (href_raw) |h| URL.resolve(page.call_arena, page.base(), h, .{ .encode = true }) catch h else null;
 
             if (has_block) {
                 try renderChildren(el.asNode(), state, writer, page);
@@ -667,6 +667,7 @@ test "browser.markdown: resolve links" {
     try page.parseHtmlAsChildren(div.asNode(),
         \\<a href="b">Link</a>
         \\<img src="../c.png" alt="Img">
+        \\<a href="/my page">Space</a>
     );
 
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -675,7 +676,8 @@ test "browser.markdown: resolve links" {
 
     try testing.expectString(
         \\[Link](https://example.com/a/b)
-        \\![Img](https://example.com/c.png)
+        \\![Img](https://example.com/c.png) 
+        \\[Space](https://example.com/my%20page)
         \\
     , aw.written());
 }
