@@ -39,7 +39,6 @@ telemetry: Telemetry,
 allocator: Allocator,
 arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
-shutdown: bool = false,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const app = try allocator.create(App);
@@ -68,11 +67,11 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     return app;
 }
 
-pub fn deinit(self: *App) void {
-    if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
-        return;
-    }
+pub fn shutdown(self: *const App) bool {
+    return self.network.shutdown.load(.acquire);
+}
 
+pub fn deinit(self: *App) void {
     const allocator = self.allocator;
     if (self.app_dir_path) |app_dir_path| {
         allocator.free(app_dir_path);

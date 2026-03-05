@@ -18,6 +18,7 @@
 
 const std = @import("std");
 pub const App = @import("App.zig");
+pub const Network = @import("network/Runtime.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const URL = @import("browser/URL.zig");
@@ -34,7 +35,7 @@ pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
-const HttpClient = @import("browser/HttpClient.zig");
+pub const HttpClient = @import("browser/HttpClient.zig");
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {

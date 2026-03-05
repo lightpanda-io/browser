@@ -31,6 +31,7 @@ pub const RunMode = enum {
     mcp,
 };
 
+pub const MAX_LISTENERS = 16;
 pub const CDP_MAX_HTTP_REQUEST_SIZE = 4096;
 
 // max message size
@@ -150,6 +151,13 @@ pub fn userAgentSuffix(self: *const Config) ?[]const u8 {
     return switch (self.mode) {
         inline .serve, .fetch, .mcp => |opts| opts.common.user_agent_suffix,
         .help, .version => null,
+    };
+}
+
+pub fn cdpTimeout(self: *const Config) usize {
+    return switch (self.mode) {
+        .serve => |opts| if (opts.timeout > 604_800) 604_800_000 else @as(usize, opts.timeout) * 1000,
+        else => unreachable,
     };
 }
 

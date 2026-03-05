@@ -460,7 +460,7 @@ const log = @import("log.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const Server = @import("Server.zig");
-var test_cdp_server: ?Server = null;
+var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -509,13 +509,11 @@ test "tests:beforeAll" {
 }
 
 test "tests:afterAll" {
-    if (test_cdp_server) |*server| {
-        server.stop();
-    }
+    test_app.network.stop();
     if (test_cdp_server_thread) |thread| {
         thread.join();
     }
-    if (test_cdp_server) |*server| {
+    if (test_cdp_server) |server| {
         server.deinit();
     }
 
@@ -540,14 +538,14 @@ test "tests:afterAll" {
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(test_app, address);
 
-    wg.finish();
-
-    test_cdp_server.?.run(address, 5) catch |err| {
+    test_cdp_server = Server.init(test_app, address) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+    wg.finish();
+
+    test_app.network.run();
 }
 
 fn testHTTPHandler(req: *std.http.Server.Request) !void {
