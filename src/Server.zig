@@ -275,12 +275,10 @@ pub const Client = struct {
     fn httpLoop(self: *Client, http: *HttpClient) !void {
         lp.assert(self.mode == .http, "Client.httpLoop invalid mode", .{});
 
+        // Pre-CDP phase: wait for the WS handshake. No HTTP transfers
+        // are active yet, so we only need to poll the WS socket.
         while (true) {
-            const status = http.tick(self.ws.timeout_ms) catch |err| {
-                log.err(.app, "http tick", .{ .err = err });
-                return;
-            };
-            if (status != .cdp_socket) {
+            if (!self.pollWsSocket(self.ws.timeout_ms)) {
                 log.info(.app, "CDP timeout", .{});
                 return;
             }
@@ -308,14 +306,15 @@ pub const Client = struct {
                     ms_remaining = self.ws.timeout_ms;
                 },
                 .no_page => {
-                    const status = http.tick(ms_remaining) catch |err| {
-                        log.err(.app, "http tick", .{ .err = err });
-                        return;
-                    };
-                    if (status != .cdp_socket) {
+                    // Poll WS socket, then process any HTTP completions.
+                    if (!self.pollWsSocket(ms_remaining)) {
                         log.info(.app, "CDP timeout", .{});
                         return;
                     }
+                    _ = http.tick(0) catch |err| {
+                        log.err(.app, "http tick", .{ .err = err });
+                        return;
+                    };
                     if (self.readSocket() == false) {
                         return;
                     }
@@ -332,6 +331,17 @@ pub const Client = struct {
                 },
             }
         }
+    }
+
+    /// Returns true if the WS socket has data ready.
+    fn pollWsSocket(self: *Client, timeout_ms: u32) bool {
+        var fds = [1]posix.pollfd{.{
+            .fd = self.ws.socket,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        }};
+        _ = posix.poll(&fds, @intCast(timeout_ms)) catch return false;
+        return fds[0].revents & posix.POLL.IN != 0;
     }
 
     fn blockingReadStart(ctx: *anyopaque) bool {

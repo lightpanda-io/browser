@@ -395,6 +395,7 @@ pub fn appliesTo(self: *const Cookie, url: *const PreparedUri, same_site: bool, 
 pub const Jar = struct {
     allocator: Allocator,
     cookies: std.ArrayList(Cookie),
+    mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: Allocator) Jar {
         return .{
@@ -472,6 +473,8 @@ pub const Jar = struct {
         origin_url: ?[:0]const u8 = null,
     };
     pub fn forRequest(self: *Jar, target_url: [:0]const u8, writer: anytype, opts: LookupOpts) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const target = PreparedUri{
             .host = URL.getHostname(target_url),
             .path = URL.getPathname(target_url),
@@ -506,6 +509,8 @@ pub const Jar = struct {
             return;
         };
 
+        self.mutex.lock();
+        defer self.mutex.unlock();
         const now = std.time.timestamp();
         try self.add(c, now);
     }
