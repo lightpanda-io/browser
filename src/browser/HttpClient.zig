@@ -17,19 +17,19 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
-
-const log = @import("../log.zig");
 const builtin = @import("builtin");
+const posix = std.posix;
 
-const Net = @import("../Net.zig");
+const lp = @import("lightpanda");
+const log = @import("../log.zig");
+const Net = @import("../network/http.zig");
+const Network = @import("../network/Runtime.zig");
 const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
-const Robots = @import("../browser/Robots.zig");
+const Robots = @import("../network/Robots.zig");
 const RobotStore = Robots.RobotStore;
-const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -65,20 +65,21 @@ active: usize,
 // 'networkAlmostIdle' Page.lifecycleEvent in CDP).
 intercepted: usize,
 
-// Our easy handles, managed by a curl multi.
-handles: Net.Handles,
+worker_id: Network.WorkerId,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
 
-// When handles has no more available easys, requests get queued.
+// When no connections are available, requests get queued.
 queue: TransferQueue,
+
+// Transfers that have been submitted to Runtime (in-flight).
+active_transfers: TransferQueue = .{},
 
 // The main app allocator
 allocator: Allocator,
 
-// Reference to the App-owned Robot Store.
-robot_store: *RobotStore,
+network: *Network,
 // Queue of requests that depend on a robots.txt.
 // Allows us to fetch the robots.txt just once.
 pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
@@ -96,8 +97,6 @@ http_proxy: ?[:0]const u8 = null,
 // We can't use http_proxy because we want also to track proxy configured via
 // CDP.
 use_proxy: bool,
-
-config: *const Config,
 
 cdp_client: ?CDPClient = null,
 
@@ -121,33 +120,26 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, config: *const Config) !*Client {
+pub fn init(allocator: Allocator, network: *Network) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
     const client = try allocator.create(Client);
     errdefer allocator.destroy(client);
 
-    var handles = try Net.Handles.init(allocator, ca_blob, config);
-    errdefer handles.deinit(allocator);
+    const http_proxy = network.config.httpProxy();
 
-    // Set transfer callbacks on each connection.
-    for (handles.connections) |*conn| {
-        try conn.setCallbacks(Transfer.headerCallback, Transfer.dataCallback);
-    }
-
-    const http_proxy = config.httpProxy();
+    const worker_id = try network.registerWorker();
 
     client.* = .{
         .queue = .{},
         .active = 0,
         .intercepted = 0,
-        .handles = handles,
         .allocator = allocator,
-        .robot_store = robot_store,
+        .network = network,
+        .worker_id = worker_id,
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
-        .config = config,
         .transfer_pool = transfer_pool,
     };
 
@@ -156,7 +148,7 @@ pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, 
 
 pub fn deinit(self: *Client) void {
     self.abort();
-    self.handles.deinit(self.allocator);
+    self.network.unregisterWorker(self.worker_id);
 
     self.transfer_pool.deinit();
 
@@ -170,7 +162,7 @@ pub fn deinit(self: *Client) void {
 }
 
 pub fn newHeaders(self: *const Client) !Net.Headers {
-    return Net.Headers.init(self.config.http_headers.user_agent_header);
+    return Net.Headers.init(self.network.config.http_headers.user_agent_header);
 }
 
 pub fn abort(self: *Client) void {
@@ -185,17 +177,11 @@ pub fn abortFrame(self: *Client, frame_id: u32) void {
 // but abort can avoid the frame_id check at comptime.
 fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
     {
-        var q = &self.handles.in_use;
+        var q = &self.active_transfers;
         var n = q.first;
         while (n) |node| {
             n = node.next;
-            const conn: *Net.Connection = @fieldParentPtr("node", node);
-            var transfer = Transfer.fromConnection(conn) catch |err| {
-                // Let's cleanup what we can
-                self.handles.remove(conn);
-                log.err(.http, "get private info", .{ .err = err, .source = "abort" });
-                continue;
-            };
+            const transfer: *Transfer = @fieldParentPtr("_active_node", node);
             if (comptime abort_all) {
                 transfer.kill();
             } else if (transfer.req.frame_id == frame_id) {
@@ -227,40 +213,49 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
     if (comptime abort_all) {
         self.queue = .{};
     }
-
-    if (comptime IS_DEBUG and abort_all) {
-        std.debug.assert(self.handles.in_use.first == null);
-        std.debug.assert(self.handles.available.len() == self.handles.connections.len);
-
-        const running = self.handles.perform() catch |err| {
-            lp.assert(false, "multi perform in abort", .{ .err = err });
-        };
-        std.debug.assert(running == 0);
-    }
 }
 
 pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
-    while (true) {
-        if (self.handles.hasAvailable() == false) {
-            break;
-        }
-        const queue_node = self.queue.popFirst() orelse break;
+    // Submit queued transfers that are waiting for a connection.
+    while (self.queue.popFirst()) |queue_node| {
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
-
-        // we know this exists, because we checked hasAvailable() above
-        const conn = self.handles.get().?;
+        const conn = self.network.getConnection() orelse {
+            self.queue.prepend(&transfer._node);
+            break;
+        };
         try self.makeRequest(conn, transfer);
     }
-    return self.perform(@intCast(timeout_ms));
+
+    // Wait for completions from the shared Runtime event loop.
+    const slot = self.getWorkerSlot() orelse return .normal;
+    slot.semaphore.timedWait(@as(u64, timeout_ms) * std.time.ns_per_ms) catch {};
+
+    _ = try self.processMessages();
+
+    // Non-blocking CDP socket check.
+    // TODO: when CDP moves to the shared event loop, remove this.
+    if (self.cdp_client) |cdp_client| {
+        var fds = [1]posix.pollfd{.{
+            .fd = cdp_client.socket,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        }};
+        _ = posix.poll(&fds, 0) catch {};
+        if (fds[0].revents & posix.POLL.IN != 0) {
+            return .cdp_socket;
+        }
+    }
+
+    return .normal;
 }
 
 pub fn request(self: *Client, req: Request) !void {
-    if (self.config.obeyRobots()) {
+    if (self.network.config.obeyRobots()) {
         const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
         errdefer self.allocator.free(robots_url);
 
         // If we have this robots cached, we can take a fast path.
-        if (self.robot_store.get(robots_url)) |robot_entry| {
+        if (self.network.robot_store.get(robots_url)) |robot_entry| {
             defer self.allocator.free(robots_url);
 
             switch (robot_entry) {
@@ -401,18 +396,18 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
     switch (ctx.status) {
         200 => {
             if (ctx.buffer.items.len > 0) {
-                const robots: ?Robots = ctx.client.robot_store.robotsFromBytes(
-                    ctx.client.config.http_headers.user_agent,
+                const robots: ?Robots = ctx.client.network.robot_store.robotsFromBytes(
+                    ctx.client.network.config.http_headers.user_agent,
                     ctx.buffer.items,
                 ) catch blk: {
                     log.warn(.browser, "failed to parse robots", .{ .robots_url = ctx.robots_url });
                     // If we fail to parse, we just insert it as absent and ignore.
-                    try ctx.client.robot_store.putAbsent(ctx.robots_url);
+                    try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
                     break :blk null;
                 };
 
                 if (robots) |r| {
-                    try ctx.client.robot_store.put(ctx.robots_url, r);
+                    try ctx.client.network.robot_store.put(ctx.robots_url, r);
                     const path = URL.getPathname(ctx.req.url);
                     allowed = r.isAllowed(path);
                 }
@@ -421,12 +416,12 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
         404 => {
             log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
             // If we get a 404, we just insert it as absent.
-            try ctx.client.robot_store.putAbsent(ctx.robots_url);
+            try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
         },
         else => {
             log.debug(.http, "unexpected status on robots", .{ .url = ctx.robots_url, .status = ctx.status });
             // If we get an unexpected status, we just insert as absent.
-            try ctx.client.robot_store.putAbsent(ctx.robots_url);
+            try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
         },
     }
 
@@ -530,12 +525,8 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 // cases, the interecptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
-    // then we _have_ to queue this.
-    if (self.handles.performing == false) {
-        if (self.handles.get()) |conn| {
-            return self.makeRequest(conn, transfer);
-        }
+    if (self.network.getConnection()) |conn| {
+        return self.makeRequest(conn, transfer);
     }
 
     self.queue.append(&transfer._node);
@@ -585,6 +576,12 @@ pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers:
     transfer._intercept_state = .fulfilled;
 }
 
+fn getWorkerSlot(self: *Client) ?*Network.WorkerSlot {
+    self.network.mutex.lock();
+    defer self.network.mutex.unlock();
+    return self.network.workers.getPtr(self.worker_id);
+}
+
 pub fn nextReqId(self: *Client) u32 {
     return self.next_request_id +% 1;
 }
@@ -609,7 +606,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .req = req,
         .ctx = req.ctx,
         .client = self,
-        .max_response_size = self.config.httpMaxResponseSize(),
+        .max_response_size = self.network.config.httpMaxResponseSize(),
     };
     return transfer;
 }
@@ -648,7 +645,7 @@ fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: 
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
 
-    for (self.handles.connections) |*conn| {
+    for (self.network.connections) |*conn| {
         try conn.setProxy(proxy.ptr);
     }
     self.use_proxy = true;
@@ -660,7 +657,7 @@ pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
     const proxy = if (self.http_proxy) |p| p.ptr else null;
-    for (self.handles.connections) |*conn| {
+    for (self.network.connections) |*conn| {
         try conn.setProxy(proxy);
     }
     self.use_proxy = proxy != null;
@@ -671,7 +668,7 @@ pub fn enableTlsVerify(self: *Client) !void {
     // Remove inflight connections check on enable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
-    for (self.handles.connections) |*conn| {
+    for (self.network.connections) |*conn| {
         try conn.setTlsVerify(true, self.use_proxy);
     }
 }
@@ -681,7 +678,7 @@ pub fn disableTlsVerify(self: *Client) !void {
     // Remove inflight connections check on disable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
-    for (self.handles.connections) |*conn| {
+    for (self.network.connections) |*conn| {
         try conn.setTlsVerify(false, self.use_proxy);
     }
 }
@@ -694,9 +691,10 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         errdefer {
             transfer._conn = null;
             transfer.deinit();
-            self.handles.isAvailable(conn);
+            self.network.releaseConnection(conn);
         }
 
+        try conn.setCallbacks(Transfer.headerCallback, Transfer.dataCallback);
         try conn.setURL(req.url);
         try conn.setMethod(req.method);
         if (req.body) |b| {
@@ -706,7 +704,7 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         }
 
         var header_list = req.headers;
-        try conn.secretHeaders(&header_list, &self.config.http_headers); // Add headers that must be hidden from intercepts
+        try conn.secretHeaders(&header_list, &self.network.config.http_headers); // Add headers that must be hidden from intercepts
         try conn.setHeaders(&header_list);
 
         // Add cookies.
@@ -722,27 +720,24 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         }
     }
 
-    // As soon as this is called, our "perform" loop is responsible for
-    // cleaning things up. That's why the above code is in a block. If anything
-    // fails BEFORE `curl_multi_add_handle` succeeds, the we still need to do
-    // cleanup. But if things fail after `curl_multi_add_handle`, we expect
-    // perfom to pickup the failure and cleanup.
-    self.handles.add(conn) catch |err| {
-        transfer._conn = null;
-        transfer.deinit();
-        self.handles.isAvailable(conn);
-        return err;
-    };
-
     if (req.start_callback) |cb| {
         cb(transfer) catch |err| {
+            transfer._conn = null;
+            self.network.releaseConnection(conn);
             transfer.deinit();
             return err;
         };
     }
 
     self.active += 1;
-    _ = try self.perform(0);
+    self.active_transfers.append(&transfer._active_node);
+
+    // Submit to shared Runtime event loop on main thread.
+    transfer._request = .{
+        .worker_id = self.worker_id,
+        .conn = conn,
+    };
+    self.network.submit(&transfer._request.node);
 }
 
 pub const PerformStatus = enum {
@@ -750,38 +745,23 @@ pub const PerformStatus = enum {
     normal,
 };
 
-fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
-    const running = try self.handles.perform();
-
-    // We're potentially going to block for a while until we get data. Process
-    // whatever messages we have waiting ahead of time.
-    if (try self.processMessages()) {
-        return .normal;
-    }
-
-    var status = PerformStatus.normal;
-    if (self.cdp_client) |cdp_client| {
-        var wait_fds = [_]Net.WaitFd{.{
-            .fd = cdp_client.socket,
-            .events = .{ .pollin = true },
-            .revents = .{},
-        }};
-        try self.handles.poll(&wait_fds, timeout_ms);
-        if (wait_fds[0].revents.pollin or wait_fds[0].revents.pollpri or wait_fds[0].revents.pollout) {
-            status = .cdp_socket;
-        }
-    } else if (running > 0) {
-        try self.handles.poll(&.{}, timeout_ms);
-    }
-
-    _ = try self.processMessages();
-    return status;
-}
 
 fn processMessages(self: *Client) !bool {
+    const slot = self.getWorkerSlot() orelse return false;
+
+    var queue: std.DoublyLinkedList = blk: {
+        slot.completion_mutex.lock();
+        defer slot.completion_mutex.unlock();
+        const q = slot.completion_queue;
+        slot.completion_queue = .{};
+        break :blk q;
+    };
+
     var processed = false;
-    while (self.handles.readMessage()) |msg| {
-        const transfer = try Transfer.fromConnection(&msg.conn);
+    while (queue.popFirst()) |node| {
+        const req: *Network.Request = @fieldParentPtr("node", node);
+        const transfer: *Transfer = @fieldParentPtr("_request", req);
+        const conn = transfer._conn orelse continue;
 
         // In case of auth challenge
         // TODO give a way to configure the number of auth retries.
@@ -831,7 +811,7 @@ fn processMessages(self: *Client) !bool {
 
         defer transfer.deinit();
 
-        if (msg.err) |err| {
+        if (req.err) |err| {
             requestFailed(transfer, err, true);
         } else blk: {
             // make sure the transfer can't be immediately aborted from a callback
@@ -842,7 +822,7 @@ fn processMessages(self: *Client) !bool {
             if (!transfer._header_done_called) {
                 // In case of request w/o data, we need to call the header done
                 // callback now.
-                const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
+                const proceed = transfer.headerDoneCallback(conn) catch |err| {
                     log.err(.http, "header_done_callback2", .{ .err = err });
                     requestFailed(transfer, err, true);
                     continue;
@@ -852,6 +832,28 @@ fn processMessages(self: *Client) !bool {
                     break :blk;
                 }
             }
+
+            // Replay buffered body data through user callback on worker thread.
+            // dataCallback on main thread only buffered the data; now we call
+            // the actual user callback where V8 access is safe.
+            if (transfer._body_buffer.items.len > 0) {
+                transfer.req.data_callback(transfer, transfer._body_buffer.items) catch |err| {
+                    log.err(.http, "data_callback", .{ .err = err });
+                    requestFailed(transfer, err, true);
+                    continue;
+                };
+
+                transfer.req.notification.dispatch(.http_response_data, &.{
+                    .data = transfer._body_buffer.items,
+                    .transfer = transfer,
+                });
+
+                if (transfer.aborted) {
+                    requestFailed(transfer, error.Abort, true);
+                    break :blk;
+                }
+            }
+
             transfer.req.done_callback(transfer.ctx) catch |err| {
                 // transfer isn't valid at this point, don't use it.
                 log.err(.http, "done_callback", .{ .err = err });
@@ -870,8 +872,9 @@ fn processMessages(self: *Client) !bool {
 
 fn endTransfer(self: *Client, transfer: *Transfer) void {
     const conn = transfer._conn.?;
-    self.handles.remove(conn);
+    self.network.releaseConnection(conn);
     transfer._conn = null;
+    self.active_transfers.remove(&transfer._active_node);
     self.active -= 1;
 }
 
@@ -989,6 +992,13 @@ pub const Transfer = struct {
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
+    // for submitting to Runtime's submit/completion queues
+    _request: Network.Request = .{ .worker_id = 0, .conn = undefined },
+    // for tracking in client.active_transfers
+    _active_node: std.DoublyLinkedList.Node = .{},
+    // Body data buffered by dataCallback on the main thread,
+    // replayed to user callbacks on the worker thread.
+    _body_buffer: std.ArrayListUnmanaged(u8) = .empty,
     _intercept_state: InterceptState = .not_intercepted,
 
     const InterceptState = union(enum) {
@@ -1015,14 +1025,16 @@ pub const Transfer = struct {
         self._notified_fail = false;
         self.response_header = null;
         self.bytes_received = 0;
+        self._body_buffer.clearRetainingCapacity();
 
         self._tries += 1;
     }
 
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
+        self._body_buffer.deinit(self.client.allocator);
         if (self._conn) |conn| {
-            self.client.handles.remove(conn);
+            self.client.network.releaseConnection(conn);
         }
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
@@ -1091,19 +1103,15 @@ pub const Transfer = struct {
     pub fn abort(self: *Transfer, err: anyerror) void {
         requestFailed(self, err, true);
 
-        const client = self.client;
-        if (self._performing or client.handles.performing) {
-            // We're currently in a curl_multi_perform. We cannot call endTransfer
-            // as that calls curl_multi_remove_handle, and you can't do that
-            // from a curl callback. Instead, we flag this transfer and all of
-            // our callbacks will check for this flag and abort the transfer for
-            // us
+        if (self._performing) {
+            // We're currently processing this transfer in processMessages.
+            // Flag it so the caller can handle cleanup.
             self.aborted = true;
             return;
         }
 
         if (self._conn != null) {
-            client.endTransfer(self);
+            self.client.endTransfer(self);
         }
         self.deinit();
     }
@@ -1360,6 +1368,9 @@ pub const Transfer = struct {
         return buf_len;
     }
 
+    // dataCallback runs on the main thread (inside curl_multi_perform).
+    // It only buffers body data. User callbacks are deferred to
+    // processMessages on the worker thread (V8 thread affinity).
     fn dataCallback(buffer: [*]const u8, chunk_count: usize, chunk_len: usize, data: *anyopaque) usize {
         // libcurl should only ever emit 1 chunk at a time
         if (comptime IS_DEBUG) {
@@ -1376,38 +1387,23 @@ pub const Transfer = struct {
             return @intCast(chunk_len);
         }
 
-        if (!transfer._header_done_called) {
-            const proceed = transfer.headerDoneCallback(&conn) catch |err| {
-                log.err(.http, "header_done_callback", .{ .err = err, .req = transfer });
-                return Net.writefunc_error;
-            };
-            if (!proceed) {
-                // signal abort to libcurl
-                return Net.writefunc_error;
-            }
+        if (transfer.aborted) {
+            return Net.writefunc_error;
         }
 
         transfer.bytes_received += chunk_len;
         if (transfer.max_response_size) |max_size| {
             if (transfer.bytes_received > max_size) {
-                requestFailed(transfer, error.ResponseTooLarge, true);
                 return Net.writefunc_error;
             }
         }
 
-        const chunk = buffer[0..chunk_len];
-        transfer.req.data_callback(transfer, chunk) catch |err| {
-            log.err(.http, "data_callback", .{ .err = err, .req = transfer });
+        transfer._body_buffer.appendSlice(transfer.client.allocator, buffer[0..chunk_len]) catch
             return Net.writefunc_error;
-        };
 
-        transfer.req.notification.dispatch(.http_response_data, &.{
-            .data = chunk,
-            .transfer = transfer,
-        });
-
-        if (transfer.aborted) {
-            return Net.writefunc_error;
+        // Wake the worker so it can process data or abort.
+        if (transfer.client.getWorkerSlot()) |slot| {
+            slot.semaphore.post();
         }
 
         return @intCast(chunk_len);

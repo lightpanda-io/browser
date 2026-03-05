@@ -25,23 +25,20 @@ const Config = @import("Config.zig");
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
-const RobotStore = @import("browser/Robots.zig").RobotStore;
 
-pub const Http = @import("http/Http.zig");
+const Network = @import("network/Runtime.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 
 const App = @This();
 
-http: Http,
+network: Network,
 config: *const Config,
 platform: Platform,
 snapshot: Snapshot,
 telemetry: Telemetry,
 allocator: Allocator,
 arena_pool: ArenaPool,
-robots: RobotStore,
 app_dir_path: ?[]const u8,
-shutdown: bool = false,
 
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const app = try allocator.create(App);
@@ -50,10 +47,8 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.config = config;
     app.allocator = allocator;
 
-    app.robots = RobotStore.init(allocator);
-
-    app.http = try Http.init(allocator, &app.robots, config);
-    errdefer app.http.deinit();
+    app.network = try Network.init(allocator, config);
+    errdefer app.network.deinit();
 
     app.platform = try Platform.init();
     errdefer app.platform.deinit();
@@ -72,19 +67,18 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     return app;
 }
 
-pub fn deinit(self: *App) void {
-    if (@atomicRmw(bool, &self.shutdown, .Xchg, true, .monotonic)) {
-        return;
-    }
+pub fn shutdown(self: *const App) bool {
+    return self.network.shutdown.load(.acquire);
+}
 
+pub fn deinit(self: *App) void {
     const allocator = self.allocator;
     if (self.app_dir_path) |app_dir_path| {
         allocator.free(app_dir_path);
         self.app_dir_path = null;
     }
     self.telemetry.deinit();
-    self.robots.deinit();
-    self.http.deinit();
+    self.network.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
     self.arena_pool.deinit();

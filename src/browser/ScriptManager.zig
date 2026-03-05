@@ -21,7 +21,8 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const log = @import("../log.zig");
-const Http = @import("../http/Http.zig");
+const HttpClient = @import("HttpClient.zig");
+const net_http = @import("../network/http.zig");
 const String = @import("../string.zig").String;
 
 const js = @import("js/js.zig");
@@ -60,7 +61,7 @@ ready_scripts: std.DoublyLinkedList,
 
 shutdown: bool = false,
 
-client: *Http.Client,
+client: *HttpClient,
 allocator: Allocator,
 buffer_pool: BufferPool,
 
@@ -88,7 +89,7 @@ importmap: std.StringHashMapUnmanaged([:0]const u8),
 // event).
 page_notified_of_completion: bool,
 
-pub fn init(allocator: Allocator, http_client: *Http.Client, page: *Page) ScriptManager {
+pub fn init(allocator: Allocator, http_client: *HttpClient, page: *Page) ScriptManager {
     return .{
         .page = page,
         .async_scripts = .{},
@@ -141,7 +142,7 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-pub fn getHeaders(self: *ScriptManager, url: [:0]const u8) !Http.Headers {
+pub fn getHeaders(self: *ScriptManager, url: [:0]const u8) !net_http.Headers {
     var headers = try self.client.newHeaders();
     try self.page.headersForRequest(self.page.arena, url, &headers);
     return headers;
@@ -675,11 +676,11 @@ pub const Script = struct {
         self.manager.script_pool.destroy(self);
     }
 
-    fn startCallback(transfer: *Http.Transfer) !void {
+    fn startCallback(transfer: *HttpClient.Transfer) !void {
         log.debug(.http, "script fetch start", .{ .req = transfer });
     }
 
-    fn headerCallback(transfer: *Http.Transfer) !bool {
+    fn headerCallback(transfer: *HttpClient.Transfer) !bool {
         const self: *Script = @ptrCast(@alignCast(transfer.ctx));
         const header = &transfer.response_header.?;
         self.status = header.status;
@@ -746,14 +747,14 @@ pub const Script = struct {
         return true;
     }
 
-    fn dataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+    fn dataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
         const self: *Script = @ptrCast(@alignCast(transfer.ctx));
         self._dataCallback(transfer, data) catch |err| {
             log.err(.http, "SM.dataCallback", .{ .err = err, .transfer = transfer, .len = data.len });
             return err;
         };
     }
-    fn _dataCallback(self: *Script, _: *Http.Transfer, data: []const u8) !void {
+    fn _dataCallback(self: *Script, _: *HttpClient.Transfer, data: []const u8) !void {
         try self.source.remote.appendSlice(self.manager.allocator, data);
     }
 

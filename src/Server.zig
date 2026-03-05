@@ -18,8 +18,6 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
-const builtin = @import("builtin");
-
 const net = std.net;
 const posix = std.posix;
 
@@ -30,16 +28,13 @@ const log = @import("log.zig");
 const App = @import("App.zig");
 const Config = @import("Config.zig");
 const CDP = @import("cdp/cdp.zig").CDP;
-const Net = @import("Net.zig");
-const Http = @import("http/Http.zig");
-const HttpClient = @import("http/Client.zig");
+const Net = @import("network/websocket.zig");
+const HttpClient = @import("browser/HttpClient.zig");
 
 const Server = @This();
 
 app: *App,
-shutdown: std.atomic.Value(bool) = .init(false),
 allocator: Allocator,
-listener: ?posix.socket_t,
 json_version_response: []const u8,
 
 // Thread management
@@ -48,103 +43,52 @@ clients: std.ArrayList(*Client) = .{},
 client_mutex: std.Thread.Mutex = .{},
 clients_pool: std.heap.MemoryPool(Client),
 
-pub fn init(app: *App, address: net.Address) !Server {
+pub fn init(app: *App, address: net.Address) !*Server {
     const allocator = app.allocator;
     const json_version_response = try buildJSONVersionResponse(allocator, address);
     errdefer allocator.free(json_version_response);
 
-    return .{
+    const self = try allocator.create(Server);
+    errdefer allocator.destroy(self);
+
+    self.* = .{
         .app = app,
-        .listener = null,
         .allocator = allocator,
         .json_version_response = json_version_response,
-        .clients_pool = std.heap.MemoryPool(Client).init(app.allocator),
+        .clients_pool = std.heap.MemoryPool(Client).init(allocator),
     };
+
+    try self.app.network.bind(address, self, onAccept);
+    log.info(.app, "server running", .{ .address = address });
+
+    return self;
 }
 
-/// Interrupts the server so that main can complete normally and call all defer handlers.
-pub fn stop(self: *Server) void {
-    if (self.shutdown.swap(true, .release)) {
-        return;
-    }
-
-    // Shutdown all active clients
+pub fn deinit(self: *Server) void {
+    // Stop all active clients
     {
         self.client_mutex.lock();
         defer self.client_mutex.unlock();
+
         for (self.clients.items) |client| {
             client.stop();
         }
     }
 
-    // Linux and BSD/macOS handle canceling a socket blocked on accept differently.
-    // For Linux, we use std.shutdown, which will cause accept to return error.SocketNotListening (EINVAL).
-    // For BSD, shutdown will return an error. Instead we call posix.close, which will result with error.ConnectionAborted (BADF).
-    if (self.listener) |listener| switch (builtin.target.os.tag) {
-        .linux => posix.shutdown(listener, .recv) catch |err| {
-            log.warn(.app, "listener shutdown", .{ .err = err });
-        },
-        .macos, .freebsd, .netbsd, .openbsd => {
-            self.listener = null;
-            posix.close(listener);
-        },
-        else => unreachable,
-    };
-}
-
-pub fn deinit(self: *Server) void {
-    if (!self.shutdown.load(.acquire)) {
-        self.stop();
-    }
-
     self.joinThreads();
-    if (self.listener) |listener| {
-        posix.close(listener);
-        self.listener = null;
-    }
     self.clients.deinit(self.allocator);
     self.clients_pool.deinit();
     self.allocator.free(self.json_version_response);
+    self.allocator.destroy(self);
 }
 
-pub fn run(self: *Server, address: net.Address, timeout_ms: u32) !void {
-    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
-    const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
-    self.listener = listener;
-
-    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-    if (@hasDecl(posix.TCP, "NODELAY")) {
-        try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
-    }
-
-    try posix.bind(listener, &address.any, address.getOsSockLen());
-    try posix.listen(listener, self.app.config.maxPendingConnections());
-
-    log.info(.app, "server running", .{ .address = address });
-    while (!self.shutdown.load(.acquire)) {
-        const socket = posix.accept(listener, null, null, posix.SOCK.NONBLOCK) catch |err| {
-            switch (err) {
-                error.SocketNotListening, error.ConnectionAborted => {
-                    log.info(.app, "server stopped", .{});
-                    break;
-                },
-                error.WouldBlock => {
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
-                    continue;
-                },
-                else => {
-                    log.err(.app, "CDP accept", .{ .err = err });
-                    std.Thread.sleep(std.time.ns_per_s);
-                    continue;
-                },
-            }
-        };
-
-        self.spawnWorker(socket, timeout_ms) catch |err| {
-            log.err(.app, "CDP spawn", .{ .err = err });
-            posix.close(socket);
-        };
-    }
+fn onAccept(ctx: *anyopaque, socket: posix.socket_t) void {
+    const self: *Server = @ptrCast(@alignCast(ctx));
+    const timeout_ms: u32 = @intCast(self.app.config.cdpTimeout());
+    self.spawnWorker(socket, timeout_ms) catch |err| {
+        log.err(.app, "CDP spawn", .{ .err = err });
+        posix.close(socket);
+    };
 }
 
 fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void {
@@ -173,10 +117,10 @@ fn handleConnection(self: *Server, socket: posix.socket_t, timeout_ms: u32) void
     self.registerClient(client);
     defer self.unregisterClient(client);
 
-    // Check shutdown after registering to avoid missing stop() signal.
-    // If stop() already iterated over clients, this client won't receive stop()
+    // Check shutdown after registering to avoid missing the stop signal.
+    // If deinit() already iterated over clients, this client won't receive stop()
     // and would block joinThreads() indefinitely.
-    if (self.shutdown.load(.acquire)) {
+    if (self.app.shutdown()) {
         return;
     }
 
@@ -213,7 +157,7 @@ fn unregisterClient(self: *Server, client: *Client) void {
 }
 
 fn spawnWorker(self: *Server, socket: posix.socket_t, timeout_ms: u32) !void {
-    if (self.shutdown.load(.acquire)) {
+    if (self.app.shutdown()) {
         return error.ShuttingDown;
     }
 
@@ -283,7 +227,7 @@ pub const Client = struct {
             log.info(.app, "client connected", .{ .ip = client_address });
         }
 
-        const http = try app.http.createClient(allocator);
+        const http = try HttpClient.init(allocator, &app.network);
         errdefer http.deinit();
 
         return .{
@@ -331,12 +275,10 @@ pub const Client = struct {
     fn httpLoop(self: *Client, http: *HttpClient) !void {
         lp.assert(self.mode == .http, "Client.httpLoop invalid mode", .{});
 
+        // Pre-CDP phase: wait for the WS handshake. No HTTP transfers
+        // are active yet, so we only need to poll the WS socket.
         while (true) {
-            const status = http.tick(self.ws.timeout_ms) catch |err| {
-                log.err(.app, "http tick", .{ .err = err });
-                return;
-            };
-            if (status != .cdp_socket) {
+            if (!self.pollWsSocket(self.ws.timeout_ms)) {
                 log.info(.app, "CDP timeout", .{});
                 return;
             }
@@ -364,14 +306,15 @@ pub const Client = struct {
                     ms_remaining = self.ws.timeout_ms;
                 },
                 .no_page => {
-                    const status = http.tick(ms_remaining) catch |err| {
-                        log.err(.app, "http tick", .{ .err = err });
-                        return;
-                    };
-                    if (status != .cdp_socket) {
+                    // Poll WS socket, then process any HTTP completions.
+                    if (!self.pollWsSocket(ms_remaining)) {
                         log.info(.app, "CDP timeout", .{});
                         return;
                     }
+                    _ = http.tick(0) catch |err| {
+                        log.err(.app, "http tick", .{ .err = err });
+                        return;
+                    };
                     if (self.readSocket() == false) {
                         return;
                     }
@@ -388,6 +331,17 @@ pub const Client = struct {
                 },
             }
         }
+    }
+
+    /// Returns true if the WS socket has data ready.
+    fn pollWsSocket(self: *Client, timeout_ms: u32) bool {
+        var fds = [1]posix.pollfd{.{
+            .fd = self.ws.socket,
+            .events = posix.POLL.IN,
+            .revents = 0,
+        }};
+        _ = posix.poll(&fds, @intCast(timeout_ms)) catch return false;
+        return fds[0].revents & posix.POLL.IN != 0;
     }
 
     fn blockingReadStart(ctx: *anyopaque) bool {
