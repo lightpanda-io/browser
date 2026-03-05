@@ -261,7 +261,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                         std.debug.assert(http_client.intercepted == 0);
                     }
 
-                    const ms: u64 = ms_to_next_task orelse blk: {
+                    var ms: u64 = ms_to_next_task orelse blk: {
                         if (wait_ms - ms_remaining < 100) {
                             if (comptime builtin.is_test) {
                                 return .done;
@@ -288,7 +288,13 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                         // Same as above, except we have a scheduled task,
                         // it just happens to be too far into the future
                         // compared to how long we were told to wait.
-                        return .done;
+                        if (!browser.hasBackgroundTasks()) {
+                            return .done;
+                        }
+                        // _we_ have nothing to run, but v8 is working on
+                        // background tasks. We'll wait for them.
+                        browser.waitForBackgroundTasks();
+                        ms = 20;
                     }
 
                     // We have a task to run in the not-so-distant future.
