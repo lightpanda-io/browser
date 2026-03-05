@@ -24,22 +24,29 @@ mutex: std.Thread.Mutex = .{},
 aw: std.io.Writer.Allocating,
 
 pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*Self {
+    const http_client = try app.http.createClient(allocator);
+    errdefer http_client.deinit();
+
+    const notification = try lp.Notification.init(allocator);
+    errdefer notification.deinit();
+
     const self = try allocator.create(Self);
     errdefer allocator.destroy(self);
 
-    self.allocator = allocator;
-    self.app = app;
-    self.writer = writer;
-    self.aw = .init(allocator);
+    var browser = try lp.Browser.init(app, .{ .http_client = http_client });
+    errdefer browser.deinit();
 
-    self.http_client = try app.http.createClient(allocator);
-    errdefer self.http_client.deinit();
-
-    self.notification = try .init(allocator);
-    errdefer self.notification.deinit();
-
-    self.browser = try lp.Browser.init(app, .{ .http_client = self.http_client });
-    errdefer self.browser.deinit();
+    self.* = .{
+        .allocator = allocator,
+        .app = app,
+        .writer = writer,
+        .browser = browser,
+        .aw = .init(allocator),
+        .http_client = http_client,
+        .notification = notification,
+        .session = undefined,
+        .page = undefined,
+    };
 
     self.session = try self.browser.newSession(self.notification);
     self.page = try self.session.createPage();
