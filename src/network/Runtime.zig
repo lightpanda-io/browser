@@ -17,8 +17,10 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const net = std.net;
+const posix = std.posix;
 const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
 
 const lp = @import("lightpanda");
 const Config = @import("../Config.zig");
@@ -29,11 +31,23 @@ const RobotStore = @import("Robots.zig").RobotStore;
 
 const Runtime = @This();
 
+const Listener = struct {
+    socket: posix.socket_t,
+    ctx: *anyopaque,
+    onAccept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
+};
+
 allocator: Allocator,
 
 config: *const Config,
 ca_blob: ?net_http.Blob,
 robot_store: RobotStore,
+
+pollfds: [Config.MAX_LISTENERS]posix.pollfd = @splat(.{ .fd = -1, .events = 0, .revents = 0 }),
+listeners: [Config.MAX_LISTENERS]?Listener = @splat(null),
+
+shutdown: std.atomic.Value(bool) = .init(false),
+listener_count: std.atomic.Value(usize) = .init(0),
 
 fn globalInit() void {
     libcurl.curl_global_init(.{ .ssl = true }) catch |err| {
@@ -72,6 +86,99 @@ pub fn deinit(self: *Runtime) void {
     }
 
     global_deinit_once.call();
+}
+
+pub fn bind(
+    self: *Runtime,
+    address: net.Address,
+    ctx: *anyopaque,
+    onAccept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
+) !void {
+    const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
+    const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
+    errdefer posix.close(listener);
+
+    try posix.setsockopt(listener, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    if (@hasDecl(posix.TCP, "NODELAY")) {
+        try posix.setsockopt(listener, posix.IPPROTO.TCP, posix.TCP.NODELAY, &std.mem.toBytes(@as(c_int, 1)));
+    }
+
+    try posix.bind(listener, &address.any, address.getOsSockLen());
+    try posix.listen(listener, self.config.maxPendingConnections());
+
+    for (&self.listeners, &self.pollfds) |*slot, *pfd| {
+        if (slot.* == null) {
+            slot.* = .{
+                .socket = listener,
+                .ctx = ctx,
+                .onAccept = onAccept,
+            };
+            pfd.* = .{
+                .fd = listener,
+                .events = posix.POLL.IN,
+                .revents = 0,
+            };
+            _ = self.listener_count.fetchAdd(1, .release);
+            return;
+        }
+    }
+
+    return error.TooManyListeners;
+}
+
+pub fn run(self: *Runtime) void {
+    while (!self.shutdown.load(.acquire) and self.listener_count.load(.acquire) > 0) {
+        _ = posix.poll(&self.pollfds, -1) catch |err| {
+            lp.log.err(.app, "poll", .{ .err = err });
+            continue;
+        };
+
+        for (&self.listeners, &self.pollfds) |*slot, *pfd| {
+            if (pfd.revents == 0) continue;
+            pfd.revents = 0;
+            const listener = slot.* orelse continue;
+
+            const socket = posix.accept(listener.socket, null, null, posix.SOCK.NONBLOCK) catch |err| {
+                switch (err) {
+                    error.SocketNotListening, error.ConnectionAborted => {
+                        pfd.* = .{ .fd = -1, .events = 0, .revents = 0 };
+                        slot.* = null;
+                        _ = self.listener_count.fetchSub(1, .release);
+                    },
+                    error.WouldBlock => {},
+                    else => {
+                        lp.log.err(.app, "accept", .{ .err = err });
+                    },
+                }
+                continue;
+            };
+
+            listener.onAccept(listener.ctx, socket);
+        }
+    }
+}
+
+pub fn stop(self: *Runtime) void {
+    self.shutdown.store(true, .release);
+
+    // Linux and BSD/macOS handle canceling a socket blocked on accept differently.
+    // For Linux, we use posix.shutdown, which will cause accept to return error.SocketNotListening (EINVAL).
+    // For BSD, shutdown will return an error. Instead we call posix.close, which will result with error.ConnectionAborted (EBADF).
+    for (&self.listeners, &self.pollfds) |*slot, *pfd| {
+        if (slot.*) |listener| {
+            switch (builtin.target.os.tag) {
+                .linux => posix.shutdown(listener.socket, .recv) catch |err| {
+                    lp.log.warn(.app, "listener shutdown", .{ .err = err });
+                },
+                .macos, .freebsd, .netbsd, .openbsd => posix.close(listener.socket),
+                else => unreachable,
+            }
+
+            pfd.* = .{ .fd = -1, .events = 0, .revents = 0 };
+            slot.* = null;
+            _ = self.listener_count.fetchSub(1, .release);
+        }
+    }
 }
 
 pub fn newConnection(self: *Runtime) !net_http.Connection {
