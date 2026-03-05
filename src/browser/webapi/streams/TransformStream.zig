@@ -85,6 +85,14 @@ pub fn initWithZigTransform(zig_transform: ZigTransformFn, page: *Page) !*Transf
     return self;
 }
 
+pub fn acquireRef(self: *TransformStream) void {
+    self._readable.acquireRef();
+}
+
+pub fn deinit(self: *TransformStream, shutdown: bool, page: *Page) void {
+    self._readable.deinit(shutdown, page);
+}
+
 pub fn transformWrite(self: *TransformStream, chunk: js.Value, page: *Page) !void {
     if (self._controller._zig_transform_fn) |zig_fn| {
         // Zig-level transform (used by TextEncoderStream etc.)
@@ -130,6 +138,8 @@ pub const JsApi = struct {
         pub const name = "TransformStream";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(TransformStream.deinit);
     };
 
     pub const constructor = bridge.constructor(TransformStream.init, .{});
@@ -165,6 +175,14 @@ pub const TransformStreamDefaultController = struct {
         });
     }
 
+    pub fn acquireRef(self: *TransformStreamDefaultController) void {
+        self._stream.acquireRef();
+    }
+
+    pub fn deinit(self: *TransformStreamDefaultController, shutdown: bool, page: *Page) void {
+        self._stream.deinit(shutdown, page);
+    }
+
     pub fn enqueue(self: *TransformStreamDefaultController, chunk: ReadableStreamDefaultController.Chunk) !void {
         try self._stream._readable._controller.enqueue(chunk);
     }
@@ -189,6 +207,8 @@ pub const TransformStreamDefaultController = struct {
             pub const name = "TransformStreamDefaultController";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
+            pub const weak = true;
+            pub const finalizer = bridge.finalizer(TransformStreamDefaultController.deinit);
         };
 
         pub const enqueue = bridge.function(TransformStreamDefaultController.enqueueValue, .{});

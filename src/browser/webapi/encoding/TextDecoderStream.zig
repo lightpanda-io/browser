@@ -72,6 +72,14 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !TextDecoderStre
     };
 }
 
+pub fn acquireRef(self: *TextDecoderStream) void {
+    self._transform.acquireRef();
+}
+
+pub fn deinit(self: *TextDecoderStream, shutdown: bool, page: *Page) void {
+    self._transform.deinit(shutdown, page);
+}
+
 fn decodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value, ignoreBOM: bool) !void {
     // chunk should be a Uint8Array; decode it as UTF-8 string
     const typed_array = try chunk.toZig(js.TypedArray(u8));
@@ -111,6 +119,8 @@ pub const JsApi = struct {
         pub const name = "TextDecoderStream";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(TextDecoderStream.deinit);
     };
 
     pub const constructor = bridge.constructor(TextDecoderStream.init, .{});
