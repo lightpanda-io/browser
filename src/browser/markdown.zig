@@ -20,6 +20,7 @@ const std = @import("std");
 
 const Page = @import("Page.zig");
 const URL = @import("URL.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
 const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
@@ -114,26 +115,24 @@ fn isAllWhitespace(text: []const u8) bool {
     } else true;
 }
 
-fn hasBlockDescendant(node: *Node) bool {
-    var it = node.childrenIterator();
-    return while (it.next()) |child| {
-        if (child.is(Element)) |el| {
-            if (isBlock(el.getTag())) break true;
-            if (hasBlockDescendant(child)) break true;
-        }
-    } else false;
+fn hasBlockDescendant(root: *Node) bool {
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        if (isBlock(el.getTag())) return true;
+    }
+    return false;
 }
 
-fn hasVisibleContent(node: *Node) bool {
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        if (isSignificantText(child)) return true;
-        if (child.is(Element)) |el| {
-            if (!isVisibleElement(el)) continue;
-            // Images are visible
-            if (el.getTag() == .img) return true;
-            // Recursive check
-            if (hasVisibleContent(child)) return true;
+fn hasVisibleContent(root: *Node) bool {
+    var tw = TreeWalker.FullExcludeSelf.init(root, .{});
+    while (tw.next()) |node| {
+        if (isSignificantText(node)) return true;
+        if (node.is(Element)) |el| {
+            if (!isVisibleElement(el)) {
+                tw.skipChildren();
+            } else if (el.getTag() == .img) {
+                return true;
+            }
         }
     }
     return false;
