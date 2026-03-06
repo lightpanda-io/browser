@@ -560,12 +560,30 @@ pub const AXRole = enum(u8) {
     none, article, banner, blockquote, button, caption, cell, checkbox, code,
     columnheader, combobox, complementary, contentinfo, definition, deletion,
     dialog, document, emphasis, figure, form, group, heading, image, insertion,
-    link, list, listbox, listitem, main, marquee, meter, navigation, option,
+    link, list, listbox, listitem, main, marquee, menuitem, meter, navigation, option,
     paragraph, presentation, progressbar, radio, region, row, rowgroup,
     rowheader, searchbox, separator, slider, spinbutton, status, strong,
-    subscript, superscript, table, term, textbox, time, RootWebArea, LineBreak,
+    subscript, superscript, @"switch", table, term, textbox, time, RootWebArea, LineBreak,
     StaticText,
     // zig fmt: on
+
+    pub fn isInteractive(self: AXRole) bool {
+        return switch (self) {
+            .button,
+            .link,
+            .checkbox,
+            .radio,
+            .textbox,
+            .combobox,
+            .searchbox,
+            .slider,
+            .spinbutton,
+            .@"switch",
+            .menuitem,
+            => true,
+            else => false,
+        };
+    }
 
     fn fromNode(node: *DOMNode) !AXRole {
         return switch (node._type) {

@@ -31,20 +31,6 @@ const CDPNode = @import("cdp/Node.zig");
 
 const Self = @This();
 
-const interactive_roles = std.StaticStringMap(void).initComptime(.{
-    .{ "button", {} },
-    .{ "link", {} },
-    .{ "checkbox", {} },
-    .{ "radio", {} },
-    .{ "textbox", {} },
-    .{ "combobox", {} },
-    .{ "searchbox", {} },
-    .{ "slider", {} },
-    .{ "spinbutton", {} },
-    .{ "switch", {} },
-    .{ "menuitem", {} },
-});
-
 dom_node: *Node,
 registry: *CDPNode.Registry,
 page: *Page,
@@ -131,7 +117,8 @@ fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const 
     if (node.is(Element)) |el| {
         node_name = el.getTagNameLower();
 
-        if (interactive_roles.has(role)) {
+        const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
+        if (ax_role.isInteractive()) {
             is_interactive = true;
         }
 
