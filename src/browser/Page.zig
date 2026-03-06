@@ -477,12 +477,10 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
 
-        {
-            const parse_arena = try self.getArena(.{ .debug = "about:blank parse" });
-            defer self.releaseArena(parse_arena);
-            var parser = Parser.init(parse_arena, self.document.asNode(), self);
-            parser.parse("<html><head></head><body></body></html>");
-        }
+        self.document.injectBlank(self) catch |err| {
+            log.err(.browser, "inject blank", .{ .err = err });
+            return error.InjectBlankFailed;
+        };
         self.documentIsComplete();
 
         session.notification.dispatch(.page_navigate, &.{
@@ -1035,9 +1033,9 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
         return;
     }
 
-    const src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse return;
+    var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
     if (src.len == 0) {
-        return;
+        src = "about:blank";
     }
 
     if (iframe._window != null) {
@@ -2920,11 +2918,6 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
             return err;
         };
     } else if (node.is(IFrame)) |iframe| {
-        if ((comptime from_parser == false) and iframe._src.len == 0) {
-            // iframe was added via JavaScript, but without a src
-            return;
-        }
-
         self.iframeAddedCallback(iframe) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
             return err;

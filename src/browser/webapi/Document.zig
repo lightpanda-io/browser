@@ -40,6 +40,8 @@ const Selection = @import("Selection.zig");
 pub const XMLDocument = @import("XMLDocument.zig");
 pub const HTMLDocument = @import("HTMLDocument.zig");
 
+const IS_DEBUG = @import("builtin").mode == .Debug;
+
 const Document = @This();
 
 _type: Type,
@@ -935,6 +937,32 @@ fn validateElementName(name: []const u8) !void {
             return error.InvalidCharacterError;
         }
     }
+}
+
+// When a page or frame's URL is about:blank, or as soon as a frame is
+// programmatically created, it has this default "blank" content
+pub fn injectBlank(self: *Document, page: *Page) error{InjectBlankError}!void {
+    self._injectBlank(page) catch |err| {
+        // we wrap _injectBlank like this so that injectBlank can only return an
+        // InjectBlankError. injectBlank is used in when nodes are inserted
+        // as since it inserts node itself, Zig can't infer the error set.
+        log.err(.browser, "inject blank", .{ .err = err });
+        return error.InjectBlankError;
+    };
+}
+
+fn _injectBlank(self: *Document, page: *Page) !void {
+    if (comptime IS_DEBUG) {
+        // should only be called on an empty document
+        std.debug.assert(self.asNode()._children == null);
+    }
+
+    const html = try page.createElementNS(.html, "html", null);
+    const head = try page.createElementNS(.html, "head", null);
+    const body = try page.createElementNS(.html, "body", null);
+    try page.appendNode(html, head, .{});
+    try page.appendNode(html, body, .{});
+    try page.appendNode(self.asNode(), html, .{});
 }
 
 const ReadyState = enum {
