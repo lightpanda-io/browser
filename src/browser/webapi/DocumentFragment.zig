@@ -195,8 +195,9 @@ pub fn cloneFragment(self: *DocumentFragment, deep: bool, page: *Page) !*Node {
 
         var child_it = node.childrenIterator();
         while (child_it.next()) |child| {
-            const cloned_child = try child.cloneNode(true, page);
-            try page.appendNode(fragment_node, cloned_child, .{ .child_already_connected = self_is_connected });
+            if (try child.cloneNodeForAppending(true, page)) |cloned_child| {
+                try page.appendNode(fragment_node, cloned_child, .{ .child_already_connected = self_is_connected });
+            }
         }
     }
 

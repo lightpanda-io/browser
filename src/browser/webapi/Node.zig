@@ -751,6 +751,29 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) CloneError!*Node {
     }
 }
 
+/// Clone a node for the purpose of appending to a parent.
+/// Returns null if the cloned node was already attached somewhere by a custom element
+/// constructor, indicating that the constructor's decision should be respected.
+///
+/// This helper is used when iterating over children to clone them. The typical pattern is:
+///   while (child_it.next()) |child| {
+///       if (try child.cloneNodeForAppending(true, page)) |cloned| {
+///           try page.appendNode(parent, cloned, opts);
+///       }
+///   }
+///
+/// The only case where a cloned node would already have a parent is when a custom element
+/// constructor (which runs during cloning per the HTML spec) explicitly attaches the element
+/// somewhere. In that case, we respect the constructor's decision and return null to signal
+/// that the cloned node should not be appended to our intended parent.
+pub fn cloneNodeForAppending(self: *Node, deep: bool, page: *Page) CloneError!?*Node {
+    const cloned = try self.cloneNode(deep, page);
+    if (cloned._parent != null) {
+        return null;
+    }
+    return cloned;
+}
+
 pub fn compareDocumentPosition(self: *Node, other: *Node) u16 {
     const DISCONNECTED: u16 = 0x01;
     const PRECEDING: u16 = 0x02;
