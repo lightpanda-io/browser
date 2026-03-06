@@ -55,15 +55,17 @@ pub const CachedData = union(enum) {
     bytecode: []const u8,
 };
 
-pub const CachedResponse = struct {
+pub const CachedMetadata = struct {
     status: u16,
     headers: std.StringHashMap([]const u8),
-
-    // Data that we have cached.
-    data: CachedData,
 
     // RFC 9111 Metadata
     stored_at: i64,
     age_at_store: u64,
     max_age: u64,
+};
+
+pub const CachedResponse = struct {
+    metadata: CachedMetadata,
+    data: CachedData,
 };
