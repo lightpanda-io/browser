@@ -3120,7 +3120,11 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
-    const element = self.window._document._active_element orelse return;
+    const element = self.window._document._active_element orelse {
+        keyboard_event.deinit(false, self);
+        return;
+    };
+
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{
             .url = self.url,
