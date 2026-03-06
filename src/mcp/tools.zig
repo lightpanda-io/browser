@@ -61,6 +61,18 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "semantic_tree",
+        .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." }
+            \\  }
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -79,18 +91,26 @@ const EvaluateParams = struct {
 
 const ToolStreamingText = struct {
     server: *Server,
-    action: enum { markdown, links },
+    action: enum { markdown, links, semantic_tree },
+    arena: std.mem.Allocator,
 
     pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
-        try jw.beginWriteRaw();
-        try jw.writer.writeByte('"');
-        var escaped = protocol.JsonEscapingWriter.init(jw.writer);
-        const w = &escaped.writer;
         switch (self.action) {
-            .markdown => lp.markdown.dump(self.server.page.document.asNode(), .{}, w, self.server.page) catch |err| {
-                log.err(.mcp, "markdown dump failed", .{ .err = err });
+            .markdown => {
+                try jw.beginWriteRaw();
+                try jw.writer.writeByte('"');
+                var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+                lp.markdown.dump(self.server.page.document.asNode(), .{}, &escaped.writer, self.server.page) catch |err| {
+                    log.err(.mcp, "markdown dump failed", .{ .err = err });
+                };
+                try jw.writer.writeByte('"');
+                jw.endWriteRaw();
             },
             .links => {
+                try jw.beginWriteRaw();
+                try jw.writer.writeByte('"');
+                var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+                const w = &escaped.writer;
                 if (Selector.querySelectorAll(self.server.page.document.asNode(), "a[href]", self.server.page)) |list| {
                     defer list.deinit(self.server.page);
                     var first = true;
@@ -111,10 +131,30 @@ const ToolStreamingText = struct {
                 } else |err| {
                     log.err(.mcp, "query links failed", .{ .err = err });
                 }
+                try jw.writer.writeByte('"');
+                jw.endWriteRaw();
+            },
+            .semantic_tree => {
+                // MCP expects a string for "text" content, but our SemanticTree is a complex object.
+                // We'll serialize it as a string to fit the MCP text protocol requirements.
+                try jw.beginWriteRaw();
+                try jw.writer.writeByte('"');
+                var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+
+                const st = lp.SemanticTree{
+                    .dom_node = self.server.page.document.asNode(),
+                    .registry = &self.server.node_registry,
+                    .page = self.server.page,
+                    .arena = self.arena,
+                };
+                std.json.Stringify.value(st, .{ .whitespace = .minified }, &escaped.writer) catch |err| {
+                    log.err(.mcp, "semantic tree dump failed", .{ .err = err });
+                };
+
+                try jw.writer.writeByte('"');
+                jw.endWriteRaw();
             },
         }
-        try jw.writer.writeByte('"');
-        jw.endWriteRaw();
     }
 };
 
@@ -124,6 +164,7 @@ const ToolAction = enum {
     markdown,
     links,
     evaluate,
+    semantic_tree,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -132,6 +173,7 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "markdown", .markdown },
     .{ "links", .links },
     .{ "evaluate", .evaluate },
+    .{ "semantic_tree", .semantic_tree },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -157,6 +199,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .markdown => try handleMarkdown(server, arena, req.id.?, call_params.arguments),
         .links => try handleLinks(server, arena, req.id.?, call_params.arguments),
         .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
+        .semantic_tree => try handleSemanticTree(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -181,7 +224,7 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     }
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .server = server, .action = .markdown },
+        .text = .{ .server = server, .action = .markdown, .arena = arena },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
@@ -199,7 +242,25 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
     }
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .server = server, .action = .links },
+        .text = .{ .server = server, .action = .links, .arena = arena },
+    }};
+    try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
+}
+
+fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const TreeParams = struct {
+        url: ?[:0]const u8 = null,
+    };
+    if (arguments) |args_raw| {
+        if (std.json.parseFromValueLeaky(TreeParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
+            if (args.url) |u| {
+                try performGoto(server, u, id);
+            }
+        } else |_| {}
+    }
+
+    const content = [_]protocol.TextContent(ToolStreamingText){.{
+        .text = .{ .server = server, .action = .semantic_tree, .arena = arena },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }

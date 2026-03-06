@@ -19,26 +19,37 @@
 const std = @import("std");
 
 const lp = @import("lightpanda");
+const log = @import("log.zig");
 const Page = lp.Page;
 
-const CData = @import("../browser/webapi/CData.zig");
-const Element = @import("../browser/webapi/Element.zig");
-const Node = @import("../browser/webapi/Node.zig");
-const AXNode = @import("AXNode.zig");
-const CDPNode = @import("Node.zig");
+const CData = @import("browser/webapi/CData.zig");
+const Element = @import("browser/webapi/Element.zig");
+const Node = @import("browser/webapi/Node.zig");
+const AXNode = @import("cdp/AXNode.zig");
+const CDPNode = @import("cdp/Node.zig");
 
-pub fn dump(root: *Node, registry: *CDPNode.Registry, jw: *std.json.Stringify, page: *Page, arena: std.mem.Allocator) !void {
-    try dumpNode(root, registry, jw, page, "", arena);
+const SemanticTree = @This();
+
+dom_node: *Node,
+registry: *CDPNode.Registry,
+page: *Page,
+arena: std.mem.Allocator,
+
+pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
+    self.dumpNode(self.dom_node, jw, "") catch |err| {
+        log.err(.cdp, "semantic tree dump failed", .{ .err = err });
+        return error.WriteFailed;
+    };
 }
 
-fn isAllWhitespace(text: []const u8) bool {
+fn isAllWhitespace(_: @This(), text: []const u8) bool {
     for (text) |c| {
         if (!std.ascii.isWhitespace(c)) return false;
     }
     return true;
 }
 
-fn getXPathSegment(node: *Node, arena: std.mem.Allocator) ![]const u8 {
+fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
     if (node.is(Element)) |el| {
         const tag = el.getTagNameLower();
         var index: usize = 1;
@@ -54,7 +65,7 @@ fn getXPathSegment(node: *Node, arena: std.mem.Allocator) ![]const u8 {
                 }
             }
         }
-        return std.fmt.allocPrint(arena, "/{s}[{d}]", .{ tag, index });
+        return std.fmt.allocPrint(self.arena, "/{s}[{d}]", .{ tag, index });
     } else if (node.is(CData.Text) != null) {
         var index: usize = 1;
         if (node._parent) |parent| {
@@ -66,12 +77,12 @@ fn getXPathSegment(node: *Node, arena: std.mem.Allocator) ![]const u8 {
                 }
             }
         }
-        return std.fmt.allocPrint(arena, "/text()[{d}]", .{index});
+        return std.fmt.allocPrint(self.arena, "/text()[{d}]", .{index});
     }
     return "";
 }
 
-fn dumpNode(node: *Node, registry: *CDPNode.Registry, jw: *std.json.Stringify, page: *Page, parent_xpath: []const u8, arena: std.mem.Allocator) !void {
+fn dumpNode(self: @This(), node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTagNameLower();
@@ -102,14 +113,14 @@ fn dumpNode(node: *Node, registry: *CDPNode.Registry, jw: *std.json.Stringify, p
     } else if (node.is(CData.Text) != null) {
         const text_node = node.is(CData.Text).?;
         const text = text_node.getWholeText();
-        if (isAllWhitespace(text)) {
+        if (self.isAllWhitespace(text)) {
             return;
         }
     } else if (node._type != .document and node._type != .document_fragment) {
         return;
     }
 
-    const cdp_node = try registry.register(node);
+    const cdp_node = try self.registry.register(node);
     const axn = AXNode.fromNode(node);
 
     const role = try axn.getRole();
@@ -136,23 +147,23 @@ fn dumpNode(node: *Node, registry: *CDPNode.Registry, jw: *std.json.Stringify, p
         }
 
         const event_target = node.asEventTarget();
-        if (page._event_manager.hasListener(event_target, "click") or
-            page._event_manager.hasListener(event_target, "mousedown") or
-            page._event_manager.hasListener(event_target, "mouseup") or
-            page._event_manager.hasListener(event_target, "keydown") or
-            page._event_manager.hasListener(event_target, "change") or
-            page._event_manager.hasListener(event_target, "input"))
+        if (self.page._event_manager.hasListener(event_target, "click") or
+            self.page._event_manager.hasListener(event_target, "mousedown") or
+            self.page._event_manager.hasListener(event_target, "mouseup") or
+            self.page._event_manager.hasListener(event_target, "keydown") or
+            self.page._event_manager.hasListener(event_target, "change") or
+            self.page._event_manager.hasListener(event_target, "input"))
         {
             is_interactive = true;
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (html_el.hasAttributeFunction(.onclick, page) or
-                html_el.hasAttributeFunction(.onmousedown, page) or
-                html_el.hasAttributeFunction(.onmouseup, page) or
-                html_el.hasAttributeFunction(.onkeydown, page) or
-                html_el.hasAttributeFunction(.onchange, page) or
-                html_el.hasAttributeFunction(.oninput, page))
+            if (html_el.hasAttributeFunction(.onclick, self.page) or
+                html_el.hasAttributeFunction(.onmousedown, self.page) or
+                html_el.hasAttributeFunction(.onmouseup, self.page) or
+                html_el.hasAttributeFunction(.onkeydown, self.page) or
+                html_el.hasAttributeFunction(.onchange, self.page) or
+                html_el.hasAttributeFunction(.oninput, self.page))
             {
                 is_interactive = true;
             }
@@ -161,8 +172,8 @@ fn dumpNode(node: *Node, registry: *CDPNode.Registry, jw: *std.json.Stringify, p
         node_name = "root";
     }
 
-    const segment = try getXPathSegment(node, arena);
-    const xpath = try std.mem.concat(arena, u8, &.{ parent_xpath, segment });
+    const segment = try self.getXPathSegment(node);
+    const xpath = try std.mem.concat(self.arena, u8, &.{ parent_xpath, segment });
 
     try jw.beginObject();
 
@@ -213,7 +224,7 @@ fn dumpNode(node: *Node, registry: *CDPNode.Registry, jw: *std.json.Stringify, p
     try jw.beginArray();
     var it = node.childrenIterator();
     while (it.next()) |child| {
-        try dumpNode(child, registry, jw, page, xpath, arena);
+        try self.dumpNode(child, jw, xpath);
     }
     try jw.endArray();
 

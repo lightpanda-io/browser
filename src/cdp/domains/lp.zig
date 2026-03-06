@@ -20,9 +20,9 @@ const std = @import("std");
 const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 const markdown = lp.markdown;
+const SemanticTree = lp.SemanticTree;
 const Node = @import("../Node.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
-const SemanticTree = @import("../semantic_tree.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
@@ -36,27 +36,13 @@ pub fn processMessage(cmd: anytype) !void {
     }
 }
 
-const SemanticTreeResult = struct {
-    dom_node: *DOMNode,
-    registry: *Node.Registry,
-    page: *lp.Page,
-    arena: std.mem.Allocator,
-
-    pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
-        SemanticTree.dump(self.dom_node, self.registry, jw, self.page, self.arena) catch |err| {
-            log.err(.cdp, "semantic tree dump failed", .{ .err = err });
-            return error.WriteFailed;
-        };
-    }
-};
-
 fn getSemanticTree(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     const dom_node = page.document.asNode();
 
     return cmd.sendResult(.{
-        .semanticTree = .{
+        .semanticTree = SemanticTree{
             .dom_node = dom_node,
             .registry = &bc.node_registry,
             .page = page,

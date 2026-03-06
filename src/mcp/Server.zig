@@ -7,6 +7,7 @@ const HttpClient = @import("../http/Client.zig");
 const testing = @import("../testing.zig");
 const protocol = @import("protocol.zig");
 const router = @import("router.zig");
+const CDPNode = @import("../cdp/Node.zig");
 
 const Self = @This();
 
@@ -18,6 +19,7 @@ notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
 page: *lp.Page,
+node_registry: CDPNode.Registry,
 
 writer: *std.io.Writer,
 mutex: std.Thread.Mutex = .{},
@@ -46,6 +48,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
         .notification = notification,
         .session = undefined,
         .page = undefined,
+        .node_registry = CDPNode.Registry.init(allocator),
     };
 
     self.session = try self.browser.newSession(self.notification);
@@ -55,6 +58,7 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
 }
 
 pub fn deinit(self: *Self) void {
+    self.node_registry.deinit();
     self.aw.deinit();
     self.browser.deinit();
     self.notification.deinit();

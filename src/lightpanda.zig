@@ -31,6 +31,7 @@ pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
+pub const SemanticTree = @import("SemanticTree.zig");
 pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
