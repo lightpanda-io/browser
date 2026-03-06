@@ -51,67 +51,39 @@ pub fn TreeWalker(comptime mode: Mode) type {
             self._current = node;
 
             if (comptime mode == .children) {
-                self._next = Node.linkToNodeOrNull(node._child_link.next);
+                self._next = node.nextSibling();
                 return node;
             }
 
-            self._next = self.computeNextInDocumentOrder(node);
+            if (node.firstChild()) |child| {
+                self._next = child;
+            } else {
+                var current: *Node = node;
+                while (current != self._root) {
+                    if (current.nextSibling()) |sibling| {
+                        self._next = sibling;
+                        return node;
+                    }
+                    current = current._parent orelse break;
+                }
+                self._next = null;
+            }
             return node;
         }
 
         pub fn skipChildren(self: *Self) void {
             if (comptime mode == .children) return;
-            const current = self._current orelse return;
-            self._next = self.computeNextSiblingOrUncle(current);
-        }
+            const current_node = self._current orelse return;
 
-        pub fn nextSibling(self: *Self) ?*Node {
-            const current = self._current orelse return null;
-            const sibling = Node.linkToNodeOrNull(current._child_link.next) orelse return null;
-
-            self._current = sibling;
-            if (comptime mode == .children) {
-                self._next = Node.linkToNodeOrNull(sibling._child_link.next);
-            } else {
-                self._next = self.computeNextInDocumentOrder(sibling);
-            }
-            return sibling;
-        }
-
-        pub fn previousSibling(self: *Self) ?*Node {
-            const current = self._current orelse return null;
-            const sibling = Node.linkToNodeOrNull(current._child_link.prev) orelse return null;
-
-            self._current = sibling;
-            if (comptime mode == .children) {
-                self._next = Node.linkToNodeOrNull(sibling._child_link.next);
-            } else {
-                self._next = self.computeNextInDocumentOrder(sibling);
-            }
-            return sibling;
-        }
-
-        fn computeNextInDocumentOrder(self: *Self, node: *Node) ?*Node {
-            if (node._children) |children| {
-                return children.first();
-            }
-            return self.computeNextSiblingOrUncle(node);
-        }
-
-        fn computeNextSiblingOrUncle(self: *Self, node: *Node) ?*Node {
-            if (node._child_link.next) |n| {
-                return Node.linkToNode(n);
-            }
-
-            var current = node._parent;
-            while (current) |parent| {
-                if (parent == self._root) return null;
-                if (parent._child_link.next) |next_sibling| {
-                    return Node.linkToNode(next_sibling);
+            var current: *Node = current_node;
+            while (current != self._root) {
+                if (current.nextSibling()) |sibling| {
+                    self._next = sibling;
+                    return;
                 }
-                current = parent._parent;
+                current = current._parent orelse break;
             }
-            return null;
+            self._next = null;
         }
 
         pub fn reset(self: *Self) void {
@@ -219,33 +191,4 @@ test "TreeWalker: skipChildren" {
     try testing.expect(tw.next() == p.asNode());
 
     try testing.expect(tw.next() == null);
-}
-
-test "TreeWalker: sibling navigation" {
-    const testing = @import("../../testing.zig");
-    const page = try testing.test_session.createPage();
-    defer testing.test_session.removePage();
-    const doc = page.window._document;
-
-    // <div>
-    //   <span>A</span>
-    //   <p>B</p>
-    // </div>
-    const div = try doc.createElement("div", null, page);
-    const span = try doc.createElement("span", null, page);
-    const p = try doc.createElement("p", null, page);
-    _ = try div.asNode().appendChild(span.asNode(), page);
-    _ = try div.asNode().appendChild(p.asNode(), page);
-
-    var tw = Full.init(div.asNode(), .{});
-
-    // Move to span
-    _ = tw.next(); // div
-    _ = tw.next(); // span
-
-    // nextSibling -> p
-    try testing.expect(tw.nextSibling() == p.asNode());
-
-    // previousSibling -> span
-    try testing.expect(tw.previousSibling() == span.asNode());
 }
