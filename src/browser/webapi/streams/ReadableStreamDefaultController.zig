@@ -27,8 +27,6 @@ const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
-/// ReadableStreamDefaultController uses ReadableStream's arena to make
-/// allocation. Indeed, the controller is owned by its ReadableStream.
 const ReadableStreamDefaultController = @This();
 
 pub const Chunk = union(enum) {
@@ -48,6 +46,7 @@ pub const Chunk = union(enum) {
 
 _page: *Page,
 _stream: *ReadableStream,
+_arena: std.mem.Allocator,
 _queue: std.ArrayList(Chunk),
 _pending_reads: std.ArrayList(js.PromiseResolver.Global),
 _high_water_mark: u32,
@@ -57,22 +56,15 @@ pub fn init(stream: *ReadableStream, high_water_mark: u32, page: *Page) !*Readab
         ._page = page,
         ._queue = .empty,
         ._stream = stream,
+        ._arena = page.arena,
         ._pending_reads = .empty,
         ._high_water_mark = high_water_mark,
     });
 }
 
-pub fn acquireRef(self: *ReadableStreamDefaultController) void {
-    self._stream.acquireRef();
-}
-
-pub fn deinit(self: *ReadableStreamDefaultController, shutdown: bool, page: *Page) void {
-    self._stream.deinit(shutdown, page);
-}
-
 pub fn addPendingRead(self: *ReadableStreamDefaultController, page: *Page) !js.Promise {
     const resolver = page.js.local.?.createPromiseResolver();
-    try self._pending_reads.append(self._stream._arena, try resolver.persist());
+    try self._pending_reads.append(self._arena, try resolver.persist());
     return resolver.promise();
 }
 
@@ -82,8 +74,8 @@ pub fn enqueue(self: *ReadableStreamDefaultController, chunk: Chunk) !void {
     }
 
     if (self._pending_reads.items.len == 0) {
-        const chunk_copy = try chunk.dupe(self._stream._arena);
-        return self._queue.append(self._stream._arena, chunk_copy);
+        const chunk_copy = try chunk.dupe(self._page.arena);
+        return self._queue.append(self._arena, chunk_copy);
     }
 
     // I know, this is ouch! But we expect to have very few (if any)
@@ -117,7 +109,7 @@ pub fn enqueueValue(self: *ReadableStreamDefaultController, value: js.Value) !vo
 
     if (self._pending_reads.items.len == 0) {
         const persisted = try value.persist();
-        try self._queue.append(self._stream._arena, .{ .js_value = persisted });
+        try self._queue.append(self._arena, .{ .js_value = persisted });
         return;
     }
 
@@ -178,7 +170,7 @@ pub fn doError(self: *ReadableStreamDefaultController, err: []const u8) !void {
     }
 
     self._stream._state = .errored;
-    self._stream._stored_error = try self._stream._arena.dupe(u8, err);
+    self._stream._stored_error = try self._page.arena.dupe(u8, err);
 
     // Reject all pending reads
     for (self._pending_reads.items) |resolver| {
@@ -218,8 +210,6 @@ pub const JsApi = struct {
         pub const name = "ReadableStreamDefaultController";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(ReadableStreamDefaultController.deinit);
     };
 
     pub const enqueue = bridge.function(ReadableStreamDefaultController.enqueueValue, .{});
