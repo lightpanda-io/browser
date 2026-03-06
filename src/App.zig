@@ -47,10 +47,17 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
-    app.config = config;
-    app.allocator = allocator;
-
-    app.robots = RobotStore.init(allocator);
+    app.* = .{
+        .config = config,
+        .allocator = allocator,
+        .robots = RobotStore.init(allocator),
+        .http = undefined,
+        .platform = undefined,
+        .snapshot = undefined,
+        .app_dir_path = undefined,
+        .telemetry = undefined,
+        .arena_pool = undefined,
+    };
 
     app.http = try Http.init(allocator, &app.robots, config);
     errdefer app.http.deinit();
