@@ -156,3 +156,129 @@ pub fn deinit(self: WebBotAuth, allocator: std.mem.Allocator) void {
     crypto.EVP_PKEY_free(self.pkey);
     allocator.free(self.directory_url);
 }
+
+test "parsePemPrivateKey: valid Ed25519 PKCS#8 PEM" {
+    const pem =
+        \\-----BEGIN PRIVATE KEY-----
+        \\MC4CAQAwBQYDK2VwBCIEIBuCRBIEFNtXcMBsyOOkFBFTJcEWTkbgSwKExhOjKFHT
+        \\-----END PRIVATE KEY-----
+        \\
+    ;
+
+    const pkey = try parsePemPrivateKey(pem);
+    defer crypto.EVP_PKEY_free(pkey);
+}
+
+test "parsePemPrivateKey: missing BEGIN marker returns error" {
+    const bad_pem = "-----END PRIVATE KEY-----\n";
+    try std.testing.expectError(error.InvalidPem, parsePemPrivateKey(bad_pem));
+}
+
+test "parsePemPrivateKey: missing END marker returns error" {
+    const bad_pem = "-----BEGIN PRIVATE KEY-----\nMC4CAQA=\n";
+    try std.testing.expectError(error.InvalidPem, parsePemPrivateKey(bad_pem));
+}
+
+test "signEd25519: signature length is always 64 bytes" {
+    const pem =
+        \\-----BEGIN PRIVATE KEY-----
+        \\MC4CAQAwBQYDK2VwBCIEIBuCRBIEFNtXcMBsyOOkFBFTJcEWTkbgSwKExhOjKFHT
+        \\-----END PRIVATE KEY-----
+        \\
+    ;
+    const pkey = try parsePemPrivateKey(pem);
+    defer crypto.EVP_PKEY_free(pkey);
+
+    var sig: [64]u8 = @splat(0);
+    try signEd25519(pkey, "hello world", &sig);
+
+    var all_zero = true;
+    for (sig) |b| if (b != 0) {
+        all_zero = false;
+        break;
+    };
+    try std.testing.expect(!all_zero);
+}
+
+test "signEd25519: same key + message produces same signature (deterministic)" {
+    const pem =
+        \\-----BEGIN PRIVATE KEY-----
+        \\MC4CAQAwBQYDK2VwBCIEIBuCRBIEFNtXcMBsyOOkFBFTJcEWTkbgSwKExhOjKFHT
+        \\-----END PRIVATE KEY-----
+        \\
+    ;
+    const pkey = try parsePemPrivateKey(pem);
+    defer crypto.EVP_PKEY_free(pkey);
+
+    var sig1: [64]u8 = undefined;
+    var sig2: [64]u8 = undefined;
+    try signEd25519(pkey, "deterministic test", &sig1);
+    try signEd25519(pkey, "deterministic test", &sig2);
+
+    try std.testing.expectEqualSlices(u8, &sig1, &sig2);
+}
+
+test "signEd25519: same key + diff message produces different signature (deterministic)" {
+    const pem =
+        \\-----BEGIN PRIVATE KEY-----
+        \\MC4CAQAwBQYDK2VwBCIEIBuCRBIEFNtXcMBsyOOkFBFTJcEWTkbgSwKExhOjKFHT
+        \\-----END PRIVATE KEY-----
+        \\
+    ;
+    const pkey = try parsePemPrivateKey(pem);
+    defer crypto.EVP_PKEY_free(pkey);
+
+    var sig1: [64]u8 = undefined;
+    var sig2: [64]u8 = undefined;
+    try signEd25519(pkey, "msg 1", &sig1);
+    try signEd25519(pkey, "msg 2", &sig2);
+
+    try std.testing.expect(!std.mem.eql(u8, &sig1, &sig2));
+}
+
+test "signRequest: adds headers with correct names" {
+    const allocator = std.testing.allocator;
+
+    const pem =
+        \\-----BEGIN PRIVATE KEY-----
+        \\MC4CAQAwBQYDK2VwBCIEIBuCRBIEFNtXcMBsyOOkFBFTJcEWTkbgSwKExhOjKFHT
+        \\-----END PRIVATE KEY-----
+        \\
+    ;
+    const pkey = try parsePemPrivateKey(pem);
+
+    const directory_url = try allocator.dupeZ(
+        u8,
+        "https://example.com/.well-known/http-message-signatures-directory",
+    );
+
+    var auth = WebBotAuth{
+        .pkey = pkey,
+        .keyid = "test-key-id",
+        .directory_url = directory_url,
+    };
+    defer auth.deinit(allocator);
+
+    var headers = try Http.Headers.init("User-Agent: Test-Agent");
+    defer headers.deinit();
+
+    try auth.signRequest(allocator, &headers, "example.com");
+
+    var it = headers.iterator();
+    var found_sig_agent = false;
+    var found_sig_input = false;
+    var found_signature = false;
+    var count: usize = 0;
+
+    while (it.next()) |h| {
+        count += 1;
+        if (std.ascii.eqlIgnoreCase(h.name, "Signature-Agent")) found_sig_agent = true;
+        if (std.ascii.eqlIgnoreCase(h.name, "Signature-Input")) found_sig_input = true;
+        if (std.ascii.eqlIgnoreCase(h.name, "Signature")) found_signature = true;
+    }
+
+    try std.testing.expect(count >= 3);
+    try std.testing.expect(found_sig_agent);
+    try std.testing.expect(found_sig_input);
+    try std.testing.expect(found_signature);
+}
