@@ -31,13 +31,27 @@ const CDPNode = @import("cdp/Node.zig");
 
 const Self = @This();
 
+const interactive_roles = std.StaticStringMap(void).initComptime(.{
+    .{ "button", {} },
+    .{ "link", {} },
+    .{ "checkbox", {} },
+    .{ "radio", {} },
+    .{ "textbox", {} },
+    .{ "combobox", {} },
+    .{ "searchbox", {} },
+    .{ "slider", {} },
+    .{ "spinbutton", {} },
+    .{ "switch", {} },
+    .{ "menuitem", {} },
+});
+
 dom_node: *Node,
 registry: *CDPNode.Registry,
 page: *Page,
 arena: std.mem.Allocator,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
-    self.dumpNode(self.dom_node, jw, "") catch |err| {
+    self.dump(self.dom_node, jw, "") catch |err| {
         log.err(.cdp, "semantic tree dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -76,20 +90,12 @@ fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
     return "";
 }
 
-fn dumpNode(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
+fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
-        const tag = el.getTagNameLower();
-        if (std.mem.eql(u8, tag, "script") or
-            std.mem.eql(u8, tag, "style") or
-            std.mem.eql(u8, tag, "meta") or
-            std.mem.eql(u8, tag, "link") or
-            std.mem.eql(u8, tag, "noscript") or
-            std.mem.eql(u8, tag, "svg") or
-            std.mem.eql(u8, tag, "head") or
-            std.mem.eql(u8, tag, "title"))
-        {
-            return;
+        switch (el.getTag()) {
+            .script, .style, .meta, .link, .noscript, .svg, .head, .title => return,
+            else => {},
         }
 
         // CSS display: none visibility check (inline style only for now)
@@ -125,18 +131,7 @@ fn dumpNode(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []co
     if (node.is(Element)) |el| {
         node_name = el.getTagNameLower();
 
-        if (std.mem.eql(u8, role, "button") or
-            std.mem.eql(u8, role, "link") or
-            std.mem.eql(u8, role, "checkbox") or
-            std.mem.eql(u8, role, "radio") or
-            std.mem.eql(u8, role, "textbox") or
-            std.mem.eql(u8, role, "combobox") or
-            std.mem.eql(u8, role, "searchbox") or
-            std.mem.eql(u8, role, "slider") or
-            std.mem.eql(u8, role, "spinbutton") or
-            std.mem.eql(u8, role, "switch") or
-            std.mem.eql(u8, role, "menuitem"))
-        {
+        if (interactive_roles.has(role)) {
             is_interactive = true;
         }
 
@@ -218,7 +213,7 @@ fn dumpNode(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []co
     try jw.beginArray();
     var it = node.childrenIterator();
     while (it.next()) |child| {
-        try self.dumpNode(child, jw, xpath);
+        try self.dump(child, jw, xpath);
     }
     try jw.endArray();
 
