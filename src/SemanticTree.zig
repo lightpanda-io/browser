@@ -20,6 +20,7 @@ const std = @import("std");
 
 const lp = @import("lightpanda");
 const log = @import("log.zig");
+const isAllWhitespace = @import("string.zig").isAllWhitespace;
 const Page = lp.Page;
 
 const CData = @import("browser/webapi/CData.zig");
@@ -28,7 +29,7 @@ const Node = @import("browser/webapi/Node.zig");
 const AXNode = @import("cdp/AXNode.zig");
 const CDPNode = @import("cdp/Node.zig");
 
-const SemanticTree = @This();
+const Self = @This();
 
 dom_node: *Node,
 registry: *CDPNode.Registry,
@@ -40,13 +41,6 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         log.err(.cdp, "semantic tree dump failed", .{ .err = err });
         return error.WriteFailed;
     };
-}
-
-fn isAllWhitespace(_: @This(), text: []const u8) bool {
-    for (text) |c| {
-        if (!std.ascii.isWhitespace(c)) return false;
-    }
-    return true;
 }
 
 fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
@@ -82,7 +76,7 @@ fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
     return "";
 }
 
-fn dumpNode(self: @This(), node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
+fn dumpNode(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTagNameLower();
@@ -113,7 +107,7 @@ fn dumpNode(self: @This(), node: *Node, jw: *std.json.Stringify, parent_xpath: [
     } else if (node.is(CData.Text) != null) {
         const text_node = node.is(CData.Text).?;
         const text = text_node.getWholeText();
-        if (self.isAllWhitespace(text)) {
+        if (isAllWhitespace(text)) {
             return;
         }
     } else if (node._type != .document and node._type != .document_fragment) {

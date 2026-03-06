@@ -24,6 +24,7 @@ const TreeWalker = @import("webapi/TreeWalker.zig");
 const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
+const isAllWhitespace = @import("../string.zig").isAllWhitespace;
 
 pub const Opts = struct {
     // Options for future customization (e.g., dialect)
@@ -107,12 +108,6 @@ fn isVisibleElement(el: *Element) bool {
 
 fn getAnchorLabel(el: *Element) ?[]const u8 {
     return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
-}
-
-fn isAllWhitespace(text: []const u8) bool {
-    return for (text) |c| {
-        if (!std.ascii.isWhitespace(c)) break false;
-    } else true;
 }
 
 fn hasBlockDescendant(root: *Node) bool {

@@ -305,6 +305,12 @@ pub const String = packed struct {
     }
 };
 
+pub fn isAllWhitespace(text: []const u8) bool {
+    return for (text) |c| {
+        if (!std.ascii.isWhitespace(c)) break false;
+    } else true;
+}
+
 // Discriminatory type that signals the bridge to use arena instead of call_arena
 // Use this for strings that need to persist beyond the current call
 // The caller can unwrap and store just the underlying .str field
