@@ -347,10 +347,16 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
     _ = opts;
     defer reset();
 
-    const root = try std.fs.path.joinZ(arena_allocator, &.{ WEB_API_TEST_ROOT, path });
-    const stat = std.fs.cwd().statFile(root) catch |err| {
-        std.debug.print("Failed to stat file: '{s}'", .{root});
-        return err;
+    const root = try std.mem.concatWithSentinel(arena_allocator, u8, &.{ WEB_API_TEST_ROOT, path }, 0);
+    const stat = std.fs.cwd().statFile(root) catch |err| switch (err) {
+        error.IsDir => {
+            try runHtmlRunnerDirectory(root);
+            return;
+        },
+        else => {
+            std.debug.print("Failed to stat file: '{s}'", .{root});
+            return err;
+        },
     };
 
     switch (stat.kind) {
@@ -361,37 +367,39 @@ pub fn htmlRunner(comptime path: []const u8, opts: HtmlRunnerOpts) !void {
             try @import("root").subtest(root);
             try runWebApiTest(root);
         },
-        .directory => {
-            var dir = try std.fs.cwd().openDir(root, .{
-                .iterate = true,
-                .no_follow = true,
-                .access_sub_paths = false,
-            });
-            defer dir.close();
-
-            var it = dir.iterateAssumeFirstIteration();
-            while (try it.next()) |entry| {
-                if (entry.kind != .file) {
-                    continue;
-                }
-
-                if (!std.mem.endsWith(u8, entry.name, ".html")) {
-                    continue;
-                }
-
-                if (@import("root").shouldRun(entry.name) == false) {
-                    continue;
-                }
-
-                const full_path = try std.fs.path.joinZ(arena_allocator, &.{ root, entry.name });
-                try @import("root").subtest(entry.name);
-                try runWebApiTest(full_path);
-            }
-        },
+        .directory => try runHtmlRunnerDirectory(root),
         else => |kind| {
             std.debug.print("Unknown file type: {s} for {s}\n", .{ @tagName(kind), root });
             return error.InvalidTestPath;
         },
+    }
+}
+
+fn runHtmlRunnerDirectory(root: [:0]const u8) !void {
+    var dir = try std.fs.cwd().openDir(root, .{
+        .iterate = true,
+        .no_follow = true,
+        .access_sub_paths = false,
+    });
+    defer dir.close();
+
+    var it = dir.iterateAssumeFirstIteration();
+    while (try it.next()) |entry| {
+        if (entry.kind != .file) {
+            continue;
+        }
+
+        if (!std.mem.endsWith(u8, entry.name, ".html")) {
+            continue;
+        }
+
+        if (@import("root").shouldRun(entry.name) == false) {
+            continue;
+        }
+
+        const full_path = try std.mem.concatWithSentinel(arena_allocator, u8, &.{ root, "/", entry.name }, 0);
+        try @import("root").subtest(entry.name);
+        try runWebApiTest(full_path);
     }
 }
 

@@ -241,6 +241,7 @@ _parent_notified: if (IS_DEBUG) bool else void = if (IS_DEBUG) false else {},
 _type: enum { root, frame }, // only used for logs right now
 _req_id: u32 = 0,
 _navigated_options: ?NavigatedOpts = null,
+_keyboard_text_suppression_depth: u32 = 0,
 
 pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
     if (comptime IS_DEBUG) {
@@ -284,12 +285,19 @@ pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
         screen = p.window._screen;
         visual_viewport = p.window._visual_viewport;
     } else {
+        const viewport = session.browser.app.display.viewport;
         screen = try factory.eventTarget(Screen{
             ._proto = undefined,
             ._orientation = null,
+            ._width = viewport.width,
+            ._height = viewport.height,
+            ._avail_height = viewport.availHeight(),
         });
         visual_viewport = try factory.eventTarget(VisualViewport{
             ._proto = undefined,
+            ._width = viewport.width,
+            ._height = viewport.height,
+            ._scale = viewport.device_pixel_ratio,
         });
     }
 
@@ -323,7 +331,15 @@ pub fn init(self: *Page, id: u32, session: *Session, parent: ?*Page) !void {
     }
 }
 
+pub const DeinitOptions = struct {
+    abort_http: bool = true,
+};
+
 pub fn deinit(self: *Page) void {
+    self.deinitWithOptions(.{});
+}
+
+pub fn deinitWithOptions(self: *Page, opts: DeinitOptions) void {
     for (self.frames.items) |frame| {
         frame.deinit();
     }
@@ -346,7 +362,9 @@ pub fn deinit(self: *Page) void {
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
-    session.browser.http_client.abort();
+    if (opts.abort_http) {
+        session.browser.http_client.abort();
+    }
     self._script_manager.deinit();
 
     if (comptime IS_DEBUG) {
@@ -363,6 +381,18 @@ pub fn deinit(self: *Page) void {
     if (self.parent == null) {
         self.arena_pool.release(self.arena);
     }
+}
+
+pub fn setSuspended(self: *Page, suspended: bool) void {
+    self.js.suspended = suspended;
+}
+
+pub fn setViewport(self: *Page, width: u32, height: u32, device_pixel_ratio: f64) !void {
+    self.window._screen.setDimensions(width, height);
+    self.window._visual_viewport.setMetrics(width, height, device_pixel_ratio);
+
+    const resize_event = try Event.initTrusted(comptime .wrap("resize"), .{}, self);
+    try self._event_manager.dispatch(self.window.asEventTarget(), resize_event);
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
@@ -722,6 +752,7 @@ pub fn documentIsComplete(self: *Page) void {
 
 fn _documentIsComplete(self: *Page) !void {
     self.document._ready_state = .complete;
+    try self.focusAutofocusElement();
 
     // Run load events before window.load.
     try self.dispatchLoad();
@@ -751,6 +782,37 @@ fn _documentIsComplete(self: *Page) !void {
     );
 
     self.notifyParentLoadComplete();
+}
+
+fn focusAutofocusElement(self: *Page) !void {
+    if (self.document._active_element != null) {
+        return;
+    }
+
+    const element = findAutofocusCandidate(self.document.asNode()) orelse return;
+    try element.focus(self);
+}
+
+fn findAutofocusCandidate(node: *Node) ?*Element {
+    var child = node.firstChild();
+    while (child) |current| : (child = current.nextSibling()) {
+        if (current.is(Element)) |element| {
+            if (isAutofocusCandidate(element)) {
+                return element;
+            }
+        }
+        if (findAutofocusCandidate(current)) |candidate| {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+fn isAutofocusCandidate(element: *Element) bool {
+    if (element.getAttributeSafe(comptime .wrap("autofocus")) == null) {
+        return false;
+    }
+    return isSequentiallyFocusableElement(element);
 }
 
 fn notifyParentLoadComplete(self: *Page) void {
@@ -915,6 +977,8 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
         },
         else => unreachable,
     }
+
+    self._session.finalizeCommittedNavigation(self);
 }
 
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
@@ -2984,22 +3048,102 @@ pub const QueuedNavigation = struct {
 };
 
 pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
+    try self.triggerMouseClickWithModifiers(x, y, .main, .{});
+}
+
+pub fn triggerMouseClickWithModifiers(self: *Page, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
+    return self.triggerMouseButtonEvent("click", x, y, button, modifiers);
+}
+
+pub const MouseButton = enum(i32) {
+    main = 0,
+    auxiliary = 1,
+    secondary = 2,
+    fourth = 3,
+    fifth = 4,
+};
+
+pub const MouseModifiers = struct {
+    alt: bool = false,
+    ctrl: bool = false,
+    meta: bool = false,
+    shift: bool = false,
+    buttons: u16 = 0,
+};
+
+pub fn triggerMouseMove(self: *Page, x: f64, y: f64, modifiers: MouseModifiers) !void {
+    return self.triggerMouseButtonEvent("mousemove", x, y, .main, modifiers);
+}
+
+pub fn triggerMouseDown(self: *Page, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
+    return self.triggerMouseButtonEvent("mousedown", x, y, button, modifiers);
+}
+
+pub fn triggerMouseUp(self: *Page, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
+    return self.triggerMouseButtonEvent("mouseup", x, y, button, modifiers);
+}
+
+pub fn triggerMouseWheel(self: *Page, x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: MouseModifiers) !void {
     const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
     if (comptime IS_DEBUG) {
-        log.debug(.page, "page mouse click", .{
+        log.debug(.page, "page mouse wheel", .{
             .url = self.url,
             .node = target,
             .x = x,
             .y = y,
+            .delta_x = delta_x,
+            .delta_y = delta_y,
             .type = self._type,
         });
     }
-    const event = (try @import("webapi/event/MouseEvent.zig").init("click", .{
+
+    const WheelEvent = @import("webapi/event/WheelEvent.zig");
+    const event = (try WheelEvent.init("wheel", .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
         .clientX = x,
         .clientY = y,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
+        .buttons = modifiers.buttons,
+        .deltaX = delta_x,
+        .deltaY = delta_y,
+        .deltaMode = WheelEvent.DOM_DELTA_PIXEL,
+    }, self)).asEvent();
+    try self._event_manager.dispatch(target.asEventTarget(), event);
+}
+
+fn triggerMouseButtonEvent(self: *Page, typ: []const u8, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+    if (comptime IS_DEBUG) {
+        log.debug(.page, "page mouse event", .{
+            .url = self.url,
+            .event_type = typ,
+            .node = target,
+            .x = x,
+            .y = y,
+            .button = @intFromEnum(button),
+            .buttons = modifiers.buttons,
+            .type = self._type,
+        });
+    }
+
+    const MouseEvent = @import("webapi/event/MouseEvent.zig");
+    const event = (try MouseEvent.init(typ, .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = x,
+        .clientY = y,
+        .button = @intFromEnum(button),
+        .buttons = modifiers.buttons,
+        .ctrlKey = modifiers.ctrl,
+        .shiftKey = modifiers.shift,
+        .altKey = modifiers.alt,
+        .metaKey = modifiers.meta,
     }, self)).asEvent();
     try self._event_manager.dispatch(target.asEventTarget(), event);
 }
@@ -3007,8 +3151,8 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
 // callback when the "click" event reaches the pages.
 pub fn handleClick(self: *Page, target: *Node) !void {
     // TODO: Also support <area> elements when implement
-    const element = target.is(Element) orelse return;
-    const html_element = element.is(Element.Html) orelse return;
+    const html_element = findClickableHtmlAncestor(target) orelse return;
+    const element = html_element.asElement();
 
     switch (html_element._type) {
         .anchor => |anchor| {
@@ -3051,30 +3195,688 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return self.submitForm(element, button.getForm(self), .{});
             }
         },
+        .label => |label| {
+            const control = label.getControl(self) orelse return;
+            const control_html = control.is(Element.Html) orelse return;
+            try control_html.click(self);
+        },
         .select, .textarea => try element.focus(self),
         else => {},
     }
 }
 
-pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
+fn findClickableHtmlAncestor(target: *Node) ?*Element.Html {
+    var current: ?*Node = target;
+    while (current) |node| : (current = node._parent) {
+        const element = node.is(Element) orelse continue;
+        const html_element = element.is(Element.Html) orelse continue;
+        switch (html_element._type) {
+            .anchor, .input, .button, .label, .select, .textarea => return html_element,
+            else => {},
+        }
+    }
+    return null;
+}
+
+pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !bool {
     const event = keyboard_event.asEvent();
-    const element = self.window._document._active_element orelse return;
+    const target = blk: {
+        if (self.window._document._active_element) |element| {
+            break :blk element.asNode();
+        }
+        if (self.window._document.getActiveElement()) |element| {
+            break :blk element.asNode();
+        }
+        break :blk self.document.asNode();
+    };
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{
             .url = self.url,
-            .node = element,
+            .node = target,
             .key = keyboard_event._key,
             .type = self._type,
         });
     }
-    try self._event_manager.dispatch(element.asEventTarget(), event);
+    try self._event_manager.dispatch(target.asEventTarget(), event);
+    return !event._prevent_default;
+}
+
+pub const KeyboardModifiers = struct {
+    alt: bool = false,
+    ctrl: bool = false,
+    meta: bool = false,
+    shift: bool = false,
+};
+
+pub fn triggerKeyboardKeyDown(self: *Page, key: []const u8, modifiers: KeyboardModifiers) !bool {
+    return self.triggerKeyboardKeyDownWithRepeat(key, modifiers, false);
+}
+
+pub fn triggerKeyboardKeyDownWithRepeat(self: *Page, key: []const u8, modifiers: KeyboardModifiers, repeat: bool) !bool {
+    const keyboard_event = try KeyboardEvent.initTrusted(comptime .wrap("keydown"), .{
+        .key = key,
+        .altKey = modifiers.alt,
+        .ctrlKey = modifiers.ctrl,
+        .metaKey = modifiers.meta,
+        .shiftKey = modifiers.shift,
+        .repeat = repeat,
+    }, self);
+    return self.triggerKeyboard(keyboard_event);
+}
+
+pub fn triggerKeyboardKeyDownNoText(self: *Page, key: []const u8, modifiers: KeyboardModifiers) !bool {
+    return self.triggerKeyboardKeyDownNoTextWithRepeat(key, modifiers, false);
+}
+
+pub fn triggerKeyboardKeyDownNoTextWithRepeat(self: *Page, key: []const u8, modifiers: KeyboardModifiers, repeat: bool) !bool {
+    self._keyboard_text_suppression_depth += 1;
+    defer self._keyboard_text_suppression_depth -= 1;
+    return self.triggerKeyboardKeyDownWithRepeat(key, modifiers, repeat);
+}
+
+pub fn triggerKeyboardKeyUp(self: *Page, key: []const u8, modifiers: KeyboardModifiers) !bool {
+    const keyboard_event = try KeyboardEvent.initTrusted(comptime .wrap("keyup"), .{
+        .key = key,
+        .altKey = modifiers.alt,
+        .ctrlKey = modifiers.ctrl,
+        .metaKey = modifiers.meta,
+        .shiftKey = modifiers.shift,
+    }, self);
+    return self.triggerKeyboard(keyboard_event);
+}
+
+pub fn triggerWindowBlur(self: *Page) !void {
+    const active = self.document._active_element orelse return;
+    try active.blur(self);
+}
+
+pub fn triggerClipboardEvent(self: *Page, typ: []const u8) !bool {
+    const active = self.document._active_element orelse return false;
+    const event = try Event.init(typ, .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+    }, self);
+    event.setTrusted();
+    try self._event_manager.dispatch(active.asEventTarget(), event);
+    return !event._prevent_default;
+}
+
+fn blocksTextInsertion(keyboard_event: *const KeyboardEvent) bool {
+    return keyboard_event.getCtrlKey() or keyboard_event.getAltKey() or keyboard_event.getMetaKey();
+}
+
+fn hasAccelModifier(keyboard_event: *const KeyboardEvent) bool {
+    return keyboard_event.getCtrlKey() or keyboard_event.getMetaKey();
+}
+
+fn isSelectAllShortcutKey(key: KeyboardEvent.Key, accel_down: bool, alt_down: bool) bool {
+    if (!accel_down or alt_down) {
+        return false;
+    }
+    return switch (key) {
+        .standard => |s| s.len == 1 and std.ascii.toLower(s[0]) == 'a',
+        else => false,
+    };
+}
+
+fn trySelectAllInput(input: *Element.Html.Input, page: *Page) !bool {
+    return switch (input._input_type) {
+        .text, .search, .url, .tel, .password => blk: {
+            try input.select(page);
+            break :blk true;
+        },
+        else => false,
+    };
+}
+
+const EditAction = enum {
+    backspace,
+    delete,
+};
+
+const MoveAction = enum {
+    left,
+    right,
+    up,
+    down,
+    home,
+    end,
+};
+
+fn editActionFromKey(key: KeyboardEvent.Key) ?EditAction {
+    return switch (key) {
+        .Backspace => .backspace,
+        .Delete => .delete,
+        else => null,
+    };
+}
+
+fn moveActionFromKey(key: KeyboardEvent.Key) ?MoveAction {
+    return switch (key) {
+        .ArrowLeft => .left,
+        .ArrowRight => .right,
+        .ArrowUp => .up,
+        .ArrowDown => .down,
+        .Home => .home,
+        .End => .end,
+        else => null,
+    };
+}
+
+const TabFocusCandidate = struct {
+    element: *Element,
+    tab_index: i32,
+    document_order: usize,
+};
+
+fn isHiddenFromSequentialFocus(element: *Element) bool {
+    var current: ?*Node = element.asNode();
+    while (current) |node| {
+        if (node.is(Element)) |el| {
+            if (el.getAttributeSafe(comptime .wrap("hidden")) != null) {
+                return true;
+            }
+        }
+        current = node.parentNode();
+    }
+    return false;
+}
+
+fn isSequentiallyFocusableElement(element: *Element) bool {
+    const html_element = element.is(Element.Html) orelse return false;
+    const tab_index = html_element.getTabIndex();
+    if (tab_index < 0) {
+        return false;
+    }
+
+    if (isHiddenFromSequentialFocus(element)) {
+        return false;
+    }
+
+    switch (html_element._type) {
+        .button => |button| if (button.getDisabled()) return false,
+        .input => |input| {
+            if (input.getDisabled() or input._input_type == .hidden) {
+                return false;
+            }
+        },
+        .select => |select| if (select.getDisabled()) return false,
+        .textarea => |textarea| if (textarea.getDisabled()) return false,
+        else => {},
+    }
+
+    return true;
+}
+
+fn collectSequentialFocusCandidates(
+    node: *Node,
+    candidates: *std.ArrayListUnmanaged(TabFocusCandidate),
+    allocator: Allocator,
+    document_order: *usize,
+) !void {
+    var child = node.firstChild();
+    while (child) |current| : (child = current.nextSibling()) {
+        if (current.is(Element)) |element| {
+            if (isSequentiallyFocusableElement(element)) {
+                const html_element = element.is(Element.Html).?;
+                try candidates.append(allocator, .{
+                    .element = element,
+                    .tab_index = html_element.getTabIndex(),
+                    .document_order = document_order.*,
+                });
+            }
+            document_order.* += 1;
+        }
+        try collectSequentialFocusCandidates(current, candidates, allocator, document_order);
+    }
+}
+
+fn tabFocusCandidateLessThan(_: void, lhs: TabFocusCandidate, rhs: TabFocusCandidate) bool {
+    const lhs_positive = lhs.tab_index > 0;
+    const rhs_positive = rhs.tab_index > 0;
+    if (lhs_positive != rhs_positive) {
+        return lhs_positive;
+    }
+
+    if (lhs_positive and rhs_positive and lhs.tab_index != rhs.tab_index) {
+        return lhs.tab_index < rhs.tab_index;
+    }
+
+    return lhs.document_order < rhs.document_order;
+}
+
+fn nextTabFocusIndex(len: usize, current_index: ?usize, backwards: bool) usize {
+    if (len == 0) {
+        return 0;
+    }
+    if (current_index) |idx| {
+        if (idx < len) {
+            if (backwards) {
+                return if (idx == 0) len - 1 else idx - 1;
+            }
+            return if (idx + 1 >= len) 0 else idx + 1;
+        }
+    }
+    return if (backwards) len - 1 else 0;
+}
+
+pub fn focusNextByTab(self: *Page, backwards: bool) !bool {
+    const arena = try self.arena_pool.acquire();
+    defer self.arena_pool.release(arena);
+
+    var candidates: std.ArrayListUnmanaged(TabFocusCandidate) = .{};
+    defer candidates.deinit(arena);
+
+    var order: usize = 0;
+    try collectSequentialFocusCandidates(self.document.asNode(), &candidates, arena, &order);
+    if (candidates.items.len == 0) {
+        return false;
+    }
+
+    std.mem.sort(TabFocusCandidate, candidates.items, {}, tabFocusCandidateLessThan);
+
+    var current_index: ?usize = null;
+    if (self.document._active_element) |active| {
+        for (candidates.items, 0..) |candidate, idx| {
+            if (candidate.element != active) {
+                continue;
+            }
+            current_index = idx;
+            break;
+        }
+    }
+
+    const target_index = nextTabFocusIndex(candidates.items.len, current_index, backwards);
+    try candidates.items[target_index].element.focus(self);
+    return true;
+}
+
+fn normalizedSelection(start_u32: u32, end_u32: u32, len: usize) struct { start: usize, end: usize } {
+    var start: usize = @min(@as(usize, @intCast(start_u32)), len);
+    const end: usize = @min(@as(usize, @intCast(end_u32)), len);
+    if (end < start) {
+        start = end;
+    }
+    return .{
+        .start = start,
+        .end = end,
+    };
+}
+
+fn removeValueRange(page: *Page, current: []const u8, start: usize, end: usize) ![]const u8 {
+    return std.mem.concat(page.arena, u8, &.{ current[0..start], current[end..] });
+}
+
+const SelectionRange = struct {
+    start: usize,
+    end: usize,
+};
+
+fn selectedRangeFromInput(input: *Element.Html.Input) ?SelectionRange {
+    switch (input._input_type) {
+        .text, .search, .url, .tel, .password => {},
+        else => return null,
+    }
+    const value = input.getValue();
+    const selection = normalizedSelection(input._selection_start, input._selection_end, value.len);
+    if (selection.end <= selection.start) {
+        return null;
+    }
+    return .{
+        .start = selection.start,
+        .end = selection.end,
+    };
+}
+
+fn selectedRangeFromTextArea(textarea: *Element.Html.TextArea) ?SelectionRange {
+    const value = textarea.getValue();
+    const selection = normalizedSelection(textarea._selection_start, textarea._selection_end, value.len);
+    if (selection.end <= selection.start) {
+        return null;
+    }
+    return .{
+        .start = selection.start,
+        .end = selection.end,
+    };
+}
+
+fn isWordByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
+fn lineStartForPosition(text: []const u8, pos_in: usize) usize {
+    const pos = @min(pos_in, text.len);
+    var i = pos;
+    while (i > 0) : (i -= 1) {
+        if (text[i - 1] == '\n') {
+            return i;
+        }
+    }
+    return 0;
+}
+
+fn lineEndForPosition(text: []const u8, pos_in: usize) usize {
+    var i = @min(pos_in, text.len);
+    while (i < text.len) : (i += 1) {
+        if (text[i] == '\n') {
+            return i;
+        }
+    }
+    return text.len;
+}
+
+fn previousLinePosition(text: []const u8, pos_in: usize) usize {
+    const pos = @min(pos_in, text.len);
+    const current_start = lineStartForPosition(text, pos);
+    if (current_start == 0) {
+        return pos;
+    }
+
+    const current_col = pos - current_start;
+    const prev_end = current_start - 1;
+    const prev_start = lineStartForPosition(text, prev_end);
+    const prev_len = prev_end - prev_start;
+    return prev_start + @min(current_col, prev_len);
+}
+
+fn nextLinePosition(text: []const u8, pos_in: usize) usize {
+    const pos = @min(pos_in, text.len);
+    const current_start = lineStartForPosition(text, pos);
+    const current_end = lineEndForPosition(text, pos);
+    if (current_end >= text.len) {
+        return pos;
+    }
+
+    const current_col = pos - current_start;
+    const next_start = current_end + 1;
+    const next_end = lineEndForPosition(text, next_start);
+    const next_len = next_end - next_start;
+    return next_start + @min(current_col, next_len);
+}
+
+fn previousWordBoundary(text: []const u8, cursor_in: usize) usize {
+    var cursor = @min(cursor_in, text.len);
+    while (cursor > 0 and std.ascii.isWhitespace(text[cursor - 1])) {
+        cursor -= 1;
+    }
+    if (cursor == 0) {
+        return 0;
+    }
+
+    if (isWordByte(text[cursor - 1])) {
+        while (cursor > 0 and isWordByte(text[cursor - 1])) {
+            cursor -= 1;
+        }
+        return cursor;
+    }
+
+    while (cursor > 0 and !std.ascii.isWhitespace(text[cursor - 1]) and !isWordByte(text[cursor - 1])) {
+        cursor -= 1;
+    }
+    return cursor;
+}
+
+fn nextWordBoundary(text: []const u8, cursor_in: usize) usize {
+    var cursor = @min(cursor_in, text.len);
+    while (cursor < text.len and std.ascii.isWhitespace(text[cursor])) {
+        cursor += 1;
+    }
+    if (cursor >= text.len) {
+        return text.len;
+    }
+
+    if (isWordByte(text[cursor])) {
+        while (cursor < text.len and isWordByte(text[cursor])) {
+            cursor += 1;
+        }
+        return cursor;
+    }
+
+    while (cursor < text.len and !std.ascii.isWhitespace(text[cursor]) and !isWordByte(text[cursor])) {
+        cursor += 1;
+    }
+    return cursor;
+}
+
+fn moveCursorPosition(text: []const u8, pos: usize, action: MoveAction, word_mode: bool, line_home_end_mode: bool) usize {
+    return switch (action) {
+        .left => if (word_mode) previousWordBoundary(text, pos) else if (pos > 0) pos - 1 else 0,
+        .right => if (word_mode) nextWordBoundary(text, pos) else if (pos < text.len) pos + 1 else text.len,
+        .up => previousLinePosition(text, pos),
+        .down => nextLinePosition(text, pos),
+        .home => if (line_home_end_mode) lineStartForPosition(text, pos) else 0,
+        .end => if (line_home_end_mode) lineEndForPosition(text, pos) else text.len,
+    };
+}
+
+const CursorMoveResult = struct {
+    start: u32,
+    end: u32,
+    backward: bool,
+};
+
+fn moveCursorSelection(
+    start_u32: u32,
+    end_u32: u32,
+    selection_is_backward: bool,
+    text: []const u8,
+    action: MoveAction,
+    with_shift: bool,
+    fallback_end_cursor: bool,
+    word_mode: bool,
+    line_home_end_mode: bool,
+) CursorMoveResult {
+    const len = text.len;
+    const selection = normalizedSelection(start_u32, end_u32, len);
+    var start = selection.start;
+    var end = selection.end;
+    var caret = end;
+    if (start == end and fallback_end_cursor and caret == 0 and len > 0) {
+        caret = len;
+        start = caret;
+        end = caret;
+    }
+
+    if (!with_shift) {
+        const pos: usize = switch (action) {
+            .left => if (start != end) start else moveCursorPosition(text, start, .left, word_mode, line_home_end_mode),
+            .right => if (start != end) end else moveCursorPosition(text, end, .right, word_mode, line_home_end_mode),
+            .up => if (start != end) start else moveCursorPosition(text, start, .up, word_mode, line_home_end_mode),
+            .down => if (start != end) end else moveCursorPosition(text, end, .down, word_mode, line_home_end_mode),
+            .home => moveCursorPosition(text, start, .home, word_mode, line_home_end_mode),
+            .end => moveCursorPosition(text, end, .end, word_mode, line_home_end_mode),
+        };
+        return .{
+            .start = @intCast(pos),
+            .end = @intCast(pos),
+            .backward = false,
+        };
+    }
+
+    var anchor: usize = undefined;
+    var focus: usize = undefined;
+    if (start != end) {
+        if (selection_is_backward) {
+            anchor = end;
+            focus = start;
+        } else {
+            anchor = start;
+            focus = end;
+        }
+    } else {
+        anchor = caret;
+        focus = caret;
+    }
+
+    focus = moveCursorPosition(text, focus, action, word_mode, line_home_end_mode);
+
+    if (focus < anchor) {
+        return .{
+            .start = @intCast(focus),
+            .end = @intCast(anchor),
+            .backward = true,
+        };
+    }
+    return .{
+        .start = @intCast(anchor),
+        .end = @intCast(focus),
+        .backward = false,
+    };
+}
+
+fn applyInputCursorMove(input: *Element.Html.Input, action: MoveAction, with_shift: bool, fallback_end_cursor: bool, word_mode: bool) bool {
+    const value = input.getValue();
+    const moved = moveCursorSelection(
+        input._selection_start,
+        input._selection_end,
+        input._selection_direction == .backward,
+        value,
+        action,
+        with_shift,
+        fallback_end_cursor,
+        word_mode and (action == .left or action == .right),
+        false,
+    );
+    input._selection_start = moved.start;
+    input._selection_end = moved.end;
+    input._selection_direction = if (moved.start == moved.end) .none else if (moved.backward) .backward else .forward;
+    return true;
+}
+
+fn applyTextAreaCursorMove(textarea: *Element.Html.TextArea, action: MoveAction, with_shift: bool, fallback_end_cursor: bool, word_mode: bool) bool {
+    const value = textarea.getValue();
+    const moved = moveCursorSelection(
+        textarea._selection_start,
+        textarea._selection_end,
+        textarea._selection_direction == .backward,
+        value,
+        action,
+        with_shift,
+        fallback_end_cursor,
+        word_mode and (action == .left or action == .right),
+        !word_mode,
+    );
+    textarea._selection_start = moved.start;
+    textarea._selection_end = moved.end;
+    textarea._selection_direction = if (moved.start == moved.end) .none else if (moved.backward) .backward else .forward;
+    return true;
+}
+
+fn editInputValue(page: *Page, input: *Element.Html.Input, action: EditAction, fallback_end_cursor: bool, word_mode: bool) !bool {
+    const current = input.getValue();
+    const len = current.len;
+    if (len == 0) {
+        return true;
+    }
+
+    const selection = normalizedSelection(input._selection_start, input._selection_end, len);
+    var cursor = selection.start;
+    if (selection.start == selection.end and fallback_end_cursor and cursor == 0 and len > 0) {
+        cursor = len;
+    }
+
+    if (selection.end > selection.start) {
+        const new_value = try removeValueRange(page, current, selection.start, selection.end);
+        try input.setValue(new_value, page);
+        const pos: u32 = @intCast(selection.start);
+        input._selection_start = pos;
+        input._selection_end = pos;
+        input._selection_direction = .none;
+        try input.dispatchInputEvent(page);
+        return true;
+    }
+
+    const remove_start, const remove_end = switch (action) {
+        .backspace => blk: {
+            if (cursor == 0) return true;
+            const remove_start = if (word_mode) previousWordBoundary(current, cursor) else cursor - 1;
+            if (remove_start == cursor) return true;
+            break :blk .{ remove_start, cursor };
+        },
+        .delete => blk: {
+            if (cursor >= len) return true;
+            const remove_end = if (word_mode) nextWordBoundary(current, cursor) else cursor + 1;
+            if (remove_end == cursor) return true;
+            break :blk .{ cursor, remove_end };
+        },
+    };
+    const new_value = try removeValueRange(page, current, remove_start, remove_end);
+    try input.setValue(new_value, page);
+
+    const new_pos: u32 = @intCast(remove_start);
+    input._selection_start = new_pos;
+    input._selection_end = new_pos;
+    input._selection_direction = .none;
+    try input.dispatchInputEvent(page);
+    return true;
+}
+
+fn editTextAreaValue(page: *Page, textarea: *Element.Html.TextArea, action: EditAction, fallback_end_cursor: bool, word_mode: bool) !bool {
+    const current = textarea.getValue();
+    const len = current.len;
+    if (len == 0) {
+        return true;
+    }
+
+    const selection = normalizedSelection(textarea._selection_start, textarea._selection_end, len);
+    var cursor = selection.start;
+    if (selection.start == selection.end and fallback_end_cursor and cursor == 0 and len > 0) {
+        cursor = len;
+    }
+
+    if (selection.end > selection.start) {
+        const new_value = try removeValueRange(page, current, selection.start, selection.end);
+        try textarea.setValue(new_value, page);
+        const pos: u32 = @intCast(selection.start);
+        textarea._selection_start = pos;
+        textarea._selection_end = pos;
+        textarea._selection_direction = .none;
+        try textarea.dispatchInputEvent(page);
+        return true;
+    }
+
+    const remove_start, const remove_end = switch (action) {
+        .backspace => blk: {
+            if (cursor == 0) return true;
+            const remove_start = if (word_mode) previousWordBoundary(current, cursor) else cursor - 1;
+            if (remove_start == cursor) return true;
+            break :blk .{ remove_start, cursor };
+        },
+        .delete => blk: {
+            if (cursor >= len) return true;
+            const remove_end = if (word_mode) nextWordBoundary(current, cursor) else cursor + 1;
+            if (remove_end == cursor) return true;
+            break :blk .{ cursor, remove_end };
+        },
+    };
+    const new_value = try removeValueRange(page, current, remove_start, remove_end);
+    try textarea.setValue(new_value, page);
+
+    const new_pos: u32 = @intCast(remove_start);
+    textarea._selection_start = new_pos;
+    textarea._selection_end = new_pos;
+    textarea._selection_direction = .none;
+    try textarea.dispatchInputEvent(page);
+    return true;
 }
 
 pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
     const keyboard_event = event.is(KeyboardEvent) orelse return;
     const key = keyboard_event.getKey();
+    const suppress_text = self._keyboard_text_suppression_depth > 0;
+    const accel_down = hasAccelModifier(keyboard_event);
+    const select_all_shortcut = isSelectAllShortcutKey(key, accel_down, keyboard_event.getAltKey());
+    const word_shortcuts = accel_down and !keyboard_event.getAltKey();
+    const edit_action = editActionFromKey(key);
+    const move_action = moveActionFromKey(key);
 
     if (key == .Dead) {
+        return;
+    }
+
+    if (key == .Tab and !keyboard_event.getCtrlKey() and !keyboard_event.getMetaKey() and !keyboard_event.getAltKey()) {
+        _ = try self.focusNextByTab(keyboard_event.getShiftKey());
         return;
     }
 
@@ -3089,18 +3891,52 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
             return;
         }
 
+        if (select_all_shortcut) {
+            if (try trySelectAllInput(input, self)) {
+                return;
+            }
+        }
+
+        if (move_action) |action| {
+            _ = applyInputCursorMove(input, action, keyboard_event.getShiftKey(), suppress_text, word_shortcuts);
+            return;
+        }
+
+        if (edit_action) |action| {
+            _ = try editInputValue(self, input, action, suppress_text, word_shortcuts);
+            return;
+        }
+
         // Handle printable characters
-        if (key.isPrintable()) {
+        if (!suppress_text and key.isPrintable() and !blocksTextInsertion(keyboard_event)) {
             try input.innerInsert(key.asString(), self);
         }
         return;
     }
 
     if (target.is(Element.Html.TextArea)) |textarea| {
+        if (select_all_shortcut) {
+            try textarea.select(self);
+            return;
+        }
+
+        if (move_action) |action| {
+            _ = applyTextAreaCursorMove(textarea, action, keyboard_event.getShiftKey(), suppress_text, word_shortcuts);
+            return;
+        }
+
+        if (edit_action) |action| {
+            _ = try editTextAreaValue(self, textarea, action, suppress_text, word_shortcuts);
+            return;
+        }
+
+        if (suppress_text and (key == .Enter or key.isPrintable())) {
+            return;
+        }
         // zig fmt: off
         const append =
             if (key == .Enter) "\n"
-            else if (key.isPrintable()) key.asString()
+            else if (key.isPrintable() and !blocksTextInsertion(keyboard_event)) key.asString()
             else return
         ;
         // zig fmt: on
@@ -3196,6 +4032,52 @@ pub fn insertText(self: *Page, v: []const u8) !void {
     }
 }
 
+pub fn getActiveTextSelection(self: *Page) ?[]const u8 {
+    const html_element = self.document._active_element orelse return null;
+
+    if (html_element.is(Element.Html.Input)) |input| {
+        const range = selectedRangeFromInput(input) orelse return null;
+        const value = input.getValue();
+        return value[range.start..range.end];
+    }
+
+    if (html_element.is(Element.Html.TextArea)) |textarea| {
+        const range = selectedRangeFromTextArea(textarea) orelse return null;
+        const value = textarea.getValue();
+        return value[range.start..range.end];
+    }
+
+    return null;
+}
+
+pub fn deleteActiveTextSelection(self: *Page) !bool {
+    const html_element = self.document._active_element orelse return false;
+
+    if (html_element.is(Element.Html.Input)) |input| {
+        if (selectedRangeFromInput(input) == null) {
+            return false;
+        }
+        _ = try editInputValue(self, input, .delete, false, false);
+        return true;
+    }
+
+    if (html_element.is(Element.Html.TextArea)) |textarea| {
+        if (selectedRangeFromTextArea(textarea) == null) {
+            return false;
+        }
+        _ = try editTextAreaValue(self, textarea, .delete, false, false);
+        return true;
+    }
+
+    return false;
+}
+
+pub fn cutActiveTextSelection(self: *Page) !?[]const u8 {
+    const selected = self.getActiveTextSelection() orelse return null;
+    _ = try self.deleteActiveTextSelection();
+    return selected;
+}
+
 const RequestCookieOpts = struct {
     is_http: bool = true,
     is_navigation: bool = false,
@@ -3225,6 +4107,120 @@ fn asUint(comptime string: anytype) std.meta.Int(
 const testing = @import("../testing.zig");
 test "WebApi: Page" {
     try testing.htmlRunner("page", .{});
+}
+
+test "Page moveCursorSelection basic behavior" {
+    const no_sel_left = moveCursorSelection(0, 0, false, "abcde", .left, false, true, false, false);
+    try testing.expectEqual(@as(u32, 4), no_sel_left.start);
+    try testing.expectEqual(@as(u32, 4), no_sel_left.end);
+    try testing.expectEqual(false, no_sel_left.backward);
+
+    const collapse_left = moveCursorSelection(2, 4, false, "0123456789", .left, false, false, false, false);
+    try testing.expectEqual(@as(u32, 2), collapse_left.start);
+    try testing.expectEqual(@as(u32, 2), collapse_left.end);
+
+    const shift_forward = moveCursorSelection(2, 4, false, "0123456789", .right, true, false, false, false);
+    try testing.expectEqual(@as(u32, 2), shift_forward.start);
+    try testing.expectEqual(@as(u32, 5), shift_forward.end);
+    try testing.expectEqual(false, shift_forward.backward);
+
+    const shift_backward = moveCursorSelection(2, 4, true, "0123456789", .left, true, false, false, false);
+    try testing.expectEqual(@as(u32, 1), shift_backward.start);
+    try testing.expectEqual(@as(u32, 4), shift_backward.end);
+    try testing.expectEqual(true, shift_backward.backward);
+}
+
+test "Page word boundary navigation helpers" {
+    try testing.expectEqual(@as(usize, 6), previousWordBoundary("hello world", 11));
+    try testing.expectEqual(@as(usize, 0), previousWordBoundary("hello world", 5));
+    try testing.expectEqual(@as(usize, 5), nextWordBoundary("hello world", 0));
+    try testing.expectEqual(@as(usize, 11), nextWordBoundary("hello world", 6));
+
+    const word_left = moveCursorSelection(11, 11, false, "hello world", .left, false, false, true, false);
+    try testing.expectEqual(@as(u32, 6), word_left.start);
+    try testing.expectEqual(@as(u32, 6), word_left.end);
+
+    const word_shift_left = moveCursorSelection(11, 11, false, "hello world", .left, true, false, true, false);
+    try testing.expectEqual(@as(u32, 6), word_shift_left.start);
+    try testing.expectEqual(@as(u32, 11), word_shift_left.end);
+    try testing.expectEqual(true, word_shift_left.backward);
+}
+
+test "Page line cursor helpers" {
+    const text = "abc\ndefg\nh";
+
+    try testing.expectEqual(@as(usize, 0), lineStartForPosition(text, 0));
+    try testing.expectEqual(@as(usize, 3), lineEndForPosition(text, 0));
+    try testing.expectEqual(@as(usize, 4), lineStartForPosition(text, 5));
+    try testing.expectEqual(@as(usize, 8), lineEndForPosition(text, 5));
+
+    try testing.expectEqual(@as(usize, 5), nextLinePosition(text, 1));
+    try testing.expectEqual(@as(usize, 1), previousLinePosition(text, 5));
+    try testing.expectEqual(@as(usize, 10), nextLinePosition(text, 7));
+    try testing.expectEqual(@as(usize, 0), previousLinePosition(text, 0));
+    try testing.expectEqual(@as(usize, 9), nextLinePosition(text, 9));
+
+    const up = moveCursorSelection(5, 5, false, text, .up, false, false, false, true);
+    try testing.expectEqual(@as(u32, 1), up.start);
+    try testing.expectEqual(@as(u32, 1), up.end);
+
+    const down = moveCursorSelection(1, 1, false, text, .down, false, false, false, true);
+    try testing.expectEqual(@as(u32, 5), down.start);
+    try testing.expectEqual(@as(u32, 5), down.end);
+
+    const home_line = moveCursorSelection(6, 6, false, text, .home, false, false, false, true);
+    try testing.expectEqual(@as(u32, 4), home_line.start);
+    try testing.expectEqual(@as(u32, 4), home_line.end);
+
+    const end_line = moveCursorSelection(5, 5, false, text, .end, false, false, false, true);
+    try testing.expectEqual(@as(u32, 8), end_line.start);
+    try testing.expectEqual(@as(u32, 8), end_line.end);
+}
+
+test "Page tab focus candidate ordering" {
+    const stride = @as(usize, @alignOf(Element));
+    const e0: *Element = @ptrFromInt(stride * 2);
+    const e1: *Element = @ptrFromInt(stride * 3);
+    const e2: *Element = @ptrFromInt(stride * 4);
+    const e3: *Element = @ptrFromInt(stride * 5);
+
+    var candidates = [_]TabFocusCandidate{
+        .{ .element = e0, .tab_index = 0, .document_order = 0 },
+        .{ .element = e1, .tab_index = 2, .document_order = 1 },
+        .{ .element = e2, .tab_index = 1, .document_order = 2 },
+        .{ .element = e3, .tab_index = 0, .document_order = 3 },
+    };
+
+    std.mem.sort(TabFocusCandidate, candidates[0..], {}, tabFocusCandidateLessThan);
+
+    try testing.expectEqual(e2, candidates[0].element);
+    try testing.expectEqual(e1, candidates[1].element);
+    try testing.expectEqual(e0, candidates[2].element);
+    try testing.expectEqual(e3, candidates[3].element);
+}
+
+test "Page nextTabFocusIndex wraps correctly" {
+    try testing.expectEqual(@as(usize, 0), nextTabFocusIndex(0, null, false));
+    try testing.expectEqual(@as(usize, 0), nextTabFocusIndex(3, null, false));
+    try testing.expectEqual(@as(usize, 2), nextTabFocusIndex(3, null, true));
+
+    try testing.expectEqual(@as(usize, 1), nextTabFocusIndex(3, 0, false));
+    try testing.expectEqual(@as(usize, 0), nextTabFocusIndex(3, 2, false));
+
+    try testing.expectEqual(@as(usize, 2), nextTabFocusIndex(3, 0, true));
+    try testing.expectEqual(@as(usize, 1), nextTabFocusIndex(3, 2, true));
+
+    try testing.expectEqual(@as(usize, 0), nextTabFocusIndex(3, 99, false));
+    try testing.expectEqual(@as(usize, 2), nextTabFocusIndex(3, 99, true));
+}
+
+test "Page select-all shortcut detection" {
+    try testing.expect(isSelectAllShortcutKey(KeyboardEvent.Key{ .standard = "a" }, true, false));
+    try testing.expect(isSelectAllShortcutKey(KeyboardEvent.Key{ .standard = "A" }, true, false));
+    try testing.expect(!isSelectAllShortcutKey(KeyboardEvent.Key{ .standard = "a" }, false, false));
+    try testing.expect(!isSelectAllShortcutKey(KeyboardEvent.Key{ .standard = "a" }, true, true));
+    try testing.expect(!isSelectAllShortcutKey(KeyboardEvent.Key{ .standard = "b" }, true, false));
+    try testing.expect(!isSelectAllShortcutKey(.Enter, true, false));
 }
 
 test "WebApi: Frames" {

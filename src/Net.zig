@@ -29,6 +29,8 @@ const assert = @import("lightpanda").assert;
 
 pub const ENABLE_DEBUG = false;
 const IS_DEBUG = builtin.mode == .Debug;
+pub const DISABLED_PROXY: [:0]const u8 = "";
+const LOOPBACK_NO_PROXY: [:0]const u8 = "localhost,127.0.0.1,::1,[::1]";
 
 pub const Blob = libcurl.CurlBlob;
 pub const WaitFd = libcurl.CurlWaitFd;
@@ -235,7 +237,10 @@ pub const ResponseHead = struct {
 };
 
 pub fn globalInit() Error!void {
-    try libcurl.curl_global_init(.{ .ssl = true });
+    try libcurl.curl_global_init(.{
+        .ssl = true,
+        .win32 = builtin.os.tag == .windows,
+    });
 }
 
 pub fn globalDeinit() void {
@@ -266,7 +271,12 @@ pub const Connection = struct {
         const http_proxy = config.httpProxy();
         if (http_proxy) |proxy| {
             try libcurl.curl_easy_setopt(easy, .proxy, proxy.ptr);
+        } else {
+            // Keep libcurl from inheriting ambient system/environment proxy settings
+            // unless the user explicitly configured one for Lightpanda.
+            try libcurl.curl_easy_setopt(easy, .proxy, DISABLED_PROXY.ptr);
         }
+        try libcurl.curl_easy_setopt(easy, .no_proxy, LOOPBACK_NO_PROXY.ptr);
 
         // tls
         if (ca_blob_) |ca_blob| {
@@ -1081,9 +1091,14 @@ pub const WsConnection = struct {
     timeout_ms: u32,
 
     pub fn init(socket: posix.socket_t, allocator: Allocator, json_version_response: []const u8, timeout_ms: u32) !WsConnection {
-        const socket_flags = try posix.fcntl(socket, posix.F.GETFL, 0);
-        const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
-        assert(socket_flags & nonblocking == nonblocking, "WsConnection.init blocking", .{});
+        const socket_flags = if (comptime builtin.os.tag == .windows)
+            0
+        else
+            try posix.fcntl(socket, posix.F.GETFL, 0);
+        if (comptime builtin.os.tag != .windows) {
+            const nonblocking = @as(u32, @bitCast(posix.O{ .NONBLOCK = true }));
+            assert(socket_flags & nonblocking == nonblocking, "WsConnection.init blocking", .{});
+        }
 
         var reader = try Reader(true).init(allocator);
         errdefer reader.deinit();
@@ -1108,7 +1123,7 @@ pub const WsConnection = struct {
         var changed_to_blocking: bool = false;
         defer _ = self.send_arena.reset(.{ .retain_with_limit = 1024 * 32 });
 
-        defer if (changed_to_blocking) {
+        defer if (changed_to_blocking and comptime builtin.os.tag != .windows) {
             // We had to change our socket to blocking me to get our write out
             // We need to change it back to non-blocking.
             _ = posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags) catch |err| {
@@ -1119,6 +1134,11 @@ pub const WsConnection = struct {
         LOOP: while (pos < data.len) {
             const written = posix.write(self.socket, data[pos..]) catch |err| switch (err) {
                 error.WouldBlock => {
+                    if (comptime builtin.os.tag == .windows) {
+                        std.Thread.sleep(100 * std.time.ns_per_us);
+                        continue :LOOP;
+                    }
+
                     // self.socket is nonblocking, because we don't want to block
                     // reads. But our life is a lot easier if we block writes,
                     // largely, because we don't have to maintain a queue of pending
@@ -1348,6 +1368,10 @@ pub const WsConnection = struct {
     }
 
     pub fn setBlocking(self: *WsConnection, blocking: bool) !void {
+        if (comptime builtin.os.tag == .windows) {
+            return;
+        }
+
         if (blocking) {
             _ = try posix.fcntl(self.socket, posix.F.SETFL, self.socket_flags & ~@as(u32, @bitCast(posix.O{ .NONBLOCK = true })));
         } else {

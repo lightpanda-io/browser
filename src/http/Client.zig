@@ -621,11 +621,11 @@ pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
 pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
-    const proxy = if (self.http_proxy) |p| p.ptr else null;
+    const proxy = if (self.http_proxy) |p| p.ptr else Net.DISABLED_PROXY.ptr;
     for (self.handles.connections) |*conn| {
         try conn.setProxy(proxy);
     }
-    self.use_proxy = proxy != null;
+    self.use_proxy = self.http_proxy != null;
 }
 
 // Enable TLS verification on all connections.
@@ -717,7 +717,10 @@ fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
     var status = PerformStatus.normal;
     if (self.cdp_client) |cdp_client| {
         var wait_fds = [_]Net.WaitFd{.{
-            .fd = cdp_client.socket,
+            .fd = if (comptime builtin.os.tag == .windows)
+                @intCast(@intFromPtr(cdp_client.socket))
+            else
+                @intCast(cdp_client.socket),
             .events = .{ .pollin = true },
             .revents = .{},
         }};

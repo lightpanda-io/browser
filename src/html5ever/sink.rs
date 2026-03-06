@@ -16,16 +16,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-use std::ptr;
-use std::cell::Cell;
 use std::borrow::Cow;
-use std::os::raw::{c_void};
+use std::cell::Cell;
+use std::os::raw::c_void;
+use std::ptr;
 
 use crate::types::*;
 
-use html5ever::tendril::{StrTendril};
-use html5ever::{Attribute, QualName};
 use html5ever::interface::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
+use html5ever::tendril::StrTendril;
+use html5ever::{Attribute, QualName};
 
 type Arena<'arena> = &'arena typed_arena::Arena<ElementData>;
 
@@ -140,15 +140,24 @@ impl<'arena> TreeSink for Sink<'arena> {
     }
 
     fn create_comment(&self, txt: StrTendril) -> Ref {
-        let str = StringSlice{ ptr: txt.as_ptr(), len: txt.len()};
+        let str = StringSlice {
+            ptr: txt.as_ptr(),
+            len: txt.len(),
+        };
         unsafe {
             return (self.create_comment_callback)(self.ctx, str);
         }
     }
 
     fn create_pi(&self, target: StrTendril, data: StrTendril) -> Ref {
-        let str_target = StringSlice{ ptr: target.as_ptr(), len: target.len()};
-        let str_data = StringSlice{ ptr: data.as_ptr(), len: data.len()};
+        let str_target = StringSlice {
+            ptr: target.as_ptr(),
+            len: target.len(),
+        };
+        let str_data = StringSlice {
+            ptr: data.as_ptr(),
+            len: data.len(),
+        };
         unsafe {
             return (self.create_processing_instruction)(self.ctx, str_target, str_data);
         }
@@ -167,24 +176,33 @@ impl<'arena> TreeSink for Sink<'arena> {
                 // you'll occasionally see that zeroed memory. Makes no sense to
                 // me, but a far as I can tell, this version works.
                 let byte_slice = t.as_ref().as_bytes();
-                let static_slice: &'static [u8] = unsafe {
-                    std::mem::transmute(byte_slice)
-                };
+                let static_slice: &'static [u8] = unsafe { std::mem::transmute(byte_slice) };
                 unsafe {
-                    (self.append_callback)(self.ctx, *parent, CNodeOrText{
-                        tag: 1,
-                        node: ptr::null(),
-                        text: StringSlice { ptr: static_slice.as_ptr(), len: static_slice.len()},
-                     });
+                    (self.append_callback)(
+                        self.ctx,
+                        *parent,
+                        CNodeOrText {
+                            tag: 1,
+                            node: ptr::null(),
+                            text: StringSlice {
+                                ptr: static_slice.as_ptr(),
+                                len: static_slice.len(),
+                            },
+                        },
+                    );
                 };
-            },
+            }
             NodeOrText::AppendNode(node) => {
-               unsafe {
-                    (self.append_callback)(self.ctx, *parent, CNodeOrText{
-                        tag: 0,
-                        node: node,
-                        text: StringSlice::default()
-                    });
+                unsafe {
+                    (self.append_callback)(
+                        self.ctx,
+                        *parent,
+                        CNodeOrText {
+                            tag: 0,
+                            node: node,
+                            text: StringSlice::default(),
+                        },
+                    );
                 };
             }
         }
@@ -194,24 +212,33 @@ impl<'arena> TreeSink for Sink<'arena> {
         match child {
             NodeOrText::AppendText(ref t) => {
                 let byte_slice = t.as_ref().as_bytes();
-                let static_slice: &'static [u8] = unsafe {
-                    std::mem::transmute(byte_slice)
-                };
+                let static_slice: &'static [u8] = unsafe { std::mem::transmute(byte_slice) };
                 unsafe {
-                    (self.append_before_sibling_callback)(self.ctx, *sibling, CNodeOrText{
-                        tag: 1,
-                        node: ptr::null(),
-                        text: StringSlice { ptr: static_slice.as_ptr(), len: static_slice.len()},
-                     });
+                    (self.append_before_sibling_callback)(
+                        self.ctx,
+                        *sibling,
+                        CNodeOrText {
+                            tag: 1,
+                            node: ptr::null(),
+                            text: StringSlice {
+                                ptr: static_slice.as_ptr(),
+                                len: static_slice.len(),
+                            },
+                        },
+                    );
                 };
-            },
+            }
             NodeOrText::AppendNode(node) => {
-               unsafe {
-                    (self.append_before_sibling_callback)(self.ctx, *sibling, CNodeOrText{
-                        tag: 0,
-                        node: node,
-                        text: StringSlice::default()
-                    });
+                unsafe {
+                    (self.append_before_sibling_callback)(
+                        self.ctx,
+                        *sibling,
+                        CNodeOrText {
+                            tag: 0,
+                            node: node,
+                            text: StringSlice::default(),
+                        },
+                    );
                 };
             }
         }
@@ -226,24 +253,35 @@ impl<'arena> TreeSink for Sink<'arena> {
         match child {
             NodeOrText::AppendText(ref t) => {
                 let byte_slice = t.as_ref().as_bytes();
-                let static_slice: &'static [u8] = unsafe {
-                    std::mem::transmute(byte_slice)
-                };
+                let static_slice: &'static [u8] = unsafe { std::mem::transmute(byte_slice) };
                 unsafe {
-                    (self.append_based_on_parent_node_callback)(self.ctx, *element, *prev_element, CNodeOrText{
-                        tag: 1,
-                        node: ptr::null(),
-                        text: StringSlice { ptr: static_slice.as_ptr(), len: static_slice.len()},
-                     });
+                    (self.append_based_on_parent_node_callback)(
+                        self.ctx,
+                        *element,
+                        *prev_element,
+                        CNodeOrText {
+                            tag: 1,
+                            node: ptr::null(),
+                            text: StringSlice {
+                                ptr: static_slice.as_ptr(),
+                                len: static_slice.len(),
+                            },
+                        },
+                    );
                 };
-            },
+            }
             NodeOrText::AppendNode(node) => {
-               unsafe {
-                    (self.append_based_on_parent_node_callback)(self.ctx, *element, *prev_element, CNodeOrText{
-                        tag: 0,
-                        node: node,
-                        text: StringSlice::default()
-                    });
+                unsafe {
+                    (self.append_based_on_parent_node_callback)(
+                        self.ctx,
+                        *element,
+                        *prev_element,
+                        CNodeOrText {
+                            tag: 0,
+                            node: node,
+                            text: StringSlice::default(),
+                        },
+                    );
                 };
             }
         }
@@ -255,9 +293,18 @@ impl<'arena> TreeSink for Sink<'arena> {
         public_id: StrTendril,
         system_id: StrTendril,
     ) {
-        let name_str = StringSlice{ ptr: name.as_ptr(), len: name.len()};
-        let public_id_str = StringSlice{ ptr: public_id.as_ptr(), len: public_id.len()};
-        let system_id_str = StringSlice{ ptr: system_id.as_ptr(), len: system_id.len()};
+        let name_str = StringSlice {
+            ptr: name.as_ptr(),
+            len: name.len(),
+        };
+        let public_id_str = StringSlice {
+            ptr: public_id.as_ptr(),
+            len: public_id.len(),
+        };
+        let system_id_str = StringSlice {
+            ptr: system_id.as_ptr(),
+            len: system_id.len(),
+        };
         unsafe {
             (self.append_doctype_to_document)(self.ctx, name_str, public_id_str, system_id_str);
         }

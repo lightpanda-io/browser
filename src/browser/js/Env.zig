@@ -360,6 +360,9 @@ pub fn runMicrotasks(self: *Env) void {
         var i: usize = 0;
         while (i < self.context_count) : (i += 1) {
             const ctx = self.contexts[i];
+            if (ctx.suspended) {
+                continue;
+            }
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
         }
     }
@@ -368,6 +371,9 @@ pub fn runMicrotasks(self: *Env) void {
 pub fn runMacrotasks(self: *Env) !?u64 {
     var ms_to_next_task: ?u64 = null;
     for (self.contexts[0..self.context_count]) |ctx| {
+        if (ctx.suspended) {
+            continue;
+        }
         if (comptime builtin.is_test == false) {
             // I hate this comptime check as much as you do. But we have tests
             // which rely on short execution before shutdown. In real world, it's

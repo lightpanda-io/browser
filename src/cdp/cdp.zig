@@ -374,6 +374,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         extra_headers: std.ArrayList([*c]const u8) = .empty,
 
         intercept_state: InterceptState,
+        emulated_viewport_override: ?ViewportOverride = null,
 
         // When network is enabled, we'll capture the transfer.id -> body
         // This is awfully memory intensive, but our underlying http client and
@@ -385,6 +386,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
         captured_responses: std.AutoHashMapUnmanaged(usize, std.ArrayList(u8)),
 
         notification: *Notification,
+
+        const ViewportOverride = struct {
+            width: u32,
+            height: u32,
+            device_pixel_ratio: f64,
+        };
 
         const Self = @This();
 
@@ -421,6 +428,7 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                 .arena = cdp.browser_context_arena.allocator(),
                 .notification_arena = cdp.notification_arena.allocator(),
                 .intercept_state = try InterceptState.init(allocator),
+                .emulated_viewport_override = null,
                 .captured_responses = .empty,
                 .notification = notification,
             };
@@ -477,12 +485,39 @@ pub fn BrowserContext(comptime CDP_T: type) type {
                     log.warn(.http, "restoreOriginalProxy", .{ .err = err });
                 };
             }
+            if (self.emulated_viewport_override != null) {
+                browser.app.display.resetViewport();
+            }
             self.intercept_state.deinit();
         }
 
         pub fn reset(self: *Self) void {
             self.node_registry.reset();
             self.node_search_list.reset();
+        }
+
+        pub fn setViewportOverride(self: *Self, width: u32, height: u32, device_pixel_ratio: f64) !void {
+            self.emulated_viewport_override = .{
+                .width = width,
+                .height = height,
+                .device_pixel_ratio = device_pixel_ratio,
+            };
+
+            const display = &self.cdp.browser.app.display;
+            display.setViewport(width, height, device_pixel_ratio);
+            if (self.session.currentPage()) |page| {
+                try page.setViewport(display.viewport.width, display.viewport.height, display.viewport.device_pixel_ratio);
+            }
+        }
+
+        pub fn clearViewportOverride(self: *Self) !void {
+            self.emulated_viewport_override = null;
+
+            const display = &self.cdp.browser.app.display;
+            display.resetViewport();
+            if (self.session.currentPage()) |page| {
+                try page.setViewport(display.viewport.width, display.viewport.height, display.viewport.device_pixel_ratio);
+            }
         }
 
         pub fn createIsolatedWorld(self: *Self, world_name: []const u8, grant_universal_access: bool) !*IsolatedWorld {

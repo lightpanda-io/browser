@@ -24,6 +24,15 @@ const Window = @import("Window.zig");
 const VisualViewport = @This();
 
 _proto: *EventTarget,
+_width: u32 = 1920,
+_height: u32 = 1080,
+_scale: f64 = 1.0,
+
+pub fn setMetrics(self: *VisualViewport, width: u32, height: u32, scale: f64) void {
+    self._width = if (width == 0) 1 else width;
+    self._height = if (height == 0) 1 else height;
+    self._scale = if (scale <= 0) 1.0 else scale;
+}
 
 pub fn asEventTarget(self: *VisualViewport) *EventTarget {
     return self._proto;
@@ -37,6 +46,18 @@ pub fn getPageTop(_: *const VisualViewport, page: *Page) u32 {
     return page.window.getScrollY();
 }
 
+pub fn getWidth(self: *const VisualViewport) u32 {
+    return self._width;
+}
+
+pub fn getHeight(self: *const VisualViewport) u32 {
+    return self._height;
+}
+
+pub fn getScale(self: *const VisualViewport) f64 {
+    return self._scale;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(VisualViewport);
 
@@ -46,13 +67,13 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    // Static viewport properties for headless browser
-    // No pinch-zoom or mobile viewport, so values are straightforward
+    // Viewport properties are static for a given page instance today.
+    // They are sourced from runtime browser configuration.
     pub const offsetLeft = bridge.property(0, .{ .template = false });
     pub const offsetTop = bridge.property(0, .{ .template = false });
     pub const pageLeft = bridge.accessor(VisualViewport.getPageLeft, null, .{});
     pub const pageTop = bridge.accessor(VisualViewport.getPageTop, null, .{});
-    pub const width = bridge.property(1920, .{ .template = false });
-    pub const height = bridge.property(1080, .{ .template = false });
-    pub const scale = bridge.property(1.0, .{ .template = false });
+    pub const width = bridge.accessor(VisualViewport.getWidth, null, .{});
+    pub const height = bridge.accessor(VisualViewport.getHeight, null, .{});
+    pub const scale = bridge.accessor(VisualViewport.getScale, null, .{});
 };

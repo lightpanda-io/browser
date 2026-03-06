@@ -52,7 +52,8 @@ storage_shed: storage.Shed,
 history: History,
 navigation: Navigation,
 
-page: ?Page,
+page: ?*Page,
+suspended_page: ?*Page,
 
 page_id_gen: u32,
 
@@ -63,6 +64,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 
     self.* = .{
         .page = null,
+        .suspended_page = null,
         .arena = arena,
         .history = .{},
         .page_id_gen = 0,
@@ -78,6 +80,9 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 pub fn deinit(self: *Session) void {
     if (self.page != null) {
         self.removePage();
+    } else if (self.suspended_page) |page| {
+        destroyPage(self, page, .{ .abort_http = false });
+        self.suspended_page = null;
     }
     const browser = self.browser;
 
@@ -90,10 +95,13 @@ pub fn deinit(self: *Session) void {
 // the pointer on Page is just returned as a convenience
 pub fn createPage(self: *Session) !*Page {
     lp.assert(self.page == null, "Session.createPage - page not null", .{});
+    lp.assert(self.suspended_page == null, "Session.createPage - suspended page not null", .{});
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
+    const page = try self.allocPage();
+    errdefer self.destroyAllocPage(page);
     try Page.init(page, self.nextPageId(), self, null);
+    self.page = page;
+    self.browser.app.display.onPageCreated();
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -113,7 +121,12 @@ pub fn removePage(self: *Session) void {
     self.notification.dispatch(.page_remove, .{});
     lp.assert(self.page != null, "Session.removePage - page is null", .{});
 
-    self.page.?.deinit();
+    destroyPage(self, self.page.?, .{});
+    if (self.suspended_page) |page| {
+        destroyPage(self, page, .{ .abort_http = false });
+        self.suspended_page = null;
+    }
+    self.browser.app.display.onPageRemoved();
     self.page = null;
 
     self.navigation.onRemovePage();
@@ -130,21 +143,22 @@ pub fn replacePage(self: *Session) !*Page {
 
     lp.assert(self.page != null, "Session.replacePage null page", .{});
 
-    var current = self.page.?;
+    const current = self.page.?;
     const page_id = current.id;
     const parent = current.parent;
-    current.deinit();
+    destroyPage(self, current, .{});
 
     self.browser.env.memoryPressureNotification(.moderate);
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
+    const page = try self.allocPage();
+    errdefer self.destroyAllocPage(page);
     try Page.init(page, page_id, self, parent);
+    self.page = page;
     return page;
 }
 
 pub fn currentPage(self: *Session) ?*Page {
-    return &(self.page orelse return null);
+    return self.page;
 }
 
 pub const WaitResult = enum {
@@ -159,7 +173,7 @@ pub fn findPage(self: *Session, id: u32) ?*Page {
 }
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
-    var page = &(self.page orelse return .no_page);
+    var page = self.page orelse return .no_page;
     while (true) {
         const wait_result = self._wait(page, wait_ms) catch |err| {
             switch (err) {
@@ -204,6 +218,13 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     const exit_when_done = http_client.cdp_client == null;
 
     while (true) {
+        self.browser.app.display.dispatchNativeInput(page) catch |err| {
+            log.err(.browser, "native input dispatch", .{
+                .err = err,
+                .url = page.url,
+            });
+        };
+
         switch (page._parse_state) {
             .pre, .raw, .text, .image => {
                 // The main page hasn't started/finished navigating.
@@ -347,26 +368,29 @@ fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
     current_page._queued_navigation = null;
     defer browser.arena_pool.release(qn.arena);
 
-    const page_id, const parent = blk: {
-        const page = &self.page.?;
-        const page_id = page.id;
-        const parent = page.parent;
+    browser.http_client.abort();
 
-        browser.http_client.abort();
-        self.removePage();
+    // Scheduled navigation replaces the page/context, but the browser window
+    // belongs to the session and should remain open across navigations.
+    self.notification.dispatch(.page_remove, .{});
+    self.navigation.onRemovePage();
+    const page_id = current_page.id;
+    const parent = current_page.parent;
 
-        break :blk .{ page_id, parent };
-    };
+    const should_suspend_current = self.suspended_page == null and canSuspendCurrentPage(self, current_page);
+    if (should_suspend_current) {
+        current_page.setSuspended(true);
+        self.suspended_page = current_page;
+    } else {
+        destroyPage(self, current_page, .{ .abort_http = false });
+        browser.env.memoryPressureNotification(.moderate);
+    }
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
+    const page = try self.allocPage();
+    errdefer self.destroyAllocPage(page);
     try Page.init(page, page_id, self, parent);
-
-    // Creates a new NavigationEventTarget for this page.
+    self.page = page;
     try self.navigation.onNewPage(page);
-
-    // start JS env
-    // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
     self.notification.dispatch(.page_created, page);
 
     page.navigate(qn.url, qn.opts) catch |err| {
@@ -377,8 +401,68 @@ fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
     return page;
 }
 
+pub fn restoreSuspendedPage(self: *Session) !?*Page {
+    const suspended = self.suspended_page orelse return null;
+    const current = self.page orelse {
+        suspended.setSuspended(false);
+        self.page = suspended;
+        self.suspended_page = null;
+        try self.navigation.onNewPage(suspended);
+        self.notification.dispatch(.page_created, suspended);
+        return suspended;
+    };
+
+    if (current == suspended) {
+        suspended.setSuspended(false);
+        self.suspended_page = null;
+        return current;
+    }
+
+    self.notification.dispatch(.page_remove, .{});
+    self.navigation.onRemovePage();
+    destroyPage(self, current, .{ .abort_http = false });
+
+    suspended.setSuspended(false);
+    self.page = suspended;
+    self.suspended_page = null;
+    try self.navigation.onNewPage(suspended);
+    self.notification.dispatch(.page_created, suspended);
+    return suspended;
+}
+
+pub fn finalizeCommittedNavigation(self: *Session, page: *Page) void {
+    if (self.page != page) {
+        return;
+    }
+    if (self.suspended_page) |suspended| {
+        destroyPage(self, suspended, .{ .abort_http = false });
+        self.suspended_page = null;
+        self.browser.env.memoryPressureNotification(.moderate);
+    }
+}
+
 pub fn nextPageId(self: *Session) u32 {
     const id = self.page_id_gen +% 1;
     self.page_id_gen = id;
     return id;
+}
+
+fn allocPage(self: *Session) !*Page {
+    return try self.browser.app.allocator.create(Page);
+}
+
+fn destroyAllocPage(self: *Session, page: *Page) void {
+    self.browser.app.allocator.destroy(page);
+}
+
+fn canSuspendCurrentPage(self: *Session, page: *Page) bool {
+    return switch (self.browser.app.config.mode) {
+        .browse => page.parent == null,
+        else => false,
+    };
+}
+
+fn destroyPage(self: *Session, page: *Page, opts: Page.DeinitOptions) void {
+    page.deinitWithOptions(opts);
+    self.destroyAllocPage(page);
 }

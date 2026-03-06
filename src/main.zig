@@ -75,10 +75,20 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
         log.opts.filter_scopes = lfs;
     }
 
+    const requested_browser_mode = args.browserMode();
+
     // _app is global to handle graceful shutdown.
     var app = try App.init(allocator, &args);
 
     defer app.deinit();
+    const browser_mode = app.display.runtime_mode;
+    if (requested_browser_mode != browser_mode) {
+        log.warn(.app, "browser mode fallback", .{
+            .requested = @tagName(requested_browser_mode),
+            .runtime = @tagName(browser_mode),
+            .status = "experimental",
+        });
+    }
     app.telemetry.record(.{ .run = {} });
 
     switch (args.mode) {
@@ -87,7 +97,7 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             sighandler.* = .{ .arena = main_arena };
             try sighandler.install();
 
-            log.debug(.app, "startup", .{ .mode = "serve", .snapshot = app.snapshot.fromEmbedded() });
+            log.debug(.app, "startup", .{ .mode = "serve", .browser_mode = @tagName(browser_mode), .snapshot = app.snapshot.fromEmbedded() });
             const address = std.net.Address.parseIp(opts.host, opts.port) catch |err| {
                 log.fatal(.app, "invalid server address", .{ .err = err, .host = opts.host, .port = opts.port });
                 return args.printUsageAndExit(false);
@@ -106,9 +116,23 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 return err;
             };
         },
+        .browse => |opts| {
+            const url = opts.url;
+            log.debug(.app, "startup", .{
+                .mode = "browse",
+                .browser_mode = @tagName(browser_mode),
+                .url = url,
+                .snapshot = app.snapshot.fromEmbedded(),
+            });
+
+            lp.browse(app, url, .{}) catch |err| {
+                log.fatal(.app, "browse error", .{ .err = err, .url = url });
+                return err;
+            };
+        },
         .fetch => |opts| {
             const url = opts.url;
-            log.debug(.app, "startup", .{ .mode = "fetch", .dump_mode = opts.dump_mode, .url = url, .snapshot = app.snapshot.fromEmbedded() });
+            log.debug(.app, "startup", .{ .mode = "fetch", .browser_mode = @tagName(browser_mode), .dump_mode = opts.dump_mode, .url = url, .snapshot = app.snapshot.fromEmbedded() });
 
             var fetch_opts = lp.FetchOpts{
                 .wait_ms = 5000,

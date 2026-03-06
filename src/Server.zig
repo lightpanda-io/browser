@@ -84,7 +84,7 @@ pub fn stop(self: *Server) void {
         .linux => posix.shutdown(listener, .recv) catch |err| {
             log.warn(.app, "listener shutdown", .{ .err = err });
         },
-        .macos, .freebsd, .netbsd, .openbsd => {
+        .windows, .macos, .freebsd, .netbsd, .openbsd => {
             self.listener = null;
             posix.close(listener);
         },

@@ -847,6 +847,41 @@ pub fn remove(self: *Element, page: *Page) void {
     page.removeNode(parent, node, .{ .will_be_reconnected = false });
 }
 
+fn initializeTextControlCaretOnFocus(self: *Element) void {
+    if (self.is(Html.Input)) |input| {
+        switch (input._input_type) {
+            .text, .search, .url, .tel, .password => {},
+            else => return,
+        }
+        if (input._selection_start != 0 or input._selection_end != 0) {
+            return;
+        }
+        const value = input.getValue();
+        if (value.len == 0) {
+            return;
+        }
+        const len: u32 = @intCast(@min(value.len, @as(usize, std.math.maxInt(u32))));
+        input._selection_start = len;
+        input._selection_end = len;
+        input._selection_direction = .none;
+        return;
+    }
+
+    if (self.is(Html.TextArea)) |textarea| {
+        if (textarea._selection_start != 0 or textarea._selection_end != 0) {
+            return;
+        }
+        const value = textarea.getValue();
+        if (value.len == 0) {
+            return;
+        }
+        const len: u32 = @intCast(@min(value.len, @as(usize, std.math.maxInt(u32))));
+        textarea._selection_start = len;
+        textarea._selection_end = len;
+        textarea._selection_direction = .none;
+    }
+}
+
 pub fn focus(self: *Element, page: *Page) !void {
     if (self.asNode().isConnected() == false) {
         // a disconnected node cannot take focus
@@ -874,6 +909,8 @@ pub fn focus(self: *Element, page: *Page) !void {
         const focusout_event = try FocusEvent.initTrusted(comptime .wrap("focusout"), .{ .bubbles = true, .composed = true, .relatedTarget = new_target }, page);
         try page._event_manager.dispatch(old_target, focusout_event.asEvent());
     }
+
+    initializeTextControlCaretOnFocus(self);
 
     const old_related: ?*EventTarget = if (old_active) |old| old.asEventTarget() else null;
 
@@ -1040,6 +1077,10 @@ pub fn parentElement(self: *Element) ?*Element {
 }
 
 pub fn checkVisibility(self: *Element, page: *Page) bool {
+    if (!isHitTestVisibleElement(self)) {
+        return false;
+    }
+
     var current: ?*Element = self;
 
     while (current) |el| {
@@ -1055,6 +1096,26 @@ pub fn checkVisibility(self: *Element, page: *Page) bool {
     return true;
 }
 
+fn isHitTestVisibleElement(self: *Element) bool {
+    const html = self.is(Html) orelse return true;
+    return switch (html._type) {
+        .base,
+        .head,
+        .link,
+        .meta,
+        .param,
+        .script,
+        .source,
+        .style,
+        .template,
+        .title,
+        .track,
+        => false,
+        .input => |input| input._input_type != .hidden,
+        else => true,
+    };
+}
+
 fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
     var width: f64 = 5.0;
     var height: f64 = 5.0;
@@ -1063,6 +1124,13 @@ fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height
         const decl = style.asCSSStyleDeclaration();
         width = CSS.parseDimension(decl.getPropertyValue("width", page)) orelse 5.0;
         height = CSS.parseDimension(decl.getPropertyValue("height", page)) orelse 5.0;
+    }
+
+    if (width == 5.0) {
+        width = CSS.parseDimension(inlineStyleDeclarationValue(self, "width") orelse "") orelse width;
+    }
+    if (height == 5.0) {
+        height = CSS.parseDimension(inlineStyleDeclarationValue(self, "height") orelse "") orelse height;
     }
 
     if (width == 5.0 or height == 5.0) {
@@ -1086,6 +1154,24 @@ fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height
     }
 
     return .{ .width = width, .height = height };
+}
+
+fn inlineStyleDeclarationValue(self: *Element, comptime property: []const u8) ?[]const u8 {
+    const style_attr = self.getAttributeSafe(comptime .wrap("style")) orelse return null;
+    return inlineStyleAttributeValue(style_attr, property);
+}
+
+fn inlineStyleAttributeValue(style_attr: []const u8, comptime property: []const u8) ?[]const u8 {
+    var declarations = std.mem.tokenizeScalar(u8, style_attr, ';');
+    while (declarations.next()) |declaration| {
+        const colon = std.mem.indexOfScalar(u8, declaration, ':') orelse continue;
+        const name = std.mem.trim(u8, declaration[0..colon], &std.ascii.whitespace);
+        if (!std.ascii.eqlIgnoreCase(name, property)) {
+            continue;
+        }
+        return std.mem.trim(u8, declaration[colon + 1 ..], &std.ascii.whitespace);
+    }
+    return null;
 }
 
 pub fn getClientWidth(self: *Element, page: *Page) f64 {
@@ -1737,6 +1823,13 @@ pub const Build = struct {
 };
 
 const testing = @import("../../testing.zig");
+test "inlineStyleDeclarationValue parses width and height from inline style" {
+    const style = "display:block; width: 220px; height: 40px; background: #1a55d6;";
+    try std.testing.expectEqualStrings("220px", inlineStyleAttributeValue(style, "width").?);
+    try std.testing.expectEqualStrings("40px", inlineStyleAttributeValue(style, "height").?);
+    try std.testing.expect(inlineStyleAttributeValue(style, "color") == null);
+}
+
 test "WebApi: Element" {
     try testing.htmlRunner("element", .{});
 }

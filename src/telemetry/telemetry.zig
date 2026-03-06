@@ -127,6 +127,10 @@ extern fn unsetenv(name: [*:0]u8) c_int;
 
 const testing = @import("../testing.zig");
 test "telemetry: disabled by environment" {
+    if (builtin.os.tag == .windows) {
+        return error.SkipZigTest;
+    }
+
     _ = setenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"), @constCast(""), 0);
     defer _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
 

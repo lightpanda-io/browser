@@ -12,9 +12,11 @@ crate-type = ["cdylib", "staticlib"]
 html5ever = "0.35.0"
 string_cache = "0.9.0"
 typed-arena = "2.0.2"
-tikv-jemallocator = {version = "0.6.0", features = ["stats"]}
-tikv-jemalloc-ctl = {version = "0.6.0", features = ["stats"]}
 xml5ever = "0.35.0"
+
+[target.'cfg(not(windows))'.dependencies]
+tikv-jemallocator = { version = "0.6.0", features = ["stats"] }
+tikv-jemalloc-ctl = { version = "0.6.0", features = ["stats"] }
 
 [profile.release]
 lto = true
