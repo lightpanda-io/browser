@@ -357,6 +357,9 @@ pub fn deinit(self: *Page) void {
         while (it.next()) |value_ptr| {
             if (value_ptr.count > 0) {
                 log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type, .url = self.url });
+                if (comptime builtin.is_test) {
+                    @panic("ArenaPool Leak");
+                }
             }
         }
     }
@@ -429,6 +432,9 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
         const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
         if (found.count != 1) {
             log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type, .url = self.url });
+            if (comptime builtin.is_test) {
+                @panic("ArenaPool Double Free");
+            }
             return;
         }
         found.count = 0;
