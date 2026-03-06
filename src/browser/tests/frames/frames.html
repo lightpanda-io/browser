@@ -13,6 +13,7 @@
 <script id="basic">
    // reload it
   $('#f2').src = 'support/sub2.html';
+  testing.expectEqual(true, true);
 
   testing.eventually(() => {
     testing.expectEqual(undefined, window[10]);
@@ -103,29 +104,29 @@
   }
 </script>
 
-<!--
-Need correct _target support
 <script id=link_click>
-  {
-    let f6 = document.createElement('iframe');
-    f6.id = 'f6';
-    f6.addEventListener('load', () => {
-      f6.contentDocument.querySelector('#link').click();
-    }, {once: true});
-    f6.src = "support/with_link.html";
-    document.documentElement.appendChild(f6);
-
-    testing.eventually(() => {
-      console.warn(f6.contentDocument);
-      testing.expectEqual("<html><head></head><body></body></html>", f6.contentDocument.documentElement.outerHTML);
+  testing.async(async (restore) => {
+    await new Promise((resolve) => {
+      let count = 0;
+      let f6 = document.createElement('iframe');
+      f6.id = 'f6';
+      f6.addEventListener('load', () => {
+        if (++count == 2) {
+          resolve();
+          return;
+        }
+        f6.contentDocument.querySelector('#link').click();
+      });
+      f6.src = "support/with_link.html";
+      document.documentElement.appendChild(f6);
     });
-  }
-</script>
- -->
-
-<script id=count>
-  testing.eventually(() => {
-    testing.expectEqual(5, window.length);
+    restore();
+    testing.expectEqual("<html><head></head><body>It was clicked!\n</body></html>", f6.contentDocument.documentElement.outerHTML);
   });
 </script>
 
+<script id=count>
+  testing.eventually(() => {
+    testing.expectEqual(6, window.length);
+  });
+</script>

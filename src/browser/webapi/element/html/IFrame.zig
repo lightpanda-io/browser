@@ -30,7 +30,7 @@ const IFrame = @This();
 _proto: *HtmlElement,
 _src: []const u8 = "",
 _executed: bool = false,
-_content_window: ?*Window = null,
+_window: ?*Window = null,
 
 pub fn asElement(self: *IFrame) *Element {
     return self._proto._proto;
@@ -40,11 +40,11 @@ pub fn asNode(self: *IFrame) *Node {
 }
 
 pub fn getContentWindow(self: *const IFrame) ?*Window {
-    return self._content_window;
+    return self._window;
 }
 
 pub fn getContentDocument(self: *const IFrame) ?*Document {
-    const window = self._content_window orelse return null;
+    const window = self._window orelse return null;
     return window._document;
 }
 

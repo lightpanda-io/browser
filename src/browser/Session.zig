@@ -416,7 +416,7 @@ fn processQueuedNavigation(self: *Session) !void {
         const page = navigations.items[i];
         if (page._queued_navigation) |qn| {
             if (qn.is_about_blank) {
-                log.warn(.page, "recursive about blank", .{});
+                log.warn(.page, "recursive about    blank", .{});
                 _ = navigations.swapRemove(i);
                 continue;
             }
@@ -425,50 +425,37 @@ fn processQueuedNavigation(self: *Session) !void {
     }
 }
 
-fn processFrameNavigation(self: *Session, current_page: *Page, qn: *QueuedNavigation) !void {
-    lp.assert(current_page.parent != null, "root queued navigation", .{});
+fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !void {
+    lp.assert(page.parent != null, "root queued navigation", .{});
 
     const browser = self.browser;
-    const iframe = current_page.iframe.?;
-    const parent = current_page.parent.?;
+    const iframe = page.iframe.?;
+    const parent = page.parent.?;
 
-    current_page._queued_navigation = null;
+    page._queued_navigation = null;
     defer browser.arena_pool.release(qn.arena);
 
-    errdefer iframe._content_window = null;
+    errdefer iframe._window = null;
 
-    if (current_page._parent_notified) {
+    if (page._parent_notified) {
         // we already notified the parent that we had loaded
         parent._pending_loads += 1;
     }
 
-    const frame_id = current_page._frame_id;
-    defer current_page.deinit(true);
+    const frame_id = page._frame_id;
+    page.deinit(true);
+    page.* = undefined;
 
-    const new_page = try parent.arena.create(Page);
-    try Page.init(new_page, frame_id, self, parent);
-    errdefer new_page.deinit(true);
+    try Page.init(page, frame_id, self, parent);
+    errdefer page.deinit(true);
 
-    new_page.iframe = iframe;
-    iframe._content_window = new_page.window;
+    page.iframe = iframe;
+    iframe._window = page.window;
 
-    new_page.navigate(qn.url, qn.opts) catch |err| {
+    page.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued frame navigation error", .{ .err = err });
         return err;
     };
-
-    for (parent.frames.items, 0..) |p, i| {
-        // Page.frames may or may not be sorted (depending on the
-        // Page.frames_sorted flag). Putting this new page at the same
-        // position as the one it's replacing is the simplest, safest and
-        // probably most efficient option.
-        if (p == current_page) {
-            parent.frames.items[i] = new_page;
-            break;
-        }
-    } else {
-        lp.assert(false, "Existing frame not found", .{ .len = parent.frames.items.len });
-    }
 }
 
 fn processRootQueuedNavigation(self: *Session) !void {

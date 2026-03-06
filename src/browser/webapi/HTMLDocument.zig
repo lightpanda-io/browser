@@ -180,8 +180,8 @@ pub fn getLocation(self: *const HTMLDocument) ?*@import("Location.zig") {
     return self._proto._location;
 }
 
-pub fn setLocation(_: *const HTMLDocument, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .script);
+pub fn setLocation(self: *HTMLDocument, url: [:0]const u8, page: *Page) !void {
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._proto._page });
 }
 
 pub fn getAll(self: *HTMLDocument, page: *Page) !*collections.HTMLAllCollection {
