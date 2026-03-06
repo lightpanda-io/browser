@@ -34,14 +34,6 @@ pub fn init(page: *Page) !TextEncoderStream {
     };
 }
 
-pub fn acquireRef(self: *TextEncoderStream) void {
-    self._transform.acquireRef();
-}
-
-pub fn deinit(self: *TextEncoderStream, shutdown: bool, page: *Page) void {
-    self._transform.deinit(shutdown, page);
-}
-
 fn encodeTransform(controller: *TransformStream.DefaultController, chunk: js.Value) !void {
     // chunk should be a JS string; encode it as UTF-8 bytes (Uint8Array)
     const str = chunk.isString() orelse return error.InvalidChunk;
@@ -64,8 +56,6 @@ pub const JsApi = struct {
         pub const name = "TextEncoderStream";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
-        pub const finalizer = bridge.finalizer(TextEncoderStream.deinit);
     };
 
     pub const constructor = bridge.constructor(TextEncoderStream.init, .{});
