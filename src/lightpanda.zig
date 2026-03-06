@@ -21,6 +21,7 @@ pub const App = @import("App.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const URL = @import("browser/URL.zig");
+pub const String = @import("string.zig").String;
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");

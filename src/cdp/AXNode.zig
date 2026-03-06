@@ -987,7 +987,7 @@ fn isIgnore(self: AXNode, page: *Page) bool {
     return false;
 }
 
-fn getRole(self: AXNode) ![]const u8 {
+pub fn getRole(self: AXNode) ![]const u8 {
     if (self.role_attr) |role_value| {
         // TODO the role can have multiple comma separated values.
         return role_value;
