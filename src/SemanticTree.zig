@@ -79,10 +79,8 @@ fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
 fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
-        switch (el.getTag()) {
-            .script, .style, .meta, .link, .noscript, .svg, .head, .title => return,
-            else => {},
-        }
+        const tag = el.getTag();
+        if (tag.isMetadata() or tag == .svg) return;
 
         // CSS display: none visibility check (inline style only for now)
         if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
@@ -118,9 +116,7 @@ fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const 
         node_name = el.getTagNameLower();
 
         const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
-        if (ax_role.isInteractive()) {
-            is_interactive = true;
-        }
+        is_interactive = ax_role.isInteractive();
 
         const event_target = node.asEventTarget();
         if (self.page._event_manager.hasListener(event_target, "click") or

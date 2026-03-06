@@ -1588,6 +1588,50 @@ pub const Tag = enum {
             else => tag,
         };
     }
+
+    pub fn isBlock(self: Tag) bool {
+        return switch (self) {
+            .p,
+            .div,
+            .section,
+            .article,
+            .main,
+            .header,
+            .footer,
+            .nav,
+            .aside,
+            .h1,
+            .h2,
+            .h3,
+            .h4,
+            .h5,
+            .h6,
+            .ul,
+            .ol,
+            .blockquote,
+            .pre,
+            .table,
+            .hr,
+            => true,
+            else => false,
+        };
+    }
+
+    pub fn isMetadata(self: Tag) bool {
+        return switch (self) {
+            .script,
+            .style,
+            .meta,
+            .link,
+            .noscript,
+            .head,
+            .title,
+            .base,
+            .template,
+            => true,
+            else => false,
+        };
+    }
 };
 
 pub const JsApi = struct {

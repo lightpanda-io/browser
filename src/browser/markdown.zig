@@ -47,13 +47,6 @@ const State = struct {
     last_char_was_newline: bool = true,
 };
 
-fn isBlock(tag: Element.Tag) bool {
-    return switch (tag) {
-        .p, .div, .section, .article, .main, .header, .footer, .nav, .aside, .h1, .h2, .h3, .h4, .h5, .h6, .ul, .ol, .blockquote, .pre, .table, .hr => true,
-        else => false,
-    };
-}
-
 fn shouldAddSpacing(tag: Element.Tag) bool {
     return switch (tag) {
         .p, .h1, .h2, .h3, .h4, .h5, .h6, .blockquote, .pre, .table => true,
@@ -100,10 +93,8 @@ fn isSignificantText(node: *Node) bool {
 }
 
 fn isVisibleElement(el: *Element) bool {
-    return switch (el.getTag()) {
-        .script, .style, .noscript, .template, .head, .meta, .link, .title, .svg => false,
-        else => true,
-    };
+    const tag = el.getTag();
+    return !tag.isMetadata() and tag != .svg;
 }
 
 fn getAnchorLabel(el: *Element) ?[]const u8 {
@@ -113,7 +104,7 @@ fn getAnchorLabel(el: *Element) ?[]const u8 {
 fn hasBlockDescendant(root: *Node) bool {
     var tw = TreeWalker.FullExcludeSelf.Elements.init(root, .{});
     while (tw.next()) |el| {
-        if (isBlock(el.getTag())) return true;
+        if (el.getTag().isBlock()) return true;
     }
     return false;
 }
@@ -187,7 +178,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
     // --- Opening Tag Logic ---
 
     // Ensure block elements start on a new line (double newline for paragraphs etc)
-    if (isBlock(tag) and !state.in_table) {
+    if (tag.isBlock() and !state.in_table) {
         try ensureNewline(state, writer);
         if (shouldAddSpacing(tag)) {
             try writer.writeByte('\n');
@@ -426,7 +417,7 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
     }
 
     // Post-block newlines
-    if (isBlock(tag) and !state.in_table) {
+    if (tag.isBlock() and !state.in_table) {
         try ensureNewline(state, writer);
     }
 }
