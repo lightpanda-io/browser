@@ -123,6 +123,42 @@ const BrowseTab = struct {
     }
 };
 
+const ClosedBrowseTab = struct {
+    url: []u8,
+    zoom_percent: i32,
+
+    fn deinit(self: *ClosedBrowseTab, allocator: std.mem.Allocator) void {
+        allocator.free(self.url);
+        self.* = undefined;
+    }
+};
+
+const SavedBrowseTab = struct {
+    url: []u8,
+    zoom_percent: i32,
+
+    fn deinit(self: *SavedBrowseTab, allocator: std.mem.Allocator) void {
+        allocator.free(self.url);
+        self.* = undefined;
+    }
+};
+
+const SavedBrowseSession = struct {
+    tabs: std.ArrayListUnmanaged(SavedBrowseTab) = .{},
+    active_index: usize = 0,
+
+    fn deinit(self: *SavedBrowseSession, allocator: std.mem.Allocator) void {
+        for (self.tabs.items) |*tab| {
+            tab.deinit(allocator);
+        }
+        self.tabs.deinit(allocator);
+        self.* = .{};
+    }
+};
+
+const BROWSE_SESSION_FILE = "browse-session-v1.txt";
+const MAX_CLOSED_BROWSE_TABS = 16;
+
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     const http_client = try app.http.createClient(app.allocator);
     defer http_client.deinit();
@@ -196,19 +232,23 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
 pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     var tabs: std.ArrayListUnmanaged(*BrowseTab) = .{};
     defer deinitBrowseTabs(app.allocator, &tabs);
+    var closed_tabs: std.ArrayListUnmanaged(ClosedBrowseTab) = .{};
+    defer deinitClosedBrowseTabs(app.allocator, &closed_tabs);
 
-    try tabs.append(app.allocator, try createBrowseTab(app, url));
-    var active_tab_index: usize = 0;
+    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url);
     var displayed_tab_index: ?usize = null;
+    var last_saved_session_hash: u64 = 0;
     try updateActiveBrowseDisplay(app, tabs.items, active_tab_index, &displayed_tab_index);
+    persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, &last_saved_session_hash);
 
     browse_loop: while (!app.shutdown and !app.display.userClosed()) {
         var handled_command = false;
         while (app.display.nextBrowserCommand()) |command| {
             defer command.deinit(app.allocator);
             handled_command = true;
-            try handleBrowseCommand(app, &tabs, &active_tab_index, command);
+            try handleBrowseCommand(app, &tabs, &closed_tabs, &active_tab_index, command);
             if (tabs.items.len == 0) {
+                clearSavedBrowseSession(app);
                 break :browse_loop;
             }
         }
@@ -235,12 +275,14 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
         try updateActiveBrowseDisplay(app, tabs.items, active_tab_index, &displayed_tab_index);
+        persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, &last_saved_session_hash);
     }
 }
 
 fn handleBrowseCommand(
     app: *App,
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
+    closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab),
     active_tab_index: *usize,
     command: BrowserCommand,
 ) !void {
@@ -278,6 +320,7 @@ fn handleBrowseCommand(
                 return;
             }
             const removed = tabs.orderedRemove(index);
+            try pushClosedBrowseTab(app.allocator, closed_tabs, removed);
             removed.deinit(app.allocator);
             if (tabs.items.len == 0) {
                 return;
@@ -288,6 +331,24 @@ fn handleBrowseCommand(
                 active_tab_index.* = tabs.items.len - 1;
             }
             tabs.items[active_tab_index.*].last_presented_hash = 0;
+        },
+        .tab_reopen_closed => {
+            var closed = popClosedBrowseTab(closed_tabs) orelse return;
+            defer closed.deinit(app.allocator);
+
+            var reopened_url_z: ?[:0]u8 = null;
+            defer if (reopened_url_z) |owned| app.allocator.free(owned);
+            const initial_url = if (std.mem.eql(u8, closed.url, "about:blank"))
+                null
+            else blk: {
+                reopened_url_z = try app.allocator.dupeZ(u8, closed.url);
+                break :blk reopened_url_z.?;
+            };
+            const tab = try createBrowseTab(app, initial_url);
+            tab.zoom_percent = closed.zoom_percent;
+            try tabs.append(app.allocator, tab);
+            active_tab_index.* = tabs.items.len - 1;
+            tab.last_presented_hash = 0;
         },
         else => {
             if (tabs.items.len == 0) {
@@ -473,6 +534,200 @@ fn deinitBrowseTabs(allocator: std.mem.Allocator, tabs: *std.ArrayListUnmanaged(
     tabs.deinit(allocator);
 }
 
+fn deinitClosedBrowseTabs(allocator: std.mem.Allocator, closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab)) void {
+    while (closed_tabs.items.len > 0) {
+        closed_tabs.items.len -= 1;
+        closed_tabs.items[closed_tabs.items.len].deinit(allocator);
+    }
+    closed_tabs.deinit(allocator);
+}
+
+fn popClosedBrowseTab(closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab)) ?ClosedBrowseTab {
+    if (closed_tabs.items.len == 0) {
+        return null;
+    }
+    return closed_tabs.pop();
+}
+
+fn pushClosedBrowseTab(
+    allocator: std.mem.Allocator,
+    closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab),
+    tab: *BrowseTab,
+) !void {
+    const url = browseTabPersistentUrl(tab);
+    const owned_url = try allocator.dupe(u8, url);
+    errdefer allocator.free(owned_url);
+
+    if (closed_tabs.items.len == MAX_CLOSED_BROWSE_TABS) {
+        var oldest = closed_tabs.orderedRemove(0);
+        oldest.deinit(allocator);
+    }
+    try closed_tabs.append(allocator, .{
+        .url = owned_url,
+        .zoom_percent = tab.zoom_percent,
+    });
+}
+
+fn initializeBrowseTabs(
+    app: *App,
+    tabs: *std.ArrayListUnmanaged(*BrowseTab),
+    startup_url: [:0]const u8,
+) !usize {
+    var saved = loadSavedBrowseSession(app.allocator, app.app_dir_path);
+    defer saved.deinit(app.allocator);
+
+    if (saved.tabs.items.len == 0) {
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url));
+        return 0;
+    }
+
+    for (saved.tabs.items) |saved_tab| {
+        var restored_url_z: ?[:0]u8 = null;
+        defer if (restored_url_z) |owned| app.allocator.free(owned);
+        const initial_url = if (std.mem.eql(u8, saved_tab.url, "about:blank"))
+            null
+        else blk: {
+            restored_url_z = try app.allocator.dupeZ(u8, saved_tab.url);
+            break :blk restored_url_z.?;
+        };
+        const tab = try createBrowseTab(app, initial_url);
+        tab.zoom_percent = saved_tab.zoom_percent;
+        try tabs.append(app.allocator, tab);
+    }
+
+    var active_index = normalizeActiveTabIndex(saved.active_index, tabs.items.len);
+    if (shouldAppendStartupUrl(saved.tabs.items, startup_url)) {
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url));
+        active_index = tabs.items.len - 1;
+    }
+
+    return active_index;
+}
+
+fn loadSavedBrowseSession(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) SavedBrowseSession {
+    const dir_path = app_dir_path orelse return .{};
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return .{};
+    defer dir.close();
+
+    const file = dir.openFile(BROWSE_SESSION_FILE, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return .{},
+    };
+    defer file.close();
+
+    const data = file.readToEndAlloc(allocator, 1024 * 64) catch return .{};
+    defer allocator.free(data);
+
+    return parseSavedBrowseSession(allocator, data) catch .{};
+}
+
+fn parseSavedBrowseSession(allocator: std.mem.Allocator, data: []const u8) !SavedBrowseSession {
+    var session: SavedBrowseSession = .{};
+    errdefer session.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, data, '\n');
+    while (it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r\n\t ");
+        if (line.len == 0 or std.mem.eql(u8, line, "lightpanda-browse-session-v1")) {
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "active\t")) {
+            session.active_index = std.fmt.parseInt(usize, line["active\t".len..], 10) catch session.active_index;
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "tab\t")) {
+            const rest = line["tab\t".len..];
+            const sep = std.mem.indexOfScalar(u8, rest, '\t') orelse continue;
+            const zoom_percent = std.fmt.parseInt(i32, rest[0..sep], 10) catch 100;
+            const url = std.mem.trim(u8, rest[sep + 1 ..], "\r\n\t ");
+            if (url.len == 0) {
+                continue;
+            }
+            try session.tabs.append(allocator, .{
+                .url = try allocator.dupe(u8, url),
+                .zoom_percent = std.math.clamp(zoom_percent, 30, 300),
+            });
+        }
+    }
+
+    return session;
+}
+
+fn shouldAppendStartupUrl(saved_tabs: []const SavedBrowseTab, startup_url: []const u8) bool {
+    const trimmed_startup = std.mem.trim(u8, startup_url, &std.ascii.whitespace);
+    if (trimmed_startup.len == 0) {
+        return false;
+    }
+    for (saved_tabs) |saved_tab| {
+        if (std.mem.eql(u8, saved_tab.url, trimmed_startup)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn clearSavedBrowseSession(app: *App) void {
+    const dir_path = app.app_dir_path orelse return;
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+    defer dir.close();
+    dir.deleteFile(BROWSE_SESSION_FILE) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => log.warn(.app, "browse session delete failed", .{ .err = err }),
+    };
+}
+
+fn persistBrowseSessionIfChanged(
+    app: *App,
+    tabs: []const *BrowseTab,
+    active_tab_index: usize,
+    last_saved_hash: *u64,
+) void {
+    const next_hash = hashBrowseSessionState(tabs, active_tab_index);
+    if (next_hash == last_saved_hash.*) {
+        return;
+    }
+    last_saved_hash.* = next_hash;
+
+    if (tabs.len == 0) {
+        clearSavedBrowseSession(app);
+        return;
+    }
+
+    saveBrowseSession(app, tabs, active_tab_index) catch |err| {
+        log.warn(.app, "browse session save failed", .{ .err = err });
+    };
+}
+
+fn hashBrowseSessionState(tabs: []const *BrowseTab, active_tab_index: usize) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    const normalized_active_index = normalizeActiveTabIndex(active_tab_index, tabs.len);
+    hasher.update(std.mem.asBytes(&normalized_active_index));
+    for (tabs) |tab| {
+        hasher.update(browseTabPersistentUrl(tab));
+        hasher.update(std.mem.asBytes(&tab.zoom_percent));
+    }
+    return hasher.final();
+}
+
+fn saveBrowseSession(app: *App, tabs: []const *BrowseTab, active_tab_index: usize) !void {
+    const dir_path = app.app_dir_path orelse return;
+    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    defer dir.close();
+
+    var buf = std.Io.Writer.Allocating.init(app.allocator);
+    defer buf.deinit();
+
+    try buf.writer.writeAll("lightpanda-browse-session-v1\n");
+    try buf.writer.print("active\t{d}\n", .{normalizeActiveTabIndex(active_tab_index, tabs.len)});
+    for (tabs) |tab| {
+        try buf.writer.print("tab\t{d}\t{s}\n", .{ tab.zoom_percent, browseTabPersistentUrl(tab) });
+    }
+    try dir.writeFile(.{
+        .sub_path = BROWSE_SESSION_FILE,
+        .data = buf.written(),
+    });
+}
+
 fn createBrowseTab(app: *App, initial_url: ?[:0]const u8) !*BrowseTab {
     const tab = try app.allocator.create(BrowseTab);
     errdefer app.allocator.destroy(tab);
@@ -589,6 +844,17 @@ fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
         .url = url,
         .is_loading = pageIsLoading(page),
     };
+}
+
+fn browseTabPersistentUrl(tab: *BrowseTab) []const u8 {
+    const page = tab.session.currentPage() orelse return "about:blank";
+    if (trimmedOrNull(page.url)) |url| {
+        return url;
+    }
+    if (trimmedOrNull(tab.committed_surface.url)) |url| {
+        return url;
+    }
+    return "about:blank";
 }
 
 fn normalizeBrowseUrl(allocator: std.mem.Allocator, raw: []const u8) !?[:0]u8 {
@@ -836,6 +1102,38 @@ test "applyZoomCommand clamps and resets zoom" {
     try std.testing.expectEqual(@as(i32, 100), applyZoomCommand(180, .zoom_reset));
     try std.testing.expectEqual(@as(i32, 300), applyZoomCommand(300, .zoom_in));
     try std.testing.expectEqual(@as(i32, 30), applyZoomCommand(30, .zoom_out));
+}
+
+test "parseSavedBrowseSession restores active index and zoom" {
+    var session = try parseSavedBrowseSession(
+        std.testing.allocator,
+        "lightpanda-browse-session-v1\nactive\t1\ntab\t125\thttp://one.test/\ntab\t90\thttp://two.test/\n",
+    );
+    defer session.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), session.active_index);
+    try std.testing.expectEqual(@as(usize, 2), session.tabs.items.len);
+    try std.testing.expectEqualStrings("http://one.test/", session.tabs.items[0].url);
+    try std.testing.expectEqual(@as(i32, 125), session.tabs.items[0].zoom_percent);
+    try std.testing.expectEqualStrings("http://two.test/", session.tabs.items[1].url);
+    try std.testing.expectEqual(@as(i32, 90), session.tabs.items[1].zoom_percent);
+}
+
+test "shouldAppendStartupUrl skips restored duplicates" {
+    var saved = SavedBrowseSession{};
+    defer saved.deinit(std.testing.allocator);
+
+    try saved.tabs.append(std.testing.allocator, .{
+        .url = try std.testing.allocator.dupe(u8, "http://one.test/"),
+        .zoom_percent = 100,
+    });
+    try saved.tabs.append(std.testing.allocator, .{
+        .url = try std.testing.allocator.dupe(u8, "http://two.test/"),
+        .zoom_percent = 110,
+    });
+
+    try std.testing.expect(!shouldAppendStartupUrl(saved.tabs.items, "http://two.test/"));
+    try std.testing.expect(shouldAppendStartupUrl(saved.tabs.items, "http://three.test/"));
 }
 
 test "normalizeBrowseUrl rejects blank input" {

@@ -12,6 +12,7 @@ pub const BrowserCommand = union(enum) {
     tab_new,
     tab_next,
     tab_previous,
+    tab_reopen_closed,
     zoom_in,
     zoom_out,
     zoom_reset,

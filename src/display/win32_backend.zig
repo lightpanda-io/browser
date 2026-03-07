@@ -3385,7 +3385,7 @@ fn renderPresentationScene(
     };
     const hint_text = std.fmt.allocPrint(
         allocator,
-        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
+        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
         .{snapshot.zoom_percent},
     ) catch return;
     defer allocator.free(hint_text);
@@ -4086,6 +4086,10 @@ fn handlePresentationShortcutKey(
     }
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and vk == c.VK_TAB) {
         queueBrowserCommand(backend, if (modifiers.shift) .tab_previous else .tab_next);
+        return true;
+    }
+    if (modifiers.ctrl and modifiers.shift and !modifiers.alt and !modifiers.meta and vk == 'T') {
+        queueBrowserCommand(backend, .tab_reopen_closed);
         return true;
     }
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'T') {
@@ -5497,12 +5501,14 @@ test "win32 tab shortcuts enqueue commands" {
     backend.presentation_title = try std.testing.allocator.dupe(u8, "Tabs");
 
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'T', .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'T', .{ .ctrl = true, .shift = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_TAB, .{ .ctrl = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_TAB, .{ .ctrl = true, .shift = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, '2', .{ .ctrl = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'W', .{ .ctrl = true }));
 
     try std.testing.expectEqual(BrowserCommand.tab_new, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.tab_reopen_closed, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand.tab_next, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand.tab_previous, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand{ .tab_activate = 1 }, backend.nextBrowserCommand().?);
