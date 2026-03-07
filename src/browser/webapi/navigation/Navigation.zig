@@ -308,7 +308,7 @@ pub fn navigateInner(
 
                 _ = try self.pushEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = page });
             }
         },
         .replace => |state| {
@@ -321,7 +321,7 @@ pub fn navigateInner(
 
                 _ = try self.replaceEntry(url, .{ .source = .navigation, .value = state }, page, true);
             } else {
-                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = page });
             }
         },
         .traverse => |index| {
@@ -334,11 +334,11 @@ pub fn navigateInner(
                 // todo: Fire navigate event
                 finished.resolve("navigation traverse", {});
             } else {
-                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
+                try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = page });
             }
         },
         .reload => {
-            try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .script);
+            try page.scheduleNavigation(url, .{ .reason = .navigation, .kind = kind }, .{ .script = page });
         },
     }
 

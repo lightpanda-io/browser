@@ -153,7 +153,7 @@ pub fn fromIsolate(isolate: js.Isolate) *Context {
 }
 
 pub fn deinit(self: *Context) void {
-    if (comptime IS_DEBUG) {
+    if (comptime IS_DEBUG and @import("builtin").is_test == false) {
         var it = self.unknown_properties.iterator();
         while (it.next()) |kv| {
             log.debug(.unknown_prop, "unknown property", .{

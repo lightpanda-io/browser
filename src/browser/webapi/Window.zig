@@ -160,8 +160,8 @@ pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
 
-pub fn setLocation(_: *const Window, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .script);
+pub fn setLocation(self: *Window, url: [:0]const u8, page: *Page) !void {
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._page });
 }
 
 pub fn getHistory(_: *Window, page: *Page) *History {

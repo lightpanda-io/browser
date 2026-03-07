@@ -83,19 +83,19 @@ pub fn setHash(_: *const Location, hash: []const u8, page: *Page) !void {
     return page.scheduleNavigation(normalized_hash, .{
         .reason = .script,
         .kind = .{ .replace = null },
-    }, .script);
+    }, .{ .script = page });
 }
 
 pub fn assign(_: *const Location, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .script);
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = page });
 }
 
 pub fn replace(_: *const Location, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .script);
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .replace = null } }, .{ .script = page });
 }
 
 pub fn reload(_: *const Location, page: *Page) !void {
-    return page.scheduleNavigation(page.url, .{ .reason = .script, .kind = .reload }, .script);
+    return page.scheduleNavigation(page.url, .{ .reason = .script, .kind = .reload }, .{ .script = page });
 }
 
 pub fn toString(self: *const Location, page: *const Page) ![:0]const u8 {

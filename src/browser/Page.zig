@@ -69,6 +69,7 @@ const ArenaPool = App.ArenaPool;
 const timestamp = @import("../datetime.zig").timestamp;
 const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
+const IFrame = Element.Html.IFrame;
 const WebApiURL = @import("webapi/URL.zig");
 const GlobalEventHandlersLookup = @import("webapi/global_event_handlers.zig").Lookup;
 
@@ -223,7 +224,7 @@ _arena_pool_leak_track: (if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, struct {
 parent: ?*Page,
 window: *Window,
 document: *Document,
-iframe: ?*Element.Html.IFrame = null,
+iframe: ?*IFrame = null,
 frames: std.ArrayList(*Page) = .{},
 frames_sorted: bool = true,
 
@@ -323,9 +324,9 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     }
 }
 
-pub fn deinit(self: *Page) void {
+pub fn deinit(self: *Page, abort_http: bool) void {
     for (self.frames.items) |frame| {
-        frame.deinit();
+        frame.deinit(abort_http);
     }
 
     if (comptime IS_DEBUG) {
@@ -346,10 +347,16 @@ pub fn deinit(self: *Page) void {
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
+
     if (self.parent == null) {
-        // only the root frame needs to abort this. It's more efficient this way
         session.browser.http_client.abort();
+    } else if (abort_http) {
+        // a small optimization, it's faster to abort _everything_ on the root
+        // page, so we prefer that. But if it's just the frame that's going
+        // away (a frame navigation) then we'll abort the frame-related requests
+        session.browser.http_client.abortFrame(self._frame_id);
     }
+
     self._script_manager.deinit();
 
     if (comptime IS_DEBUG) {
@@ -357,6 +364,9 @@ pub fn deinit(self: *Page) void {
         while (it.next()) |value_ptr| {
             if (value_ptr.count > 0) {
                 log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type, .url = self.url });
+                if (comptime builtin.is_test) {
+                    @panic("ArenaPool Leak");
+                }
             }
         }
     }
@@ -429,6 +439,9 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
         const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
         if (found.count != 1) {
             log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type, .url = self.url });
+            if (comptime builtin.is_test) {
+                @panic("ArenaPool Double Free");
+            }
             return;
         }
         found.count = 0;
@@ -459,16 +472,15 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     // if the url is about:blank, we load an empty HTML document in the
     // page and dispatch the events.
     if (std.mem.eql(u8, "about:blank", request_url)) {
+        self.url = "about:blank";
         // Assume we parsed the document.
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
 
-        {
-            const parse_arena = try self.getArena(.{ .debug = "about:blank parse" });
-            defer self.releaseArena(parse_arena);
-            var parser = Parser.init(parse_arena, self.document.asNode(), self);
-            parser.parse("<html><head></head><body></body></html>");
-        }
+        self.document.injectBlank(self) catch |err| {
+            log.err(.browser, "inject blank", .{ .err = err });
+            return error.InjectBlankFailed;
+        };
         self.documentIsComplete();
 
         session.notification.dispatch(.page_navigate, &.{
@@ -559,57 +571,89 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     };
 }
 
-// We cannot navigate immediately as navigating will delete the DOM tree,
-// which holds this event's node.
-// As such we schedule the function to be called as soon as possible.
-pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
-    if (self.canScheduleNavigation(priority) == false) {
+// Navigation can happen in many places, such as executing a <script> tag or
+// a JavaScript callback, a CDP command, etc...It's rarely safe to do immediately
+// as the caller almost certainly does'nt expect the page to go away during the
+// call. So, we schedule the navigation for the next tick.
+pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
+    if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
         return;
     }
     const arena = try self.arena_pool.acquire();
     errdefer self.arena_pool.release(arena);
-    return self.scheduleNavigationWithArena(arena, request_url, opts, priority);
+    return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
 }
 
-fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []const u8, opts: NavigateOpts, priority: NavigationPriority) !void {
-    const resolved_url = try URL.resolve(
-        arena,
-        self.base(),
-        request_url,
-        .{ .always_dupe = true, .encode = true },
-    );
+// Don't name the first parameter "self", because the target of this navigation
+// might change inside the function. So the code should be explicit about the
+// page that it's acting on.
+fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url: []const u8, opts: NavigateOpts, nt: Navigation) !void {
+    const resolved_url, const is_about_blank = blk: {
+        if (std.mem.eql(u8, request_url, "about:blank")) {
+            // navigate will handle this special case
+            break :blk .{ "about:blank", true };
+        }
+        const u = try URL.resolve(
+            arena,
+            originator.base(),
+            request_url,
+            .{ .always_dupe = true, .encode = true },
+        );
+        break :blk .{ u, false };
+    };
 
-    const session = self._session;
-    if (!opts.force and URL.eqlDocument(self.url, resolved_url)) {
-        self.arena_pool.release(arena);
+    const target = switch (nt) {
+        .script => |p| p orelse originator,
+        .iframe => |iframe| iframe._window.?._page, // only an frame with existing content (i.e. a window) can be navigated
+        .anchor, .form => |node| blk: {
+            const doc = node.ownerDocument(originator) orelse break :blk originator;
+            break :blk doc._page orelse originator;
+        },
+    };
 
-        self.url = try self.arena.dupeZ(u8, resolved_url);
-        self.window._location = try Location.init(self.url, self);
-        self.document._location = self.window._location;
-        return session.navigation.updateEntries(self.url, opts.kind, self, true);
+    const session = target._session;
+    if (!opts.force and URL.eqlDocument(target.url, resolved_url)) {
+        target.url = try target.arena.dupeZ(u8, resolved_url);
+        target.window._location = try Location.init(target.url, target);
+        target.document._location = target.window._location;
+        if (target.parent == null) {
+            try session.navigation.updateEntries(target.url, opts.kind, target, true);
+        }
+        // doin't defer this, the caller, the caller is responsible for freeing
+        // it on error
+        target.arena_pool.release(arena);
+        return;
     }
 
     log.info(.browser, "schedule navigation", .{
         .url = resolved_url,
         .reason = opts.reason,
-        .target = resolved_url,
-        .type = self._type,
+        .type = target._type,
     });
 
-    session.browser.http_client.abort();
+    // This is a micro-optimization. Terminate any inflight request as early
+    // as we can. This will be more propery shutdown when we process the
+    // scheduled navigation.
+    if (target.parent == null) {
+        session.browser.http_client.abort();
+    } else {
+        // This doesn't terminate any inflight requests for nested frames, but
+        // again, this is just an optimization. We'll correctly shut down all
+        // nested inflight requests when we process the navigation.
+        session.browser.http_client.abortFrame(target._frame_id);
+    }
 
     const qn = try arena.create(QueuedNavigation);
     qn.* = .{
         .opts = opts,
         .arena = arena,
         .url = resolved_url,
-        .priority = priority,
+        .is_about_blank = is_about_blank,
+        .navigation_type = std.meta.activeTag(nt),
     };
 
-    if (self._queued_navigation) |existing| {
-        self.arena_pool.release(existing.arena);
-    }
-    self._queued_navigation = qn;
+    target._queued_navigation = qn;
+    return session.scheduleNavigation(target);
 }
 
 // A script can have multiple competing navigation events, say it starts off
@@ -617,23 +661,31 @@ fn scheduleNavigationWithArena(self: *Page, arena: Allocator, request_url: []con
 // You might think that we just stop at the first one, but that doesn't seem
 // to be what browsers do, and it isn't particularly well supported by v8 (i.e.
 // halting execution mid-script).
-// From what I can tell, there are 3 "levels" of priority, in order:
+// From what I can tell, there are 4 "levels" of priority, in order:
 // 1 - form submission
 // 2 - JavaScript apis (e.g. top.location)
 // 3 - anchor clicks
+// 4 - iframe.src =
 // Within, each category, it's last-one-wins.
-fn canScheduleNavigation(self: *Page, priority: NavigationPriority) bool {
-    const existing = self._queued_navigation orelse return true;
+fn canScheduleNavigation(self: *Page, new_target_type: NavigationType) bool {
+    if (self.parent) |parent| {
+        if (parent.isGoingAway()) {
+            return false;
+        }
+    }
 
-    if (existing.priority == priority) {
+    const existing_target_type = (self._queued_navigation orelse return true).navigation_type;
+
+    if (existing_target_type == new_target_type) {
         // same reason, than this latest one wins
         return true;
     }
 
-    return switch (existing.priority) {
-        .anchor => true, // everything is higher priority than an anchor
+    return switch (existing_target_type) {
+        .iframe => true, // everything is higher priority than iframe.src = "x"
+        .anchor => new_target_type != .iframe, // an anchor is only higher priority than an iframe
         .form => false, // nothing is higher priority than a form
-        .script => priority == .form, // a form is higher priority than a script
+        .script => new_target_type == .form, // a form is higher priority than a script
     };
 }
 
@@ -665,7 +717,7 @@ pub fn scriptsCompletedLoading(self: *Page) void {
     self.pendingLoadCompleted();
 }
 
-pub fn iframeCompletedLoading(self: *Page, iframe: *Element.Html.IFrame) void {
+pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
     blk: {
         var ls: JS.Local.Scope = undefined;
         self.js.localScope(&ls);
@@ -758,6 +810,8 @@ fn _documentIsComplete(self: *Page) !void {
 }
 
 fn notifyParentLoadComplete(self: *Page) void {
+    const parent = self.parent orelse return;
+
     if (self._parent_notified == true) {
         if (comptime IS_DEBUG) {
             std.debug.assert(false);
@@ -767,9 +821,7 @@ fn notifyParentLoadComplete(self: *Page) void {
     }
 
     self._parent_notified = true;
-    if (self.parent) |p| {
-        p.iframeCompletedLoading(self.iframe.?);
-    }
+    parent.iframeCompletedLoading(self.iframe.?);
 }
 
 fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
@@ -949,7 +1001,11 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
 }
 
 pub fn isGoingAway(self: *const Page) bool {
-    return self._queued_navigation != null;
+    if (self._queued_navigation != null) {
+        return true;
+    }
+    const parent = self.parent orelse return false;
+    return parent.isGoingAway();
 }
 
 pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Element.Html.Script) !void {
@@ -968,7 +1024,7 @@ pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Ele
     };
 }
 
-pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
+pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
     if (self.isGoingAway()) {
         // if we're planning on navigating to another page, don't load this iframe
         return;
@@ -977,34 +1033,43 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         return;
     }
 
-    const src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse return;
+    var src = iframe.asElement().getAttributeSafe(comptime .wrap("src")) orelse "";
     if (src.len == 0) {
-        return;
+        src = "about:blank";
+    }
+
+    if (iframe._window != null) {
+        // This frame is being re-navigated. We need to do this through a
+        // scheduleNavigation phase. We can't navigate immediately here, for
+        // the same reason that a "root" page can't immediately navigate:
+        // we could be in the middle of a JS callback or something else that
+        // doesn't exit the page to just suddenly go away.
+        return self.scheduleNavigation(src, .{
+            .reason = .script,
+            .kind = .{ .push = null },
+        }, .{ .iframe = iframe });
     }
 
     iframe._executed = true;
     const session = self._session;
 
-    // A frame can be re-navigated by setting the src.
-    const existing_window = iframe._content_window;
-
     const page_frame = try self.arena.create(Page);
-    const frame_id = blk: {
-        if (existing_window) |w| {
-            const existing_frame_id = w._page._frame_id;
-            session.browser.http_client.abortFrame(existing_frame_id);
-            break :blk existing_frame_id;
-        }
-        break :blk session.nextFrameId();
-    };
+    const frame_id = session.nextFrameId();
 
     try Page.init(page_frame, frame_id, session, self);
-    errdefer page_frame.deinit();
+    errdefer page_frame.deinit(true);
 
     self._pending_loads += 1;
     page_frame.iframe = iframe;
-    iframe._content_window = page_frame.window;
-    errdefer iframe._content_window = null;
+    iframe._window = page_frame.window;
+    errdefer iframe._window = null;
+
+    // on first load, dispatch frame_created evnet
+    self._session.notification.dispatch(.page_frame_created, &.{
+        .frame_id = frame_id,
+        .parent_id = self._frame_id,
+        .timestamp = timestamp(.monotonic),
+    });
 
     const url = blk: {
         if (std.mem.eql(u8, src, "about:blank")) {
@@ -1018,41 +1083,13 @@ pub fn iframeAddedCallback(self: *Page, iframe: *Element.Html.IFrame) !void {
         );
     };
 
-    if (existing_window == null) {
-        // on first load, dispatch frame_created evnet
-        self._session.notification.dispatch(.page_frame_created, &.{
-            .frame_id = frame_id,
-            .parent_id = self._frame_id,
-            .timestamp = timestamp(.monotonic),
-        });
-    }
-
     page_frame.navigate(url, .{ .reason = .initialFrameNavigation }) catch |err| {
         log.warn(.page, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
-        iframe._content_window = null;
-        page_frame.deinit();
+        iframe._window = null;
+        page_frame.deinit(true);
         return error.IFrameLoadError;
     };
-
-    if (existing_window) |w| {
-        const existing_page = w._page;
-        if (existing_page._parent_notified == false) {
-            self._pending_loads -= 1;
-        }
-
-        for (self.frames.items, 0..) |p, i| {
-            if (p == existing_page) {
-                self.frames.items[i] = page_frame;
-                break;
-            }
-        } else {
-            lp.assert(false, "Existing frame not found", .{ .len = self.frames.items.len });
-        }
-
-        existing_page.deinit();
-        return;
-    }
 
     // window[N] is based on document order. For now we'll just append the frame
     // at the end of our list and set frames_sorted == false. window.getFrame
@@ -1969,7 +2006,7 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                         .{ ._proto = undefined },
                     ),
                     asUint("iframe") => return self.createHtmlElementT(
-                        Element.Html.IFrame,
+                        IFrame,
                         namespace,
                         attribute_iterator,
                         .{ ._proto = undefined },
@@ -2880,12 +2917,7 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "script", .type = self._type, .url = self.url });
             return err;
         };
-    } else if (node.is(Element.Html.IFrame)) |iframe| {
-        if ((comptime from_parser == false) and iframe._src.len == 0) {
-            // iframe was added via JavaScript, but without a src
-            return;
-        }
-
+    } else if (node.is(IFrame)) |iframe| {
         self.iframeAddedCallback(iframe) catch |err| {
             log.err(.page, "page.nodeIsReady", .{ .err = err, .element = "iframe", .type = self._type, .url = self.url });
             return err;
@@ -3026,17 +3058,26 @@ pub const NavigatedOpts = struct {
     method: Http.Method = .GET,
 };
 
-const NavigationPriority = enum {
+const NavigationType = enum {
     form,
     script,
     anchor,
+    iframe,
+};
+
+const Navigation = union(NavigationType) {
+    form: *Node,
+    script: ?*Page,
+    anchor: *Node,
+    iframe: *IFrame,
 };
 
 pub const QueuedNavigation = struct {
     arena: Allocator,
     url: [:0]const u8,
     opts: NavigateOpts,
-    priority: NavigationPriority,
+    is_about_blank: bool,
+    navigation_type: NavigationType,
 };
 
 pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
@@ -3089,11 +3130,17 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
+            // TODO: We need to support targets properly, but this is the most
+            // common case: a click on an anchor navigates the page/frame that
+            // anchor is in.
+
+            // ownerDocument only returns null when `target` is a document, which
+            // it is NOT in this case. Even for a detched node, it'll return self.document
             try element.focus(self);
             try self.scheduleNavigation(href, .{
                 .reason = .script,
                 .kind = .{ .push = null },
-            }, .anchor);
+            }, .{ .anchor = target });
         },
         .input => |input| {
             try element.focus(self);
@@ -3114,7 +3161,11 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
-    const element = self.window._document._active_element orelse return;
+    const element = self.window._document._active_element orelse {
+        keyboard_event.deinit(false, self);
+        return;
+    };
+
     if (comptime IS_DEBUG) {
         log.debug(.page, "page keydown", .{
             .url = self.url,
@@ -3224,7 +3275,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
     }
-    return self.scheduleNavigationWithArena(arena, action, opts, .form);
+    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = form_element.asNode() });
 }
 
 // insertText is a shortcut to insert text into the active element.
