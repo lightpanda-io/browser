@@ -474,12 +474,12 @@ pub const JsApi = struct {
     pub const canGoForward = bridge.accessor(Navigation.getCanGoForward, null, .{});
     pub const currentEntry = bridge.accessor(Navigation.getCurrentEntry, null, .{});
     pub const transition = bridge.accessor(Navigation.getTransition, null, .{});
-    pub const back = bridge.function(Navigation.back, .{});
+    pub const back = bridge.function(Navigation.back, .{ .dom_exception = true });
     pub const entries = bridge.function(Navigation.entries, .{});
-    pub const forward = bridge.function(Navigation.forward, .{});
-    pub const navigate = bridge.function(Navigation.navigate, .{});
-    pub const traverseTo = bridge.function(Navigation.traverseTo, .{});
-    pub const updateCurrentEntry = bridge.function(Navigation.updateCurrentEntry, .{});
+    pub const forward = bridge.function(Navigation.forward, .{ .dom_exception = true });
+    pub const navigate = bridge.function(Navigation.navigate, .{ .dom_exception = true });
+    pub const traverseTo = bridge.function(Navigation.traverseTo, .{ .dom_exception = true });
+    pub const updateCurrentEntry = bridge.function(Navigation.updateCurrentEntry, .{ .dom_exception = true });
 
     pub const oncurrententrychange = bridge.accessor(
         Navigation.getOnCurrentEntryChange,
