@@ -156,7 +156,23 @@ const SavedBrowseSession = struct {
     }
 };
 
+const BrowseSettings = struct {
+    restore_previous_session: bool = true,
+    default_zoom_percent: i32 = 100,
+    homepage_url: []u8 = &.{},
+
+    fn deinit(self: *BrowseSettings, allocator: std.mem.Allocator) void {
+        allocator.free(self.homepage_url);
+        self.* = .{};
+    }
+
+    fn homeUrl(self: *const BrowseSettings) ?[]const u8 {
+        return trimmedOrNull(self.homepage_url);
+    }
+};
+
 const BROWSE_SESSION_FILE = "browse-session-v1.txt";
+const BROWSE_SETTINGS_FILE = "browse-settings-v1.txt";
 const BROWSE_DOWNLOADS_FILE = "downloads-v1.txt";
 const BROWSE_DOWNLOADS_DIR = "downloads";
 const MAX_CLOSED_BROWSE_TABS = 16;
@@ -599,21 +615,25 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     defer deinitBrowseTabs(app.allocator, &tabs);
     var closed_tabs: std.ArrayListUnmanaged(ClosedBrowseTab) = .{};
     defer deinitClosedBrowseTabs(app.allocator, &closed_tabs);
+    var settings = loadBrowseSettings(app.allocator, app.app_dir_path);
+    defer settings.deinit(app.allocator);
     var downloads = BrowseDownloads.init(app.allocator, app.app_dir_path);
     defer downloads.deinit(app.app_dir_path);
 
-    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url);
+    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url, &settings);
     var displayed_tab_index: ?usize = null;
     var last_saved_session_hash: u64 = 0;
-    try updateActiveBrowseDisplay(app, tabs.items, &downloads, active_tab_index, &displayed_tab_index);
-    persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, &last_saved_session_hash);
+    var last_saved_settings_hash: u64 = 0;
+    try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
+    persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, settings.restore_previous_session, &last_saved_session_hash);
+    persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
 
     browse_loop: while (!app.shutdown and !app.display.userClosed()) {
         var handled_command = false;
         while (app.display.nextBrowserCommand()) |command| {
             defer command.deinit(app.allocator);
             handled_command = true;
-            try handleBrowseCommand(app, &tabs, &closed_tabs, &downloads, &active_tab_index, command);
+            try handleBrowseCommand(app, &tabs, &closed_tabs, &settings, &downloads, &active_tab_index, command);
             if (tabs.items.len == 0) {
                 clearSavedBrowseSession(app);
                 break :browse_loop;
@@ -626,7 +646,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
         if (handled_command) {
-            try updateActiveBrowseDisplay(app, tabs.items, &downloads, active_tab_index, &displayed_tab_index);
+            try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
         }
 
         for (tabs.items, 0..) |tab, index| {
@@ -643,8 +663,9 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         }
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
-        try updateActiveBrowseDisplay(app, tabs.items, &downloads, active_tab_index, &displayed_tab_index);
-        persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, &last_saved_session_hash);
+        try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
+        persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, settings.restore_previous_session, &last_saved_session_hash);
+        persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
         downloads.persistIfChanged(app.app_dir_path);
     }
 }
@@ -653,13 +674,14 @@ fn handleBrowseCommand(
     app: *App,
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab),
+    settings: *BrowseSettings,
     downloads: *BrowseDownloads,
     active_tab_index: *usize,
     command: BrowserCommand,
 ) !void {
     switch (command) {
         .tab_new => {
-            const tab = try createBrowseTab(app, null);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent);
             try tabs.append(app.allocator, tab);
             active_tab_index.* = tabs.items.len - 1;
             tabs.items[active_tab_index.*].last_presented_hash = 0;
@@ -716,7 +738,7 @@ fn handleBrowseCommand(
                 reopened_url_z = try app.allocator.dupeZ(u8, closed.url);
                 break :blk reopened_url_z.?;
             };
-            const tab = try createBrowseTab(app, initial_url);
+            const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent);
             tab.zoom_percent = closed.zoom_percent;
             try tabs.append(app.allocator, tab);
             active_tab_index.* = tabs.items.len - 1;
@@ -739,7 +761,7 @@ fn handleBrowseCommand(
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const tab = tabs.items[active_index];
             const page = tab.session.currentPage() orelse return;
-            try handleActiveBrowseCommand(app, tab, page, command);
+            try handleActiveBrowseCommand(app, tab, page, settings, command);
         },
     }
 }
@@ -748,6 +770,7 @@ fn handleActiveBrowseCommand(
     app: *App,
     tab: *BrowseTab,
     page: *Page,
+    settings: *BrowseSettings,
     command: BrowserCommand,
 ) !void {
     const session = tab.session;
@@ -820,6 +843,16 @@ fn handleActiveBrowseCommand(
             tab.last_presented_hash = 0;
             _ = try session.navigation.navigateInner(url, .{ .traverse = index }, page);
         },
+        .home => {
+            const home_url = settings.homeUrl() orelse return;
+            try app.display.presentDocument("Lightpanda Browser", home_url, "Loading page...");
+            tab.last_presented_hash = 0;
+            tab.restore_committed_surface = false;
+            try page.scheduleNavigation(home_url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            }, .{ .script = null });
+        },
         .stop => {
             tab.restore_committed_surface = tab.committed_surface.available();
             if (page._queued_navigation) |qn| {
@@ -836,8 +869,21 @@ fn handleActiveBrowseCommand(
                 tab.last_presented_hash = 0;
             }
         },
+        .settings_toggle_restore_session => {
+            settings.restore_previous_session = !settings.restore_previous_session;
+        },
+        .settings_default_zoom_in, .settings_default_zoom_out, .settings_default_zoom_reset => {
+            settings.default_zoom_percent = applyDefaultZoomCommand(settings.default_zoom_percent, command);
+        },
+        .settings_set_homepage_to_current => {
+            const homepage = browseTabPersistentUrl(tab);
+            try replaceBrowseHomepage(app.allocator, settings, homepage);
+        },
+        .settings_clear_homepage => {
+            clearBrowseHomepage(app.allocator, settings);
+        },
         .zoom_in, .zoom_out, .zoom_reset => {
-            const next_zoom = applyZoomCommand(tab.zoom_percent, command);
+            const next_zoom = applyZoomCommand(tab.zoom_percent, settings.default_zoom_percent, command);
             if (next_zoom == tab.zoom_percent) {
                 return;
             }
@@ -852,11 +898,20 @@ fn handleActiveBrowseCommand(
     }
 }
 
-fn applyZoomCommand(current_zoom: i32, command: BrowserCommand) i32 {
+fn applyZoomCommand(current_zoom: i32, default_zoom_percent: i32, command: BrowserCommand) i32 {
     return switch (command) {
         .zoom_in => std.math.clamp(current_zoom + 10, 30, 300),
         .zoom_out => std.math.clamp(current_zoom - 10, 30, 300),
-        .zoom_reset => 100,
+        .zoom_reset => std.math.clamp(default_zoom_percent, 30, 300),
+        else => current_zoom,
+    };
+}
+
+fn applyDefaultZoomCommand(current_zoom: i32, command: BrowserCommand) i32 {
+    return switch (command) {
+        .settings_default_zoom_in => std.math.clamp(current_zoom + 10, 30, 300),
+        .settings_default_zoom_out => std.math.clamp(current_zoom - 10, 30, 300),
+        .settings_default_zoom_reset => 100,
         else => current_zoom,
     };
 }
@@ -878,6 +933,7 @@ fn pageIsBlankIdle(page: *Page) bool {
 fn syncBrowseDisplayState(
     app: *App,
     tabs: []const *BrowseTab,
+    settings: *const BrowseSettings,
     downloads: *BrowseDownloads,
     active_tab_index: usize,
     loading_override: ?bool,
@@ -916,6 +972,11 @@ fn syncBrowseDisplayState(
         app.allocator.free(download_entries);
     }
     app.display.setDownloadEntries(download_entries);
+    app.display.setSettingsState(.{
+        .restore_previous_session = settings.restore_previous_session,
+        .default_zoom_percent = settings.default_zoom_percent,
+        .homepage_url = settings.homeUrl() orelse "",
+    });
 }
 
 fn deinitBrowseTabs(allocator: std.mem.Allocator, tabs: *std.ArrayListUnmanaged(*BrowseTab)) void {
@@ -964,12 +1025,18 @@ fn initializeBrowseTabs(
     app: *App,
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     startup_url: [:0]const u8,
+    settings: *const BrowseSettings,
 ) !usize {
+    if (!settings.restore_previous_session) {
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent));
+        return 0;
+    }
+
     var saved = loadSavedBrowseSession(app.allocator, app.app_dir_path);
     defer saved.deinit(app.allocator);
 
     if (saved.tabs.items.len == 0) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent));
         return 0;
     }
 
@@ -982,14 +1049,14 @@ fn initializeBrowseTabs(
             restored_url_z = try app.allocator.dupeZ(u8, saved_tab.url);
             break :blk restored_url_z.?;
         };
-        const tab = try createBrowseTab(app, initial_url);
+        const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent);
         tab.zoom_percent = saved_tab.zoom_percent;
         try tabs.append(app.allocator, tab);
     }
 
     var active_index = normalizeActiveTabIndex(saved.active_index, tabs.items.len);
     if (shouldAppendStartupUrl(saved.tabs.items, startup_url)) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent));
         active_index = tabs.items.len - 1;
     }
 
@@ -1068,12 +1135,126 @@ fn clearSavedBrowseSession(app: *App) void {
     };
 }
 
+fn loadBrowseSettings(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) BrowseSettings {
+    const dir_path = app_dir_path orelse return .{};
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return .{};
+    defer dir.close();
+
+    const file = dir.openFile(BROWSE_SETTINGS_FILE, .{}) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return .{},
+    };
+    defer file.close();
+
+    const data = file.readToEndAlloc(allocator, 1024 * 16) catch return .{};
+    defer allocator.free(data);
+    return parseBrowseSettings(allocator, data) catch .{};
+}
+
+fn parseBrowseSettings(allocator: std.mem.Allocator, data: []const u8) !BrowseSettings {
+    var settings: BrowseSettings = .{};
+    errdefer settings.deinit(allocator);
+
+    var it = std.mem.splitScalar(u8, data, '\n');
+    while (it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r\n\t ");
+        if (line.len == 0 or std.mem.eql(u8, line, "lightpanda-browse-settings-v1")) {
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "restore_previous_session\t")) {
+            const raw = line["restore_previous_session\t".len..];
+            settings.restore_previous_session = std.mem.eql(u8, raw, "1") or std.ascii.eqlIgnoreCase(raw, "true");
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "default_zoom_percent\t")) {
+            const raw = line["default_zoom_percent\t".len..];
+            settings.default_zoom_percent = std.math.clamp(
+                std.fmt.parseInt(i32, raw, 10) catch settings.default_zoom_percent,
+                30,
+                300,
+            );
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "homepage_url\t")) {
+            const raw = std.mem.trim(u8, line["homepage_url\t".len..], "\r\n\t ");
+            clearBrowseHomepage(allocator, &settings);
+            if (raw.len > 0) {
+                settings.homepage_url = try allocator.dupe(u8, raw);
+            }
+        }
+    }
+
+    return settings;
+}
+
+fn hashBrowseSettings(settings: *const BrowseSettings) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(std.mem.asBytes(&settings.restore_previous_session));
+    hasher.update(std.mem.asBytes(&settings.default_zoom_percent));
+    hasher.update(settings.homepage_url);
+    return hasher.final();
+}
+
+fn persistBrowseSettingsIfChanged(app: *App, settings: *const BrowseSettings, last_saved_hash: *u64) void {
+    const next_hash = hashBrowseSettings(settings);
+    if (next_hash == last_saved_hash.*) {
+        return;
+    }
+    last_saved_hash.* = next_hash;
+    saveBrowseSettings(app, settings) catch |err| {
+        log.warn(.app, "browse settings save failed", .{ .err = err });
+    };
+}
+
+fn saveBrowseSettings(app: *App, settings: *const BrowseSettings) !void {
+    const dir_path = app.app_dir_path orelse return;
+    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    defer dir.close();
+
+    var buf = std.Io.Writer.Allocating.init(app.allocator);
+    defer buf.deinit();
+
+    try buf.writer.writeAll("lightpanda-browse-settings-v1\n");
+    try buf.writer.print(
+        "restore_previous_session\t{d}\ndefault_zoom_percent\t{d}\nhomepage_url\t{s}\n",
+        .{
+            if (settings.restore_previous_session) @as(u8, 1) else @as(u8, 0),
+            settings.default_zoom_percent,
+            settings.homeUrl() orelse "",
+        },
+    );
+    try dir.writeFile(.{
+        .sub_path = BROWSE_SETTINGS_FILE,
+        .data = buf.written(),
+    });
+}
+
+fn replaceBrowseHomepage(allocator: std.mem.Allocator, settings: *BrowseSettings, url: []const u8) !void {
+    clearBrowseHomepage(allocator, settings);
+    const trimmed = std.mem.trim(u8, url, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        return;
+    }
+    settings.homepage_url = try allocator.dupe(u8, trimmed);
+}
+
+fn clearBrowseHomepage(allocator: std.mem.Allocator, settings: *BrowseSettings) void {
+    allocator.free(settings.homepage_url);
+    settings.homepage_url = &.{};
+}
+
 fn persistBrowseSessionIfChanged(
     app: *App,
     tabs: []const *BrowseTab,
     active_tab_index: usize,
+    restore_previous_session: bool,
     last_saved_hash: *u64,
 ) void {
+    if (!restore_previous_session) {
+        last_saved_hash.* = std.math.maxInt(u64);
+        clearSavedBrowseSession(app);
+        return;
+    }
     const next_hash = hashBrowseSessionState(tabs, active_tab_index);
     if (next_hash == last_saved_hash.*) {
         return;
@@ -1367,7 +1548,7 @@ fn parseSavedDownloadEntry(allocator: std.mem.Allocator, line: []const u8) !Brow
     };
 }
 
-fn createBrowseTab(app: *App, initial_url: ?[:0]const u8) !*BrowseTab {
+fn createBrowseTab(app: *App, initial_url: ?[:0]const u8, default_zoom_percent: i32) !*BrowseTab {
     const tab = try app.allocator.create(BrowseTab);
     errdefer app.allocator.destroy(tab);
 
@@ -1385,7 +1566,7 @@ fn createBrowseTab(app: *App, initial_url: ?[:0]const u8) !*BrowseTab {
     tab.committed_surface = .{};
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;
-    tab.zoom_percent = 100;
+    tab.zoom_percent = std.math.clamp(default_zoom_percent, 30, 300);
 
     if (initial_url) |target_url| {
         const encoded_url = try URL.ensureEncoded(page.call_arena, target_url);
@@ -1407,6 +1588,7 @@ fn normalizeActiveTabIndex(index: usize, tab_count: usize) usize {
 fn updateActiveBrowseDisplay(
     app: *App,
     tabs: []const *BrowseTab,
+    settings: *const BrowseSettings,
     downloads: *BrowseDownloads,
     active_tab_index: usize,
     displayed_tab_index: *?usize,
@@ -1423,7 +1605,7 @@ fn updateActiveBrowseDisplay(
         active_tab.committed_surface.available() and
         pageIsLoading(page);
 
-    try syncBrowseDisplayState(app, tabs, downloads, active_index, if (show_committed_surface) false else null);
+    try syncBrowseDisplayState(app, tabs, settings, downloads, active_index, if (show_committed_surface) false else null);
 
     if (displayed_tab_index.* == null or displayed_tab_index.*.? != active_index) {
         active_tab.last_presented_hash = 0;
@@ -1737,11 +1919,31 @@ test "normalizeBrowseUrl keeps loopback targets on http" {
 }
 
 test "applyZoomCommand clamps and resets zoom" {
-    try std.testing.expectEqual(@as(i32, 110), applyZoomCommand(100, .zoom_in));
-    try std.testing.expectEqual(@as(i32, 90), applyZoomCommand(100, .zoom_out));
-    try std.testing.expectEqual(@as(i32, 100), applyZoomCommand(180, .zoom_reset));
-    try std.testing.expectEqual(@as(i32, 300), applyZoomCommand(300, .zoom_in));
-    try std.testing.expectEqual(@as(i32, 30), applyZoomCommand(30, .zoom_out));
+    try std.testing.expectEqual(@as(i32, 110), applyZoomCommand(100, 100, .zoom_in));
+    try std.testing.expectEqual(@as(i32, 90), applyZoomCommand(100, 100, .zoom_out));
+    try std.testing.expectEqual(@as(i32, 120), applyZoomCommand(180, 120, .zoom_reset));
+    try std.testing.expectEqual(@as(i32, 300), applyZoomCommand(300, 100, .zoom_in));
+    try std.testing.expectEqual(@as(i32, 30), applyZoomCommand(30, 100, .zoom_out));
+}
+
+test "parseBrowseSettings restores session, zoom, and homepage" {
+    var settings = try parseBrowseSettings(
+        std.testing.allocator,
+        "lightpanda-browse-settings-v1\nrestore_previous_session\t0\ndefault_zoom_percent\t130\nhomepage_url\thttp://home.test/\n",
+    );
+    defer settings.deinit(std.testing.allocator);
+
+    try std.testing.expect(!settings.restore_previous_session);
+    try std.testing.expectEqual(@as(i32, 130), settings.default_zoom_percent);
+    try std.testing.expectEqualStrings("http://home.test/", settings.homepage_url);
+}
+
+test "applyDefaultZoomCommand clamps and resets default zoom" {
+    try std.testing.expectEqual(@as(i32, 110), applyDefaultZoomCommand(100, .settings_default_zoom_in));
+    try std.testing.expectEqual(@as(i32, 90), applyDefaultZoomCommand(100, .settings_default_zoom_out));
+    try std.testing.expectEqual(@as(i32, 100), applyDefaultZoomCommand(180, .settings_default_zoom_reset));
+    try std.testing.expectEqual(@as(i32, 300), applyDefaultZoomCommand(300, .settings_default_zoom_in));
+    try std.testing.expectEqual(@as(i32, 30), applyDefaultZoomCommand(30, .settings_default_zoom_out));
 }
 
 test "parseSavedBrowseSession restores active index and zoom" {

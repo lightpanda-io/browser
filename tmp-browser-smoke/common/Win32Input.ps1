@@ -54,6 +54,7 @@ public static class SmokeProbeUser32 {
     private const uint KEYEVENTF_UNICODE = 0x0004;
     private const ushort VK_CONTROL = 0x11;
     private const ushort VK_SHIFT = 0x10;
+    private const ushort VK_SPACE = 0x20;
     private const ushort VK_RETURN = 0x0D;
     private const ushort VK_TAB = 0x09;
     private const ushort VK_PRIOR = 0x21;
@@ -73,8 +74,10 @@ public static class SmokeProbeUser32 {
     private const ushort VK_J = 0x4A;
     private const ushort VK_T = 0x54;
     private const ushort VK_W = 0x57;
+    private const ushort VK_MENU = 0x12;
     private const ushort VK_ESCAPE = 0x1B;
     private const ushort VK_F3 = 0x72;
+    private const ushort VK_OEM_COMMA = 0xBC;
     private const ushort VK_OEM_PLUS = 0xBB;
     private const ushort VK_P = 0x50;
 
@@ -213,6 +216,21 @@ public static class SmokeProbeUser32 {
         inputs[3].U.ki.wVk = VK_CONTROL;
         inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
         EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlJ");
+    }
+
+    public static void SendCtrlComma() {
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_OEM_COMMA;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_OEM_COMMA;
+        inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_CONTROL;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlComma");
     }
 
     public static void SendCtrlT() {
@@ -370,6 +388,21 @@ public static class SmokeProbeUser32 {
         EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlShiftT");
     }
 
+    public static void SendAltHome() {
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_MENU;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_HOME;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_HOME;
+        inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_MENU;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendAltHome");
+    }
+
     public static void SendCtrlWheel(int delta) {
         var inputs = new INPUT[3];
         inputs[0].type = INPUT_KEYBOARD;
@@ -408,6 +441,10 @@ public static class SmokeProbeUser32 {
 
     public static void SendEnter() {
         SendVirtualKey(VK_RETURN);
+    }
+
+    public static void SendSpace() {
+        SendVirtualKey(VK_SPACE);
     }
 
     public static void SendTab() {
@@ -533,6 +570,10 @@ function Send-SmokeCtrlJ {
   [SmokeProbeUser32]::SendCtrlJ()
 }
 
+function Send-SmokeCtrlComma {
+  [SmokeProbeUser32]::SendCtrlComma()
+}
+
 function Send-SmokeCtrlT {
   [SmokeProbeUser32]::SendCtrlT()
 }
@@ -572,8 +613,16 @@ function Send-SmokeCtrlShiftT {
   [SmokeProbeUser32]::SendCtrlShiftT()
 }
 
+function Send-SmokeAltHome {
+  [SmokeProbeUser32]::SendAltHome()
+}
+
 function Send-SmokeEnter {
   [SmokeProbeUser32]::SendEnter()
+}
+
+function Send-SmokeSpace {
+  [SmokeProbeUser32]::SendSpace()
 }
 
 function Send-SmokeEscape {
@@ -598,6 +647,14 @@ function Send-SmokeUp {
 
 function Send-SmokeDown {
   [SmokeProbeUser32]::SendDown()
+}
+
+function Send-SmokeLeft {
+  [SmokeProbeUser32]::SendVirtualKey([uint16]0x25)
+}
+
+function Send-SmokeRight {
+  [SmokeProbeUser32]::SendVirtualKey([uint16]0x27)
 }
 
 function Send-SmokeHome {

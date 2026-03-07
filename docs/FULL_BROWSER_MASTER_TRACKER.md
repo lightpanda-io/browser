@@ -47,6 +47,12 @@ The fork already has a real headed Windows foundation:
 - label activation and `Enter` form submit basics work
 - bounded localhost smoke probes exist for navigation, history, reload, stop,
   wrapped links, and form interactions
+- native tab strip, reopen-closed-tab, and session restore are working in the
+  headed shell
+- native overlays exist for history, bookmarks, downloads, and basic settings
+- headed `browse` now has zoom controls, find-in-page, bookmark persistence,
+  download persistence, homepage navigation, and persisted default zoom /
+  restore-session settings
 
 ## Achieved Gates
 

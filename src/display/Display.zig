@@ -41,6 +41,7 @@ const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig"
     pub fn setHistoryEntries(_: *@This(), _: []const []const u8, _: usize) void {}
     pub fn setDownloadEntries(_: *@This(), _: []const DownloadEntry) void {}
     pub fn setTabEntries(_: *@This(), _: []const TabEntry, _: usize) void {}
+    pub fn setSettingsState(_: *@This(), _: SettingsState) void {}
     pub fn setAppDataPath(_: *@This(), _: ?[]const u8) void {}
     pub fn dispatchInput(_: *@This(), _: anytype) !void {}
     pub fn presentDocument(_: *@This(), _: []const u8, _: []const u8, _: []const u8) !void {}
@@ -84,6 +85,12 @@ pub const DownloadEntry = struct {
     path: []const u8,
     status: []const u8,
     removable: bool,
+};
+
+pub const SettingsState = struct {
+    restore_previous_session: bool,
+    default_zoom_percent: i32,
+    homepage_url: []const u8,
 };
 
 pub const Backend = union(enum) {
@@ -243,6 +250,13 @@ pub fn setDownloadEntries(self: *Display, entries: []const DownloadEntry) void {
 pub fn setTabEntries(self: *Display, entries: []const TabEntry, active_index: usize) void {
     switch (self.backend) {
         .headed_windows => |*backend| backend.setTabEntries(entries, active_index),
+        else => {},
+    }
+}
+
+pub fn setSettingsState(self: *Display, settings: SettingsState) void {
+    switch (self.backend) {
+        .headed_windows => |*backend| backend.setSettingsState(settings),
         else => {},
     }
 }

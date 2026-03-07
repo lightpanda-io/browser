@@ -159,6 +159,11 @@ pub const Win32Backend = struct {
     download_overlay_open: bool = false,
     download_overlay_selected_index: usize = 0,
     download_overlay_scroll_index: usize = 0,
+    presentation_restore_previous_session: bool = true,
+    presentation_default_zoom_percent: i32 = 100,
+    presentation_homepage_url: []u8 = &.{},
+    settings_overlay_open: bool = false,
+    settings_overlay_selected_index: usize = 0,
     presentation_left_mouse_consumed: bool = false,
     pending_presentation_command: ?BrowserCommand = null,
     image_cache_lock: std.Thread.Mutex = .{},
@@ -449,6 +454,28 @@ pub const Win32Backend = struct {
         _ = self.presentation_seq.fetchAdd(1, .acq_rel);
     }
 
+    pub fn setSettingsState(self: *Win32Backend, settings: Display.SettingsState) void {
+        self.presentation_lock.lock();
+        defer self.presentation_lock.unlock();
+
+        if (self.presentation_restore_previous_session == settings.restore_previous_session and
+            self.presentation_default_zoom_percent == settings.default_zoom_percent and
+            std.mem.eql(u8, self.presentation_homepage_url, settings.homepage_url))
+        {
+            return;
+        }
+
+        const owned_homepage = self.allocator.dupe(u8, settings.homepage_url) catch |err| {
+            log.warn(.app, "win settings copy failed", .{ .err = err });
+            return;
+        };
+        self.allocator.free(self.presentation_homepage_url);
+        self.presentation_homepage_url = owned_homepage;
+        self.presentation_restore_previous_session = settings.restore_previous_session;
+        self.presentation_default_zoom_percent = settings.default_zoom_percent;
+        _ = self.presentation_seq.fetchAdd(1, .acq_rel);
+    }
+
     pub fn setAppDataPath(self: *Win32Backend, path: ?[]const u8) void {
         if (self.app_data_path) |existing| {
             if (path) |next| {
@@ -604,6 +631,7 @@ pub const Win32Backend = struct {
         deinitOwnedStringList(&self.presentation_history_entries, self.allocator);
         deinitOwnedStringList(&self.presentation_bookmark_entries, self.allocator);
         deinitOwnedDownloadList(&self.presentation_download_entries, self.allocator);
+        self.allocator.free(self.presentation_homepage_url);
         if (self.pending_presentation_command) |command| {
             command.deinit(self.allocator);
         }
@@ -868,6 +896,11 @@ const PresentationSnapshot = struct {
     download_overlay_open: bool,
     download_selected_index: usize,
     download_scroll_index: usize,
+    restore_previous_session: bool,
+    default_zoom_percent: i32,
+    homepage_url: []u8,
+    settings_overlay_open: bool,
+    settings_selected_index: usize,
 
     fn deinit(self: PresentationSnapshot, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
@@ -887,6 +920,7 @@ const PresentationSnapshot = struct {
         deinitOwnedStringList(&bookmark_entries, allocator);
         var download_entries = self.download_entries;
         deinitOwnedDownloadList(&download_entries, allocator);
+        allocator.free(self.homepage_url);
     }
 };
 
@@ -941,6 +975,27 @@ const DownloadOverlayChromeAction = enum {
     delete,
 };
 
+const SettingsOverlayChromeAction = enum {
+    close,
+    clear_homepage,
+};
+
+const SettingsOverlayAction = enum {
+    toggle_restore_previous_session,
+    default_zoom_decrease,
+    default_zoom_increase,
+    default_zoom_reset,
+    set_homepage_to_current,
+    clear_homepage,
+};
+
+const SettingsOverlayMove = enum {
+    up,
+    down,
+    home,
+    end,
+};
+
 const TabStripAction = union(enum) {
     activate: usize,
     close: usize,
@@ -993,6 +1048,12 @@ const FindChromeAction = enum {
     next,
 };
 
+const SettingsOverlayRow = enum(usize) {
+    restore_previous_session = 0,
+    default_zoom = 1,
+    homepage = 2,
+};
+
 const BOOKMARKS_FILE = "bookmarks.txt";
 
 fn deinitOwnedStringList(list: *std.ArrayListUnmanaged([]u8), allocator: std.mem.Allocator) void {
@@ -1030,7 +1091,8 @@ fn presentationHasContent(backend: *Win32Backend) bool {
         backend.find_input_active or
         backend.history_overlay_open or
         backend.bookmark_overlay_open or
-        backend.download_overlay_open;
+        backend.download_overlay_open or
+        backend.settings_overlay_open;
 }
 
 fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
@@ -1119,6 +1181,11 @@ fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
         .download_overlay_open = backend.download_overlay_open,
         .download_selected_index = backend.download_overlay_selected_index,
         .download_scroll_index = backend.download_overlay_scroll_index,
+        .restore_previous_session = backend.presentation_restore_previous_session,
+        .default_zoom_percent = backend.presentation_default_zoom_percent,
+        .homepage_url = try backend.allocator.dupe(u8, backend.presentation_homepage_url),
+        .settings_overlay_open = backend.settings_overlay_open,
+        .settings_selected_index = clampSettingsOverlaySelectedIndex(backend.settings_overlay_selected_index),
     };
 }
 
@@ -1594,6 +1661,26 @@ fn overlayFooterRect(panel: c.RECT) c.RECT {
     };
 }
 
+fn settingsRowCount() usize {
+    return 3;
+}
+
+fn settingsPanelRect(client: c.RECT) c.RECT {
+    return historyPanelRect(client, settingsRowCount());
+}
+
+fn settingsOverlayCloseButtonRect(panel: c.RECT) c.RECT {
+    return historyOverlayCloseButtonRect(panel);
+}
+
+fn settingsOverlayClearButtonRect(panel: c.RECT) c.RECT {
+    return bookmarkOverlayDeleteButtonRect(panel);
+}
+
+fn settingsRowRect(client: c.RECT, row_index: usize) c.RECT {
+    return historyEntryRect(client, settingsRowCount(), row_index);
+}
+
 fn historyEntryRect(client: c.RECT, entry_count: usize, index: usize) c.RECT {
     const panel = historyPanelRect(client, entry_count);
     const top = panel.top + 28 + (@as(c_int, @intCast(index)) * PRESENTATION_HISTORY_PANEL_ROW_HEIGHT);
@@ -1641,6 +1728,18 @@ fn presentationDownloadEntryCount(backend: *Win32Backend) usize {
     return backend.presentation_download_entries.items.len;
 }
 
+fn presentationSettingsOverlayOpen(backend: *Win32Backend) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+    return backend.settings_overlay_open;
+}
+
+fn currentSettingsOverlaySelectedIndex(backend: *Win32Backend) usize {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+    return clampSettingsOverlaySelectedIndex(backend.settings_overlay_selected_index);
+}
+
 fn setHistoryOverlayOpen(backend: *Win32Backend, open: bool) bool {
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
@@ -1652,6 +1751,7 @@ fn setHistoryOverlayOpen(backend: *Win32Backend, open: bool) bool {
     if (open) {
         backend.bookmark_overlay_open = false;
         backend.download_overlay_open = false;
+        backend.settings_overlay_open = false;
         backend.address_input_active = false;
         backend.address_input_select_all = false;
         backend.address_pending_high_surrogate = null;
@@ -1695,6 +1795,7 @@ fn setBookmarkOverlayOpen(backend: *Win32Backend, open: bool) bool {
     if (open) {
         backend.history_overlay_open = false;
         backend.download_overlay_open = false;
+        backend.settings_overlay_open = false;
         backend.address_input_active = false;
         backend.address_input_select_all = false;
         backend.address_pending_high_surrogate = null;
@@ -1721,6 +1822,7 @@ fn setDownloadOverlayOpen(backend: *Win32Backend, open: bool) bool {
     if (open) {
         backend.history_overlay_open = false;
         backend.bookmark_overlay_open = false;
+        backend.settings_overlay_open = false;
         backend.address_input_active = false;
         backend.address_input_select_all = false;
         backend.address_pending_high_surrogate = null;
@@ -1737,6 +1839,144 @@ fn setDownloadOverlayOpen(backend: *Win32Backend, open: bool) bool {
         backend.download_overlay_scroll_index = 0;
     }
     return true;
+}
+
+fn setSettingsOverlayOpen(backend: *Win32Backend, open: bool) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (backend.settings_overlay_open == open) {
+        return false;
+    }
+    backend.settings_overlay_open = open;
+    if (open) {
+        backend.history_overlay_open = false;
+        backend.bookmark_overlay_open = false;
+        backend.download_overlay_open = false;
+        backend.address_input_active = false;
+        backend.address_input_select_all = false;
+        backend.address_pending_high_surrogate = null;
+        backend.address_input.clearRetainingCapacity();
+        backend.find_input_active = false;
+        backend.find_input_select_all = false;
+        backend.find_pending_high_surrogate = null;
+        backend.settings_overlay_selected_index = 0;
+    }
+    return true;
+}
+
+fn clampSettingsOverlaySelectedIndex(selected_index: usize) usize {
+    return @min(selected_index, settingsRowCount() - 1);
+}
+
+fn settingsActionForSelectedRow(selected_index: usize, variant: enum { primary, secondary, tertiary, clear }) ?SettingsOverlayAction {
+    const row: SettingsOverlayRow = @enumFromInt(clampSettingsOverlaySelectedIndex(selected_index));
+    return switch (row) {
+        .restore_previous_session => switch (variant) {
+            .primary, .secondary, .tertiary => .toggle_restore_previous_session,
+            .clear => null,
+        },
+        .default_zoom => switch (variant) {
+            .primary => .default_zoom_increase,
+            .secondary => .default_zoom_decrease,
+            .tertiary => .default_zoom_reset,
+            .clear => null,
+        },
+        .homepage => switch (variant) {
+            .primary, .secondary, .tertiary => .set_homepage_to_current,
+            .clear => .clear_homepage,
+        },
+    };
+}
+
+fn queueSettingsOverlayAction(backend: *Win32Backend, action: SettingsOverlayAction) bool {
+    switch (action) {
+        .toggle_restore_previous_session => queueBrowserCommand(backend, .settings_toggle_restore_session),
+        .default_zoom_decrease => queueBrowserCommand(backend, .settings_default_zoom_out),
+        .default_zoom_increase => queueBrowserCommand(backend, .settings_default_zoom_in),
+        .default_zoom_reset => queueBrowserCommand(backend, .settings_default_zoom_reset),
+        .set_homepage_to_current => queueBrowserCommand(backend, .settings_set_homepage_to_current),
+        .clear_homepage => queueBrowserCommand(backend, .settings_clear_homepage),
+    }
+    return true;
+}
+
+fn handleSettingsOverlayMove(hwnd: c.HWND, backend: *Win32Backend, move: SettingsOverlayMove) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.settings_overlay_open) {
+        return false;
+    }
+    const next_index: usize = switch (move) {
+        .up => if (backend.settings_overlay_selected_index == 0) 0 else backend.settings_overlay_selected_index - 1,
+        .down => @min(backend.settings_overlay_selected_index + 1, settingsRowCount() - 1),
+        .home => 0,
+        .end => settingsRowCount() - 1,
+    };
+    if (next_index == backend.settings_overlay_selected_index) {
+        return false;
+    }
+    backend.settings_overlay_selected_index = next_index;
+    _ = c.InvalidateRect(hwnd, null, c.TRUE);
+    return true;
+}
+
+fn settingsPanelHitTest(backend: *Win32Backend, client: c.RECT, x: f64, y: f64) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.settings_overlay_open) {
+        return false;
+    }
+    return clientPointInRect(settingsPanelRect(client), x, y);
+}
+
+fn settingsOverlayChromeActionAtClientPoint(backend: *Win32Backend, client: c.RECT, x: f64, y: f64) ?SettingsOverlayChromeAction {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.settings_overlay_open) {
+        return null;
+    }
+    const panel = settingsPanelRect(client);
+    if (clientPointInRect(settingsOverlayCloseButtonRect(panel), x, y)) {
+        return .close;
+    }
+    if (backend.presentation_homepage_url.len > 0 and clientPointInRect(settingsOverlayClearButtonRect(panel), x, y)) {
+        return .clear_homepage;
+    }
+    return null;
+}
+
+fn handleSettingsOverlayChromeClick(hwnd: c.HWND, backend: *Win32Backend, client: c.RECT, x: f64, y: f64) bool {
+    const action = settingsOverlayChromeActionAtClientPoint(backend, client, x, y) orelse return false;
+    _ = c.SetFocus(hwnd);
+    const changed = switch (action) {
+        .close => setSettingsOverlayOpen(backend, false),
+        .clear_homepage => queueSettingsOverlayAction(backend, .clear_homepage),
+    };
+    if (changed) {
+        _ = c.InvalidateRect(hwnd, null, c.TRUE);
+    }
+    return true;
+}
+
+fn selectSettingsRowAtClientPoint(backend: *Win32Backend, client: c.RECT, x: f64, y: f64) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.settings_overlay_open) {
+        return false;
+    }
+    for (0..settingsRowCount()) |row_index| {
+        if (!clientPointInRect(settingsRowRect(client, row_index), x, y)) {
+            continue;
+        }
+        backend.settings_overlay_selected_index = row_index;
+        return true;
+    }
+    return false;
 }
 
 fn toggleCurrentBookmark(backend: *Win32Backend) bool {
@@ -1987,9 +2227,11 @@ fn presentationHasInteractiveAtClientPoint(backend: *Win32Backend, hwnd: c.HWND,
         historyOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
         bookmarkOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
         downloadOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
+        settingsOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
         historyEntryCommandAtClientPoint(backend, client, x, y) != null or
         bookmarkEntryCommandAtClientPoint(backend, client, x, y) != null or
-        downloadPanelHitTest(backend, client, x, y);
+        downloadPanelHitTest(backend, client, x, y) or
+        settingsPanelHitTest(backend, client, x, y);
 }
 
 fn presentationCommandAtClientPointWithClient(
@@ -3153,6 +3395,94 @@ fn drawDownloadOverlay(
     );
 }
 
+fn drawSettingsOverlay(
+    hdc: c.HDC,
+    client: c.RECT,
+    snapshot: PresentationSnapshot,
+    allocator: std.mem.Allocator,
+) void {
+    const panel = settingsPanelRect(client);
+    const fill = c.CreateSolidBrush(c.RGB(248, 248, 248));
+    if (fill != null) {
+        defer _ = c.DeleteObject(fill);
+        var fill_rect = panel;
+        _ = c.FillRect(hdc, &fill_rect, fill);
+    }
+    const border = c.CreateSolidBrush(c.RGB(180, 180, 180));
+    if (border != null) {
+        defer _ = c.DeleteObject(border);
+        var border_rect = panel;
+        _ = c.FrameRect(hdc, &border_rect, border);
+    }
+
+    var header_rect = c.RECT{
+        .left = panel.left + PRESENTATION_HISTORY_PANEL_PADDING,
+        .top = panel.top + 8,
+        .right = settingsOverlayClearButtonRect(panel).left - 6,
+        .bottom = panel.top + 26,
+    };
+    drawPresentationText(
+        hdc,
+        &header_rect,
+        "Settings  Ctrl+, close  Alt+Home home",
+        c.DT_LEFT | c.DT_TOP | c.DT_SINGLELINE | c.DT_NOPREFIX,
+    );
+    drawChromeButton(hdc, settingsOverlayClearButtonRect(panel), "Clr", snapshot.homepage_url.len > 0);
+    drawChromeButton(hdc, settingsOverlayCloseButtonRect(panel), "x", true);
+
+    for (0..settingsRowCount()) |row_index| {
+        var row_rect = settingsRowRect(client, row_index);
+        if (row_index == snapshot.settings_selected_index) {
+            const selected_border = c.CreateSolidBrush(c.RGB(185, 140, 40));
+            if (selected_border != null) {
+                defer _ = c.DeleteObject(selected_border);
+                var selected_rect = row_rect;
+                _ = c.FrameRect(hdc, &selected_rect, selected_border);
+            }
+        }
+
+        const label = switch (@as(SettingsOverlayRow, @enumFromInt(row_index))) {
+            .restore_previous_session => std.fmt.allocPrint(
+                allocator,
+                "1. Restore previous session: {s}  [Enter/Space toggle]",
+                .{if (snapshot.restore_previous_session) "On" else "Off"},
+            ) catch null,
+            .default_zoom => std.fmt.allocPrint(
+                allocator,
+                "2. Default zoom: {d}%  [Left/Right adjust, Enter reset]",
+                .{snapshot.default_zoom_percent},
+            ) catch null,
+            .homepage => std.fmt.allocPrint(
+                allocator,
+                "3. Homepage: {s}  [Enter set current, Delete clear]",
+                .{if (snapshot.homepage_url.len > 0) snapshot.homepage_url else "(none)"},
+            ) catch null,
+        };
+        defer if (label) |owned_label| allocator.free(owned_label);
+        row_rect.left += 6;
+        row_rect.right -= 6;
+        drawPresentationText(
+            hdc,
+            &row_rect,
+            label orelse "",
+            c.DT_LEFT | c.DT_VCENTER | c.DT_SINGLELINE | c.DT_END_ELLIPSIS | c.DT_NOPREFIX,
+        );
+    }
+
+    const footer = switch (@as(SettingsOverlayRow, @enumFromInt(snapshot.settings_selected_index))) {
+        .restore_previous_session => "Up/Down move  Enter/Space toggle this setting",
+        .default_zoom => "Up/Down move  Left/Right change  Enter reset default zoom",
+        .homepage => "Up/Down move  Enter set homepage to current page  Delete clears",
+    };
+    var footer_rect = overlayFooterRect(panel);
+    drawPresentationText(
+        hdc,
+        &footer_rect,
+        footer,
+        c.DT_LEFT | c.DT_VCENTER | c.DT_SINGLELINE | c.DT_END_ELLIPSIS | c.DT_NOPREFIX,
+    );
+}
+
 fn drawPresentationText(hdc: c.HDC, rect: *c.RECT, text: []const u8, flags: c.UINT) void {
     const utf16 = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, text) catch return;
     defer std.heap.c_allocator.free(utf16);
@@ -3720,7 +4050,7 @@ fn renderPresentationScene(
     };
     const hint_text = std.fmt.allocPrint(
         allocator,
-        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
+        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
         .{snapshot.zoom_percent},
     ) catch return;
     defer allocator.free(hint_text);
@@ -3807,6 +4137,9 @@ fn renderPresentationScene(
             snapshot.download_scroll_index,
             allocator,
         );
+    }
+    if (snapshot.settings_overlay_open) {
+        drawSettingsOverlay(hdc, client, snapshot.*, allocator);
     }
 }
 
@@ -4511,6 +4844,15 @@ fn handlePresentationShortcutKey(
         queueBrowserCommand(backend, .{ .tab_activate = index });
         return true;
     }
+    if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == c.VK_OEM_COMMA) {
+        _ = setSettingsOverlayOpen(backend, !presentationSettingsOverlayOpen(backend));
+        _ = c.InvalidateRect(hwnd, null, c.TRUE);
+        return true;
+    }
+    if ((modifiers.alt or modifiers.meta) and !modifiers.ctrl and !modifiers.shift and vk == c.VK_HOME) {
+        queueBrowserCommand(backend, .home);
+        return true;
+    }
 
     if (presentationAddressEditing(backend)) {
         const handled = switch (vk) {
@@ -4558,6 +4900,43 @@ fn handlePresentationShortcutKey(
             _ = c.InvalidateRect(hwnd, null, c.TRUE);
         }
         return handled;
+    }
+
+    if (presentationSettingsOverlayOpen(backend)) {
+        const selected_index = currentSettingsOverlaySelectedIndex(backend);
+        const handled = switch (vk) {
+            c.VK_ESCAPE => setSettingsOverlayOpen(backend, false),
+            c.VK_UP => handleSettingsOverlayMove(hwnd, backend, .up),
+            c.VK_DOWN => handleSettingsOverlayMove(hwnd, backend, .down),
+            c.VK_HOME => handleSettingsOverlayMove(hwnd, backend, .home),
+            c.VK_END => handleSettingsOverlayMove(hwnd, backend, .end),
+            c.VK_LEFT => if (settingsActionForSelectedRow(selected_index, .secondary)) |action|
+                queueSettingsOverlayAction(backend, action)
+            else
+                false,
+            c.VK_RIGHT => if (settingsActionForSelectedRow(selected_index, .primary)) |action|
+                queueSettingsOverlayAction(backend, action)
+            else
+                false,
+            c.VK_RETURN => if (settingsActionForSelectedRow(selected_index, .tertiary)) |action|
+                queueSettingsOverlayAction(backend, action)
+            else
+                false,
+            c.VK_SPACE => if (settingsActionForSelectedRow(selected_index, .primary)) |action|
+                queueSettingsOverlayAction(backend, action)
+            else
+                false,
+            c.VK_DELETE => if (settingsActionForSelectedRow(selected_index, .clear)) |action|
+                queueSettingsOverlayAction(backend, action)
+            else
+                false,
+            else => false,
+        };
+        if (handled) {
+            _ = c.InvalidateRect(hwnd, null, c.TRUE);
+            return true;
+        }
+        return false;
     }
 
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'D') {
@@ -5329,6 +5708,25 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     var client: c.RECT = undefined;
                     _ = c.GetClientRect(hwnd, &client);
 
+                    if (presentationSettingsOverlayOpen(backend)) {
+                        cancelPendingPresentationCommand(backend);
+                        backend.presentation_left_mouse_consumed = true;
+                        _ = c.SetFocus(hwnd);
+                        if (handleSettingsOverlayChromeClick(hwnd, backend, client, client_pos.x, client_pos.y)) {
+                            return 0;
+                        }
+                        if (settingsPanelHitTest(backend, client, client_pos.x, client_pos.y)) {
+                            if (selectSettingsRowAtClientPoint(backend, client, client_pos.x, client_pos.y)) {
+                                _ = c.InvalidateRect(hwnd, null, c.TRUE);
+                            }
+                            return 0;
+                        }
+                        if (setSettingsOverlayOpen(backend, false)) {
+                            _ = c.InvalidateRect(hwnd, null, c.TRUE);
+                        }
+                        return 0;
+                    }
+
                     if (presentationDownloadOverlayOpen(backend)) {
                         cancelPendingPresentationCommand(backend);
                         backend.presentation_left_mouse_consumed = true;
@@ -5671,7 +6069,11 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     }
                     return 0;
                 }
-                if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
+                if (presentationHistoryOverlayOpen(backend) or
+                    presentationBookmarkOverlayOpen(backend) or
+                    presentationDownloadOverlayOpen(backend) or
+                    presentationSettingsOverlayOpen(backend))
+                {
                     return 0;
                 }
                 if (backend.suppress_wm_char_units > 0) {
@@ -5702,7 +6104,11 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     }
                     return 1;
                 }
-                if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
+                if (presentationHistoryOverlayOpen(backend) or
+                    presentationBookmarkOverlayOpen(backend) or
+                    presentationDownloadOverlayOpen(backend) or
+                    presentationSettingsOverlayOpen(backend))
+                {
                     return 1;
                 }
                 queueTextCodePoint(backend, @intCast(wparam));
@@ -5972,6 +6378,65 @@ test "win32 ctrl+j toggles downloads overlay" {
     try std.testing.expect(presentationDownloadOverlayOpen(&backend));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true }));
     try std.testing.expect(!presentationDownloadOverlayOpen(&backend));
+}
+
+test "win32 ctrl+comma toggles settings overlay" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_title = try std.testing.allocator.dupe(u8, "Settings");
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_OEM_COMMA, .{ .ctrl = true }));
+    try std.testing.expect(presentationSettingsOverlayOpen(&backend));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_OEM_COMMA, .{ .ctrl = true }));
+    try std.testing.expect(!presentationSettingsOverlayOpen(&backend));
+}
+
+test "win32 settings overlay keyboard queues settings commands" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_title = try std.testing.allocator.dupe(u8, "Settings");
+    backend.presentation_homepage_url = try std.testing.allocator.dupe(u8, "http://home.test/");
+    backend.settings_overlay_open = true;
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_SPACE, .{}));
+    try std.testing.expectEqual(BrowserCommand.settings_toggle_restore_session, backend.nextBrowserCommand().?);
+
+    backend.settings_overlay_open = true;
+    backend.settings_overlay_selected_index = 1;
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_RIGHT, .{}));
+    try std.testing.expectEqual(BrowserCommand.settings_default_zoom_in, backend.nextBrowserCommand().?);
+
+    backend.settings_overlay_open = true;
+    backend.settings_overlay_selected_index = 1;
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_LEFT, .{}));
+    try std.testing.expectEqual(BrowserCommand.settings_default_zoom_out, backend.nextBrowserCommand().?);
+
+    backend.settings_overlay_open = true;
+    backend.settings_overlay_selected_index = 1;
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_RETURN, .{}));
+    try std.testing.expectEqual(BrowserCommand.settings_default_zoom_reset, backend.nextBrowserCommand().?);
+
+    backend.settings_overlay_open = true;
+    backend.settings_overlay_selected_index = 2;
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_RETURN, .{}));
+    try std.testing.expectEqual(BrowserCommand.settings_set_homepage_to_current, backend.nextBrowserCommand().?);
+
+    backend.settings_overlay_open = true;
+    backend.settings_overlay_selected_index = 2;
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_DELETE, .{}));
+    try std.testing.expectEqual(BrowserCommand.settings_clear_homepage, backend.nextBrowserCommand().?);
+}
+
+test "win32 alt+home queues home command" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_title = try std.testing.allocator.dupe(u8, "Home");
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_HOME, .{ .alt = true }));
+    try std.testing.expectEqual(BrowserCommand.home, backend.nextBrowserCommand().?);
 }
 
 test "win32 disabled chrome buttons are not interactive" {
