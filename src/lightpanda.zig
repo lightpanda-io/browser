@@ -157,7 +157,372 @@ const SavedBrowseSession = struct {
 };
 
 const BROWSE_SESSION_FILE = "browse-session-v1.txt";
+const BROWSE_DOWNLOADS_FILE = "downloads-v1.txt";
+const BROWSE_DOWNLOADS_DIR = "downloads";
 const MAX_CLOSED_BROWSE_TABS = 16;
+const MAX_DOWNLOADS_HISTORY = 64;
+
+const BrowseDownloadStatus = enum(u8) {
+    queued,
+    downloading,
+    completed,
+    failed,
+    interrupted,
+};
+
+const BrowseDownloadEntry = struct {
+    filename: []u8,
+    path: []u8,
+    url: []u8,
+    detail: []u8 = &.{},
+    bytes_received: usize = 0,
+    total_bytes: usize = 0,
+    has_total_bytes: bool = false,
+    status: BrowseDownloadStatus = .queued,
+
+    fn deinit(self: *BrowseDownloadEntry, allocator: std.mem.Allocator) void {
+        allocator.free(self.filename);
+        allocator.free(self.path);
+        allocator.free(self.url);
+        allocator.free(self.detail);
+        self.* = undefined;
+    }
+};
+
+const BrowseDownloads = struct {
+    allocator: std.mem.Allocator,
+    entries: std.ArrayListUnmanaged(BrowseDownloadEntry) = .{},
+    active: std.ArrayListUnmanaged(*ActiveBrowseDownload) = .{},
+    last_saved_hash: u64 = 0,
+
+    fn init(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) BrowseDownloads {
+        var downloads: BrowseDownloads = .{ .allocator = allocator };
+        downloads.loadFromDisk(app_dir_path);
+        return downloads;
+    }
+
+    fn deinit(self: *BrowseDownloads, app_dir_path: ?[]const u8) void {
+        for (self.active.items) |download| {
+            download.cancel(.interrupted, "Browser shutting down");
+        }
+        while (self.active.items.len > 0) {
+            self.active.items.len -= 1;
+            self.active.items[self.active.items.len].deinit();
+        }
+        self.active.deinit(self.allocator);
+
+        self.persistIfChanged(app_dir_path);
+        while (self.entries.items.len > 0) {
+            self.entries.items.len -= 1;
+            self.entries.items[self.entries.items.len].deinit(self.allocator);
+        }
+        self.entries.deinit(self.allocator);
+    }
+
+    fn setDetail(entry: *BrowseDownloadEntry, allocator: std.mem.Allocator, detail: []const u8) void {
+        allocator.free(entry.detail);
+        entry.detail = allocator.dupe(u8, detail) catch &.{};
+    }
+
+    fn removeEntry(self: *BrowseDownloads, app_dir_path: ?[]const u8, index: usize) bool {
+        if (index >= self.entries.items.len) {
+            return false;
+        }
+        for (self.active.items) |download| {
+            if (download.entry_index == index) {
+                return false;
+            }
+        }
+        var removed = self.entries.orderedRemove(index);
+        if (removed.path.len > 0) {
+            std.fs.deleteFileAbsolute(removed.path) catch {};
+        }
+        removed.deinit(self.allocator);
+        for (self.active.items) |download| {
+            if (download.entry_index > index) {
+                download.entry_index -= 1;
+            }
+        }
+        self.persistIfChanged(app_dir_path);
+        return true;
+    }
+
+    fn cancelDownloadsForTab(self: *BrowseDownloads, tab: *BrowseTab, app_dir_path: ?[]const u8) void {
+        for (self.active.items) |download| {
+            if (download.source_tab == tab) {
+                download.cancel(.interrupted, "Tab closed");
+            }
+        }
+        self.persistIfChanged(app_dir_path);
+    }
+
+    fn processPendingRequests(self: *BrowseDownloads, app: *App, tab: *BrowseTab) !void {
+        var pending = tab.session.takePendingDownloads();
+        defer {
+            while (pending.items.len > 0) {
+                pending.items.len -= 1;
+                pending.items[pending.items.len].deinit(app.allocator);
+            }
+            pending.deinit(app.allocator);
+        }
+
+        for (pending.items) |request| {
+            try self.startDownload(app, tab, request);
+        }
+    }
+
+    fn startDownloadFromValues(
+        self: *BrowseDownloads,
+        app: *App,
+        tab: *BrowseTab,
+        url: []const u8,
+        suggested_filename: []const u8,
+    ) !void {
+        var request = Session.PendingDownload{
+            .url = try app.allocator.dupe(u8, url),
+            .suggested_filename = try app.allocator.dupe(u8, suggested_filename),
+        };
+        defer request.deinit(app.allocator);
+        try self.startDownload(app, tab, request);
+    }
+
+    fn tick(self: *BrowseDownloads, timeout_ms: u32) void {
+        for (self.active.items) |download| {
+            if (download.finished) {
+                continue;
+            }
+            _ = download.http_client.tick(timeout_ms) catch |err| {
+                download.fail("Download tick failed", err);
+            };
+        }
+
+        var i: usize = 0;
+        while (i < self.active.items.len) {
+            const download = self.active.items[i];
+            if (!download.finished) {
+                i += 1;
+                continue;
+            }
+            _ = self.active.orderedRemove(i);
+            download.deinit();
+        }
+    }
+
+    fn trimHistory(self: *BrowseDownloads) void {
+        while (self.entries.items.len > MAX_DOWNLOADS_HISTORY) {
+            var removed = self.entries.orderedRemove(0);
+            removed.deinit(self.allocator);
+            for (self.active.items) |download| {
+                if (download.entry_index > 0) {
+                    download.entry_index -= 1;
+                }
+            }
+        }
+    }
+
+    fn startDownload(self: *BrowseDownloads, app: *App, tab: *BrowseTab, request: Session.PendingDownload) !void {
+        const page = tab.session.currentPage() orelse return;
+        const app_dir_path = app.app_dir_path orelse return;
+        const downloads_dir = try ensureBrowseDownloadsDir(app.allocator, app_dir_path);
+        defer app.allocator.free(downloads_dir);
+
+        const derived_name = try deriveDownloadFileName(
+            app.allocator,
+            request.url,
+            request.suggested_filename,
+        );
+        defer app.allocator.free(derived_name);
+
+        const final_name = try makeUniqueDownloadFileName(app.allocator, downloads_dir, derived_name);
+        errdefer app.allocator.free(final_name);
+
+        const file_path = try std.fs.path.join(app.allocator, &.{ downloads_dir, final_name });
+        errdefer app.allocator.free(file_path);
+
+        const file = try std.fs.createFileAbsolute(file_path, .{ .truncate = true });
+        errdefer {
+            file.close();
+            std.fs.deleteFileAbsolute(file_path) catch {};
+        }
+
+        const entry_index = self.entries.items.len;
+        try self.entries.append(app.allocator, .{
+            .filename = try app.allocator.dupe(u8, final_name),
+            .path = try app.allocator.dupe(u8, file_path),
+            .url = try app.allocator.dupe(u8, request.url),
+            .status = .queued,
+        });
+        errdefer {
+            var removed = self.entries.pop().?;
+            removed.deinit(app.allocator);
+        }
+
+        var download = try app.allocator.create(ActiveBrowseDownload);
+        errdefer app.allocator.destroy(download);
+        download.* = try ActiveBrowseDownload.init(app, self, tab, entry_index, file);
+        errdefer download.deinit();
+
+        try download.start(page, request.url);
+        try self.active.append(app.allocator, download);
+        self.trimHistory();
+        self.persistIfChanged(app.app_dir_path);
+    }
+
+    fn toDisplayEntries(self: *BrowseDownloads, allocator: std.mem.Allocator) ![]Display.DownloadEntry {
+        var entries = try allocator.alloc(Display.DownloadEntry, self.entries.items.len);
+        errdefer allocator.free(entries);
+
+        for (self.entries.items, 0..) |entry, index| {
+            entries[index] = .{
+                .filename = entry.filename,
+                .path = entry.path,
+                .status = try formatDownloadStatusLabel(allocator, entry),
+                .removable = !downloadEntryActive(self, index),
+            };
+        }
+        return entries;
+    }
+
+    fn loadFromDisk(self: *BrowseDownloads, app_dir_path: ?[]const u8) void {
+        const dir_path = app_dir_path orelse return;
+        var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+        defer dir.close();
+
+        const file = dir.openFile(BROWSE_DOWNLOADS_FILE, .{}) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return,
+        };
+        if (file == null) {
+            return;
+        }
+        defer file.?.close();
+
+        const data = file.?.readToEndAlloc(self.allocator, 1024 * 128) catch return;
+        defer self.allocator.free(data);
+
+        var it = std.mem.splitScalar(u8, data, '\n');
+        while (it.next()) |raw_line| {
+            const line = std.mem.trim(u8, raw_line, "\r\n");
+            if (line.len == 0) {
+                continue;
+            }
+            const entry = parseSavedDownloadEntry(self.allocator, line) catch continue;
+            self.entries.append(self.allocator, entry) catch {
+                var owned = entry;
+                owned.deinit(self.allocator);
+                break;
+            };
+        }
+        self.last_saved_hash = hashSavedDownloads(self.entries.items);
+    }
+
+    fn persistIfChanged(self: *BrowseDownloads, app_dir_path: ?[]const u8) void {
+        const hash = hashSavedDownloads(self.entries.items);
+        if (hash == self.last_saved_hash) {
+            return;
+        }
+        saveBrowseDownloads(self.allocator, app_dir_path, self.entries.items);
+        self.last_saved_hash = hash;
+    }
+};
+
+const ActiveBrowseDownload = struct {
+    allocator: std.mem.Allocator,
+    manager: *BrowseDownloads,
+    source_tab: *BrowseTab,
+    http_client: *HttpClient.Client,
+    file: ?std.fs.File,
+    arena: std.heap.ArenaAllocator,
+    entry_index: usize,
+    finished: bool = false,
+
+    fn init(
+        app: *App,
+        manager: *BrowseDownloads,
+        source_tab: *BrowseTab,
+        entry_index: usize,
+        file: std.fs.File,
+    ) !ActiveBrowseDownload {
+        return .{
+            .allocator = app.allocator,
+            .manager = manager,
+            .source_tab = source_tab,
+            .http_client = try app.http.createClient(app.allocator),
+            .file = file,
+            .arena = std.heap.ArenaAllocator.init(app.allocator),
+            .entry_index = entry_index,
+        };
+    }
+
+    fn deinit(self: *ActiveBrowseDownload) void {
+        if (self.file) |file| {
+            file.close();
+            self.file = null;
+        }
+        self.http_client.deinit();
+        self.arena.deinit();
+        self.allocator.destroy(self);
+    }
+
+    fn start(self: *ActiveBrowseDownload, page: *Page, request_url: []const u8) !void {
+        const arena = self.arena.allocator();
+        const url_z = try arena.dupeZ(u8, request_url);
+        var headers = try self.http_client.newHeaders();
+        try page.headersForRequest(arena, url_z, &headers);
+
+        self.manager.entries.items[self.entry_index].status = .downloading;
+        self.manager.persistIfChanged(page._session.browser.app.app_dir_path);
+
+        try self.http_client.request(.{
+            .ctx = self,
+            .frame_id = page._frame_id,
+            .url = url_z,
+            .method = .GET,
+            .headers = headers,
+            .cookie_jar = &page._session.cookie_jar,
+            .resource_type = .fetch,
+            .notification = self.source_tab.notification,
+            .header_callback = browseDownloadHeaderCallback,
+            .data_callback = browseDownloadDataCallback,
+            .done_callback = browseDownloadDoneCallback,
+            .error_callback = browseDownloadErrorCallback,
+            .shutdown_callback = browseDownloadShutdownCallback,
+        });
+    }
+
+    fn fail(self: *ActiveBrowseDownload, detail: []const u8, err: anyerror) void {
+        var entry = &self.manager.entries.items[self.entry_index];
+        entry.status = .failed;
+        const message = std.fmt.allocPrint(self.allocator, "{s}: {s}", .{ detail, @errorName(err) }) catch detail;
+        defer if (message.ptr != detail.ptr) self.allocator.free(message);
+        BrowseDownloads.setDetail(entry, self.allocator, message);
+        self.cleanupPartialFile();
+        self.finished = true;
+    }
+
+    fn cancel(self: *ActiveBrowseDownload, status: BrowseDownloadStatus, detail: []const u8) void {
+        if (self.finished) {
+            return;
+        }
+        var entry = &self.manager.entries.items[self.entry_index];
+        entry.status = status;
+        BrowseDownloads.setDetail(entry, self.allocator, detail);
+        self.finished = true;
+        self.cleanupPartialFile();
+        self.http_client.abort();
+    }
+
+    fn cleanupPartialFile(self: *ActiveBrowseDownload) void {
+        if (self.file) |file| {
+            file.close();
+            self.file = null;
+        }
+        const path = self.manager.entries.items[self.entry_index].path;
+        if (path.len > 0) {
+            std.fs.deleteFileAbsolute(path) catch {};
+        }
+    }
+};
 
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
     const http_client = try app.http.createClient(app.allocator);
@@ -234,11 +599,13 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     defer deinitBrowseTabs(app.allocator, &tabs);
     var closed_tabs: std.ArrayListUnmanaged(ClosedBrowseTab) = .{};
     defer deinitClosedBrowseTabs(app.allocator, &closed_tabs);
+    var downloads = BrowseDownloads.init(app.allocator, app.app_dir_path);
+    defer downloads.deinit(app.app_dir_path);
 
     var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url);
     var displayed_tab_index: ?usize = null;
     var last_saved_session_hash: u64 = 0;
-    try updateActiveBrowseDisplay(app, tabs.items, active_tab_index, &displayed_tab_index);
+    try updateActiveBrowseDisplay(app, tabs.items, &downloads, active_tab_index, &displayed_tab_index);
     persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, &last_saved_session_hash);
 
     browse_loop: while (!app.shutdown and !app.display.userClosed()) {
@@ -246,7 +613,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         while (app.display.nextBrowserCommand()) |command| {
             defer command.deinit(app.allocator);
             handled_command = true;
-            try handleBrowseCommand(app, &tabs, &closed_tabs, &active_tab_index, command);
+            try handleBrowseCommand(app, &tabs, &closed_tabs, &downloads, &active_tab_index, command);
             if (tabs.items.len == 0) {
                 clearSavedBrowseSession(app);
                 break :browse_loop;
@@ -259,7 +626,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
         if (handled_command) {
-            try updateActiveBrowseDisplay(app, tabs.items, active_tab_index, &displayed_tab_index);
+            try updateActiveBrowseDisplay(app, tabs.items, &downloads, active_tab_index, &displayed_tab_index);
         }
 
         for (tabs.items, 0..) |tab, index| {
@@ -267,15 +634,18 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
                 tab.session.wait(opts.wait_ms)
             else
                 tab.session.waitNoInput(0);
+            try downloads.processPendingRequests(app, tab);
         }
+        downloads.tick(0);
 
         if (tabs.items.len == 0) {
             break;
         }
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
-        try updateActiveBrowseDisplay(app, tabs.items, active_tab_index, &displayed_tab_index);
+        try updateActiveBrowseDisplay(app, tabs.items, &downloads, active_tab_index, &displayed_tab_index);
         persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, &last_saved_session_hash);
+        downloads.persistIfChanged(app.app_dir_path);
     }
 }
 
@@ -283,6 +653,7 @@ fn handleBrowseCommand(
     app: *App,
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab),
+    downloads: *BrowseDownloads,
     active_tab_index: *usize,
     command: BrowserCommand,
 ) !void {
@@ -320,6 +691,7 @@ fn handleBrowseCommand(
                 return;
             }
             const removed = tabs.orderedRemove(index);
+            downloads.cancelDownloadsForTab(removed, app.app_dir_path);
             try pushClosedBrowseTab(app.allocator, closed_tabs, removed);
             removed.deinit(app.allocator);
             if (tabs.items.len == 0) {
@@ -349,6 +721,16 @@ fn handleBrowseCommand(
             try tabs.append(app.allocator, tab);
             active_tab_index.* = tabs.items.len - 1;
             tab.last_presented_hash = 0;
+        },
+        .download_remove => |index| {
+            _ = downloads.removeEntry(app.app_dir_path, index);
+        },
+        .download => |download| {
+            if (tabs.items.len == 0) {
+                return;
+            }
+            const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
+            try downloads.startDownloadFromValues(app, tabs.items[active_index], download.url, download.suggested_filename);
         },
         else => {
             if (tabs.items.len == 0) {
@@ -496,6 +878,7 @@ fn pageIsBlankIdle(page: *Page) bool {
 fn syncBrowseDisplayState(
     app: *App,
     tabs: []const *BrowseTab,
+    downloads: *BrowseDownloads,
     active_tab_index: usize,
     loading_override: ?bool,
 ) !void {
@@ -524,6 +907,15 @@ fn syncBrowseDisplayState(
         tab_entries[index] = try browseTabEntry(tab);
     }
     app.display.setTabEntries(tab_entries, active_index);
+
+    const download_entries = try downloads.toDisplayEntries(app.allocator);
+    defer {
+        for (download_entries) |entry| {
+            app.allocator.free(entry.status);
+        }
+        app.allocator.free(download_entries);
+    }
+    app.display.setDownloadEntries(download_entries);
 }
 
 fn deinitBrowseTabs(allocator: std.mem.Allocator, tabs: *std.ArrayListUnmanaged(*BrowseTab)) void {
@@ -728,6 +1120,253 @@ fn saveBrowseSession(app: *App, tabs: []const *BrowseTab, active_tab_index: usiz
     });
 }
 
+fn browseDownloadHeaderCallback(transfer: *HttpClient.Transfer) !bool {
+    const download: *ActiveBrowseDownload = @ptrCast(@alignCast(transfer.ctx));
+    const entry = &download.manager.entries.items[download.entry_index];
+    entry.status = .downloading;
+    if (transfer.getContentLength()) |content_length| {
+        entry.total_bytes = content_length;
+        entry.has_total_bytes = true;
+    }
+    const response_header = transfer.response_header orelse return true;
+    if (response_header.status >= 400) {
+        return error.BadStatusCode;
+    }
+    download.manager.persistIfChanged(download.source_tab.browser.app.app_dir_path);
+    return true;
+}
+
+fn browseDownloadDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    const download: *ActiveBrowseDownload = @ptrCast(@alignCast(transfer.ctx));
+    const file = download.file orelse return error.Closed;
+    try file.writeAll(data);
+    download.manager.entries.items[download.entry_index].bytes_received += data.len;
+}
+
+fn browseDownloadDoneCallback(ctx: *anyopaque) !void {
+    const download: *ActiveBrowseDownload = @ptrCast(@alignCast(ctx));
+    if (download.file) |file| {
+        file.close();
+        download.file = null;
+    }
+    var entry = &download.manager.entries.items[download.entry_index];
+    entry.status = .completed;
+    BrowseDownloads.setDetail(entry, download.allocator, "");
+    download.finished = true;
+    download.manager.persistIfChanged(download.source_tab.browser.app.app_dir_path);
+}
+
+fn browseDownloadErrorCallback(ctx: *anyopaque, err: anyerror) void {
+    const download: *ActiveBrowseDownload = @ptrCast(@alignCast(ctx));
+    if (download.finished) {
+        return;
+    }
+    var entry = &download.manager.entries.items[download.entry_index];
+    entry.status = .failed;
+    const message = std.fmt.allocPrint(download.allocator, "Failed: {s}", .{@errorName(err)}) catch "Failed";
+    defer if (@intFromPtr(message.ptr) != @intFromPtr("Failed".ptr)) download.allocator.free(message);
+    BrowseDownloads.setDetail(entry, download.allocator, message);
+    download.cleanupPartialFile();
+    download.finished = true;
+    download.manager.persistIfChanged(download.source_tab.browser.app.app_dir_path);
+}
+
+fn browseDownloadShutdownCallback(ctx: *anyopaque) void {
+    const download: *ActiveBrowseDownload = @ptrCast(@alignCast(ctx));
+    if (download.finished) {
+        return;
+    }
+    var entry = &download.manager.entries.items[download.entry_index];
+    entry.status = .interrupted;
+    BrowseDownloads.setDetail(entry, download.allocator, "Interrupted");
+    download.cleanupPartialFile();
+    download.finished = true;
+    download.manager.persistIfChanged(download.source_tab.browser.app.app_dir_path);
+}
+
+fn downloadEntryActive(downloads: *BrowseDownloads, index: usize) bool {
+    for (downloads.active.items) |download| {
+        if (download.entry_index == index and !download.finished) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn formatDownloadStatusLabel(allocator: std.mem.Allocator, entry: BrowseDownloadEntry) ![]u8 {
+    return switch (entry.status) {
+        .queued => allocator.dupe(u8, "Queued"),
+        .downloading => if (entry.has_total_bytes)
+            std.fmt.allocPrint(allocator, "Downloading {d}/{d} B", .{ entry.bytes_received, entry.total_bytes })
+        else
+            std.fmt.allocPrint(allocator, "Downloading {d} B", .{entry.bytes_received}),
+        .completed => std.fmt.allocPrint(allocator, "Complete {d} B", .{entry.bytes_received}),
+        .failed, .interrupted => if (entry.detail.len > 0)
+            allocator.dupe(u8, entry.detail)
+        else if (entry.status == .failed)
+            allocator.dupe(u8, "Failed")
+        else
+            allocator.dupe(u8, "Interrupted"),
+    };
+}
+
+fn ensureBrowseDownloadsDir(allocator: std.mem.Allocator, app_dir_path: []const u8) ![]u8 {
+    var dir = try std.fs.openDirAbsolute(app_dir_path, .{});
+    defer dir.close();
+    try dir.makePath(BROWSE_DOWNLOADS_DIR);
+    return try std.fs.path.join(allocator, &.{ app_dir_path, BROWSE_DOWNLOADS_DIR });
+}
+
+fn deriveDownloadFileName(
+    allocator: std.mem.Allocator,
+    url: []const u8,
+    suggested_filename: []const u8,
+) ![]u8 {
+    const preferred = std.mem.trim(u8, suggested_filename, &std.ascii.whitespace);
+    if (preferred.len > 0) {
+        return sanitizeDownloadFileName(allocator, preferred);
+    }
+
+    const trimmed_url = std.mem.trim(u8, url, &std.ascii.whitespace);
+    const slash_index = std.mem.lastIndexOfScalar(u8, trimmed_url, '/') orelse 0;
+    const basename = if (slash_index + 1 < trimmed_url.len)
+        trimmed_url[slash_index + 1 ..]
+    else
+        trimmed_url;
+    const without_query = basename[0..(std.mem.indexOfAny(u8, basename, "?#") orelse basename.len)];
+    if (without_query.len == 0) {
+        return allocator.dupe(u8, "download.bin");
+    }
+    return sanitizeDownloadFileName(allocator, without_query);
+}
+
+fn sanitizeDownloadFileName(allocator: std.mem.Allocator, raw_name: []const u8) ![]u8 {
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+
+    const trimmed = std.mem.trim(u8, raw_name, &std.ascii.whitespace);
+    for (trimmed) |char| {
+        switch (char) {
+            '<', '>', ':', '"', '/', '\\', '|', '?', '*', '\r', '\n', '\t' => try buf.append(allocator, '_'),
+            else => try buf.append(allocator, char),
+        }
+    }
+    const candidate = std.mem.trim(u8, buf.items, ". ");
+    if (candidate.len == 0) {
+        return allocator.dupe(u8, "download.bin");
+    }
+    return allocator.dupe(u8, candidate);
+}
+
+fn makeUniqueDownloadFileName(allocator: std.mem.Allocator, downloads_dir: []const u8, base_name: []const u8) ![]u8 {
+    var dir = try std.fs.openDirAbsolute(downloads_dir, .{});
+    defer dir.close();
+
+    const ext_index = std.mem.lastIndexOfScalar(u8, base_name, '.');
+    const stem = if (ext_index) |index| base_name[0..index] else base_name;
+    const ext = if (ext_index) |index| base_name[index..] else "";
+
+    if (!fileExistsInDir(dir, base_name)) {
+        return allocator.dupe(u8, base_name);
+    }
+
+    var suffix: usize = 2;
+    while (true) : (suffix += 1) {
+        const candidate = try std.fmt.allocPrint(allocator, "{s} ({d}){s}", .{ stem, suffix, ext });
+        errdefer allocator.free(candidate);
+        if (!fileExistsInDir(dir, candidate)) {
+            return candidate;
+        }
+    }
+}
+
+fn fileExistsInDir(dir: std.fs.Dir, sub_path: []const u8) bool {
+    dir.access(sub_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return true,
+    };
+    return true;
+}
+
+fn hashSavedDownloads(entries: []const BrowseDownloadEntry) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    for (entries) |entry| {
+        hasher.update(entry.filename);
+        hasher.update(entry.path);
+        hasher.update(entry.url);
+        hasher.update(entry.detail);
+        hasher.update(std.mem.asBytes(&entry.bytes_received));
+        hasher.update(std.mem.asBytes(&entry.total_bytes));
+        hasher.update(std.mem.asBytes(&entry.has_total_bytes));
+        hasher.update(std.mem.asBytes(&@intFromEnum(entry.status)));
+    }
+    return hasher.final();
+}
+
+fn saveBrowseDownloads(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    entries: []const BrowseDownloadEntry,
+) void {
+    const dir_path = app_dir_path orelse return;
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+    defer dir.close();
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+
+    for (entries) |entry| {
+        buf.writer.print(
+            "{d}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\n",
+            .{
+                @intFromEnum(entry.status),
+                entry.bytes_received,
+                entry.total_bytes,
+                if (entry.has_total_bytes) @as(u8, 1) else @as(u8, 0),
+                sanitizePersistedDownloadField(entry.filename),
+                sanitizePersistedDownloadField(entry.path),
+                sanitizePersistedDownloadField(entry.url),
+                sanitizePersistedDownloadField(entry.detail),
+            },
+        ) catch return;
+    }
+
+    dir.writeFile(.{ .sub_path = BROWSE_DOWNLOADS_FILE, .data = buf.written() }) catch |err| {
+        log.warn(.app, "browse downloads write failed", .{ .err = err });
+    };
+}
+
+fn sanitizePersistedDownloadField(value: []const u8) []const u8 {
+    return std.mem.trim(u8, value, "\r\n\t");
+}
+
+fn parseSavedDownloadEntry(allocator: std.mem.Allocator, line: []const u8) !BrowseDownloadEntry {
+    var fields_it = std.mem.splitScalar(u8, line, '\t');
+    const status_raw = fields_it.next() orelse return error.InvalidFormat;
+    const received_raw = fields_it.next() orelse return error.InvalidFormat;
+    const total_raw = fields_it.next() orelse return error.InvalidFormat;
+    const has_total_raw = fields_it.next() orelse return error.InvalidFormat;
+    const filename = fields_it.next() orelse return error.InvalidFormat;
+    const path = fields_it.next() orelse return error.InvalidFormat;
+    const url = fields_it.next() orelse return error.InvalidFormat;
+    const detail = fields_it.next() orelse "";
+
+    const saved_status: BrowseDownloadStatus = @enumFromInt(try std.fmt.parseInt(u8, status_raw, 10));
+    return .{
+        .filename = try allocator.dupe(u8, filename),
+        .path = try allocator.dupe(u8, path),
+        .url = try allocator.dupe(u8, url),
+        .detail = try allocator.dupe(u8, detail),
+        .bytes_received = try std.fmt.parseInt(usize, received_raw, 10),
+        .total_bytes = try std.fmt.parseInt(usize, total_raw, 10),
+        .has_total_bytes = try std.fmt.parseInt(u8, has_total_raw, 10) != 0,
+        .status = switch (saved_status) {
+            .queued, .downloading => .interrupted,
+            else => saved_status,
+        },
+    };
+}
+
 fn createBrowseTab(app: *App, initial_url: ?[:0]const u8) !*BrowseTab {
     const tab = try app.allocator.create(BrowseTab);
     errdefer app.allocator.destroy(tab);
@@ -768,6 +1407,7 @@ fn normalizeActiveTabIndex(index: usize, tab_count: usize) usize {
 fn updateActiveBrowseDisplay(
     app: *App,
     tabs: []const *BrowseTab,
+    downloads: *BrowseDownloads,
     active_tab_index: usize,
     displayed_tab_index: *?usize,
 ) !void {
@@ -783,7 +1423,7 @@ fn updateActiveBrowseDisplay(
         active_tab.committed_surface.available() and
         pageIsLoading(page);
 
-    try syncBrowseDisplayState(app, tabs, active_index, if (show_committed_surface) false else null);
+    try syncBrowseDisplayState(app, tabs, downloads, active_index, if (show_committed_surface) false else null);
 
     if (displayed_tab_index.* == null or displayed_tab_index.*.? != active_index) {
         active_tab.last_presented_hash = 0;
@@ -1134,6 +1774,27 @@ test "shouldAppendStartupUrl skips restored duplicates" {
 
     try std.testing.expect(!shouldAppendStartupUrl(saved.tabs.items, "http://two.test/"));
     try std.testing.expect(shouldAppendStartupUrl(saved.tabs.items, "http://three.test/"));
+}
+
+test "sanitizeDownloadFileName replaces invalid windows characters" {
+    const sanitized = try sanitizeDownloadFileName(std.testing.allocator, "report<>:\\/|?*.txt");
+    defer std.testing.allocator.free(sanitized);
+
+    try std.testing.expectEqualStrings("report________.txt", sanitized);
+}
+
+test "parseSavedDownloadEntry restores interrupted active downloads" {
+    var entry = try parseSavedDownloadEntry(
+        std.testing.allocator,
+        "1\t12\t20\t1\texample.txt\tC:\\tmp\\example.txt\thttp://example.test/file.txt\tDownloading",
+    );
+    defer entry.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(BrowseDownloadStatus.interrupted, entry.status);
+    try std.testing.expectEqual(@as(usize, 12), entry.bytes_received);
+    try std.testing.expectEqual(@as(usize, 20), entry.total_bytes);
+    try std.testing.expect(entry.has_total_bytes);
+    try std.testing.expectEqualStrings("example.txt", entry.filename);
 }
 
 test "normalizeBrowseUrl rejects blank input" {

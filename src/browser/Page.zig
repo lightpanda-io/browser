@@ -3252,15 +3252,28 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
+            if (try element.hasAttribute(comptime .wrap("download"), self)) {
+                const resolved_url = try URL.resolve(
+                    self.call_arena,
+                    self.base(),
+                    href,
+                    .{ .always_dupe = false, .encode = true },
+                );
+                const suggested_filename = element.getAttributeSafe(comptime .wrap("download")) orelse "";
+                try element.focus(self);
+                try self._session.enqueueDownload(resolved_url, suggested_filename);
+                log.info(.browser, "a.download", .{
+                    .type = self._type,
+                    .url = self.url,
+                    .href = href,
+                });
+                return;
+            }
+
             // Check target attribute - don't navigate if opening in new window/tab
             const target_val = anchor.getTarget();
             if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
                 log.warn(.not_implemented, "a.target", .{ .type = self._type, .url = self.url });
-                return;
-            }
-
-            if (try element.hasAttribute(comptime .wrap("download"), self)) {
-                log.warn(.browser, "a.download", .{ .type = self._type, .url = self.url });
                 return;
             }
 

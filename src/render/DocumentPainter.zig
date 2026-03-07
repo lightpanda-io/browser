@@ -504,6 +504,7 @@ const Painter = struct {
 
         sortCommandRowFragments(fragments.items);
         const resolved = try URL.resolve(self.page.call_arena, self.page.base(), href, .{ .encode = true });
+        const download_filename = element.getAttributeSafe(comptime .wrap("download")) orelse "";
         for (fragments.items) |fragment| {
             try self.list.addLinkRegion(self.allocator, .{
                 .x = fragment.x,
@@ -511,6 +512,7 @@ const Painter = struct {
                 .width = fragment.width,
                 .height = fragment.height,
                 .url = @constCast(resolved),
+                .download_filename = @constCast(download_filename),
             });
         }
     }
@@ -597,6 +599,7 @@ fn resolvedLinkRegion(
         .width = width,
         .height = height,
         .url = @constCast(resolved),
+        .download_filename = @constCast(element.getAttributeSafe(comptime .wrap("download")) orelse ""),
     };
 }
 

@@ -70,6 +70,7 @@ public static class SmokeProbeUser32 {
     private const ushort VK_D = 0x44;
     private const ushort VK_F = 0x46;
     private const ushort VK_H = 0x48;
+    private const ushort VK_J = 0x4A;
     private const ushort VK_T = 0x54;
     private const ushort VK_W = 0x57;
     private const ushort VK_ESCAPE = 0x1B;
@@ -197,6 +198,21 @@ public static class SmokeProbeUser32 {
         inputs[3].U.ki.wVk = VK_CONTROL;
         inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
         EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlH");
+    }
+
+    public static void SendCtrlJ() {
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_J;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_J;
+        inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_CONTROL;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlJ");
     }
 
     public static void SendCtrlT() {
@@ -511,6 +527,10 @@ function Send-SmokeCtrlD {
 
 function Send-SmokeCtrlH {
   [SmokeProbeUser32]::SendCtrlH()
+}
+
+function Send-SmokeCtrlJ {
+  [SmokeProbeUser32]::SendCtrlJ()
 }
 
 function Send-SmokeCtrlT {

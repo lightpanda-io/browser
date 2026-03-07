@@ -41,6 +41,17 @@ const IS_DEBUG = builtin.mode == .Debug;
 // deinit a page before running another one.
 const Session = @This();
 
+pub const PendingDownload = struct {
+    url: []u8,
+    suggested_filename: []u8,
+
+    pub fn deinit(self: *PendingDownload, allocator: Allocator) void {
+        allocator.free(self.url);
+        allocator.free(self.suggested_filename);
+        self.* = undefined;
+    }
+};
+
 browser: *Browser,
 notification: *Notification,
 
@@ -49,6 +60,7 @@ queued_navigation: std.ArrayList(*Page),
 // We process async navigations first (safe from re-entrance), then sync
 // about:blank navigations (which may add to queued_navigation).
 queued_queued_navigation: std.ArrayList(*Page),
+pending_downloads: std.ArrayListUnmanaged(PendingDownload),
 
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
@@ -81,6 +93,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .browser = browser,
         .queued_navigation = .{},
         .queued_queued_navigation = .{},
+        .pending_downloads = .{},
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
     };
@@ -94,6 +107,11 @@ pub fn deinit(self: *Session) void {
         self.suspended_page = null;
     }
     self.cookie_jar.deinit();
+    while (self.pending_downloads.items.len > 0) {
+        self.pending_downloads.items.len -= 1;
+        self.pending_downloads.items[self.pending_downloads.items.len].deinit(self.browser.app.allocator);
+    }
+    self.pending_downloads.deinit(self.browser.app.allocator);
 
     const browser = self.browser;
     self.storage_shed.deinit(browser.app.allocator);
@@ -576,6 +594,25 @@ pub fn nextFrameId(self: *Session) u32 {
     const id = self.frame_id_gen +% 1;
     self.frame_id_gen = id;
     return id;
+}
+
+pub fn enqueueDownload(self: *Session, url: []const u8, suggested_filename: []const u8) !void {
+    const allocator = self.browser.app.allocator;
+    const owned_url = try allocator.dupe(u8, url);
+    errdefer allocator.free(owned_url);
+    const owned_filename = try allocator.dupe(u8, suggested_filename);
+    errdefer allocator.free(owned_filename);
+
+    try self.pending_downloads.append(allocator, .{
+        .url = owned_url,
+        .suggested_filename = owned_filename,
+    });
+}
+
+pub fn takePendingDownloads(self: *Session) std.ArrayListUnmanaged(PendingDownload) {
+    var pending: std.ArrayListUnmanaged(PendingDownload) = .{};
+    std.mem.swap(std.ArrayListUnmanaged(PendingDownload), &pending, &self.pending_downloads);
+    return pending;
 }
 
 fn allocPage(self: *Session) !*Page {

@@ -21,6 +21,7 @@ const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
 const URL = @import("../browser/URL.zig");
 const BrowserCommand = @import("BrowserCommand.zig").BrowserCommand;
+const Display = @import("Display.zig");
 const DisplayList = @import("../render/DisplayList.zig").DisplayList;
 const DisplayColor = @import("../render/DisplayList.zig").Color;
 const ImageCommand = @import("../render/DisplayList.zig").ImageCommand;
@@ -154,6 +155,10 @@ pub const Win32Backend = struct {
     bookmark_overlay_open: bool = false,
     bookmark_overlay_selected_index: usize = 0,
     bookmark_overlay_scroll_index: usize = 0,
+    presentation_download_entries: std.ArrayListUnmanaged(PresentationDownloadEntry) = .{},
+    download_overlay_open: bool = false,
+    download_overlay_selected_index: usize = 0,
+    download_overlay_scroll_index: usize = 0,
     presentation_left_mouse_consumed: bool = false,
     pending_presentation_command: ?BrowserCommand = null,
     image_cache_lock: std.Thread.Mutex = .{},
@@ -316,6 +321,76 @@ pub const Win32Backend = struct {
             self.presentation_history_entries.items.len,
             self.history_overlay_scroll_index,
         );
+        _ = self.presentation_seq.fetchAdd(1, .acq_rel);
+    }
+
+    pub fn setDownloadEntries(self: *Win32Backend, entries: []const Display.DownloadEntry) void {
+        self.presentation_lock.lock();
+        defer self.presentation_lock.unlock();
+
+        if (self.presentation_download_entries.items.len == entries.len) {
+            var unchanged = true;
+            for (entries, self.presentation_download_entries.items) |entry, existing| {
+                if (entry.removable != existing.removable or
+                    !std.mem.eql(u8, entry.filename, existing.filename) or
+                    !std.mem.eql(u8, entry.path, existing.path) or
+                    !std.mem.eql(u8, entry.status, existing.status))
+                {
+                    unchanged = false;
+                    break;
+                }
+            }
+            if (unchanged) {
+                return;
+            }
+        }
+
+        deinitOwnedDownloadList(&self.presentation_download_entries, self.allocator);
+        self.presentation_download_entries.ensureTotalCapacity(self.allocator, entries.len) catch |err| {
+            log.warn(.app, "win downloads reserve failed", .{ .err = err });
+            return;
+        };
+        for (entries) |entry| {
+            const owned_filename = self.allocator.dupe(u8, entry.filename) catch |err| {
+                log.warn(.app, "win dl filename copy", .{ .err = err });
+                deinitOwnedDownloadList(&self.presentation_download_entries, self.allocator);
+                return;
+            };
+            errdefer self.allocator.free(owned_filename);
+            const owned_path = self.allocator.dupe(u8, entry.path) catch |err| {
+                self.allocator.free(owned_filename);
+                log.warn(.app, "win dl path copy", .{ .err = err });
+                deinitOwnedDownloadList(&self.presentation_download_entries, self.allocator);
+                return;
+            };
+            errdefer self.allocator.free(owned_path);
+            const owned_status = self.allocator.dupe(u8, entry.status) catch |err| {
+                self.allocator.free(owned_filename);
+                self.allocator.free(owned_path);
+                log.warn(.app, "win dl status copy", .{ .err = err });
+                deinitOwnedDownloadList(&self.presentation_download_entries, self.allocator);
+                return;
+            };
+            self.presentation_download_entries.appendAssumeCapacity(.{
+                .filename = owned_filename,
+                .path = owned_path,
+                .status = owned_status,
+                .removable = entry.removable,
+            });
+        }
+        self.download_overlay_selected_index = clampOverlaySelectedIndex(
+            self.presentation_download_entries.items.len,
+            self.download_overlay_selected_index,
+        );
+        self.download_overlay_scroll_index = clampOverlayScrollIndex(
+            self.presentation_download_entries.items.len,
+            self.download_overlay_scroll_index,
+            self.presentation_download_entries.items.len,
+        );
+        if (self.presentation_download_entries.items.len == 0) {
+            self.download_overlay_selected_index = 0;
+            self.download_overlay_scroll_index = 0;
+        }
         _ = self.presentation_seq.fetchAdd(1, .acq_rel);
     }
 
@@ -528,6 +603,7 @@ pub const Win32Backend = struct {
         deinitOwnedTabList(&self.presentation_tab_entries, self.allocator);
         deinitOwnedStringList(&self.presentation_history_entries, self.allocator);
         deinitOwnedStringList(&self.presentation_bookmark_entries, self.allocator);
+        deinitOwnedDownloadList(&self.presentation_download_entries, self.allocator);
         if (self.pending_presentation_command) |command| {
             command.deinit(self.allocator);
         }
@@ -788,6 +864,10 @@ const PresentationSnapshot = struct {
     bookmark_overlay_open: bool,
     bookmark_selected_index: usize,
     bookmark_scroll_index: usize,
+    download_entries: std.ArrayListUnmanaged(PresentationDownloadEntry),
+    download_overlay_open: bool,
+    download_selected_index: usize,
+    download_scroll_index: usize,
 
     fn deinit(self: PresentationSnapshot, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
@@ -805,6 +885,8 @@ const PresentationSnapshot = struct {
         deinitOwnedStringList(&history_entries, allocator);
         var bookmark_entries = self.bookmark_entries;
         deinitOwnedStringList(&bookmark_entries, allocator);
+        var download_entries = self.download_entries;
+        deinitOwnedDownloadList(&download_entries, allocator);
     }
 };
 
@@ -854,6 +936,11 @@ const BookmarkOverlayChromeAction = enum {
     delete,
 };
 
+const DownloadOverlayChromeAction = enum {
+    close,
+    delete,
+};
+
 const TabStripAction = union(enum) {
     activate: usize,
     close: usize,
@@ -874,6 +961,20 @@ const PresentationTabEntry = struct {
     fn deinit(self: *PresentationTabEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
         allocator.free(self.url);
+        self.* = undefined;
+    }
+};
+
+const PresentationDownloadEntry = struct {
+    filename: []u8,
+    path: []u8,
+    status: []u8,
+    removable: bool,
+
+    fn deinit(self: *PresentationDownloadEntry, allocator: std.mem.Allocator) void {
+        allocator.free(self.filename);
+        allocator.free(self.path);
+        allocator.free(self.status);
         self.* = undefined;
     }
 };
@@ -910,6 +1011,14 @@ fn deinitOwnedTabList(list: *std.ArrayListUnmanaged(PresentationTabEntry), alloc
     list.* = .{};
 }
 
+fn deinitOwnedDownloadList(list: *std.ArrayListUnmanaged(PresentationDownloadEntry), allocator: std.mem.Allocator) void {
+    for (list.items) |*entry| {
+        entry.deinit(allocator);
+    }
+    list.deinit(allocator);
+    list.* = .{};
+}
+
 fn presentationHasContent(backend: *Win32Backend) bool {
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
@@ -920,7 +1029,8 @@ fn presentationHasContent(backend: *Win32Backend) bool {
         backend.address_input_active or
         backend.find_input_active or
         backend.history_overlay_open or
-        backend.bookmark_overlay_open;
+        backend.bookmark_overlay_open or
+        backend.download_overlay_open;
 }
 
 fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
@@ -992,6 +1102,23 @@ fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
         .bookmark_overlay_open = backend.bookmark_overlay_open,
         .bookmark_selected_index = backend.bookmark_overlay_selected_index,
         .bookmark_scroll_index = backend.bookmark_overlay_scroll_index,
+        .download_entries = blk: {
+            var download_entries: std.ArrayListUnmanaged(PresentationDownloadEntry) = .{};
+            errdefer deinitOwnedDownloadList(&download_entries, backend.allocator);
+            try download_entries.ensureTotalCapacity(backend.allocator, backend.presentation_download_entries.items.len);
+            for (backend.presentation_download_entries.items) |entry| {
+                download_entries.appendAssumeCapacity(.{
+                    .filename = try backend.allocator.dupe(u8, entry.filename),
+                    .path = try backend.allocator.dupe(u8, entry.path),
+                    .status = try backend.allocator.dupe(u8, entry.status),
+                    .removable = entry.removable,
+                });
+            }
+            break :blk download_entries;
+        },
+        .download_overlay_open = backend.download_overlay_open,
+        .download_selected_index = backend.download_overlay_selected_index,
+        .download_scroll_index = backend.download_overlay_scroll_index,
     };
 }
 
@@ -1053,7 +1180,7 @@ fn presentationClientToPage(
 fn presentationHasNavigateAtClientPoint(backend: *Win32Backend, x: f64, y: f64) bool {
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
-    return findPresentationNavigateUrlLocked(backend, x, y) != null;
+    return findPresentationLinkRegionLocked(backend, x, y) != null;
 }
 
 fn presentationCommandAtClientPoint(backend: *Win32Backend, hwnd: c.HWND, x: f64, y: f64) ?BrowserCommand {
@@ -1068,12 +1195,23 @@ fn presentationNavigateCommandAtClientPoint(backend: *Win32Backend, x: f64, y: f
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
 
-    const url = findPresentationNavigateUrlLocked(backend, x, y) orelse return null;
-    const owned = backend.allocator.dupe(u8, url) catch |err| {
+    const region = findPresentationLinkRegionLocked(backend, x, y) orelse return null;
+    const owned_url = backend.allocator.dupe(u8, region.url) catch |err| {
         log.warn(.app, "win link hit dupe", .{ .err = err });
         return null;
     };
-    return .{ .navigate = owned };
+    if (region.download_filename.len > 0) {
+        const owned_filename = backend.allocator.dupe(u8, region.download_filename) catch |err| {
+            backend.allocator.free(owned_url);
+            log.warn(.app, "win dl hit dupe", .{ .err = err });
+            return null;
+        };
+        return .{ .download = .{
+            .url = owned_url,
+            .suggested_filename = owned_filename,
+        } };
+    }
+    return .{ .navigate = owned_url };
 }
 
 fn beginPendingPresentationCommand(backend: *Win32Backend, hwnd: c.HWND, x: f64, y: f64) bool {
@@ -1107,7 +1245,7 @@ fn cancelPendingPresentationCommand(backend: *Win32Backend) void {
     }
 }
 
-fn findPresentationNavigateUrlLocked(backend: *Win32Backend, x: f64, y: f64) ?[]const u8 {
+fn findPresentationLinkRegionLocked(backend: *Win32Backend, x: f64, y: f64) ?DisplayList.LinkRegion {
     const display_list = backend.presentation_display_list orelse return null;
     const point = presentationClientToDisplayListLocked(backend, x, y) orelse return null;
     const px: i32 = @intFromFloat(point.x);
@@ -1117,7 +1255,7 @@ fn findPresentationNavigateUrlLocked(backend: *Win32Backend, x: f64, y: f64) ?[]
         index -= 1;
         const region = display_list.link_regions.items[index];
         if (px >= region.x and py >= region.y and px < region.x + region.width and py < region.y + region.height) {
-            return region.url;
+            return region;
         }
     }
     return null;
@@ -1491,6 +1629,18 @@ fn presentationBookmarkEntryCount(backend: *Win32Backend) usize {
     return backend.presentation_bookmark_entries.items.len;
 }
 
+fn presentationDownloadOverlayOpen(backend: *Win32Backend) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+    return backend.download_overlay_open;
+}
+
+fn presentationDownloadEntryCount(backend: *Win32Backend) usize {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+    return backend.presentation_download_entries.items.len;
+}
+
 fn setHistoryOverlayOpen(backend: *Win32Backend, open: bool) bool {
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
@@ -1501,6 +1651,7 @@ fn setHistoryOverlayOpen(backend: *Win32Backend, open: bool) bool {
     backend.history_overlay_open = open;
     if (open) {
         backend.bookmark_overlay_open = false;
+        backend.download_overlay_open = false;
         backend.address_input_active = false;
         backend.address_input_select_all = false;
         backend.address_pending_high_surrogate = null;
@@ -1543,6 +1694,7 @@ fn setBookmarkOverlayOpen(backend: *Win32Backend, open: bool) bool {
     backend.bookmark_overlay_open = open;
     if (open) {
         backend.history_overlay_open = false;
+        backend.download_overlay_open = false;
         backend.address_input_active = false;
         backend.address_input_select_all = false;
         backend.address_pending_high_surrogate = null;
@@ -1554,6 +1706,35 @@ fn setBookmarkOverlayOpen(backend: *Win32Backend, open: bool) bool {
         backend.bookmark_overlay_scroll_index = 0;
     } else {
         backend.bookmark_overlay_scroll_index = 0;
+    }
+    return true;
+}
+
+fn setDownloadOverlayOpen(backend: *Win32Backend, open: bool) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (backend.download_overlay_open == open) {
+        return false;
+    }
+    backend.download_overlay_open = open;
+    if (open) {
+        backend.history_overlay_open = false;
+        backend.bookmark_overlay_open = false;
+        backend.address_input_active = false;
+        backend.address_input_select_all = false;
+        backend.address_pending_high_surrogate = null;
+        backend.address_input.clearRetainingCapacity();
+        backend.find_input_active = false;
+        backend.find_input_select_all = false;
+        backend.find_pending_high_surrogate = null;
+        backend.download_overlay_selected_index = if (backend.presentation_download_entries.items.len == 0)
+            0
+        else
+            @min(backend.download_overlay_selected_index, backend.presentation_download_entries.items.len - 1);
+        backend.download_overlay_scroll_index = 0;
+    } else {
+        backend.download_overlay_scroll_index = 0;
     }
     return true;
 }
@@ -1735,6 +1916,46 @@ fn bookmarkOverlayChromeActionAtClientPoint(backend: *Win32Backend, client: c.RE
     return null;
 }
 
+fn downloadPanelHitTest(backend: *Win32Backend, client: c.RECT, x: f64, y: f64) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.download_overlay_open) {
+        return false;
+    }
+    return clientPointInRect(historyPanelRect(client, backend.presentation_download_entries.items.len), x, y);
+}
+
+fn downloadOverlayChromeActionAtClientPoint(backend: *Win32Backend, client: c.RECT, x: f64, y: f64) ?DownloadOverlayChromeAction {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.download_overlay_open) {
+        return null;
+    }
+    const panel = historyPanelRect(client, backend.presentation_download_entries.items.len);
+    if (clientPointInRect(bookmarkOverlayCloseButtonRect(panel), x, y)) {
+        return .close;
+    }
+    if (backend.presentation_download_entries.items.len > 0 and clientPointInRect(bookmarkOverlayDeleteButtonRect(panel), x, y)) {
+        return .delete;
+    }
+    return null;
+}
+
+fn handleDownloadOverlayChromeClick(hwnd: c.HWND, backend: *Win32Backend, client: c.RECT, x: f64, y: f64) bool {
+    const action = downloadOverlayChromeActionAtClientPoint(backend, client, x, y) orelse return false;
+    _ = c.SetFocus(hwnd);
+    const changed = switch (action) {
+        .close => setDownloadOverlayOpen(backend, false),
+        .delete => deleteSelectedDownload(backend),
+    };
+    if (changed) {
+        _ = c.InvalidateRect(hwnd, null, c.TRUE);
+    }
+    return true;
+}
+
 fn handleHistoryOverlayChromeClick(hwnd: c.HWND, backend: *Win32Backend, client: c.RECT, x: f64, y: f64) bool {
     const action = historyOverlayChromeActionAtClientPoint(backend, client, x, y) orelse return false;
     _ = c.SetFocus(hwnd);
@@ -1765,8 +1986,10 @@ fn presentationHasInteractiveAtClientPoint(backend: *Win32Backend, hwnd: c.HWND,
         findChromeActionAtClientPoint(backend, client, x, y) != null or
         historyOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
         bookmarkOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
+        downloadOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
         historyEntryCommandAtClientPoint(backend, client, x, y) != null or
-        bookmarkEntryCommandAtClientPoint(backend, client, x, y) != null;
+        bookmarkEntryCommandAtClientPoint(backend, client, x, y) != null or
+        downloadPanelHitTest(backend, client, x, y);
 }
 
 fn presentationCommandAtClientPointWithClient(
@@ -2818,6 +3041,118 @@ fn drawBookmarkOverlay(
     );
 }
 
+fn drawDownloadOverlay(
+    hdc: c.HDC,
+    client: c.RECT,
+    entries: []const PresentationDownloadEntry,
+    selected_index: usize,
+    scroll_index: usize,
+    allocator: std.mem.Allocator,
+) void {
+    const panel = historyPanelRect(client, entries.len);
+    const fill = c.CreateSolidBrush(c.RGB(248, 248, 248));
+    if (fill != null) {
+        defer _ = c.DeleteObject(fill);
+        var fill_rect = panel;
+        _ = c.FillRect(hdc, &fill_rect, fill);
+    }
+    const border = c.CreateSolidBrush(c.RGB(180, 180, 180));
+    if (border != null) {
+        defer _ = c.DeleteObject(border);
+        var border_rect = panel;
+        _ = c.FrameRect(hdc, &border_rect, border);
+    }
+
+    var header_rect = c.RECT{
+        .left = panel.left + PRESENTATION_HISTORY_PANEL_PADDING,
+        .top = panel.top + 8,
+        .right = bookmarkOverlayDeleteButtonRect(panel).left - 6,
+        .bottom = panel.top + 26,
+    };
+    const owned_header: ?[]u8 = std.fmt.allocPrint(
+        allocator,
+        "Downloads {d}  Ctrl+J close",
+        .{entries.len},
+    ) catch null;
+    defer if (owned_header) |header| allocator.free(header);
+    drawPresentationText(
+        hdc,
+        &header_rect,
+        owned_header orelse "Downloads",
+        c.DT_LEFT | c.DT_TOP | c.DT_SINGLELINE | c.DT_NOPREFIX,
+    );
+    const can_delete = entries.len > 0 and entries[clampOverlaySelectedIndex(entries.len, selected_index)].removable;
+    drawChromeButton(hdc, bookmarkOverlayDeleteButtonRect(panel), "Del", can_delete);
+    drawChromeButton(hdc, bookmarkOverlayCloseButtonRect(panel), "x", true);
+
+    if (entries.len == 0) {
+        var empty_rect = c.RECT{
+            .left = panel.left + PRESENTATION_HISTORY_PANEL_PADDING,
+            .top = panel.top + 36,
+            .right = panel.right - PRESENTATION_HISTORY_PANEL_PADDING,
+            .bottom = panel.bottom - PRESENTATION_HISTORY_PANEL_PADDING,
+        };
+        drawPresentationText(
+            hdc,
+            &empty_rect,
+            "No downloads yet. Click a download link or use site flows that trigger downloads.",
+            c.DT_LEFT | c.DT_TOP | c.DT_WORDBREAK | c.DT_NOPREFIX,
+        );
+        return;
+    }
+
+    const visible_entries = visibleHistoryEntryCount(client, entries.len);
+    const start_index = bookmarkEntryWindowStart(client, entries.len, scroll_index, selected_index);
+    for (entries[start_index .. start_index + visible_entries], 0..) |entry, row_index| {
+        const entry_index = start_index + row_index;
+        var row_rect = historyEntryRect(client, visible_entries, row_index);
+        if (entry_index == selected_index) {
+            const selected_border = c.CreateSolidBrush(c.RGB(185, 140, 40));
+            if (selected_border != null) {
+                defer _ = c.DeleteObject(selected_border);
+                var selected_rect = row_rect;
+                _ = c.FrameRect(hdc, &selected_rect, selected_border);
+            }
+        }
+
+        const owned_label = std.fmt.allocPrint(
+            allocator,
+            "{d}. {s}  [{s}]",
+            .{ entry_index + 1, entry.filename, entry.status },
+        ) catch null;
+        defer if (owned_label) |label| allocator.free(label);
+        row_rect.left += 6;
+        row_rect.right -= 6;
+        drawPresentationText(
+            hdc,
+            &row_rect,
+            owned_label orelse entry.filename,
+            c.DT_LEFT | c.DT_VCENTER | c.DT_SINGLELINE | c.DT_END_ELLIPSIS | c.DT_NOPREFIX,
+        );
+    }
+
+    const selected = entries[clampOverlaySelectedIndex(entries.len, selected_index)];
+    const owned_footer = std.fmt.allocPrint(
+        allocator,
+        "{d}-{d}/{d}  Sel {d}  {s}",
+        .{
+            start_index + 1,
+            @min(entries.len, start_index + visible_entries),
+            entries.len,
+            clampOverlaySelectedIndex(entries.len, selected_index) + 1,
+            selected.path,
+        },
+    ) catch null;
+    defer if (owned_footer) |footer| allocator.free(footer);
+    var footer_rect = overlayFooterRect(panel);
+    drawPresentationText(
+        hdc,
+        &footer_rect,
+        owned_footer orelse selected.path,
+        c.DT_LEFT | c.DT_VCENTER | c.DT_SINGLELINE | c.DT_END_ELLIPSIS | c.DT_NOPREFIX,
+    );
+}
+
 fn drawPresentationText(hdc: c.HDC, rect: *c.RECT, text: []const u8, flags: c.UINT) void {
     const utf16 = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, text) catch return;
     defer std.heap.c_allocator.free(utf16);
@@ -3385,7 +3720,7 @@ fn renderPresentationScene(
     };
     const hint_text = std.fmt.allocPrint(
         allocator,
-        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
+        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
         .{snapshot.zoom_percent},
     ) catch return;
     defer allocator.free(hint_text);
@@ -3460,6 +3795,16 @@ fn renderPresentationScene(
             snapshot.url,
             snapshot.bookmark_selected_index,
             snapshot.bookmark_scroll_index,
+            allocator,
+        );
+    }
+    if (snapshot.download_overlay_open) {
+        drawDownloadOverlay(
+            hdc,
+            client,
+            snapshot.download_entries.items,
+            snapshot.download_selected_index,
+            snapshot.download_scroll_index,
             allocator,
         );
     }
@@ -3933,6 +4278,22 @@ fn handleBookmarkOverlayMove(hwnd: c.HWND, backend: *Win32Backend, move: Overlay
     );
 }
 
+fn handleDownloadOverlayMove(hwnd: c.HWND, backend: *Win32Backend, move: OverlayMove) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.download_overlay_open) {
+        return false;
+    }
+    return applyOverlayMove(
+        backend.presentation_download_entries.items.len,
+        visibleOverlayEntryCountForWindow(hwnd, backend.presentation_download_entries.items.len),
+        &backend.download_overlay_selected_index,
+        &backend.download_overlay_scroll_index,
+        move,
+    );
+}
+
 fn scrollHistoryOverlayByWheel(hwnd: c.HWND, backend: *Win32Backend, raw_delta: i16) bool {
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
@@ -3969,6 +4330,26 @@ fn scrollBookmarkOverlayByWheel(hwnd: c.HWND, backend: *Win32Backend, raw_delta:
         visibleOverlayEntryCountForWindow(hwnd, backend.presentation_bookmark_entries.items.len),
         &backend.bookmark_overlay_selected_index,
         &backend.bookmark_overlay_scroll_index,
+        rows,
+    );
+}
+
+fn scrollDownloadOverlayByWheel(hwnd: c.HWND, backend: *Win32Backend, raw_delta: i16) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.download_overlay_open) {
+        return false;
+    }
+    const rows: isize = if (raw_delta > 0) -1 else if (raw_delta < 0) 1 else 0;
+    if (rows == 0) {
+        return false;
+    }
+    return scrollOverlayRows(
+        backend.presentation_download_entries.items.len,
+        visibleOverlayEntryCountForWindow(hwnd, backend.presentation_download_entries.items.len),
+        &backend.download_overlay_selected_index,
+        &backend.download_overlay_scroll_index,
         rows,
     );
 }
@@ -4039,6 +4420,25 @@ fn deleteSelectedBookmark(backend: *Win32Backend) bool {
     }
     backend.saveBookmarksToDiskLocked();
     _ = backend.presentation_seq.fetchAdd(1, .acq_rel);
+    return true;
+}
+
+fn deleteSelectedDownload(backend: *Win32Backend) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (!backend.download_overlay_open or backend.presentation_download_entries.items.len == 0) {
+        return false;
+    }
+    const index = clampOverlaySelectedIndex(
+        backend.presentation_download_entries.items.len,
+        backend.download_overlay_selected_index,
+    );
+    const entry = backend.presentation_download_entries.items[index];
+    if (!entry.removable) {
+        return false;
+    }
+    queueBrowserCommand(backend, .{ .download_remove = index });
     return true;
 }
 
@@ -4195,6 +4595,24 @@ fn handlePresentationShortcutKey(
         return handled;
     }
 
+    if (presentationDownloadOverlayOpen(backend)) {
+        const handled = switch (vk) {
+            c.VK_ESCAPE => setDownloadOverlayOpen(backend, false),
+            c.VK_DELETE => deleteSelectedDownload(backend),
+            c.VK_UP => handleDownloadOverlayMove(hwnd, backend, .up),
+            c.VK_DOWN => handleDownloadOverlayMove(hwnd, backend, .down),
+            c.VK_PRIOR => handleDownloadOverlayMove(hwnd, backend, .page_up),
+            c.VK_NEXT => handleDownloadOverlayMove(hwnd, backend, .page_down),
+            c.VK_HOME => handleDownloadOverlayMove(hwnd, backend, .home),
+            c.VK_END => handleDownloadOverlayMove(hwnd, backend, .end),
+            else => false,
+        };
+        if (handled) {
+            _ = c.InvalidateRect(hwnd, null, c.TRUE);
+            return true;
+        }
+    }
+
     if (presentationHistoryOverlayOpen(backend)) {
         const handled = switch (vk) {
             c.VK_ESCAPE => setHistoryOverlayOpen(backend, false),
@@ -4224,6 +4642,12 @@ fn handlePresentationShortcutKey(
         } else {
             _ = c.InvalidateRect(hwnd, null, c.TRUE);
         }
+        return true;
+    }
+
+    if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'J') {
+        _ = setDownloadOverlayOpen(backend, !presentationDownloadOverlayOpen(backend));
+        _ = c.InvalidateRect(hwnd, null, c.TRUE);
         return true;
     }
 
@@ -4905,6 +5329,22 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     var client: c.RECT = undefined;
                     _ = c.GetClientRect(hwnd, &client);
 
+                    if (presentationDownloadOverlayOpen(backend)) {
+                        cancelPendingPresentationCommand(backend);
+                        backend.presentation_left_mouse_consumed = true;
+                        _ = c.SetFocus(hwnd);
+                        if (handleDownloadOverlayChromeClick(hwnd, backend, client, client_pos.x, client_pos.y)) {
+                            return 0;
+                        }
+                        if (downloadPanelHitTest(backend, client, client_pos.x, client_pos.y)) {
+                            return 0;
+                        }
+                        if (setDownloadOverlayOpen(backend, false)) {
+                            _ = c.InvalidateRect(hwnd, null, c.TRUE);
+                        }
+                        return 0;
+                    }
+
                     if (presentationBookmarkOverlayOpen(backend)) {
                         cancelPendingPresentationCommand(backend);
                         backend.presentation_left_mouse_consumed = true;
@@ -5073,7 +5513,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                 const client_pos = clientCoordFromLParam(lparam);
                 if (presentationHasContent(backend)) {
                     setPresentationCursor(hwnd, backend, client_pos.x, client_pos.y);
-                    if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend)) {
+                    if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
                         return 0;
                     }
                 }
@@ -5102,6 +5542,12 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     }
                     if (presentationBookmarkOverlayOpen(backend)) {
                         if (scrollBookmarkOverlayByWheel(hwnd, backend, raw_delta)) {
+                            _ = c.InvalidateRect(hwnd, null, c.TRUE);
+                        }
+                        return 0;
+                    }
+                    if (presentationDownloadOverlayOpen(backend)) {
+                        if (scrollDownloadOverlayByWheel(hwnd, backend, raw_delta)) {
                             _ = c.InvalidateRect(hwnd, null, c.TRUE);
                         }
                         return 0;
@@ -5151,7 +5597,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                 if (handlePresentationShortcutKey(hwnd, backend, vk, modifiers)) {
                     return 0;
                 }
-                if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend)) {
+                if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
                     return 0;
                 }
                 if (handlePresentationScrollKey(hwnd, backend, vk)) {
@@ -5168,7 +5614,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         },
         c.WM_KEYUP, c.WM_SYSKEYUP => {
             if (getBackendPtr(hwnd)) |backend| {
-                if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend)) {
+                if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
                     return 0;
                 }
                 const vk: u32 = @intCast(wparam & 0xFFFF);
@@ -5182,7 +5628,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         },
         c.WM_IME_COMPOSITION => {
             if (getBackendPtr(hwnd)) |backend| {
-                if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend)) {
+                if (presentationAddressEditing(backend) or presentationFindEditing(backend) or presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
                     return 0;
                 }
                 if (hasImeCompositionString(lparam)) {
@@ -5225,7 +5671,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     }
                     return 0;
                 }
-                if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend)) {
+                if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
                     return 0;
                 }
                 if (backend.suppress_wm_char_units > 0) {
@@ -5256,7 +5702,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     }
                     return 1;
                 }
-                if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend)) {
+                if (presentationHistoryOverlayOpen(backend) or presentationBookmarkOverlayOpen(backend) or presentationDownloadOverlayOpen(backend)) {
                     return 1;
                 }
                 queueTextCodePoint(backend, @intCast(wparam));
@@ -5514,6 +5960,18 @@ test "win32 tab shortcuts enqueue commands" {
     try std.testing.expectEqual(BrowserCommand{ .tab_activate = 1 }, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand{ .tab_close = 1 }, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
+}
+
+test "win32 ctrl+j toggles downloads overlay" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_title = try std.testing.allocator.dupe(u8, "Downloads");
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true }));
+    try std.testing.expect(presentationDownloadOverlayOpen(&backend));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true }));
+    try std.testing.expect(!presentationDownloadOverlayOpen(&backend));
 }
 
 test "win32 disabled chrome buttons are not interactive" {
@@ -5795,6 +6253,25 @@ test "win32 bookmark overlay delete removes persisted entry" {
     const data = try file.readToEndAlloc(std.testing.allocator, 64);
     defer std.testing.allocator.free(data);
     try std.testing.expectEqual(@as(usize, 0), data.len);
+}
+
+test "win32 download overlay delete enqueues remove command" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    const entries = [_]Display.DownloadEntry{
+        .{
+            .filename = "example.txt",
+            .path = "C:\\tmp\\example.txt",
+            .status = "Complete 10 B",
+            .removable = true,
+        },
+    };
+    backend.setDownloadEntries(entries[0..]);
+    backend.download_overlay_open = true;
+
+    try std.testing.expect(deleteSelectedDownload(&backend));
+    try std.testing.expectEqual(BrowserCommand{ .download_remove = 0 }, backend.nextBrowserCommand().?);
 }
 
 test "win32 presentation scaling helpers round-trip coordinates" {
