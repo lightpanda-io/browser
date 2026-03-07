@@ -7,6 +7,7 @@ pub const BrowserCommand = union(enum) {
     };
 
     navigate: []u8,
+    navigate_new_tab: []u8,
     download: Download,
     history_traverse: usize,
     download_remove: usize,
@@ -17,6 +18,7 @@ pub const BrowserCommand = union(enum) {
     reload,
     stop,
     tab_new,
+    tab_duplicate,
     tab_next,
     tab_previous,
     tab_reopen_closed,
@@ -34,6 +36,7 @@ pub const BrowserCommand = union(enum) {
     pub fn deinit(self: BrowserCommand, allocator: std.mem.Allocator) void {
         switch (self) {
             .navigate => |url| allocator.free(url),
+            .navigate_new_tab => |url| allocator.free(url),
             .download => |download| {
                 allocator.free(download.url);
                 allocator.free(download.suggested_filename);

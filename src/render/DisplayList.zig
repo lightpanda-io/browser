@@ -32,6 +32,7 @@ pub const LinkRegion = struct {
     height: i32,
     url: []u8,
     download_filename: []u8 = &.{},
+    open_in_new_tab: bool = false,
 };
 
 pub const ImageCommand = struct {
@@ -127,6 +128,7 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .height = region.height,
             .url = try allocator.dupe(u8, region.url),
             .download_filename = try allocator.dupe(u8, region.download_filename),
+            .open_in_new_tab = region.open_in_new_tab,
         });
     }
     return copy;
@@ -175,6 +177,7 @@ pub fn addLinkRegion(self: *DisplayList, allocator: std.mem.Allocator, region: L
         .height = region.height,
         .url = try allocator.dupe(u8, region.url),
         .download_filename = try allocator.dupe(u8, region.download_filename),
+        .open_in_new_tab = region.open_in_new_tab,
     });
     self.content_height = @max(self.content_height, region.y + region.height);
 }
@@ -232,5 +235,6 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(std.mem.asBytes(&region.height));
         hasher.update(region.url);
         hasher.update(region.download_filename);
+        hasher.update(std.mem.asBytes(&region.open_in_new_tab));
     }
 }

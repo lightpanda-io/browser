@@ -591,6 +591,23 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     };
 }
 
+pub fn navigateOwned(self: *Page, request_url: []const u8, opts: NavigateOpts) !void {
+    const owned_url = try self.arena.dupeZ(u8, request_url);
+    const owned_body = if (opts.body) |body|
+        try self.arena.dupe(u8, body)
+    else
+        null;
+    const owned_header = if (opts.header) |header|
+        try self.arena.dupeZ(u8, header)
+    else
+        null;
+
+    var owned_opts = opts;
+    owned_opts.body = owned_body;
+    owned_opts.header = owned_header;
+    return self.navigate(owned_url, owned_opts);
+}
+
 // Navigation can happen in many places, such as executing a <script> tag or
 // a JavaScript callback, a CDP command, etc...It's rarely safe to do immediately
 // as the caller almost certainly does'nt expect the page to go away during the
@@ -3270,10 +3287,19 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
-            // Check target attribute - don't navigate if opening in new window/tab
             const target_val = anchor.getTarget();
-            if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
-                log.warn(.not_implemented, "a.target", .{ .type = self._type, .url = self.url });
+            if (opensNewTopLevelTarget(target_val)) {
+                const resolved_url = try URL.resolve(
+                    self.call_arena,
+                    self.base(),
+                    href,
+                    .{ .always_dupe = false, .encode = true },
+                );
+                try element.focus(self);
+                try self._session.enqueueOpenInNewTab(resolved_url, .{
+                    .reason = .script,
+                    .kind = .{ .push = null },
+                }, true, 0);
                 return;
             }
 
@@ -3309,6 +3335,19 @@ pub fn handleClick(self: *Page, target: *Node) !void {
         .select, .textarea => try element.focus(self),
         else => {},
     }
+}
+
+fn opensNewTopLevelTarget(target_val: []const u8) bool {
+    if (target_val.len == 0) {
+        return false;
+    }
+    if (std.mem.eql(u8, target_val, "_self") or
+        std.mem.eql(u8, target_val, "_parent") or
+        std.mem.eql(u8, target_val, "_top"))
+    {
+        return false;
+    }
+    return true;
 }
 
 fn findClickableHtmlAncestor(target: *Node) ?*Element.Html {
@@ -4138,7 +4177,8 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     const form_data = try FormData.init(form, submitter_, self);
 
     const arena = try self.arena_pool.acquire();
-    errdefer self.arena_pool.release(arena);
+    var release_arena = true;
+    defer if (release_arena) self.arena_pool.release(arena);
 
     const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));
 
@@ -4160,6 +4200,19 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
     }
+
+    const target = form_element.getAttributeSafe(comptime .wrap("target")) orelse "";
+    if (opensNewTopLevelTarget(target)) {
+        const resolved_action = try URL.resolve(
+            self.call_arena,
+            self.base(),
+            action,
+            .{ .always_dupe = false, .encode = true },
+        );
+        try self._session.enqueueOpenInNewTab(resolved_action, opts, true, 0);
+        return;
+    }
+    release_arena = false;
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = form_element.asNode() });
 }
 
@@ -4277,6 +4330,15 @@ test "Page moveCursorSelection basic behavior" {
     try testing.expectEqual(@as(u32, 1), shift_backward.start);
     try testing.expectEqual(@as(u32, 4), shift_backward.end);
     try testing.expectEqual(true, shift_backward.backward);
+}
+
+test "opensNewTopLevelTarget distinguishes same-context targets" {
+    try std.testing.expect(!opensNewTopLevelTarget(""));
+    try std.testing.expect(!opensNewTopLevelTarget("_self"));
+    try std.testing.expect(!opensNewTopLevelTarget("_parent"));
+    try std.testing.expect(!opensNewTopLevelTarget("_top"));
+    try std.testing.expect(opensNewTopLevelTarget("_blank"));
+    try std.testing.expect(opensNewTopLevelTarget("named-window"));
 }
 
 test "Page word boundary navigation helpers" {

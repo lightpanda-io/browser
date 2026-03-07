@@ -1278,6 +1278,9 @@ fn presentationNavigateCommandAtClientPoint(backend: *Win32Backend, x: f64, y: f
             .suggested_filename = owned_filename,
         } };
     }
+    if (region.open_in_new_tab) {
+        return .{ .navigate_new_tab = owned_url };
+    }
     return .{ .navigate = owned_url };
 }
 
@@ -1358,7 +1361,7 @@ fn tabStripActionAtClientPoint(
 
     for (backend.presentation_tab_entries.items, 0..) |_, index| {
         const rect = tabRect(client, backend.presentation_tab_entries.items.len, index);
-        if (tabHasCloseButton(rect) and clientPointInRect(tabCloseButtonRect(rect), x, y)) {
+        if (tabCloseEnabled(backend.presentation_tab_entries.items.len, rect) and clientPointInRect(tabCloseButtonRect(rect), x, y)) {
             return .{ .close = index };
         }
         if (clientPointInRect(rect, x, y)) {
@@ -1578,6 +1581,10 @@ fn tabRect(client: c.RECT, tab_count: usize, index: usize) c.RECT {
 
 fn tabHasCloseButton(rect: c.RECT) bool {
     return rect.right - rect.left >= 44;
+}
+
+fn tabCloseEnabled(tab_count: usize, rect: c.RECT) bool {
+    return tab_count > 1 and tabHasCloseButton(rect);
 }
 
 fn tabCloseButtonRect(rect: c.RECT) c.RECT {
@@ -2967,7 +2974,7 @@ fn drawTabStrip(
         var text_rect = rect;
         text_rect.left += 8;
         text_rect.right -= 6;
-        if (tabHasCloseButton(rect)) {
+        if (tabCloseEnabled(snapshot.tab_entries.items.len, rect)) {
             text_rect.right = tabCloseButtonRect(rect).left - 4;
         }
 
@@ -2979,7 +2986,7 @@ fn drawTabStrip(
         );
 
         if (tabHasCloseButton(rect)) {
-            drawChromeButton(hdc, tabCloseButtonRect(rect), "x", true);
+            drawChromeButton(hdc, tabCloseButtonRect(rect), "x", tabCloseEnabled(snapshot.tab_entries.items.len, rect));
         }
     }
 
@@ -4050,7 +4057,7 @@ fn renderPresentationScene(
     };
     const hint_text = std.fmt.allocPrint(
         allocator,
-        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
+        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
         .{snapshot.zoom_percent},
     ) catch return;
     defer allocator.free(hint_text);
@@ -4823,6 +4830,13 @@ fn handlePresentationShortcutKey(
     }
     if (modifiers.ctrl and modifiers.shift and !modifiers.alt and !modifiers.meta and vk == 'T') {
         queueBrowserCommand(backend, .tab_reopen_closed);
+        return true;
+    }
+    if (modifiers.ctrl and modifiers.shift and !modifiers.alt and !modifiers.meta and vk == 'D') {
+        if (presentationTabEntryCount(backend) == 0) {
+            return false;
+        }
+        queueBrowserCommand(backend, .tab_duplicate);
         return true;
     }
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'T') {
@@ -6280,6 +6294,39 @@ test "win32 find collects multiple matches within one text run" {
     try std.testing.expect(matches.items[1].width > 0);
 }
 
+test "win32 rendered _blank link queues navigate_new_tab" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    var display_list: DisplayList = .{};
+    errdefer display_list.deinit(std.testing.allocator);
+    try display_list.addLinkRegion(std.testing.allocator, .{
+        .x = 24,
+        .y = 32,
+        .width = 220,
+        .height = 40,
+        .url = @constCast("http://popup.test/result"),
+        .open_in_new_tab = true,
+    });
+
+    backend.presentation_display_list = display_list;
+
+    const command = presentationNavigateCommandAtClientPoint(
+        &backend,
+        @as(f64, @floatFromInt(PRESENTATION_MARGIN + 24 + 8)),
+        @as(f64, @floatFromInt(PRESENTATION_HEADER_HEIGHT + 8 + 32 + 8)),
+    ).?;
+    defer command.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings(
+        "http://popup.test/result",
+        switch (command) {
+            .navigate_new_tab => |url| url,
+            else => return error.TestUnexpectedCommandType,
+        },
+    );
+}
+
 test "win32 chrome button hit test maps back forward reload" {
     const mid_y = @as(f64, @floatFromInt((PRESENTATION_ADDRESS_TOP + PRESENTATION_ADDRESS_BOTTOM) / 2));
     try std.testing.expectEqual(ChromeButtonKind.back, chromeCommandKindAtClientPoint(24, mid_y).?);
@@ -6354,6 +6401,7 @@ test "win32 tab shortcuts enqueue commands" {
 
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'T', .{ .ctrl = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'T', .{ .ctrl = true, .shift = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'D', .{ .ctrl = true, .shift = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_TAB, .{ .ctrl = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_TAB, .{ .ctrl = true, .shift = true }));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, '2', .{ .ctrl = true }));
@@ -6361,11 +6409,42 @@ test "win32 tab shortcuts enqueue commands" {
 
     try std.testing.expectEqual(BrowserCommand.tab_new, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand.tab_reopen_closed, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.tab_duplicate, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand.tab_next, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand.tab_previous, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand{ .tab_activate = 1 }, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand{ .tab_close = 1 }, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
+}
+
+test "win32 single tab close button is disabled" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    const tabs = [_]struct {
+        title: []const u8,
+        url: []const u8,
+        is_loading: bool,
+    }{
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false },
+    };
+    backend.setTabEntries(tabs[0..], 0);
+
+    const client = c.RECT{ .left = 0, .top = 0, .right = 960, .bottom = 540 };
+    const rect = tabRect(client, 1, 0);
+    const close_rect = tabCloseButtonRect(rect);
+
+    try std.testing.expect(tabHasCloseButton(rect));
+    try std.testing.expect(!tabCloseEnabled(1, rect));
+    try std.testing.expectEqual(
+        BrowserCommand{ .tab_activate = 0 },
+        presentationCommandAtClientPointWithClient(
+            &backend,
+            client,
+            @as(f64, @floatFromInt(close_rect.left + 2)),
+            @as(f64, @floatFromInt(close_rect.top + 2)),
+        ).?,
+    );
 }
 
 test "win32 ctrl+j toggles downloads overlay" {

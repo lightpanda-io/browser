@@ -107,6 +107,16 @@ Exit criteria:
 - history UI, bookmarks UI, downloads UI, and basic settings UI
 - find-in-page and zoom controls
 
+Current state inside Gate 1:
+- tabs now cover open, close, switch, duplicate, reopen, and clean session restore
+- history, bookmarks, downloads, settings, find, and zoom are present in the
+  headed shell
+- disabled close-state for the single remaining tab is implemented
+- rendered `_blank` anchor popups now open in a new tab through the native
+  headed surface
+- remaining blocker: form-driven `_blank` submission through the session-owned
+  pending-tab-open path is still crashing on Windows headed `browse`
+
 ### Gate 2: Shared Subresource Loader And Profile
 
 Status: Planned

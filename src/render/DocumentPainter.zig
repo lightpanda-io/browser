@@ -505,6 +505,7 @@ const Painter = struct {
         sortCommandRowFragments(fragments.items);
         const resolved = try URL.resolve(self.page.call_arena, self.page.base(), href, .{ .encode = true });
         const download_filename = element.getAttributeSafe(comptime .wrap("download")) orelse "";
+        const open_in_new_tab = linkOpensInNewTab(element);
         for (fragments.items) |fragment| {
             try self.list.addLinkRegion(self.allocator, .{
                 .x = fragment.x,
@@ -513,6 +514,7 @@ const Painter = struct {
                 .height = fragment.height,
                 .url = @constCast(resolved),
                 .download_filename = @constCast(download_filename),
+                .open_in_new_tab = open_in_new_tab,
             });
         }
     }
@@ -600,7 +602,22 @@ fn resolvedLinkRegion(
         .height = height,
         .url = @constCast(resolved),
         .download_filename = @constCast(element.getAttributeSafe(comptime .wrap("download")) orelse ""),
+        .open_in_new_tab = linkOpensInNewTab(element),
     };
+}
+
+fn linkOpensInNewTab(element: *Element) bool {
+    const target = element.getAttributeSafe(comptime .wrap("target")) orelse return false;
+    if (target.len == 0) {
+        return false;
+    }
+    if (std.mem.eql(u8, target, "_self") or
+        std.mem.eql(u8, target, "_parent") or
+        std.mem.eql(u8, target, "_top"))
+    {
+        return false;
+    }
+    return true;
 }
 
 fn collectCommandRowFragments(
