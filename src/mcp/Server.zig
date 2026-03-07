@@ -17,7 +17,6 @@ http_client: *HttpClient,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
-page: *lp.Page,
 
 writer: *std.io.Writer,
 mutex: std.Thread.Mutex = .{},
@@ -45,12 +44,8 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
         .http_client = http_client,
         .notification = notification,
         .session = undefined,
-        .page = undefined,
     };
-
     self.session = try self.browser.newSession(self.notification);
-    self.page = try self.session.createPage();
-
     return self;
 }
 
