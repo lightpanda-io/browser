@@ -121,7 +121,10 @@ Current state inside Gate 1:
 - bounded headed probes remain the acceptance gate for `_blank` popup flows
   and rendered named-target anchor pointer activation, including target-tab
   reuse
-- next blocker: expand popup policy beyond the current narrow named-target path
+- rendered same-tab link activation now dispatches a real DOM click first, so
+  `onclick`, `preventDefault`, and click-time href mutation are preserved on the
+  headed surface before any direct navigation fallback
+- next blocker: expand popup policy beyond the current narrow named-target path,
   and make chrome state clearer around popup/tab targeting
 
 ### Gate 2: Shared Subresource Loader And Profile

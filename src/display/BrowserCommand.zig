@@ -6,11 +6,22 @@ pub const BrowserCommand = union(enum) {
         suggested_filename: []u8,
     };
 
+    pub const ActivateLinkRegion = struct {
+        x: f64,
+        y: f64,
+        url: []u8,
+        dom_path: []u16,
+        suggested_filename: []u8,
+        target_name: []u8,
+        open_in_new_tab: bool,
+    };
+
     pub const NavigateTarget = struct {
         url: []u8,
         target_name: []u8,
     };
 
+    activate_link_region: ActivateLinkRegion,
     navigate: []u8,
     navigate_new_tab: []u8,
     navigate_target_tab: NavigateTarget,
@@ -41,6 +52,12 @@ pub const BrowserCommand = union(enum) {
 
     pub fn deinit(self: BrowserCommand, allocator: std.mem.Allocator) void {
         switch (self) {
+            .activate_link_region => |activation| {
+                allocator.free(activation.url);
+                allocator.free(activation.dom_path);
+                allocator.free(activation.suggested_filename);
+                allocator.free(activation.target_name);
+            },
             .navigate => |url| allocator.free(url),
             .navigate_new_tab => |url| allocator.free(url),
             .navigate_target_tab => |target| {

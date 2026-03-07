@@ -505,6 +505,7 @@ const Painter = struct {
 
         sortCommandRowFragments(fragments.items);
         const resolved = try URL.resolve(self.page.call_arena, self.page.base(), href, .{ .encode = true });
+        const dom_path = try encodeNodePath(self.page.call_arena, element.asNode());
         const download_filename = element.getAttributeSafe(comptime .wrap("download")) orelse "";
         const open_in_new_tab = linkOpensFreshTab(element);
         const target_name = linkTargetName(element);
@@ -515,6 +516,7 @@ const Painter = struct {
                 .width = fragment.width,
                 .height = fragment.height,
                 .url = @constCast(resolved),
+                .dom_path = dom_path,
                 .download_filename = @constCast(download_filename),
                 .open_in_new_tab = open_in_new_tab,
                 .target_name = @constCast(target_name),
@@ -597,6 +599,7 @@ fn resolvedLinkRegion(
         return null;
     }
     const resolved = try URL.resolve(page.call_arena, page.base(), href, .{ .encode = true });
+    const dom_path = try encodeNodePath(page.call_arena, element.asNode());
 
     return .{
         .x = x,
@@ -604,6 +607,7 @@ fn resolvedLinkRegion(
         .width = width,
         .height = height,
         .url = @constCast(resolved),
+        .dom_path = dom_path,
         .download_filename = @constCast(element.getAttributeSafe(comptime .wrap("download")) orelse ""),
         .open_in_new_tab = linkOpensFreshTab(element),
         .target_name = @constCast(linkTargetName(element)),
@@ -659,6 +663,36 @@ fn collectCommandRowFragments(
         try mergeCommandBoundsIntoFragments(allocator, &fragments, bounds);
     }
     return fragments;
+}
+
+fn encodeNodePath(
+    allocator: std.mem.Allocator,
+    node: *Node,
+) ![]u16 {
+    var reverse: std.ArrayListUnmanaged(u16) = .{};
+    errdefer reverse.deinit(allocator);
+
+    var current: ?*Node = node;
+    while (current) |value| {
+        const parent = value.parentNode() orelse break;
+        var child = parent.firstChild();
+        var index: usize = 0;
+        while (child) |candidate| : (child = candidate.nextSibling()) {
+            if (candidate == value) {
+                break;
+            }
+            index += 1;
+        }
+        try reverse.append(allocator, std.math.cast(u16, index) orelse return error.Overflow);
+        current = parent;
+    }
+
+    const path = try allocator.alloc(u16, reverse.items.len);
+    for (reverse.items, 0..) |segment, idx| {
+        path[(reverse.items.len - 1) - idx] = segment;
+    }
+    reverse.deinit(allocator);
+    return path;
 }
 
 fn mergeCommandBoundsIntoFragments(
@@ -1486,6 +1520,30 @@ test "paintDocument emits named target link region" {
         );
         try std.testing.expect(region.width > 0);
         try std.testing.expect(region.height > 0);
+        found = true;
+        break;
+    }
+
+    try std.testing.expect(found);
+}
+
+test "paintDocument emits same-context link region with dom path" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.link_regions.items) |region| {
+        if (!std.mem.eql(u8, region.url, "http://127.0.0.1:9582/src/browser/tests/page/original-target.html")) {
+            continue;
+        }
+        try std.testing.expect(region.width > 0);
+        try std.testing.expect(region.height > 0);
+        try std.testing.expect(region.dom_path.len > 0);
         found = true;
         break;
     }

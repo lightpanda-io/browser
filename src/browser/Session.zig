@@ -684,10 +684,18 @@ pub fn takePendingDownloads(self: *Session) std.ArrayListUnmanaged(PendingDownlo
     return pending;
 }
 
+pub fn hasPendingDownloads(self: *const Session) bool {
+    return self.pending_downloads.items.len > 0;
+}
+
 pub fn takePendingTabOpens(self: *Session) std.ArrayListUnmanaged(PendingTabOpen) {
     var pending: std.ArrayListUnmanaged(PendingTabOpen) = .{};
     std.mem.swap(std.ArrayListUnmanaged(PendingTabOpen), &pending, &self.pending_tab_opens);
     return pending;
+}
+
+pub fn hasPendingTabOpens(self: *const Session) bool {
+    return self.pending_tab_opens.items.len > 0;
 }
 
 fn allocPage(self: *Session) !*Page {

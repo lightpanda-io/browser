@@ -1277,37 +1277,41 @@ fn presentationNavigateCommandAtClientPoint(backend: *Win32Backend, x: f64, y: f
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
 
+    const display_list = backend.presentation_display_list orelse return null;
+    const point = presentationClientToDisplayListLocked(backend, x, y) orelse return null;
     const region = findPresentationLinkRegionLocked(backend, x, y) orelse return null;
     const owned_url = backend.allocator.dupe(u8, region.url) catch |err| {
         log.warn(.app, "win link hit dupe", .{ .err = err });
         return null;
     };
-    if (region.download_filename.len > 0) {
-        const owned_filename = backend.allocator.dupe(u8, region.download_filename) catch |err| {
-            backend.allocator.free(owned_url);
-            log.warn(.app, "win dl hit dupe", .{ .err = err });
-            return null;
-        };
-        return .{ .download = .{
-            .url = owned_url,
-            .suggested_filename = owned_filename,
-        } };
-    }
-    if (region.target_name.len > 0) {
-        const owned_target_name = backend.allocator.dupe(u8, region.target_name) catch |err| {
-            backend.allocator.free(owned_url);
-            log.warn(.app, "win target hit dupe", .{ .err = err });
-            return null;
-        };
-        return .{ .navigate_target_tab = .{
-            .url = owned_url,
-            .target_name = owned_target_name,
-        } };
-    }
-    if (region.open_in_new_tab) {
-        return .{ .navigate_new_tab = owned_url };
-    }
-    return .{ .navigate = owned_url };
+    const owned_dom_path = backend.allocator.dupe(u16, region.dom_path) catch |err| {
+        backend.allocator.free(owned_url);
+        log.warn(.app, "win dom path hit dupe", .{ .err = err });
+        return null;
+    };
+    errdefer backend.allocator.free(owned_dom_path);
+    const owned_filename = backend.allocator.dupe(u8, region.download_filename) catch |err| {
+        backend.allocator.free(owned_url);
+        log.warn(.app, "win dl hit dupe", .{ .err = err });
+        return null;
+    };
+    errdefer backend.allocator.free(owned_filename);
+    const owned_target_name = backend.allocator.dupe(u8, region.target_name) catch |err| {
+        backend.allocator.free(owned_url);
+        log.warn(.app, "win target hit dupe", .{ .err = err });
+        return null;
+    };
+    errdefer backend.allocator.free(owned_target_name);
+
+    return .{ .activate_link_region = .{
+        .x = point.x - @as(f64, @floatFromInt(display_list.page_margin)),
+        .y = point.y - @as(f64, @floatFromInt(display_list.page_margin)),
+        .url = owned_url,
+        .dom_path = owned_dom_path,
+        .suggested_filename = owned_filename,
+        .target_name = owned_target_name,
+        .open_in_new_tab = region.open_in_new_tab,
+    } };
 }
 
 fn beginPendingPresentationCommand(backend: *Win32Backend, hwnd: c.HWND, x: f64, y: f64) bool {
@@ -6357,7 +6361,7 @@ test "win32 find collects multiple matches within one text run" {
     try std.testing.expect(matches.items[1].width > 0);
 }
 
-test "win32 rendered target link queues navigate_target_tab" {
+test "win32 rendered target link queues activate_link_region" {
     var backend = Win32Backend.init(std.testing.allocator, 1, 1);
     defer backend.deinit();
 
@@ -6384,17 +6388,29 @@ test "win32 rendered target link queues navigate_target_tab" {
     try std.testing.expectEqualStrings(
         "http://popup.test/result",
         switch (command) {
-            .navigate_target_tab => |target| target.url,
+            .activate_link_region => |activation| activation.url,
             else => return error.TestUnexpectedCommandType,
         },
     );
     try std.testing.expectEqualStrings(
         "report",
         switch (command) {
-            .navigate_target_tab => |target| target.target_name,
+            .activate_link_region => |activation| activation.target_name,
             else => return error.TestUnexpectedCommandType,
         },
     );
+    try std.testing.expectEqual(false, switch (command) {
+        .activate_link_region => |activation| activation.open_in_new_tab,
+        else => return error.TestUnexpectedCommandType,
+    });
+    try std.testing.expectEqual(@as(usize, 0), switch (command) {
+        .activate_link_region => |activation| activation.dom_path.len,
+        else => return error.TestUnexpectedCommandType,
+    });
+    try std.testing.expect(switch (command) {
+        .activate_link_region => |activation| activation.x > 0 and activation.y > 0,
+        else => return error.TestUnexpectedCommandType,
+    });
 }
 
 test "win32 formatTabStripLabel includes popup target prefix" {

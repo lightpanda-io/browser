@@ -31,6 +31,7 @@ pub const LinkRegion = struct {
     width: i32,
     height: i32,
     url: []u8,
+    dom_path: []u16 = &.{},
     download_filename: []u8 = &.{},
     open_in_new_tab: bool = false,
     target_name: []u8 = &.{},
@@ -102,6 +103,7 @@ pub fn deinit(self: *DisplayList, allocator: std.mem.Allocator) void {
     self.commands.deinit(allocator);
     for (self.link_regions.items) |region| {
         allocator.free(region.url);
+        allocator.free(region.dom_path);
         allocator.free(region.download_filename);
         allocator.free(region.target_name);
     }
@@ -129,6 +131,7 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .width = region.width,
             .height = region.height,
             .url = try allocator.dupe(u8, region.url),
+            .dom_path = try allocator.dupe(u16, region.dom_path),
             .download_filename = try allocator.dupe(u8, region.download_filename),
             .open_in_new_tab = region.open_in_new_tab,
             .target_name = try allocator.dupe(u8, region.target_name),
@@ -179,6 +182,7 @@ pub fn addLinkRegion(self: *DisplayList, allocator: std.mem.Allocator, region: L
         .width = region.width,
         .height = region.height,
         .url = try allocator.dupe(u8, region.url),
+        .dom_path = try allocator.dupe(u16, region.dom_path),
         .download_filename = try allocator.dupe(u8, region.download_filename),
         .open_in_new_tab = region.open_in_new_tab,
         .target_name = try allocator.dupe(u8, region.target_name),
@@ -238,6 +242,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(std.mem.asBytes(&region.width));
         hasher.update(std.mem.asBytes(&region.height));
         hasher.update(region.url);
+        hasher.update(std.mem.sliceAsBytes(region.dom_path));
         hasher.update(region.download_filename);
         hasher.update(std.mem.asBytes(&region.open_in_new_tab));
         hasher.update(region.target_name);

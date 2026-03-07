@@ -3156,7 +3156,37 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
 }
 
 pub fn triggerMouseClickWithModifiers(self: *Page, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
-    return self.triggerMouseButtonEvent("click", x, y, button, modifiers);
+    _ = try self.triggerMouseButtonEventResult("click", x, y, button, modifiers);
+}
+
+pub const MouseClickDispatchResult = struct {
+    dispatched: bool,
+    default_prevented: bool,
+};
+
+pub fn triggerMouseClickWithResult(
+    self: *Page,
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    modifiers: MouseModifiers,
+) !MouseClickDispatchResult {
+    return self.triggerMouseButtonEventResult("click", x, y, button, modifiers);
+}
+
+pub fn triggerMouseClickOnNodePathWithResult(
+    self: *Page,
+    path: []const u16,
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    modifiers: MouseModifiers,
+) !MouseClickDispatchResult {
+    const target = self.resolveNodePath(path) orelse return .{
+        .dispatched = false,
+        .default_prevented = false,
+    };
+    return self.dispatchMouseButtonEventResult(target, "click", x, y, button, modifiers);
 }
 
 pub const MouseButton = enum(i32) {
@@ -3176,15 +3206,15 @@ pub const MouseModifiers = struct {
 };
 
 pub fn triggerMouseMove(self: *Page, x: f64, y: f64, modifiers: MouseModifiers) !void {
-    return self.triggerMouseButtonEvent("mousemove", x, y, .main, modifiers);
+    _ = try self.triggerMouseButtonEventResult("mousemove", x, y, .main, modifiers);
 }
 
 pub fn triggerMouseDown(self: *Page, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
-    return self.triggerMouseButtonEvent("mousedown", x, y, button, modifiers);
+    _ = try self.triggerMouseButtonEventResult("mousedown", x, y, button, modifiers);
 }
 
 pub fn triggerMouseUp(self: *Page, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
-    return self.triggerMouseButtonEvent("mouseup", x, y, button, modifiers);
+    _ = try self.triggerMouseButtonEventResult("mouseup", x, y, button, modifiers);
 }
 
 pub fn triggerMouseWheel(self: *Page, x: f64, y: f64, delta_x: f64, delta_y: f64, modifiers: MouseModifiers) !void {
@@ -3220,8 +3250,30 @@ pub fn triggerMouseWheel(self: *Page, x: f64, y: f64, delta_x: f64, delta_y: f64
     try self._event_manager.dispatch(target.asEventTarget(), event);
 }
 
-fn triggerMouseButtonEvent(self: *Page, typ: []const u8, x: f64, y: f64, button: MouseButton, modifiers: MouseModifiers) !void {
-    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
+fn triggerMouseButtonEventResult(
+    self: *Page,
+    typ: []const u8,
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    modifiers: MouseModifiers,
+) !MouseClickDispatchResult {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return .{
+        .dispatched = false,
+        .default_prevented = false,
+    };
+    return self.dispatchMouseButtonEventResult(target.asNode(), typ, x, y, button, modifiers);
+}
+
+fn dispatchMouseButtonEventResult(
+    self: *Page,
+    target: *Node,
+    typ: []const u8,
+    x: f64,
+    y: f64,
+    button: MouseButton,
+    modifiers: MouseModifiers,
+) !MouseClickDispatchResult {
     if (comptime IS_DEBUG) {
         log.debug(.page, "page mouse event", .{
             .url = self.url,
@@ -3250,6 +3302,28 @@ fn triggerMouseButtonEvent(self: *Page, typ: []const u8, x: f64, y: f64, button:
         .metaKey = modifiers.meta,
     }, self)).asEvent();
     try self._event_manager.dispatch(target.asEventTarget(), event);
+    return .{
+        .dispatched = true,
+        .default_prevented = event._prevent_default,
+    };
+}
+
+fn resolveNodePath(self: *Page, path: []const u16) ?*Node {
+    var current = self.window._document.asNode();
+    for (path) |segment| {
+        var child = current.firstChild();
+        var index: u16 = 0;
+        while (child) |candidate| : (child = candidate.nextSibling()) {
+            if (index == segment) {
+                current = candidate;
+                break;
+            }
+            index += 1;
+        } else {
+            return null;
+        }
+    }
+    return current;
 }
 
 // callback when the "click" event reaches the pages.
@@ -4409,6 +4483,32 @@ fn deinitPendingTabOpensForTest(
     pending.deinit(allocator);
 }
 
+fn deinitPendingDownloadsForTest(
+    allocator: std.mem.Allocator,
+    pending: *std.ArrayListUnmanaged(Session.PendingDownload),
+) void {
+    while (pending.items.len > 0) {
+        var request = pending.items[pending.items.len - 1];
+        pending.items.len -= 1;
+        request.deinit(allocator);
+    }
+    pending.deinit(allocator);
+}
+
+fn clickSelectorCenter(
+    page: *Page,
+    comptime selector: []const u8,
+) !MouseClickDispatchResult {
+    const element = (try page.window._document.querySelector(comptime .wrap(selector), page)).?;
+    const rect = element.getBoundingClientRect(page);
+    return page.triggerMouseClickWithResult(
+        rect.getX() + (rect.getWidth() / 2.0),
+        rect.getY() + (rect.getHeight() / 2.0),
+        .main,
+        .{},
+    );
+}
+
 test "Page handleClick queues named target anchor popup" {
     var page = try testing.pageTest("page/popup_target.html");
     defer page._session.removePage();
@@ -4485,6 +4585,50 @@ test "Page handleClick queues named target POST form popup" {
     try testing.expectEqual(.POST, pending.items[0].opts.method);
     try testing.expectString("q=two", pending.items[0].opts.body.?);
     try testing.expectString("Content-Type: application/x-www-form-urlencoded", pending.items[0].opts.header.?);
+}
+
+test "Page triggerMouseClickWithResult respects anchor preventDefault" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+
+    const result = try clickSelectorCenter(page, "#plink");
+
+    try testing.expectEqual(true, result.dispatched);
+    try testing.expectEqual(true, result.default_prevented);
+    try testing.expect(page._queued_navigation == null);
+
+    var pending_downloads = page._session.takePendingDownloads();
+    defer deinitPendingDownloadsForTest(page._session.browser.app.allocator, &pending_downloads);
+    try testing.expectEqual(@as(usize, 0), pending_downloads.items.len);
+
+    var pending_tabs = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending_tabs);
+    try testing.expectEqual(@as(usize, 0), pending_tabs.items.len);
+
+    try testing.expectString("Rendered Prevented Click", (try page.getTitle()).?);
+}
+
+test "Page triggerMouseClickWithResult uses href mutated by onclick" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+
+    const result = try clickSelectorCenter(page, "#mlink");
+
+    try testing.expectEqual(true, result.dispatched);
+    try testing.expectEqual(false, result.default_prevented);
+    try testing.expect(page._queued_navigation != null);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/mutated-target.html?from=onclick",
+        page._queued_navigation.?.url,
+    );
+
+    var pending_downloads = page._session.takePendingDownloads();
+    defer deinitPendingDownloadsForTest(page._session.browser.app.allocator, &pending_downloads);
+    try testing.expectEqual(@as(usize, 0), pending_downloads.items.len);
+
+    var pending_tabs = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending_tabs);
+    try testing.expectEqual(@as(usize, 0), pending_tabs.items.len);
 }
 
 test "Page word boundary navigation helpers" {

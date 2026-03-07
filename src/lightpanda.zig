@@ -776,6 +776,41 @@ fn handleBrowseCommand(
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             try downloads.startDownloadFromValues(app, tabs.items[active_index], download.url, download.suggested_filename);
         },
+        .activate_link_region => |activation| {
+            if (tabs.items.len == 0) {
+                return;
+            }
+            const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
+            const tab = tabs.items[active_index];
+            const page = tab.session.currentPage() orelse return;
+            if (try handleRenderedLinkActivation(tab, page, activation)) {
+                tab.last_presented_hash = 0;
+                return;
+            }
+
+            if (activation.suggested_filename.len > 0) {
+                try downloads.startDownloadFromValues(app, tab, activation.url, activation.suggested_filename);
+                tab.last_presented_hash = 0;
+                return;
+            }
+            if (activation.target_name.len > 0) {
+                try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, tab.zoom_percent, activation.url, .{
+                    .reason = .address_bar,
+                    .kind = .{ .push = null },
+                }, activation.target_name, true);
+                return;
+            }
+            if (activation.open_in_new_tab) {
+                try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, tab.zoom_percent, activation.url, .{
+                    .reason = .address_bar,
+                    .kind = .{ .push = null },
+                }, "_blank", true);
+                return;
+            }
+            try handleActiveBrowseCommand(app, tab, page, settings, .{
+                .navigate = activation.url,
+            });
+        },
         .navigate_new_tab => |raw_url| {
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const source_tab = tabs.items[active_index];
@@ -1066,6 +1101,44 @@ fn navigateBrowseTabToOwnedUrl(tab: *BrowseTab, raw_url: []const u8, opts: Page.
         return;
     }
     try page.scheduleNavigation(raw_url, opts, .{ .script = null });
+}
+
+fn handleRenderedLinkActivation(
+    tab: *BrowseTab,
+    page: *Page,
+    activation: BrowserCommand.ActivateLinkRegion,
+) !bool {
+    const had_pending_navigation = page._queued_navigation != null;
+    const had_pending_tab_opens = tab.session.hasPendingTabOpens();
+    const had_pending_downloads = tab.session.hasPendingDownloads();
+    var result = if (activation.dom_path.len > 0)
+        try page.triggerMouseClickOnNodePathWithResult(activation.dom_path, activation.x, activation.y, .main, .{})
+    else
+        Page.MouseClickDispatchResult{
+            .dispatched = false,
+            .default_prevented = false,
+        };
+
+    if (!result.dispatched) {
+        result = try page.triggerMouseClickWithResult(activation.x, activation.y, .main, .{});
+    }
+
+    if (!result.dispatched) {
+        return false;
+    }
+    if (result.default_prevented) {
+        return true;
+    }
+    if (!had_pending_navigation and page._queued_navigation != null) {
+        return true;
+    }
+    if (!had_pending_tab_opens and tab.session.hasPendingTabOpens()) {
+        return true;
+    }
+    if (!had_pending_downloads and tab.session.hasPendingDownloads()) {
+        return true;
+    }
+    return false;
 }
 
 fn applyZoomCommand(current_zoom: i32, default_zoom_percent: i32, command: BrowserCommand) i32 {
