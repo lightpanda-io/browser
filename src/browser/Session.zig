@@ -182,9 +182,17 @@ pub fn findPage(self: *Session, frame_id: u32) ?*Page {
 }
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
+    return self.waitWithInput(wait_ms, true);
+}
+
+pub fn waitNoInput(self: *Session, wait_ms: u32) WaitResult {
+    return self.waitWithInput(wait_ms, false);
+}
+
+fn waitWithInput(self: *Session, wait_ms: u32, dispatch_native_input: bool) WaitResult {
     var page = self.page orelse return .no_page;
     while (true) {
-        const wait_result = self._wait(page, wait_ms) catch |err| {
+        const wait_result = self._wait(page, wait_ms, dispatch_native_input) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 else => log.err(.browser, "session wait", .{
@@ -208,7 +216,7 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
     }
 }
 
-fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
+fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool) !WaitResult {
     var timer = try std.time.Timer.start();
     var ms_remaining = wait_ms;
 
@@ -228,12 +236,14 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     const exit_when_done = http_client.cdp_client == null;
 
     while (true) {
-        self.browser.app.display.dispatchNativeInput(page) catch |err| {
-            log.err(.browser, "native input dispatch", .{
-                .err = err,
-                .url = page.url,
-            });
-        };
+        if (dispatch_native_input) {
+            self.browser.app.display.dispatchNativeInput(page) catch |err| {
+                log.err(.browser, "native input dispatch", .{
+                    .err = err,
+                    .url = page.url,
+                });
+            };
+        }
 
         switch (page._parse_state) {
             .pre, .raw, .text, .image => {

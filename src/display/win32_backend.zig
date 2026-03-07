@@ -143,6 +143,8 @@ pub const Win32Backend = struct {
     find_input_select_all: bool = false,
     find_pending_high_surrogate: ?u16 = null,
     find_match_index: usize = 0,
+    presentation_tab_entries: std.ArrayListUnmanaged(PresentationTabEntry) = .{},
+    presentation_active_tab_index: usize = 0,
     presentation_history_entries: std.ArrayListUnmanaged([]u8) = .{},
     presentation_history_current_index: usize = 0,
     history_overlay_open: bool = false,
@@ -317,6 +319,61 @@ pub const Win32Backend = struct {
         _ = self.presentation_seq.fetchAdd(1, .acq_rel);
     }
 
+    pub fn setTabEntries(self: *Win32Backend, entries: anytype, active_index: usize) void {
+        self.presentation_lock.lock();
+        defer self.presentation_lock.unlock();
+
+        const normalized_active_index = if (entries.len == 0)
+            0
+        else
+            @min(active_index, entries.len - 1);
+
+        if (self.presentation_active_tab_index == normalized_active_index and
+            self.presentation_tab_entries.items.len == entries.len)
+        {
+            var unchanged = true;
+            for (entries, self.presentation_tab_entries.items) |entry, existing| {
+                if (entry.is_loading != existing.is_loading or
+                    !std.mem.eql(u8, entry.title, existing.title) or
+                    !std.mem.eql(u8, entry.url, existing.url))
+                {
+                    unchanged = false;
+                    break;
+                }
+            }
+            if (unchanged) {
+                return;
+            }
+        }
+
+        deinitOwnedTabList(&self.presentation_tab_entries, self.allocator);
+        self.presentation_tab_entries.ensureTotalCapacity(self.allocator, entries.len) catch |err| {
+            log.warn(.app, "win tabs reserve failed", .{ .err = err });
+            return;
+        };
+        for (entries) |entry| {
+            const owned_title = self.allocator.dupe(u8, entry.title) catch |err| {
+                log.warn(.app, "win tab title copy failed", .{ .err = err });
+                deinitOwnedTabList(&self.presentation_tab_entries, self.allocator);
+                return;
+            };
+            errdefer self.allocator.free(owned_title);
+            const owned_url = self.allocator.dupe(u8, entry.url) catch |err| {
+                self.allocator.free(owned_title);
+                log.warn(.app, "win tab url copy failed", .{ .err = err });
+                deinitOwnedTabList(&self.presentation_tab_entries, self.allocator);
+                return;
+            };
+            self.presentation_tab_entries.appendAssumeCapacity(.{
+                .title = owned_title,
+                .url = owned_url,
+                .is_loading = entry.is_loading,
+            });
+        }
+        self.presentation_active_tab_index = normalized_active_index;
+        _ = self.presentation_seq.fetchAdd(1, .acq_rel);
+    }
+
     pub fn setAppDataPath(self: *Win32Backend, path: ?[]const u8) void {
         if (self.app_data_path) |existing| {
             if (path) |next| {
@@ -468,6 +525,7 @@ pub const Win32Backend = struct {
         }
         self.address_input.deinit(self.allocator);
         self.find_input.deinit(self.allocator);
+        deinitOwnedTabList(&self.presentation_tab_entries, self.allocator);
         deinitOwnedStringList(&self.presentation_history_entries, self.allocator);
         deinitOwnedStringList(&self.presentation_bookmark_entries, self.allocator);
         if (self.pending_presentation_command) |command| {
@@ -719,6 +777,8 @@ const PresentationSnapshot = struct {
     find_text: []u8,
     find_editing: bool,
     find_match_index: usize,
+    tab_entries: std.ArrayListUnmanaged(PresentationTabEntry),
+    active_tab_index: usize,
     history_entries: std.ArrayListUnmanaged([]u8),
     history_current_index: usize,
     history_overlay_open: bool,
@@ -739,6 +799,8 @@ const PresentationSnapshot = struct {
         }
         allocator.free(self.address_text);
         allocator.free(self.find_text);
+        var tab_entries = self.tab_entries;
+        deinitOwnedTabList(&tab_entries, allocator);
         var history_entries = self.history_entries;
         deinitOwnedStringList(&history_entries, allocator);
         var bookmark_entries = self.bookmark_entries;
@@ -748,6 +810,13 @@ const PresentationSnapshot = struct {
 
 const PRESENTATION_HEADER_HEIGHT: c_int = 92;
 const PRESENTATION_MARGIN: c_int = 12;
+const PRESENTATION_TAB_TOP: c_int = 6;
+const PRESENTATION_TAB_BOTTOM: c_int = 24;
+const PRESENTATION_TAB_GAP: c_int = 4;
+const PRESENTATION_TAB_CLOSE_WIDTH: c_int = 18;
+const PRESENTATION_TAB_NEW_WIDTH: c_int = 22;
+const PRESENTATION_TAB_MIN_WIDTH: c_int = 56;
+const PRESENTATION_TAB_MAX_WIDTH: c_int = 180;
 const PRESENTATION_SCROLL_STEP: i32 = 48;
 const PRESENTATION_PAGE_STEP: i32 = 320;
 const PRESENTATION_ADDRESS_TOP: c_int = 28;
@@ -785,10 +854,28 @@ const BookmarkOverlayChromeAction = enum {
     delete,
 };
 
+const TabStripAction = union(enum) {
+    activate: usize,
+    close: usize,
+    new_tab,
+};
+
 const ChromeButtonKind = enum {
     back,
     forward,
     reload,
+};
+
+const PresentationTabEntry = struct {
+    title: []u8,
+    url: []u8,
+    is_loading: bool,
+
+    fn deinit(self: *PresentationTabEntry, allocator: std.mem.Allocator) void {
+        allocator.free(self.title);
+        allocator.free(self.url);
+        self.* = undefined;
+    }
 };
 
 const FindMatch = struct {
@@ -815,12 +902,21 @@ fn deinitOwnedStringList(list: *std.ArrayListUnmanaged([]u8), allocator: std.mem
     list.* = .{};
 }
 
+fn deinitOwnedTabList(list: *std.ArrayListUnmanaged(PresentationTabEntry), allocator: std.mem.Allocator) void {
+    for (list.items) |*entry| {
+        entry.deinit(allocator);
+    }
+    list.deinit(allocator);
+    list.* = .{};
+}
+
 fn presentationHasContent(backend: *Win32Backend) bool {
     backend.presentation_lock.lock();
     defer backend.presentation_lock.unlock();
     return backend.presentation_body.len > 0 or
         backend.presentation_url.len > 0 or
         backend.presentation_title.len > 0 or
+        backend.presentation_tab_entries.items.len > 0 or
         backend.address_input_active or
         backend.find_input_active or
         backend.history_overlay_open or
@@ -850,6 +946,27 @@ fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
         .find_text = try backend.allocator.dupe(u8, backend.find_input.items),
         .find_editing = backend.find_input_active,
         .find_match_index = backend.find_match_index,
+        .tab_entries = blk: {
+            var tab_entries: std.ArrayListUnmanaged(PresentationTabEntry) = .{};
+            errdefer deinitOwnedTabList(&tab_entries, backend.allocator);
+            try tab_entries.ensureTotalCapacity(backend.allocator, backend.presentation_tab_entries.items.len);
+            for (backend.presentation_tab_entries.items) |entry| {
+                const owned_title = try backend.allocator.dupe(u8, entry.title);
+                errdefer backend.allocator.free(owned_title);
+                const owned_url = try backend.allocator.dupe(u8, entry.url);
+                errdefer backend.allocator.free(owned_url);
+                tab_entries.appendAssumeCapacity(.{
+                    .title = owned_title,
+                    .url = owned_url,
+                    .is_loading = entry.is_loading,
+                });
+            }
+            break :blk tab_entries;
+        },
+        .active_tab_index = if (backend.presentation_tab_entries.items.len == 0)
+            0
+        else
+            @min(backend.presentation_active_tab_index, backend.presentation_tab_entries.items.len - 1),
         .history_entries = blk: {
             var history_entries: std.ArrayListUnmanaged([]u8) = .{};
             errdefer deinitOwnedStringList(&history_entries, backend.allocator);
@@ -1003,6 +1120,47 @@ fn findPresentationNavigateUrlLocked(backend: *Win32Backend, x: f64, y: f64) ?[]
             return region.url;
         }
     }
+    return null;
+}
+
+fn presentationTabEntryCount(backend: *Win32Backend) usize {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+    return backend.presentation_tab_entries.items.len;
+}
+
+fn presentationActiveTabIndex(backend: *Win32Backend) usize {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+    if (backend.presentation_tab_entries.items.len == 0) {
+        return 0;
+    }
+    return @min(backend.presentation_active_tab_index, backend.presentation_tab_entries.items.len - 1);
+}
+
+fn tabStripActionAtClientPoint(
+    backend: *Win32Backend,
+    client: c.RECT,
+    x: f64,
+    y: f64,
+) ?TabStripAction {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    if (clientPointInRect(tabNewButtonRect(client), x, y)) {
+        return .new_tab;
+    }
+
+    for (backend.presentation_tab_entries.items, 0..) |_, index| {
+        const rect = tabRect(client, backend.presentation_tab_entries.items.len, index);
+        if (tabHasCloseButton(rect) and clientPointInRect(tabCloseButtonRect(rect), x, y)) {
+            return .{ .close = index };
+        }
+        if (clientPointInRect(rect, x, y)) {
+            return .{ .activate = index };
+        }
+    }
+
     return null;
 }
 
@@ -1173,6 +1331,56 @@ fn chromeButtonRect(kind: ChromeButtonKind) c.RECT {
         .top = PRESENTATION_ADDRESS_TOP,
         .right = left + PRESENTATION_CHROME_BUTTON_WIDTH,
         .bottom = PRESENTATION_ADDRESS_BOTTOM,
+    };
+}
+
+fn tabStripRight(client: c.RECT) c_int {
+    return findBoxRect(client).left - PRESENTATION_TAB_GAP;
+}
+
+fn tabNewButtonRect(client: c.RECT) c.RECT {
+    const right = tabStripRight(client);
+    return .{
+        .left = @max(client.left + PRESENTATION_MARGIN, right - PRESENTATION_TAB_NEW_WIDTH),
+        .top = PRESENTATION_TAB_TOP,
+        .right = right,
+        .bottom = PRESENTATION_TAB_BOTTOM,
+    };
+}
+
+fn tabWidthForClient(client: c.RECT, tab_count: usize) c_int {
+    if (tab_count == 0) {
+        return 0;
+    }
+    const available_right = tabNewButtonRect(client).left - PRESENTATION_TAB_GAP;
+    const gaps = @as(c_int, @intCast(@max(tab_count, 1) - 1)) * PRESENTATION_TAB_GAP;
+    const available_width = @max(1, available_right - client.left - PRESENTATION_MARGIN - gaps);
+    const raw = @divTrunc(available_width, @as(c_int, @intCast(tab_count)));
+    return @max(1, @min(PRESENTATION_TAB_MAX_WIDTH, raw));
+}
+
+fn tabRect(client: c.RECT, tab_count: usize, index: usize) c.RECT {
+    const width = tabWidthForClient(client, tab_count);
+    const left = client.left + PRESENTATION_MARGIN +
+        (@as(c_int, @intCast(index)) * (width + PRESENTATION_TAB_GAP));
+    return .{
+        .left = left,
+        .top = PRESENTATION_TAB_TOP,
+        .right = left + width,
+        .bottom = PRESENTATION_TAB_BOTTOM,
+    };
+}
+
+fn tabHasCloseButton(rect: c.RECT) bool {
+    return rect.right - rect.left >= 44;
+}
+
+fn tabCloseButtonRect(rect: c.RECT) c.RECT {
+    return .{
+        .left = rect.right - PRESENTATION_TAB_CLOSE_WIDTH - 4,
+        .top = rect.top + 2,
+        .right = rect.right - 4,
+        .bottom = rect.bottom - 2,
     };
 }
 
@@ -1551,7 +1759,8 @@ fn handleBookmarkOverlayChromeClick(hwnd: c.HWND, backend: *Win32Backend, client
 fn presentationHasInteractiveAtClientPoint(backend: *Win32Backend, hwnd: c.HWND, x: f64, y: f64) bool {
     var client: c.RECT = undefined;
     _ = c.GetClientRect(hwnd, &client);
-    return chromeCommandKindAtClientPointEnabled(backend, x, y) != null or
+    return tabStripActionAtClientPoint(backend, client, x, y) != null or
+        chromeCommandKindAtClientPointEnabled(backend, x, y) != null or
         presentationHasNavigateAtClientPoint(backend, x, y) or
         findChromeActionAtClientPoint(backend, client, x, y) != null or
         historyOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
@@ -1567,6 +1776,13 @@ fn presentationCommandAtClientPointWithClient(
     y: f64,
 ) ?BrowserCommand {
     if (maybe_client) |client| {
+        if (tabStripActionAtClientPoint(backend, client, x, y)) |action| {
+            return switch (action) {
+                .activate => |index| .{ .tab_activate = index },
+                .close => |index| .{ .tab_close = index },
+                .new_tab => .tab_new,
+            };
+        }
         if (bookmarkEntryCommandAtClientPoint(backend, client, x, y)) |command| {
             return command;
         }
@@ -2228,6 +2444,81 @@ fn drawChromeButton(hdc: c.HDC, rect: c.RECT, label: []const u8, enabled: bool) 
         label,
         c.DT_CENTER | c.DT_VCENTER | c.DT_SINGLELINE | c.DT_NOPREFIX,
     );
+}
+
+fn drawTabStrip(
+    hdc: c.HDC,
+    client: c.RECT,
+    snapshot: *const PresentationSnapshot,
+    allocator: std.mem.Allocator,
+) void {
+    if (snapshot.tab_entries.items.len == 0) {
+        var title_rect = c.RECT{
+            .left = client.left + PRESENTATION_MARGIN,
+            .top = client.top + 8,
+            .right = findBoxRect(client).left - PRESENTATION_TAB_GAP,
+            .bottom = client.top + 24,
+        };
+        const title_text = if (snapshot.title.len > 0) snapshot.title else "Lightpanda Browser";
+        drawPresentationText(
+            hdc,
+            &title_rect,
+            title_text,
+            c.DT_LEFT | c.DT_TOP | c.DT_SINGLELINE | c.DT_END_ELLIPSIS | c.DT_NOPREFIX,
+        );
+        return;
+    }
+
+    for (snapshot.tab_entries.items, 0..) |entry, index| {
+        const rect = tabRect(client, snapshot.tab_entries.items.len, index);
+        const is_active = index == snapshot.active_tab_index;
+
+        const fill = c.CreateSolidBrush(if (is_active)
+            c.RGB(255, 255, 255)
+        else
+            c.RGB(240, 240, 240));
+        if (fill != null) {
+            defer _ = c.DeleteObject(fill);
+            var fill_rect = rect;
+            _ = c.FillRect(hdc, &fill_rect, fill);
+        }
+
+        const border = c.CreateSolidBrush(if (is_active)
+            c.RGB(150, 150, 150)
+        else
+            c.RGB(190, 190, 190));
+        if (border != null) {
+            defer _ = c.DeleteObject(border);
+            var border_rect = rect;
+            _ = c.FrameRect(hdc, &border_rect, border);
+        }
+
+        const label = if (entry.is_loading)
+            std.fmt.allocPrint(allocator, "* {s}", .{entry.title}) catch entry.title
+        else
+            entry.title;
+        defer if (label.ptr != entry.title.ptr) allocator.free(label);
+
+        var text_rect = rect;
+        text_rect.left += 8;
+        text_rect.right -= 6;
+        if (tabHasCloseButton(rect)) {
+            text_rect.right = tabCloseButtonRect(rect).left - 4;
+        }
+
+        drawPresentationText(
+            hdc,
+            &text_rect,
+            label,
+            c.DT_LEFT | c.DT_VCENTER | c.DT_SINGLELINE | c.DT_END_ELLIPSIS | c.DT_NOPREFIX,
+        );
+
+        if (tabHasCloseButton(rect)) {
+            drawChromeButton(hdc, tabCloseButtonRect(rect), "x", true);
+        }
+    }
+
+    drawChromeButton(hdc, tabNewButtonRect(client), "+", true);
 }
 
 fn findBoxRect(client: c.RECT) c.RECT {
@@ -3041,19 +3332,7 @@ fn renderPresentationScene(
         null;
     const current_find_ordinal = if (current_find_match) |index| index + 1 else 0;
 
-    var title_rect = c.RECT{
-        .left = client.left + PRESENTATION_MARGIN,
-        .top = client.top + 8,
-        .right = client.right - PRESENTATION_MARGIN,
-        .bottom = client.top + 24,
-    };
-    const title_text = if (snapshot.title.len > 0) snapshot.title else "Lightpanda Browser";
-    drawPresentationText(
-        hdc,
-        &title_rect,
-        title_text,
-        c.DT_LEFT | c.DT_TOP | c.DT_SINGLELINE | c.DT_END_ELLIPSIS | c.DT_NOPREFIX,
-    );
+    drawTabStrip(hdc, client, snapshot, allocator);
 
     drawFindBox(
         hdc,
@@ -3106,7 +3385,7 @@ fn renderPresentationScene(
     };
     const hint_text = std.fmt.allocPrint(
         allocator,
-        "Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
+        "Ctrl+T new tab  Ctrl+W close tab  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
         .{snapshot.zoom_percent},
     ) catch return;
     defer allocator.free(hint_text);
@@ -3804,6 +4083,29 @@ fn handlePresentationShortcutKey(
     }
     if (modifiers.ctrl and modifiers.shift and vk == 'P') {
         return savePresentationPngAuto(backend);
+    }
+    if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and vk == c.VK_TAB) {
+        queueBrowserCommand(backend, if (modifiers.shift) .tab_previous else .tab_next);
+        return true;
+    }
+    if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'T') {
+        queueBrowserCommand(backend, .tab_new);
+        return true;
+    }
+    if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'W') {
+        if (presentationTabEntryCount(backend) == 0) {
+            return false;
+        }
+        queueBrowserCommand(backend, .{ .tab_close = presentationActiveTabIndex(backend) });
+        return true;
+    }
+    if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk >= '1' and vk <= '9') {
+        const index: usize = @intCast(vk - '1');
+        if (index >= presentationTabEntryCount(backend)) {
+            return false;
+        }
+        queueBrowserCommand(backend, .{ .tab_activate = index });
+        return true;
     }
 
     if (presentationAddressEditing(backend)) {
@@ -5127,6 +5429,85 @@ test "win32 chrome button hit test maps back forward reload" {
     try std.testing.expectEqual(ChromeButtonKind.back, chromeCommandKindAtClientPoint(24, mid_y).?);
     try std.testing.expectEqual(ChromeButtonKind.forward, chromeCommandKindAtClientPoint(56, mid_y).?);
     try std.testing.expectEqual(ChromeButtonKind.reload, chromeCommandKindAtClientPoint(88, mid_y).?);
+}
+
+test "win32 tab strip hit test maps activate close and new" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    const tabs = [_]struct {
+        title: []const u8,
+        url: []const u8,
+        is_loading: bool,
+    }{
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false },
+        .{ .title = "Two", .url = "http://two.test/", .is_loading = true },
+    };
+    backend.setTabEntries(tabs[0..], 1);
+
+    const client = c.RECT{ .left = 0, .top = 0, .right = 960, .bottom = 540 };
+    const first_tab = tabRect(client, tabs.len, 0);
+    const second_tab = tabRect(client, tabs.len, 1);
+    const close_rect = tabCloseButtonRect(second_tab);
+    const new_rect = tabNewButtonRect(client);
+
+    try std.testing.expectEqual(
+        BrowserCommand{ .tab_activate = 0 },
+        presentationCommandAtClientPointWithClient(
+            &backend,
+            client,
+            @as(f64, @floatFromInt(first_tab.left + 8)),
+            @as(f64, @floatFromInt(first_tab.top + 8)),
+        ).?,
+    );
+    try std.testing.expectEqual(
+        BrowserCommand{ .tab_close = 1 },
+        presentationCommandAtClientPointWithClient(
+            &backend,
+            client,
+            @as(f64, @floatFromInt(close_rect.left + 2)),
+            @as(f64, @floatFromInt(close_rect.top + 2)),
+        ).?,
+    );
+    try std.testing.expectEqual(
+        BrowserCommand.tab_new,
+        presentationCommandAtClientPointWithClient(
+            &backend,
+            client,
+            @as(f64, @floatFromInt(new_rect.left + 2)),
+            @as(f64, @floatFromInt(new_rect.top + 2)),
+        ).?,
+    );
+}
+
+test "win32 tab shortcuts enqueue commands" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    const tabs = [_]struct {
+        title: []const u8,
+        url: []const u8,
+        is_loading: bool,
+    }{
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false },
+        .{ .title = "Two", .url = "http://two.test/", .is_loading = false },
+        .{ .title = "Three", .url = "http://three.test/", .is_loading = false },
+    };
+    backend.setTabEntries(tabs[0..], 1);
+    backend.presentation_title = try std.testing.allocator.dupe(u8, "Tabs");
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'T', .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_TAB, .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_TAB, .{ .ctrl = true, .shift = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, '2', .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'W', .{ .ctrl = true }));
+
+    try std.testing.expectEqual(BrowserCommand.tab_new, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.tab_next, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.tab_previous, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand{ .tab_activate = 1 }, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand{ .tab_close = 1 }, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
 }
 
 test "win32 disabled chrome buttons are not interactive" {

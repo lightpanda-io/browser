@@ -70,6 +70,8 @@ public static class SmokeProbeUser32 {
     private const ushort VK_D = 0x44;
     private const ushort VK_F = 0x46;
     private const ushort VK_H = 0x48;
+    private const ushort VK_T = 0x54;
+    private const ushort VK_W = 0x57;
     private const ushort VK_ESCAPE = 0x1B;
     private const ushort VK_F3 = 0x72;
     private const ushort VK_OEM_PLUS = 0xBB;
@@ -195,6 +197,86 @@ public static class SmokeProbeUser32 {
         inputs[3].U.ki.wVk = VK_CONTROL;
         inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
         EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlH");
+    }
+
+    public static void SendCtrlT() {
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_T;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_T;
+        inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_CONTROL;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlT");
+    }
+
+    public static void SendCtrlW() {
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_W;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_W;
+        inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_CONTROL;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlW");
+    }
+
+    public static void SendCtrlTab() {
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_TAB;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_TAB;
+        inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_CONTROL;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlTab");
+    }
+
+    public static void SendCtrlShiftTab() {
+        var inputs = new INPUT[6];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_SHIFT;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_TAB;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_TAB;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[4].type = INPUT_KEYBOARD;
+        inputs[4].U.ki.wVk = VK_SHIFT;
+        inputs[4].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[5].type = INPUT_KEYBOARD;
+        inputs[5].U.ki.wVk = VK_CONTROL;
+        inputs[5].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlShiftTab");
+    }
+
+    public static void SendCtrlDigit(ushort vk) {
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = vk;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = vk;
+        inputs[2].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_CONTROL;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlDigit");
     }
 
     public static void SendCtrlPlus() {
@@ -409,6 +491,29 @@ function Send-SmokeCtrlD {
 
 function Send-SmokeCtrlH {
   [SmokeProbeUser32]::SendCtrlH()
+}
+
+function Send-SmokeCtrlT {
+  [SmokeProbeUser32]::SendCtrlT()
+}
+
+function Send-SmokeCtrlW {
+  [SmokeProbeUser32]::SendCtrlW()
+}
+
+function Send-SmokeCtrlTab {
+  [SmokeProbeUser32]::SendCtrlTab()
+}
+
+function Send-SmokeCtrlShiftTab {
+  [SmokeProbeUser32]::SendCtrlShiftTab()
+}
+
+function Send-SmokeCtrlDigit([int]$Digit) {
+  if ($Digit -lt 1 -or $Digit -gt 9) {
+    throw "Digit must be between 1 and 9"
+  }
+  [SmokeProbeUser32]::SendCtrlDigit([uint16](0x30 + $Digit))
 }
 
 function Send-SmokeCtrlPlus {

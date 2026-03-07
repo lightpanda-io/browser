@@ -39,6 +39,7 @@ const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig"
     pub fn onViewportChanged(_: *@This(), _: u32, _: u32) void {}
     pub fn setNavigationState(_: *@This(), _: bool, _: bool, _: bool, _: i32) void {}
     pub fn setHistoryEntries(_: *@This(), _: []const []const u8, _: usize) void {}
+    pub fn setTabEntries(_: *@This(), _: []const TabEntry, _: usize) void {}
     pub fn setAppDataPath(_: *@This(), _: ?[]const u8) void {}
     pub fn dispatchInput(_: *@This(), _: anytype) !void {}
     pub fn presentDocument(_: *@This(), _: []const u8, _: []const u8, _: []const u8) !void {}
@@ -69,6 +70,12 @@ pub const Viewport = struct {
         // Reserve some space for browser UI chrome semantics.
         return if (self.height > 40) self.height - 40 else self.height;
     }
+};
+
+pub const TabEntry = struct {
+    title: []const u8,
+    url: []const u8,
+    is_loading: bool,
 };
 
 pub const Backend = union(enum) {
@@ -214,6 +221,13 @@ pub fn setNavigationState(self: *Display, can_go_back: bool, can_go_forward: boo
 pub fn setHistoryEntries(self: *Display, entries: []const []const u8, current_index: usize) void {
     switch (self.backend) {
         .headed_windows => |*backend| backend.setHistoryEntries(entries, current_index),
+        else => {},
+    }
+}
+
+pub fn setTabEntries(self: *Display, entries: []const TabEntry, active_index: usize) void {
+    switch (self.backend) {
+        .headed_windows => |*backend| backend.setTabEntries(entries, active_index),
         else => {},
     }
 }
