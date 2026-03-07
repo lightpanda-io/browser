@@ -187,6 +187,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     var committed_surface: CommittedBrowseSurface = .{};
     defer committed_surface.deinit(app.allocator);
     var restore_committed_surface = false;
+    var zoom_percent: i32 = 100;
 
     try app.display.presentDocument("Lightpanda Browser", url, "Loading page...");
 
@@ -195,11 +196,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         .reason = .address_bar,
         .kind = .{ .push = null },
     });
-    app.display.setNavigationState(
-        session.navigation.getCanGoBack(),
-        session.navigation.getCanGoForward(),
-        pageIsLoading(page),
-    );
+    try syncBrowseDisplayState(app, session, page, zoom_percent, null);
 
     var last_presented_hash: u64 = 0;
     browse_loop: while (!app.shutdown and !app.display.userClosed()) {
@@ -215,29 +212,22 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
                 &last_presented_hash,
                 &committed_surface,
                 &restore_committed_surface,
+                &zoom_percent,
             );
         }
 
         _ = session.wait(opts.wait_ms);
         page = session.currentPage() orelse break;
         if (restore_committed_surface and committed_surface.available() and pageIsLoading(page)) {
-            app.display.setNavigationState(
-                session.navigation.getCanGoBack(),
-                session.navigation.getCanGoForward(),
-                false,
-            );
+            try syncBrowseDisplayState(app, session, page, zoom_percent, false);
             try restoreCommittedBrowseSurface(app, &committed_surface, &last_presented_hash);
             continue;
         }
         if (!pageIsLoading(page)) {
             restore_committed_surface = false;
         }
-        app.display.setNavigationState(
-            session.navigation.getCanGoBack(),
-            session.navigation.getCanGoForward(),
-            pageIsLoading(page),
-        );
-        try presentPage(app, page, &last_presented_hash, &committed_surface);
+        try syncBrowseDisplayState(app, session, page, zoom_percent, null);
+        try presentPage(app, page, &last_presented_hash, &committed_surface, zoom_percent);
     }
 }
 
@@ -249,6 +239,7 @@ fn handleBrowseCommand(
     last_presented_hash: *u64,
     committed_surface: *CommittedBrowseSurface,
     restore_committed_surface: *bool,
+    zoom_percent: *i32,
 ) !void {
     switch (command) {
         .navigate => |raw_url| {
@@ -308,6 +299,17 @@ fn handleBrowseCommand(
                 .kind = .reload,
             }, .{ .script = null });
         },
+        .history_traverse => |index| {
+            restore_committed_surface.* = false;
+            const entries = session.navigation.entries();
+            if (index >= entries.len) {
+                return;
+            }
+            const url = entries[index].url() orelse return;
+            try app.display.presentDocument("Lightpanda Browser", page.url, "Loading page...");
+            last_presented_hash.* = 0;
+            _ = try session.navigation.navigateInner(url, .{ .traverse = index }, page);
+        },
         .stop => {
             restore_committed_surface.* = committed_surface.available();
             if (page._queued_navigation) |qn| {
@@ -317,24 +319,65 @@ fn handleBrowseCommand(
             session.browser.http_client.abort();
             if (try session.restoreSuspendedPage()) |restored_page| {
                 restore_committed_surface.* = false;
-                app.display.setNavigationState(
-                    session.navigation.getCanGoBack(),
-                    session.navigation.getCanGoForward(),
-                    pageIsLoading(restored_page),
-                );
+                try syncBrowseDisplayState(app, session, restored_page, zoom_percent.*, null);
                 last_presented_hash.* = 0;
-                try presentPage(app, restored_page, last_presented_hash, committed_surface);
+                try presentPage(app, restored_page, last_presented_hash, committed_surface, zoom_percent.*);
             } else if (restore_committed_surface.*) {
                 try restoreCommittedBrowseSurface(app, committed_surface, last_presented_hash);
             } else {
                 last_presented_hash.* = 0;
             }
         },
+        .zoom_in, .zoom_out, .zoom_reset => {
+            const next_zoom = applyZoomCommand(zoom_percent.*, command);
+            if (next_zoom == zoom_percent.*) {
+                return;
+            }
+            zoom_percent.* = next_zoom;
+            restore_committed_surface.* = false;
+            try syncBrowseDisplayState(app, session, page, zoom_percent.*, null);
+            last_presented_hash.* = 0;
+            if (!pageIsLoading(page)) {
+                try presentPage(app, page, last_presented_hash, committed_surface, zoom_percent.*);
+            }
+        },
     }
+}
+
+fn applyZoomCommand(current_zoom: i32, command: BrowserCommand) i32 {
+    return switch (command) {
+        .zoom_in => std.math.clamp(current_zoom + 10, 30, 300),
+        .zoom_out => std.math.clamp(current_zoom - 10, 30, 300),
+        .zoom_reset => 100,
+        else => current_zoom,
+    };
 }
 
 fn pageIsLoading(page: *Page) bool {
     return page._queued_navigation != null or page._parse_state != .complete;
+}
+
+fn syncBrowseDisplayState(
+    app: *App,
+    session: *Session,
+    page: *Page,
+    zoom_percent: i32,
+    loading_override: ?bool,
+) !void {
+    app.display.setNavigationState(
+        session.navigation.getCanGoBack(),
+        session.navigation.getCanGoForward(),
+        loading_override orelse pageIsLoading(page),
+        zoom_percent,
+    );
+
+    const navigation_entries = session.navigation.entries();
+    var history_entries = try app.allocator.alloc([]const u8, navigation_entries.len);
+    defer app.allocator.free(history_entries);
+    for (navigation_entries, 0..) |entry, index| {
+        history_entries[index] = entry.url() orelse "about:blank";
+    }
+    app.display.setHistoryEntries(history_entries, session.navigation.getCurrentIndex());
 }
 
 fn normalizeBrowseUrl(allocator: std.mem.Allocator, raw: []const u8) !?[:0]u8 {
@@ -388,6 +431,7 @@ fn presentPage(
     page: *Page,
     last_presented_hash: *u64,
     committed_surface: *CommittedBrowseSurface,
+    zoom_percent: i32,
 ) !void {
     if (page._queued_navigation != null or page._parse_state != .complete) {
         const title = (try page.getTitle()) orelse "Lightpanda Browser";
@@ -411,6 +455,7 @@ fn presentPage(
     try markdown.dump(page.window._document.asNode(), .{}, &body.writer, page);
     var display_list = try DocumentPainter.paintDocument(app.allocator, page, .{
         .viewport_width = @intCast(app.display.viewport.width),
+        .layout_scale = zoom_percent,
     });
     defer display_list.deinit(app.allocator);
 
@@ -555,6 +600,14 @@ test "normalizeBrowseUrl keeps loopback targets on http" {
     const ipv6 = try normalizeBrowseUrl(allocator, "[::1]:8080/");
     defer allocator.free(ipv6.?);
     try std.testing.expectEqualStrings("http://[::1]:8080/", ipv6.?);
+}
+
+test "applyZoomCommand clamps and resets zoom" {
+    try std.testing.expectEqual(@as(i32, 110), applyZoomCommand(100, .zoom_in));
+    try std.testing.expectEqual(@as(i32, 90), applyZoomCommand(100, .zoom_out));
+    try std.testing.expectEqual(@as(i32, 100), applyZoomCommand(180, .zoom_reset));
+    try std.testing.expectEqual(@as(i32, 300), applyZoomCommand(300, .zoom_in));
+    try std.testing.expectEqual(@as(i32, 30), applyZoomCommand(30, .zoom_out));
 }
 
 test "normalizeBrowseUrl rejects blank input" {

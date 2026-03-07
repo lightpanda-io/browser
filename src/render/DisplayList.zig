@@ -89,7 +89,7 @@ pub const DisplayList = @This();
 commands: std.ArrayListUnmanaged(Command) = .{},
 link_regions: std.ArrayListUnmanaged(LinkRegion) = .{},
 content_height: i32 = 0,
-layout_scale: i32 = 1,
+layout_scale: i32 = 100,
 page_margin: i32 = 0,
 
 pub fn deinit(self: *DisplayList, allocator: std.mem.Allocator) void {

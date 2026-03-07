@@ -75,6 +75,10 @@ pub fn getCanGoForward(self: *const Navigation) bool {
     return self._entries.items.len > self._index + 1;
 }
 
+pub fn getCurrentIndex(self: *const Navigation) usize {
+    return self._index;
+}
+
 pub fn getCurrentEntryOrNull(self: *Navigation) ?*NavigationHistoryEntry {
     if (self._entries.items.len > self._index) {
         return self._entries.items[self._index];

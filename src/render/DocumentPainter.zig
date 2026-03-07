@@ -12,7 +12,7 @@ const ImageCommand = @import("DisplayList.zig").ImageCommand;
 
 pub const PaintOpts = struct {
     viewport_width: i32,
-    layout_scale: i32 = 4,
+    layout_scale: i32 = 100,
     page_margin: i32 = 20,
     block_min_width: i32 = 280,
     inline_min_width: i32 = 120,

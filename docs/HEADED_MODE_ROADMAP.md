@@ -3,6 +3,10 @@
 This fork targets full headed-mode browser usage while preserving Lightpanda's
 current headless strengths.
 
+For the full product plan from the current headed foundation to a
+production-ready minimalist Zig browser, see
+`docs/FULL_BROWSER_MASTER_TRACKER.md`.
+
 ## Current Status
 
 - `--browser_mode headless|headed` is now accepted.

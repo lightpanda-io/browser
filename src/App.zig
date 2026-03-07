@@ -72,6 +72,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     errdefer app.snapshot.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);
+    app.display.setAppDataPath(app.app_dir_path);
 
     app.telemetry = try Telemetry.init(app, config.mode);
     errdefer app.telemetry.deinit();

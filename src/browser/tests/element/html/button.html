@@ -126,3 +126,35 @@
     testing.expectFalse(button.outerHTML.includes('required'))
   }
 </script>
+
+<script id="keydown_space_clicks_button">
+  {
+    const button = document.createElement('button')
+    document.body.appendChild(button)
+
+    let clicks = 0
+    button.addEventListener('click', () => clicks += 1)
+
+    button.focus()
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
+
+    testing.expectEqual(1, clicks)
+    document.body.removeChild(button)
+  }
+</script>
+
+<script id="keydown_enter_clicks_button">
+  {
+    const button = document.createElement('button')
+    document.body.appendChild(button)
+
+    let clicks = 0
+    button.addEventListener('click', () => clicks += 1)
+
+    button.focus()
+    button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+
+    testing.expectEqual(1, clicks)
+    document.body.removeChild(button)
+  }
+</script>

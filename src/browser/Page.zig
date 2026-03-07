@@ -3413,6 +3413,21 @@ fn isSelectAllShortcutKey(key: KeyboardEvent.Key, accel_down: bool, alt_down: bo
     };
 }
 
+fn isKeyboardActivationKey(key: KeyboardEvent.Key) bool {
+    return switch (key) {
+        .Enter => true,
+        .standard => |s| std.mem.eql(u8, s, " "),
+        else => false,
+    };
+}
+
+fn isKeyboardSpaceKey(key: KeyboardEvent.Key) bool {
+    return switch (key) {
+        .standard => |s| std.mem.eql(u8, s, " "),
+        else => false,
+    };
+}
+
 fn trySelectAllInput(input: *Element.Html.Input, page: *Page) !bool {
     return switch (input._input_type) {
         .text, .search, .url, .tel, .password => blk: {
@@ -3973,13 +3988,48 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
         return;
     }
 
+    if (target.is(Element.Html.Button)) |button| {
+        if (!keyboard_event.getCtrlKey() and !keyboard_event.getMetaKey() and !keyboard_event.getAltKey() and isKeyboardActivationKey(key)) {
+            const html_element = button.asElement().is(Element.Html).?;
+            try html_element.click(self);
+        }
+        return;
+    }
+
     if (target.is(Element.Html.Input)) |input| {
-        if (key == .Enter) {
-            return self.submitForm(input.asElement(), input.getForm(self), .{});
+        const input_type = input._input_type;
+
+        if (!keyboard_event.getCtrlKey() and !keyboard_event.getMetaKey() and !keyboard_event.getAltKey()) {
+            if (key == .Enter) {
+                switch (input_type) {
+                    .submit, .reset, .button, .image => {
+                        const html_element = input.asElement().is(Element.Html).?;
+                        try html_element.click(self);
+                        return;
+                    },
+                    .radio, .checkbox => return,
+                    else => return self.submitForm(input.asElement(), input.getForm(self), .{}),
+                }
+            }
+
+            if (isKeyboardSpaceKey(key)) {
+                switch (input_type) {
+                    .checkbox, .radio, .submit, .reset, .button, .image => {
+                        const html_element = input.asElement().is(Element.Html).?;
+                        try html_element.click(self);
+                        return;
+                    },
+                    else => {},
+                }
+            }
         }
 
-        // Don't handle text input for radio/checkbox
-        const input_type = input._input_type;
+        // Don't handle text input for radio/checkbox or activation-only inputs.
+        switch (input_type) {
+            .radio, .checkbox, .submit, .reset, .button, .image => return,
+            else => {},
+        }
+
         if (input_type == .radio or input_type == .checkbox) {
             return;
         }

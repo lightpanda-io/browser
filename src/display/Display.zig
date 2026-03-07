@@ -37,7 +37,9 @@ const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig"
         return false;
     }
     pub fn onViewportChanged(_: *@This(), _: u32, _: u32) void {}
-    pub fn setNavigationState(_: *@This(), _: bool, _: bool, _: bool) void {}
+    pub fn setNavigationState(_: *@This(), _: bool, _: bool, _: bool, _: i32) void {}
+    pub fn setHistoryEntries(_: *@This(), _: []const []const u8, _: usize) void {}
+    pub fn setAppDataPath(_: *@This(), _: ?[]const u8) void {}
     pub fn dispatchInput(_: *@This(), _: anytype) !void {}
     pub fn presentDocument(_: *@This(), _: []const u8, _: []const u8, _: []const u8) !void {}
     pub fn presentPageView(_: *@This(), _: []const u8, _: []const u8, _: []const u8, _: ?*const DisplayList) !void {}
@@ -202,9 +204,23 @@ pub fn resetViewport(self: *Display) void {
     );
 }
 
-pub fn setNavigationState(self: *Display, can_go_back: bool, can_go_forward: bool, is_loading: bool) void {
+pub fn setNavigationState(self: *Display, can_go_back: bool, can_go_forward: bool, is_loading: bool, zoom_percent: i32) void {
     switch (self.backend) {
-        .headed_windows => |*backend| backend.setNavigationState(can_go_back, can_go_forward, is_loading),
+        .headed_windows => |*backend| backend.setNavigationState(can_go_back, can_go_forward, is_loading, zoom_percent),
+        else => {},
+    }
+}
+
+pub fn setHistoryEntries(self: *Display, entries: []const []const u8, current_index: usize) void {
+    switch (self.backend) {
+        .headed_windows => |*backend| backend.setHistoryEntries(entries, current_index),
+        else => {},
+    }
+}
+
+pub fn setAppDataPath(self: *Display, path: ?[]const u8) void {
+    switch (self.backend) {
+        .headed_windows => |*backend| backend.setAppDataPath(path),
         else => {},
     }
 }
