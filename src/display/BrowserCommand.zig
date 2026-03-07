@@ -6,8 +6,14 @@ pub const BrowserCommand = union(enum) {
         suggested_filename: []u8,
     };
 
+    pub const NavigateTarget = struct {
+        url: []u8,
+        target_name: []u8,
+    };
+
     navigate: []u8,
     navigate_new_tab: []u8,
+    navigate_target_tab: NavigateTarget,
     download: Download,
     history_traverse: usize,
     download_remove: usize,
@@ -37,6 +43,10 @@ pub const BrowserCommand = union(enum) {
         switch (self) {
             .navigate => |url| allocator.free(url),
             .navigate_new_tab => |url| allocator.free(url),
+            .navigate_target_tab => |target| {
+                allocator.free(target.url);
+                allocator.free(target.target_name);
+            },
             .download => |download| {
                 allocator.free(download.url);
                 allocator.free(download.suggested_filename);

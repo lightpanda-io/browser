@@ -1278,6 +1278,17 @@ fn presentationNavigateCommandAtClientPoint(backend: *Win32Backend, x: f64, y: f
             .suggested_filename = owned_filename,
         } };
     }
+    if (region.target_name.len > 0) {
+        const owned_target_name = backend.allocator.dupe(u8, region.target_name) catch |err| {
+            backend.allocator.free(owned_url);
+            log.warn(.app, "win target hit dupe", .{ .err = err });
+            return null;
+        };
+        return .{ .navigate_target_tab = .{
+            .url = owned_url,
+            .target_name = owned_target_name,
+        } };
+    }
     if (region.open_in_new_tab) {
         return .{ .navigate_new_tab = owned_url };
     }
@@ -6294,7 +6305,7 @@ test "win32 find collects multiple matches within one text run" {
     try std.testing.expect(matches.items[1].width > 0);
 }
 
-test "win32 rendered _blank link queues navigate_new_tab" {
+test "win32 rendered target link queues navigate_target_tab" {
     var backend = Win32Backend.init(std.testing.allocator, 1, 1);
     defer backend.deinit();
 
@@ -6306,7 +6317,7 @@ test "win32 rendered _blank link queues navigate_new_tab" {
         .width = 220,
         .height = 40,
         .url = @constCast("http://popup.test/result"),
-        .open_in_new_tab = true,
+        .target_name = @constCast("report"),
     });
 
     backend.presentation_display_list = display_list;
@@ -6321,7 +6332,14 @@ test "win32 rendered _blank link queues navigate_new_tab" {
     try std.testing.expectEqualStrings(
         "http://popup.test/result",
         switch (command) {
-            .navigate_new_tab => |url| url,
+            .navigate_target_tab => |target| target.url,
+            else => return error.TestUnexpectedCommandType,
+        },
+    );
+    try std.testing.expectEqualStrings(
+        "report",
+        switch (command) {
+            .navigate_target_tab => |target| target.target_name,
             else => return error.TestUnexpectedCommandType,
         },
     );

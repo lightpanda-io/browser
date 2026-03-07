@@ -109,12 +109,14 @@ const BrowseTab = struct {
     notification: *Notification,
     browser: Browser,
     session: *Session,
+    target_name: []u8 = &.{},
     committed_surface: CommittedBrowseSurface = .{},
     restore_committed_surface: bool = false,
     last_presented_hash: u64 = 0,
     zoom_percent: i32 = 100,
 
     fn deinit(self: *BrowseTab, allocator: std.mem.Allocator) void {
+        freeOwnedBrowseTabTargetName(allocator, self.target_name);
         self.committed_surface.deinit(allocator);
         self.browser.deinit();
         self.notification.deinit();
@@ -776,13 +778,18 @@ fn handleBrowseCommand(
         .navigate_new_tab => |raw_url| {
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const source_tab = tabs.items[active_index];
-            const tab = try createBrowseTab(app, null, source_tab.zoom_percent);
-            tab.zoom_percent = source_tab.zoom_percent;
-            try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
-            try navigateBrowseTabToOwnedUrl(tab, raw_url, .{
+            try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, source_tab.zoom_percent, raw_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
-            });
+            }, "_blank", true);
+        },
+        .navigate_target_tab => |target| {
+            const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
+            const source_tab = tabs.items[active_index];
+            try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, source_tab.zoom_percent, target.url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            }, target.target_name, true);
         },
         else => {
             if (tabs.items.len == 0) {
@@ -954,10 +961,84 @@ fn processPendingTabOpens(
             request.zoom_percent
         else
             settings.default_zoom_percent;
-        const tab = try createBrowseTab(app, null, zoom_percent);
-        try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, request.activate);
-        try navigateBrowseTabToOwnedUrl(tab, request.url, request.opts);
+        try openOrReuseTargetedBrowseTab(
+            app,
+            tabs,
+            active_tab_index,
+            zoom_percent,
+            request.url,
+            request.opts,
+            request.target_name,
+            request.activate,
+        );
     }
+}
+
+fn normalizeTopLevelTargetName(target_name: []const u8) []const u8 {
+    return std.mem.trim(u8, target_name, &std.ascii.whitespace);
+}
+
+fn freeOwnedBrowseTabTargetName(allocator: std.mem.Allocator, target_name: []u8) void {
+    if (target_name.len > 0) {
+        allocator.free(target_name);
+    }
+}
+
+fn targetAlwaysOpensFreshTab(target_name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(normalizeTopLevelTargetName(target_name), "_blank");
+}
+
+fn setBrowseTabTargetName(allocator: std.mem.Allocator, tab: *BrowseTab, target_name: []const u8) !void {
+    const normalized = normalizeTopLevelTargetName(target_name);
+    if (normalized.len == 0 or targetAlwaysOpensFreshTab(normalized)) {
+        freeOwnedBrowseTabTargetName(allocator, tab.target_name);
+        tab.target_name = &.{};
+        return;
+    }
+
+    const owned = try allocator.dupe(u8, normalized);
+    freeOwnedBrowseTabTargetName(allocator, tab.target_name);
+    tab.target_name = owned;
+}
+
+fn findBrowseTabIndexByTargetName(tabs: []const *BrowseTab, target_name: []const u8) ?usize {
+    const normalized = normalizeTopLevelTargetName(target_name);
+    if (normalized.len == 0 or targetAlwaysOpensFreshTab(normalized)) {
+        return null;
+    }
+    for (tabs, 0..) |tab, index| {
+        if (std.ascii.eqlIgnoreCase(tab.target_name, normalized)) {
+            return index;
+        }
+    }
+    return null;
+}
+
+fn openOrReuseTargetedBrowseTab(
+    app: *App,
+    tabs: *std.ArrayListUnmanaged(*BrowseTab),
+    active_tab_index: *usize,
+    zoom_percent: i32,
+    raw_url: []const u8,
+    opts: Page.NavigateOpts,
+    target_name: []const u8,
+    activate: bool,
+) !void {
+    if (findBrowseTabIndexByTargetName(tabs.items, target_name)) |target_index| {
+        const tab = tabs.items[target_index];
+        if (activate) {
+            active_tab_index.* = target_index;
+        }
+        try navigateBrowseTabToOwnedUrl(tab, raw_url, opts);
+        return;
+    }
+
+    const tab = try createBrowseTab(app, null, zoom_percent);
+    errdefer tab.deinit(app.allocator);
+    tab.zoom_percent = zoom_percent;
+    try setBrowseTabTargetName(app.allocator, tab, target_name);
+    try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, activate);
+    try navigateBrowseTabToOwnedUrl(tab, raw_url, opts);
 }
 
 fn appendBrowseTab(
@@ -1649,6 +1730,7 @@ fn createBrowseTab(app: *App, initial_url: ?[:0]const u8, default_zoom_percent: 
 
     tab.session = try tab.browser.newSession(tab.notification);
     const page = try tab.session.createPage();
+    tab.target_name = &.{};
     tab.committed_surface = .{};
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;

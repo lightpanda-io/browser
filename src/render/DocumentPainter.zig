@@ -515,6 +515,7 @@ const Painter = struct {
                 .url = @constCast(resolved),
                 .download_filename = @constCast(download_filename),
                 .open_in_new_tab = open_in_new_tab,
+                .target_name = @constCast(""),
             });
         }
     }
@@ -603,6 +604,7 @@ fn resolvedLinkRegion(
         .url = @constCast(resolved),
         .download_filename = @constCast(element.getAttributeSafe(comptime .wrap("download")) orelse ""),
         .open_in_new_tab = linkOpensInNewTab(element),
+        .target_name = @constCast(""),
     };
 }
 
@@ -611,9 +613,9 @@ fn linkOpensInNewTab(element: *Element) bool {
     if (target.len == 0) {
         return false;
     }
-    if (std.mem.eql(u8, target, "_self") or
-        std.mem.eql(u8, target, "_parent") or
-        std.mem.eql(u8, target, "_top"))
+    if (std.ascii.eqlIgnoreCase(target, "_self") or
+        std.ascii.eqlIgnoreCase(target, "_parent") or
+        std.ascii.eqlIgnoreCase(target, "_top"))
     {
         return false;
     }

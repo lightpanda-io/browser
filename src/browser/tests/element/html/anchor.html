@@ -265,3 +265,14 @@
   });
 }
 </script>
+
+<script id=keydown_enter_clicks_anchor>
+{
+  location.hash = '';
+  $('#nested_link').focus();
+  $('#nested_link').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  testing.eventually(() => {
+    testing.expectEqual('#nested-target', location.hash);
+  });
+}
+</script>

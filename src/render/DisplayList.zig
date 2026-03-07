@@ -33,6 +33,7 @@ pub const LinkRegion = struct {
     url: []u8,
     download_filename: []u8 = &.{},
     open_in_new_tab: bool = false,
+    target_name: []u8 = &.{},
 };
 
 pub const ImageCommand = struct {
@@ -102,6 +103,7 @@ pub fn deinit(self: *DisplayList, allocator: std.mem.Allocator) void {
     for (self.link_regions.items) |region| {
         allocator.free(region.url);
         allocator.free(region.download_filename);
+        allocator.free(region.target_name);
     }
     self.link_regions.deinit(allocator);
     self.* = .{};
@@ -129,6 +131,7 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .url = try allocator.dupe(u8, region.url),
             .download_filename = try allocator.dupe(u8, region.download_filename),
             .open_in_new_tab = region.open_in_new_tab,
+            .target_name = try allocator.dupe(u8, region.target_name),
         });
     }
     return copy;
@@ -178,6 +181,7 @@ pub fn addLinkRegion(self: *DisplayList, allocator: std.mem.Allocator, region: L
         .url = try allocator.dupe(u8, region.url),
         .download_filename = try allocator.dupe(u8, region.download_filename),
         .open_in_new_tab = region.open_in_new_tab,
+        .target_name = try allocator.dupe(u8, region.target_name),
     });
     self.content_height = @max(self.content_height, region.y + region.height);
 }
@@ -236,5 +240,6 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(region.url);
         hasher.update(region.download_filename);
         hasher.update(std.mem.asBytes(&region.open_in_new_tab));
+        hasher.update(region.target_name);
     }
 }

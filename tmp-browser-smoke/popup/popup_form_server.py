@@ -1,6 +1,6 @@
 import http.server
 import sys
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 
 class PopupFormHandler(http.server.BaseHTTPRequestHandler):
@@ -12,11 +12,15 @@ class PopupFormHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path == "/ping":
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+
+        if path == "/ping":
             self._write_html(b"ok")
             return
 
-        if self.path == "/form-post-index.html":
+        if path == "/form-post-index.html":
             body = (
                 b"<!doctype html><html><head><meta charset=\"utf-8\">"
                 b"<title>Popup Form Post Start</title>"
@@ -31,10 +35,60 @@ class PopupFormHandler(http.server.BaseHTTPRequestHandler):
             self._write_html(body)
             return
 
+        if path == "/form-target-get-index.html":
+            body = (
+                b"<!doctype html><html><head><meta charset=\"utf-8\">"
+                b"<title>Popup Named Form Start</title>"
+                b"</head><body>"
+                b"<main style=\"display:block;padding:24px;\">"
+                b"<p style=\"display:block;margin:0 0 18px 0;\">Both submits target the same named popup tab.</p>"
+                b"<form action=\"/form-target-result.html\" method=\"get\" target=\"report\" style=\"display:block;margin:0 0 18px 0;\">"
+                b"<input type=\"hidden\" name=\"q\" value=\"one\">"
+                b"<input id=\"submitter-one\" type=\"submit\" value=\"OPEN FORM RESULT ONE\" autofocus style=\"font-size:30px;width:420px;\">"
+                b"</form>"
+                b"<form action=\"/form-target-result.html\" method=\"get\" target=\"report\" style=\"display:block;\">"
+                b"<input type=\"hidden\" name=\"q\" value=\"two\">"
+                b"<input id=\"submitter-two\" type=\"submit\" value=\"OPEN FORM RESULT TWO\" style=\"font-size:30px;width:420px;\">"
+                b"</form>"
+                b"</main></body></html>"
+            )
+            self._write_html(body)
+            return
+
+        if path == "/form-target-post-index.html":
+            body = (
+                b"<!doctype html><html><head><meta charset=\"utf-8\">"
+                b"<title>Popup Named Form Post Start</title>"
+                b"</head><body>"
+                b"<main style=\"display:block;padding:24px;\">"
+                b"<p style=\"display:block;margin:0 0 18px 0;\">Both submits target the same named popup tab.</p>"
+                b"<form action=\"/form-target-post-result.html\" method=\"post\" target=\"report\" style=\"display:block;margin:0 0 18px 0;\">"
+                b"<input type=\"hidden\" name=\"q\" value=\"one\">"
+                b"<input id=\"submitter-one\" type=\"submit\" value=\"OPEN POST RESULT ONE\" autofocus style=\"font-size:30px;width:420px;\">"
+                b"</form>"
+                b"<form action=\"/form-target-post-result.html\" method=\"post\" target=\"report\" style=\"display:block;\">"
+                b"<input type=\"hidden\" name=\"q\" value=\"two\">"
+                b"<input id=\"submitter-two\" type=\"submit\" value=\"OPEN POST RESULT TWO\" style=\"font-size:30px;width:420px;\">"
+                b"</form>"
+                b"</main></body></html>"
+            )
+            self._write_html(body)
+            return
+
+        if path == "/form-target-result.html":
+            q = query.get("q", [""])[0]
+            body = (
+                "<!doctype html><html><head><meta charset=\"utf-8\">"
+                f"<title>Popup Named Form Result {q}</title>"
+                "</head><body><main><h1>Popup Named Form Result</h1></main></body></html>"
+            ).encode("utf-8")
+            self._write_html(body)
+            return
+
         self.send_error(404)
 
     def do_POST(self) -> None:
-        if self.path != "/form-post-result.html":
+        if self.path not in ("/form-post-result.html", "/form-target-post-result.html"):
             self.send_error(404)
             return
 
@@ -43,14 +97,24 @@ class PopupFormHandler(http.server.BaseHTTPRequestHandler):
         decoded = raw.decode("utf-8", errors="replace")
         parsed = parse_qs(decoded)
         q = parsed.get("q", [""])[0]
-        sys.stderr.write(f"POPUP_POST_BODY {decoded}\n")
+        if self.path == "/form-target-post-result.html":
+            sys.stderr.write(f"POPUP_TARGET_POST_BODY {decoded}\n")
+        else:
+            sys.stderr.write(f"POPUP_POST_BODY {decoded}\n")
         sys.stderr.flush()
 
-        body = (
-            "<!doctype html><html><head><meta charset=\"utf-8\">"
-            f"<title>Popup Form Post Result {q}</title>"
-            "</head><body><main><h1>Popup Form Post Result</h1></main></body></html>"
-        ).encode("utf-8")
+        if self.path == "/form-target-post-result.html":
+            body = (
+                "<!doctype html><html><head><meta charset=\"utf-8\">"
+                f"<title>Popup Named Form Post Result {q}</title>"
+                "</head><body><main><h1>Popup Named Form Post Result</h1></main></body></html>"
+            ).encode("utf-8")
+        else:
+            body = (
+                "<!doctype html><html><head><meta charset=\"utf-8\">"
+                f"<title>Popup Form Post Result {q}</title>"
+                "</head><body><main><h1>Popup Form Post Result</h1></main></body></html>"
+            ).encode("utf-8")
         self._write_html(body)
 
     def log_message(self, fmt, *args):

@@ -54,12 +54,14 @@ pub const PendingDownload = struct {
 
 pub const PendingTabOpen = struct {
     url: [:0]u8,
+    target_name: []u8,
     opts: Page.NavigateOpts,
     activate: bool = true,
     zoom_percent: i32 = 100,
 
     pub fn deinit(self: *PendingTabOpen, allocator: Allocator) void {
         allocator.free(self.url);
+        allocator.free(self.target_name);
         if (self.opts.body) |body| {
             allocator.free(body);
         }
@@ -635,10 +637,19 @@ pub fn enqueueDownload(self: *Session, url: []const u8, suggested_filename: []co
     });
 }
 
-pub fn enqueueOpenInNewTab(self: *Session, url: []const u8, opts: Page.NavigateOpts, activate: bool, zoom_percent: i32) !void {
+pub fn enqueueOpenInTargetTab(
+    self: *Session,
+    url: []const u8,
+    target_name: []const u8,
+    opts: Page.NavigateOpts,
+    activate: bool,
+    zoom_percent: i32,
+) !void {
     const allocator = self.browser.app.allocator;
     const owned_url = try allocator.dupeZ(u8, url);
     errdefer allocator.free(owned_url);
+    const owned_target_name = try allocator.dupe(u8, target_name);
+    errdefer allocator.free(owned_target_name);
     const owned_body = if (opts.body) |body|
         try allocator.dupe(u8, body)
     else
@@ -652,6 +663,7 @@ pub fn enqueueOpenInNewTab(self: *Session, url: []const u8, opts: Page.NavigateO
 
     try self.pending_tab_opens.append(allocator, .{
         .url = owned_url,
+        .target_name = owned_target_name,
         .opts = .{
             .cdp_id = opts.cdp_id,
             .reason = opts.reason,

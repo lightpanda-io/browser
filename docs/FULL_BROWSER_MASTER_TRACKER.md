@@ -115,9 +115,14 @@ Current state inside Gate 1:
 - rendered `_blank` anchor popups now open in a new tab through the native
   headed surface
 - form-driven `_blank` submission now reaches a stable headed new-tab flow
-- bounded headed probes now cover anchor popups plus GET and POST form popups
-- next blocker: popup policy is still narrow and still needs richer non-`_blank`
-  target handling plus clearer chrome-state feedback
+- browser-side named-target queueing/reuse is now implemented for anchors and
+  form submission, with direct page/session tests covering anchor click, anchor
+  `Enter`, and GET/POST form submission
+- bounded headed probes remain the acceptance gate for `_blank` popup flows;
+  rendered named-target pointer activation is still narrower and not yet the
+  runtime acceptance gate
+- next blocker: expand popup policy beyond the current narrow named-target path
+  and make chrome state clearer around popup/tab targeting
 
 ### Gate 2: Shared Subresource Loader And Profile
 

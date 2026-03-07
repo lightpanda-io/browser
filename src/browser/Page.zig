@@ -3287,20 +3287,36 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
-            const target_val = anchor.getTarget();
-            if (opensNewTopLevelTarget(target_val)) {
-                const resolved_url = try URL.resolve(
-                    self.call_arena,
-                    self.base(),
-                    href,
-                    .{ .always_dupe = false, .encode = true },
-                );
-                try element.focus(self);
-                try self._session.enqueueOpenInNewTab(resolved_url, .{
-                    .reason = .script,
-                    .kind = .{ .push = null },
-                }, true, 0);
-                return;
+            switch (classifyTopLevelTarget(anchor.getTarget())) {
+                .same_context => {},
+                .new_tab => {
+                    const resolved_url = try URL.resolve(
+                        self.call_arena,
+                        self.base(),
+                        href,
+                        .{ .always_dupe = false, .encode = true },
+                    );
+                    try element.focus(self);
+                    try self._session.enqueueOpenInTargetTab(resolved_url, "_blank", .{
+                        .reason = .script,
+                        .kind = .{ .push = null },
+                    }, true, 0);
+                    return;
+                },
+                .named => |target_name| {
+                    const resolved_url = try URL.resolve(
+                        self.call_arena,
+                        self.base(),
+                        href,
+                        .{ .always_dupe = false, .encode = true },
+                    );
+                    try element.focus(self);
+                    try self._session.enqueueOpenInTargetTab(resolved_url, target_name, .{
+                        .reason = .script,
+                        .kind = .{ .push = null },
+                    }, true, 0);
+                    return;
+                },
             }
 
             // TODO: We need to support targets properly, but this is the most
@@ -3337,17 +3353,27 @@ pub fn handleClick(self: *Page, target: *Node) !void {
     }
 }
 
-fn opensNewTopLevelTarget(target_val: []const u8) bool {
-    if (target_val.len == 0) {
-        return false;
+const TopLevelTarget = union(enum) {
+    same_context,
+    new_tab,
+    named: []const u8,
+};
+
+fn classifyTopLevelTarget(target_val: []const u8) TopLevelTarget {
+    const target = std.mem.trim(u8, target_val, &std.ascii.whitespace);
+    if (target.len == 0) {
+        return .same_context;
     }
-    if (std.mem.eql(u8, target_val, "_self") or
-        std.mem.eql(u8, target_val, "_parent") or
-        std.mem.eql(u8, target_val, "_top"))
+    if (std.ascii.eqlIgnoreCase(target, "_self") or
+        std.ascii.eqlIgnoreCase(target, "_parent") or
+        std.ascii.eqlIgnoreCase(target, "_top"))
     {
-        return false;
+        return .same_context;
     }
-    return true;
+    if (std.ascii.eqlIgnoreCase(target, "_blank")) {
+        return .new_tab;
+    }
+    return .{ .named = target };
 }
 
 fn findClickableHtmlAncestor(target: *Node) ?*Element.Html {
@@ -4040,6 +4066,14 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
         return;
     }
 
+    if (target.is(Element.Html.Anchor)) |anchor| {
+        if (!keyboard_event.getCtrlKey() and !keyboard_event.getMetaKey() and !keyboard_event.getAltKey() and key == .Enter) {
+            const html_element = anchor.asElement().is(Element.Html).?;
+            try html_element.click(self);
+        }
+        return;
+    }
+
     if (target.is(Element.Html.Button)) |button| {
         if (!keyboard_event.getCtrlKey() and !keyboard_event.getMetaKey() and !keyboard_event.getAltKey() and isKeyboardActivationKey(key)) {
             const html_element = button.asElement().is(Element.Html).?;
@@ -4201,16 +4235,28 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
         action = try URL.concatQueryString(arena, action, buf.written());
     }
 
-    const target = form_element.getAttributeSafe(comptime .wrap("target")) orelse "";
-    if (opensNewTopLevelTarget(target)) {
-        const resolved_action = try URL.resolve(
-            self.call_arena,
-            self.base(),
-            action,
-            .{ .always_dupe = false, .encode = true },
-        );
-        try self._session.enqueueOpenInNewTab(resolved_action, opts, true, 0);
-        return;
+    switch (classifyTopLevelTarget(form_element.getAttributeSafe(comptime .wrap("target")) orelse "")) {
+        .same_context => {},
+        .new_tab => {
+            const resolved_action = try URL.resolve(
+                self.call_arena,
+                self.base(),
+                action,
+                .{ .always_dupe = false, .encode = true },
+            );
+            try self._session.enqueueOpenInTargetTab(resolved_action, "_blank", opts, true, 0);
+            return;
+        },
+        .named => |target_name| {
+            const resolved_action = try URL.resolve(
+                self.call_arena,
+                self.base(),
+                action,
+                .{ .always_dupe = false, .encode = true },
+            );
+            try self._session.enqueueOpenInTargetTab(resolved_action, target_name, opts, true, 0);
+            return;
+        },
     }
     release_arena = false;
     return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = form_element.asNode() });
@@ -4332,13 +4378,113 @@ test "Page moveCursorSelection basic behavior" {
     try testing.expectEqual(true, shift_backward.backward);
 }
 
-test "opensNewTopLevelTarget distinguishes same-context targets" {
-    try std.testing.expect(!opensNewTopLevelTarget(""));
-    try std.testing.expect(!opensNewTopLevelTarget("_self"));
-    try std.testing.expect(!opensNewTopLevelTarget("_parent"));
-    try std.testing.expect(!opensNewTopLevelTarget("_top"));
-    try std.testing.expect(opensNewTopLevelTarget("_blank"));
-    try std.testing.expect(opensNewTopLevelTarget("named-window"));
+test "classifyTopLevelTarget distinguishes tab and named targets" {
+    try std.testing.expectEqual(TopLevelTarget.same_context, classifyTopLevelTarget(""));
+    try std.testing.expectEqual(TopLevelTarget.same_context, classifyTopLevelTarget("_self"));
+    try std.testing.expectEqual(TopLevelTarget.same_context, classifyTopLevelTarget("_SELF"));
+    try std.testing.expectEqual(TopLevelTarget.same_context, classifyTopLevelTarget("_parent"));
+    try std.testing.expectEqual(TopLevelTarget.same_context, classifyTopLevelTarget("_top"));
+    try std.testing.expectEqual(TopLevelTarget.new_tab, classifyTopLevelTarget("_blank"));
+    try std.testing.expectEqual(TopLevelTarget.new_tab, classifyTopLevelTarget("_BLANK"));
+
+    const named = classifyTopLevelTarget("named-window");
+    try std.testing.expectEqualStrings(
+        "named-window",
+        switch (named) {
+            .named => |value| value,
+            else => return error.TestUnexpectedTargetKind,
+        },
+    );
+}
+
+fn deinitPendingTabOpensForTest(
+    allocator: std.mem.Allocator,
+    pending: *std.ArrayListUnmanaged(Session.PendingTabOpen),
+) void {
+    while (pending.items.len > 0) {
+        var request = pending.items[pending.items.len - 1];
+        pending.items.len -= 1;
+        request.deinit(allocator);
+    }
+    pending.deinit(allocator);
+}
+
+test "Page handleClick queues named target anchor popup" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    const anchor = (try page.window._document.querySelector(.wrap("#named_anchor"), page)).?;
+    try page.handleClick(anchor.asNode());
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=anchor",
+        pending.items[0].url,
+    );
+}
+
+test "Page Enter on focused anchor queues named target popup" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    const anchor = (try page.window._document.querySelector(.wrap("#named_anchor"), page)).?;
+    try anchor.focus(page);
+    _ = try page.triggerKeyboardKeyDownNoText("Enter", .{});
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=anchor",
+        pending.items[0].url,
+    );
+}
+
+test "Page handleClick queues named target GET form popup" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    const submitter = (try page.window._document.querySelector(.wrap("#named_get_submit"), page)).?;
+    try page.handleClick(submitter.asNode());
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?q=one",
+        pending.items[0].url,
+    );
+    try testing.expectEqual(.GET, pending.items[0].opts.method);
+    try testing.expect(pending.items[0].opts.body == null);
+}
+
+test "Page handleClick queues named target POST form popup" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    const submitter = (try page.window._document.querySelector(.wrap("#named_post_submit"), page)).?;
+    try page.handleClick(submitter.asNode());
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/popup-target-post.html",
+        pending.items[0].url,
+    );
+    try testing.expectEqual(.POST, pending.items[0].opts.method);
+    try testing.expectString("q=two", pending.items[0].opts.body.?);
+    try testing.expectString("Content-Type: application/x-www-form-urlencoded", pending.items[0].opts.header.?);
 }
 
 test "Page word boundary navigation helpers" {
