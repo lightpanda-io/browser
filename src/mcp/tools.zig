@@ -78,7 +78,7 @@ const EvaluateParams = struct {
 };
 
 const ToolStreamingText = struct {
-    server: *Server,
+    page: *lp.Page,
     action: enum { markdown, links },
 
     pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
@@ -87,16 +87,16 @@ const ToolStreamingText = struct {
         var escaped = protocol.JsonEscapingWriter.init(jw.writer);
         const w = &escaped.writer;
         switch (self.action) {
-            .markdown => lp.markdown.dump(self.server.page.document.asNode(), .{}, w, self.server.page) catch |err| {
+            .markdown => lp.markdown.dump(self.page.document.asNode(), .{}, w, self.page) catch |err| {
                 log.err(.mcp, "markdown dump failed", .{ .err = err });
             },
             .links => {
-                if (Selector.querySelectorAll(self.server.page.document.asNode(), "a[href]", self.server.page)) |list| {
-                    defer list.deinit(self.server.page);
+                if (Selector.querySelectorAll(self.page.document.asNode(), "a[href]", self.page)) |list| {
+                    defer list.deinit(self.page);
                     var first = true;
                     for (list._nodes) |node| {
                         if (node.is(Element.Html.Anchor)) |anchor| {
-                            const href = anchor.getHref(self.server.page) catch |err| {
+                            const href = anchor.getHref(self.page) catch |err| {
                                 log.err(.mcp, "resolve href failed", .{ .err = err });
                                 continue;
                             };
@@ -135,8 +135,8 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
-    if (req.params == null) {
-        return server.sendError(req.id.?, .InvalidParams, "Missing params");
+    if (req.params == null or req.id == null) {
+        return server.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
     }
 
     const CallParams = struct {
@@ -179,9 +179,12 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
             }
         } else |_| {}
     }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .server = server, .action = .markdown },
+        .text = .{ .page = page, .action = .markdown },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
@@ -197,9 +200,12 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
             }
         } else |_| {}
     }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .server = server, .action = .links },
+        .text = .{ .page = page, .action = .links },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
@@ -210,9 +216,12 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     if (args.url) |url| {
         try performGoto(server, url, id);
     }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
 
     var ls: js.Local.Scope = undefined;
-    server.page.js.localScope(&ls);
+    page.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;
@@ -247,7 +256,12 @@ fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.js
 }
 
 fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
-    _ = server.page.navigate(url, .{
+    const session = server.session;
+    if (session.page != null) {
+        session.removePage();
+    }
+    const page = try session.createPage();
+    page.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     }) catch {
@@ -271,6 +285,7 @@ test "MCP - evaluate error reporting" {
 
     var server = try Server.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
+    _ = try server.session.createPage();
 
     const aa = testing.arena_allocator;
 
