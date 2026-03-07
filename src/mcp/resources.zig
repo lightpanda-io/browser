@@ -37,7 +37,7 @@ const ResourceStreamingResult = struct {
     },
 
     const StreamingText = struct {
-        server: *Server,
+        page: *lp.Page,
         format: enum { html, markdown },
 
         pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
@@ -45,10 +45,10 @@ const ResourceStreamingResult = struct {
             try jw.writer.writeByte('"');
             var escaped = protocol.JsonEscapingWriter.init(jw.writer);
             switch (self.format) {
-                .html => lp.dump.root(self.server.page.document, .{}, &escaped.writer, self.server.page) catch |err| {
+                .html => lp.dump.root(self.page.document, .{}, &escaped.writer, self.page) catch |err| {
                     log.err(.mcp, "html dump failed", .{ .err = err });
                 },
-                .markdown => lp.markdown.dump(self.server.page.document.asNode(), .{}, &escaped.writer, self.server.page) catch |err| {
+                .markdown => lp.markdown.dump(self.page.document.asNode(), .{}, &escaped.writer, self.page) catch |err| {
                     log.err(.mcp, "markdown dump failed", .{ .err = err });
                 },
             }
@@ -69,16 +69,21 @@ const resource_map = std.StaticStringMap(ResourceUri).initComptime(.{
 });
 
 pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
-    if (req.params == null) {
-        return server.sendError(req.id.?, .InvalidParams, "Missing params");
+    if (req.params == null or req.id == null) {
+        return server.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
     }
+    const req_id = req.id.?;
 
     const params = std.json.parseFromValueLeaky(ReadParams, arena, req.params.?, .{ .ignore_unknown_fields = true }) catch {
-        return server.sendError(req.id.?, .InvalidParams, "Invalid params");
+        return server.sendError(req_id, .InvalidParams, "Invalid params");
     };
 
     const uri = resource_map.get(params.uri) orelse {
-        return server.sendError(req.id.?, .InvalidRequest, "Resource not found");
+        return server.sendError(req_id, .InvalidRequest, "Resource not found");
+    };
+
+    const page = server.session.currentPage() orelse {
+        return server.sendError(req_id, .PageNotLoaded, "Page not loaded");
     };
 
     switch (uri) {
@@ -87,20 +92,20 @@ pub fn handleRead(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
                 .contents = &.{.{
                     .uri = params.uri,
                     .mimeType = "text/html",
-                    .text = .{ .server = server, .format = .html },
+                    .text = .{ .page = page, .format = .html },
                 }},
             };
-            try server.sendResult(req.id.?, result);
+            try server.sendResult(req_id, result);
         },
         .@"mcp://page/markdown" => {
             const result: ResourceStreamingResult = .{
                 .contents = &.{.{
                     .uri = params.uri,
                     .mimeType = "text/markdown",
-                    .text = .{ .server = server, .format = .markdown },
+                    .text = .{ .page = page, .format = .markdown },
                 }},
             };
-            try server.sendResult(req.id.?, result);
+            try server.sendResult(req_id, result);
         },
     }
 }
