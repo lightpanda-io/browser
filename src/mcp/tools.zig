@@ -285,6 +285,7 @@ test "MCP - evaluate error reporting" {
 
     var server = try Server.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
+    _ = try server.session.createPage();
 
     const aa = testing.arena_allocator;
 
