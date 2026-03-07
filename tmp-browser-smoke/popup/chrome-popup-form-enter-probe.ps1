@@ -1,14 +1,12 @@
-# Acceptance probe: form-driven target=_blank should open a headed popup tab
-# without crashing the Windows browser shell.
 $repo = "C:\Users\adyba\src\lightpanda-browser"
 $root = Join-Path $repo "tmp-browser-smoke\popup"
-$profileRoot = Join-Path $root "profile-form"
-$port = 8159
+$profileRoot = Join-Path $root "profile-form-enter-official"
+$port = 8166
 $browserExe = Join-Path $repo "zig-out\bin\lightpanda.exe"
-$browserOut = Join-Path $root "chrome-popup-form.browser.stdout.txt"
-$browserErr = Join-Path $root "chrome-popup-form.browser.stderr.txt"
-$serverOut = Join-Path $root "chrome-popup-form.server.stdout.txt"
-$serverErr = Join-Path $root "chrome-popup-form.server.stderr.txt"
+$browserOut = Join-Path $root "chrome-popup-form-enter.browser.stdout.txt"
+$browserErr = Join-Path $root "chrome-popup-form-enter.browser.stderr.txt"
+$serverOut = Join-Path $root "chrome-popup-form-enter.server.stdout.txt"
+$serverErr = Join-Path $root "chrome-popup-form-enter.server.stderr.txt"
 
 cmd /c "rmdir /s /q `"$profileRoot`"" | Out-Null
 New-Item -ItemType Directory -Force -Path $profileRoot | Out-Null
@@ -35,21 +33,20 @@ try {
       if ($resp.StatusCode -eq 200) { $ready = $true; break }
     } catch {}
   }
-  if (-not $ready) { throw "popup form probe server did not become ready" }
+  if (-not $ready) { throw "popup form enter probe server did not become ready" }
 
   $browser = Start-Process -FilePath $browserExe -ArgumentList "browse","http://127.0.0.1:$port/form-index.html","--window_width","960","--window_height","640" -WorkingDirectory $repo -PassThru -RedirectStandardOutput $browserOut -RedirectStandardError $browserErr
   $hwnd = Wait-TabWindowHandle $browser.Id
-  if ($hwnd -eq [IntPtr]::Zero) { throw "popup form probe window handle not found" }
+  if ($hwnd -eq [IntPtr]::Zero) { throw "popup form enter probe window handle not found" }
   Show-SmokeWindow $hwnd
 
   $titles.initial = Wait-TabTitle $browser.Id "Popup Form Start"
-  if (-not $titles.initial) { throw "popup form probe initial title missing" }
+  if (-not $titles.initial) { throw "popup form enter probe initial title missing" }
 
-  Start-Sleep -Milliseconds 200
-  Send-SmokeSpace
+  Send-SmokeEnter
   $titles.result = Wait-TabTitle $browser.Id "Popup Form Result"
   $formWorked = [bool]$titles.result
-  if (-not $formWorked) { throw "popup form probe did not open result tab" }
+  if (-not $formWorked) { throw "popup form enter probe did not open result tab" }
 } catch {
   $failure = $_.Exception.Message
 } finally {

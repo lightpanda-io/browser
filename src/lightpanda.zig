@@ -222,15 +222,17 @@ const BrowseDownloads = struct {
             download.cancel(.interrupted, "Browser shutting down");
         }
         while (self.active.items.len > 0) {
+            const download = self.active.items[self.active.items.len - 1];
             self.active.items.len -= 1;
-            self.active.items[self.active.items.len].deinit();
+            download.deinit();
         }
         self.active.deinit(self.allocator);
 
         self.persistIfChanged(app_dir_path);
         while (self.entries.items.len > 0) {
+            var entry = self.entries.items[self.entries.items.len - 1];
             self.entries.items.len -= 1;
-            self.entries.items[self.entries.items.len].deinit(self.allocator);
+            entry.deinit(self.allocator);
         }
         self.entries.deinit(self.allocator);
     }
@@ -276,8 +278,9 @@ const BrowseDownloads = struct {
         var pending = tab.session.takePendingDownloads();
         defer {
             while (pending.items.len > 0) {
+                var request = pending.items[pending.items.len - 1];
                 pending.items.len -= 1;
-                pending.items[pending.items.len].deinit(app.allocator);
+                request.deinit(app.allocator);
             }
             pending.deinit(app.allocator);
         }
@@ -670,6 +673,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
         if (opened_pending_tab) {
+            try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
             persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, settings.restore_previous_session, &last_saved_session_hash);
             persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
             downloads.persistIfChanged(app.app_dir_path);
@@ -694,29 +698,19 @@ fn handleBrowseCommand(
     switch (command) {
         .tab_new => {
             const tab = try createBrowseTab(app, null, settings.default_zoom_percent);
-            try tabs.append(app.allocator, tab);
-            active_tab_index.* = tabs.items.len - 1;
-            tabs.items[active_tab_index.*].last_presented_hash = 0;
+            try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
         },
         .tab_duplicate => {
             const source_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const source_tab = tabs.items[source_index];
             const source_url = browseTabPersistentUrl(source_tab);
-
-            var initial_url_z: ?[:0]u8 = null;
-            defer if (initial_url_z) |owned| app.allocator.free(owned);
-            const initial_url = if (std.mem.eql(u8, source_url, "about:blank"))
-                null
-            else blk: {
-                initial_url_z = try app.allocator.dupeZ(u8, source_url);
-                break :blk initial_url_z.?;
-            };
-
-            const tab = try createBrowseTab(app, initial_url, source_tab.zoom_percent);
+            const tab = try createBrowseTab(app, null, source_tab.zoom_percent);
             tab.zoom_percent = source_tab.zoom_percent;
-            try tabs.append(app.allocator, tab);
-            active_tab_index.* = tabs.items.len - 1;
-            tab.last_presented_hash = 0;
+            try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
+            try navigateBrowseTabToOwnedUrl(tab, source_url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            });
         },
         .tab_activate => |index| {
             if (index >= tabs.items.len) {
@@ -761,20 +755,13 @@ fn handleBrowseCommand(
         .tab_reopen_closed => {
             var closed = popClosedBrowseTab(closed_tabs) orelse return;
             defer closed.deinit(app.allocator);
-
-            var reopened_url_z: ?[:0]u8 = null;
-            defer if (reopened_url_z) |owned| app.allocator.free(owned);
-            const initial_url = if (std.mem.eql(u8, closed.url, "about:blank"))
-                null
-            else blk: {
-                reopened_url_z = try app.allocator.dupeZ(u8, closed.url);
-                break :blk reopened_url_z.?;
-            };
-            const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent);
             tab.zoom_percent = closed.zoom_percent;
-            try tabs.append(app.allocator, tab);
-            active_tab_index.* = tabs.items.len - 1;
-            tab.last_presented_hash = 0;
+            try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
+            try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            });
         },
         .download_remove => |index| {
             _ = downloads.removeEntry(app.app_dir_path, index);
@@ -789,21 +776,13 @@ fn handleBrowseCommand(
         .navigate_new_tab => |raw_url| {
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const source_tab = tabs.items[active_index];
-
-            var initial_url_z: ?[:0]u8 = null;
-            defer if (initial_url_z) |owned| app.allocator.free(owned);
-            const initial_url = if (std.mem.eql(u8, raw_url, "about:blank"))
-                null
-            else blk: {
-                initial_url_z = try app.allocator.dupeZ(u8, raw_url);
-                break :blk initial_url_z.?;
-            };
-
-            const tab = try createBrowseTab(app, initial_url, source_tab.zoom_percent);
+            const tab = try createBrowseTab(app, null, source_tab.zoom_percent);
             tab.zoom_percent = source_tab.zoom_percent;
-            try tabs.append(app.allocator, tab);
-            active_tab_index.* = tabs.items.len - 1;
-            tab.last_presented_hash = 0;
+            try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
+            try navigateBrowseTabToOwnedUrl(tab, raw_url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            });
         },
         else => {
             if (tabs.items.len == 0) {
@@ -963,8 +942,9 @@ fn processPendingTabOpens(
     var pending = source_tab.session.takePendingTabOpens();
     defer {
         while (pending.items.len > 0) {
+            var request = pending.items[pending.items.len - 1];
             pending.items.len -= 1;
-            pending.items[pending.items.len].deinit(app.allocator);
+            request.deinit(app.allocator);
         }
         pending.deinit(app.allocator);
     }
@@ -974,29 +954,32 @@ fn processPendingTabOpens(
             request.zoom_percent
         else
             settings.default_zoom_percent;
-        const can_open_direct = !std.mem.eql(u8, request.url, "about:blank") and
-            request.opts.method == .GET and
-            request.opts.body == null and
-            request.opts.header == null;
-
-        var initial_url_z: ?[:0]u8 = null;
-        defer if (initial_url_z) |owned| app.allocator.free(owned);
-
-        const tab = if (can_open_direct) blk: {
-            initial_url_z = try app.allocator.dupeZ(u8, request.url);
-            break :blk try createBrowseTab(app, initial_url_z.?, zoom_percent);
-        } else try createBrowseTab(app, null, zoom_percent);
-
-        if (!can_open_direct and !std.mem.eql(u8, request.url, "about:blank")) {
-            const page = tab.session.currentPage() orelse continue;
-            try page.navigateOwned(request.url, request.opts);
-        }
-        try tabs.append(app.allocator, tab);
-        if (request.activate) {
-            active_tab_index.* = tabs.items.len - 1;
-        }
-        tab.last_presented_hash = 0;
+        const tab = try createBrowseTab(app, null, zoom_percent);
+        try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, request.activate);
+        try navigateBrowseTabToOwnedUrl(tab, request.url, request.opts);
     }
+}
+
+fn appendBrowseTab(
+    allocator: std.mem.Allocator,
+    tabs: *std.ArrayListUnmanaged(*BrowseTab),
+    tab: *BrowseTab,
+    active_tab_index: *usize,
+    activate: bool,
+) !void {
+    try tabs.append(allocator, tab);
+    if (activate) {
+        active_tab_index.* = tabs.items.len - 1;
+    }
+    tab.last_presented_hash = 0;
+}
+
+fn navigateBrowseTabToOwnedUrl(tab: *BrowseTab, raw_url: []const u8, opts: Page.NavigateOpts) !void {
+    if (std.mem.eql(u8, raw_url, "about:blank")) {
+        return;
+    }
+    const page = tab.session.currentPage() orelse return;
+    try page.navigateOwned(raw_url, opts);
 }
 
 fn applyZoomCommand(current_zoom: i32, default_zoom_percent: i32, command: BrowserCommand) i32 {
@@ -1082,16 +1065,18 @@ fn syncBrowseDisplayState(
 
 fn deinitBrowseTabs(allocator: std.mem.Allocator, tabs: *std.ArrayListUnmanaged(*BrowseTab)) void {
     while (tabs.items.len > 0) {
+        const tab = tabs.items[tabs.items.len - 1];
         tabs.items.len -= 1;
-        tabs.items[tabs.items.len].deinit(allocator);
+        tab.deinit(allocator);
     }
     tabs.deinit(allocator);
 }
 
 fn deinitClosedBrowseTabs(allocator: std.mem.Allocator, closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab)) void {
     while (closed_tabs.items.len > 0) {
+        var tab = closed_tabs.items[closed_tabs.items.len - 1];
         closed_tabs.items.len -= 1;
-        closed_tabs.items[closed_tabs.items.len].deinit(allocator);
+        tab.deinit(allocator);
     }
     closed_tabs.deinit(allocator);
 }

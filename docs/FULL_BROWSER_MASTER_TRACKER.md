@@ -114,8 +114,10 @@ Current state inside Gate 1:
 - disabled close-state for the single remaining tab is implemented
 - rendered `_blank` anchor popups now open in a new tab through the native
   headed surface
-- remaining blocker: form-driven `_blank` submission through the session-owned
-  pending-tab-open path is still crashing on Windows headed `browse`
+- form-driven `_blank` submission now reaches a stable headed new-tab flow
+- bounded headed probes now cover anchor popups plus GET and POST form popups
+- next blocker: popup policy is still narrow and still needs richer non-`_blank`
+  target handling plus clearer chrome-state feedback
 
 ### Gate 2: Shared Subresource Loader And Profile
 

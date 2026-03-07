@@ -128,13 +128,15 @@ pub fn deinit(self: *Session) void {
     }
     self.cookie_jar.deinit();
     while (self.pending_downloads.items.len > 0) {
+        var pending = self.pending_downloads.items[self.pending_downloads.items.len - 1];
         self.pending_downloads.items.len -= 1;
-        self.pending_downloads.items[self.pending_downloads.items.len].deinit(self.browser.app.allocator);
+        pending.deinit(self.browser.app.allocator);
     }
     self.pending_downloads.deinit(self.browser.app.allocator);
     while (self.pending_tab_opens.items.len > 0) {
+        var pending = self.pending_tab_opens.items[self.pending_tab_opens.items.len - 1];
         self.pending_tab_opens.items.len -= 1;
-        self.pending_tab_opens.items[self.pending_tab_opens.items.len].deinit(self.browser.app.allocator);
+        pending.deinit(self.browser.app.allocator);
     }
     self.pending_tab_opens.deinit(self.browser.app.allocator);
 
@@ -148,7 +150,6 @@ pub fn deinit(self: *Session) void {
 pub fn createPage(self: *Session) !*Page {
     lp.assert(self.page == null, "Session.createPage - page not null", .{});
     lp.assert(self.suspended_page == null, "Session.createPage - suspended page not null", .{});
-
     const page = try self.allocPage();
     errdefer self.destroyAllocPage(page);
     try Page.init(page, self.nextFrameId(), self, null);
