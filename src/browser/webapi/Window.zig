@@ -798,7 +798,7 @@ pub const JsApi = struct {
     pub const matchMedia = bridge.function(Window.matchMedia, .{});
     pub const postMessage = bridge.function(Window.postMessage, .{});
     pub const btoa = bridge.function(Window.btoa, .{});
-    pub const atob = bridge.function(Window.atob, .{});
+    pub const atob = bridge.function(Window.atob, .{ .dom_exception = true });
     pub const reportError = bridge.function(Window.reportError, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
     pub const getSelection = bridge.function(Window.getSelection, .{});
