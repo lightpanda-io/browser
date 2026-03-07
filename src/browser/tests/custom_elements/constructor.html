@@ -53,3 +53,78 @@
     testing.expectEqual('NO-CONSTRUCTOR-ELEMENT', el.tagName);
 }
 </script>
+
+<div id=clone_container></div>
+
+<script id=clone>
+    {
+        let calls = 0;
+        class MyCloneElementA extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+                $('#clone_container').appendChild(this);
+            }
+        }
+        customElements.define('my-clone_element_a', MyCloneElementA);
+        const original = document.createElement('my-clone_element_a');
+         $('#clone_container').cloneNode(true);
+        testing.expectEqual(2, calls);
+    }
+</script>
+
+<div id=fragment_clone_container></div>
+
+<script id=clone_fragment>
+    {
+        let calls = 0;
+        class MyFragmentCloneElement extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+                $('#fragment_clone_container').appendChild(this);
+            }
+        }
+        customElements.define('my-fragment-clone-element', MyFragmentCloneElement);
+
+        // Create a DocumentFragment with a custom element
+        const fragment = document.createDocumentFragment();
+        const customEl = document.createElement('my-fragment-clone-element');
+        fragment.appendChild(customEl);
+
+        // Clone the fragment - this should trigger the crash
+        // because the constructor will attach the element during cloning
+        const clonedFragment = fragment.cloneNode(true);
+        testing.expectEqual(2, calls);
+    }
+</script>
+
+<div id=range_clone_container></div>
+
+<script id=clone_range>
+    {
+        let calls = 0;
+        class MyRangeCloneElement extends HTMLElement {
+            constructor() {
+                super();
+                calls += 1;
+                $('#range_clone_container').appendChild(this);
+            }
+        }
+        customElements.define('my-range-clone-element', MyRangeCloneElement);
+
+        // Create a container with a custom element
+        const container = document.createElement('div');
+        const customEl = document.createElement('my-range-clone-element');
+        container.appendChild(customEl);
+
+        // Create a range that includes the custom element
+        const range = document.createRange();
+        range.selectNodeContents(container);
+
+        // Clone the range contents - this should trigger the crash
+        // because the constructor will attach the element during cloning
+        const clonedContents = range.cloneContents();
+        testing.expectEqual(2, calls);
+    }
+</script>

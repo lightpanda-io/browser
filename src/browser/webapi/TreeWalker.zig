@@ -31,6 +31,7 @@ const Mode = enum {
 
 pub fn TreeWalker(comptime mode: Mode) type {
     return struct {
+        _current: ?*Node = null,
         _next: ?*Node,
         _root: *Node,
 
@@ -47,37 +48,46 @@ pub fn TreeWalker(comptime mode: Mode) type {
 
         pub fn next(self: *Self) ?*Node {
             const node = self._next orelse return null;
+            self._current = node;
 
             if (comptime mode == .children) {
-                self._next = Node.linkToNodeOrNull(node._child_link.next);
+                self._next = node.nextSibling();
                 return node;
             }
 
-            if (node._children) |children| {
-                self._next = children.first();
-            } else if (node._child_link.next) |n| {
-                self._next = Node.linkToNode(n);
+            if (node.firstChild()) |child| {
+                self._next = child;
             } else {
-                // No children, no next sibling - walk up until we find a next sibling or hit root
-                var current = node._parent;
-                while (current) |parent| {
-                    if (parent == self._root) {
-                        self._next = null;
-                        break;
+                var current: *Node = node;
+                while (current != self._root) {
+                    if (current.nextSibling()) |sibling| {
+                        self._next = sibling;
+                        return node;
                     }
-                    if (parent._child_link.next) |next_sibling| {
-                        self._next = Node.linkToNode(next_sibling);
-                        break;
-                    }
-                    current = parent._parent;
-                } else {
-                    self._next = null;
+                    current = current._parent orelse break;
                 }
+                self._next = null;
             }
             return node;
         }
 
+        pub fn skipChildren(self: *Self) void {
+            if (comptime mode == .children) return;
+            const current_node = self._current orelse return;
+
+            var current: *Node = current_node;
+            while (current != self._root) {
+                if (current.nextSibling()) |sibling| {
+                    self._next = sibling;
+                    return;
+                }
+                current = current._parent orelse break;
+            }
+            self._next = null;
+        }
+
         pub fn reset(self: *Self) void {
+            self._current = null;
             self._next = firstNext(self._root);
         }
 
@@ -146,4 +156,39 @@ pub fn TreeWalker(comptime mode: Mode) type {
             }
         };
     };
+}
+
+test "TreeWalker: skipChildren" {
+    const testing = @import("../../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    const doc = page.window._document;
+
+    // <div>
+    //   <span>
+    //     <b>A</b>
+    //   </span>
+    //   <p>B</p>
+    // </div>
+    const div = try doc.createElement("div", null, page);
+    const span = try doc.createElement("span", null, page);
+    const b = try doc.createElement("b", null, page);
+    const p = try doc.createElement("p", null, page);
+    _ = try span.asNode().appendChild(b.asNode(), page);
+    _ = try div.asNode().appendChild(span.asNode(), page);
+    _ = try div.asNode().appendChild(p.asNode(), page);
+
+    var tw = Full.init(div.asNode(), .{});
+
+    // root (div)
+    try testing.expect(tw.next() == div.asNode());
+
+    // span
+    try testing.expect(tw.next() == span.asNode());
+
+    // skip children of span (should jump over <b> to <p>)
+    tw.skipChildren();
+    try testing.expect(tw.next() == p.asNode());
+
+    try testing.expect(tw.next() == null);
 }

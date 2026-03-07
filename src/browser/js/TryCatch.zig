@@ -134,4 +134,17 @@ pub const Caught = struct {
         try writer.write(prefix ++ ".line", self.line);
         try writer.write(prefix ++ ".caught", self.caught);
     }
+
+    pub fn jsonStringify(self: Caught, jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("exception");
+        try jw.write(self.exception);
+        try jw.objectField("stack");
+        try jw.write(self.stack);
+        try jw.objectField("line");
+        try jw.write(self.line);
+        try jw.objectField("caught");
+        try jw.write(self.caught);
+        try jw.endObject();
+    }
 };

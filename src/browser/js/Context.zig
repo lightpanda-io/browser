@@ -157,7 +157,7 @@ pub fn fromIsolate(isolate: js.Isolate) *Context {
 }
 
 pub fn deinit(self: *Context) void {
-    if (comptime IS_DEBUG) {
+    if (comptime IS_DEBUG and @import("builtin").is_test == false) {
         var it = self.unknown_properties.iterator();
         while (it.next()) |kv| {
             log.debug(.unknown_prop, "unknown property", .{
@@ -790,9 +790,16 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
             entry.module_promise = try module_resolver.promise().persist();
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
+            if (status == .kUninstantiated) {
+                if (try mod.instantiate(resolveModuleCallback) == false) {
+                    _ = resolver.reject("module instantiation", local.newString("Module instantiation failed"));
+                    return promise;
+                }
+            }
+
             const evaluated = mod.evaluate() catch {
                 if (comptime IS_DEBUG) {
-                    std.debug.assert(status == .kErrored);
+                    std.debug.assert(mod.getStatus() == .kErrored);
                 }
                 _ = resolver.reject("module evaluation", local.newString("Module evaluation failed"));
                 return promise;
@@ -872,13 +879,12 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 
     const then_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-            const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
             var c: Caller = undefined;
-            c.init(isolate);
+            c.initFromHandle(callback_handle);
             defer c.deinit();
 
-            const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
+            const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getData() orelse return));
 
             if (s.context_id != c.local.ctx.id) {
                 // The microtask is tied to the isolate, not the context
@@ -897,17 +903,15 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 
     const catch_callback = newFunctionWithData(local, struct {
         pub fn callback(callback_handle: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
-            const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(callback_handle).?;
             var c: Caller = undefined;
-            c.init(isolate);
+            c.initFromHandle(callback_handle);
             defer c.deinit();
 
-            const info_data = v8.v8__FunctionCallbackInfo__Data(callback_handle).?;
-            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(v8.v8__External__Value(@ptrCast(info_data))));
+            const info = Caller.FunctionCallbackInfo{ .handle = callback_handle.? };
+            const s: *DynamicModuleResolveState = @ptrCast(@alignCast(info.getData() orelse return));
 
             const l = &c.local;
-            const ctx = l.ctx;
-            if (s.context_id != ctx.id) {
+            if (s.context_id != l.ctx.id) {
                 return;
             }
 
@@ -1011,6 +1015,13 @@ fn enqueueMicrotask(self: *Context, callback: anytype) void {
     }.run, self);
 }
 
+// There's an assumption here: the js.Function will be alive when microtasks are
+// run. If we're Env.runMicrotasks in all the places that we're supposed to, then
+// this should be safe (I think). In whatever HandleScope a microtask is enqueued,
+// PerformCheckpoint should be run. So the v8::Local<v8::Function> should remain
+// valid. If we have problems with this, a simple solution is to provide a Zig
+// wrapper for these callbacks which references a js.Function.Temp, on callback
+// it executes the function and then releases the global.
 pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     // Use context-specific microtask queue instead of isolate queue
     v8.v8__MicrotaskQueue__EnqueueMicrotaskFunc(self.microtask_queue, self.isolate.handle, cb.handle);

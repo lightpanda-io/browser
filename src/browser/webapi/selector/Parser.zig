@@ -87,14 +87,34 @@ pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]
 
         var comma_pos: usize = trimmed.len;
         var depth: usize = 0;
+        var in_quote: u8 = 0; // 0 = not in quotes, '"' or '\'' = in that quote type
         var i: usize = 0;
         while (i < trimmed.len) {
             const c = trimmed[i];
+            if (in_quote != 0) {
+                // Inside a quoted string
+                if (c == '\\') {
+                    // Skip escape sequence inside quotes
+                    i += 1;
+                    if (i < trimmed.len) i += 1;
+                } else if (c == in_quote) {
+                    // Closing quote
+                    in_quote = 0;
+                    i += 1;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
             switch (c) {
                 '\\' => {
                     // Skip escape sequence (backslash + next character)
                     i += 1;
                     if (i < trimmed.len) i += 1;
+                },
+                '"', '\'' => {
+                    in_quote = c;
+                    i += 1;
                 },
                 '(' => {
                     depth += 1;

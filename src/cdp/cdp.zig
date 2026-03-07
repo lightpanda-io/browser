@@ -219,6 +219,10 @@ pub fn CDPT(comptime TypeProvider: type) type {
             };
 
             switch (domain.len) {
+                2 => switch (@as(u16, @bitCast(domain[0..2].*))) {
+                    asUint(u16, "LP") => return @import("domains/lp.zig").processMessage(command),
+                    else => {},
+                },
                 3 => switch (@as(u24, @bitCast(domain[0..3].*))) {
                     asUint(u24, "DOM") => return @import("domains/dom.zig").processMessage(command),
                     asUint(u24, "Log") => return @import("domains/log.zig").processMessage(command),
@@ -446,15 +450,10 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             const browser = &self.cdp.browser;
             const env = &browser.env;
 
-            // Drain microtasks makes sure we don't have inspector's callback
-            // in progress before deinit.
-            env.runMicrotasks();
-
             // resetContextGroup detach the inspector from all contexts.
-            // It append async tasks, so we make sure we run the message loop
+            // It appends async tasks, so we make sure we run the message loop
             // before deinit it.
             env.inspector.?.resetContextGroup();
-            _ = env.pumpMessageLoop();
             env.inspector.?.stopSession();
 
             // abort all intercepted requests before closing the sesion/page

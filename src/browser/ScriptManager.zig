@@ -265,7 +265,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .url = url,
             .ctx = script,
             .method = .GET,
-            .page_id = page.id,
+            .frame_id = page._frame_id,
             .headers = try self.getHeaders(url),
             .blocking = is_blocking,
             .cookie_jar = &page._session.cookie_jar,
@@ -384,7 +384,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .url = url,
         .ctx = script,
         .method = .GET,
-        .page_id = page.id,
+        .frame_id = page._frame_id,
         .headers = try self.getHeaders(url),
         .cookie_jar = &page._session.cookie_jar,
         .resource_type = .script,
@@ -487,7 +487,7 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     try self.client.request(.{
         .url = url,
         .method = .GET,
-        .page_id = page.id,
+        .frame_id = page._frame_id,
         .headers = try self.getHeaders(url),
         .ctx = script,
         .resource_type = .script,
@@ -634,6 +634,8 @@ pub const Script = struct {
     debug_transfer_notified_fail: bool = false,
     debug_transfer_redirecting: bool = false,
     debug_transfer_intercept_state: u8 = 0,
+    debug_transfer_auth_challenge: bool = false,
+    debug_transfer_easy_id: usize = 0,
 
     const Kind = enum {
         module,
@@ -711,6 +713,8 @@ pub const Script = struct {
                 .a5 = self.debug_transfer_notified_fail,
                 .a6 = self.debug_transfer_redirecting,
                 .a7 = self.debug_transfer_intercept_state,
+                .a8 = self.debug_transfer_auth_challenge,
+                .a9 = self.debug_transfer_easy_id,
                 .b1 = transfer.id,
                 .b2 = transfer._tries,
                 .b3 = transfer.aborted,
@@ -718,6 +722,8 @@ pub const Script = struct {
                 .b5 = transfer._notified_fail,
                 .b6 = transfer._redirecting,
                 .b7 = @intFromEnum(transfer._intercept_state),
+                .b8 = transfer._auth_challenge != null,
+                .b9 = if (transfer._conn) |c| @intFromPtr(c.easy) else 0,
             });
             self.header_callback_called = true;
             self.debug_transfer_id = transfer.id;
@@ -727,6 +733,8 @@ pub const Script = struct {
             self.debug_transfer_notified_fail = transfer._notified_fail;
             self.debug_transfer_redirecting = transfer._redirecting;
             self.debug_transfer_intercept_state = @intFromEnum(transfer._intercept_state);
+            self.debug_transfer_auth_challenge = transfer._auth_challenge != null;
+            self.debug_transfer_easy_id = if (transfer._conn) |c| @intFromPtr(c.easy) else 0;
         }
 
         lp.assert(self.source.remote.capacity == 0, "ScriptManager.Header buffer", .{ .capacity = self.source.remote.capacity });

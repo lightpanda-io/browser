@@ -60,6 +60,11 @@ fn initWithContext(self: *Caller, ctx: *Context, v8_context: *const v8.Context) 
     ctx.local = &self.local;
 }
 
+pub fn initFromHandle(self: *Caller, handle: ?*const v8.FunctionCallbackInfo) void {
+    const isolate = v8.v8__FunctionCallbackInfo__GetIsolate(handle).?;
+    self.init(isolate);
+}
+
 pub fn deinit(self: *Caller) void {
     const ctx = self.local.ctx;
     const call_depth = ctx.call_depth - 1;
@@ -328,9 +333,13 @@ fn nameToString(local: *const Local, comptime T: type, name: *const v8.Name) !T 
 fn handleError(comptime T: type, comptime F: type, local: *const Local, err: anyerror, info: anytype, comptime opts: CallOpts) void {
     const isolate = local.isolate;
 
-    if (comptime @import("builtin").mode == .Debug and @TypeOf(info) == FunctionCallbackInfo) {
-        if (log.enabled(.js, .warn)) {
-            logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
+    if (comptime IS_DEBUG and @TypeOf(info) == FunctionCallbackInfo) {
+        if (log.enabled(.js, .debug)) {
+            const DOMException = @import("../webapi/DOMException.zig");
+            if (DOMException.fromError(err) == null) {
+                // This isn't a DOMException, let's log it
+                logFunctionCallError(local, @typeName(T), @typeName(F), err, info);
+            }
         }
     }
 
@@ -360,7 +369,7 @@ fn handleError(comptime T: type, comptime F: type, local: *const Local, err: any
 // this can add as much as 10 seconds of compilation time.
 fn logFunctionCallError(local: *const Local, type_name: []const u8, func: []const u8, err: anyerror, info: FunctionCallbackInfo) void {
     const args_dump = serializeFunctionArgs(local, info) catch "failed to serialize args";
-    log.info(.js, "function call error", .{
+    log.debug(.js, "function call error", .{
         .type = type_name,
         .func = func,
         .err = err,
@@ -437,6 +446,11 @@ pub const FunctionCallbackInfo = struct {
         return .{ .local = local, .handle = v8.v8__FunctionCallbackInfo__INDEX(self.handle, @intCast(index)).? };
     }
 
+    pub fn getData(self: FunctionCallbackInfo) ?*anyopaque {
+        const data = v8.v8__FunctionCallbackInfo__Data(self.handle) orelse return null;
+        return v8.v8__External__Value(@ptrCast(data));
+    }
+
     pub fn getThis(self: FunctionCallbackInfo) *const v8.Object {
         return v8.v8__FunctionCallbackInfo__This(self.handle).?;
     }
@@ -495,6 +509,7 @@ pub const Function = struct {
         as_typed_array: bool = false,
         null_as_undefined: bool = false,
         cache: ?Caching = null,
+        embedded_receiver: bool = false,
 
         // We support two ways to cache a value directly into a v8::Object. The
         // difference between the two is like the difference between a Map
@@ -565,6 +580,9 @@ pub const Function = struct {
         var args: ParameterTypes(F) = undefined;
         if (comptime opts.static) {
             args = try getArgs(F, 0, local, info);
+        } else if (comptime opts.embedded_receiver) {
+            args = try getArgs(F, 1, local, info);
+            @field(args, "0") = @ptrCast(@alignCast(info.getData() orelse unreachable));
         } else {
             args = try getArgs(F, 1, local, info);
             @field(args, "0") = try TaggedOpaque.fromJS(*T, info.getThis());

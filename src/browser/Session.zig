@@ -30,6 +30,7 @@ const History = @import("webapi/History.zig");
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
 const Notification = @import("../Notification.zig");
+const QueuedNavigation = Page.QueuedNavigation;
 
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = builtin.mode == .Debug;
@@ -43,6 +44,12 @@ const Session = @This();
 browser: *Browser,
 notification: *Notification,
 
+queued_navigation: std.ArrayList(*Page),
+// Temporary buffer for about:blank navigations during processing.
+// We process async navigations first (safe from re-entrance), then sync
+// about:blank navigations (which may add to queued_navigation).
+queued_queued_navigation: std.ArrayList(*Page),
+
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
 
@@ -55,7 +62,7 @@ navigation: Navigation,
 page: ?*Page,
 suspended_page: ?*Page,
 
-page_id_gen: u32,
+frame_id_gen: u32,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
@@ -67,11 +74,13 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .suspended_page = null,
         .arena = arena,
         .history = .{},
-        .page_id_gen = 0,
+        .frame_id_gen = 0,
         // The prototype (EventTarget) for Navigation is created when a Page is created.
         .navigation = .{ ._proto = undefined },
         .storage_shed = .{},
         .browser = browser,
+        .queued_navigation = .{},
+        .queued_queued_navigation = .{},
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
     };
@@ -81,12 +90,12 @@ pub fn deinit(self: *Session) void {
     if (self.page != null) {
         self.removePage();
     } else if (self.suspended_page) |page| {
-        destroyPage(self, page, .{ .abort_http = false });
+        destroyPage(self, page, false);
         self.suspended_page = null;
     }
-    const browser = self.browser;
-
     self.cookie_jar.deinit();
+
+    const browser = self.browser;
     self.storage_shed.deinit(browser.app.allocator);
     browser.arena_pool.release(self.arena);
 }
@@ -99,7 +108,7 @@ pub fn createPage(self: *Session) !*Page {
 
     const page = try self.allocPage();
     errdefer self.destroyAllocPage(page);
-    try Page.init(page, self.nextPageId(), self, null);
+    try Page.init(page, self.nextFrameId(), self, null);
     self.page = page;
     self.browser.app.display.onPageCreated();
 
@@ -121,9 +130,9 @@ pub fn removePage(self: *Session) void {
     self.notification.dispatch(.page_remove, .{});
     lp.assert(self.page != null, "Session.removePage - page is null", .{});
 
-    destroyPage(self, self.page.?, .{});
+    destroyPage(self, self.page.?, true);
     if (self.suspended_page) |page| {
-        destroyPage(self, page, .{ .abort_http = false });
+        destroyPage(self, page, false);
         self.suspended_page = null;
     }
     self.browser.app.display.onPageRemoved();
@@ -144,15 +153,15 @@ pub fn replacePage(self: *Session) !*Page {
     lp.assert(self.page != null, "Session.replacePage null page", .{});
 
     const current = self.page.?;
-    const page_id = current.id;
+    const frame_id = current._frame_id;
     const parent = current.parent;
-    destroyPage(self, current, .{});
+    destroyPage(self, current, true);
 
     self.browser.env.memoryPressureNotification(.moderate);
 
     const page = try self.allocPage();
     errdefer self.destroyAllocPage(page);
-    try Page.init(page, page_id, self, parent);
+    try Page.init(page, frame_id, self, parent);
     self.page = page;
     return page;
 }
@@ -167,9 +176,9 @@ pub const WaitResult = enum {
     cdp_socket,
 };
 
-pub fn findPage(self: *Session, id: u32) ?*Page {
+pub fn findPage(self: *Session, frame_id: u32) ?*Page {
     const page = self.currentPage() orelse return null;
-    return if (page.id == id) page else null;
+    return if (page._frame_id == frame_id) page else null;
 }
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
@@ -188,10 +197,11 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
 
         switch (wait_result) {
             .done => {
-                if (page._queued_navigation == null) {
+                if (self.queued_navigation.items.len == 0) {
                     return .done;
                 }
-                page = self.processScheduledNavigation(page) catch return .done;
+                self.processQueuedNavigation() catch return .done;
+                page = self.page.?; // might have changed
             },
             else => |result| return result,
         }
@@ -250,7 +260,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                 }
             },
             .html, .complete => {
-                if (page._queued_navigation != null) {
+                if (self.queued_navigation.items.len != 0) {
                     return .done;
                 }
 
@@ -282,7 +292,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                         std.debug.assert(http_client.intercepted == 0);
                     }
 
-                    const ms: u64 = ms_to_next_task orelse blk: {
+                    var ms: u64 = ms_to_next_task orelse blk: {
                         if (wait_ms - ms_remaining < 100) {
                             if (comptime builtin.is_test) {
                                 return .done;
@@ -309,7 +319,13 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                         // Same as above, except we have a scheduled task,
                         // it just happens to be too far into the future
                         // compared to how long we were told to wait.
-                        return .done;
+                        if (!browser.hasBackgroundTasks()) {
+                            return .done;
+                        }
+                        // _we_ have nothing to run, but v8 is working on
+                        // background tasks. We'll wait for them.
+                        browser.waitForBackgroundTasks();
+                        ms = 20;
                     }
 
                     // We have a task to run in the not-so-distant future.
@@ -360,45 +376,150 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     }
 }
 
-fn processScheduledNavigation(self: *Session, current_page: *Page) !*Page {
-    const browser = self.browser;
+pub fn scheduleNavigation(self: *Session, page: *Page) !void {
+    const list = &self.queued_navigation;
 
-    const qn = current_page._queued_navigation.?;
-    // take ownership of the page's queued navigation
-    current_page._queued_navigation = null;
+    // Check if page is already queued
+    for (list.items) |existing| {
+        if (existing == page) {
+            // Already queued
+            return;
+        }
+    }
+
+    return list.append(self.arena, page);
+}
+
+fn processQueuedNavigation(self: *Session) !void {
+    const navigations = &self.queued_navigation;
+
+    if (self.page.?._queued_navigation != null) {
+        // This is both an optimization and a simplification of sorts. If the
+        // root page is navigating, then we don't need to process any other
+        // navigation. Also, the navigation for the root page and for a frame
+        // is different enough that have two distinct code blocks is, imo,
+        // better. Yes, there will be duplication.
+        navigations.clearRetainingCapacity();
+        return self.processRootQueuedNavigation();
+    }
+
+    const about_blank_queue = &self.queued_queued_navigation;
+    defer about_blank_queue.clearRetainingCapacity();
+
+    // First pass: process async navigations (non-about:blank)
+    // These cannot cause re-entrant navigation scheduling
+    for (navigations.items) |page| {
+        const qn = page._queued_navigation.?;
+
+        if (qn.is_about_blank) {
+            // Defer about:blank to second pass
+            try about_blank_queue.append(self.arena, page);
+            continue;
+        }
+
+        try self.processFrameNavigation(page, qn);
+    }
+
+    // Clear the queue after first pass
+    navigations.clearRetainingCapacity();
+
+    // Second pass: process synchronous navigations (about:blank)
+    // These may trigger new navigations which go into queued_navigation
+    for (about_blank_queue.items) |page| {
+        const qn = page._queued_navigation.?;
+        try self.processFrameNavigation(page, qn);
+    }
+
+    // Safety: Remove any about:blank navigations that were queued during the
+    // second pass to prevent infinite loops
+    var i: usize = 0;
+    while (i < navigations.items.len) {
+        const page = navigations.items[i];
+        if (page._queued_navigation) |qn| {
+            if (qn.is_about_blank) {
+                log.warn(.page, "recursive about    blank", .{});
+                _ = navigations.swapRemove(i);
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !void {
+    lp.assert(page.parent != null, "root queued navigation", .{});
+
+    const browser = self.browser;
+    const iframe = page.iframe.?;
+    const parent = page.parent.?;
+
+    page._queued_navigation = null;
     defer browser.arena_pool.release(qn.arena);
 
-    browser.http_client.abort();
+    errdefer iframe._window = null;
+
+    if (page._parent_notified) {
+        // we already notified the parent that we had loaded
+        parent._pending_loads += 1;
+    }
+
+    const frame_id = page._frame_id;
+    page.deinit(true);
+    page.* = undefined;
+
+    try Page.init(page, frame_id, self, parent);
+    errdefer page.deinit(true);
+
+    page.iframe = iframe;
+    iframe._window = page.window;
+
+    page.navigate(qn.url, qn.opts) catch |err| {
+        log.err(.browser, "queued frame navigation error", .{ .err = err });
+        return err;
+    };
+}
+
+fn processRootQueuedNavigation(self: *Session) !void {
+    const current_page = self.page.?;
+    const frame_id = current_page._frame_id;
+
+    // create a copy before the page is cleared
+    const qn = current_page._queued_navigation.?;
+    current_page._queued_navigation = null;
+    defer self.browser.arena_pool.release(qn.arena);
+
+    const browser = self.browser;
 
     // Scheduled navigation replaces the page/context, but the browser window
     // belongs to the session and should remain open across navigations.
     self.notification.dispatch(.page_remove, .{});
     self.navigation.onRemovePage();
-    const page_id = current_page.id;
-    const parent = current_page.parent;
 
     const should_suspend_current = self.suspended_page == null and canSuspendCurrentPage(self, current_page);
     if (should_suspend_current) {
         current_page.setSuspended(true);
         self.suspended_page = current_page;
     } else {
-        destroyPage(self, current_page, .{ .abort_http = false });
+        destroyPage(self, current_page, false);
         browser.env.memoryPressureNotification(.moderate);
     }
 
-    const page = try self.allocPage();
-    errdefer self.destroyAllocPage(page);
-    try Page.init(page, page_id, self, parent);
-    self.page = page;
-    try self.navigation.onNewPage(page);
-    self.notification.dispatch(.page_created, page);
+    const new_page = try self.allocPage();
+    errdefer self.destroyAllocPage(new_page);
+    try Page.init(new_page, frame_id, self, null);
+    self.page = new_page;
 
-    page.navigate(qn.url, qn.opts) catch |err| {
-        log.err(.browser, "queued navigation error", .{ .err = err, .url = qn.url });
+    // Creates a new NavigationEventTarget for this page.
+    try self.navigation.onNewPage(new_page);
+
+    // start JS env
+    // Inform CDP the main page has been created such that additional context for other Worlds can be created as well
+    self.notification.dispatch(.page_created, new_page);
+
+    new_page.navigate(qn.url, qn.opts) catch |err| {
+        log.err(.browser, "queued navigation error", .{ .err = err });
         return err;
     };
-
-    return page;
 }
 
 pub fn restoreSuspendedPage(self: *Session) !?*Page {
@@ -420,7 +541,7 @@ pub fn restoreSuspendedPage(self: *Session) !?*Page {
 
     self.notification.dispatch(.page_remove, .{});
     self.navigation.onRemovePage();
-    destroyPage(self, current, .{ .abort_http = false });
+    destroyPage(self, current, false);
 
     suspended.setSuspended(false);
     self.page = suspended;
@@ -435,15 +556,15 @@ pub fn finalizeCommittedNavigation(self: *Session, page: *Page) void {
         return;
     }
     if (self.suspended_page) |suspended| {
-        destroyPage(self, suspended, .{ .abort_http = false });
+        destroyPage(self, suspended, false);
         self.suspended_page = null;
         self.browser.env.memoryPressureNotification(.moderate);
     }
 }
 
-pub fn nextPageId(self: *Session) u32 {
-    const id = self.page_id_gen +% 1;
-    self.page_id_gen = id;
+pub fn nextFrameId(self: *Session) u32 {
+    const id = self.frame_id_gen +% 1;
+    self.frame_id_gen = id;
     return id;
 }
 
@@ -462,7 +583,7 @@ fn canSuspendCurrentPage(self: *Session, page: *Page) bool {
     };
 }
 
-fn destroyPage(self: *Session, page: *Page, opts: Page.DeinitOptions) void {
-    page.deinitWithOptions(opts);
+fn destroyPage(self: *Session, page: *Page, abort_http: bool) void {
+    page.deinit(abort_http);
     self.destroyAllocPage(page);
 }

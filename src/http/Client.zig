@@ -66,7 +66,7 @@ active: usize,
 intercepted: usize,
 
 // Our easy handles, managed by a curl multi.
-handles: Handles,
+handles: Net.Handles,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -128,7 +128,7 @@ pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, 
     const client = try allocator.create(Client);
     errdefer allocator.destroy(client);
 
-    var handles = try Handles.init(allocator, ca_blob, config);
+    var handles = try Net.Handles.init(allocator, ca_blob, config);
     errdefer handles.deinit(allocator);
 
     // Set transfer callbacks on each connection.
@@ -174,27 +174,61 @@ pub fn newHeaders(self: *const Client) !Net.Headers {
 }
 
 pub fn abort(self: *Client) void {
-    while (self.handles.in_use.first) |node| {
-        const conn: *Net.Connection = @fieldParentPtr("node", node);
-        var transfer = Transfer.fromConnection(conn) catch |err| {
-            log.err(.http, "get private info", .{ .err = err, .source = "abort" });
-            continue;
-        };
-        transfer.kill();
+    self._abort(true, 0);
+}
+
+pub fn abortFrame(self: *Client, frame_id: u32) void {
+    self._abort(false, frame_id);
+}
+
+// Written this way so that both abort and abortFrame can share the same code
+// but abort can avoid the frame_id check at comptime.
+fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
+    {
+        var q = &self.handles.in_use;
+        var n = q.first;
+        while (n) |node| {
+            n = node.next;
+            const conn: *Net.Connection = @fieldParentPtr("node", node);
+            var transfer = Transfer.fromConnection(conn) catch |err| {
+                // Let's cleanup what we can
+                self.handles.remove(conn);
+                log.err(.http, "get private info", .{ .err = err, .source = "abort" });
+                continue;
+            };
+            if (comptime abort_all) {
+                transfer.kill();
+            } else if (transfer.req.frame_id == frame_id) {
+                q.remove(node);
+                transfer.kill();
+            }
+        }
     }
-    if (comptime IS_DEBUG) {
+
+    if (comptime IS_DEBUG and abort_all) {
         std.debug.assert(self.active == 0);
     }
 
-    var n = self.queue.first;
-    while (n) |node| {
-        n = node.next;
-        const transfer: *Transfer = @fieldParentPtr("_node", node);
-        transfer.kill();
+    {
+        var q = &self.queue;
+        var n = q.first;
+        while (n) |node| {
+            n = node.next;
+            const transfer: *Transfer = @fieldParentPtr("_node", node);
+            if (comptime abort_all) {
+                transfer.kill();
+            } else if (transfer.req.frame_id == frame_id) {
+                q.remove(node);
+                transfer.kill();
+            }
+        }
     }
-    self.queue = .{};
 
-    if (comptime IS_DEBUG) {
+    if (comptime abort_all) {
+        self.queue = .{};
+    }
+
+    if (comptime IS_DEBUG and abort_all) {
         std.debug.assert(self.handles.in_use.first == null);
         std.debug.assert(self.handles.available.len() == self.handles.connections.len);
 
@@ -320,7 +354,7 @@ fn fetchRobotsThenProcessRequest(self: *Client, robots_url: [:0]const u8, req: R
             .method = .GET,
             .headers = headers,
             .blocking = false,
-            .page_id = req.page_id,
+            .frame_id = req.frame_id,
             .cookie_jar = req.cookie_jar,
             .notification = req.notification,
             .resource_type = .fetch,
@@ -496,8 +530,12 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 // cases, the interecptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
-    if (self.handles.get()) |conn| {
-        return self.makeRequest(conn, transfer);
+    // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
+    // then we _have_ to queue this.
+    if (self.handles.performing == false) {
+        if (self.handles.get()) |conn| {
+            return self.makeRequest(conn, transfer);
+        }
     }
 
     self.queue.append(&transfer._node);
@@ -629,7 +667,7 @@ pub fn restoreOriginalProxy(self: *Client) !void {
 }
 
 // Enable TLS verification on all connections.
-pub fn enableTlsVerify(self: *const Client) !void {
+pub fn enableTlsVerify(self: *Client) !void {
     // Remove inflight connections check on enable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
@@ -639,7 +677,7 @@ pub fn enableTlsVerify(self: *const Client) !void {
 }
 
 // Disable TLS verification on all connections.
-pub fn disableTlsVerify(self: *const Client) !void {
+pub fn disableTlsVerify(self: *Client) !void {
     // Remove inflight connections check on disable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
@@ -653,7 +691,11 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
 
     {
         transfer._conn = conn;
-        errdefer transfer.deinit();
+        errdefer {
+            transfer._conn = null;
+            transfer.deinit();
+            self.handles.isAvailable(conn);
+        }
 
         try conn.setURL(req.url);
         try conn.setMethod(req.method);
@@ -680,17 +722,20 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         }
     }
 
-    // Once soon as this is called, our "perform" loop is responsible for
+    // As soon as this is called, our "perform" loop is responsible for
     // cleaning things up. That's why the above code is in a block. If anything
-    // fails BEFORE `curl_multi_add_handle` suceeds, the we still need to do
+    // fails BEFORE `curl_multi_add_handle` succeeds, the we still need to do
     // cleanup. But if things fail after `curl_multi_add_handle`, we expect
     // perfom to pickup the failure and cleanup.
-    try self.handles.add(conn);
+    self.handles.add(conn) catch |err| {
+        transfer._conn = null;
+        transfer.deinit();
+        self.handles.isAvailable(conn);
+        return err;
+    };
 
     if (req.start_callback) |cb| {
         cb(transfer) catch |err| {
-            self.handles.remove(conn);
-            transfer._conn = null;
             transfer.deinit();
             return err;
         };
@@ -792,11 +837,16 @@ fn processMessages(self: *Client) !bool {
         if (msg.err) |err| {
             requestFailed(transfer, err, true);
         } else blk: {
-            // In case of request w/o data, we need to call the header done
-            // callback now.
+            // make sure the transfer can't be immediately aborted from a callback
+            // since we still need it here.
+            transfer._performing = true;
+            defer transfer._performing = false;
+
             if (!transfer._header_done_called) {
+                // In case of request w/o data, we need to call the header done
+                // callback now.
                 const proceed = transfer.headerDoneCallback(&msg.conn) catch |err| {
-                    log.err(.http, "header_done_callback", .{ .err = err });
+                    log.err(.http, "header_done_callback2", .{ .err = err });
                     requestFailed(transfer, err, true);
                     continue;
                 };
@@ -834,8 +884,6 @@ fn ensureNoActiveConnection(self: *const Client) !void {
     }
 }
 
-const Handles = Net.Handles;
-
 pub const RequestCookie = struct {
     is_http: bool,
     jar: *CookieJar,
@@ -858,7 +906,7 @@ pub const RequestCookie = struct {
 };
 
 pub const Request = struct {
-    page_id: u32,
+    frame_id: u32,
     method: Method,
     url: [:0]const u8,
     headers: Net.Headers,
@@ -940,6 +988,7 @@ pub const Transfer = struct {
     // number of times the transfer has been tried.
     // incremented by reset func.
     _tries: u8 = 0,
+    _performing: bool = false,
 
     // for when a Transfer is queued in the client.queue
     _node: std.DoublyLinkedList.Node = .{},
@@ -1044,13 +1093,9 @@ pub const Transfer = struct {
 
     pub fn abort(self: *Transfer, err: anyerror) void {
         requestFailed(self, err, true);
-        if (self._conn == null) {
-            self.deinit();
-            return;
-        }
 
         const client = self.client;
-        if (client.handles.performing) {
+        if (self._performing or client.handles.performing) {
             // We're currently in a curl_multi_perform. We cannot call endTransfer
             // as that calls curl_multi_remove_handle, and you can't do that
             // from a curl callback. Instead, we flag this transfer and all of
@@ -1265,9 +1310,9 @@ pub const Transfer = struct {
                 // WWW-Authenticate or Proxy-Authenticate header.
                 transfer._auth_challenge = .{
                     .status = status,
-                    .source = undefined,
-                    .scheme = undefined,
-                    .realm = undefined,
+                    .source = null,
+                    .scheme = null,
+                    .realm = null,
                 };
                 return buf_len;
             }

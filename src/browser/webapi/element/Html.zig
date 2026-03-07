@@ -39,6 +39,7 @@ pub const Canvas = @import("html/Canvas.zig");
 pub const Custom = @import("html/Custom.zig");
 pub const Data = @import("html/Data.zig");
 pub const DataList = @import("html/DataList.zig");
+pub const Details = @import("html/Details.zig");
 pub const Dialog = @import("html/Dialog.zig");
 pub const Directory = @import("html/Directory.zig");
 pub const Div = @import("html/Div.zig");
@@ -119,6 +120,7 @@ pub const Type = union(enum) {
     custom: *Custom,
     data: *Data,
     datalist: *DataList,
+    details: *Details,
     dialog: *Dialog,
     directory: *Directory,
     div: *Div,
@@ -380,7 +382,7 @@ pub fn getAttributeFunction(
     page: *Page,
 ) !?js.Function.Global {
     const element = self.asElement();
-    if (page._element_attr_listeners.get(.{ .target = element.asEventTarget(), .handler = listener_type })) |cached| {
+    if (page._event_target_attr_listeners.get(.{ .target = element.asEventTarget(), .handler = listener_type })) |cached| {
         return cached;
     }
 
@@ -404,7 +406,7 @@ pub fn getAttributeFunction(
 }
 
 pub fn hasAttributeFunction(self: *HtmlElement, listener_type: GlobalEventHandler, page: *const Page) bool {
-    return page._element_attr_listeners.contains(.{ .target = self.asEventTarget(), .handler = listener_type });
+    return page._event_target_attr_listeners.contains(.{ .target = self.asEventTarget(), .handler = listener_type });
 }
 
 fn setAttributeListener(
@@ -421,7 +423,7 @@ fn setAttributeListener(
     }
 
     if (listener_callback) |cb| {
-        try page._element_attr_listeners.put(page.arena, .{
+        try page._event_target_attr_listeners.put(page.arena, .{
             .target = self.asEventTarget(),
             .handler = listener_type,
         }, cb);
@@ -429,7 +431,7 @@ fn setAttributeListener(
     }
 
     // The listener is null, remove existing listener.
-    _ = page._element_attr_listeners.remove(.{
+    _ = page._event_target_attr_listeners.remove(.{
         .target = self.asEventTarget(),
         .handler = listener_type,
     });

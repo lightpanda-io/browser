@@ -43,7 +43,7 @@ pub fn asEventTarget(self: *XMLHttpRequestEventTarget) *EventTarget {
     return self._proto;
 }
 
-pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchType, progress_: ?Progress, local: *const js.Local, page: *Page) !void {
+pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchType, progress_: ?Progress, page: *Page) !void {
     const field, const typ = comptime blk: {
         break :blk switch (event_type) {
             .abort => .{ "_on_abort", "abort" },
@@ -63,10 +63,10 @@ pub fn dispatch(self: *XMLHttpRequestEventTarget, comptime event_type: DispatchT
         page,
     )).asEvent();
 
-    return page._event_manager.dispatchWithFunction(
+    return page._event_manager.dispatchDirect(
         self.asEventTarget(),
         event,
-        local.toLocal(@field(self, field)),
+        @field(self, field),
         .{ .context = "XHR " ++ typ },
     );
 }

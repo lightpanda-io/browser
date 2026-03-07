@@ -19,6 +19,8 @@
 const std = @import("std");
 
 const Page = @import("Page.zig");
+const URL = @import("URL.zig");
+const TreeWalker = @import("webapi/TreeWalker.zig");
 const CData = @import("webapi/CData.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
@@ -103,20 +105,37 @@ fn isVisibleElement(el: *Element) bool {
     };
 }
 
+fn getAnchorLabel(el: *Element) ?[]const u8 {
+    return el.getAttributeSafe(comptime .wrap("aria-label")) orelse el.getAttributeSafe(comptime .wrap("title"));
+}
+
 fn isAllWhitespace(text: []const u8) bool {
     return for (text) |c| {
         if (!std.ascii.isWhitespace(c)) break false;
     } else true;
 }
 
-fn hasBlockDescendant(node: *Node) bool {
-    var it = node.childrenIterator();
-    return while (it.next()) |child| {
-        if (child.is(Element)) |el| {
-            if (isBlock(el.getTag())) break true;
-            if (hasBlockDescendant(child)) break true;
+fn hasBlockDescendant(root: *Node) bool {
+    var tw = TreeWalker.FullExcludeSelf.Elements.init(root, .{});
+    while (tw.next()) |el| {
+        if (isBlock(el.getTag())) return true;
+    }
+    return false;
+}
+
+fn hasVisibleContent(root: *Node) bool {
+    var tw = TreeWalker.FullExcludeSelf.init(root, .{});
+    while (tw.next()) |node| {
+        if (isSignificantText(node)) return true;
+        if (node.is(Element)) |el| {
+            if (!isVisibleElement(el)) {
+                tw.skipChildren();
+            } else if (el.getTag() == .img) {
+                return true;
+            }
         }
-    } else false;
+    }
+    return false;
 }
 
 fn ensureNewline(state: *State, writer: *std.Io.Writer) !void {
@@ -278,20 +297,29 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             }
             try writer.writeAll("](");
             if (el.getAttributeSafe(comptime .wrap("src"))) |src| {
-                try writer.writeAll(src);
+                const absolute_src = URL.resolve(page.call_arena, page.base(), src, .{ .encode = true }) catch src;
+                try writer.writeAll(absolute_src);
             }
             try writer.writeAll(")");
             state.last_char_was_newline = false;
             return;
         },
         .anchor => {
+            const has_content = hasVisibleContent(el.asNode());
+            const label = getAnchorLabel(el);
+            const href_raw = el.getAttributeSafe(comptime .wrap("href"));
+
+            if (!has_content and label == null and href_raw == null) return;
+
             const has_block = hasBlockDescendant(el.asNode());
+            const href = if (href_raw) |h| URL.resolve(page.call_arena, page.base(), h, .{ .encode = true }) catch h else null;
+
             if (has_block) {
                 try renderChildren(el.asNode(), state, writer, page);
-                if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
+                if (href) |h| {
                     if (!state.last_char_was_newline) try writer.writeByte('\n');
-                    try writer.writeAll("([Link](");
-                    try writer.writeAll(href);
+                    try writer.writeAll("([](");
+                    try writer.writeAll(h);
                     try writer.writeAll("))\n");
                     state.last_char_was_newline = true;
                 }
@@ -301,10 +329,14 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             if (isStandaloneAnchor(el)) {
                 if (!state.last_char_was_newline) try writer.writeByte('\n');
                 try writer.writeByte('[');
-                try renderChildren(el.asNode(), state, writer, page);
+                if (has_content) {
+                    try renderChildren(el.asNode(), state, writer, page);
+                } else {
+                    try writer.writeAll(label orelse "");
+                }
                 try writer.writeAll("](");
-                if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
-                    try writer.writeAll(href);
+                if (href) |h| {
+                    try writer.writeAll(h);
                 }
                 try writer.writeAll(")\n");
                 state.last_char_was_newline = true;
@@ -312,10 +344,14 @@ fn renderElement(el: *Element, state: *State, writer: *std.Io.Writer, page: *Pag
             }
 
             try writer.writeByte('[');
-            try renderChildren(el.asNode(), state, writer, page);
+            if (has_content) {
+                try renderChildren(el.asNode(), state, writer, page);
+            } else {
+                try writer.writeAll(label orelse "");
+            }
             try writer.writeAll("](");
-            if (el.getAttributeSafe(comptime .wrap("href"))) |href| {
-                try writer.writeAll(href);
+            if (href) |h| {
+                try writer.writeAll(h);
             }
             try writer.writeByte(')');
             state.last_char_was_newline = false;
@@ -452,6 +488,8 @@ fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
     const testing = @import("../testing.zig");
     const page = try testing.test_session.createPage();
     defer testing.test_session.removePage();
+    page.url = "http://localhost/";
+
     const doc = page.window._document;
 
     const div = try doc.createElement("div", null, page);
@@ -464,35 +502,35 @@ fn testMarkdownHTML(html: []const u8, expected: []const u8) !void {
     try testing.expectString(expected, aw.written());
 }
 
-test "markdown: basic" {
+test "browser.markdown: basic" {
     try testMarkdownHTML("Hello world", "Hello world\n");
 }
 
-test "markdown: whitespace" {
+test "browser.markdown: whitespace" {
     try testMarkdownHTML("<span>A</span> <span>B</span>", "A B\n");
 }
 
-test "markdown: escaping" {
+test "browser.markdown: escaping" {
     try testMarkdownHTML("<p># Not a header</p>", "\n\\# Not a header\n");
 }
 
-test "markdown: strikethrough" {
+test "browser.markdown: strikethrough" {
     try testMarkdownHTML("<s>deleted</s>", "~~deleted~~\n");
 }
 
-test "markdown: task list" {
+test "browser.markdown: task list" {
     try testMarkdownHTML(
         \\<input type="checkbox" checked><input type="checkbox">
     , "[x] [ ] \n");
 }
 
-test "markdown: ordered list" {
+test "browser.markdown: ordered list" {
     try testMarkdownHTML(
         \\<ol><li>First</li><li>Second</li></ol>
     , "1. First\n2. Second\n");
 }
 
-test "markdown: table" {
+test "browser.markdown: table" {
     try testMarkdownHTML(
         \\<table><thead><tr><th>Head 1</th><th>Head 2</th></tr></thead>
         \\<tbody><tr><td>Cell 1</td><td>Cell 2</td></tr></tbody></table>
@@ -505,7 +543,7 @@ test "markdown: table" {
     );
 }
 
-test "markdown: nested lists" {
+test "browser.markdown: nested lists" {
     try testMarkdownHTML(
         \\<ul><li>Parent<ul><li>Child</li></ul></li></ul>
     ,
@@ -515,19 +553,19 @@ test "markdown: nested lists" {
     );
 }
 
-test "markdown: blockquote" {
+test "browser.markdown: blockquote" {
     try testMarkdownHTML("<blockquote>Hello world</blockquote>", "\n> Hello world\n");
 }
 
-test "markdown: links" {
-    try testMarkdownHTML("<a href=\"https://lightpanda.io\">Lightpanda</a>", "[Lightpanda](https://lightpanda.io)\n");
+test "browser.markdown: links" {
+    try testMarkdownHTML("<a href=\"/relative\">Link</a>", "[Link](http://localhost/relative)\n");
 }
 
-test "markdown: images" {
-    try testMarkdownHTML("<img src=\"logo.png\" alt=\"Logo\">", "![Logo](logo.png)\n");
+test "browser.markdown: images" {
+    try testMarkdownHTML("<img src=\"logo.png\" alt=\"Logo\">", "![Logo](http://localhost/logo.png)\n");
 }
 
-test "markdown: headings" {
+test "browser.markdown: headings" {
     try testMarkdownHTML("<h1>Title</h1><h2>Subtitle</h2>",
         \\
         \\# Title
@@ -537,7 +575,7 @@ test "markdown: headings" {
     );
 }
 
-test "markdown: code" {
+test "browser.markdown: code" {
     try testMarkdownHTML(
         \\<p>Use git push</p>
         \\<pre><code>line 1
@@ -554,7 +592,7 @@ test "markdown: code" {
     );
 }
 
-test "markdown: block link" {
+test "browser.markdown: block link" {
     try testMarkdownHTML(
         \\<a href="https://example.com">
         \\  <h3>Title</h3>
@@ -565,12 +603,12 @@ test "markdown: block link" {
         \\### Title
         \\
         \\Description
-        \\([Link](https://example.com))
+        \\([](https://example.com))
         \\
     );
 }
 
-test "markdown: inline link" {
+test "browser.markdown: inline link" {
     try testMarkdownHTML(
         \\<p>Visit <a href="https://example.com">Example</a>.</p>
     ,
@@ -580,7 +618,7 @@ test "markdown: inline link" {
     );
 }
 
-test "markdown: standalone anchors" {
+test "browser.markdown: standalone anchors" {
     // Inside main, with whitespace between anchors -> treated as blocks
     try testMarkdownHTML(
         \\<main>
@@ -588,20 +626,71 @@ test "markdown: standalone anchors" {
         \\  <a href="2">Link 2</a>
         \\</main>
     ,
-        \\[Link 1](1)
-        \\[Link 2](2)
+        \\[Link 1](http://localhost/1)
+        \\[Link 2](http://localhost/2)
         \\
     );
 }
 
-test "markdown: mixed anchors in main" {
+test "browser.markdown: mixed anchors in main" {
     // Anchors surrounded by text should remain inline
     try testMarkdownHTML(
         \\<main>
         \\  Welcome <a href="1">Link 1</a>.
         \\</main>
     ,
-        \\Welcome [Link 1](1). 
+        \\Welcome [Link 1](http://localhost/1). 
         \\
     );
+}
+
+test "browser.markdown: skip empty links" {
+    try testMarkdownHTML(
+        \\<a href="/"></a>
+        \\<a href="/"><svg></svg></a>
+    ,
+        \\[](http://localhost/)
+        \\[](http://localhost/)
+        \\
+    );
+}
+
+test "browser.markdown: resolve links" {
+    const testing = @import("../testing.zig");
+    const page = try testing.test_session.createPage();
+    defer testing.test_session.removePage();
+    page.url = "https://example.com/a/index.html";
+
+    const doc = page.window._document;
+    const div = try doc.createElement("div", null, page);
+    try page.parseHtmlAsChildren(div.asNode(),
+        \\<a href="b">Link</a>
+        \\<img src="../c.png" alt="Img">
+        \\<a href="/my page">Space</a>
+    );
+
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try dump(div.asNode(), .{}, &aw.writer, page);
+
+    try testing.expectString(
+        \\[Link](https://example.com/a/b)
+        \\![Img](https://example.com/c.png) 
+        \\[Space](https://example.com/my%20page)
+        \\
+    , aw.written());
+}
+
+test "browser.markdown: anchor fallback label" {
+    try testMarkdownHTML(
+        \\<a href="/discord" aria-label="Discord Server"><svg></svg></a>
+    , "[Discord Server](http://localhost/discord)\n");
+
+    try testMarkdownHTML(
+        \\<a href="/search" title="Search Site"><svg></svg></a>
+    , "[Search Site](http://localhost/search)\n");
+
+    try testMarkdownHTML(
+        \\<a href="/no-label"><svg></svg></a>
+    , "[](http://localhost/no-label)\n");
 }

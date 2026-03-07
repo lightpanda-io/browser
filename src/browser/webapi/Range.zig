@@ -446,8 +446,9 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
             var offset = self._proto._start_offset;
             while (offset < self._proto._end_offset) : (offset += 1) {
                 if (self._proto._start_container.getChildAt(offset)) |child| {
-                    const cloned = try child.cloneNode(true, page);
-                    _ = try fragment.asNode().appendChild(cloned, page);
+                    if (try child.cloneNodeForAppending(true, page)) |cloned| {
+                        _ = try fragment.asNode().appendChild(cloned, page);
+                    }
                 }
             }
         }
@@ -468,9 +469,11 @@ pub fn cloneContents(self: *const Range, page: *Page) !*DocumentFragment {
         if (self._proto._start_container.parentNode() == self._proto._end_container.parentNode()) {
             var current = self._proto._start_container.nextSibling();
             while (current != null and current != self._proto._end_container) {
-                const cloned = try current.?.cloneNode(true, page);
-                _ = try fragment.asNode().appendChild(cloned, page);
-                current = current.?.nextSibling();
+                const next = current.?.nextSibling();
+                if (try current.?.cloneNodeForAppending(true, page)) |cloned| {
+                    _ = try fragment.asNode().appendChild(cloned, page);
+                }
+                current = next;
             }
         }
 

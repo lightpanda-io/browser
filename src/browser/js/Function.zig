@@ -160,8 +160,8 @@ fn _tryCallWithThis(self: *const Function, comptime T: type, this: anytype, args
             try_catch.rethrow();
             return error.TryCatchRethrow;
         }
-        caught.* = try_catch.caughtOrError(local.call_arena, error.JSExecCallback);
-        return error.JSExecCallback;
+        caught.* = try_catch.caughtOrError(local.call_arena, error.JsException);
+        return error.JsException;
     };
 
     if (@typeInfo(T) == .void) {

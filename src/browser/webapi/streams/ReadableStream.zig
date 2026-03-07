@@ -24,6 +24,7 @@ const Page = @import("../../Page.zig");
 
 const ReadableStreamDefaultReader = @import("ReadableStreamDefaultReader.zig");
 const ReadableStreamDefaultController = @import("ReadableStreamDefaultController.zig");
+const WritableStream = @import("WritableStream.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -233,6 +234,126 @@ pub fn cancel(self: *ReadableStream, reason: ?[]const u8, page: *Page) !js.Promi
     return resolver.promise();
 }
 
+/// pipeThrough(transform) — pipes this readable stream through a transform stream,
+/// returning the readable side. `transform` is a JS object with `readable` and `writable` properties.
+const PipeTransform = struct {
+    writable: *WritableStream,
+    readable: *ReadableStream,
+};
+pub fn pipeThrough(self: *ReadableStream, transform: PipeTransform, page: *Page) !*ReadableStream {
+    if (self.getLocked()) {
+        return error.ReaderLocked;
+    }
+
+    // Start async piping from this stream to the writable side
+    try PipeState.startPipe(self, transform.writable, null, page);
+
+    return transform.readable;
+}
+
+/// pipeTo(writable) — pipes this readable stream to a writable stream.
+/// Returns a promise that resolves when piping is complete.
+pub fn pipeTo(self: *ReadableStream, destination: *WritableStream, page: *Page) !js.Promise {
+    if (self.getLocked()) {
+        return page.js.local.?.rejectPromise("ReadableStream is locked");
+    }
+
+    const local = page.js.local.?;
+    var pipe_resolver = local.createPromiseResolver();
+    const promise = pipe_resolver.promise();
+    const persisted_resolver = try pipe_resolver.persist();
+
+    try PipeState.startPipe(self, destination, persisted_resolver, page);
+
+    return promise;
+}
+
+/// State for an async pipe operation.
+const PipeState = struct {
+    reader: *ReadableStreamDefaultReader,
+    writable: *WritableStream,
+    context_id: usize,
+    resolver: ?js.PromiseResolver.Global,
+
+    fn startPipe(
+        stream: *ReadableStream,
+        writable: *WritableStream,
+        resolver: ?js.PromiseResolver.Global,
+        page: *Page,
+    ) !void {
+        const reader = try stream.getReader(page);
+        const state = try page.arena.create(PipeState);
+        state.* = .{
+            .reader = reader,
+            .writable = writable,
+            .context_id = page.js.id,
+            .resolver = resolver,
+        };
+        try state.pumpRead(page);
+    }
+
+    fn pumpRead(state: *PipeState, page: *Page) !void {
+        const local = page.js.local.?;
+
+        // Call reader.read() which returns a Promise
+        const read_promise = try state.reader.read(page);
+
+        // Create JS callback functions for .then() and .catch()
+        const then_fn = local.newCallback(onReadFulfilled, state);
+        const catch_fn = local.newCallback(onReadRejected, state);
+
+        _ = read_promise.thenAndCatch(then_fn, catch_fn) catch {
+            state.finish(local);
+        };
+    }
+
+    const ReadData = struct {
+        done: bool,
+        value: js.Value,
+    };
+    fn onReadFulfilled(self: *PipeState, data_: ?ReadData, page: *Page) void {
+        const local = page.js.local.?;
+        const data = data_ orelse {
+            return self.finish(local);
+        };
+
+        if (data.done) {
+            // Stream is finished, close the writable side
+            self.writable.closeStream(page) catch {};
+            self.reader.releaseLock();
+            if (self.resolver) |r| {
+                local.toLocal(r).resolve("pipeTo complete", {});
+            }
+            return;
+        }
+
+        const value = data.value;
+        if (value.isUndefined()) {
+            return self.finish(local);
+        }
+
+        self.writable.writeChunk(value, page) catch {
+            return self.finish(local);
+        };
+
+        // Continue reading the next chunk
+        self.pumpRead(page) catch {
+            self.finish(local);
+        };
+    }
+
+    fn onReadRejected(self: *PipeState, page: *Page) void {
+        self.finish(page.js.local.?);
+    }
+
+    fn finish(self: *PipeState, local: *const js.Local) void {
+        self.reader.releaseLock();
+        if (self.resolver) |r| {
+            local.toLocal(r).resolve("pipe finished", {});
+        }
+    }
+};
+
 const Cancel = struct {
     callback: ?js.Function.Global = null,
     reason: ?[]const u8 = null,
@@ -251,6 +372,8 @@ pub const JsApi = struct {
     pub const constructor = bridge.constructor(ReadableStream.init, .{});
     pub const cancel = bridge.function(ReadableStream.cancel, .{});
     pub const getReader = bridge.function(ReadableStream.getReader, .{});
+    pub const pipeThrough = bridge.function(ReadableStream.pipeThrough, .{});
+    pub const pipeTo = bridge.function(ReadableStream.pipeTo, .{});
     pub const locked = bridge.accessor(ReadableStream.getLocked, null, .{});
     pub const symbol_async_iterator = bridge.iterator(ReadableStream.getAsyncIterator, .{ .async = true });
 };

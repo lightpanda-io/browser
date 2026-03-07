@@ -31,6 +31,7 @@ pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         getTargets,
         attachToTarget,
+        attachToBrowserTarget,
         closeTarget,
         createBrowserContext,
         createTarget,
@@ -47,6 +48,7 @@ pub fn processMessage(cmd: anytype) !void {
     switch (action) {
         .getTargets => return getTargets(cmd),
         .attachToTarget => return attachToTarget(cmd),
+        .attachToBrowserTarget => return attachToBrowserTarget(cmd),
         .closeTarget => return closeTarget(cmd),
         .createBrowserContext => return createBrowserContext(cmd),
         .createTarget => return createTarget(cmd),
@@ -79,7 +81,7 @@ fn getTargets(cmd: anytype) !void {
         .targetInfos = [_]TargetInfo{.{
             .targetId = target_id,
             .type = "page",
-            .title = bc.getTitle() orelse "about:blank",
+            .title = bc.getTitle() orelse "",
             .url = bc.getURL() orelse "about:blank",
             .attached = true,
             .canAccessOpener = false,
@@ -177,7 +179,7 @@ fn createTarget(cmd: anytype) !void {
     const page = try bc.session.createPage();
 
     // the target_id == the frame_id of the "root" page
-    const frame_id = id.toFrameId(page.id);
+    const frame_id = id.toFrameId(page._frame_id);
     bc.target_id = frame_id;
     const target_id = &bc.target_id.?;
     {
@@ -207,7 +209,7 @@ fn createTarget(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .attached = false,
             .targetId = target_id,
-            .title = "about:blank",
+            .title = "",
             .browserContextId = bc.id,
             .url = "about:blank",
         },
@@ -243,14 +245,31 @@ fn attachToTarget(cmd: anytype) !void {
         return error.UnknownTargetId;
     }
 
-    if (bc.session_id == null) {
-        try doAttachtoTarget(cmd, target_id);
-    }
+    try doAttachtoTarget(cmd, target_id);
 
-    return cmd.sendResult(
-        .{ .sessionId = bc.session_id },
-        .{ .include_session_id = false },
-    );
+    return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
+}
+
+fn attachToBrowserTarget(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
+
+    const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
+
+    try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
+        .sessionId = session_id,
+        .targetInfo = TargetInfo{
+            .targetId = bc.id, // We use the browser context is as browser's target id.
+            .title = "",
+            .url = "",
+            .type = "browser",
+            // Chrome doesn't send a browserContextId in this case.
+            .browserContextId = null,
+        },
+    }, .{});
+
+    bc.session_id = session_id;
+
+    return cmd.sendResult(.{ .sessionId = bc.session_id }, .{});
 }
 
 fn closeTarget(cmd: anytype) !void {
@@ -311,7 +330,7 @@ fn getTargetInfo(cmd: anytype) !void {
             .targetInfo = TargetInfo{
                 .targetId = target_id,
                 .type = "page",
-                .title = bc.getTitle() orelse "about:blank",
+                .title = bc.getTitle() orelse "",
                 .url = bc.getURL() orelse "about:blank",
                 .attached = true,
                 .canAccessOpener = false,
@@ -323,7 +342,7 @@ fn getTargetInfo(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .targetId = "TID-STARTUP-B",
             .type = "browser",
-            .title = "about:blank",
+            .title = "",
             .url = "about:blank",
             .attached = true,
             .canAccessOpener = false,
@@ -421,7 +440,7 @@ fn setAutoAttach(cmd: anytype) !void {
         if (bc.target_id == null) {
             if (bc.session.currentPage()) |page| {
                 // the target_id == the frame_id of the "root" page
-                bc.target_id = id.toFrameId(page.id);
+                bc.target_id = id.toFrameId(page._frame_id);
                 try doAttachtoTarget(cmd, &bc.target_id.?);
             }
         }
@@ -442,8 +461,8 @@ fn setAutoAttach(cmd: anytype) !void {
         .targetInfo = TargetInfo{
             .type = "page",
             .targetId = "TID-STARTUP-P",
-            .title = "New Private Tab",
-            .url = "chrome://newtab/",
+            .title = "",
+            .url = "about:blank",
             .browserContextId = "BID-STARTUP",
         },
     }, .{});
@@ -451,22 +470,23 @@ fn setAutoAttach(cmd: anytype) !void {
 
 fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
     const bc = cmd.browser_context.?;
-    lp.assert(bc.session_id == null, "CDP.target.doAttachtoTarget not null session_id", .{});
-    const session_id = cmd.cdp.session_id_gen.next();
+    const session_id = bc.session_id orelse cmd.cdp.session_id_gen.next();
 
-    // extra_headers should not be kept on a new page or tab,
-    // currently we have only 1 page, we clear it just in case
-    bc.extra_headers.clearRetainingCapacity();
+    if (bc.session_id == null) {
+        // extra_headers should not be kept on a new page or tab,
+        // currently we have only 1 page, we clear it just in case
+        bc.extra_headers.clearRetainingCapacity();
+    }
 
     try cmd.sendEvent("Target.attachedToTarget", AttachToTarget{
         .sessionId = session_id,
         .targetInfo = TargetInfo{
             .targetId = target_id,
-            .title = "about:blank",
-            .url = "chrome://newtab/",
+            .title = bc.getTitle() orelse "",
+            .url = bc.getURL() orelse "about:blank",
             .browserContextId = bc.id,
         },
-    }, .{});
+    }, .{ .session_id = bc.session_id });
 
     bc.session_id = session_id;
 }
@@ -568,7 +588,7 @@ test "cdp.target: createTarget" {
 
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
     }
 
     {
@@ -580,8 +600,8 @@ test "cdp.target: createTarget" {
 
         // should create a browser context
         const bc = ctx.cdp().browser_context.?;
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = bc.session_id.?, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = bc.id, .targetId = bc.target_id.? } }, .{});
     }
 
     var ctx = testing.context();
@@ -596,7 +616,7 @@ test "cdp.target: createTarget" {
         try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-9" } });
         try testing.expectEqual(true, bc.target_id != null);
         try ctx.expectSentResult(.{ .targetId = bc.target_id.? }, .{ .id = 10 });
-        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "about:blank", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.targetCreated", .{ .targetInfo = .{ .url = "about:blank", .title = "", .attached = false, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
     }
 }
 
@@ -658,7 +678,7 @@ test "cdp.target: attachToTarget" {
         try ctx.processMessage(.{ .id = 11, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-000000000B" } });
         const session_id = bc.session_id.?;
         try ctx.expectSentResult(.{ .sessionId = session_id }, .{ .id = 11 });
-        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "chrome://newtab/", .title = "about:blank", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
+        try ctx.expectSentEvent("Target.attachedToTarget", .{ .sessionId = session_id, .targetInfo = .{ .url = "about:blank", .title = "", .attached = true, .type = "page", .canAccessOpener = false, .browserContextId = "BID-9", .targetId = bc.target_id.? } }, .{});
     }
 }
 
@@ -671,7 +691,7 @@ test "cdp.target: getTargetInfo" {
         try ctx.expectSentResult(.{
             .targetInfo = .{
                 .type = "browser",
-                .title = "about:blank",
+                .title = "",
                 .url = "about:blank",
                 .attached = true,
                 .canAccessOpener = false,

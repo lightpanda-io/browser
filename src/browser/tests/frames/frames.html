@@ -3,52 +3,72 @@
 
 <script>
   function frame1Onload() {
-    window.f1_onload = true;
+    window.f1_onload = 'f1_onload_loaded';
   }
 </script>
 
-<iframe id=f1 onload="frame1Onload" src="support/sub 1.html"></iframe>
+<iframe id=f0></iframe>
+<iframe id=f1 onload="frame1Onload()" src="support/sub 1.html"></iframe>
 <iframe id=f2 src="support/sub2.html"></iframe>
 
-<script id="basic">
-  testing.eventually(() => {
-    testing.expectEqual(undefined, window[10]);
+<script id=empty>
+  {
+    const blank = document.createElement('iframe');
+    testing.expectEqual(null, blank.contentDocument);
+    document.documentElement.appendChild(blank);
+    testing.expectEqual('<html><head></head><body></body></html>', blank.contentDocument.documentElement.outerHTML);
 
-    testing.expectEqual(window, window[0].top);
-    testing.expectEqual(window, window[0].parent);
-    testing.expectEqual(false, window === window[0]);
+    const f0 = $('#f0')
+    testing.expectEqual('<html><head></head><body></body></html>', f0.contentDocument.documentElement.outerHTML);
+  }
+</script>
+
+<script id="basic">
+   // reload it
+  $('#f2').src = 'support/sub2.html';
+  testing.expectEqual(true, true);
+
+  testing.eventually(() => {
+    testing.expectEqual(undefined, window[20]);
 
     testing.expectEqual(window, window[1].top);
     testing.expectEqual(window, window[1].parent);
     testing.expectEqual(false, window === window[1]);
-    testing.expectEqual(false, window[0] === window[1]);
+
+    testing.expectEqual(window, window[2].top);
+    testing.expectEqual(window, window[2].parent);
+    testing.expectEqual(false, window === window[2]);
+    testing.expectEqual(false, window[1] === window[2]);
 
     testing.expectEqual(0, $('#f1').childNodes.length);
 
     testing.expectEqual(testing.BASE_URL + 'frames/support/sub%201.html', $('#f1').src);
-    testing.expectEqual(window[0], $('#f1').contentWindow);
-    testing.expectEqual(window[1], $('#f2').contentWindow);
+    testing.expectEqual(window[1], $('#f1').contentWindow);
+    testing.expectEqual(window[2], $('#f2').contentWindow);
 
-    testing.expectEqual(window[0].document, $('#f1').contentDocument);
-    testing.expectEqual(window[1].document, $('#f2').contentDocument);
+    testing.expectEqual(window[1].document, $('#f1').contentDocument);
+    testing.expectEqual(window[2].document, $('#f2').contentDocument);
 
     // sibling frames share the same top
-    testing.expectEqual(window[0].top, window[1].top);
+    testing.expectEqual(window[1].top, window[2].top);
 
     // child frames have no sub-frames
-    testing.expectEqual(0, window[0].length);
     testing.expectEqual(0, window[1].length);
+    testing.expectEqual(0, window[2].length);
 
     // self and window are self-referential on child frames
-    testing.expectEqual(window[0], window[0].self);
-    testing.expectEqual(window[0], window[0].window);
     testing.expectEqual(window[1], window[1].self);
+    testing.expectEqual(window[1], window[1].window);
+    testing.expectEqual(window[2], window[2].self);
 
     // child frame's top.parent is itself (root has no parent)
     testing.expectEqual(window, window[0].top.parent);
 
+    // Todo: Context security tokens
     // testing.expectEqual(true, window.sub1_loaded);
     // testing.expectEqual(true, window.sub2_loaded);
+    // testing.expectEqual(1, window.sub1_count);
+    // testing.expectEqual(2, window.sub2_count);
   });
 </script>
 
@@ -56,6 +76,7 @@
   {
     let f3_load_event = false;
     let f3 = document.createElement('iframe');
+    f3.id = 'f3';
     f3.addEventListener('load', () => {
       f3_load_event = true;
     });
@@ -63,14 +84,62 @@
     document.documentElement.appendChild(f3);
 
     testing.eventually(() => {
-      testing.expectEqual(true, window.f1_onload);
+      testing.expectEqual('f1_onload_loaded', window.f1_onload);
       testing.expectEqual(true, f3_load_event);
     });
   }
 </script>
 
+<script id=about_blank>
+  {
+    let f4 = document.createElement('iframe');
+    f4.id = 'f4';
+    f4.src = "about:blank";
+    document.documentElement.appendChild(f4);
+
+    testing.eventually(() => {
+      testing.expectEqual("<html><head></head><body></body></html>", f4.contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
+
+<script id=about_blank_renavigate>
+  {
+    let f5 = document.createElement('iframe');
+    f5.id = 'f5';
+    f5.src = "support/sub 1.html";
+    document.documentElement.appendChild(f5);
+    f5.src = "about:blank";
+
+    testing.eventually(() => {
+      testing.expectEqual("<html><head></head><body></body></html>", f5.contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
+
+<script id=link_click>
+  testing.async(async (restore) => {
+    await new Promise((resolve) => {
+      let count = 0;
+      let f6 = document.createElement('iframe');
+      f6.id = 'f6';
+      f6.addEventListener('load', () => {
+        if (++count == 2) {
+          resolve();
+          return;
+        }
+        f6.contentDocument.querySelector('#link').click();
+      });
+      f6.src = "support/with_link.html";
+      document.documentElement.appendChild(f6);
+    });
+    restore();
+    testing.expectEqual("<html><head></head><body>It was clicked!\n</body></html>", f6.contentDocument.documentElement.outerHTML);
+  });
+</script>
+
 <script id=count>
   testing.eventually(() => {
-    testing.expectEqual(3, window.length);
+    testing.expectEqual(8, window.length);
   });
 </script>

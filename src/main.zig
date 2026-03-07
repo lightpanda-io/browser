@@ -155,6 +155,21 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 return err;
             };
         },
+        .mcp => {
+            log.info(.mcp, "starting server", .{});
+
+            log.opts.format = .logfmt;
+
+            var stdout = std.fs.File.stdout().writer(&.{});
+
+            var mcp_server: *lp.mcp.Server = try .init(allocator, app, &stdout.interface);
+            defer mcp_server.deinit();
+
+            var stdin_buf: [64 * 1024]u8 = undefined;
+            var stdin = std.fs.File.stdin().reader(&stdin_buf);
+
+            try lp.mcp.router.processRequests(mcp_server, &stdin.interface);
+        },
         else => unreachable,
     }
 }

@@ -983,6 +983,10 @@ test "URL: ensureEncoded" {
             .url = "https://example.com/path?value=100% done",
             .expected = "https://example.com/path?value=100%25%20done",
         },
+        .{
+            .url = "about:blank",
+            .expected = "about:blank",
+        },
     };
 
     for (cases) |case| {

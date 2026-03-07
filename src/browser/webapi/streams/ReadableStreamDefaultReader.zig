@@ -44,11 +44,13 @@ pub const ReadResult = struct {
         empty,
         string: []const u8,
         uint8array: js.TypedArray(u8),
+        js_value: js.Value.Global,
 
         pub fn fromChunk(chunk: ReadableStreamDefaultController.Chunk) Chunk {
             return switch (chunk) {
                 .string => |s| .{ .string = s },
                 .uint8array => |arr| .{ .uint8array = arr },
+                .js_value => |val| .{ .js_value = val },
             };
         }
     };

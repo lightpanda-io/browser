@@ -30,6 +30,7 @@ pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
+pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 const BrowserCommand = @import("display/BrowserCommand.zig").BrowserCommand;
@@ -274,7 +275,7 @@ fn handleBrowseCommand(
             try page.scheduleNavigation(normalized_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
-            }, .script);
+            }, .{ .script = null });
         },
         .back => {
             restore_committed_surface.* = false;
@@ -305,7 +306,7 @@ fn handleBrowseCommand(
                 .reason = .navigation,
                 .force = true,
                 .kind = .reload,
-            }, .script);
+            }, .{ .script = null });
         },
         .stop => {
             restore_committed_surface.* = committed_surface.available();

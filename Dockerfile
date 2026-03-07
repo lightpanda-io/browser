@@ -36,10 +36,6 @@ RUN ZIG=$(grep '\.minimum_zig_version = "' "build.zig.zon" | cut -d'"' -f2) && \
     mv zig-${ARCH}-linux-${ZIG} /usr/local/lib && \
     ln -s /usr/local/lib/zig-${ARCH}-linux-${ZIG}/zig /usr/local/bin/zig
 
-# install deps
-RUN git submodule init && \
-    git submodule update --recursive
-
 # download and install v8
 RUN case $TARGETPLATFORM in \
     "linux/arm64") ARCH="aarch64" ;; \

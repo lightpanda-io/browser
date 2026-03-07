@@ -49,11 +49,18 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
 
-    app.config = config;
-    app.allocator = allocator;
-    app.display = Display.init(allocator, config);
-
-    app.robots = RobotStore.init(allocator);
+    app.* = .{
+        .config = config,
+        .allocator = allocator,
+        .display = Display.init(allocator, config),
+        .robots = RobotStore.init(allocator),
+        .http = undefined,
+        .platform = undefined,
+        .snapshot = undefined,
+        .app_dir_path = undefined,
+        .telemetry = undefined,
+        .arena_pool = undefined,
+    };
 
     app.http = try Http.init(allocator, &app.robots, config);
     errdefer app.http.deinit();
@@ -69,7 +76,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.telemetry = try Telemetry.init(app, config.mode);
     errdefer app.telemetry.deinit();
 
-    app.arena_pool = ArenaPool.init(allocator);
+    app.arena_pool = ArenaPool.init(allocator, 512, 1024 * 16);
     errdefer app.arena_pool.deinit();
 
     return app;

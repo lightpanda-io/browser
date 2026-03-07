@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=transform_stream_basic>
+  {
+    const ts = new TransformStream();
+    testing.expectEqual('object', typeof ts);
+    testing.expectEqual('object', typeof ts.readable);
+    testing.expectEqual('object', typeof ts.writable);
+  }
+</script>
+
+<script id=transform_stream_with_transformer>
+  (async function() {
+    const ts = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.toUpperCase());
+      }
+    });
+
+    const writer = ts.writable.getWriter();
+    const reader = ts.readable.getReader();
+
+    await writer.write('hello');
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('HELLO', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=writable_stream_basic>
+  {
+    const ws = new WritableStream();
+    testing.expectEqual('object', typeof ws);
+    testing.expectEqual(false, ws.locked);
+  }
+</script>
+
+<script id=writable_stream_writer>
+  {
+    const ws = new WritableStream();
+    const writer = ws.getWriter();
+    testing.expectEqual('object', typeof writer);
+    testing.expectEqual(true, ws.locked);
+  }
+</script>
+
+<script id=writable_stream_writer_desired_size>
+  {
+    const ws = new WritableStream();
+    const writer = ws.getWriter();
+    testing.expectEqual(1, writer.desiredSize);
+  }
+</script>
+
+<script id=text_encoder_stream_encoding>
+  {
+    const tes = new TextEncoderStream();
+    testing.expectEqual('utf-8', tes.encoding);
+    testing.expectEqual('object', typeof tes.readable);
+    testing.expectEqual('object', typeof tes.writable);
+  }
+</script>
+
+<script id=text_encoder_stream_encode>
+  (async function() {
+    const tes = new TextEncoderStream();
+
+    const writer = tes.writable.getWriter();
+    const reader = tes.readable.getReader();
+
+    await writer.write('hi');
+    await writer.close();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual(true, result.value instanceof Uint8Array);
+    // 'hi' in UTF-8 is [104, 105]
+    testing.expectEqual(104, result.value[0]);
+    testing.expectEqual(105, result.value[1]);
+    testing.expectEqual(2, result.value.length);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=pipe_through_basic>
+  (async function() {
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue('hello');
+        controller.close();
+      }
+    });
+
+    const ts = new TransformStream({
+      transform(chunk, controller) {
+        controller.enqueue(chunk.toUpperCase());
+      }
+    });
+
+    const output = input.pipeThrough(ts);
+    const reader = output.getReader();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('HELLO', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>
+
+<script id=pipe_to_basic>
+  (async function() {
+    const chunks = [];
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue('a');
+        controller.enqueue('b');
+        controller.close();
+      }
+    });
+
+    const ws = new WritableStream({
+      write(chunk) {
+        chunks.push(chunk);
+      }
+    });
+
+    await input.pipeTo(ws);
+    testing.expectEqual(2, chunks.length);
+    testing.expectEqual('a', chunks[0]);
+    testing.expectEqual('b', chunks[1]);
+  })();
+</script>
+
+<script id=pipe_through_text_decoder>
+  (async function() {
+    const bytes = new Uint8Array([104, 101, 108, 108, 111]);
+    const input = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      }
+    });
+
+    const output = input.pipeThrough(new TextDecoderStream());
+    const reader = output.getReader();
+
+    const result = await reader.read();
+    testing.expectEqual(false, result.done);
+    testing.expectEqual('hello', result.value);
+
+    const result2 = await reader.read();
+    testing.expectEqual(true, result2.done);
+  })();
+</script>

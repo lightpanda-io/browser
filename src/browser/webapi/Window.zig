@@ -172,8 +172,8 @@ pub fn getSelection(self: *const Window) *Selection {
     return &self._document._selection;
 }
 
-pub fn setLocation(_: *const Window, url: [:0]const u8, page: *Page) !void {
-    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .script);
+pub fn setLocation(self: *Window, url: [:0]const u8, page: *Page) !void {
+    return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._page });
 }
 
 pub fn getHistory(_: *Window, page: *Page) *History {
@@ -568,10 +568,10 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
         .promise = try rejection.promise().temp(),
     }, page)).asEvent();
 
-    try page._event_manager.dispatchWithFunction(
+    try page._event_manager.dispatchDirect(
         self.asEventTarget(),
         event,
-        rejection.local.toLocal(self._on_unhandled_rejection),
+        self._on_unhandled_rejection,
         .{ .inject_target = true, .context = "window.unhandledrejection" },
     );
 }

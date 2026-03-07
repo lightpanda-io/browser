@@ -209,6 +209,7 @@ pub fn getTagNameLower(self: *const Element) []const u8 {
                 .custom => |e| e._tag_name.str(),
                 .data => "data",
                 .datalist => "datalist",
+                .details => "details",
                 .dialog => "dialog",
                 .directory => "dir",
                 .div => "div",
@@ -287,6 +288,7 @@ pub fn getTagNameSpec(self: *const Element, buf: []u8) []const u8 {
             .custom => |e| upperTagName(&e._tag_name, buf),
             .data => "DATA",
             .datalist => "DATALIST",
+            .details => "DETAILS",
             .dialog => "DIALOG",
             .directory => "DIR",
             .div => "DIV",
@@ -1412,11 +1414,12 @@ pub fn clone(self: *Element, deep: bool, page: *Page) !*Node {
     if (deep) {
         var child_it = self.asNode().childrenIterator();
         while (child_it.next()) |child| {
-            const cloned_child = try child.cloneNode(true, page);
-            // We pass `true` to `child_already_connected` as a hacky optimization
-            // We _know_ this child isn't connected (Becasue the parent isn't connected)
-            // setting this to `true` skips all connection checks and just assumes t
-            try page.appendNode(node, cloned_child, .{ .child_already_connected = true });
+            if (try child.cloneNodeForAppending(true, page)) |cloned_child| {
+                // We pass `true` to `child_already_connected` as a hacky optimization
+                // We _know_ this child isn't connected (Because the parent isn't connected)
+                // setting this to `true` skips all connection checks.
+                try page.appendNode(node, cloned_child, .{ .child_already_connected = true });
+            }
         }
     }
 
@@ -1471,6 +1474,7 @@ pub fn getTag(self: *const Element) Tag {
             .custom => .custom,
             .data => .data,
             .datalist => .datalist,
+            .details => .details,
             .dialog => .dialog,
             .directory => .directory,
             .iframe => .iframe,
