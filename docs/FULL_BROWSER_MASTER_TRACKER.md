@@ -118,9 +118,9 @@ Current state inside Gate 1:
 - browser-side named-target queueing/reuse is now implemented for anchors and
   form submission, with direct page/session tests covering anchor click, anchor
   `Enter`, and GET/POST form submission
-- bounded headed probes remain the acceptance gate for `_blank` popup flows;
-  rendered named-target pointer activation is still narrower and not yet the
-  runtime acceptance gate
+- bounded headed probes remain the acceptance gate for `_blank` popup flows
+  and rendered named-target anchor pointer activation, including target-tab
+  reuse
 - next blocker: expand popup policy beyond the current narrow named-target path
   and make chrome state clearer around popup/tab targeting
 

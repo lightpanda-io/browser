@@ -4,6 +4,7 @@ const URL = @import("../browser/URL.zig");
 const Node = @import("../browser/webapi/Node.zig");
 const Element = @import("../browser/webapi/Element.zig");
 const HTMLDocument = @import("../browser/webapi/HTMLDocument.zig");
+const testing = @import("../testing.zig");
 const DisplayList = @import("DisplayList.zig").DisplayList;
 const Command = @import("DisplayList.zig").Command;
 const Color = @import("DisplayList.zig").Color;
@@ -505,7 +506,8 @@ const Painter = struct {
         sortCommandRowFragments(fragments.items);
         const resolved = try URL.resolve(self.page.call_arena, self.page.base(), href, .{ .encode = true });
         const download_filename = element.getAttributeSafe(comptime .wrap("download")) orelse "";
-        const open_in_new_tab = linkOpensInNewTab(element);
+        const open_in_new_tab = linkOpensFreshTab(element);
+        const target_name = linkTargetName(element);
         for (fragments.items) |fragment| {
             try self.list.addLinkRegion(self.allocator, .{
                 .x = fragment.x,
@@ -515,7 +517,7 @@ const Painter = struct {
                 .url = @constCast(resolved),
                 .download_filename = @constCast(download_filename),
                 .open_in_new_tab = open_in_new_tab,
-                .target_name = @constCast(""),
+                .target_name = @constCast(target_name),
             });
         }
     }
@@ -603,23 +605,46 @@ fn resolvedLinkRegion(
         .height = height,
         .url = @constCast(resolved),
         .download_filename = @constCast(element.getAttributeSafe(comptime .wrap("download")) orelse ""),
-        .open_in_new_tab = linkOpensInNewTab(element),
-        .target_name = @constCast(""),
+        .open_in_new_tab = linkOpensFreshTab(element),
+        .target_name = @constCast(linkTargetName(element)),
     };
 }
 
-fn linkOpensInNewTab(element: *Element) bool {
-    const target = element.getAttributeSafe(comptime .wrap("target")) orelse return false;
+const LinkTargetKind = union(enum) {
+    same_context,
+    new_tab,
+    named: []const u8,
+};
+
+fn classifyLinkTargetValue(target_value: []const u8) LinkTargetKind {
+    const target = std.mem.trim(u8, target_value, &std.ascii.whitespace);
     if (target.len == 0) {
-        return false;
+        return .same_context;
     }
     if (std.ascii.eqlIgnoreCase(target, "_self") or
         std.ascii.eqlIgnoreCase(target, "_parent") or
         std.ascii.eqlIgnoreCase(target, "_top"))
     {
-        return false;
+        return .same_context;
     }
-    return true;
+    if (std.ascii.eqlIgnoreCase(target, "_blank")) {
+        return .new_tab;
+    }
+    return .{ .named = target };
+}
+
+fn linkOpensFreshTab(element: *Element) bool {
+    return switch (classifyLinkTargetValue(element.getAttributeSafe(comptime .wrap("target")) orelse "")) {
+        .new_tab => true,
+        else => false,
+    };
+}
+
+fn linkTargetName(element: *Element) []const u8 {
+    return switch (classifyLinkTargetValue(element.getAttributeSafe(comptime .wrap("target")) orelse "")) {
+        .named => |target_name| target_name,
+        else => "",
+    };
 }
 
 fn collectCommandRowFragments(
@@ -1424,4 +1449,46 @@ test "isInlineDisplay matches inline variants" {
     try std.testing.expect(isInlineDisplay("inline-block"));
     try std.testing.expect(isInlineDisplay(" inline-flex "));
     try std.testing.expect(!isInlineDisplay("block"));
+}
+
+test "classifyLinkTargetValue distinguishes blank named and same-context targets" {
+    try std.testing.expectEqual(LinkTargetKind.same_context, classifyLinkTargetValue(""));
+    try std.testing.expectEqual(LinkTargetKind.same_context, classifyLinkTargetValue("_self"));
+    try std.testing.expectEqual(LinkTargetKind.same_context, classifyLinkTargetValue("_TOP"));
+    try std.testing.expectEqual(LinkTargetKind.new_tab, classifyLinkTargetValue("_blank"));
+    const named = classifyLinkTargetValue(" report ");
+    try std.testing.expectEqualStrings(
+        "report",
+        switch (named) {
+            .named => |value| value,
+            else => return error.TestUnexpectedTargetKind,
+        },
+    );
+}
+
+test "paintDocument emits named target link region" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.link_regions.items) |region| {
+        if (!std.mem.eql(u8, region.target_name, "report")) {
+            continue;
+        }
+        try std.testing.expectEqualStrings(
+            "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=anchor",
+            region.url,
+        );
+        try std.testing.expect(region.width > 0);
+        try std.testing.expect(region.height > 0);
+        found = true;
+        break;
+    }
+
+    try std.testing.expect(found);
 }

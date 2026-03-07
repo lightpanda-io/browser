@@ -37,6 +37,7 @@ const Display = @import("display/Display.zig");
 const BrowserCommand = @import("display/BrowserCommand.zig").BrowserCommand;
 const DocumentPainter = @import("render/DocumentPainter.zig");
 const HttpClient = @import("http/Client.zig");
+const testing = @import("testing.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -1060,7 +1061,11 @@ fn navigateBrowseTabToOwnedUrl(tab: *BrowseTab, raw_url: []const u8, opts: Page.
         return;
     }
     const page = tab.session.currentPage() orelse return;
-    try page.navigateOwned(raw_url, opts);
+    if (pageIsBlankIdle(page)) {
+        try page.navigateOwned(raw_url, opts);
+        return;
+    }
+    try page.scheduleNavigation(raw_url, opts, .{ .script = null });
 }
 
 fn applyZoomCommand(current_zoom: i32, default_zoom_percent: i32, command: BrowserCommand) i32 {
@@ -1808,6 +1813,7 @@ fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
             .title = "Closed Tab",
             .url = "about:blank",
             .is_loading = false,
+            .target_name = tab.target_name,
         };
     };
 
@@ -1816,6 +1822,7 @@ fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
             .title = "New Tab",
             .url = "about:blank",
             .is_loading = false,
+            .target_name = tab.target_name,
         };
     }
 
@@ -1833,6 +1840,7 @@ fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
         .title = title,
         .url = url,
         .is_loading = pageIsLoading(page),
+        .target_name = tab.target_name,
     };
 }
 
@@ -2144,6 +2152,84 @@ test "shouldAppendStartupUrl skips restored duplicates" {
 
     try std.testing.expect(!shouldAppendStartupUrl(saved.tabs.items, "http://two.test/"));
     try std.testing.expect(shouldAppendStartupUrl(saved.tabs.items, "http://three.test/"));
+}
+
+test "targetAlwaysOpensFreshTab only matches _blank" {
+    try std.testing.expect(targetAlwaysOpensFreshTab("_blank"));
+    try std.testing.expect(targetAlwaysOpensFreshTab(" _BLANK "));
+    try std.testing.expect(!targetAlwaysOpensFreshTab(""));
+    try std.testing.expect(!targetAlwaysOpensFreshTab("report"));
+}
+
+test "findBrowseTabIndexByTargetName ignores blank and matches named targets" {
+    var one = BrowseTab{
+        .http_client = undefined,
+        .notification = undefined,
+        .browser = undefined,
+        .session = undefined,
+        .target_name = @constCast("report"),
+    };
+    var two = BrowseTab{
+        .http_client = undefined,
+        .notification = undefined,
+        .browser = undefined,
+        .session = undefined,
+        .target_name = @constCast("audit"),
+    };
+    const tabs = [_]*BrowseTab{ &one, &two };
+    try std.testing.expectEqual(@as(?usize, 0), findBrowseTabIndexByTargetName(&tabs, "report"));
+    try std.testing.expectEqual(@as(?usize, 1), findBrowseTabIndexByTargetName(&tabs, " AUDIT "));
+    try std.testing.expectEqual(@as(?usize, null), findBrowseTabIndexByTargetName(&tabs, "_blank"));
+}
+
+test "openOrReuseTargetedBrowseTab reuses existing named tab" {
+    var tabs: std.ArrayListUnmanaged(*BrowseTab) = .{};
+    defer deinitBrowseTabs(testing.test_app.allocator, &tabs);
+
+    var active_tab_index: usize = 0;
+    const source = try createBrowseTab(testing.test_app, null, 100);
+    try appendBrowseTab(testing.test_app.allocator, &tabs, source, &active_tab_index, true);
+
+    const first_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html";
+    const second_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-post.html";
+    const opts: Page.NavigateOpts = .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+    };
+
+    try openOrReuseTargetedBrowseTab(
+        testing.test_app,
+        &tabs,
+        &active_tab_index,
+        100,
+        first_url,
+        opts,
+        "report",
+        true,
+    );
+    try std.testing.expectEqual(@as(usize, 2), tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), active_tab_index);
+    try std.testing.expectEqualStrings("report", tabs.items[1].target_name);
+    _ = tabs.items[1].session.wait(2000);
+
+    active_tab_index = 0;
+    try openOrReuseTargetedBrowseTab(
+        testing.test_app,
+        &tabs,
+        &active_tab_index,
+        100,
+        second_url,
+        opts,
+        "report",
+        true,
+    );
+    try std.testing.expectEqual(@as(usize, 2), tabs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), active_tab_index);
+    try std.testing.expectEqualStrings("report", tabs.items[1].target_name);
+    _ = tabs.items[1].session.wait(2000);
+
+    const target_page = tabs.items[1].session.currentPage() orelse return error.TestPageMissing;
+    try std.testing.expectEqualStrings(second_url, target_page.url);
 }
 
 test "sanitizeDownloadFileName replaces invalid windows characters" {

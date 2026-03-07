@@ -415,7 +415,8 @@ pub const Win32Backend = struct {
             for (entries, self.presentation_tab_entries.items) |entry, existing| {
                 if (entry.is_loading != existing.is_loading or
                     !std.mem.eql(u8, entry.title, existing.title) or
-                    !std.mem.eql(u8, entry.url, existing.url))
+                    !std.mem.eql(u8, entry.url, existing.url) or
+                    !std.mem.eql(u8, entry.target_name, existing.target_name))
                 {
                     unchanged = false;
                     break;
@@ -444,10 +445,19 @@ pub const Win32Backend = struct {
                 deinitOwnedTabList(&self.presentation_tab_entries, self.allocator);
                 return;
             };
+            errdefer self.allocator.free(owned_url);
+            const owned_target_name = self.allocator.dupe(u8, entry.target_name) catch |err| {
+                self.allocator.free(owned_title);
+                self.allocator.free(owned_url);
+                log.warn(.app, "win tab target copy failed", .{ .err = err });
+                deinitOwnedTabList(&self.presentation_tab_entries, self.allocator);
+                return;
+            };
             self.presentation_tab_entries.appendAssumeCapacity(.{
                 .title = owned_title,
                 .url = owned_url,
                 .is_loading = entry.is_loading,
+                .target_name = owned_target_name,
             });
         }
         self.presentation_active_tab_index = normalized_active_index;
@@ -1012,10 +1022,12 @@ const PresentationTabEntry = struct {
     title: []u8,
     url: []u8,
     is_loading: bool,
+    target_name: []u8,
 
     fn deinit(self: *PresentationTabEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
         allocator.free(self.url);
+        allocator.free(self.target_name);
         self.* = undefined;
     }
 };
@@ -1127,10 +1139,13 @@ fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
                 errdefer backend.allocator.free(owned_title);
                 const owned_url = try backend.allocator.dupe(u8, entry.url);
                 errdefer backend.allocator.free(owned_url);
+                const owned_target_name = try backend.allocator.dupe(u8, entry.target_name);
+                errdefer backend.allocator.free(owned_target_name);
                 tab_entries.appendAssumeCapacity(.{
                     .title = owned_title,
                     .url = owned_url,
                     .is_loading = entry.is_loading,
+                    .target_name = owned_target_name,
                 });
             }
             break :blk tab_entries;
@@ -2976,10 +2991,7 @@ fn drawTabStrip(
             _ = c.FrameRect(hdc, &border_rect, border);
         }
 
-        const label = if (entry.is_loading)
-            std.fmt.allocPrint(allocator, "* {s}", .{entry.title}) catch entry.title
-        else
-            entry.title;
+        const label = formatTabStripLabel(allocator, entry) catch entry.title;
         defer if (label.ptr != entry.title.ptr) allocator.free(label);
 
         var text_rect = rect;
@@ -3002,6 +3014,46 @@ fn drawTabStrip(
     }
 
     drawChromeButton(hdc, tabNewButtonRect(client), "+", true);
+}
+
+fn formatTabStripLabel(allocator: std.mem.Allocator, entry: PresentationTabEntry) ![]u8 {
+    if (entry.target_name.len > 0) {
+        if (entry.is_loading) {
+            return try std.fmt.allocPrint(allocator, "* [{s}] {s}", .{ entry.target_name, entry.title });
+        }
+        return try std.fmt.allocPrint(allocator, "[{s}] {s}", .{ entry.target_name, entry.title });
+    }
+    if (entry.is_loading) {
+        return try std.fmt.allocPrint(allocator, "* {s}", .{entry.title});
+    }
+    return entry.title;
+}
+
+fn activePopupTargetName(snapshot: *const PresentationSnapshot) []const u8 {
+    if (snapshot.tab_entries.items.len == 0) {
+        return "";
+    }
+    const active_index = @min(snapshot.active_tab_index, snapshot.tab_entries.items.len - 1);
+    return snapshot.tab_entries.items[active_index].target_name;
+}
+
+fn formatPresentationHintText(
+    allocator: std.mem.Allocator,
+    zoom_percent: i32,
+    active_popup_target: []const u8,
+) ![]u8 {
+    if (active_popup_target.len > 0) {
+        return try std.fmt.allocPrint(
+            allocator,
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]",
+            .{ zoom_percent, active_popup_target },
+        );
+    }
+    return try std.fmt.allocPrint(
+        allocator,
+        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
+        .{zoom_percent},
+    );
 }
 
 fn findBoxRect(client: c.RECT) c.RECT {
@@ -4066,10 +4118,10 @@ fn renderPresentationScene(
         .right = client.right - PRESENTATION_MARGIN,
         .bottom = client.top + PRESENTATION_HINT_BOTTOM,
     };
-    const hint_text = std.fmt.allocPrint(
+    const hint_text = formatPresentationHintText(
         allocator,
-        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
-        .{snapshot.zoom_percent},
+        snapshot.zoom_percent,
+        activePopupTargetName(snapshot),
     ) catch return;
     defer allocator.free(hint_text);
     drawPresentationText(
@@ -6345,6 +6397,33 @@ test "win32 rendered target link queues navigate_target_tab" {
     );
 }
 
+test "win32 formatTabStripLabel includes popup target prefix" {
+    const plain = try formatTabStripLabel(std.testing.allocator, .{
+        .title = @constCast("Result"),
+        .url = @constCast("http://popup.test/result"),
+        .is_loading = false,
+        .target_name = @constCast("report"),
+    });
+    defer std.testing.allocator.free(plain);
+    try std.testing.expectEqualStrings("[report] Result", plain);
+
+    const loading = try formatTabStripLabel(std.testing.allocator, .{
+        .title = @constCast("Result"),
+        .url = @constCast("http://popup.test/result"),
+        .is_loading = true,
+        .target_name = @constCast("report"),
+    });
+    defer std.testing.allocator.free(loading);
+    try std.testing.expectEqualStrings("* [report] Result", loading);
+}
+
+test "win32 formatPresentationHintText includes active popup target" {
+    const hint = try formatPresentationHintText(std.testing.allocator, 110, "report");
+    defer std.testing.allocator.free(hint);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "Zoom 110%") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "Popup target [report]") != null);
+}
+
 test "win32 chrome button hit test maps back forward reload" {
     const mid_y = @as(f64, @floatFromInt((PRESENTATION_ADDRESS_TOP + PRESENTATION_ADDRESS_BOTTOM) / 2));
     try std.testing.expectEqual(ChromeButtonKind.back, chromeCommandKindAtClientPoint(24, mid_y).?);
@@ -6360,9 +6439,10 @@ test "win32 tab strip hit test maps activate close and new" {
         title: []const u8,
         url: []const u8,
         is_loading: bool,
+        target_name: []const u8,
     }{
-        .{ .title = "One", .url = "http://one.test/", .is_loading = false },
-        .{ .title = "Two", .url = "http://two.test/", .is_loading = true },
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "" },
+        .{ .title = "Two", .url = "http://two.test/", .is_loading = true, .target_name = "report" },
     };
     backend.setTabEntries(tabs[0..], 1);
 
@@ -6409,10 +6489,11 @@ test "win32 tab shortcuts enqueue commands" {
         title: []const u8,
         url: []const u8,
         is_loading: bool,
+        target_name: []const u8,
     }{
-        .{ .title = "One", .url = "http://one.test/", .is_loading = false },
-        .{ .title = "Two", .url = "http://two.test/", .is_loading = false },
-        .{ .title = "Three", .url = "http://three.test/", .is_loading = false },
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "" },
+        .{ .title = "Two", .url = "http://two.test/", .is_loading = false, .target_name = "report" },
+        .{ .title = "Three", .url = "http://three.test/", .is_loading = false, .target_name = "" },
     };
     backend.setTabEntries(tabs[0..], 1);
     backend.presentation_title = try std.testing.allocator.dupe(u8, "Tabs");
@@ -6443,8 +6524,9 @@ test "win32 single tab close button is disabled" {
         title: []const u8,
         url: []const u8,
         is_loading: bool,
+        target_name: []const u8,
     }{
-        .{ .title = "One", .url = "http://one.test/", .is_loading = false },
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "" },
     };
     backend.setTabEntries(tabs[0..], 0);
 

@@ -78,6 +78,7 @@ pub const TabEntry = struct {
     title: []const u8,
     url: []const u8,
     is_loading: bool,
+    target_name: []const u8,
 };
 
 pub const DownloadEntry = struct {
