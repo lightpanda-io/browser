@@ -22,6 +22,7 @@
 //! The structure does not clear the memory allocated in the arena,
 //! clear the entire arena when exiting the program.
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const lp = @import("lightpanda");
@@ -44,11 +45,17 @@ pub const Listener = struct {
 };
 
 pub fn install(self: *SigHandler) !void {
+    if (comptime builtin.os.tag == .windows) {
+        return;
+    }
+
     // Block SIGINT and SIGTERM for the current thread and all created from it
     self.sigset = std.posix.sigemptyset();
     std.posix.sigaddset(&self.sigset, std.posix.SIG.INT);
     std.posix.sigaddset(&self.sigset, std.posix.SIG.TERM);
-    std.posix.sigaddset(&self.sigset, std.posix.SIG.QUIT);
+    if (comptime builtin.os.tag != .windows) {
+        std.posix.sigaddset(&self.sigset, std.posix.SIG.QUIT);
+    }
     std.posix.sigprocmask(std.posix.SIG.BLOCK, &self.sigset, null);
 
     self.handle_thread = try std.Thread.spawn(.{ .allocator = self.arena }, SigHandler.sighandle, .{self});

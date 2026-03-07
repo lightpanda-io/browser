@@ -7,6 +7,8 @@
 <a href="/hello/world/anchor2.html" id=a2></a>
 <a href="https://www.openmymind.net/Elixirs-With-Statement/" id=a3></a>
 <a id=link href=foo>OK</a>
+<a id=nested_link href="#nested-target"><span id=nested_label>Nested Link</span></a>
+<div id=nested-target></div>
 
 <script id=empty_href>
   testing.expectEqual('', $('#a0').href);
@@ -252,4 +254,25 @@
     a.href = 'over 9000!';
     testing.expectEqual(testing.BASE_URL + 'element/html/over%209000!', a.href);
   }
+</script>
+
+<script id=anchor_click_uses_clickable_ancestor>
+{
+  location.hash = '';
+  $('#nested_label').click();
+  testing.eventually(() => {
+    testing.expectEqual('#nested-target', location.hash);
+  });
+}
+</script>
+
+<script id=keydown_enter_clicks_anchor>
+{
+  location.hash = '';
+  $('#nested_link').focus();
+  $('#nested_link').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  testing.eventually(() => {
+    testing.expectEqual('#nested-target', location.hash);
+  });
+}
 </script>

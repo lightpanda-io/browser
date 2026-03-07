@@ -23,6 +23,7 @@ const Build = std.Build;
 pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const is_msvc = target.result.abi == .msvc;
 
     const manifest = Manifest.init(b);
 
@@ -45,7 +46,7 @@ pub fn build(b: *Build) !void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
-            .link_libcpp = true,
+            .link_libcpp = target.result.abi != .msvc,
             .sanitize_c = enable_csan,
             .sanitize_thread = enable_tsan,
         });
@@ -55,6 +56,16 @@ pub fn build(b: *Build) !void {
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
         try linkCurl(b, mod);
         try linkHtml5Ever(b, mod);
+        if (target.result.os.tag == .windows) {
+            mod.linkSystemLibrary("user32", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("gdi32", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("imm32", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("gdiplus", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("urlmon", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("winmm", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("userenv", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("dbghelp", .{ .use_pkg_config = .no });
+        }
 
         break :blk mod;
     };
@@ -75,7 +86,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        b.installArtifact(exe);
+        installArtifactCompat(b, exe, is_msvc);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -99,7 +110,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        b.installArtifact(exe);
+        installArtifactCompat(b, exe, is_msvc);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -137,7 +148,7 @@ pub fn build(b: *Build) !void {
                 },
             }),
         });
-        b.installArtifact(exe);
+        installArtifactCompat(b, exe, is_msvc);
 
         const run_cmd = b.addRunArtifact(exe);
         if (b.args) |args| {
@@ -146,6 +157,16 @@ pub fn build(b: *Build) !void {
         const run_step = b.step("legacy_test", "Run the app");
         run_step.dependOn(&run_cmd.step);
     }
+}
+
+fn installArtifactCompat(b: *Build, artifact: *Build.Step.Compile, is_msvc: bool) void {
+    if (is_msvc) {
+        b.getInstallStep().dependOn(&b.addInstallArtifact(artifact, .{
+            .pdb_dir = .disabled,
+        }).step);
+        return;
+    }
+    b.installArtifact(artifact);
 }
 
 fn linkV8(
@@ -164,7 +185,7 @@ fn linkV8(
         .is_tsan = is_tsan,
         .inspector_subtype = false,
         .v8_enable_sandbox = is_tsan,
-        .cache_root = b.pathFromRoot(".lp-cache"),
+        .cache_root = b.pathFromRoot(if (target.result.os.tag == .windows) ".lp-cache-win" else ".lp-cache"),
         .prebuilt_v8_path = prebuilt_v8_path,
     });
     mod.addImport("v8", dep.module("v8"));
@@ -172,6 +193,8 @@ fn linkV8(
 
 fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
     const is_debug = if (mod.optimize.? == .Debug) true else false;
+    const html5ever_lib_name = if (mod.resolved_target.?.result.os.tag == .windows) "litefetch_html5ever.lib" else "liblitefetch_html5ever.a";
+    const is_windows_msvc = mod.resolved_target.?.result.os.tag == .windows and mod.resolved_target.?.result.abi == .msvc;
 
     const exec_cargo = b.addSystemCommand(&.{
         "cargo",           "build",
@@ -185,7 +208,23 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
     const html5ever_step = b.step("html5ever", "Install html5ever dependency (requires cargo)");
     html5ever_step.dependOn(&exec_cargo.step);
 
-    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, "liblitefetch_html5ever.a");
+    const obj = out_dir.path(b, if (is_debug) "debug" else "release").path(b, html5ever_lib_name);
+    if (is_windows_msvc) {
+        const strip_cmd = b.addSystemCommand(&.{
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "& { param([string]$src, [string]$dst) Copy-Item -Force $src $dst; $libExe='C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\VC\\Tools\\MSVC\\14.50.35717\\bin\\Hostx64\\x64\\lib.exe'; if(-not (Test-Path $libExe)){ throw 'lib.exe not found at expected VS path' }; $members=& $libExe /nologo /list $dst; $remove=$members | Where-Object { $_ -match 'compiler_builtins' }; if($remove.Count -eq 0){ exit 0 }; $tmpA=\"$dst.tmpA.lib\"; $tmpB=\"$dst.tmpB.lib\"; Copy-Item -Force $dst $tmpA; foreach($m in $remove){ & $libExe /nologo \"/remove:$m\" \"/out:$tmpB\" $tmpA | Out-Null; Move-Item -Force $tmpB $tmpA }; Move-Item -Force $tmpA $dst }",
+        });
+        strip_cmd.addFileArg(obj);
+        const stripped_obj = strip_cmd.addOutputFileArg("litefetch_html5ever_stripped.lib");
+        strip_cmd.step.dependOn(&exec_cargo.step);
+        html5ever_step.dependOn(&strip_cmd.step);
+        mod.addObjectFile(stripped_obj);
+        return;
+    }
     mod.addObjectFile(obj);
 }
 
@@ -220,6 +259,8 @@ fn linkCurl(b: *Build, mod: *Build.Module) !void {
 
 fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
     const dep = b.dependency("zlib", .{});
+    const is_windows = target.result.os.tag == .windows;
+    const is_msvc = target.result.abi == .msvc;
 
     const mod = b.createModule(.{
         .target = target,
@@ -231,12 +272,19 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     lib.installHeadersDirectory(dep.path(""), "", .{});
     lib.addCSourceFiles(.{
         .root = dep.path(""),
-        .flags = &.{
-            "-DHAVE_SYS_TYPES_H",
-            "-DHAVE_STDINT_H",
-            "-DHAVE_STDDEF_H",
-            "-DHAVE_UNISTD_H",
-        },
+        .flags = if (is_windows and is_msvc)
+            &.{
+                "-DHAVE_SYS_TYPES_H",
+                "-DHAVE_STDINT_H",
+                "-DHAVE_STDDEF_H",
+            }
+        else
+            &.{
+                "-DHAVE_SYS_TYPES_H",
+                "-DHAVE_STDINT_H",
+                "-DHAVE_STDDEF_H",
+                "-DHAVE_UNISTD_H",
+            },
         .files = &.{
             "adler32.c", "compress.c", "crc32.c",
             "deflate.c", "gzclose.c",  "gzlib.c",
@@ -313,6 +361,8 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
 
 fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
     const dep = b.dependency("nghttp2", .{});
+    const is_windows = target.result.os.tag == .windows;
+    const is_msvc = target.result.abi == .msvc;
 
     const mod = b.createModule(.{
         .target = target,
@@ -336,12 +386,26 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
     lib.installHeadersDirectory(dep.path("lib/includes/nghttp2"), "nghttp2", .{});
     lib.addCSourceFiles(.{
         .root = dep.path("lib"),
-        .flags = &.{
-            "-DNGHTTP2_STATICLIB",
-            "-DHAVE_TIME_H",
-            "-DHAVE_ARPA_INET_H",
-            "-DHAVE_NETINET_IN_H",
-        },
+        .flags = if (is_windows and is_msvc)
+            &.{
+                "-DNGHTTP2_STATICLIB",
+                "-DHAVE_TIME_H",
+                "-DWIN32",
+                "-Dssize_t=ptrdiff_t",
+            }
+        else if (is_windows)
+            &.{
+                "-DNGHTTP2_STATICLIB",
+                "-DHAVE_TIME_H",
+                "-DWIN32",
+            }
+        else
+            &.{
+                "-DNGHTTP2_STATICLIB",
+                "-DHAVE_TIME_H",
+                "-DHAVE_ARPA_INET_H",
+                "-DHAVE_NETINET_IN_H",
+            },
         .files = &.{
             "sfparse.c",                 "nghttp2_alpn.c",   "nghttp2_buf.c",
             "nghttp2_callbacks.c",       "nghttp2_debug.c",  "nghttp2_extpri.c",
@@ -354,6 +418,9 @@ fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.O
             "nghttp2_ratelim.c",         "nghttp2_time.c",
         },
     });
+    if (is_windows) {
+        lib.root_module.linkSystemLibrary("ws2_32", .{ .use_pkg_config = .no });
+    }
 
     return lib;
 }
@@ -377,6 +444,7 @@ fn buildCurl(
     const abi = target.result.abi;
 
     const is_gnu = abi.isGnu();
+    const is_msvc = abi == .msvc;
     const is_ios = os == .ios;
     const is_android = abi.isAndroid();
     const is_linux = os == .linux;
@@ -427,7 +495,7 @@ fn buildCurl(
         .CURL_DISABLE_TELNET = true,
         .CURL_DISABLE_TFTP = true,
 
-        .ssize_t = null,
+        .ssize_t = if (is_windows and is_msvc) "ptrdiff_t" else null,
         ._FILE_OFFSET_BITS = 64,
 
         .USE_IPV6 = true,
@@ -443,18 +511,25 @@ fn buildCurl(
 
         .SIZEOF_OFF_T_CODE = byte_size(b, target, "OFF_T", .longlong),
         .SIZEOF_CURL_OFF_T_CODE = byte_size(b, target, "CURL_OFF_T", .longlong),
-        .SIZEOF_CURL_SOCKET_T_CODE = byte_size(b, target, "CURL_SOCKET_T", .int),
+        .SIZEOF_CURL_SOCKET_T_CODE = if (is_windows)
+            std.fmt.allocPrint(
+                b.allocator,
+                "#define SIZEOF_CURL_SOCKET_T {d}",
+                .{target.result.ptrBitWidth() / 8},
+            ) catch @panic("OOM")
+        else
+            byte_size(b, target, "CURL_SOCKET_T", .int),
 
         .SIZEOF_SIZE_T_CODE = byte_size(b, target, "SIZE_T", .longlong),
         .SIZEOF_TIME_T_CODE = byte_size(b, target, "TIME_T", .longlong),
 
         // headers availability
         .HAVE_ARPA_INET_H = !is_windows,
-        .HAVE_DIRENT_H = true,
+        .HAVE_DIRENT_H = !is_windows,
         .HAVE_FCNTL_H = true,
         .HAVE_IFADDRS_H = !is_windows,
         .HAVE_IO_H = is_windows,
-        .HAVE_LIBGEN_H = true,
+        .HAVE_LIBGEN_H = !is_windows,
         .HAVE_LINUX_TCP_H = is_linux and is_gnu,
         .HAVE_LOCALE_H = true,
         .HAVE_NETDB_H = !is_windows,
@@ -469,12 +544,12 @@ fn buildCurl(
         .HAVE_STDBOOL_H = true,
         .HAVE_STDDEF_H = true,
         .HAVE_STDINT_H = true,
-        .HAVE_STRINGS_H = true,
+        .HAVE_STRINGS_H = !is_windows,
         .HAVE_STROPTS_H = false,
         .HAVE_SYS_EVENTFD_H = is_linux or is_freebsd or is_netbsd,
         .HAVE_SYS_FILIO_H = !is_linux and !is_windows,
         .HAVE_SYS_IOCTL_H = !is_windows,
-        .HAVE_SYS_PARAM_H = true,
+        .HAVE_SYS_PARAM_H = !is_windows,
         .HAVE_SYS_POLL_H = !is_windows,
         .HAVE_SYS_RESOURCE_H = !is_windows,
         .HAVE_SYS_SELECT_H = !is_windows,
@@ -484,7 +559,7 @@ fn buildCurl(
         .HAVE_SYS_UTIME_H = is_windows,
         .HAVE_TERMIOS_H = !is_windows,
         .HAVE_TERMIO_H = is_linux,
-        .HAVE_UNISTD_H = true,
+        .HAVE_UNISTD_H = !is_windows,
         .HAVE_UTIME_H = true,
         .STDC_HEADERS = true,
 
@@ -530,6 +605,7 @@ fn buildCurl(
         .HAVE_WRITABLE_ARGV = !is_windows,
         .HAVE__SETMODE = is_windows,
         .USE_THREADS_POSIX = !is_windows,
+        .USE_THREADS_WIN32 = is_windows,
 
         // filesystem, network
         .HAVE_ACCEPT4 = is_linux or is_freebsd or is_netbsd or is_openbsd,
@@ -547,7 +623,7 @@ fn buildCurl(
         .HAVE_FSETXATTR_6 = is_darwin,
         .HAVE_FTRUNCATE = true,
         .HAVE_GETADDRINFO = true,
-        .HAVE_GETADDRINFO_THREADSAFE = is_linux or is_freebsd or is_netbsd,
+        .HAVE_GETADDRINFO_THREADSAFE = is_windows or is_linux or is_freebsd or is_netbsd,
         .HAVE_GETHOSTBYNAME_R = is_linux or is_freebsd,
         .HAVE_GETHOSTBYNAME_R_3 = false,
         .HAVE_GETHOSTBYNAME_R_3_REENTRANT = false,
@@ -609,12 +685,22 @@ fn buildCurl(
     lib.installHeadersDirectory(dep.path("include/curl"), "curl", .{});
     lib.addCSourceFiles(.{
         .root = dep.path("lib"),
-        .flags = &.{
-            "-D_GNU_SOURCE",
-            "-DHAVE_CONFIG_H",
-            "-DCURL_STATICLIB",
-            "-DBUILDING_LIBCURL",
-        },
+        .flags = if (is_windows and is_msvc)
+            &.{
+                "-DHAVE_CONFIG_H",
+                "-DCURL_STATICLIB",
+                "-DNGHTTP2_STATICLIB",
+                "-DBUILDING_LIBCURL",
+                "-Dssize_t=ptrdiff_t",
+            }
+        else
+            &.{
+                "-D_GNU_SOURCE",
+                "-DHAVE_CONFIG_H",
+                "-DCURL_STATICLIB",
+                "-DNGHTTP2_STATICLIB",
+                "-DBUILDING_LIBCURL",
+            },
         .files = &.{
             // You can include all files from lib, libcurl uses #ifdef-guards to exclude code for disabled functions
             "altsvc.c",              "amigaos.c",              "asyn-ares.c",

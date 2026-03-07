@@ -124,6 +124,10 @@ script_manager: ?*ScriptManager,
 // Our macrotasks
 scheduler: Scheduler,
 
+// Parked pages keep their live DOM/context for stop-restore, but their JS
+// event loop must not keep running while a provisional replacement page loads.
+suspended: bool = false,
+
 unknown_properties: (if (IS_DEBUG) std.StringHashMapUnmanaged(UnknownPropertyStat) else void) = if (IS_DEBUG) .{} else {},
 
 const ModuleEntry = struct {

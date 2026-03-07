@@ -123,6 +123,35 @@ INFO  app : server running . . . . . . . . . . . . . . . . .  [+0ms]
       address = 127.0.0.1:9222
 ```
 
+### Browser mode switch (fork)
+
+This fork adds a browser mode switch on `fetch` and `serve`:
+
+```console
+./lightpanda serve --browser_mode headed
+```
+
+Shortcuts are available:
+- `--headed`
+- `--headless`
+
+`headed` is currently experimental.
+- On Windows targets, it starts a native headed window lifecycle backend.
+- Windows headed mode now forwards native mouse (down/up/move/wheel/hwheel), click, keydown/keyup (including repeat state), text input (`WM_CHAR`/`WM_UNICHAR`), IME result/preedit composition messages (`WM_IME_COMPOSITION`), back/forward mouse buttons, and window blur into page input, with caret-aware text insertion, `Ctrl/Meta + A` select-all, word-wise caret/edit shortcuts (`Ctrl/Meta + ArrowLeft/ArrowRight`, `Ctrl/Meta + Backspace/Delete`), textarea vertical/line navigation (`ArrowUp/ArrowDown`, line-aware `Home/End`, document `Ctrl/Meta + Home/End`), `Tab`/`Shift+Tab` focus traversal (including positive `tabindex` ordering), and native clipboard shortcuts (`Ctrl/Meta + C/X/V`, `Ctrl+Insert`, `Shift+Insert`, `Shift+Delete`) for text controls. Clipboard shortcuts now dispatch cancelable `copy`/`cut`/`paste` events first and respect `preventDefault()`.
+- On non-Windows targets, it safely falls back to headless execution.
+
+Viewport sizing is configurable for both modes:
+- `--window_width <px>`
+- `--window_height <px>`
+
+CDP viewport control is also wired in this fork:
+- `Emulation.setDeviceMetricsOverride`
+- `Emulation.clearDeviceMetricsOverride`
+- `Browser.setWindowBounds` (width/height)
+
+Windows run/build guide for this fork:
+- [`docs/WINDOWS_FULL_USE.md`](docs/WINDOWS_FULL_USE.md)
+
 Once the CDP server started, you can run a Puppeteer script by configuring the
 `browserWSEndpoint`.
 

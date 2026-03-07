@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Rendered Link Activation Start</title>
+</head>
+<body>
+  <main style="display:block;padding:24px;">
+    <a
+      id="plink"
+      href="prevent-default-should-not-load.html"
+      style="display:block;width:420px;padding:24px;margin:0 0 20px 0;font-size:28px;color:#004c99;background:#ddeeff;"
+    >PREVENT DEFAULT</a>
+    <a
+      id="mlink"
+      href="original-target.html"
+      style="display:block;width:420px;padding:24px;font-size:28px;color:#005500;background:#ddffdd;"
+    >MUTATE HREF</a>
+  </main>
+  <script>
+    const prevent = document.getElementById('plink');
+    prevent.onclick = function (event) {
+      event.preventDefault();
+      document.title = 'Rendered Prevented Click';
+    };
+
+    const mutate = document.getElementById('mlink');
+    mutate.onclick = function () {
+      mutate.href = 'mutated-target.html?from=onclick';
+    };
+  </script>
+</body>
+</html>

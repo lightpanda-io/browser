@@ -281,3 +281,45 @@
     testing.expectEqual(false, r3.checked);
   }
 </script>
+
+<script id="keydown_space_toggles_checkbox">
+  {
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    document.body.appendChild(cb);
+
+    cb.focus();
+    cb.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    testing.expectEqual(true, cb.checked);
+
+    cb.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    testing.expectEqual(false, cb.checked);
+
+    document.body.removeChild(cb);
+  }
+</script>
+
+<script id="keydown_space_checks_radio">
+  {
+    const r1 = document.createElement('input');
+    r1.type = 'radio';
+    r1.name = 'keyboardgroup';
+    r1.checked = true;
+
+    const r2 = document.createElement('input');
+    r2.type = 'radio';
+    r2.name = 'keyboardgroup';
+
+    document.body.appendChild(r1);
+    document.body.appendChild(r2);
+
+    r2.focus();
+    r2.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+
+    testing.expectEqual(false, r1.checked);
+    testing.expectEqual(true, r2.checked);
+
+    document.body.removeChild(r1);
+    document.body.removeChild(r2);
+  }
+</script>

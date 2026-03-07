@@ -31,6 +31,31 @@ const Screen = @This();
 
 _proto: *EventTarget,
 _orientation: ?*Orientation = null,
+_width: u32 = 1920,
+_height: u32 = 1080,
+_avail_height: u32 = 1040,
+
+pub fn setDimensions(self: *Screen, width: u32, height: u32) void {
+    self._width = if (width == 0) 1 else width;
+    self._height = if (height == 0) 1 else height;
+    self._avail_height = if (self._height > 40) self._height - 40 else self._height;
+}
+
+pub fn getWidth(self: *const Screen) u32 {
+    return self._width;
+}
+
+pub fn getHeight(self: *const Screen) u32 {
+    return self._height;
+}
+
+pub fn getAvailWidth(self: *const Screen) u32 {
+    return self._width;
+}
+
+pub fn getAvailHeight(self: *const Screen) u32 {
+    return self._avail_height;
+}
 
 pub fn asEventTarget(self: *Screen) *EventTarget {
     return self._proto;
@@ -54,10 +79,10 @@ pub const JsApi = struct {
         pub var class_id: bridge.ClassId = undefined;
     };
 
-    pub const width = bridge.property(1920, .{ .template = false });
-    pub const height = bridge.property(1080, .{ .template = false });
-    pub const availWidth = bridge.property(1920, .{ .template = false });
-    pub const availHeight = bridge.property(1040, .{ .template = false });
+    pub const width = bridge.accessor(Screen.getWidth, null, .{});
+    pub const height = bridge.accessor(Screen.getHeight, null, .{});
+    pub const availWidth = bridge.accessor(Screen.getAvailWidth, null, .{});
+    pub const availHeight = bridge.accessor(Screen.getAvailHeight, null, .{});
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });
     pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});
