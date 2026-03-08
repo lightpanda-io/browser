@@ -187,8 +187,13 @@ Current state inside Gate 1:
   `browser://tabs`, with bounded headed probes for invalid-address handling,
   disabled back/forward chrome on error, error-state preservation, and
   recovery once the target becomes reachable again
-- next blocker: migrate richer interaction directly onto the internal pages so
-  fewer browser-shell actions still depend on address-bar routes or secondary
+- `browser://history`, `browser://bookmarks`, and `browser://downloads` now
+  keep live per-tab filter state, support internal `filter/...` and
+  `filter-clear` routes, expose quick-filter links directly on the page, and
+  have bounded headed probes for quick-filter plus clear-filter document
+  actions
+- next blocker: keep turning internal pages into richer live shell surfaces so
+  fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
 
 ### Gate 2: Shared Subresource Loader And Profile
