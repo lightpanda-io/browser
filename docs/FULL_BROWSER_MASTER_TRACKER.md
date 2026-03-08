@@ -201,6 +201,9 @@ Current state inside Gate 1:
 - those same internal history/bookmark/download pages now also keep per-tab
   sort state, support internal `sort/...` routes, expose in-page sort controls,
   and have bounded headed probes for sort changes plus sorted row actions
+- `browser://bookmarks` now supports persisted in-page reorder actions in saved
+  order mode, and `browser://downloads` now supports in-place retry of failed
+  and interrupted entries with bounded headed document-action coverage
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
