@@ -48,7 +48,7 @@ try {
   $reloadWorked = $titles.history_after_reload -like "*Browser History (2)*"
   if (-not $reloadWorked) { throw "history page did not survive reload" }
 
-  Invoke-BrowserPagesTabActivate $hwnd 5
+  Invoke-BrowserPagesTabActivate $hwnd 6
   $titles.page_one = Wait-TabTitle $browser.Id "Browser Pages One" 40
   $traverseWorked = [bool]$titles.page_one
   if (-not $traverseWorked) { throw "history traverse action failed" }

@@ -94,3 +94,13 @@ function Invoke-BrowserPagesTabActivate([IntPtr]$Hwnd, [int]$TabCount) {
   }
   Send-SmokeEnter
 }
+
+function Invoke-BrowserPagesDocumentAction([IntPtr]$Hwnd, [int]$TabCount, [int]$BrowserId, [string]$Needle, [int]$Attempts = 40) {
+  Focus-BrowserPagesDocument $Hwnd
+  for ($i = 0; $i -lt $TabCount; $i++) {
+    Send-SmokeTab
+    Start-Sleep -Milliseconds 120
+  }
+  Send-SmokeEnter
+  return Wait-TabTitle $BrowserId $Needle $Attempts
+}

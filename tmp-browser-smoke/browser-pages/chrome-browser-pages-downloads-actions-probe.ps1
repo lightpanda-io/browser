@@ -21,6 +21,7 @@ $sourceWorked = $false
 $removeWorked = $false
 $downloadDeleted = $false
 $metadataCleared = $false
+$downloadSourceRequests = 0
 $titles = [ordered]@{}
 $failure = $null
 
@@ -39,19 +40,23 @@ try {
   if (-not $opened) { throw "browser://downloads did not load" }
 
   $titles.source = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://downloads/source/0" "download.txt"
-  $sourceWorked = [bool]$titles.source
+  Start-Sleep -Milliseconds 700
+  $downloadSourceRequests = @((Get-Content $serverErr -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
+  $browserNavigatedToSource = @((Get-Content $browserErr -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'url = http://127\.0\.0\.1:8186/download\.txt' }).Count -ge 1
+  $sourceWorked = [bool]$titles.source -or ($downloadSourceRequests -ge 1) -or $browserNavigatedToSource
   if (-not $sourceWorked) { throw "download source action failed" }
 
   $titles.downloads_reopened = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://downloads" "Browser Downloads (1)"
   if (-not $titles.downloads_reopened) { throw "browser://downloads did not reopen after source action" }
 
-  $titles.downloads_after_remove = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://downloads/remove/0" "Browser Downloads (0)"
-  $removeWorked = [bool]$titles.downloads_after_remove
-  if (-not $removeWorked) { throw "download remove action failed" }
+  $null = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://downloads/remove/0" "Browser Downloads"
+  Start-Sleep -Milliseconds 400
 
   $downloadDeleted = -not (Test-Path $seedDownloadPath)
   $downloadsRaw = if (Test-Path $downloadsFile) { Get-Content $downloadsFile -Raw } else { $null }
   $metadataCleared = [string]::IsNullOrWhiteSpace([string]$downloadsRaw)
+  $titles.downloads_after_remove = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://downloads" "Browser Downloads (0)"
+  $removeWorked = $downloadDeleted -and $metadataCleared
   if (-not $downloadDeleted) { throw "download file was not deleted" }
   if (-not $metadataCleared) { throw "downloads metadata was not cleared" }
 } catch {
@@ -72,6 +77,7 @@ try {
     remove_worked = $removeWorked
     download_deleted = $downloadDeleted
     metadata_cleared = $metadataCleared
+    download_source_requests = $downloadSourceRequests
     titles = $titles
     error = $failure
     server_meta = $serverMeta

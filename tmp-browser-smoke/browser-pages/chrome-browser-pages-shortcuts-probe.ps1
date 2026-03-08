@@ -19,6 +19,7 @@ $server = $null
 $browser = $null
 $ready = $false
 $navigated = $false
+$tabsWorked = $false
 $historyWorked = $false
 $bookmarksWorked = $false
 $downloadsWorked = $false
@@ -42,6 +43,11 @@ try {
   $titles.page_two = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "http://127.0.0.1:$port/page-two.html" "Browser Pages Two"
   $navigated = [bool]$titles.page_two
   if (-not $navigated) { throw "browser pages navigation to page two failed" }
+
+  Send-SmokeCtrlShiftA
+  $titles.tabs = Wait-TabTitle $browser.Id "Browser Tabs (1)" 40
+  $tabsWorked = [bool]$titles.tabs
+  if (-not $tabsWorked) { throw "tabs page shortcut did not load" }
 
   Send-SmokeCtrlH
   $titles.history = Wait-TabTitle $browser.Id "Browser History (2)" 40
@@ -76,6 +82,7 @@ try {
     browser_pid = if ($browser) { $browser.Id } else { 0 }
     ready = $ready
     navigated = $navigated
+    tabs_worked = $tabsWorked
     history_worked = $historyWorked
     bookmarks_worked = $bookmarksWorked
     downloads_worked = $downloadsWorked

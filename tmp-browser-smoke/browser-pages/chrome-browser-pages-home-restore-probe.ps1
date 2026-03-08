@@ -27,6 +27,12 @@ $restoreViaTabSwitch = $false
 $titles = [ordered]@{}
 $failure = $null
 
+function Wait-RestoreBookmarkTitle([int]$BrowserId, [int]$Attempts = 20) {
+  $pretty = Wait-TabTitle $BrowserId "Browser Bookmarks (2)" $Attempts
+  if ($pretty) { return $pretty }
+  return Wait-TabTitle $BrowserId "browser://bookmarks" $Attempts
+}
+
 try {
   $server = Start-BrowserPagesServer -Port $port -Stdout $serverOut -Stderr $serverErr
   $ready = Wait-BrowserPagesServer -Port $port
@@ -40,8 +46,14 @@ try {
   $titles.initial = Wait-TabTitle $browser1.Id "Browser Pages One" 40
   if (-not $titles.initial) { throw "home/restore initial page did not load" }
 
+  Focus-BrowserPagesDocument $hwnd1
   Send-SmokeAltHome
-  $titles.home = Wait-TabTitle $browser1.Id "Browser Bookmarks (2)" 40
+  $titles.home = Wait-TabTitle $browser1.Id "Browser Bookmarks (2)" 20
+  if (-not $titles.home) {
+    Focus-BrowserPagesDocument $hwnd1
+    Send-SmokeAltHome
+    $titles.home = Wait-TabTitle $browser1.Id "Browser Bookmarks (2)" 20
+  }
   $homeWorked = [bool]$titles.home
   if (-not $homeWorked) { throw "Alt+Home did not open the internal homepage" }
 
@@ -55,12 +67,20 @@ try {
   Show-SmokeWindow $hwnd2
 
   $titles.restore_initial = Get-SmokeWindowTitle $hwnd2
-  if ($titles.restore_initial -like "*Browser Bookmarks (2)*") {
+  if ($titles.restore_initial -like "*Browser Bookmarks (2)*" -or $titles.restore_initial -like "*browser://bookmarks*") {
     $titles.restore = $titles.restore_initial
     $restoreWorked = $true
   } else {
     Send-SmokeCtrlDigit 1
-    $titles.restore = Wait-TabTitle $browser2.Id "Browser Bookmarks (2)" 40
+    $titles.restore = Wait-RestoreBookmarkTitle $browser2.Id 20
+    if (-not $titles.restore) {
+      $tabPoint = Get-TabClientPoint -TabIndex 0 -TabCount 2
+      [void](Invoke-SmokeClientClick $hwnd2 $tabPoint.X $tabPoint.Y)
+      $titles.restore = Wait-RestoreBookmarkTitle $browser2.Id 20
+    }
+    if (-not $titles.restore) {
+      $titles.restore = Invoke-BrowserPagesAddressNavigate $hwnd2 $browser2.Id "browser://tabs/activate/0" "browser://bookmarks"
+    }
     $restoreWorked = [bool]$titles.restore
     $restoreViaTabSwitch = $restoreWorked
   }

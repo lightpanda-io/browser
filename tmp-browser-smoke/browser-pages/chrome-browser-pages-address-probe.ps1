@@ -20,6 +20,7 @@ $browser = $null
 $ready = $false
 $navigated = $false
 $startWorked = $false
+$tabsWorked = $false
 $historyWorked = $false
 $bookmarksWorked = $false
 $downloadsWorked = $false
@@ -47,6 +48,10 @@ try {
   $titles.start = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://start" "Browser Start"
   $startWorked = [bool]$titles.start
   if (-not $startWorked) { throw "browser://start did not load" }
+
+  $titles.tabs = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://tabs" "Browser Tabs (1)"
+  $tabsWorked = [bool]$titles.tabs
+  if (-not $tabsWorked) { throw "browser://tabs did not load" }
 
   $titles.history = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://history" "Browser History (2)"
   $historyWorked = [bool]$titles.history
@@ -78,6 +83,7 @@ try {
     ready = $ready
     navigated = $navigated
     start_worked = $startWorked
+    tabs_worked = $tabsWorked
     history_worked = $historyWorked
     bookmarks_worked = $bookmarksWorked
     downloads_worked = $downloadsWorked

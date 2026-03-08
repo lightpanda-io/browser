@@ -19,6 +19,7 @@ $server = $null
 $browser = $null
 $ready = $false
 $startWorked = $false
+$tabsWorked = $false
 $historyWorked = $false
 $bookmarksWorked = $false
 $downloadsWorked = $false
@@ -46,21 +47,26 @@ try {
   if (-not $startWorked) { throw "Alt+Home did not open Browser Start fallback" }
 
   Invoke-BrowserPagesTabActivate $hwnd 1
-  $titles.history = Wait-TabTitle $browser.Id "Browser History (2)" 40
-  $historyWorked = [bool]$titles.history
-  if (-not $historyWorked) { throw "start page history link failed" }
+  $titles.tabs = Wait-TabTitle $browser.Id "Browser Tabs (1)" 40
+  $tabsWorked = [bool]$titles.tabs
+  if (-not $tabsWorked) { throw "start page tabs link failed" }
 
   Invoke-BrowserPagesTabActivate $hwnd 2
+  $titles.history = Wait-TabTitle $browser.Id "Browser History (2)" 40
+  $historyWorked = [bool]$titles.history
+  if (-not $historyWorked) { throw "tabs page history link failed" }
+
+  Invoke-BrowserPagesTabActivate $hwnd 3
   $titles.bookmarks = Wait-TabTitle $browser.Id "Browser Bookmarks (2)" 40
   $bookmarksWorked = [bool]$titles.bookmarks
   if (-not $bookmarksWorked) { throw "history page bookmarks link failed" }
 
-  Invoke-BrowserPagesTabActivate $hwnd 3
+  Invoke-BrowserPagesTabActivate $hwnd 4
   $titles.downloads = Wait-TabTitle $browser.Id "Browser Downloads (1)" 40
   $downloadsWorked = [bool]$titles.downloads
   if (-not $downloadsWorked) { throw "bookmarks page downloads link failed" }
 
-  Invoke-BrowserPagesTabActivate $hwnd 4
+  Invoke-BrowserPagesTabActivate $hwnd 5
   $titles.settings = Wait-TabTitle $browser.Id "Browser Settings" 40
   $settingsWorked = [bool]$titles.settings
   if (-not $settingsWorked) { throw "downloads page settings link failed" }
@@ -83,6 +89,7 @@ try {
     browser_pid = if ($browser) { $browser.Id } else { 0 }
     ready = $ready
     start_worked = $startWorked
+    tabs_worked = $tabsWorked
     history_worked = $historyWorked
     bookmarks_worked = $bookmarksWorked
     downloads_worked = $downloadsWorked

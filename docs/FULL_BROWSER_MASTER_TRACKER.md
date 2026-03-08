@@ -56,8 +56,8 @@ The fork already has a real headed Windows foundation:
 - headed `browse` now has a persisted script-popup policy with Win32 settings
   UI, blocked-runtime coverage, and allowed/blocked script popup acceptance
 - internal `browser://history`, `browser://bookmarks`, `browser://downloads`,
-  and `browser://settings` pages now support stateful actions, not just static
-  snapshots
+  `browser://settings`, and `browser://tabs` pages now support stateful
+  actions, not just static snapshots
 - the normal headed shell shortcuts now target internal browser pages first,
   while the legacy overlays are secondary diagnostic surfaces
 
@@ -139,12 +139,15 @@ Current state inside Gate 1:
   `onclick`, `preventDefault`, and click-time href mutation are preserved on the
   headed surface before any direct navigation fallback
 - dedicated internal browser pages now exist for history, bookmarks, downloads,
-  and settings, backed by current session state or the persisted stores already
-  in place
+  settings, and tabs, backed by current session state or the persisted stores
+  already in place
 - those browser pages are reachable through both native headed shortcuts and
-  `browser://history`, `browser://bookmarks`, `browser://downloads`, and
-  `browser://settings` address-bar aliases
+  `browser://start`, `browser://tabs`, `browser://history`,
+  `browser://bookmarks`, `browser://downloads`, and `browser://settings`
+  address-bar aliases
 - those browser pages now execute real internal actions:
+  - tab new, activate, duplicate, reload, close, and reopen-closed flows
+    through `browser://tabs/...`
   - history traverse and reload-safe reopen
   - bookmark open/remove backed by the persisted bookmark store
   - download source/remove backed by the persisted download store
@@ -153,6 +156,7 @@ Current state inside Gate 1:
   - homepage navigation to an internal page plus restart-time restore of the
     internal page in the session model
 - the standard shell shortcuts now open those internal pages directly:
+  - `Ctrl+Shift+A` tabs
   - `Ctrl+H` history
   - `Ctrl+Shift+B` bookmarks
   - `Ctrl+J` downloads
@@ -160,10 +164,23 @@ Current state inside Gate 1:
 - the internal pages now include a shared shell header/nav plus a
   `browser://start` hub page, and `Alt+Home` falls back to that start page when
   no homepage is configured
+- bounded headed browser-page probes now cover:
+  - history, bookmarks, downloads, and settings actions
+  - start-page cross-navigation
+  - tabs-page tab-management actions and reload/reopen recovery
+  - homepage-to-internal-page restart restore
 - legacy overlays are still available for diagnostics on secondary shortcuts,
   but they are no longer the primary shell path
+- current residual inside this slice:
+  - some restored or background-activated internal tabs still surface the alias
+    title like `browser://bookmarks` or `browser://tabs` instead of the richer
+    generated page title
+  - downloads remove mutates profile state correctly, but the same-session
+    zero-count title refresh on `browser://downloads` is still weaker than the
+    other internal pages
 - next blocker: migrate more shell behavior and richer interaction onto the
-  internal pages so the overlay path can keep shrinking without losing utility
+  internal pages and close the remaining internal-page title/presentation gaps
+  so the overlay path can keep shrinking without losing utility
 
 ### Gate 2: Shared Subresource Loader And Profile
 
