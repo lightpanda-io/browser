@@ -37,17 +37,36 @@ pub fn processMessage(cmd: anytype) !void {
 }
 
 fn getSemanticTree(cmd: anytype) !void {
+    const Params = struct {
+        format: ?[]const u8 = null,
+    };
+    const params = (try cmd.params(Params)) orelse Params{};
+
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     const dom_node = page.document.asNode();
 
+    const st = SemanticTree{
+        .dom_node = dom_node,
+        .registry = &bc.node_registry,
+        .page = page,
+        .arena = cmd.arena,
+    };
+
+    if (params.format) |format| {
+        if (std.mem.eql(u8, format, "text")) {
+            var aw: std.Io.Writer.Allocating = .init(cmd.arena);
+            defer aw.deinit();
+            try st.textStringify(&aw.writer);
+
+            return cmd.sendResult(.{
+                .semanticTree = aw.written(),
+            }, .{});
+        }
+    }
+
     return cmd.sendResult(.{
-        .semanticTree = SemanticTree{
-            .dom_node = dom_node,
-            .registry = &bc.node_registry,
-            .page = page,
-            .arena = cmd.arena,
-        },
+        .semanticTree = st,
     }, .{});
 }
 

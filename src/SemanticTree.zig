@@ -43,6 +43,13 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
     };
 }
 
+pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
+    self.dumpText(self.dom_node, writer, 0) catch |err| {
+        log.err(.cdp, "semantic tree text dump failed", .{ .err = err });
+        return error.WriteFailed;
+    };
+}
+
 fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
     if (node.is(Element)) |el| {
         const tag = el.getTagNameLower();
@@ -221,4 +228,107 @@ fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const 
     try jw.endArray();
 
     try jw.endObject();
+}
+
+fn dumpText(self: Self, node: *Node, writer: *std.Io.Writer, depth: usize) !void {
+    // 1. Skip non-content nodes
+    if (node.is(Element)) |el| {
+        const tag = el.getTag();
+        if (tag.isMetadata() or tag == .svg) return;
+
+        // CSS display: none visibility check (inline style only for now)
+        if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
+            if (std.mem.indexOf(u8, style, "display: none") != null or
+                std.mem.indexOf(u8, style, "display:none") != null)
+            {
+                return;
+            }
+        }
+
+        if (el.is(Element.Html)) |html_el| {
+            if (html_el.getHidden()) return;
+        }
+    } else if (node.is(CData.Text) != null) {
+        const text_node = node.is(CData.Text).?;
+        const text = text_node.getWholeText();
+        if (isAllWhitespace(text)) {
+            return;
+        }
+    } else if (node._type != .document and node._type != .document_fragment) {
+        return;
+    }
+
+    const cdp_node = try self.registry.register(node);
+    const axn = AXNode.fromNode(node);
+    const role = try axn.getRole();
+
+    var is_interactive = false;
+    var value: ?[]const u8 = null;
+
+    if (node.is(Element)) |el| {
+        const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
+        is_interactive = ax_role.isInteractive();
+
+        const event_target = node.asEventTarget();
+        if (self.page._event_manager.hasListener(event_target, "click") or
+            self.page._event_manager.hasListener(event_target, "mousedown") or
+            self.page._event_manager.hasListener(event_target, "mouseup") or
+            self.page._event_manager.hasListener(event_target, "keydown") or
+            self.page._event_manager.hasListener(event_target, "change") or
+            self.page._event_manager.hasListener(event_target, "input"))
+        {
+            is_interactive = true;
+        }
+
+        if (el.is(Element.Html)) |html_el| {
+            if (html_el.hasAttributeFunction(.onclick, self.page) or
+                html_el.hasAttributeFunction(.onmousedown, self.page) or
+                html_el.hasAttributeFunction(.onmouseup, self.page) or
+                html_el.hasAttributeFunction(.onkeydown, self.page) or
+                html_el.hasAttributeFunction(.onchange, self.page) or
+                html_el.hasAttributeFunction(.oninput, self.page))
+            {
+                is_interactive = true;
+            }
+        }
+
+        if (el.is(Element.Html.Input)) |input| {
+            value = input.getValue();
+        } else if (el.is(Element.Html.TextArea)) |textarea| {
+            value = textarea.getValue();
+        } else if (el.is(Element.Html.Select)) |select| {
+            value = select.getValue(self.page);
+        }
+    }
+
+    // Format: "  [12] link: Hacker News (value)"
+    for (0..(depth * 2)) |_| {
+        try writer.writeByte(' ');
+    }
+    try writer.print("[{d}] {s}: ", .{ cdp_node.id, role });
+
+    if (try axn.getName(self.page, self.arena)) |name| {
+        if (name.len > 0) {
+            try writer.writeAll(name);
+        }
+    } else if (node.is(CData.Text) != null) {
+        const text_node = node.is(CData.Text).?;
+        const trimmed = std.mem.trim(u8, text_node.getWholeText(), " \t\r\n");
+        if (trimmed.len > 0) {
+            try writer.writeAll(trimmed);
+        }
+    }
+
+    if (value) |v| {
+        if (v.len > 0) {
+            try writer.print(" (value: {s})", .{v});
+        }
+    }
+
+    try writer.writeByte('\n');
+
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        try self.dumpText(child, writer, depth + 1);
+    }
 }

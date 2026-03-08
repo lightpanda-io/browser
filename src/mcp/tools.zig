@@ -135,8 +135,7 @@ const ToolStreamingText = struct {
                 jw.endWriteRaw();
             },
             .semantic_tree => {
-                // MCP expects a string for "text" content, but our SemanticTree is a complex object.
-                // We'll serialize it as a string to fit the MCP text protocol requirements.
+                // Return the highly compressed Stagehand-style text format for maximum token efficiency
                 try jw.beginWriteRaw();
                 try jw.writer.writeByte('"');
                 var escaped = protocol.JsonEscapingWriter.init(jw.writer);
@@ -147,7 +146,8 @@ const ToolStreamingText = struct {
                     .page = self.server.page,
                     .arena = self.arena,
                 };
-                std.json.Stringify.value(st, .{ .whitespace = .minified }, &escaped.writer) catch |err| {
+
+                st.textStringify(&escaped.writer) catch |err| {
                     log.err(.mcp, "semantic tree dump failed", .{ .err = err });
                 };
 
