@@ -40,7 +40,7 @@ try {
   $opened = [bool]$titles.history
   if (-not $opened) { throw "browser://history did not open" }
 
-  $titles.filtered = Invoke-BrowserPagesDocumentAction $hwnd 6 $browser.Id "Browser History (1/2)"
+  $titles.filtered = Invoke-BrowserPagesDocumentAction $hwnd 8 $browser.Id "Browser History (1/2)"
   $quickFilterWorked = [bool]$titles.filtered
   if (-not $quickFilterWorked) { throw "history quick filter did not apply" }
 

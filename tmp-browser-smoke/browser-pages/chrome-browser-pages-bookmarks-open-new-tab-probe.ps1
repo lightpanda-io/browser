@@ -40,7 +40,7 @@ try {
   $bookmarksOpened = [bool]$titles.bookmarks
   if (-not $bookmarksOpened) { throw "browser://bookmarks did not load" }
 
-  $titles.opened = Invoke-BrowserPagesDocumentAction $hwnd 10 $browser.Id "Browser Pages Two"
+  $titles.opened = Invoke-BrowserPagesDocumentAction $hwnd 12 $browser.Id "Browser Pages Two"
   $openNewTabWorked = [bool]$titles.opened
   if (-not $openNewTabWorked) { throw "bookmark open-in-new-tab document action did not open page two" }
 

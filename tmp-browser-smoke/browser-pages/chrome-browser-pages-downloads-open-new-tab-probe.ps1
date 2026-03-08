@@ -38,7 +38,7 @@ try {
   $downloadsOpened = [bool]$titles.downloads
   if (-not $downloadsOpened) { throw "browser://downloads did not load" }
 
-  $titles.opened = Invoke-BrowserPagesDocumentAction $hwnd 13 $browser.Id "download.txt"
+  $titles.opened = Invoke-BrowserPagesDocumentAction $hwnd 15 $browser.Id "download.txt"
   Start-Sleep -Milliseconds 600
   $downloadSourceRequests = @((Get-Content $serverErr -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
   $openNewTabWorked = [bool]$titles.opened -or ($downloadSourceRequests -ge 1)

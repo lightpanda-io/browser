@@ -58,6 +58,9 @@ The fork already has a real headed Windows foundation:
 - internal `browser://history`, `browser://bookmarks`, `browser://downloads`,
   `browser://settings`, and `browser://tabs` pages now support stateful
   actions, not just static snapshots
+- those internal history, bookmark, and download pages now keep per-tab sort
+  state, expose in-page sort controls, and refresh titles/counts plus row order
+  live as the sort mode changes
 - the normal headed shell shortcuts now target internal browser pages first,
   while the legacy overlays are secondary diagnostic surfaces
 
@@ -195,6 +198,9 @@ Current state inside Gate 1:
 - those same internal history/bookmark/download pages now expose explicit
   per-row open-in-new-tab actions, with bounded headed probes proving the new
   tab opens while the originating internal page tab remains intact
+- those same internal history/bookmark/download pages now also keep per-tab
+  sort state, support internal `sort/...` routes, expose in-page sort controls,
+  and have bounded headed probes for sort changes plus sorted row actions
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces

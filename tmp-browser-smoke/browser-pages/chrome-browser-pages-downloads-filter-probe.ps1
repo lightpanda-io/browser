@@ -44,7 +44,7 @@ try {
   $opened = [bool]$titles.downloads
   if (-not $opened) { throw "browser://downloads did not open" }
 
-  $titles.filtered = Invoke-BrowserPagesDocumentAction $hwnd 8 $browser.Id "Browser Downloads (1/2)"
+  $titles.filtered = Invoke-BrowserPagesDocumentAction $hwnd 10 $browser.Id "Browser Downloads (1/2)"
   $quickFilterWorked = [bool]$titles.filtered
   if (-not $quickFilterWorked) { throw "downloads failed quick filter did not apply" }
 

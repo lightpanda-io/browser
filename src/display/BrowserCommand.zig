@@ -6,6 +6,21 @@ pub const BrowserCommand = union(enum) {
         suggested_filename: []u8,
     };
 
+    pub const HistorySortMode = enum(u8) {
+        oldest_first,
+        newest_first,
+    };
+
+    pub const BookmarkSortMode = enum(u8) {
+        saved_order,
+        alphabetical,
+    };
+
+    pub const DownloadSortMode = enum(u8) {
+        saved_order,
+        newest_first,
+    };
+
     pub const ActivateLinkRegion = struct {
         x: f64,
         y: f64,
@@ -29,9 +44,11 @@ pub const BrowserCommand = union(enum) {
     history_traverse: usize,
     history_open_new_tab: usize,
     history_clear_session,
+    history_sort_set: HistorySortMode,
     history_filter_set: []const u8,
     history_filter_clear,
     bookmark_add_current,
+    bookmark_sort_set: BookmarkSortMode,
     bookmark_filter_set: []const u8,
     bookmark_filter_clear,
     bookmark_open: usize,
@@ -41,6 +58,7 @@ pub const BrowserCommand = union(enum) {
     download_source_new_tab: usize,
     download_remove: usize,
     download_clear,
+    download_sort_set: DownloadSortMode,
     download_filter_set: []const u8,
     download_filter_clear,
     tab_activate: usize,

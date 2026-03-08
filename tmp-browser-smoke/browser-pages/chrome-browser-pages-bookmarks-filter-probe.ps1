@@ -38,7 +38,7 @@ try {
   $opened = [bool]$titles.bookmarks
   if (-not $opened) { throw "browser://bookmarks did not open" }
 
-  $titles.filtered = Invoke-BrowserPagesDocumentAction $hwnd 6 $browser.Id "Browser Bookmarks (1/2)"
+  $titles.filtered = Invoke-BrowserPagesDocumentAction $hwnd 8 $browser.Id "Browser Bookmarks (1/2)"
   $quickFilterWorked = [bool]$titles.filtered
   if (-not $quickFilterWorked) { throw "bookmark quick filter did not apply" }
 

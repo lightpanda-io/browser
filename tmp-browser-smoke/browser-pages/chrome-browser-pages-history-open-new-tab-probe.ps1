@@ -40,7 +40,7 @@ try {
   $historyOpened = [bool]$titles.history
   if (-not $historyOpened) { throw "browser://history did not load" }
 
-  $titles.opened = Invoke-BrowserPagesDocumentAction $hwnd 9 $browser.Id "Browser Pages One"
+  $titles.opened = Invoke-BrowserPagesDocumentAction $hwnd 11 $browser.Id "Browser Pages One"
   $openNewTabWorked = [bool]$titles.opened
   if (-not $openNewTabWorked) { throw "history open-in-new-tab document action did not open page one" }
 
