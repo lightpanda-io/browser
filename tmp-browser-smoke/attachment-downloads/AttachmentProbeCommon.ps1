@@ -62,3 +62,16 @@ function Wait-DownloadedFile([string]$Path, [int]$Attempts = 60) {
   }
   return $false
 }
+
+function Get-AttachmentRequestCount([string]$LogPath, [string]$Path) {
+  if (-not (Test-Path $LogPath)) { return 0 }
+  $last = 0
+  $pattern = "^GET " + [regex]::Escape($Path) + " (\d+)$"
+  foreach ($line in (Get-Content $LogPath)) {
+    if ($line -match $pattern) {
+      $value = [int]$Matches[1]
+      if ($value -gt $last) { $last = $value }
+    }
+  }
+  return $last
+}

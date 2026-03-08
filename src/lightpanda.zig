@@ -200,6 +200,7 @@ const BrowseTab = struct {
     notification: *Notification,
     browser: Browser,
     session: *Session,
+    downloads: ?*BrowseDownloads = null,
     target_name: []u8 = &.{},
     popup_source: PopupSource = .none,
     committed_surface: CommittedBrowseSurface = .{},
@@ -541,9 +542,11 @@ const BrowseDownloads = struct {
             if (download.finished) {
                 continue;
             }
-            _ = download.http_client.tick(timeout_ms) catch |err| {
-                download.fail("Download tick failed", err);
-            };
+            if (download.http_client) |http_client| {
+                _ = http_client.tick(timeout_ms) catch |err| {
+                    download.fail("Download tick failed", err);
+                };
+            }
         }
 
         var i: usize = 0;
@@ -618,6 +621,65 @@ const BrowseDownloads = struct {
         self.persistIfChanged(app.app_dir_path);
     }
 
+    fn adoptRootAttachmentTransfer(
+        self: *BrowseDownloads,
+        app: *App,
+        tab: *BrowseTab,
+        page: *Page,
+        transfer: *HttpClient.Transfer,
+        suggested_filename: []const u8,
+    ) !void {
+        const app_dir_path = app.app_dir_path orelse return error.AppDataUnavailable;
+        const downloads_dir = try ensureBrowseDownloadsDir(app.allocator, app_dir_path);
+        defer app.allocator.free(downloads_dir);
+
+        const request_url = page.url;
+        const derived_name = try deriveDownloadFileName(
+            app.allocator,
+            request_url,
+            suggested_filename,
+        );
+        defer app.allocator.free(derived_name);
+
+        const final_name = try makeUniqueDownloadFileName(app.allocator, downloads_dir, derived_name);
+        errdefer app.allocator.free(final_name);
+
+        const file_path = try std.fs.path.join(app.allocator, &.{ downloads_dir, final_name });
+        errdefer app.allocator.free(file_path);
+
+        const file = try std.fs.createFileAbsolute(file_path, .{ .truncate = true });
+        errdefer {
+            file.close();
+            std.fs.deleteFileAbsolute(file_path) catch {};
+        }
+
+        const entry_index = self.entries.items.len;
+        try self.entries.append(app.allocator, .{
+            .filename = try app.allocator.dupe(u8, final_name),
+            .path = try app.allocator.dupe(u8, file_path),
+            .url = try app.allocator.dupe(u8, request_url),
+            .status = .queued,
+        });
+        errdefer {
+            var removed = self.entries.pop().?;
+            removed.deinit(app.allocator);
+        }
+
+        var download = try app.allocator.create(ActiveBrowseDownload);
+        errdefer app.allocator.destroy(download);
+        download.* = ActiveBrowseDownload.initAdopted(app, self, tab, entry_index, file, transfer);
+        errdefer download.deinit();
+
+        try self.active.append(app.allocator, download);
+        errdefer self.active.items.len -= 1;
+
+        download.adoptTransfer(transfer);
+        _ = try browseDownloadHeaderCallback(transfer);
+
+        self.trimHistory();
+        self.persistIfChanged(app.app_dir_path);
+    }
+
     fn toDisplayEntries(self: *BrowseDownloads, allocator: std.mem.Allocator) ![]Display.DownloadEntry {
         var entries = try allocator.alloc(Display.DownloadEntry, self.entries.items.len);
         errdefer allocator.free(entries);
@@ -680,7 +742,8 @@ const ActiveBrowseDownload = struct {
     allocator: std.mem.Allocator,
     manager: *BrowseDownloads,
     source_tab: *BrowseTab,
-    http_client: *HttpClient.Client,
+    http_client: ?*HttpClient.Client,
+    transfer: ?*HttpClient.Transfer = null,
     file: ?std.fs.File,
     arena: std.heap.ArenaAllocator,
     entry_index: usize,
@@ -704,26 +767,51 @@ const ActiveBrowseDownload = struct {
         };
     }
 
+    fn initAdopted(
+        app: *App,
+        manager: *BrowseDownloads,
+        source_tab: *BrowseTab,
+        entry_index: usize,
+        file: std.fs.File,
+        transfer: *HttpClient.Transfer,
+    ) ActiveBrowseDownload {
+        return .{
+            .allocator = app.allocator,
+            .manager = manager,
+            .source_tab = source_tab,
+            .http_client = null,
+            .transfer = transfer,
+            .file = file,
+            .arena = std.heap.ArenaAllocator.init(app.allocator),
+            .entry_index = entry_index,
+        };
+    }
+
     fn deinit(self: *ActiveBrowseDownload) void {
         if (self.file) |file| {
             file.close();
             self.file = null;
         }
-        self.http_client.deinit();
+        if (self.http_client) |http_client| {
+            http_client.deinit();
+            self.http_client = null;
+        }
+        self.transfer = null;
         self.arena.deinit();
         self.allocator.destroy(self);
     }
 
     fn start(self: *ActiveBrowseDownload, page: *Page, request_url: []const u8) !void {
+        const http_client = self.http_client orelse return error.NoHttpClient;
         const arena = self.arena.allocator();
         const url_z = try arena.dupeZ(u8, request_url);
-        var headers = try self.http_client.newHeaders();
+        var headers = try http_client.newHeaders();
         try page.headersForRequest(arena, url_z, &headers);
 
         self.manager.entries.items[self.entry_index].status = .downloading;
         self.manager.persistIfChanged(page._session.browser.app.app_dir_path);
 
-        try self.http_client.request(.{
+        try http_client.request(.{
             .ctx = self,
             .frame_id = page._frame_id,
             .url = url_z,
@@ -738,6 +826,16 @@ const ActiveBrowseDownload = struct {
             .error_callback = browseDownloadErrorCallback,
             .shutdown_callback = browseDownloadShutdownCallback,
         });
+    }
+
+    fn adoptTransfer(self: *ActiveBrowseDownload, transfer: *HttpClient.Transfer) void {
+        self.transfer = transfer;
+        transfer.ctx = self;
+        transfer.req.ctx = self;
+        transfer.req.data_callback = browseDownloadDataCallback;
+        transfer.req.done_callback = browseDownloadDoneCallback;
+        transfer.req.error_callback = browseDownloadErrorCallback;
+        transfer.req.shutdown_callback = browseDownloadShutdownCallback;
     }
 
     fn fail(self: *ActiveBrowseDownload, detail: []const u8, err: anyerror) void {
@@ -759,7 +857,11 @@ const ActiveBrowseDownload = struct {
         BrowseDownloads.setDetail(entry, self.allocator, detail);
         self.finished = true;
         self.cleanupPartialFile();
-        self.http_client.abort();
+        if (self.http_client) |http_client| {
+            http_client.abort();
+        } else if (self.transfer) |transfer| {
+            transfer.abort(error.Abort);
+        }
     }
 
     fn cleanupPartialFile(self: *ActiveBrowseDownload) void {
@@ -854,7 +956,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     var downloads = BrowseDownloads.init(app.allocator, app.app_dir_path);
     defer downloads.deinit(app.app_dir_path);
 
-    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url, &settings);
+    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url, &settings, &downloads);
     var displayed_tab_index: ?usize = null;
     var last_saved_session_hash: u64 = 0;
     var last_saved_settings_hash: u64 = 0;
@@ -909,7 +1011,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         const settled_tab_count = tabs.items.len;
         var tab_index: usize = 0;
         while (tab_index < settled_tab_count) : (tab_index += 1) {
-            try processPendingTabOpens(app, &tabs, &settings, &active_tab_index, tab_index);
+            try processPendingTabOpens(app, &tabs, &settings, &downloads, &active_tab_index, tab_index);
         }
         const opened_pending_tab = tabs.items.len != settled_tab_count;
         downloads.tick(0);
@@ -953,14 +1055,14 @@ fn handleBrowseCommand(
     defer applyBrowsePopupPolicyToTabs(shell.tabs.items, settings.allow_script_popups);
     switch (command) {
         .tab_new => {
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
         },
         .tab_duplicate => {
             const source_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
             const source_tab = shell.tabs.items[source_index];
             const source_url = browseTabPersistentUrl(source_tab);
-            const tab = try createBrowseTab(app, null, source_tab.zoom_percent, settings.allow_script_popups);
+            const tab = try createBrowseTab(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads);
             tab.zoom_percent = source_tab.zoom_percent;
             try tab.internal_filters.copyFrom(app.allocator, &source_tab.internal_filters);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
@@ -975,7 +1077,7 @@ fn handleBrowseCommand(
             }
             const source_tab = shell.tabs.items[index];
             const source_url = browseTabPersistentUrl(source_tab);
-            const tab = try createBrowseTab(app, null, source_tab.zoom_percent, settings.allow_script_popups);
+            const tab = try createBrowseTab(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads);
             tab.zoom_percent = source_tab.zoom_percent;
             try tab.internal_filters.copyFrom(app.allocator, &source_tab.internal_filters);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
@@ -1039,7 +1141,7 @@ fn handleBrowseCommand(
         .tab_reopen_closed => {
             var closed = popClosedBrowseTab(shell.closed_tabs) orelse return;
             defer closed.deinit(app.allocator);
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads);
             tab.zoom_percent = closed.zoom_percent;
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
@@ -1050,7 +1152,7 @@ fn handleBrowseCommand(
         .tab_reopen_closed_index => |index| {
             var closed = popClosedBrowseTabAtUiIndex(shell.closed_tabs, index) orelse return;
             defer closed.deinit(app.allocator);
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads);
             tab.zoom_percent = closed.zoom_percent;
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
@@ -1173,14 +1275,14 @@ fn handleBrowseCommand(
                 return;
             }
             if (activation.target_name.len > 0) {
-                try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, tab.zoom_percent, activation.url, .{
+                try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, downloads, tab.zoom_percent, activation.url, .{
                     .reason = .address_bar,
                     .kind = .{ .push = null },
                 }, activation.target_name, true, .anchor);
                 return;
             }
             if (activation.open_in_new_tab) {
-                try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, tab.zoom_percent, activation.url, .{
+                try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, downloads, tab.zoom_percent, activation.url, .{
                     .reason = .address_bar,
                     .kind = .{ .push = null },
                 }, "_blank", true, .anchor);
@@ -1193,7 +1295,7 @@ fn handleBrowseCommand(
         .navigate_new_tab => |raw_url| {
             const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
             const source_tab = shell.tabs.items[active_index];
-            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, raw_url, .{
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, downloads, source_tab.zoom_percent, raw_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, "_blank", true, .none);
@@ -1201,7 +1303,7 @@ fn handleBrowseCommand(
         .navigate_target_tab => |target| {
             const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
             const source_tab = shell.tabs.items[active_index];
-            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, target.url, .{
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, downloads, source_tab.zoom_percent, target.url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, target.target_name, true, .none);
@@ -1214,7 +1316,7 @@ fn handleBrowseCommand(
                 return;
             }
             const entry_url = entries[index].url() orelse return;
-            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, entry_url, .{
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, downloads, source_tab.zoom_percent, entry_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, "_blank", true, .none);
@@ -1224,7 +1326,7 @@ fn handleBrowseCommand(
             const source_tab = shell.tabs.items[active_index];
             const bookmark_url = loadPersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index) orelse return;
             defer app.allocator.free(bookmark_url);
-            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, bookmark_url, .{
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, downloads, source_tab.zoom_percent, bookmark_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, "_blank", true, .none);
@@ -1234,7 +1336,7 @@ fn handleBrowseCommand(
             const source_tab = shell.tabs.items[active_index];
             const download_url = loadDownloadUrlAtIndex(app.allocator, downloads, index) orelse return;
             defer app.allocator.free(download_url);
-            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, download_url, .{
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, downloads, source_tab.zoom_percent, download_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, "_blank", true, .none);
@@ -1605,6 +1707,7 @@ fn processPendingTabOpens(
     app: *App,
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
     active_tab_index: *usize,
     source_index: usize,
 ) !void {
@@ -1632,6 +1735,7 @@ fn processPendingTabOpens(
             tabs,
             active_tab_index,
             settings.allow_script_popups,
+            downloads,
             zoom_percent,
             request.url,
             request.opts,
@@ -1687,6 +1791,7 @@ fn openOrReuseTargetedBrowseTab(
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     active_tab_index: *usize,
     allow_script_popups: bool,
+    downloads: *BrowseDownloads,
     zoom_percent: i32,
     raw_url: []const u8,
     opts: Page.NavigateOpts,
@@ -1714,7 +1819,7 @@ fn openOrReuseTargetedBrowseTab(
         return;
     }
 
-    const tab = try createBrowseTab(app, null, zoom_percent, allow_script_popups);
+    const tab = try createBrowseTab(app, null, zoom_percent, allow_script_popups, downloads);
     errdefer tab.deinit(app.allocator);
     tab.zoom_percent = zoom_percent;
     try setBrowseTabTargetName(app.allocator, tab, target_name);
@@ -1759,10 +1864,33 @@ fn resetBrowseTabSession(tab: *BrowseTab) !void {
     tab.committed_surface.deinit(tab.browser.app.allocator);
     tab.browser.closeSession();
     tab.session = try tab.browser.newSession(tab.notification);
+    updateBrowseTabRootAttachmentDownloadHandler(tab);
     _ = try tab.session.createPage();
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;
     tab.last_internal_page_state_hash = 0;
+}
+
+fn browseRootAttachmentDownloadHandler(
+    ctx: *anyopaque,
+    page: *Page,
+    transfer: *HttpClient.Transfer,
+    suggested_filename: []const u8,
+) !void {
+    const tab: *BrowseTab = @ptrCast(@alignCast(ctx));
+    const downloads = tab.downloads orelse return error.BrowseDownloadsUnavailable;
+    try downloads.adoptRootAttachmentTransfer(tab.browser.app, tab, page, transfer, suggested_filename);
+}
+
+fn updateBrowseTabRootAttachmentDownloadHandler(tab: *BrowseTab) void {
+    if (tab.downloads != null) {
+        tab.session.setRootAttachmentDownloadHandler(.{
+            .ctx = tab,
+            .promote = browseRootAttachmentDownloadHandler,
+        });
+    } else {
+        tab.session.setRootAttachmentDownloadHandler(null);
+    }
 }
 
 fn handleRenderedLinkActivation(
@@ -2003,9 +2131,10 @@ fn initializeBrowseTabs(
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     startup_url: [:0]const u8,
     settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
 ) !usize {
     if (!settings.restore_previous_session) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads));
         return 0;
     }
 
@@ -2013,7 +2142,7 @@ fn initializeBrowseTabs(
     defer saved.deinit(app.allocator);
 
     if (saved.tabs.items.len == 0) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads));
         return 0;
     }
 
@@ -2026,14 +2155,14 @@ fn initializeBrowseTabs(
             restored_url_z = try app.allocator.dupeZ(u8, saved_tab.url);
             break :blk restored_url_z.?;
         };
-        const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups);
+        const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups, downloads);
         tab.zoom_percent = saved_tab.zoom_percent;
         try tabs.append(app.allocator, tab);
     }
 
     var active_index = normalizeActiveTabIndex(saved.active_index, tabs.items.len);
     if (shouldAppendStartupUrl(saved.tabs.items, startup_url)) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads));
         active_index = tabs.items.len - 1;
     }
 
@@ -2545,6 +2674,7 @@ fn createBrowseTab(
     initial_url: ?[:0]const u8,
     default_zoom_percent: i32,
     allow_script_popups: bool,
+    downloads: ?*BrowseDownloads,
 ) !*BrowseTab {
     const tab = try app.allocator.create(BrowseTab);
     errdefer app.allocator.destroy(tab);
@@ -2560,6 +2690,8 @@ fn createBrowseTab(
     tab.browser.allow_script_popups = allow_script_popups;
 
     tab.session = try tab.browser.newSession(tab.notification);
+    tab.downloads = downloads;
+    updateBrowseTabRootAttachmentDownloadHandler(tab);
     const page = try tab.session.createPage();
     tab.target_name = &.{};
     tab.popup_source = .none;
@@ -5493,9 +5625,11 @@ test "findBrowseTabIndexByTargetName ignores blank and matches named targets" {
 test "openOrReuseTargetedBrowseTab reuses existing named tab" {
     var tabs: std.ArrayListUnmanaged(*BrowseTab) = .{};
     defer deinitBrowseTabs(testing.test_app.allocator, &tabs);
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
 
     var active_tab_index: usize = 0;
-    const source = try createBrowseTab(testing.test_app, null, 100, true);
+    const source = try createBrowseTab(testing.test_app, null, 100, true, null);
     try appendBrowseTab(testing.test_app.allocator, &tabs, source, &active_tab_index, true);
 
     const first_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html";
@@ -5510,6 +5644,7 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
         &tabs,
         &active_tab_index,
         true,
+        &downloads,
         100,
         first_url,
         opts,
@@ -5529,6 +5664,7 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
         &tabs,
         &active_tab_index,
         true,
+        &downloads,
         100,
         second_url,
         opts,
@@ -5549,9 +5685,11 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
 test "openOrReuseTargetedBrowseTab resets live named script popup tab before reuse" {
     var tabs: std.ArrayListUnmanaged(*BrowseTab) = .{};
     defer deinitBrowseTabs(testing.test_app.allocator, &tabs);
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
 
     var active_tab_index: usize = 0;
-    const source = try createBrowseTab(testing.test_app, null, 100, true);
+    const source = try createBrowseTab(testing.test_app, null, 100, true, null);
     try appendBrowseTab(testing.test_app.allocator, &tabs, source, &active_tab_index, true);
 
     const first_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=script-one";
@@ -5566,6 +5704,7 @@ test "openOrReuseTargetedBrowseTab resets live named script popup tab before reu
         &tabs,
         &active_tab_index,
         true,
+        &downloads,
         100,
         first_url,
         opts,
@@ -5584,6 +5723,7 @@ test "openOrReuseTargetedBrowseTab resets live named script popup tab before reu
         &tabs,
         &active_tab_index,
         true,
+        &downloads,
         100,
         second_url,
         opts,

@@ -918,10 +918,10 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
             const disposition = transfer.getResponseHeaderValue("content-disposition", 0) orelse break :blk "";
             break :blk (try contentDispositionSuggestedFilename(self.arena, disposition)) orelse "";
         };
-        try self._session.enqueueDownload(self.url, suggested_filename);
+        const adopted = try self._session.promoteRootAttachmentDownload(self, transfer, suggested_filename);
         self._parse_state = .attachment_promoted;
         self._session.noteAttachmentPromotion();
-        return false;
+        return adopted;
     }
 
     return true;

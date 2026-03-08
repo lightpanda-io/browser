@@ -29,10 +29,14 @@ try {
   $downloadPath = Join-Path $downloadsDir 'attachment-basic'
   $downloaded = Wait-DownloadedFile $downloadPath 80
   $restoredTitle = Wait-TabTitle $ownedBrowser.Id 'Attachment Download Home' 40
+  Start-Sleep -Milliseconds 200
+  $requestCount = Get-AttachmentRequestCount $serverErr '/attachment-basic'
 
   [pscustomobject]@{
     download_worked = $downloaded
     restored_title_worked = [bool]$restoredTitle
+    request_count = $requestCount
+    single_request_worked = ($requestCount -eq 1)
   } | ConvertTo-Json -Compress
 }
 finally {

@@ -23,11 +23,15 @@ try {
   $downloaded = Wait-DownloadedFile $downloadPath 80
   $downloadsTitle = Wait-TabTitle $ownedBrowser.Id 'Downloads (1)' 60
   $downloadsData = Get-Content (Join-Path $profile.AppDataRoot 'downloads-v1.txt') -Raw
+  Start-Sleep -Milliseconds 200
+  $requestCount = Get-AttachmentRequestCount $serverErr '/attachment-named'
 
   [pscustomobject]@{
     download_worked = $downloaded
     downloads_page_worked = [bool]$downloadsTitle
     named_entry_worked = $downloadsData -match 'server-report.txt'
+    request_count = $requestCount
+    single_request_worked = ($requestCount -eq 1)
   } | ConvertTo-Json -Compress
 }
 finally {

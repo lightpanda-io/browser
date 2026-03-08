@@ -27,6 +27,7 @@ const storage = @import("webapi/storage/storage.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");
 pub const PopupSource = @import("PopupSource.zig").PopupSource;
+const HttpClient = @import("../http/Client.zig");
 
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
@@ -51,6 +52,11 @@ pub const PendingDownload = struct {
         allocator.free(self.suggested_filename);
         self.* = undefined;
     }
+};
+
+pub const RootAttachmentDownloadHandler = struct {
+    ctx: *anyopaque,
+    promote: *const fn (ctx: *anyopaque, page: *Page, transfer: *HttpClient.Transfer, suggested_filename: []const u8) anyerror!void,
 };
 
 pub const PendingBrowserNavigate = struct {
@@ -95,6 +101,7 @@ pending_browser_navigations: std.ArrayListUnmanaged(PendingBrowserNavigate),
 pending_downloads: std.ArrayListUnmanaged(PendingDownload),
 pending_tab_opens: std.ArrayListUnmanaged(PendingTabOpen),
 pending_attachment_promotions: usize = 0,
+root_attachment_download_handler: ?RootAttachmentDownloadHandler = null,
 
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
@@ -132,6 +139,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .pending_downloads = .{},
         .pending_tab_opens = .{},
         .pending_attachment_promotions = 0,
+        .root_attachment_download_handler = null,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
         .allow_script_popups = browser.allow_script_popups,
@@ -663,6 +671,28 @@ pub fn enqueueDownload(self: *Session, url: []const u8, suggested_filename: []co
         .url = owned_url,
         .suggested_filename = owned_filename,
     });
+}
+
+pub fn setRootAttachmentDownloadHandler(self: *Session, handler: ?RootAttachmentDownloadHandler) void {
+    self.root_attachment_download_handler = handler;
+}
+
+pub fn promoteRootAttachmentDownload(
+    self: *Session,
+    page: *Page,
+    transfer: *HttpClient.Transfer,
+    suggested_filename: []const u8,
+) !bool {
+    if (self.root_attachment_download_handler) |handler| {
+        handler.promote(handler.ctx, page, transfer, suggested_filename) catch |err| {
+            log.warn(.browser, "attachment adopt fallback", .{ .err = err, .url = page.url });
+            try self.enqueueDownload(page.url, suggested_filename);
+            return false;
+        };
+        return true;
+    }
+    try self.enqueueDownload(page.url, suggested_filename);
+    return false;
 }
 
 pub fn enqueueBrowserNavigation(self: *Session, url: []const u8) !void {
