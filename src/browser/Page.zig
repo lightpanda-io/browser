@@ -190,6 +190,8 @@ _queued_navigation: ?*QueuedNavigation = null,
 // The URL of the current page
 url: [:0]const u8 = "about:blank",
 
+origin: ?[]const u8 = null,
+
 // The base url specifies the base URL used to resolve the relative urls.
 // It is set by a <base> tag.
 // If null the url must be used.
@@ -388,10 +390,6 @@ pub fn getTitle(self: *Page) !?[]const u8 {
     return null;
 }
 
-pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
-    return try URL.getOrigin(allocator, self.url);
-}
-
 // Add comon headers for a request:
 // * cookies
 // * referer
@@ -449,7 +447,7 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
 }
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
-    const current_origin = (try URL.getOrigin(self.call_arena, self.url)) orelse return false;
+    const current_origin = self.origin orelse return false;
     return std.mem.startsWith(u8, url, current_origin);
 }
 
@@ -472,6 +470,14 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     // page and dispatch the events.
     if (std.mem.eql(u8, "about:blank", request_url)) {
         self.url = "about:blank";
+
+        if (self.parent) |parent| {
+            self.origin = parent.origin;
+        } else {
+            self.origin = null;
+        }
+        try self.js.setOrigin(self.origin);
+
         // Assume we parsed the document.
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
@@ -518,6 +524,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     var http_client = session.browser.http_client;
 
     self.url = try self.arena.dupeZ(u8, request_url);
+    self.origin = try URL.getOrigin(self.arena, self.url);
 
     self._req_id = req_id;
     self._navigated_options = .{
@@ -825,9 +832,15 @@ fn notifyParentLoadComplete(self: *Page) void {
 fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
-    // would be different than self.url in the case of a redirect
     const header = &transfer.response_header.?;
-    self.url = try self.arena.dupeZ(u8, std.mem.span(header.url));
+
+    const response_url = std.mem.span(header.url);
+    if (std.mem.eql(u8, response_url, self.url) == false) {
+        // would be different than self.url in the case of a redirect
+        self.url = try self.arena.dupeZ(u8, response_url);
+        self.origin = try URL.getOrigin(self.arena, self.url);
+    }
+    try self.js.setOrigin(self.origin);
 
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;

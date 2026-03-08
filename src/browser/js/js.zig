@@ -161,7 +161,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             var ctx = self.local.ctx;
             var global: v8.Global = undefined;
             v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-            try ctx.global_values.append(ctx.arena, global);
+            try ctx.trackGlobal(global);
 
             return .{ .handle = global };
         }

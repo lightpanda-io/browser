@@ -171,7 +171,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
         .pointer => |ptr| {
             const resolved = resolveValue(value);
 
-            const gop = try ctx.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
+            const gop = try ctx.origin.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
                 return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);

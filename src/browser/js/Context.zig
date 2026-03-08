@@ -23,6 +23,7 @@ const log = @import("../../log.zig");
 const js = @import("js.zig");
 const Env = @import("Env.zig");
 const bridge = @import("bridge.zig");
+const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 
 const Page = @import("../Page.zig");
@@ -74,12 +75,7 @@ call_depth: usize = 0,
 // context.localScope
 local: ?*const js.Local = null,
 
-// Serves two purposes. Like `global_objects`, this is used to free
-// every Global(Object) we've created during the lifetime of the context.
-// More importantly, it serves as an identity map - for a given Zig
-// instance, we map it to the same Global(Object).
-// The key is the @intFromPtr of the Zig value
-identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+origin: *Origin,
 
 // Any type that is stored in the identity_map which has a finalizer declared
 // will have its finalizer stored here. This is only used when shutting down
@@ -87,26 +83,9 @@ identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
 finalizer_callback_pool: std.heap.MemoryPool(FinalizerCallback),
 
-// Some web APIs have to manage opaque values. Ideally, they use an
-// js.Object, but the js.Object has no lifetime guarantee beyond the
-// current call. They can call .persist() on their js.Object to get
-// a `Global(Object)`. We need to track these to free them.
-// This used to be a map and acted like identity_map; the key was
-// the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
-// a reliable way to know if an object has already been persisted,
-// we now simply persist every time persist() is called.
-global_values: std.ArrayList(v8.Global) = .empty,
-global_objects: std.ArrayList(v8.Global) = .empty,
+// Unlike other v8 types, like functions or objects, modules are not shared
+// across origins.
 global_modules: std.ArrayList(v8.Global) = .empty,
-global_promises: std.ArrayList(v8.Global) = .empty,
-global_functions: std.ArrayList(v8.Global) = .empty,
-global_promise_resolvers: std.ArrayList(v8.Global) = .empty,
-
-// Temp variants stored in HashMaps for O(1) early cleanup.
-// Key is global.data_ptr.
-global_values_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
-global_promises_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
-global_functions_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
@@ -175,12 +154,6 @@ pub fn deinit(self: *Context) void {
     self.scheduler.deinit();
 
     {
-        var it = self.identity_map.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
-    {
         var it = self.finalizer_callbacks.valueIterator();
         while (it.next()) |finalizer| {
             finalizer.*.deinit();
@@ -188,50 +161,11 @@ pub fn deinit(self: *Context) void {
         self.finalizer_callback_pool.deinit();
     }
 
-    for (self.global_values.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    for (self.global_objects.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
     for (self.global_modules.items) |*global| {
         v8.v8__Global__Reset(global);
     }
 
-    for (self.global_functions.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    for (self.global_promises.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    for (self.global_promise_resolvers.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    {
-        var it = self.global_values_temp.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
-
-    {
-        var it = self.global_promises_temp.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
-
-    {
-        var it = self.global_functions_temp.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
+    env.releaseOrigin(self.origin);
 
     v8.v8__Global__Reset(&self.handle);
     env.isolate.notifyContextDisposed();
@@ -239,6 +173,38 @@ pub fn deinit(self: *Context) void {
     // purge while the context is still alive.
     _ = env.pumpMessageLoop();
     v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
+}
+
+pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
+    const env = self.env;
+    const isolate = env.isolate;
+
+    const origin = try env.getOrCreateOrigin(key);
+    errdefer env.releaseOrigin(origin);
+
+    try self.origin.transferTo(origin);
+    self.origin.deinit(env.app);
+
+    self.origin = origin;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        self.localScope(&ls);
+        defer ls.deinit();
+
+        // Set the V8::Context SecurityToken, which is a big part of what allows
+        // one context to access another.
+        const token_local = v8.v8__Global__Get(&origin.security_token, isolate.handle);
+        v8.v8__Context__SetSecurityToken(ls.local.handle, token_local);
+    }
+}
+
+pub fn trackGlobal(self: *Context, global: v8.Global) !void {
+    return self.origin.trackGlobal(global);
+}
+
+pub fn trackTemp(self: *Context, global: v8.Global) !void {
+    return self.origin.trackTemp(global);
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
@@ -279,7 +245,7 @@ pub fn release(self: *Context, item: anytype) void {
     if (@TypeOf(item) == *anyopaque) {
         // Existing *anyopaque path for identity_map. Called internally from
         // finalizers
-        var global = self.identity_map.fetchRemove(@intFromPtr(item)) orelse {
+        var global = self.origin.identity_map.fetchRemove(@intFromPtr(item)) orelse {
             if (comptime IS_DEBUG) {
                 // should not be possible
                 std.debug.assert(false);
@@ -301,14 +267,14 @@ pub fn release(self: *Context, item: anytype) void {
         return;
     }
 
-    var map = switch (@TypeOf(item)) {
-        js.Value.Temp => &self.global_values_temp,
-        js.Promise.Temp => &self.global_promises_temp,
-        js.Function.Temp => &self.global_functions_temp,
-        else => |T| @compileError("Context.release cannot be called with a " ++ @typeName(T)),
-    };
+    if (comptime IS_DEBUG) {
+        switch (@TypeOf(item)) {
+            js.Value.Temp, js.Promise.Temp, js.Function.Temp => {},
+            else => |T| @compileError("Context.release cannot be called with a " ++ @typeName(T)),
+        }
+    }
 
-    if (map.fetchRemove(item.handle.data_ptr)) |kv| {
+    if (self.origin.temps.fetchRemove(item.handle.data_ptr)) |kv| {
         var global = kv.value;
         v8.v8__Global__Reset(&global);
     }

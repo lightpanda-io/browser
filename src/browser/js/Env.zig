@@ -26,6 +26,7 @@ const App = @import("../../App.zig");
 const log = @import("../../log.zig");
 
 const bridge = @import("bridge.zig");
+const Origin = @import("Origin.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
@@ -57,6 +58,8 @@ const Env = @This();
 
 app: *App,
 
+allocator: Allocator,
+
 platform: *const Platform,
 
 // the global isolate
@@ -69,6 +72,9 @@ context_count: usize,
 isolate_params: *v8.CreateParams,
 
 context_id: usize,
+
+// Maps origin -> shared Origin contains, for v8 values shared across same-origin Contexts
+origins: std.StringHashMapUnmanaged(*Origin) = .empty,
 
 // Global handles that need to be freed on deinit
 eternal_function_templates: []v8.Eternal,
@@ -206,6 +212,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     return .{
         .app = app,
         .context_id = 0,
+        .allocator = allocator,
         .contexts = undefined,
         .context_count = 0,
         .isolate = isolate,
@@ -228,7 +235,17 @@ pub fn deinit(self: *Env) void {
         ctx.deinit();
     }
 
-    const allocator = self.app.allocator;
+    const app = self.app;
+    const allocator = app.allocator;
+
+    {
+        var it = self.origins.valueIterator();
+        while (it.next()) |value| {
+            value.*.deinit(app);
+        }
+        self.origins.deinit(allocator);
+    }
+
     if (self.inspector) |i| {
         i.deinit(allocator);
     }
@@ -272,6 +289,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
 
     // get the global object for the context, this maps to our Window
     const global_obj = v8.v8__Context__Global(v8_context).?;
+
     {
         // Store our TAO inside the internal field of the global object. This
         // maps the v8::Object -> Zig instance. Almost all objects have this, and
@@ -287,6 +305,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         };
         v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
     }
+
     // our window wrapped in a v8::Global
     var global_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, global_obj, &global_global);
@@ -294,10 +313,14 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
+    const origin = try self.getOrCreateOrigin(null);
+    errdefer self.releaseOrigin(origin);
+
     const context = try context_arena.create(Context);
     context.* = .{
         .env = self,
         .page = page,
+        .origin = origin,
         .id = context_id,
         .isolate = isolate,
         .arena = context_arena,
@@ -309,7 +332,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .scheduler = .init(context_arena),
         .finalizer_callback_pool = std.heap.MemoryPool(Context.FinalizerCallback).init(self.app.allocator),
     };
-    try context.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
+    try context.origin.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
@@ -348,6 +371,41 @@ pub fn destroyContext(self: *Env, context: *Context) void {
     }
 
     context.deinit();
+}
+
+pub fn getOrCreateOrigin(self: *Env, key_: ?[]const u8) !*Origin {
+    const key = key_ orelse {
+        var opaque_origin: [36]u8 = undefined;
+        @import("../../id.zig").uuidv4(&opaque_origin);
+        // Origin.init will dupe opaque_origin. It's fine that this doesn't
+        // get added to self.origins. In fact, it further isolates it. When the
+        // context is freed, it'll call env.releaseOrigin which will free it.
+        return Origin.init(self.app, self.isolate, &opaque_origin);
+    };
+
+    const gop = try self.origins.getOrPut(self.allocator, key);
+    if (gop.found_existing) {
+        const origin = gop.value_ptr.*;
+        origin.rc += 1;
+        return origin;
+    }
+
+    errdefer _ = self.origins.remove(key);
+
+    const origin = try Origin.init(self.app, self.isolate, key);
+    gop.key_ptr.* = origin.key;
+    gop.value_ptr.* = origin;
+    return origin;
+}
+
+pub fn releaseOrigin(self: *Env, origin: *Origin) void {
+    const rc = origin.rc;
+    if (rc == 1) {
+        _ = self.origins.remove(origin.key);
+        origin.deinit(self.app);
+    } else {
+        origin.rc = rc - 1;
+    }
 }
 
 pub fn runMicrotasks(self: *Env) void {

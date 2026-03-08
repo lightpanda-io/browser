@@ -209,9 +209,9 @@ fn _persist(self: *const Function, comptime is_global: bool) !(if (is_global) Gl
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     if (comptime is_global) {
-        try ctx.global_functions.append(ctx.arena, global);
+        try ctx.trackGlobal(global);
     } else {
-        try ctx.global_functions_temp.put(ctx.arena, global.data_ptr, global);
+        try ctx.trackTemp(global);
     }
     return .{ .handle = global };
 }

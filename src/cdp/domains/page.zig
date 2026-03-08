@@ -414,7 +414,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         bc.inspector_session.inspector.contextCreated(
             &ls.local,
             "",
-            try page.getOrigin(arena) orelse "",
+            page.origin orelse "",
             aux_data,
             true,
         );
