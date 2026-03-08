@@ -94,6 +94,7 @@ queued_queued_navigation: std.ArrayList(*Page),
 pending_browser_navigations: std.ArrayListUnmanaged(PendingBrowserNavigate),
 pending_downloads: std.ArrayListUnmanaged(PendingDownload),
 pending_tab_opens: std.ArrayListUnmanaged(PendingTabOpen),
+pending_attachment_promotions: usize = 0,
 
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
@@ -130,6 +131,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .pending_browser_navigations = .{},
         .pending_downloads = .{},
         .pending_tab_opens = .{},
+        .pending_attachment_promotions = 0,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
         .allow_script_popups = browser.allow_script_popups,
@@ -437,6 +439,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool)
                 // flattening it into raw_done immediately.
                 return .done;
             },
+            .attachment_promoted => return .done,
             .raw_done => {
                 if (exit_when_done) {
                     return .done;
@@ -743,6 +746,20 @@ pub fn takePendingTabOpens(self: *Session) std.ArrayListUnmanaged(PendingTabOpen
 
 pub fn hasPendingTabOpens(self: *const Session) bool {
     return self.pending_tab_opens.items.len > 0;
+}
+
+pub fn noteAttachmentPromotion(self: *Session) void {
+    self.pending_attachment_promotions += 1;
+}
+
+pub fn takePendingAttachmentPromotions(self: *Session) usize {
+    const pending = self.pending_attachment_promotions;
+    self.pending_attachment_promotions = 0;
+    return pending;
+}
+
+pub fn hasPendingAttachmentPromotions(self: *const Session) bool {
+    return self.pending_attachment_promotions != 0;
 }
 
 fn allocPage(self: *Session) !*Page {

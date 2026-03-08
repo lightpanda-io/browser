@@ -207,6 +207,11 @@ Current state inside Gate 1:
 - `browser://bookmarks` now supports persisted in-page reorder actions in saved
   order mode, and `browser://downloads` now supports in-place retry of failed
   and interrupted entries with bounded headed document-action coverage
+- root `Content-Disposition: attachment` navigations now promote into the
+  headed download manager instead of degrading into navigation errors:
+  address-bar navigations, in-page link activations, and direct startup URLs
+  all enqueue real downloads, restore the suspended page when one exists, and
+  fall back to `browser://downloads` when there is no live page to restore
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -226,6 +231,11 @@ Exit criteria:
 - file chooser and download manager flows exist
 - same-origin, CORS, CSP, mixed-content, and certificate error behavior are
   coherent enough for mainstream browsing
+
+Current known gap entering Gate 2:
+- root attachment navigations now reach the download manager, but the current
+  implementation promotes at header time and re-fetches through the existing
+  download client instead of adopting the original response stream directly
 
 ### Gate 3: Layout Engine Replacement
 

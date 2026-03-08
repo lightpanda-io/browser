@@ -1489,6 +1489,34 @@ pub const Transfer = struct {
         return std.fmt.parseInt(u32, cl, 10) catch null;
     }
 
+    pub fn getResponseHeaderValue(self: *const Transfer, name: []const u8, index: usize) ?[]const u8 {
+        if (self._conn) |conn| {
+            var lowered_buf: [129]u8 = undefined;
+            if (name.len + 1 > lowered_buf.len) {
+                return null;
+            }
+            for (name, 0..) |char, i| {
+                lowered_buf[i] = std.ascii.toLower(char);
+            }
+            lowered_buf[name.len] = 0;
+            const value = conn.getResponseHeader(lowered_buf[0..name.len :0], index) orelse return null;
+            return value.value;
+        }
+
+        const rh = self.response_header orelse return null;
+        var matched_index: usize = 0;
+        for (rh._injected_headers) |hdr| {
+            if (!std.ascii.eqlIgnoreCase(hdr.name, name)) {
+                continue;
+            }
+            if (matched_index == index) {
+                return hdr.value;
+            }
+            matched_index += 1;
+        }
+        return null;
+    }
+
     fn getContentLengthRawValue(self: *const Transfer) ?[]const u8 {
         if (self._conn) |conn| {
             // If we have a connection, than this is a normal request. We can get the

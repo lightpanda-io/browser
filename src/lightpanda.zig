@@ -900,6 +900,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
                 tab.session.waitNoInput(opts.wait_ms);
             _ = try captureBrowseTabRuntimeError(app.allocator, tab);
             try downloads.processPendingRequests(app, tab);
+            try processPendingAttachmentPromotions(app, &shell, index, &settings, &downloads);
         }
         var pending_nav_index: usize = 0;
         while (pending_nav_index < tabs.items.len) : (pending_nav_index += 1) {
@@ -1572,6 +1573,32 @@ fn processPendingBrowserNavigations(
             .navigate = request.url,
         });
     }
+}
+
+fn processPendingAttachmentPromotions(
+    app: *App,
+    shell: *BrowseShell,
+    tab_index: usize,
+    settings: *BrowseSettings,
+    downloads: *BrowseDownloads,
+) !void {
+    if (tab_index >= shell.tabs.items.len) {
+        return;
+    }
+    const tab = shell.tabs.items[tab_index];
+    if (!tab.session.hasPendingAttachmentPromotions()) {
+        return;
+    }
+    _ = tab.session.takePendingAttachmentPromotions();
+
+    if ((try tab.session.restoreSuspendedPage()) != null) {
+        tab.restore_committed_surface = false;
+        tab.last_presented_hash = 0;
+        return;
+    }
+
+    const page = tab.session.currentPage() orelse return;
+    try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, .downloads);
 }
 
 fn processPendingTabOpens(

@@ -913,7 +913,110 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
         });
     }
 
+    if (try shouldPromoteRootAttachmentNavigation(self, transfer)) {
+        const suggested_filename = blk: {
+            const disposition = transfer.getResponseHeaderValue("content-disposition", 0) orelse break :blk "";
+            break :blk (try contentDispositionSuggestedFilename(self.arena, disposition)) orelse "";
+        };
+        try self._session.enqueueDownload(self.url, suggested_filename);
+        self._parse_state = .attachment_promoted;
+        self._session.noteAttachmentPromotion();
+        return false;
+    }
+
     return true;
+}
+
+fn shouldPromoteRootAttachmentNavigation(self: *Page, transfer: *Http.Transfer) !bool {
+    if (self.parent != null or self._session.browser.app.config.mode != .browse) {
+        return false;
+    }
+    const response_header = transfer.response_header orelse return false;
+    if (response_header.status < 200 or response_header.status >= 300) {
+        return false;
+    }
+    const disposition = transfer.getResponseHeaderValue("content-disposition", 0) orelse return false;
+    return contentDispositionIndicatesAttachment(disposition);
+}
+
+fn contentDispositionIndicatesAttachment(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        return false;
+    }
+    const end = std.mem.indexOfScalar(u8, trimmed, ';') orelse trimmed.len;
+    const disposition_type = std.mem.trim(u8, trimmed[0..end], &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(disposition_type, "attachment");
+}
+
+fn contentDispositionSuggestedFilename(allocator: Allocator, value: []const u8) !?[]u8 {
+    var it = std.mem.splitScalar(u8, value, ';');
+    _ = it.next();
+
+    var fallback: ?[]u8 = null;
+    errdefer if (fallback) |owned| allocator.free(owned);
+    while (it.next()) |raw_segment| {
+        const segment = std.mem.trim(u8, raw_segment, &std.ascii.whitespace);
+        if (segment.len == 0) {
+            continue;
+        }
+        const eq = std.mem.indexOfScalar(u8, segment, '=') orelse continue;
+        const name = std.mem.trim(u8, segment[0..eq], &std.ascii.whitespace);
+        const raw_value = trimContentDispositionParameterValue(segment[eq + 1 ..]);
+        if (raw_value.len == 0) {
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(name, "filename*")) {
+            const decoded = try decodeExtendedDispositionFilename(allocator, raw_value);
+            if (fallback) |owned| {
+                allocator.free(owned);
+                fallback = null;
+            }
+            return decoded;
+        }
+        if (fallback == null and std.ascii.eqlIgnoreCase(name, "filename")) {
+            fallback = try allocator.dupe(u8, raw_value);
+        }
+    }
+    return fallback;
+}
+
+fn trimContentDispositionParameterValue(value: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len >= 2 and trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') {
+        return trimmed[1 .. trimmed.len - 1];
+    }
+    return trimmed;
+}
+
+fn decodeExtendedDispositionFilename(allocator: Allocator, value: []const u8) ![]u8 {
+    const encoded = if (std.mem.indexOf(u8, value, "''")) |sep|
+        value[sep + 2 ..]
+    else
+        value;
+
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+
+    var index: usize = 0;
+    while (index < encoded.len) : (index += 1) {
+        const char = encoded[index];
+        if (char == '%' and index + 2 < encoded.len) {
+            const hi = std.fmt.charToDigit(encoded[index + 1], 16) catch {
+                try buf.append(allocator, char);
+                continue;
+            };
+            const lo = std.fmt.charToDigit(encoded[index + 2], 16) catch {
+                try buf.append(allocator, char);
+                continue;
+            };
+            try buf.append(allocator, @as(u8, @intCast((hi << 4) | lo)));
+            index += 2;
+            continue;
+        }
+        try buf.append(allocator, char);
+    }
+    return allocator.dupe(u8, buf.items);
 }
 
 fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
@@ -974,6 +1077,7 @@ fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
         .pre => unreachable,
         .complete => unreachable,
         .err => unreachable,
+        .attachment_promoted => unreachable,
         .raw_done => unreachable,
     }
 }
@@ -1052,6 +1156,7 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
             parser.parse(html);
             self.documentIsComplete();
         },
+        .attachment_promoted => unreachable,
         else => unreachable,
     }
 
@@ -1060,6 +1165,10 @@ fn pageDoneCallback(ctx: *anyopaque) !void {
 
 fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     var self: *Page = @ptrCast(@alignCast(ctx));
+
+    if (self._parse_state == .attachment_promoted and self._session.hasPendingAttachmentPromotions()) {
+        return;
+    }
 
     log.err(.page, "navigate failed", .{ .err = err, .type = self._type, .url = self.url });
     self._parse_state = .{ .err = err };
@@ -3015,6 +3124,7 @@ const ParseState = union(enum) {
     pre,
     complete,
     err: anyerror,
+    attachment_promoted,
     html: std.ArrayList(u8),
     text: std.ArrayList(u8),
     image: std.ArrayList(u8),
@@ -4780,6 +4890,33 @@ test "Page select-all shortcut detection" {
     try testing.expect(!isSelectAllShortcutKey(KeyboardEvent.Key{ .standard = "a" }, true, true));
     try testing.expect(!isSelectAllShortcutKey(KeyboardEvent.Key{ .standard = "b" }, true, false));
     try testing.expect(!isSelectAllShortcutKey(.Enter, true, false));
+}
+
+test "contentDispositionIndicatesAttachment matches attachment token only" {
+    try std.testing.expect(contentDispositionIndicatesAttachment("attachment"));
+    try std.testing.expect(contentDispositionIndicatesAttachment(" Attachment ; filename=\"report.txt\""));
+    try std.testing.expect(!contentDispositionIndicatesAttachment("inline; filename=\"report.txt\""));
+    try std.testing.expect(!contentDispositionIndicatesAttachment("filename=\"report.txt\""));
+}
+
+test "contentDispositionSuggestedFilename prefers extended filename" {
+    const filename = (try contentDispositionSuggestedFilename(
+        std.testing.allocator,
+        "attachment; filename=\"fallback.txt\"; filename*=UTF-8''server%20report.txt",
+    )).?;
+    defer std.testing.allocator.free(filename);
+
+    try std.testing.expectEqualStrings("server report.txt", filename);
+}
+
+test "contentDispositionSuggestedFilename parses quoted filename" {
+    const filename = (try contentDispositionSuggestedFilename(
+        std.testing.allocator,
+        "attachment; filename=\"server-report.txt\"",
+    )).?;
+    defer std.testing.allocator.free(filename);
+
+    try std.testing.expectEqualStrings("server-report.txt", filename);
 }
 
 test "WebApi: Frames" {
