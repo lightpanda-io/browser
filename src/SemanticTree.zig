@@ -230,6 +230,12 @@ fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const 
     try jw.endObject();
 }
 
+fn isStructuralRole(role: []const u8) bool {
+    return std.mem.eql(u8, role, "none") or
+        std.mem.eql(u8, role, "generic") or
+        std.mem.eql(u8, role, "InlineTextBox");
+}
+
 fn dumpText(self: Self, node: *Node, writer: *std.Io.Writer, depth: usize) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
@@ -301,15 +307,44 @@ fn dumpText(self: Self, node: *Node, writer: *std.Io.Writer, depth: usize) !void
         }
     }
 
+    const name = try axn.getName(self.page, self.arena);
+
+    // Pruning Heuristic:
+    // If it's a structural node (none/generic) and has no unique label, unwrap it.
+    // We only keep 'none'/'generic' if they are interactive.
+    const structural = isStructuralRole(role);
+    const has_explicit_label = if (node.is(Element)) |el|
+        el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
+    else
+        false;
+
+    if (structural and !is_interactive and !has_explicit_label) {
+        // Just unwrap and process children
+        var it = node.childrenIterator();
+        while (it.next()) |child| {
+            try self.dumpText(child, writer, depth);
+        }
+        return;
+    }
+
+    // Skip redundant StaticText nodes if the parent already captures the text
+    if (std.mem.eql(u8, role, "StaticText") and node._parent != null) {
+        const parent_axn = AXNode.fromNode(node._parent.?);
+        const parent_name = try parent_axn.getName(self.page, self.arena);
+        if (parent_name != null and name != null and std.mem.indexOf(u8, parent_name.?, name.?) != null) {
+            return;
+        }
+    }
+
     // Format: "  [12] link: Hacker News (value)"
     for (0..(depth * 2)) |_| {
         try writer.writeByte(' ');
     }
     try writer.print("[{d}] {s}: ", .{ cdp_node.id, role });
 
-    if (try axn.getName(self.page, self.arena)) |name| {
-        if (name.len > 0) {
-            try writer.writeAll(name);
+    if (name) |n| {
+        if (n.len > 0) {
+            try writer.writeAll(n);
         }
     } else if (node.is(CData.Text) != null) {
         const text_node = node.is(CData.Text).?;
