@@ -150,9 +150,9 @@ fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const 
     try jw.beginObject();
 
     try jw.objectField("nodeId");
-    try jw.write(cdp_node.id);
+    try jw.write(try std.fmt.allocPrint(self.arena, "{d}", .{cdp_node.id}));
 
-    try jw.objectField("backendNodeId");
+    try jw.objectField("backendDOMNodeId");
     try jw.write(cdp_node.id);
 
     try jw.objectField("nodeName");
@@ -170,6 +170,26 @@ fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const 
 
         try jw.objectField("role");
         try jw.write(role);
+
+        // Add accessible name (e.g. button label, aria-label, etc.)
+        if (try axn.getName(self.page, self.arena)) |name| {
+            if (name.len > 0) {
+                try jw.objectField("name");
+                try jw.write(name);
+            }
+        }
+
+        // Add value for input elements
+        if (el.is(Element.Html.Input)) |input| {
+            try jw.objectField("value");
+            try jw.write(input.getValue());
+        } else if (el.is(Element.Html.TextArea)) |textarea| {
+            try jw.objectField("value");
+            try jw.write(textarea.getValue());
+        } else if (el.is(Element.Html.Select)) |select| {
+            try jw.objectField("value");
+            try jw.write(select.getValue(self.page));
+        }
 
         if (el._attributes) |attrs| {
             try jw.objectField("attributes");
