@@ -82,7 +82,7 @@
   testing.expectEqual('ceil', atob('Y2VpbA'));  // 6 chars, len%4==2, needs '=='
 
   // length % 4 == 1 must still throw
-  testing.expectError('Error: InvalidCharacterError', () => {
+  testing.expectError('InvalidCharacterError: Invalid Character', () => {
     atob('Y');
   });
 </script>

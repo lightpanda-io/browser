@@ -268,7 +268,7 @@ pub const JsApi = struct {
 
     pub const now = bridge.function(Performance.now, .{});
     pub const mark = bridge.function(Performance.mark, .{});
-    pub const measure = bridge.function(Performance.measure, .{});
+    pub const measure = bridge.function(Performance.measure, .{ .dom_exception = true });
     pub const clearMarks = bridge.function(Performance.clearMarks, .{});
     pub const clearMeasures = bridge.function(Performance.clearMeasures, .{});
     pub const getEntries = bridge.function(Performance.getEntries, .{});
