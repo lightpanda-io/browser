@@ -27,6 +27,17 @@ function Wait-TabsPageTitle([int]$BrowserId, [int]$Count, [int]$Attempts = 40) {
   return Wait-TabTitle $BrowserId "browser://tabs" $Attempts
 }
 
+function Invoke-TabsPageAddressNavigate([IntPtr]$Hwnd, [int]$BrowserId, [int]$Count) {
+  [void](Invoke-SmokeClientClick $Hwnd 160 40)
+  Start-Sleep -Milliseconds 150
+  Send-SmokeCtrlA
+  Start-Sleep -Milliseconds 120
+  Send-SmokeText "browser://tabs"
+  Start-Sleep -Milliseconds 120
+  Send-SmokeEnter
+  return Wait-TabsPageTitle $BrowserId $Count 40
+}
+
 try {
   $server = Start-BrowserPagesServer -Port $port -Stdout $serverOut -Stderr $serverErr
   $ready = Wait-BrowserPagesServer -Port $port
@@ -53,7 +64,7 @@ try {
   $titles.tabs_host_tab = Wait-TabTitle $browser.Id "New Tab" 40
   if (-not $titles.tabs_host_tab) { throw "tabs actions did not open the dedicated tabs host tab" }
 
-  $titles.tabs_three = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://tabs" "browser://tabs"
+  $titles.tabs_three = Invoke-TabsPageAddressNavigate $hwnd $browser.Id 3
   $tabsOpened = [bool]$titles.tabs_three
   if (-not $tabsOpened) { throw "tabs host tab did not open browser://tabs" }
 

@@ -293,6 +293,32 @@ const BrowseDownloads = struct {
         return true;
     }
 
+    fn clearInactiveEntries(self: *BrowseDownloads, app_dir_path: ?[]const u8) bool {
+        var removed_any = false;
+        var index: usize = self.entries.items.len;
+        while (index > 0) {
+            index -= 1;
+            if (downloadEntryActive(self, index)) {
+                continue;
+            }
+            var removed = self.entries.orderedRemove(index);
+            if (removed.path.len > 0) {
+                std.fs.deleteFileAbsolute(removed.path) catch {};
+            }
+            removed.deinit(self.allocator);
+            for (self.active.items) |download| {
+                if (download.entry_index > index) {
+                    download.entry_index -= 1;
+                }
+            }
+            removed_any = true;
+        }
+        if (removed_any) {
+            self.persistIfChanged(app_dir_path);
+        }
+        return removed_any;
+    }
+
     fn cancelDownloadsForTab(self: *BrowseDownloads, tab: *BrowseTab, app_dir_path: ?[]const u8) void {
         for (self.active.items) |download| {
             if (download.source_tab == tab) {
@@ -947,6 +973,8 @@ fn handleActiveBrowseCommand(
                 switch (route) {
                     .page => |internal_page| try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, internal_page),
                     .command => |internal_command| {
+                        const current_internal_page = parseInternalBrowsePage(page.url);
+                        const command_host_page = internalBrowseCommandHostPage(internal_command);
                         switch (internal_command) {
                             .tab_new,
                             .tab_activate,
@@ -965,7 +993,15 @@ fn handleActiveBrowseCommand(
                                 defer if (owns_route_scope) route_scope.deinit();
                                 try handleActiveBrowseCommand(app, shell, tab_index, settings, downloads, internal_command);
                                 if (internalBrowseCommandKeepsCurrentPage(internal_command)) {
-                                    try refreshCurrentInternalBrowsePage(app, shell, tab_index, page, settings, downloads, true);
+                                    if (command_host_page) |host_page| {
+                                        if (current_internal_page != null and current_internal_page.? == host_page) {
+                                            try refreshCurrentInternalBrowsePage(app, shell, tab_index, page, settings, downloads, true);
+                                        } else {
+                                            try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, host_page);
+                                        }
+                                    } else if (current_internal_page != null) {
+                                        try refreshCurrentInternalBrowsePage(app, shell, tab_index, page, settings, downloads, true);
+                                    }
                                 }
                             },
                         }
@@ -1028,6 +1064,13 @@ fn handleActiveBrowseCommand(
             tab.last_presented_hash = 0;
             _ = try session.navigation.navigateInner(url, .{ .traverse = index }, page);
         },
+        .history_clear_session => {
+            _ = clearBrowseHistoryToCurrent(tab);
+        },
+        .bookmark_add_current => {
+            const bookmark_url = browseTabHomepageCandidateUrl(tab) orelse return;
+            _ = addPersistedBookmark(app.allocator, app.app_dir_path, bookmark_url);
+        },
         .bookmark_open => |index| {
             const bookmark_url = loadPersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index) orelse return;
             defer app.allocator.free(bookmark_url);
@@ -1047,6 +1090,9 @@ fn handleActiveBrowseCommand(
         },
         .download_remove => |index| {
             _ = downloads.removeEntry(app.app_dir_path, index);
+        },
+        .download_clear => {
+            _ = downloads.clearInactiveEntries(app.app_dir_path);
         },
         .home => {
             const home_url = settings.homeUrl() orelse {
@@ -1113,7 +1159,7 @@ fn handleActiveBrowseCommand(
             tab.restore_committed_surface = false;
             tab.last_presented_hash = 0;
             if (!pageIsLoading(page)) {
-                try presentPage(app, page, &tab.last_presented_hash, &tab.committed_surface, tab.zoom_percent);
+                try presentPage(app, page, &tab.last_presented_hash, &tab.committed_surface, tab.zoom_percent, null);
             }
         },
         else => {},
@@ -1418,8 +1464,22 @@ fn syncBrowseDisplayState(
 
     var tab_entries = try app.allocator.alloc(Display.TabEntry, tabs.len);
     defer app.allocator.free(tab_entries);
+    var owned_tab_titles = try app.allocator.alloc([]u8, tabs.len);
+    defer {
+        for (owned_tab_titles) |title| {
+            app.allocator.free(title);
+        }
+        app.allocator.free(owned_tab_titles);
+    }
     for (tabs, 0..) |tab, index| {
-        tab_entries[index] = try browseTabEntry(tab);
+        owned_tab_titles[index] = try browseTabEntryTitle(
+            app.allocator,
+            app.app_dir_path,
+            tabs,
+            index,
+            downloads,
+        );
+        tab_entries[index] = browseTabEntry(tab, owned_tab_titles[index]);
     }
     app.display.setTabEntries(tab_entries, active_index);
 
@@ -2109,12 +2169,25 @@ fn updateActiveBrowseDisplay(
     if (!pageIsLoading(page)) {
         active_tab.restore_committed_surface = false;
     }
+    const internal_title_override = if (parseInternalBrowsePage(page.url)) |internal_page|
+        try makeInternalBrowsePageDisplayTitle(
+            app.allocator,
+            app.app_dir_path,
+            tabs,
+            active_index,
+            downloads,
+            internal_page,
+        )
+    else
+        null;
+    defer if (internal_title_override) |title| app.allocator.free(title);
     try presentPage(
         app,
         page,
         &active_tab.last_presented_hash,
         &active_tab.committed_surface,
         active_tab.zoom_percent,
+        internal_title_override,
     );
 }
 
@@ -2123,45 +2196,65 @@ fn trimmedOrNull(value: []const u8) ?[]const u8 {
     return if (trimmed.len == 0) null else trimmed;
 }
 
-fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
+fn browseTabEntryTitle(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    tabs: []const *BrowseTab,
+    tab_index: usize,
+    downloads: *BrowseDownloads,
+) ![]u8 {
+    if (tab_index >= tabs.len) {
+        return allocator.dupe(u8, "Closed Tab");
+    }
+    const tab = tabs[tab_index];
     const page = tab.session.currentPage() orelse {
-        return .{
-            .title = "Closed Tab",
-            .url = "about:blank",
-            .is_loading = false,
-            .target_name = tab.target_name,
-            .popup_source = tab.popup_source,
-        };
+        return allocator.dupe(u8, "Closed Tab");
     };
 
     if (pageIsBlankIdle(page)) {
-        return .{
-            .title = "New Tab",
-            .url = "about:blank",
-            .is_loading = false,
-            .target_name = tab.target_name,
-            .popup_source = tab.popup_source,
-        };
+        return allocator.dupe(u8, "New Tab");
     }
 
-    const title = blk: {
-        if (!pageIsLoading(page)) {
-            const page_title = (try page.getTitle()) orelse "";
-            if (trimmedOrNull(page_title)) |resolved| break :blk resolved;
+    if (!pageIsLoading(page)) {
+        if (parseInternalBrowsePage(page.url)) |internal_page| {
+            return makeInternalBrowsePageDisplayTitle(
+                allocator,
+                app_dir_path,
+                tabs,
+                tab_index,
+                downloads,
+                internal_page,
+            );
         }
-        break :blk trimmedOrNull(tab.committed_surface.title) orelse
+        const page_title = (try page.getTitle()) orelse "";
+        if (trimmedOrNull(page_title)) |resolved| {
+            return allocator.dupe(u8, resolved);
+        }
+    }
+
+    return allocator.dupe(
+        u8,
+        trimmedOrNull(tab.committed_surface.title) orelse
             trimmedOrNull(page.url) orelse
             trimmedOrNull(tab.committed_surface.url) orelse
-            "New Tab";
-    };
-    const url = trimmedOrNull(page.url) orelse
+            "New Tab",
+    );
+}
+
+fn browseTabEntry(tab: *BrowseTab, title: []const u8) Display.TabEntry {
+    const page = tab.session.currentPage();
+    const url = if (page) |current_page|
+        trimmedOrNull(current_page.url) orelse
+            trimmedOrNull(tab.committed_surface.url) orelse
+            "about:blank"
+    else
         trimmedOrNull(tab.committed_surface.url) orelse
-        "about:blank";
+            "about:blank";
 
     return .{
         .title = title,
         .url = url,
-        .is_loading = pageIsLoading(page),
+        .is_loading = if (page) |current_page| pageIsLoading(current_page) else false,
         .target_name = tab.target_name,
         .popup_source = tab.popup_source,
     };
@@ -2206,6 +2299,22 @@ fn browseTabHomepageCandidateUrl(tab: *BrowseTab) ?[]const u8 {
         }
     }
     return null;
+}
+
+fn clearBrowseHistoryToCurrent(tab: *BrowseTab) bool {
+    const entries = tab.session.navigation.entries();
+    if (entries.len == 0) {
+        return false;
+    }
+    const current_index = tab.session.navigation.getCurrentIndex();
+    if (current_index >= entries.len) {
+        return false;
+    }
+    const current_entry = entries[current_index];
+    tab.session.navigation._entries.items[0] = current_entry;
+    tab.session.navigation._entries.items.len = 1;
+    tab.session.navigation._index = 0;
+    return true;
 }
 
 fn normalizeBrowseUrl(allocator: std.mem.Allocator, raw: []const u8) !?[:0]u8 {
@@ -2346,9 +2455,13 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .page = .tabs },
         .history => if (parseInternalBrowseIndexAction(action, "traverse/")) |index|
             .{ .command = .{ .history_traverse = index } }
+        else if (std.ascii.eqlIgnoreCase(action, "clear-session"))
+            .{ .command = .history_clear_session }
         else
             .{ .page = .history },
-        .bookmarks => if (parseInternalBrowseIndexAction(action, "open/")) |index|
+        .bookmarks => if (std.ascii.eqlIgnoreCase(action, "add-current"))
+            .{ .command = .bookmark_add_current }
+        else if (parseInternalBrowseIndexAction(action, "open/")) |index|
             .{ .command = .{ .bookmark_open = index } }
         else if (parseInternalBrowseIndexAction(action, "remove/")) |index|
             .{ .command = .{ .bookmark_remove = index } }
@@ -2358,6 +2471,8 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .command = .{ .download_source = index } }
         else if (parseInternalBrowseIndexAction(action, "remove/")) |index|
             .{ .command = .{ .download_remove = index } }
+        else if (std.ascii.eqlIgnoreCase(action, "clear"))
+            .{ .command = .download_clear }
         else
             .{ .page = .downloads },
         .settings => if (std.ascii.eqlIgnoreCase(action, "toggle-restore-session"))
@@ -2420,12 +2535,24 @@ fn openInternalBrowsePage(
         internalBrowsePageAlias(internal_page),
         html,
     );
-    try presentPage(app, page, &tab.last_presented_hash, &tab.committed_surface, tab.zoom_percent);
+    const title_override = try makeInternalBrowsePageDisplayTitle(
+        app.allocator,
+        app.app_dir_path,
+        shell.tabs.items,
+        tab_index,
+        downloads,
+        internal_page,
+    );
+    defer app.allocator.free(title_override);
+    try presentPage(app, page, &tab.last_presented_hash, &tab.committed_surface, tab.zoom_percent, title_override);
 }
 
 fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
     return switch (command) {
+        .history_clear_session,
+        .bookmark_add_current,
         .bookmark_remove,
+        .download_clear,
         .download_remove,
         .settings_toggle_restore_session,
         .settings_toggle_script_popups,
@@ -2436,6 +2563,29 @@ fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
         .settings_clear_homepage,
         => true,
         else => false,
+    };
+}
+
+fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
+    return switch (command) {
+        .history_clear_session => .history,
+        .bookmark_add_current,
+        .bookmark_open,
+        .bookmark_remove,
+        => .bookmarks,
+        .download_source,
+        .download_remove,
+        .download_clear,
+        => .downloads,
+        .settings_toggle_restore_session,
+        .settings_toggle_script_popups,
+        .settings_default_zoom_in,
+        .settings_default_zoom_out,
+        .settings_default_zoom_reset,
+        .settings_set_homepage_to_current,
+        .settings_clear_homepage,
+        => .settings,
+        else => null,
     };
 }
 
@@ -2577,7 +2727,16 @@ fn refreshCurrentInternalBrowsePage(
         internalBrowsePageAlias(internal_page),
         html,
     );
-    try presentPage(app, page, &tab.last_presented_hash, &tab.committed_surface, tab.zoom_percent);
+    const title_override = try makeInternalBrowsePageDisplayTitle(
+        app.allocator,
+        app.app_dir_path,
+        shell.tabs.items,
+        tab_index,
+        downloads,
+        internal_page,
+    );
+    defer app.allocator.free(title_override);
+    try presentPage(app, page, &tab.last_presented_hash, &tab.committed_surface, tab.zoom_percent, title_override);
 }
 
 fn buildInternalBrowsePageHtml(
@@ -2598,7 +2757,7 @@ fn buildInternalBrowsePageHtml(
     const tab = shell.tabs.items[tab_index];
     switch (internal_page) {
         .start => try writeInternalStartPage(allocator, &html.writer, app_dir_path, shell, tab_index, settings, downloads),
-        .tabs => try writeInternalTabsPage(allocator, &html.writer, shell),
+        .tabs => try writeInternalTabsPage(allocator, &html.writer, app_dir_path, shell, downloads),
         .history => try writeInternalHistoryPage(allocator, &html.writer, tab),
         .bookmarks => try writeInternalBookmarksPage(allocator, &html.writer, app_dir_path),
         .downloads => try writeInternalDownloadsPage(allocator, &html.writer, downloads),
@@ -2694,6 +2853,34 @@ fn internalBrowsePageTitle(internal_page: InternalBrowsePage) []const u8 {
     };
 }
 
+fn makeInternalBrowsePageDisplayTitle(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    tabs: []const *BrowseTab,
+    tab_index: usize,
+    downloads: *BrowseDownloads,
+    internal_page: InternalBrowsePage,
+) ![]u8 {
+    return switch (internal_page) {
+        .start => allocator.dupe(u8, "Browser Start"),
+        .tabs => std.fmt.allocPrint(allocator, "Browser Tabs ({d})", .{tabs.len}),
+        .history => blk: {
+            if (tab_index >= tabs.len) {
+                break :blk allocator.dupe(u8, "Browser History (0)");
+            }
+            const tab = tabs[tab_index];
+            break :blk std.fmt.allocPrint(allocator, "Browser History ({d})", .{tab.session.navigation.entries().len});
+        },
+        .bookmarks => blk: {
+            var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+            defer deinitOwnedStrings(allocator, &bookmarks);
+            break :blk std.fmt.allocPrint(allocator, "Browser Bookmarks ({d})", .{bookmarks.items.len});
+        },
+        .downloads => std.fmt.allocPrint(allocator, "Browser Downloads ({d})", .{downloads.entries.items.len}),
+        .settings => allocator.dupe(u8, "Browser Settings"),
+    };
+}
+
 fn writeInternalPageEnd(writer: anytype) !void {
     try writer.writeAll("</body></html>");
 }
@@ -2777,7 +2964,9 @@ fn popupSourceLabel(source: PopupSource) []const u8 {
 fn writeInternalTabsPage(
     allocator: std.mem.Allocator,
     writer: anytype,
+    app_dir_path: ?[]const u8,
     shell: *const BrowseShell,
+    downloads: *BrowseDownloads,
 ) !void {
     const active_index = if (shell.tabs.items.len == 0)
         @as(usize, 0)
@@ -2808,7 +2997,14 @@ fn writeInternalTabsPage(
     }
     try writer.writeAll("<ol>");
     for (shell.tabs.items, 0..) |tab, index| {
-        const entry = try browseTabEntry(tab);
+        const tab_title = try browseTabEntryTitle(
+            allocator,
+            app_dir_path,
+            shell.tabs.items,
+            index,
+            downloads,
+        );
+        const entry = browseTabEntry(tab, tab_title);
         const activate_href = try std.fmt.allocPrint(allocator, "browser://tabs/activate/{d}", .{index});
         defer allocator.free(activate_href);
         const duplicate_href = try std.fmt.allocPrint(allocator, "browser://tabs/duplicate/{d}", .{index});
@@ -2852,6 +3048,7 @@ fn writeInternalTabsPage(
         try writer.writeAll("<br><small>");
         try writeHtmlEscaped(writer, entry.url);
         try writer.writeAll("</small></li>");
+        allocator.free(tab_title);
     }
     try writer.writeAll("</ol>");
     try writeInternalPageEnd(writer);
@@ -2869,7 +3066,9 @@ fn writeInternalHistoryPage(allocator: std.mem.Allocator, writer: anytype, tab: 
         "Current tab navigation entries.",
     );
     try writeInternalShellNav(writer, .history);
-    try writer.print("<p><strong>Entries:</strong> {d}</p>", .{entries.len});
+    try writer.print("<p><strong>Entries:</strong> {d}</p><p>", .{entries.len});
+    try writeInternalActionLink(writer, "browser://history/clear-session", "Clear session history");
+    try writer.writeAll("</p>");
     if (entries.len == 0) {
         try writer.writeAll("<p>No history entries yet.</p>");
         try writeInternalPageEnd(writer);
@@ -2909,7 +3108,9 @@ fn writeInternalBookmarksPage(
         "Persisted bookmark entries from the current browser profile.",
     );
     try writeInternalShellNav(writer, .bookmarks);
-    try writer.print("<p><strong>Entries:</strong> {d}</p>", .{bookmarks.items.len});
+    try writer.print("<p><strong>Entries:</strong> {d}</p><p>", .{bookmarks.items.len});
+    try writeInternalActionLink(writer, "browser://bookmarks/add-current", "Add current page");
+    try writer.writeAll("</p>");
     if (bookmarks.items.len == 0) {
         try writer.writeAll("<p>No bookmarks saved yet. Press Ctrl+D on a page first.</p>");
         try writeInternalPageEnd(writer);
@@ -2947,7 +3148,9 @@ fn writeInternalDownloadsPage(
         "Download history for the current browser profile.",
     );
     try writeInternalShellNav(writer, .downloads);
-    try writer.print("<p><strong>Entries:</strong> {d}</p>", .{downloads.entries.items.len});
+    try writer.print("<p><strong>Entries:</strong> {d}</p><p>", .{downloads.entries.items.len});
+    try writeInternalActionLink(writer, "browser://downloads/clear", "Clear inactive downloads");
+    try writer.writeAll("</p>");
     if (downloads.entries.items.len == 0) {
         try writer.writeAll("<p>No downloads recorded yet.</p>");
         try writeInternalPageEnd(writer);
@@ -3115,6 +3318,32 @@ fn removePersistedBookmarkAtIndex(
     return true;
 }
 
+fn addPersistedBookmark(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    raw_url: []const u8,
+) bool {
+    const trimmed = std.mem.trim(u8, raw_url, "\r\n\t ");
+    if (trimmed.len == 0) {
+        return false;
+    }
+
+    var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+    defer deinitOwnedStrings(allocator, &bookmarks);
+
+    if (indexOfOwnedString(bookmarks.items, trimmed) != null) {
+        return false;
+    }
+
+    const owned = allocator.dupe(u8, trimmed) catch return false;
+    bookmarks.append(allocator, owned) catch {
+        allocator.free(owned);
+        return false;
+    };
+    savePersistedBookmarks(allocator, app_dir_path, bookmarks.items);
+    return true;
+}
+
 fn loadPersistedBookmarkAtIndex(
     allocator: std.mem.Allocator,
     app_dir_path: ?[]const u8,
@@ -3166,6 +3395,7 @@ fn presentPage(
     last_presented_hash: *u64,
     committed_surface: *CommittedBrowseSurface,
     zoom_percent: i32,
+    title_override: ?[]const u8,
 ) !void {
     if (pageIsBlankIdle(page)) {
         const title = "New Tab";
@@ -3185,7 +3415,8 @@ fn presentPage(
     }
 
     if (page._queued_navigation != null or page._parse_state != .complete) {
-        const title = trimmedOrNull(committed_surface.title) orelse
+        const title = title_override orelse
+            trimmedOrNull(committed_surface.title) orelse
             trimmedOrNull(page.url) orelse
             "Lightpanda Browser";
         const url = if (page.url.len > 0) page.url else "about:blank";
@@ -3212,7 +3443,7 @@ fn presentPage(
     });
     defer display_list.deinit(app.allocator);
 
-    const title = (try page.getTitle()) orelse "";
+    const title = title_override orelse ((try page.getTitle()) orelse "");
     const url = page.url;
     const text = body.written();
 
@@ -3629,6 +3860,14 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://history/traverse/2").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .history_clear_session },
+        parseInternalBrowseRoute("browser://history/clear-session").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .bookmark_add_current },
+        parseInternalBrowseRoute("browser://bookmarks/add-current").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .bookmark_open = 3 } },
         parseInternalBrowseRoute("browser://bookmarks/open/3").?,
     );
@@ -3643,6 +3882,10 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .download_remove = 0 } },
         parseInternalBrowseRoute("browser://downloads/remove/0").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .download_clear },
+        parseInternalBrowseRoute("browser://downloads/clear").?,
     );
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .settings_toggle_script_popups },
@@ -3677,10 +3920,12 @@ test "hashInternalTabsPageState changes when active tab changes" {
     var tab_one: BrowseTab = undefined;
     var tab_two: BrowseTab = undefined;
     tab_one.session = &session_one;
+    tab_one.committed_surface = .{};
     tab_one.target_name = &.{};
     tab_one.popup_source = .none;
     tab_one.zoom_percent = 100;
     tab_two.session = &session_two;
+    tab_two.committed_surface = .{};
     tab_two.target_name = &.{};
     tab_two.popup_source = .none;
     tab_two.zoom_percent = 125;
@@ -3719,10 +3964,12 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
     var tab_one: BrowseTab = undefined;
     var tab_two: BrowseTab = undefined;
     tab_one.session = &session_one;
+    tab_one.committed_surface = .{};
     tab_one.zoom_percent = 100;
     tab_one.target_name = @constCast("report");
     tab_one.popup_source = .script;
     tab_two.session = &session_two;
+    tab_two.committed_surface = .{};
     tab_two.zoom_percent = 125;
     tab_two.target_name = &.{};
     tab_two.popup_source = .none;
@@ -3749,7 +3996,9 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
 
     var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer buf.deinit();
-    try writeInternalTabsPage(std.testing.allocator, &buf.writer, &shell);
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+    try writeInternalTabsPage(std.testing.allocator, &buf.writer, null, &shell, &downloads);
 
     const html = buf.written();
     try std.testing.expect(std.mem.indexOf(u8, html, "Browser Tabs (2)") != null);
@@ -3758,6 +4007,161 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "target=report") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "popup=script") != null);
+}
+
+test "addPersistedBookmark appends unique bookmark once" {
+    const rel_dir = ".zig-cache/tmp/internal-bookmark-add-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+
+    try std.testing.expect(addPersistedBookmark(std.testing.allocator, abs_dir, "http://one.test/"));
+    try std.testing.expect(!addPersistedBookmark(std.testing.allocator, abs_dir, "http://one.test/"));
+
+    var bookmarks = loadPersistedBookmarks(std.testing.allocator, abs_dir);
+    defer deinitOwnedStrings(std.testing.allocator, &bookmarks);
+    try std.testing.expectEqual(@as(usize, 1), bookmarks.items.len);
+    try std.testing.expectEqualStrings("http://one.test/", bookmarks.items[0]);
+}
+
+test "clearInactiveEntries removes completed download files and metadata" {
+    const rel_dir = ".zig-cache/tmp/internal-download-clear-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+    const file_path = try std.fs.path.join(std.testing.allocator, &.{ abs_dir, "gone.txt" });
+    defer std.testing.allocator.free(file_path);
+    var dir = try std.fs.openDirAbsolute(abs_dir, .{});
+    defer dir.close();
+    try dir.writeFile(.{ .sub_path = "gone.txt", .data = "gone" });
+
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "gone.txt"),
+        .path = try std.testing.allocator.dupe(u8, file_path),
+        .url = try std.testing.allocator.dupe(u8, "http://one.test/gone.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .bytes_received = 4,
+        .status = .completed,
+    });
+
+    try std.testing.expect(downloads.clearInactiveEntries(abs_dir));
+    try std.testing.expectEqual(@as(usize, 0), downloads.entries.items.len);
+    try std.testing.expectError(error.FileNotFound, std.fs.accessAbsolute(file_path, .{}));
+}
+
+test "makeInternalBrowsePageDisplayTitle reflects live counts" {
+    const rel_dir = ".zig-cache/tmp/internal-title-count-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+    savePersistedBookmarks(std.testing.allocator, abs_dir, &.{ "http://one.test/", "http://two.test/" });
+
+    var session: Session = undefined;
+    session.page = null;
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.zoom_percent = 100;
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+
+    const tabs = [_]*BrowseTab{&tab};
+
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "file.txt"),
+        .path = try std.testing.allocator.dupe(u8, "C:/tmp/file.txt"),
+        .url = try std.testing.allocator.dupe(u8, "http://one.test/file.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+
+    const tabs_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .tabs);
+    defer std.testing.allocator.free(tabs_title);
+    try std.testing.expectEqualStrings("Browser Tabs (1)", tabs_title);
+
+    const bookmarks_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .bookmarks);
+    defer std.testing.allocator.free(bookmarks_title);
+    try std.testing.expectEqualStrings("Browser Bookmarks (2)", bookmarks_title);
+
+    const downloads_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .downloads);
+    defer std.testing.allocator.free(downloads_title);
+    try std.testing.expectEqualStrings("Browser Downloads (1)", downloads_title);
+}
+
+test "hashInternalBrowsePageState changes after bookmark and download mutations" {
+    const rel_dir = ".zig-cache/tmp/internal-page-hash-mutation-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+
+    savePersistedBookmarks(std.testing.allocator, abs_dir, &.{"http://one.test/"});
+
+    var session: Session = undefined;
+    session.page = null;
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.zoom_percent = 100;
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+
+    var tab_items = [_]*BrowseTab{&tab};
+    var tabs = std.ArrayListUnmanaged(*BrowseTab){
+        .items = tab_items[0..],
+        .capacity = tab_items.len,
+    };
+    var closed_tabs = std.ArrayListUnmanaged(ClosedBrowseTab){};
+    defer closed_tabs.deinit(std.testing.allocator);
+    var active_index: usize = 0;
+    const shell: BrowseShell = .{
+        .tabs = &tabs,
+        .closed_tabs = &closed_tabs,
+        .active_tab_index = &active_index,
+    };
+    var settings = BrowseSettings{};
+    defer settings.deinit(std.testing.allocator);
+
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "file.txt"),
+        .path = try std.testing.allocator.dupe(u8, "C:/tmp/file.txt"),
+        .url = try std.testing.allocator.dupe(u8, "http://one.test/file.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+
+    const first_bookmarks_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .bookmarks);
+    try std.testing.expect(addPersistedBookmark(std.testing.allocator, abs_dir, "http://two.test/"));
+    const second_bookmarks_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .bookmarks);
+    try std.testing.expect(first_bookmarks_hash != second_bookmarks_hash);
+
+    const first_downloads_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .downloads);
+    try std.testing.expect(downloads.clearInactiveEntries(abs_dir));
+    const second_downloads_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .downloads);
+    try std.testing.expect(first_downloads_hash != second_downloads_hash);
+}
+
+test "internalBrowseCommandHostPage maps stateful internal actions" {
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.history_clear_session));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.bookmark_add_current));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_clear));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_set_homepage_to_current));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, null), internalBrowseCommandHostPage(.reload));
 }
 
 test "removePersistedBookmarkAtIndex rewrites bookmark file" {

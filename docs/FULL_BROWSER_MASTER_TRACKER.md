@@ -148,9 +148,11 @@ Current state inside Gate 1:
 - those browser pages now execute real internal actions:
   - tab new, activate, duplicate, reload, close, and reopen-closed flows
     through `browser://tabs/...`
-  - history traverse and reload-safe reopen
-  - bookmark open/remove backed by the persisted bookmark store
-  - download source/remove backed by the persisted download store
+  - history traverse, reload-safe reopen, and clear-session collapse
+  - bookmark add-current, open, and remove backed by the persisted bookmark
+    store
+  - download source, remove, and clear-inactive backed by the persisted
+    download store
   - settings toggles for restore-session, script popups, default zoom, and
     homepage mutation
   - homepage navigation to an internal page plus restart-time restore of the
@@ -166,21 +168,17 @@ Current state inside Gate 1:
   no homepage is configured
 - bounded headed browser-page probes now cover:
   - history, bookmarks, downloads, and settings actions
+  - bookmark add-current, history clear-session, and download clear-all flows
   - start-page cross-navigation
   - tabs-page tab-management actions and reload/reopen recovery
   - homepage-to-internal-page restart restore
 - legacy overlays are still available for diagnostics on secondary shortcuts,
   but they are no longer the primary shell path
-- current residual inside this slice:
-  - some restored or background-activated internal tabs still surface the alias
-    title like `browser://bookmarks` or `browser://tabs` instead of the richer
-    generated page title
-  - downloads remove mutates profile state correctly, but the same-session
-    zero-count title refresh on `browser://downloads` is still weaker than the
-    other internal pages
-- next blocker: migrate more shell behavior and richer interaction onto the
-  internal pages and close the remaining internal-page title/presentation gaps
-  so the overlay path can keep shrinking without losing utility
+- internal page titles now stay user-facing across active presentation,
+  background tab state, restart restore, and the zero-count downloads case
+- next blocker: migrate richer interaction directly onto the internal pages so
+  fewer browser-shell actions still depend on address-bar routes or secondary
+  overlay surfaces
 
 ### Gate 2: Shared Subresource Loader And Profile
 
