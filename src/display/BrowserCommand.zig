@@ -38,6 +38,7 @@ pub const BrowserCommand = union(enum) {
     tab_close: usize,
     tab_duplicate_index: usize,
     tab_reload_index: usize,
+    tab_reopen_closed_index: usize,
     back,
     forward,
     reload,

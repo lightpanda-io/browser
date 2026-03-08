@@ -139,6 +139,12 @@ const ClosedBrowseTab = struct {
     }
 };
 
+const ClosedBrowseTabDisplayEntry = struct {
+    ui_index: usize,
+    url: []const u8,
+    zoom_percent: i32,
+};
+
 const SavedBrowseTab = struct {
     url: []u8,
     zoom_percent: i32,
@@ -860,6 +866,17 @@ fn handleBrowseCommand(
                 .kind = .{ .push = null },
             });
         },
+        .tab_reopen_closed_index => |index| {
+            var closed = popClosedBrowseTabAtUiIndex(shell.closed_tabs, index) orelse return;
+            defer closed.deinit(app.allocator);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups);
+            tab.zoom_percent = closed.zoom_percent;
+            try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
+            try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            });
+        },
         .download_remove => |index| {
             _ = downloads.removeEntry(app.app_dir_path, index);
         },
@@ -975,35 +992,27 @@ fn handleActiveBrowseCommand(
                     .command => |internal_command| {
                         const current_internal_page = parseInternalBrowsePage(page.url);
                         const command_host_page = internalBrowseCommandHostPage(internal_command);
-                        switch (internal_command) {
-                            .tab_new,
-                            .tab_activate,
-                            .tab_close,
-                            .tab_duplicate,
-                            .tab_duplicate_index,
-                            .tab_reload_index,
-                            .tab_reopen_closed,
-                            => try handleBrowseCommand(app, shell, tab_index, settings, downloads, internal_command),
-                            else => {
-                                var route_scope: js.Local.Scope = undefined;
-                                const owns_route_scope = page.js.local == null;
-                                if (owns_route_scope) {
-                                    page.js.localScope(&route_scope);
-                                }
-                                defer if (owns_route_scope) route_scope.deinit();
-                                try handleActiveBrowseCommand(app, shell, tab_index, settings, downloads, internal_command);
-                                if (internalBrowseCommandKeepsCurrentPage(internal_command)) {
-                                    if (command_host_page) |host_page| {
-                                        if (current_internal_page != null and current_internal_page.? == host_page) {
-                                            try refreshCurrentInternalBrowsePage(app, shell, tab_index, page, settings, downloads, true);
-                                        } else {
-                                            try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, host_page);
-                                        }
-                                    } else if (current_internal_page != null) {
+                        if (internalBrowseCommandUsesBrowseLoopHandler(internal_command)) {
+                            try handleBrowseCommand(app, shell, tab_index, settings, downloads, internal_command);
+                        } else {
+                            var route_scope: js.Local.Scope = undefined;
+                            const owns_route_scope = page.js.local == null;
+                            if (owns_route_scope) {
+                                page.js.localScope(&route_scope);
+                            }
+                            defer if (owns_route_scope) route_scope.deinit();
+                            try handleActiveBrowseCommand(app, shell, tab_index, settings, downloads, internal_command);
+                            if (internalBrowseCommandKeepsCurrentPage(internal_command)) {
+                                if (command_host_page) |host_page| {
+                                    if (current_internal_page != null and current_internal_page.? == host_page) {
                                         try refreshCurrentInternalBrowsePage(app, shell, tab_index, page, settings, downloads, true);
+                                    } else {
+                                        try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, host_page);
                                     }
+                                } else if (current_internal_page != null) {
+                                    try refreshCurrentInternalBrowsePage(app, shell, tab_index, page, settings, downloads, true);
                                 }
-                            },
+                            }
                         }
                     },
                 }
@@ -1529,6 +1538,36 @@ fn popClosedBrowseTab(closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab)) ?Cl
         return null;
     }
     return closed_tabs.pop();
+}
+
+fn popClosedBrowseTabAtUiIndex(closed_tabs: *std.ArrayListUnmanaged(ClosedBrowseTab), ui_index: usize) ?ClosedBrowseTab {
+    if (ui_index >= closed_tabs.items.len) {
+        return null;
+    }
+    const storage_index = closed_tabs.items.len - 1 - ui_index;
+    return closed_tabs.orderedRemove(storage_index);
+}
+
+fn makeClosedBrowseTabDisplayEntries(
+    allocator: std.mem.Allocator,
+    closed_tabs: []const ClosedBrowseTab,
+    limit: usize,
+) !std.ArrayListUnmanaged(ClosedBrowseTabDisplayEntry) {
+    var entries: std.ArrayListUnmanaged(ClosedBrowseTabDisplayEntry) = .{};
+    errdefer entries.deinit(allocator);
+
+    const max_count = @min(limit, closed_tabs.len);
+    var ui_index: usize = 0;
+    while (ui_index < max_count) : (ui_index += 1) {
+        const storage_index = closed_tabs.len - 1 - ui_index;
+        const closed = closed_tabs[storage_index];
+        try entries.append(allocator, .{
+            .ui_index = ui_index,
+            .url = closed.url,
+            .zoom_percent = closed.zoom_percent,
+        });
+    }
+    return entries;
 }
 
 fn pushClosedBrowseTab(
@@ -2441,6 +2480,8 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
         .start => .{ .page = .start },
         .tabs => if (std.ascii.eqlIgnoreCase(action, "new"))
             .{ .command = .tab_new }
+        else if (parseInternalBrowseIndexAction(action, "reopen-closed/")) |index|
+            .{ .command = .{ .tab_reopen_closed_index = index } }
         else if (std.ascii.eqlIgnoreCase(action, "reopen-closed"))
             .{ .command = .tab_reopen_closed }
         else if (parseInternalBrowseIndexAction(action, "activate/")) |index|
@@ -2566,6 +2607,21 @@ fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
     };
 }
 
+fn internalBrowseCommandUsesBrowseLoopHandler(command: BrowserCommand) bool {
+    return switch (command) {
+        .tab_new,
+        .tab_activate,
+        .tab_close,
+        .tab_duplicate,
+        .tab_duplicate_index,
+        .tab_reload_index,
+        .tab_reopen_closed,
+        .tab_reopen_closed_index,
+        => true,
+        else => false,
+    };
+}
+
 fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
     return switch (command) {
         .history_clear_session => .history,
@@ -2630,6 +2686,10 @@ fn hashInternalTabsPageState(shell: *const BrowseShell) u64 {
             const loading = false;
             hasher.update(std.mem.asBytes(&loading));
         }
+    }
+    for (shell.closed_tabs.items) |tab| {
+        hasher.update(tab.url);
+        hasher.update(std.mem.asBytes(&tab.zoom_percent));
     }
     return hasher.final();
 }
@@ -2893,6 +2953,285 @@ fn writeInternalActionLink(writer: anytype, href: []const u8, label: []const u8)
     try writer.writeAll("</a>");
 }
 
+const INTERNAL_START_PREVIEW_LIMIT: usize = 3;
+
+fn writeInternalStartSectionTitle(writer: anytype, title: []const u8) !void {
+    try writer.writeAll("<h2>");
+    try writeHtmlEscaped(writer, title);
+    try writer.writeAll("</h2>");
+}
+
+fn writeInternalStartQuickActions(
+    writer: anytype,
+    tab: *BrowseTab,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+    closed_tabs_count: usize,
+) !void {
+    try writeInternalStartSectionTitle(writer, "Quick Actions");
+    try writer.writeAll("<p>");
+    try writeInternalActionLink(writer, "browser://tabs/new", "New tab");
+    if (closed_tabs_count > 0) {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, "browser://tabs/reopen-closed", "Reopen latest closed tab");
+    }
+    if (browseTabHomepageCandidateUrl(tab) != null) {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, "browser://bookmarks/add-current", "Add current page");
+    }
+    if (settings.homeUrl()) |home_url| {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, home_url, "Open homepage");
+    }
+    if (downloads.entries.items.len > 0) {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, "browser://downloads/clear", "Clear inactive downloads");
+    }
+    try writer.writeAll("</p>");
+}
+
+fn writeInternalStartRecentTabsSection(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    app_dir_path: ?[]const u8,
+    shell: *const BrowseShell,
+    downloads: *BrowseDownloads,
+) !void {
+    try writeInternalStartSectionTitle(writer, "Open Tabs");
+    try writer.print("<p><strong>Count:</strong> {d} ", .{shell.tabs.items.len});
+    try writeInternalActionLink(writer, "browser://tabs", "Open tabs page");
+    try writer.writeAll("</p>");
+    if (shell.tabs.items.len == 0) {
+        try writer.writeAll("<p>No tabs are currently open.</p>");
+        return;
+    }
+
+    const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
+    const preview_count = @min(INTERNAL_START_PREVIEW_LIMIT, shell.tabs.items.len);
+    try writer.writeAll("<ul>");
+    for (shell.tabs.items[0..preview_count], 0..) |tab, index| {
+        const title = try browseTabEntryTitle(allocator, app_dir_path, shell.tabs.items, index, downloads);
+        defer allocator.free(title);
+        const entry = browseTabEntry(tab, title);
+        const activate_href = try std.fmt.allocPrint(allocator, "browser://tabs/activate/{d}", .{index});
+        defer allocator.free(activate_href);
+        try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, activate_href, "Activate");
+        try writer.writeAll(" <strong>");
+        try writeHtmlEscaped(writer, entry.title);
+        try writer.writeAll("</strong>");
+        if (index == active_index) {
+            try writer.writeAll(" <small>(Current)</small>");
+        }
+        try writer.writeAll("<br><small>");
+        try writeHtmlEscaped(writer, entry.url);
+        try writer.writeAll("</small></li>");
+    }
+    try writer.writeAll("</ul>");
+}
+
+fn writeInternalStartClosedTabsSection(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    shell: *const BrowseShell,
+) !void {
+    try writeInternalStartSectionTitle(writer, "Recently Closed");
+    try writer.print("<p><strong>Available:</strong> {d} ", .{shell.closed_tabs.items.len});
+    try writeInternalActionLink(writer, "browser://tabs", "Open tabs page");
+    try writer.writeAll("</p>");
+    if (shell.closed_tabs.items.len == 0) {
+        try writer.writeAll("<p>No closed tabs are available.</p>");
+        return;
+    }
+
+    var entries = try makeClosedBrowseTabDisplayEntries(allocator, shell.closed_tabs.items, INTERNAL_START_PREVIEW_LIMIT);
+    defer entries.deinit(allocator);
+    try writer.writeAll("<ul>");
+    for (entries.items) |entry| {
+        const reopen_href = try std.fmt.allocPrint(allocator, "browser://tabs/reopen-closed/{d}", .{entry.ui_index});
+        defer allocator.free(reopen_href);
+        try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, reopen_href, "Reopen");
+        try writer.writeAll(" <strong>");
+        try writeHtmlEscaped(writer, entry.url);
+        try writer.writeAll("</strong> <small>(");
+        try writer.print("{d}%)</small></li>", .{entry.zoom_percent});
+    }
+    try writer.writeAll("</ul>");
+}
+
+fn writeInternalStartHistorySection(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    tab: *BrowseTab,
+) !void {
+    const entries = tab.session.navigation.entries();
+    const current_index = if (entries.len == 0) 0 else tab.session.navigation.getCurrentIndex();
+    try writeInternalStartSectionTitle(writer, "Recent History");
+    try writer.print("<p><strong>Entries:</strong> {d} ", .{entries.len});
+    try writeInternalActionLink(writer, "browser://history", "Open history page");
+    if (entries.len > 0) {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, "browser://history/clear-session", "Clear session history");
+    }
+    try writer.writeAll("</p>");
+    if (entries.len == 0) {
+        try writer.writeAll("<p>No history entries yet.</p>");
+        return;
+    }
+
+    try writer.writeAll("<ul>");
+    var shown: usize = 0;
+    var offset: usize = 0;
+    while (offset < entries.len and shown < INTERNAL_START_PREVIEW_LIMIT) : (offset += 1) {
+        const index = entries.len - 1 - offset;
+        const url = entries[index].url() orelse continue;
+        const open_href = try std.fmt.allocPrint(allocator, "browser://history/traverse/{d}", .{index});
+        defer allocator.free(open_href);
+        try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, open_href, "Open");
+        try writer.writeAll(" ");
+        if (index == current_index) {
+            try writer.writeAll("<small>(Current)</small> ");
+        }
+        try writeHtmlEscaped(writer, url);
+        try writer.writeAll("</li>");
+        shown += 1;
+    }
+    try writer.writeAll("</ul>");
+}
+
+fn writeInternalStartBookmarksSection(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    app_dir_path: ?[]const u8,
+    tab: *BrowseTab,
+) !void {
+    var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+    defer deinitOwnedStrings(allocator, &bookmarks);
+    try writeInternalStartSectionTitle(writer, "Recent Bookmarks");
+    try writer.print("<p><strong>Entries:</strong> {d} ", .{bookmarks.items.len});
+    try writeInternalActionLink(writer, "browser://bookmarks", "Open bookmarks page");
+    if (browseTabHomepageCandidateUrl(tab) != null) {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, "browser://bookmarks/add-current", "Add current page");
+    }
+    try writer.writeAll("</p>");
+    if (bookmarks.items.len == 0) {
+        try writer.writeAll("<p>No bookmarks saved yet.</p>");
+        return;
+    }
+
+    try writer.writeAll("<ul>");
+    var shown: usize = 0;
+    var offset: usize = 0;
+    while (offset < bookmarks.items.len and shown < INTERNAL_START_PREVIEW_LIMIT) : (offset += 1) {
+        const index = bookmarks.items.len - 1 - offset;
+        const bookmark = bookmarks.items[index];
+        const open_href = try std.fmt.allocPrint(allocator, "browser://bookmarks/open/{d}", .{index});
+        defer allocator.free(open_href);
+        const remove_href = try std.fmt.allocPrint(allocator, "browser://bookmarks/remove/{d}", .{index});
+        defer allocator.free(remove_href);
+        try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, open_href, "Open");
+        try writer.writeAll(" ");
+        try writeInternalActionLink(writer, remove_href, "Remove");
+        try writer.writeAll(" ");
+        try writeHtmlEscaped(writer, bookmark);
+        try writer.writeAll("</li>");
+        shown += 1;
+    }
+    try writer.writeAll("</ul>");
+}
+
+fn writeInternalStartDownloadsSection(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    downloads: *BrowseDownloads,
+) !void {
+    try writeInternalStartSectionTitle(writer, "Recent Downloads");
+    try writer.print("<p><strong>Entries:</strong> {d} ", .{downloads.entries.items.len});
+    try writeInternalActionLink(writer, "browser://downloads", "Open downloads page");
+    if (downloads.entries.items.len > 0) {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, "browser://downloads/clear", "Clear inactive downloads");
+    }
+    try writer.writeAll("</p>");
+    if (downloads.entries.items.len == 0) {
+        try writer.writeAll("<p>No downloads recorded yet.</p>");
+        return;
+    }
+
+    try writer.writeAll("<ul>");
+    var shown: usize = 0;
+    var offset: usize = 0;
+    while (offset < downloads.entries.items.len and shown < INTERNAL_START_PREVIEW_LIMIT) : (offset += 1) {
+        const index = downloads.entries.items.len - 1 - offset;
+        const entry = downloads.entries.items[index];
+        const status = try formatDownloadStatusLabel(allocator, entry);
+        defer allocator.free(status);
+        const source_href = try std.fmt.allocPrint(allocator, "browser://downloads/source/{d}", .{index});
+        defer allocator.free(source_href);
+        const removable = !downloadEntryActive(downloads, index);
+        const remove_href = if (removable)
+            try std.fmt.allocPrint(allocator, "browser://downloads/remove/{d}", .{index})
+        else
+            null;
+        defer if (remove_href) |href| allocator.free(href);
+
+        try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, source_href, "Source");
+        if (remove_href) |href| {
+            try writer.writeAll(" ");
+            try writeInternalActionLink(writer, href, "Remove");
+        }
+        try writer.writeAll(" <strong>");
+        try writeHtmlEscaped(writer, entry.filename);
+        try writer.writeAll("</strong> <small>(");
+        try writeHtmlEscaped(writer, status);
+        try writer.writeAll(")</small></li>");
+        shown += 1;
+    }
+    try writer.writeAll("</ul>");
+}
+
+fn writeInternalStartSettingsSection(
+    writer: anytype,
+    tab: *BrowseTab,
+    settings: *const BrowseSettings,
+) !void {
+    try writeInternalStartSectionTitle(writer, "Settings Snapshot");
+    try writer.writeAll("<ul><li>Restore previous session: <strong>");
+    try writer.writeAll(if (settings.restore_previous_session) "On" else "Off");
+    try writer.writeAll("</strong> ");
+    try writeInternalActionLink(writer, "browser://settings/toggle-restore-session", "Toggle");
+    try writer.writeAll("</li><li>Script popups: <strong>");
+    try writer.writeAll(if (settings.allow_script_popups) "On" else "Off");
+    try writer.writeAll("</strong> ");
+    try writeInternalActionLink(writer, "browser://settings/toggle-script-popups", "Toggle");
+    try writer.writeAll("</li><li>Default zoom: <strong>");
+    try writer.print("{d}%</strong> ", .{settings.default_zoom_percent});
+    try writeInternalActionLink(writer, "browser://settings/default-zoom/out", "-");
+    try writer.writeAll(" ");
+    try writeInternalActionLink(writer, "browser://settings/default-zoom/reset", "Reset");
+    try writer.writeAll(" ");
+    try writeInternalActionLink(writer, "browser://settings/default-zoom/in", "+");
+    try writer.writeAll("</li><li>Homepage: <strong>");
+    try writeHtmlEscaped(writer, settings.homeUrl() orelse "(none)");
+    try writer.writeAll("</strong>");
+    if (browseTabHomepageCandidateUrl(tab) != null) {
+        try writer.writeAll(" ");
+        try writeInternalActionLink(writer, "browser://settings/homepage/set-current", "Use current site");
+    }
+    if (settings.homeUrl() != null) {
+        try writer.writeAll(" ");
+        try writeInternalActionLink(writer, "browser://settings/homepage/clear", "Clear");
+    }
+    try writer.writeAll("</li><li>");
+    try writeInternalActionLink(writer, "browser://settings", "Open full settings page");
+    try writer.writeAll("</li></ul>");
+}
+
 fn writeInternalStartPage(
     allocator: std.mem.Allocator,
     writer: anytype,
@@ -2906,9 +3245,6 @@ fn writeInternalStartPage(
         return;
     }
     const tab = shell.tabs.items[tab_index];
-    var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
-    defer deinitOwnedStrings(allocator, &bookmarks);
-    const history_entries = tab.session.navigation.entries();
     const closed_tabs_count = shell.closed_tabs.items.len;
 
     try writeInternalPageStart(
@@ -2918,37 +3254,14 @@ fn writeInternalStartPage(
         "Internal browser shell hub for headed browse mode.",
     );
     try writeInternalShellNav(writer, .start);
-    try writer.writeAll("<ul>");
-    try writer.print("<li>Tabs: <strong>{d}</strong> ", .{shell.tabs.items.len});
-    try writeInternalActionLink(writer, "browser://tabs", "Open tabs");
-    if (closed_tabs_count > 0) {
-        try writer.print(" <small>({d} closed tab{s} available)</small>", .{
-            closed_tabs_count,
-            if (closed_tabs_count == 1) "" else "s",
-        });
-    }
-    try writer.writeAll("</li>");
-    try writer.print("<li>History entries: <strong>{d}</strong> ", .{history_entries.len});
-    try writeInternalActionLink(writer, "browser://history", "Open history");
-    try writer.writeAll("</li>");
-    try writer.print("<li>Bookmarks: <strong>{d}</strong> ", .{bookmarks.items.len});
-    try writeInternalActionLink(writer, "browser://bookmarks", "Open bookmarks");
-    try writer.writeAll("</li>");
-    try writer.print("<li>Downloads: <strong>{d}</strong> ", .{downloads.entries.items.len});
-    try writeInternalActionLink(writer, "browser://downloads", "Open downloads");
-    try writer.writeAll("</li><li>Settings and policy: ");
-    try writeInternalActionLink(writer, "browser://settings", "Open settings");
-    try writer.writeAll("</li>");
-    if (settings.homeUrl()) |home_url| {
-        try writer.writeAll("<li>Homepage: ");
-        try writeInternalActionLink(writer, home_url, "Open homepage");
-        try writer.writeAll(" <small>(");
-        try writeHtmlEscaped(writer, home_url);
-        try writer.writeAll(")</small></li>");
-    } else {
-        try writer.writeAll("<li>No homepage set. Press Alt+Home to reopen this Start page.</li>");
-    }
-    try writer.writeAll("</ul>");
+    try writer.writeAll("<p>Browser shell dashboard with live previews and direct actions.</p>");
+    try writeInternalStartQuickActions(writer, tab, settings, downloads, closed_tabs_count);
+    try writeInternalStartSettingsSection(writer, tab, settings);
+    try writeInternalStartRecentTabsSection(allocator, writer, app_dir_path, shell, downloads);
+    try writeInternalStartClosedTabsSection(allocator, writer, shell);
+    try writeInternalStartHistorySection(allocator, writer, tab);
+    try writeInternalStartBookmarksSection(allocator, writer, app_dir_path, tab);
+    try writeInternalStartDownloadsSection(allocator, writer, downloads);
     try writeInternalPageEnd(writer);
 }
 
@@ -3049,6 +3362,29 @@ fn writeInternalTabsPage(
         try writeHtmlEscaped(writer, entry.url);
         try writer.writeAll("</small></li>");
         allocator.free(tab_title);
+    }
+    try writer.writeAll("</ol>");
+    try writeInternalStartSectionTitle(writer, "Closed Tabs");
+    try writer.print("<p><strong>Available:</strong> {d} ", .{shell.closed_tabs.items.len});
+    try writeInternalActionLink(writer, "browser://tabs/reopen-closed", "Reopen latest");
+    try writer.writeAll("</p>");
+    if (shell.closed_tabs.items.len == 0) {
+        try writer.writeAll("<p>No closed tabs available.</p>");
+        try writeInternalPageEnd(writer);
+        return;
+    }
+    var closed_entries = try makeClosedBrowseTabDisplayEntries(allocator, shell.closed_tabs.items, shell.closed_tabs.items.len);
+    defer closed_entries.deinit(allocator);
+    try writer.writeAll("<ol>");
+    for (closed_entries.items) |entry| {
+        const reopen_href = try std.fmt.allocPrint(allocator, "browser://tabs/reopen-closed/{d}", .{entry.ui_index});
+        defer allocator.free(reopen_href);
+        try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, reopen_href, "Reopen");
+        try writer.writeAll(" <strong>");
+        try writeHtmlEscaped(writer, entry.url);
+        try writer.writeAll("</strong> <small>(");
+        try writer.print("{d}%)</small></li>", .{entry.zoom_percent});
     }
     try writer.writeAll("</ol>");
     try writeInternalPageEnd(writer);
@@ -3840,6 +4176,10 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://tabs/reopen-closed").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .tab_reopen_closed_index = 1 } },
+        parseInternalBrowseRoute("browser://tabs/reopen-closed/1").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .tab_activate = 2 } },
         parseInternalBrowseRoute("browser://tabs/activate/2").?,
     );
@@ -3956,6 +4296,42 @@ test "hashInternalTabsPageState changes when active tab changes" {
     try std.testing.expect(first_hash != second_hash);
 }
 
+test "hashInternalTabsPageState changes when closed tab content changes" {
+    var session: Session = undefined;
+    session.page = null;
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.committed_surface = .{};
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+    tab.zoom_percent = 100;
+
+    var tab_items = [_]*BrowseTab{&tab};
+    var tabs = std.ArrayListUnmanaged(*BrowseTab){
+        .items = tab_items[0..],
+        .capacity = tab_items.len,
+    };
+    var closed_items = [_]ClosedBrowseTab{
+        .{ .url = @constCast("http://closed-one.test/"), .zoom_percent = 100 },
+        .{ .url = @constCast("http://closed-two.test/"), .zoom_percent = 110 },
+    };
+    var closed_tabs = std.ArrayListUnmanaged(ClosedBrowseTab){
+        .items = closed_items[0..],
+        .capacity = closed_items.len,
+    };
+    var active_index: usize = 0;
+    const shell: BrowseShell = .{
+        .tabs = &tabs,
+        .closed_tabs = &closed_tabs,
+        .active_tab_index = &active_index,
+    };
+
+    const first_hash = hashInternalTabsPageState(&shell);
+    closed_tabs.items[1].url = @constCast("http://closed-three.test/");
+    const second_hash = hashInternalTabsPageState(&shell);
+    try std.testing.expect(first_hash != second_hash);
+}
+
 test "writeInternalTabsPage includes indexed actions and popup metadata" {
     var session_one: Session = undefined;
     session_one.page = null;
@@ -3979,10 +4355,16 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
         .items = tab_items[0..],
         .capacity = tab_items.len,
     };
-    var closed_item = [_]ClosedBrowseTab{.{
-        .url = @constCast("http://closed.test/"),
-        .zoom_percent = 100,
-    }};
+    var closed_item = [_]ClosedBrowseTab{
+        .{
+            .url = @constCast("http://closed-a.test/"),
+            .zoom_percent = 100,
+        },
+        .{
+            .url = @constCast("http://closed-b.test/"),
+            .zoom_percent = 125,
+        },
+    };
     var closed_tabs = std.ArrayListUnmanaged(ClosedBrowseTab){
         .items = closed_item[0..],
         .capacity = closed_item.len,
@@ -4005,8 +4387,138 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/new") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/duplicate/1") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed/0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed/1") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "target=report") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "popup=script") != null);
+}
+
+test "makeClosedBrowseTabDisplayEntries returns newest first ui ordering" {
+    const closed_tabs = [_]ClosedBrowseTab{
+        .{ .url = @constCast("http://first.test/"), .zoom_percent = 100 },
+        .{ .url = @constCast("http://second.test/"), .zoom_percent = 110 },
+        .{ .url = @constCast("http://third.test/"), .zoom_percent = 120 },
+    };
+
+    var entries = try makeClosedBrowseTabDisplayEntries(std.testing.allocator, closed_tabs[0..], 3);
+    defer entries.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), entries.items.len);
+    try std.testing.expectEqual(@as(usize, 0), entries.items[0].ui_index);
+    try std.testing.expectEqualStrings("http://third.test/", entries.items[0].url);
+    try std.testing.expectEqual(@as(i32, 120), entries.items[0].zoom_percent);
+    try std.testing.expectEqual(@as(usize, 1), entries.items[1].ui_index);
+    try std.testing.expectEqualStrings("http://second.test/", entries.items[1].url);
+    try std.testing.expectEqual(@as(usize, 2), entries.items[2].ui_index);
+    try std.testing.expectEqualStrings("http://first.test/", entries.items[2].url);
+}
+
+test "writeInternalStartPage includes preview sections and quick actions" {
+    const NavigationHistoryEntry = @import("browser/webapi/navigation/NavigationHistoryEntry.zig");
+    const rel_dir = ".zig-cache/tmp/internal-start-page-preview-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+    savePersistedBookmarks(std.testing.allocator, abs_dir, &.{ "http://bookmark-one.test/", "http://bookmark-two.test/" });
+
+    var session: Session = undefined;
+    session.page = null;
+    session.navigation = .{ ._proto = undefined };
+    const history_one = try std.testing.allocator.create(NavigationHistoryEntry);
+    errdefer std.testing.allocator.destroy(history_one);
+    history_one.* = .{
+        ._id = "history-one",
+        ._key = "history-one",
+        ._url = "http://history-one.test/",
+        ._state = .{ .source = .history, .value = null },
+    };
+    const history_two = try std.testing.allocator.create(NavigationHistoryEntry);
+    errdefer std.testing.allocator.destroy(history_two);
+    history_two.* = .{
+        ._id = "history-two",
+        ._key = "history-two",
+        ._url = "http://history-two.test/",
+        ._state = .{ .source = .history, .value = null },
+    };
+    try session.navigation._entries.append(std.testing.allocator, history_one);
+    try session.navigation._entries.append(std.testing.allocator, history_two);
+    defer {
+        session.navigation._entries.deinit(std.testing.allocator);
+        std.testing.allocator.destroy(history_one);
+        std.testing.allocator.destroy(history_two);
+    }
+    session.navigation._index = 1;
+
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.committed_surface = .{ .url = @constCast("http://current.test/") };
+    tab.zoom_percent = 100;
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+
+    var tab_items = [_]*BrowseTab{&tab};
+    var tabs = std.ArrayListUnmanaged(*BrowseTab){
+        .items = tab_items[0..],
+        .capacity = tab_items.len,
+    };
+    var closed_items = [_]ClosedBrowseTab{
+        .{ .url = @constCast("http://closed-one.test/"), .zoom_percent = 100 },
+        .{ .url = @constCast("http://closed-two.test/"), .zoom_percent = 125 },
+    };
+    var closed_tabs = std.ArrayListUnmanaged(ClosedBrowseTab){
+        .items = closed_items[0..],
+        .capacity = closed_items.len,
+    };
+    var active_index: usize = 0;
+    const shell: BrowseShell = .{
+        .tabs = &tabs,
+        .closed_tabs = &closed_tabs,
+        .active_tab_index = &active_index,
+    };
+    var settings = BrowseSettings{
+        .restore_previous_session = true,
+        .allow_script_popups = false,
+        .default_zoom_percent = 120,
+        .homepage_url = try std.testing.allocator.dupe(u8, "http://home.test/"),
+    };
+    defer settings.deinit(std.testing.allocator);
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "seed.txt"),
+        .path = try std.testing.allocator.dupe(u8, "C:/tmp/seed.txt"),
+        .url = try std.testing.allocator.dupe(u8, "http://download.test/seed.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+    try writeInternalStartPage(std.testing.allocator, &buf.writer, abs_dir, &shell, 0, &settings, &downloads);
+    const html = buf.written();
+
+    try std.testing.expect(std.mem.indexOf(u8, html, "Quick Actions") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/new") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/add-current") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/clear") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Open Tabs") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/activate/0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Recently Closed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed/0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Recent History") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/traverse/1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Recent Bookmarks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/open/1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Recent Downloads") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/source/0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Settings Snapshot") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/toggle-script-popups") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/default-zoom/reset") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/homepage/clear") != null);
 }
 
 test "addPersistedBookmark appends unique bookmark once" {
@@ -4162,6 +4674,13 @@ test "internalBrowseCommandHostPage maps stateful internal actions" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_set_homepage_to_current));
     try std.testing.expectEqual(@as(?InternalBrowsePage, null), internalBrowseCommandHostPage(.reload));
+}
+
+test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reopen" {
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.tab_new));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.tab_reopen_closed));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .tab_reopen_closed_index = 1 }));
+    try std.testing.expect(!internalBrowseCommandUsesBrowseLoopHandler(.download_clear));
 }
 
 test "removePersistedBookmarkAtIndex rewrites bookmark file" {

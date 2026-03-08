@@ -170,7 +170,12 @@ Current state inside Gate 1:
   - history, bookmarks, downloads, and settings actions
   - bookmark add-current, history clear-session, and download clear-all flows
   - start-page cross-navigation
+  - `browser://start` quick actions and settings-summary mutations through
+    in-page document actions, not only address-bar routes
+  - `browser://start` recent history/bookmark/download preview actions through
+    in-page document actions
   - tabs-page tab-management actions and reload/reopen recovery
+  - `browser://tabs` indexed closed-tab reopen through in-page document actions
   - homepage-to-internal-page restart restore
 - legacy overlays are still available for diagnostics on secondary shortcuts,
   but they are no longer the primary shell path
