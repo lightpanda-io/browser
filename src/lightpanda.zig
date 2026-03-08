@@ -1071,6 +1071,39 @@ fn handleBrowseCommand(
                 .kind = .{ .push = null },
             }, target.target_name, true, .none);
         },
+        .history_open_new_tab => |index| {
+            const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
+            const source_tab = shell.tabs.items[active_index];
+            const entries = source_tab.session.navigation.entries();
+            if (index >= entries.len) {
+                return;
+            }
+            const entry_url = entries[index].url() orelse return;
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, entry_url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            }, "_blank", true, .none);
+        },
+        .bookmark_open_new_tab => |index| {
+            const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
+            const source_tab = shell.tabs.items[active_index];
+            const bookmark_url = loadPersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index) orelse return;
+            defer app.allocator.free(bookmark_url);
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, bookmark_url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            }, "_blank", true, .none);
+        },
+        .download_source_new_tab => |index| {
+            const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
+            const source_tab = shell.tabs.items[active_index];
+            const download_url = loadDownloadUrlAtIndex(app.allocator, downloads, index) orelse return;
+            defer app.allocator.free(download_url);
+            try openOrReuseTargetedBrowseTab(app, shell.tabs, shell.active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, download_url, .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            }, "_blank", true, .none);
+        },
         else => {
             if (shell.tabs.items.len == 0) {
                 return;
@@ -2874,6 +2907,8 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .page = .tabs },
         .history => if (parseInternalBrowseIndexAction(action, "traverse/")) |index|
             .{ .command = .{ .history_traverse = index } }
+        else if (parseInternalBrowseIndexAction(action, "open-new-tab/")) |index|
+            .{ .command = .{ .history_open_new_tab = index } }
         else if (parseInternalBrowseFilterAction(action, "filter/")) |filter|
             .{ .command = .{ .history_filter_set = filter } }
         else if (std.ascii.eqlIgnoreCase(action, "filter-clear"))
@@ -2890,12 +2925,16 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .command = .bookmark_filter_clear }
         else if (parseInternalBrowseIndexAction(action, "open/")) |index|
             .{ .command = .{ .bookmark_open = index } }
+        else if (parseInternalBrowseIndexAction(action, "open-new-tab/")) |index|
+            .{ .command = .{ .bookmark_open_new_tab = index } }
         else if (parseInternalBrowseIndexAction(action, "remove/")) |index|
             .{ .command = .{ .bookmark_remove = index } }
         else
             .{ .page = .bookmarks },
         .downloads => if (parseInternalBrowseIndexAction(action, "source/")) |index|
             .{ .command = .{ .download_source = index } }
+        else if (parseInternalBrowseIndexAction(action, "source-new-tab/")) |index|
+            .{ .command = .{ .download_source_new_tab = index } }
         else if (parseInternalBrowseFilterAction(action, "filter/")) |filter|
             .{ .command = .{ .download_filter_set = filter } }
         else if (std.ascii.eqlIgnoreCase(action, "filter-clear"))
@@ -3010,13 +3049,16 @@ fn openInternalErrorPageForTab(
 fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
     return switch (command) {
         .history_clear_session,
+        .history_open_new_tab,
         .history_filter_set,
         .history_filter_clear,
         .bookmark_add_current,
+        .bookmark_open_new_tab,
         .bookmark_filter_set,
         .bookmark_filter_clear,
         .bookmark_remove,
         .download_clear,
+        .download_source_new_tab,
         .download_filter_set,
         .download_filter_clear,
         .download_remove,
@@ -3042,10 +3084,13 @@ fn internalBrowseCommandUsesBrowseLoopHandler(command: BrowserCommand) bool {
         .tab_reload_index,
         .tab_reopen_closed,
         .tab_reopen_closed_index,
+        .history_open_new_tab,
         .history_filter_set,
         .history_filter_clear,
+        .bookmark_open_new_tab,
         .bookmark_filter_set,
         .bookmark_filter_clear,
+        .download_source_new_tab,
         .download_filter_set,
         .download_filter_clear,
         => true,
@@ -3056,16 +3101,19 @@ fn internalBrowseCommandUsesBrowseLoopHandler(command: BrowserCommand) bool {
 fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
     return switch (command) {
         .history_clear_session => .history,
+        .history_open_new_tab,
         .history_filter_set,
         .history_filter_clear,
         => .history,
         .bookmark_add_current,
+        .bookmark_open_new_tab,
         .bookmark_filter_set,
         .bookmark_filter_clear,
         .bookmark_open,
         .bookmark_remove,
         => .bookmarks,
         .download_source,
+        .download_source_new_tab,
         .download_remove,
         .download_clear,
         .download_filter_set,
@@ -4205,8 +4253,12 @@ fn writeInternalHistoryPage(allocator: std.mem.Allocator, writer: anytype, tab: 
         }
         const traverse_href = try std.fmt.allocPrint(allocator, "browser://history/traverse/{d}", .{index});
         defer allocator.free(traverse_href);
+        const open_new_tab_href = try std.fmt.allocPrint(allocator, "browser://history/open-new-tab/{d}", .{index});
+        defer allocator.free(open_new_tab_href);
         try writer.writeAll("<li>");
         try writeInternalActionLink(writer, traverse_href, "Open");
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, open_new_tab_href, "Open in new tab");
         try writer.writeAll(" ");
         if (index == current_index) {
             try writer.writeAll("<strong>Current</strong> ");
@@ -4274,12 +4326,16 @@ fn writeInternalBookmarksPage(
         }
         const open_href = try std.fmt.allocPrint(allocator, "browser://bookmarks/open/{d}", .{index});
         defer allocator.free(open_href);
+        const open_new_tab_href = try std.fmt.allocPrint(allocator, "browser://bookmarks/open-new-tab/{d}", .{index});
+        defer allocator.free(open_new_tab_href);
         const remove_href = try std.fmt.allocPrint(allocator, "browser://bookmarks/remove/{d}", .{index});
         defer allocator.free(remove_href);
         try writer.writeAll("<li>");
         try writeInternalActionLink(writer, remove_href, "Remove");
-        try writer.writeAll(" ");
+        try writer.writeAll(" | ");
         try writeInternalActionLink(writer, open_href, "Open");
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, open_new_tab_href, "Open in new tab");
         try writer.writeAll(" ");
         try writeHtmlEscaped(writer, bookmark);
         try writer.writeAll("</li>");
@@ -4353,7 +4409,11 @@ fn writeInternalDownloadsPage(
         }
         const source_href = try std.fmt.allocPrint(allocator, "browser://downloads/source/{d}", .{index});
         defer allocator.free(source_href);
+        const source_new_tab_href = try std.fmt.allocPrint(allocator, "browser://downloads/source-new-tab/{d}", .{index});
+        defer allocator.free(source_new_tab_href);
         try writeInternalActionLink(writer, source_href, "Source");
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, source_new_tab_href, "Source in new tab");
         try writer.writeAll("<br><strong>");
         try writeHtmlEscaped(writer, entry.filename);
         try writer.writeAll("</strong> - ");
@@ -5065,6 +5125,10 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://history/traverse/2").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .history_open_new_tab = 2 } },
+        parseInternalBrowseRoute("browser://history/open-new-tab/2").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .history_clear_session },
         parseInternalBrowseRoute("browser://history/clear-session").?,
     );
@@ -5101,12 +5165,20 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://bookmarks/open/3").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .bookmark_open_new_tab = 2 } },
+        parseInternalBrowseRoute("browser://bookmarks/open-new-tab/2").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .bookmark_remove = 1 } },
         parseInternalBrowseRoute("browser://bookmarks/remove/1").?,
     );
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .download_source = 4 } },
         parseInternalBrowseRoute("browser://downloads/source/4").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .download_source_new_tab = 1 } },
+        parseInternalBrowseRoute("browser://downloads/source-new-tab/1").?,
     );
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .download_remove = 0 } },
@@ -5492,6 +5564,7 @@ test "writeInternalHistoryPage applies filter state and renders quick links" {
     try std.testing.expect(std.mem.indexOf(u8, html, "Browser History (1/2)") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/filter-clear") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/filter/127.0.0.1%3A8190") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/open-new-tab/0") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "http://127.0.0.1:8190/page-two.html") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "http://other.test/hidden.html") == null);
 }
@@ -5526,6 +5599,7 @@ test "writeInternalBookmarksPage applies filter state and renders quick links" {
     try std.testing.expect(std.mem.indexOf(u8, html, "Browser Bookmarks (1/2)") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/filter-clear") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/filter/127.0.0.1%3A8190") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/open-new-tab/1") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "http://127.0.0.1:8190/page-two.html") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "http://other.test/hidden.html") == null);
 }
@@ -5568,6 +5642,7 @@ test "writeInternalDownloadsPage applies filter state and renders quick links" {
     try std.testing.expect(std.mem.indexOf(u8, html, "Browser Downloads (1/2)") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/filter-clear") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/filter/failed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/source-new-tab/0") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "report.txt") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "seed.txt") == null);
 }
@@ -5826,12 +5901,15 @@ test "captureBrowseTabRuntimeError clears error state on successful external pag
 
 test "internalBrowseCommandHostPage maps stateful internal actions" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.history_clear_session));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_open_new_tab = 0 }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_filter_set = "one" }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.history_filter_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.bookmark_add_current));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.{ .bookmark_open_new_tab = 0 }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.{ .bookmark_filter_set = "one" }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.bookmark_filter_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_clear));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_source_new_tab = 0 }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_filter_set = "one" }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_filter_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_set_homepage_to_current));
@@ -5842,13 +5920,23 @@ test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reo
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.tab_new));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.tab_reopen_closed));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .tab_reopen_closed_index = 1 }));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_open_new_tab = 0 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.history_filter_clear));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .bookmark_open_new_tab = 0 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .bookmark_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.bookmark_filter_clear));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_source_new_tab = 0 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.download_filter_clear));
     try std.testing.expect(!internalBrowseCommandUsesBrowseLoopHandler(.download_clear));
+}
+
+test "internalBrowseCommandKeepsCurrentPage includes internal open in new tab actions" {
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_open_new_tab = 0 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_open_new_tab = 0 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_source_new_tab = 0 }));
+    try std.testing.expect(!internalBrowseCommandKeepsCurrentPage(.{ .download_source = 0 }));
 }
 
 test "removePersistedBookmarkAtIndex rewrites bookmark file" {

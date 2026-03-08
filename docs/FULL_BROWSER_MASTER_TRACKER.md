@@ -192,6 +192,9 @@ Current state inside Gate 1:
   `filter-clear` routes, expose quick-filter links directly on the page, and
   have bounded headed probes for quick-filter plus clear-filter document
   actions
+- those same internal history/bookmark/download pages now expose explicit
+  per-row open-in-new-tab actions, with bounded headed probes proving the new
+  tab opens while the originating internal page tab remains intact
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
