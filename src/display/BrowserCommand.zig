@@ -41,6 +41,7 @@ pub const BrowserCommand = union(enum) {
     tab_reopen_closed,
     home,
     settings_toggle_restore_session,
+    settings_toggle_script_popups,
     settings_default_zoom_in,
     settings_default_zoom_out,
     settings_default_zoom_reset,

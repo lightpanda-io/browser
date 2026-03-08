@@ -96,6 +96,7 @@ navigation: Navigation,
 
 page: ?*Page,
 suspended_page: ?*Page,
+allow_script_popups: bool,
 
 frame_id_gen: u32,
 
@@ -120,6 +121,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .pending_tab_opens = .{},
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
+        .allow_script_popups = browser.allow_script_popups,
     };
 }
 

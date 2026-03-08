@@ -187,6 +187,7 @@ const WindowOpenTarget = union(enum) {
 const WindowOpenAction = enum {
     same_context,
     popup,
+    blocked,
 };
 
 fn normalizeWindowOpenUrl(url: ?[]const u8) []const u8 {
@@ -282,6 +283,9 @@ fn openInner(self: *Window, url: ?[]const u8, target: ?[]const u8, page: *Page) 
             return .same_context;
         },
         .new_tab => {
+            if (!page._session.allow_script_popups) {
+                return .blocked;
+            }
             const resolved = try URL.resolve(page.call_arena, page.base(), open_url, .{
                 .always_dupe = false,
                 .encode = true,
@@ -297,6 +301,9 @@ fn openInner(self: *Window, url: ?[]const u8, target: ?[]const u8, page: *Page) 
             return .popup;
         },
         .named => |target_name| {
+            if (!page._session.allow_script_popups) {
+                return .blocked;
+            }
             const resolved = try URL.resolve(page.call_arena, page.base(), open_url, .{
                 .always_dupe = false,
                 .encode = true,
@@ -318,7 +325,7 @@ pub fn open(self: *Window, url: ?[]const u8, target: ?[]const u8, features: ?[]c
     _ = features;
     return switch (try openInner(self, url, target, page)) {
         .same_context => try page.js.local.?.zigValueToJs(self, .{}),
-        .popup => null,
+        .popup, .blocked => null,
     };
 }
 
@@ -1057,4 +1064,44 @@ test "Window open named target queues script popup tab" {
         "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=named-window-open",
         pending.items[0].url,
     );
+}
+
+test "Window open _blank respects blocked script popup policy" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+    page._session.allow_script_popups = false;
+
+    const action = try openInner(
+        page.window,
+        "/src/browser/tests/page/popup-target-result.html?from=blocked-blank-window-open",
+        "_blank",
+        page,
+    );
+
+    try std.testing.expectEqual(WindowOpenAction.blocked, action);
+    try std.testing.expect(page._queued_navigation == null);
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+    try testing.expectEqual(@as(usize, 0), pending.items.len);
+}
+
+test "Window open named target respects blocked script popup policy" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+    page._session.allow_script_popups = false;
+
+    const action = try openInner(
+        page.window,
+        "/src/browser/tests/page/popup-target-result.html?from=blocked-named-window-open",
+        "report",
+        page,
+    );
+
+    try std.testing.expectEqual(WindowOpenAction.blocked, action);
+    try std.testing.expect(page._queued_navigation == null);
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+    try testing.expectEqual(@as(usize, 0), pending.items.len);
 }

@@ -163,6 +163,7 @@ const SavedBrowseSession = struct {
 
 const BrowseSettings = struct {
     restore_previous_session: bool = true,
+    allow_script_popups: bool = true,
     default_zoom_percent: i32 = 100,
     homepage_url: []u8 = &.{},
 
@@ -700,16 +701,17 @@ fn handleBrowseCommand(
     active_tab_index: *usize,
     command: BrowserCommand,
 ) !void {
+    defer applyBrowsePopupPolicyToTabs(tabs.items, settings.allow_script_popups);
     switch (command) {
         .tab_new => {
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups);
             try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
         },
         .tab_duplicate => {
             const source_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const source_tab = tabs.items[source_index];
             const source_url = browseTabPersistentUrl(source_tab);
-            const tab = try createBrowseTab(app, null, source_tab.zoom_percent);
+            const tab = try createBrowseTab(app, null, source_tab.zoom_percent, settings.allow_script_popups);
             tab.zoom_percent = source_tab.zoom_percent;
             try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, source_url, .{
@@ -760,7 +762,7 @@ fn handleBrowseCommand(
         .tab_reopen_closed => {
             var closed = popClosedBrowseTab(closed_tabs) orelse return;
             defer closed.deinit(app.allocator);
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent);
+            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups);
             tab.zoom_percent = closed.zoom_percent;
             try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
@@ -796,14 +798,14 @@ fn handleBrowseCommand(
                 return;
             }
             if (activation.target_name.len > 0) {
-                try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, tab.zoom_percent, activation.url, .{
+                try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, settings.allow_script_popups, tab.zoom_percent, activation.url, .{
                     .reason = .address_bar,
                     .kind = .{ .push = null },
                 }, activation.target_name, true, .anchor);
                 return;
             }
             if (activation.open_in_new_tab) {
-                try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, tab.zoom_percent, activation.url, .{
+                try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, settings.allow_script_popups, tab.zoom_percent, activation.url, .{
                     .reason = .address_bar,
                     .kind = .{ .push = null },
                 }, "_blank", true, .anchor);
@@ -816,7 +818,7 @@ fn handleBrowseCommand(
         .navigate_new_tab => |raw_url| {
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const source_tab = tabs.items[active_index];
-            try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, source_tab.zoom_percent, raw_url, .{
+            try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, raw_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, "_blank", true, .none);
@@ -824,7 +826,7 @@ fn handleBrowseCommand(
         .navigate_target_tab => |target| {
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const source_tab = tabs.items[active_index];
-            try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, source_tab.zoom_percent, target.url, .{
+            try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, settings.allow_script_popups, source_tab.zoom_percent, target.url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, target.target_name, true, .none);
@@ -947,6 +949,11 @@ fn handleActiveBrowseCommand(
         .settings_toggle_restore_session => {
             settings.restore_previous_session = !settings.restore_previous_session;
         },
+        .settings_toggle_script_popups => {
+            settings.allow_script_popups = !settings.allow_script_popups;
+            tab.browser.allow_script_popups = settings.allow_script_popups;
+            tab.session.allow_script_popups = settings.allow_script_popups;
+        },
         .settings_default_zoom_in, .settings_default_zoom_out, .settings_default_zoom_reset => {
             settings.default_zoom_percent = applyDefaultZoomCommand(settings.default_zoom_percent, command);
         },
@@ -1003,6 +1010,7 @@ fn processPendingTabOpens(
             app,
             tabs,
             active_tab_index,
+            settings.allow_script_popups,
             zoom_percent,
             request.url,
             request.opts,
@@ -1057,6 +1065,7 @@ fn openOrReuseTargetedBrowseTab(
     app: *App,
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     active_tab_index: *usize,
+    allow_script_popups: bool,
     zoom_percent: i32,
     raw_url: []const u8,
     opts: Page.NavigateOpts,
@@ -1066,6 +1075,8 @@ fn openOrReuseTargetedBrowseTab(
 ) !void {
     if (findBrowseTabIndexByTargetName(tabs.items, target_name)) |target_index| {
         const tab = tabs.items[target_index];
+        tab.browser.allow_script_popups = allow_script_popups;
+        tab.session.allow_script_popups = allow_script_popups;
         tab.popup_source = popup_source;
         const normalized_target = normalizeTopLevelTargetName(target_name);
         if (popup_source == .script and normalized_target.len > 0 and !targetAlwaysOpensFreshTab(normalized_target)) {
@@ -1082,7 +1093,7 @@ fn openOrReuseTargetedBrowseTab(
         return;
     }
 
-    const tab = try createBrowseTab(app, null, zoom_percent);
+    const tab = try createBrowseTab(app, null, zoom_percent, allow_script_popups);
     errdefer tab.deinit(app.allocator);
     tab.zoom_percent = zoom_percent;
     try setBrowseTabTargetName(app.allocator, tab, target_name);
@@ -1240,9 +1251,17 @@ fn syncBrowseDisplayState(
     app.display.setDownloadEntries(download_entries);
     app.display.setSettingsState(.{
         .restore_previous_session = settings.restore_previous_session,
+        .allow_script_popups = settings.allow_script_popups,
         .default_zoom_percent = settings.default_zoom_percent,
         .homepage_url = settings.homeUrl() orelse "",
     });
+}
+
+fn applyBrowsePopupPolicyToTabs(tabs: []const *BrowseTab, allow_script_popups: bool) void {
+    for (tabs) |tab| {
+        tab.browser.allow_script_popups = allow_script_popups;
+        tab.session.allow_script_popups = allow_script_popups;
+    }
 }
 
 fn deinitBrowseTabs(allocator: std.mem.Allocator, tabs: *std.ArrayListUnmanaged(*BrowseTab)) void {
@@ -1296,7 +1315,7 @@ fn initializeBrowseTabs(
     settings: *const BrowseSettings,
 ) !usize {
     if (!settings.restore_previous_session) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups));
         return 0;
     }
 
@@ -1304,7 +1323,7 @@ fn initializeBrowseTabs(
     defer saved.deinit(app.allocator);
 
     if (saved.tabs.items.len == 0) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups));
         return 0;
     }
 
@@ -1317,14 +1336,14 @@ fn initializeBrowseTabs(
             restored_url_z = try app.allocator.dupeZ(u8, saved_tab.url);
             break :blk restored_url_z.?;
         };
-        const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent);
+        const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups);
         tab.zoom_percent = saved_tab.zoom_percent;
         try tabs.append(app.allocator, tab);
     }
 
     var active_index = normalizeActiveTabIndex(saved.active_index, tabs.items.len);
     if (shouldAppendStartupUrl(saved.tabs.items, startup_url)) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent));
+        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups));
         active_index = tabs.items.len - 1;
     }
 
@@ -1434,6 +1453,11 @@ fn parseBrowseSettings(allocator: std.mem.Allocator, data: []const u8) !BrowseSe
             settings.restore_previous_session = std.mem.eql(u8, raw, "1") or std.ascii.eqlIgnoreCase(raw, "true");
             continue;
         }
+        if (std.mem.startsWith(u8, line, "allow_script_popups\t")) {
+            const raw = line["allow_script_popups\t".len..];
+            settings.allow_script_popups = std.mem.eql(u8, raw, "1") or std.ascii.eqlIgnoreCase(raw, "true");
+            continue;
+        }
         if (std.mem.startsWith(u8, line, "default_zoom_percent\t")) {
             const raw = line["default_zoom_percent\t".len..];
             settings.default_zoom_percent = std.math.clamp(
@@ -1458,6 +1482,7 @@ fn parseBrowseSettings(allocator: std.mem.Allocator, data: []const u8) !BrowseSe
 fn hashBrowseSettings(settings: *const BrowseSettings) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(std.mem.asBytes(&settings.restore_previous_session));
+    hasher.update(std.mem.asBytes(&settings.allow_script_popups));
     hasher.update(std.mem.asBytes(&settings.default_zoom_percent));
     hasher.update(settings.homepage_url);
     return hasher.final();
@@ -1484,9 +1509,10 @@ fn saveBrowseSettings(app: *App, settings: *const BrowseSettings) !void {
 
     try buf.writer.writeAll("lightpanda-browse-settings-v1\n");
     try buf.writer.print(
-        "restore_previous_session\t{d}\ndefault_zoom_percent\t{d}\nhomepage_url\t{s}\n",
+        "restore_previous_session\t{d}\nallow_script_popups\t{d}\ndefault_zoom_percent\t{d}\nhomepage_url\t{s}\n",
         .{
             if (settings.restore_previous_session) @as(u8, 1) else @as(u8, 0),
+            if (settings.allow_script_popups) @as(u8, 1) else @as(u8, 0),
             settings.default_zoom_percent,
             settings.homeUrl() orelse "",
         },
@@ -1816,7 +1842,12 @@ fn parseSavedDownloadEntry(allocator: std.mem.Allocator, line: []const u8) !Brow
     };
 }
 
-fn createBrowseTab(app: *App, initial_url: ?[:0]const u8, default_zoom_percent: i32) !*BrowseTab {
+fn createBrowseTab(
+    app: *App,
+    initial_url: ?[:0]const u8,
+    default_zoom_percent: i32,
+    allow_script_popups: bool,
+) !*BrowseTab {
     const tab = try app.allocator.create(BrowseTab);
     errdefer app.allocator.destroy(tab);
 
@@ -1828,6 +1859,7 @@ fn createBrowseTab(app: *App, initial_url: ?[:0]const u8, default_zoom_percent: 
 
     tab.browser = try Browser.init(app, .{ .http_client = tab.http_client });
     errdefer tab.browser.deinit();
+    tab.browser.allow_script_popups = allow_script_popups;
 
     tab.session = try tab.browser.newSession(tab.notification);
     const page = try tab.session.createPage();
@@ -2202,14 +2234,15 @@ test "applyZoomCommand clamps and resets zoom" {
     try std.testing.expectEqual(@as(i32, 30), applyZoomCommand(30, 100, .zoom_out));
 }
 
-test "parseBrowseSettings restores session, zoom, and homepage" {
+test "parseBrowseSettings restores session, popup policy, zoom, and homepage" {
     var settings = try parseBrowseSettings(
         std.testing.allocator,
-        "lightpanda-browse-settings-v1\nrestore_previous_session\t0\ndefault_zoom_percent\t130\nhomepage_url\thttp://home.test/\n",
+        "lightpanda-browse-settings-v1\nrestore_previous_session\t0\nallow_script_popups\t0\ndefault_zoom_percent\t130\nhomepage_url\thttp://home.test/\n",
     );
     defer settings.deinit(std.testing.allocator);
 
     try std.testing.expect(!settings.restore_previous_session);
+    try std.testing.expect(!settings.allow_script_popups);
     try std.testing.expectEqual(@as(i32, 130), settings.default_zoom_percent);
     try std.testing.expectEqualStrings("http://home.test/", settings.homepage_url);
 }
@@ -2287,7 +2320,7 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
     defer deinitBrowseTabs(testing.test_app.allocator, &tabs);
 
     var active_tab_index: usize = 0;
-    const source = try createBrowseTab(testing.test_app, null, 100);
+    const source = try createBrowseTab(testing.test_app, null, 100, true);
     try appendBrowseTab(testing.test_app.allocator, &tabs, source, &active_tab_index, true);
 
     const first_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html";
@@ -2301,6 +2334,7 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
         testing.test_app,
         &tabs,
         &active_tab_index,
+        true,
         100,
         first_url,
         opts,
@@ -2319,6 +2353,7 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
         testing.test_app,
         &tabs,
         &active_tab_index,
+        true,
         100,
         second_url,
         opts,
@@ -2341,7 +2376,7 @@ test "openOrReuseTargetedBrowseTab resets live named script popup tab before reu
     defer deinitBrowseTabs(testing.test_app.allocator, &tabs);
 
     var active_tab_index: usize = 0;
-    const source = try createBrowseTab(testing.test_app, null, 100);
+    const source = try createBrowseTab(testing.test_app, null, 100, true);
     try appendBrowseTab(testing.test_app.allocator, &tabs, source, &active_tab_index, true);
 
     const first_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=script-one";
@@ -2355,6 +2390,7 @@ test "openOrReuseTargetedBrowseTab resets live named script popup tab before reu
         testing.test_app,
         &tabs,
         &active_tab_index,
+        true,
         100,
         first_url,
         opts,
@@ -2372,6 +2408,7 @@ test "openOrReuseTargetedBrowseTab resets live named script popup tab before reu
         testing.test_app,
         &tabs,
         &active_tab_index,
+        true,
         100,
         second_url,
         opts,

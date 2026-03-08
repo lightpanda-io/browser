@@ -53,6 +53,8 @@ The fork already has a real headed Windows foundation:
 - headed `browse` now has zoom controls, find-in-page, bookmark persistence,
   download persistence, homepage navigation, and persisted default zoom /
   restore-session settings
+- headed `browse` now has a persisted script-popup policy with Win32 settings
+  UI, blocked-runtime coverage, and allowed/blocked script popup acceptance
 
 ## Achieved Gates
 
@@ -118,17 +120,22 @@ Current state inside Gate 1:
 - script-driven `window.open()` now reaches stable headed `_blank` and
   named-target tab flows, and later launcher-page callbacks remain alive after
   popup activation
+- script popup policy now covers allowed vs blocked `window.open()` behavior,
+  with persisted settings and headed Win32 shell controls
 - browser-side named-target queueing/reuse is now implemented for anchors and
   form submission, with direct page/session tests covering anchor click, anchor
   `Enter`, and GET/POST form submission
 - bounded headed probes remain the acceptance gate for `_blank` popup flows,
   rendered named-target anchor pointer activation, script popup tab reuse, and
   launcher-background callback survival after popup open
+- bounded headed probes now also cover popup policy persistence through the
+  settings overlay and blocked script-popup runtime behavior
 - rendered same-tab link activation now dispatches a real DOM click first, so
   `onclick`, `preventDefault`, and click-time href mutation are preserved on the
   headed surface before any direct navigation fallback
-- next blocker: expand popup policy beyond the current narrow top-level target
-  path, and make chrome state clearer around popup/tab targeting
+- next blocker: move shell surfaces like history/bookmarks/downloads/settings
+  away from overlay-only state and toward dedicated browser pages backed by the
+  persisted stores already in place
 
 ### Gate 2: Shared Subresource Loader And Profile
 

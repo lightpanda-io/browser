@@ -44,6 +44,7 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: *HttpClient,
+allow_script_popups: bool = true,
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
@@ -63,6 +64,7 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = opts.http_client,
+        .allow_script_popups = true,
     };
 }
 

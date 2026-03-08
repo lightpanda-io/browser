@@ -92,6 +92,7 @@ pub const DownloadEntry = struct {
 
 pub const SettingsState = struct {
     restore_previous_session: bool,
+    allow_script_popups: bool,
     default_zoom_percent: i32,
     homepage_url: []const u8,
 };

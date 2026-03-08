@@ -161,6 +161,7 @@ pub const Win32Backend = struct {
     download_overlay_selected_index: usize = 0,
     download_overlay_scroll_index: usize = 0,
     presentation_restore_previous_session: bool = true,
+    presentation_allow_script_popups: bool = true,
     presentation_default_zoom_percent: i32 = 100,
     presentation_homepage_url: []u8 = &.{},
     settings_overlay_open: bool = false,
@@ -472,6 +473,7 @@ pub const Win32Backend = struct {
         defer self.presentation_lock.unlock();
 
         if (self.presentation_restore_previous_session == settings.restore_previous_session and
+            self.presentation_allow_script_popups == settings.allow_script_popups and
             self.presentation_default_zoom_percent == settings.default_zoom_percent and
             std.mem.eql(u8, self.presentation_homepage_url, settings.homepage_url))
         {
@@ -485,6 +487,7 @@ pub const Win32Backend = struct {
         self.allocator.free(self.presentation_homepage_url);
         self.presentation_homepage_url = owned_homepage;
         self.presentation_restore_previous_session = settings.restore_previous_session;
+        self.presentation_allow_script_popups = settings.allow_script_popups;
         self.presentation_default_zoom_percent = settings.default_zoom_percent;
         _ = self.presentation_seq.fetchAdd(1, .acq_rel);
     }
@@ -910,6 +913,7 @@ const PresentationSnapshot = struct {
     download_selected_index: usize,
     download_scroll_index: usize,
     restore_previous_session: bool,
+    allow_script_popups: bool,
     default_zoom_percent: i32,
     homepage_url: []u8,
     settings_overlay_open: bool,
@@ -995,6 +999,7 @@ const SettingsOverlayChromeAction = enum {
 
 const SettingsOverlayAction = enum {
     toggle_restore_previous_session,
+    toggle_script_popups,
     default_zoom_decrease,
     default_zoom_increase,
     default_zoom_reset,
@@ -1066,8 +1071,9 @@ const FindChromeAction = enum {
 
 const SettingsOverlayRow = enum(usize) {
     restore_previous_session = 0,
-    default_zoom = 1,
-    homepage = 2,
+    script_popups = 1,
+    default_zoom = 2,
+    homepage = 3,
 };
 
 const BOOKMARKS_FILE = "bookmarks.txt";
@@ -1202,6 +1208,7 @@ fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
         .download_selected_index = backend.download_overlay_selected_index,
         .download_scroll_index = backend.download_overlay_scroll_index,
         .restore_previous_session = backend.presentation_restore_previous_session,
+        .allow_script_popups = backend.presentation_allow_script_popups,
         .default_zoom_percent = backend.presentation_default_zoom_percent,
         .homepage_url = try backend.allocator.dupe(u8, backend.presentation_homepage_url),
         .settings_overlay_open = backend.settings_overlay_open,
@@ -1704,7 +1711,7 @@ fn overlayFooterRect(panel: c.RECT) c.RECT {
 }
 
 fn settingsRowCount() usize {
-    return 3;
+    return 4;
 }
 
 fn settingsPanelRect(client: c.RECT) c.RECT {
@@ -1918,6 +1925,10 @@ fn settingsActionForSelectedRow(selected_index: usize, variant: enum { primary, 
             .primary, .secondary, .tertiary => .toggle_restore_previous_session,
             .clear => null,
         },
+        .script_popups => switch (variant) {
+            .primary, .secondary, .tertiary => .toggle_script_popups,
+            .clear => null,
+        },
         .default_zoom => switch (variant) {
             .primary => .default_zoom_increase,
             .secondary => .default_zoom_decrease,
@@ -1934,6 +1945,7 @@ fn settingsActionForSelectedRow(selected_index: usize, variant: enum { primary, 
 fn queueSettingsOverlayAction(backend: *Win32Backend, action: SettingsOverlayAction) bool {
     switch (action) {
         .toggle_restore_previous_session => queueBrowserCommand(backend, .settings_toggle_restore_session),
+        .toggle_script_popups => queueBrowserCommand(backend, .settings_toggle_script_popups),
         .default_zoom_decrease => queueBrowserCommand(backend, .settings_default_zoom_out),
         .default_zoom_increase => queueBrowserCommand(backend, .settings_default_zoom_in),
         .default_zoom_reset => queueBrowserCommand(backend, .settings_default_zoom_reset),
@@ -3072,33 +3084,35 @@ fn formatPresentationHintText(
     allocator: std.mem.Allocator,
     zoom_percent: i32,
     popup_hint: PopupHintState,
+    allow_script_popups: bool,
 ) ![]u8 {
+    const popup_policy = if (allow_script_popups) "on" else "off";
     const source_label = popup_hint.popup_source.label();
     if (popup_hint.target_name.len > 0 and source_label.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} target [{s}]",
-            .{ zoom_percent, source_label, popup_hint.target_name },
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} target [{s}]  Script popups {s}",
+            .{ zoom_percent, source_label, popup_hint.target_name, popup_policy },
         );
     }
     if (popup_hint.target_name.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]",
-            .{ zoom_percent, popup_hint.target_name },
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]  Script popups {s}",
+            .{ zoom_percent, popup_hint.target_name, popup_policy },
         );
     }
     if (source_label.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} tab",
-            .{ zoom_percent, source_label },
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} tab  Script popups {s}",
+            .{ zoom_percent, source_label, popup_policy },
         );
     }
     return try std.fmt.allocPrint(
         allocator,
-        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%",
-        .{zoom_percent},
+        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Script popups {s}",
+        .{ zoom_percent, popup_policy },
     );
 }
 
@@ -3563,14 +3577,19 @@ fn drawSettingsOverlay(
                 "1. Restore previous session: {s}  [Enter/Space toggle]",
                 .{if (snapshot.restore_previous_session) "On" else "Off"},
             ) catch null,
+            .script_popups => std.fmt.allocPrint(
+                allocator,
+                "2. Script popups: {s}  [Enter/Space toggle]",
+                .{if (snapshot.allow_script_popups) "On" else "Off"},
+            ) catch null,
             .default_zoom => std.fmt.allocPrint(
                 allocator,
-                "2. Default zoom: {d}%  [Left/Right adjust, Enter reset]",
+                "3. Default zoom: {d}%  [Left/Right adjust, Enter reset]",
                 .{snapshot.default_zoom_percent},
             ) catch null,
             .homepage => std.fmt.allocPrint(
                 allocator,
-                "3. Homepage: {s}  [Enter set current, Delete clear]",
+                "4. Homepage: {s}  [Enter set current, Delete clear]",
                 .{if (snapshot.homepage_url.len > 0) snapshot.homepage_url else "(none)"},
             ) catch null,
         };
@@ -3587,6 +3606,7 @@ fn drawSettingsOverlay(
 
     const footer = switch (@as(SettingsOverlayRow, @enumFromInt(snapshot.settings_selected_index))) {
         .restore_previous_session => "Up/Down move  Enter/Space toggle this setting",
+        .script_popups => "Up/Down move  Enter/Space toggles script popup policy",
         .default_zoom => "Up/Down move  Left/Right change  Enter reset default zoom",
         .homepage => "Up/Down move  Enter set homepage to current page  Delete clears",
     };
@@ -4168,6 +4188,7 @@ fn renderPresentationScene(
         allocator,
         snapshot.zoom_percent,
         activePopupHintState(snapshot),
+        snapshot.allow_script_popups,
     ) catch return;
     defer allocator.free(hint_text);
     drawPresentationText(
@@ -6481,10 +6502,11 @@ test "win32 formatPresentationHintText includes active popup target" {
     const hint = try formatPresentationHintText(std.testing.allocator, 110, .{
         .target_name = "report",
         .popup_source = .script,
-    });
+    }, false);
     defer std.testing.allocator.free(hint);
     try std.testing.expect(std.mem.indexOf(u8, hint, "Zoom 110%") != null);
     try std.testing.expect(std.mem.indexOf(u8, hint, "Popup script target [report]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "Script popups off") != null);
 }
 
 test "win32 chrome button hit test maps back forward reload" {
@@ -6650,26 +6672,31 @@ test "win32 settings overlay keyboard queues settings commands" {
 
     backend.settings_overlay_open = true;
     backend.settings_overlay_selected_index = 1;
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_SPACE, .{}));
+    try std.testing.expectEqual(BrowserCommand.settings_toggle_script_popups, backend.nextBrowserCommand().?);
+
+    backend.settings_overlay_open = true;
+    backend.settings_overlay_selected_index = 2;
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_RIGHT, .{}));
     try std.testing.expectEqual(BrowserCommand.settings_default_zoom_in, backend.nextBrowserCommand().?);
 
     backend.settings_overlay_open = true;
-    backend.settings_overlay_selected_index = 1;
+    backend.settings_overlay_selected_index = 2;
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_LEFT, .{}));
     try std.testing.expectEqual(BrowserCommand.settings_default_zoom_out, backend.nextBrowserCommand().?);
 
     backend.settings_overlay_open = true;
-    backend.settings_overlay_selected_index = 1;
+    backend.settings_overlay_selected_index = 2;
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_RETURN, .{}));
     try std.testing.expectEqual(BrowserCommand.settings_default_zoom_reset, backend.nextBrowserCommand().?);
 
     backend.settings_overlay_open = true;
-    backend.settings_overlay_selected_index = 2;
+    backend.settings_overlay_selected_index = 3;
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_RETURN, .{}));
     try std.testing.expectEqual(BrowserCommand.settings_set_homepage_to_current, backend.nextBrowserCommand().?);
 
     backend.settings_overlay_open = true;
-    backend.settings_overlay_selected_index = 2;
+    backend.settings_overlay_selected_index = 3;
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_DELETE, .{}));
     try std.testing.expectEqual(BrowserCommand.settings_clear_homepage, backend.nextBrowserCommand().?);
 }

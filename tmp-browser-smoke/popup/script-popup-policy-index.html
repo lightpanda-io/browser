@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Popup Policy Start</title>
+<body>
+  <main>
+    <h1>Popup Policy Trigger</h1>
+    <p>Press P to attempt a script popup.</p>
+  </main>
+  <script>
+    let attempt = 0;
+    window.addEventListener("keydown", (event) => {
+      if ((event.key || "").toLowerCase() !== "p") return;
+      attempt += 1;
+      document.title = `Popup Policy Attempt ${attempt}`;
+      window.open(`/script-popup-policy-result.html?attempt=${attempt}`, "_blank");
+    });
+  </script>
+</body>
