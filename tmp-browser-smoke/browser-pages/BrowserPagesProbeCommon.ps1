@@ -70,7 +70,7 @@ function Start-BrowserPagesBrowser([string]$StartupUrl, [string]$Stdout, [string
   return Start-Process -FilePath $script:BrowserExe -ArgumentList "browse",$StartupUrl,"--window_width","960","--window_height","640" -WorkingDirectory $script:Repo -PassThru -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
 }
 
-function Invoke-BrowserPagesAddressNavigate([IntPtr]$Hwnd, [int]$BrowserId, [string]$Url, [string]$Needle) {
+function Invoke-BrowserPagesAddressCommit([IntPtr]$Hwnd, [string]$Url) {
   [void](Invoke-SmokeClientClick $Hwnd 160 40)
   Start-Sleep -Milliseconds 150
   Send-SmokeCtrlA
@@ -78,6 +78,10 @@ function Invoke-BrowserPagesAddressNavigate([IntPtr]$Hwnd, [int]$BrowserId, [str
   Send-SmokeText $Url
   Start-Sleep -Milliseconds 120
   Send-SmokeEnter
+}
+
+function Invoke-BrowserPagesAddressNavigate([IntPtr]$Hwnd, [int]$BrowserId, [string]$Url, [string]$Needle) {
+  Invoke-BrowserPagesAddressCommit $Hwnd $Url
   return Wait-TabTitle $BrowserId $Needle 40
 }
 

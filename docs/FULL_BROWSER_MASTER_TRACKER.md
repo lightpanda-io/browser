@@ -201,6 +201,9 @@ Current state inside Gate 1:
 - those same internal history/bookmark/download pages now also keep per-tab
   sort state, support internal `sort/...` routes, expose in-page sort controls,
   and have bounded headed probes for sort changes plus sorted row actions
+- `browser://history` now also supports in-page single-entry removal plus
+  safe `remove-before` / `remove-after` pruning that preserves the current live
+  page, with bounded headed probes for single-remove and both prune directions
 - `browser://bookmarks` now supports persisted in-page reorder actions in saved
   order mode, and `browser://downloads` now supports in-place retry of failed
   and interrupted entries with bounded headed document-action coverage

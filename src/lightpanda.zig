@@ -1063,6 +1063,24 @@ fn handleBrowseCommand(
         .bookmark_remove => |index| {
             _ = removePersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index);
         },
+        .history_remove => |index| {
+            if (source_tab_index >= shell.tabs.items.len) {
+                return;
+            }
+            _ = shell.tabs.items[source_tab_index].session.navigation.removeEntryPreservingCurrent(index);
+        },
+        .history_remove_before => |index| {
+            if (source_tab_index >= shell.tabs.items.len) {
+                return;
+            }
+            _ = shell.tabs.items[source_tab_index].session.navigation.removeEntriesBeforePreservingCurrent(index);
+        },
+        .history_remove_after => |index| {
+            if (source_tab_index >= shell.tabs.items.len) {
+                return;
+            }
+            _ = shell.tabs.items[source_tab_index].session.navigation.removeEntriesAfterPreservingCurrent(index);
+        },
         .history_filter_set => |raw_filter| {
             if (source_tab_index >= shell.tabs.items.len) {
                 return;
@@ -1384,6 +1402,15 @@ fn handleActiveBrowseCommand(
         },
         .history_clear_session => {
             _ = clearBrowseHistoryToCurrent(tab);
+        },
+        .history_remove => |index| {
+            _ = session.navigation.removeEntryPreservingCurrent(index);
+        },
+        .history_remove_before => |index| {
+            _ = session.navigation.removeEntriesBeforePreservingCurrent(index);
+        },
+        .history_remove_after => |index| {
+            _ = session.navigation.removeEntriesAfterPreservingCurrent(index);
         },
         .history_sort_set => |mode| {
             tab.internal_filters.history_sort = mode;
@@ -2937,6 +2964,33 @@ fn clearBrowseHistoryToCurrent(tab: *BrowseTab) bool {
     return true;
 }
 
+fn historyEntryCanRemove(tab: *BrowseTab, index: usize) bool {
+    const entries = tab.session.navigation.entries();
+    if (entries.len <= 1 or index >= entries.len) {
+        return false;
+    }
+    const current_index = tab.session.navigation.getCurrentIndex();
+    return current_index < entries.len and index != current_index;
+}
+
+fn historyEntryCanRemoveBefore(tab: *BrowseTab, index: usize) bool {
+    const entries = tab.session.navigation.entries();
+    if (entries.len <= 1 or index >= entries.len or index == 0) {
+        return false;
+    }
+    const current_index = tab.session.navigation.getCurrentIndex();
+    return current_index < entries.len and index <= current_index;
+}
+
+fn historyEntryCanRemoveAfter(tab: *BrowseTab, index: usize) bool {
+    const entries = tab.session.navigation.entries();
+    if (entries.len <= 1 or index >= entries.len or index + 1 >= entries.len) {
+        return false;
+    }
+    const current_index = tab.session.navigation.getCurrentIndex();
+    return current_index < entries.len and index >= current_index;
+}
+
 fn normalizeBrowseUrl(allocator: std.mem.Allocator, raw: []const u8) !?[:0]u8 {
     const trimmed = std.mem.trim(u8, raw, &std.ascii.whitespace);
     if (trimmed.len == 0) {
@@ -3123,6 +3177,12 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .command = .{ .history_traverse = index } }
         else if (parseInternalBrowseIndexAction(action, "open-new-tab/")) |index|
             .{ .command = .{ .history_open_new_tab = index } }
+        else if (parseInternalBrowseIndexAction(action, "remove/")) |index|
+            .{ .command = .{ .history_remove = index } }
+        else if (parseInternalBrowseIndexAction(action, "remove-before/")) |index|
+            .{ .command = .{ .history_remove_before = index } }
+        else if (parseInternalBrowseIndexAction(action, "remove-after/")) |index|
+            .{ .command = .{ .history_remove_after = index } }
         else if (parseInternalBrowseHistorySortAction(action)) |mode|
             .{ .command = .{ .history_sort_set = mode } }
         else if (parseInternalBrowseFilterAction(action, "filter/")) |filter|
@@ -3276,6 +3336,9 @@ fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
     return switch (command) {
         .history_clear_session,
         .history_open_new_tab,
+        .history_remove,
+        .history_remove_before,
+        .history_remove_after,
         .history_sort_set,
         .history_filter_set,
         .history_filter_clear,
@@ -3317,6 +3380,9 @@ fn internalBrowseCommandUsesBrowseLoopHandler(command: BrowserCommand) bool {
         .tab_reopen_closed,
         .tab_reopen_closed_index,
         .history_open_new_tab,
+        .history_remove,
+        .history_remove_before,
+        .history_remove_after,
         .history_sort_set,
         .history_filter_set,
         .history_filter_clear,
@@ -3340,6 +3406,9 @@ fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
     return switch (command) {
         .history_clear_session => .history,
         .history_open_new_tab,
+        .history_remove,
+        .history_remove_before,
+        .history_remove_after,
         .history_sort_set,
         .history_filter_set,
         .history_filter_clear,
@@ -4632,10 +4701,37 @@ fn writeInternalHistoryPage(allocator: std.mem.Allocator, writer: anytype, tab: 
         defer allocator.free(traverse_href);
         const open_new_tab_href = try std.fmt.allocPrint(allocator, "browser://history/open-new-tab/{d}", .{index});
         defer allocator.free(open_new_tab_href);
+        const remove_href = if (historyEntryCanRemove(tab, index))
+            try std.fmt.allocPrint(allocator, "browser://history/remove/{d}", .{index})
+        else
+            null;
+        defer if (remove_href) |href| allocator.free(href);
+        const remove_before_href = if (historyEntryCanRemoveBefore(tab, index))
+            try std.fmt.allocPrint(allocator, "browser://history/remove-before/{d}", .{index})
+        else
+            null;
+        defer if (remove_before_href) |href| allocator.free(href);
+        const remove_after_href = if (historyEntryCanRemoveAfter(tab, index))
+            try std.fmt.allocPrint(allocator, "browser://history/remove-after/{d}", .{index})
+        else
+            null;
+        defer if (remove_after_href) |href| allocator.free(href);
         try writer.writeAll("<li>");
         try writeInternalActionLink(writer, traverse_href, "Open");
         try writer.writeAll(" | ");
         try writeInternalActionLink(writer, open_new_tab_href, "Open in new tab");
+        if (remove_href) |href| {
+            try writer.writeAll(" | ");
+            try writeInternalActionLink(writer, href, "Remove");
+        }
+        if (remove_before_href) |href| {
+            try writer.writeAll(" | ");
+            try writeInternalActionLink(writer, href, "Remove before");
+        }
+        if (remove_after_href) |href| {
+            try writer.writeAll(" | ");
+            try writeInternalActionLink(writer, href, "Remove after");
+        }
         try writer.writeAll(" ");
         if (index == current_index) {
             try writer.writeAll("<strong>Current</strong> ");
@@ -5577,6 +5673,18 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://history/open-new-tab/2").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .history_remove = 2 } },
+        parseInternalBrowseRoute("browser://history/remove/2").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .history_remove_before = 1 } },
+        parseInternalBrowseRoute("browser://history/remove-before/1").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .history_remove_after = 1 } },
+        parseInternalBrowseRoute("browser://history/remove-after/1").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .history_sort_set = .newest_first } },
         parseInternalBrowseRoute("browser://history/sort/newest-first").?,
     );
@@ -6042,6 +6150,69 @@ test "writeInternalHistoryPage applies filter state and renders quick links" {
     try std.testing.expect(std.mem.indexOf(u8, html, "http://other.test/hidden.html") == null);
 }
 
+test "writeInternalHistoryPage renders safe mutation actions around the current entry" {
+    const NavigationHistoryEntry = @import("browser/webapi/navigation/NavigationHistoryEntry.zig");
+    var session: Session = undefined;
+    session.page = null;
+    session.navigation = .{ ._proto = undefined };
+    const first = try std.testing.allocator.create(NavigationHistoryEntry);
+    errdefer std.testing.allocator.destroy(first);
+    first.* = .{
+        ._id = "history-a",
+        ._key = "history-a",
+        ._url = "http://127.0.0.1:8190/index.html",
+        ._state = .{ .source = .history, .value = null },
+    };
+    const second = try std.testing.allocator.create(NavigationHistoryEntry);
+    errdefer std.testing.allocator.destroy(second);
+    second.* = .{
+        ._id = "history-b",
+        ._key = "history-b",
+        ._url = "http://127.0.0.1:8190/page-two.html",
+        ._state = .{ .source = .history, .value = null },
+    };
+    const third = try std.testing.allocator.create(NavigationHistoryEntry);
+    errdefer std.testing.allocator.destroy(third);
+    third.* = .{
+        ._id = "history-c",
+        ._key = "history-c",
+        ._url = "http://127.0.0.1:8190/page-three.html",
+        ._state = .{ .source = .history, .value = null },
+    };
+    try session.navigation._entries.append(std.testing.allocator, first);
+    try session.navigation._entries.append(std.testing.allocator, second);
+    try session.navigation._entries.append(std.testing.allocator, third);
+    defer {
+        session.navigation._entries.deinit(std.testing.allocator);
+        std.testing.allocator.destroy(first);
+        std.testing.allocator.destroy(second);
+        std.testing.allocator.destroy(third);
+    }
+    session.navigation._index = 1;
+
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.committed_surface = .{};
+    tab.error_state = .{};
+    tab.internal_filters = .{};
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+    tab.zoom_percent = 100;
+    defer tab.internal_filters.deinit(std.testing.allocator);
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+    try writeInternalHistoryPage(std.testing.allocator, &buf.writer, &tab);
+    const html = buf.written();
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/remove/0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/remove/2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/remove/1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/remove-before/1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/remove-after/1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/remove-before/2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history/remove-after/0") == null);
+}
+
 test "writeInternalBookmarksPage applies filter state and renders quick links" {
     const rel_dir = ".zig-cache/tmp/internal-bookmark-filter-test";
     std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
@@ -6375,6 +6546,10 @@ test "makeInternalBrowsePageDisplayTitle reflects live counts" {
     const sorted_history_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .history);
     defer std.testing.allocator.free(sorted_history_title);
     try std.testing.expectEqualStrings("Browser History (2, newest first)", sorted_history_title);
+    try std.testing.expect(tab.session.navigation.removeEntryPreservingCurrent(0));
+    const trimmed_history_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .history);
+    defer std.testing.allocator.free(trimmed_history_title);
+    try std.testing.expectEqualStrings("Browser History (1, newest first)", trimmed_history_title);
 
     const bookmarks_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .bookmarks);
     defer std.testing.allocator.free(bookmarks_title);
@@ -6508,6 +6683,9 @@ test "hashInternalBrowsePageState changes after bookmark and download mutations"
     tab.internal_filters.history_sort = .newest_first;
     const history_second_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .history);
     try std.testing.expect(history_first_hash != history_second_hash);
+    try std.testing.expect(tab.session.navigation.removeEntryPreservingCurrent(0));
+    const history_third_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .history);
+    try std.testing.expect(history_second_hash != history_third_hash);
 
     const third_downloads_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .downloads);
     tab.internal_filters.downloads_sort = .newest_first;
@@ -6596,6 +6774,9 @@ test "captureBrowseTabRuntimeError clears error state on successful external pag
 test "internalBrowseCommandHostPage maps stateful internal actions" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.history_clear_session));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_open_new_tab = 0 }));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_remove = 0 }));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_remove_before = 1 }));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_remove_after = 1 }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_sort_set = .newest_first }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_filter_set = "one" }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.history_filter_clear));
@@ -6621,6 +6802,9 @@ test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reo
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.tab_reopen_closed));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .tab_reopen_closed_index = 1 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_open_new_tab = 0 }));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_remove = 0 }));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_remove_before = 1 }));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_remove_after = 1 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_sort_set = .newest_first }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.history_filter_clear));
@@ -6640,6 +6824,9 @@ test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reo
 
 test "internalBrowseCommandKeepsCurrentPage includes internal open in new tab actions" {
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_open_new_tab = 0 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_remove = 0 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_remove_before = 1 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_remove_after = 1 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_sort_set = .newest_first }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_open_new_tab = 0 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_move_up = 0 }));
