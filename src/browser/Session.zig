@@ -53,6 +53,15 @@ pub const PendingDownload = struct {
     }
 };
 
+pub const PendingBrowserNavigate = struct {
+    url: []u8,
+
+    pub fn deinit(self: *PendingBrowserNavigate, allocator: Allocator) void {
+        allocator.free(self.url);
+        self.* = undefined;
+    }
+};
+
 pub const PendingTabOpen = struct {
     url: [:0]u8,
     target_name: []u8,
@@ -82,6 +91,7 @@ queued_navigation: std.ArrayList(*Page),
 // We process async navigations first (safe from re-entrance), then sync
 // about:blank navigations (which may add to queued_navigation).
 queued_queued_navigation: std.ArrayList(*Page),
+pending_browser_navigations: std.ArrayListUnmanaged(PendingBrowserNavigate),
 pending_downloads: std.ArrayListUnmanaged(PendingDownload),
 pending_tab_opens: std.ArrayListUnmanaged(PendingTabOpen),
 
@@ -117,6 +127,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .browser = browser,
         .queued_navigation = .{},
         .queued_queued_navigation = .{},
+        .pending_browser_navigations = .{},
         .pending_downloads = .{},
         .pending_tab_opens = .{},
         .notification = notification,
@@ -133,6 +144,12 @@ pub fn deinit(self: *Session) void {
         self.suspended_page = null;
     }
     self.cookie_jar.deinit();
+    while (self.pending_browser_navigations.items.len > 0) {
+        var pending_browser_navigation = self.pending_browser_navigations.items[self.pending_browser_navigations.items.len - 1];
+        self.pending_browser_navigations.items.len -= 1;
+        pending_browser_navigation.deinit(self.browser.app.allocator);
+    }
+    self.pending_browser_navigations.deinit(self.browser.app.allocator);
     while (self.pending_downloads.items.len > 0) {
         var pending = self.pending_downloads.items[self.pending_downloads.items.len - 1];
         self.pending_downloads.items.len -= 1;
@@ -641,6 +658,16 @@ pub fn enqueueDownload(self: *Session, url: []const u8, suggested_filename: []co
     });
 }
 
+pub fn enqueueBrowserNavigation(self: *Session, url: []const u8) !void {
+    const allocator = self.browser.app.allocator;
+    const owned_url = try allocator.dupe(u8, url);
+    errdefer allocator.free(owned_url);
+
+    try self.pending_browser_navigations.append(allocator, .{
+        .url = owned_url,
+    });
+}
+
 pub fn enqueueOpenInTargetTab(
     self: *Session,
     url: []const u8,
@@ -682,6 +709,16 @@ pub fn enqueueOpenInTargetTab(
         .activate = activate,
         .zoom_percent = zoom_percent,
     });
+}
+
+pub fn takePendingBrowserNavigations(self: *Session) std.ArrayListUnmanaged(PendingBrowserNavigate) {
+    var pending: std.ArrayListUnmanaged(PendingBrowserNavigate) = .{};
+    std.mem.swap(std.ArrayListUnmanaged(PendingBrowserNavigate), &pending, &self.pending_browser_navigations);
+    return pending;
+}
+
+pub fn hasPendingBrowserNavigations(self: *const Session) bool {
+    return self.pending_browser_navigations.items.len > 0;
 }
 
 pub fn takePendingDownloads(self: *Session) std.ArrayListUnmanaged(PendingDownload) {

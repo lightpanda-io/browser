@@ -78,6 +78,7 @@ public static class SmokeProbeUser32 {
     private const ushort VK_MENU = 0x12;
     private const ushort VK_ESCAPE = 0x1B;
     private const ushort VK_F3 = 0x72;
+    private const ushort VK_F5 = 0x74;
     private const ushort VK_OEM_COMMA = 0xBC;
     private const ushort VK_OEM_PLUS = 0xBB;
     private const ushort VK_P = 0x50;
@@ -525,6 +526,10 @@ public static class SmokeProbeUser32 {
         SendVirtualKey(VK_F3);
     }
 
+    public static void SendF5() {
+        SendVirtualKey(VK_F5);
+    }
+
     public static void SendShiftF3() {
         var inputs = new INPUT[4];
         inputs[0].type = INPUT_KEYBOARD;
@@ -752,6 +757,10 @@ function Send-SmokeEscape {
 
 function Send-SmokeF3 {
   [SmokeProbeUser32]::SendF3()
+}
+
+function Send-SmokeF5 {
+  [SmokeProbeUser32]::SendF5()
 }
 
 function Send-SmokeShiftF3 {

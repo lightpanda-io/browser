@@ -3340,6 +3340,12 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
+            if (std.ascii.startsWithIgnoreCase(href, "browser://")) {
+                try element.focus(self);
+                try self._session.enqueueBrowserNavigation(href);
+                return;
+            }
+
             if (std.mem.startsWith(u8, href, "javascript:")) {
                 return;
             }
@@ -4496,6 +4502,18 @@ fn deinitPendingDownloadsForTest(
     pending.deinit(allocator);
 }
 
+fn deinitPendingBrowserNavigationsForTest(
+    allocator: std.mem.Allocator,
+    pending: *std.ArrayListUnmanaged(Session.PendingBrowserNavigate),
+) void {
+    while (pending.items.len > 0) {
+        var request = pending.items[pending.items.len - 1];
+        pending.items.len -= 1;
+        request.deinit(allocator);
+    }
+    pending.deinit(allocator);
+}
+
 fn clickSelectorCenter(
     page: *Page,
     comptime selector: []const u8,
@@ -4547,6 +4565,37 @@ test "Page Enter on focused anchor queues named target popup" {
         "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=anchor",
         pending.items[0].url,
     );
+}
+
+test "Page handleClick queues browser navigation for internal browser link" {
+    var page = try testing.pageTest("page/internal_browser_link.html");
+    defer page._session.removePage();
+
+    const anchor = (try page.window._document.querySelector(.wrap("#browser_history"), page)).?;
+    try page.handleClick(anchor.asNode());
+
+    var pending_browser_navigations = page._session.takePendingBrowserNavigations();
+    defer deinitPendingBrowserNavigationsForTest(page._session.browser.app.allocator, &pending_browser_navigations);
+
+    try testing.expectEqual(@as(usize, 1), pending_browser_navigations.items.len);
+    try testing.expectString("browser://history/traverse/0", pending_browser_navigations.items[0].url);
+    try testing.expect(page._queued_navigation == null);
+}
+
+test "Page Enter on focused anchor queues browser navigation for internal browser link" {
+    var page = try testing.pageTest("page/internal_browser_link.html");
+    defer page._session.removePage();
+
+    const anchor = (try page.window._document.querySelector(.wrap("#browser_history"), page)).?;
+    try anchor.focus(page);
+    _ = try page.triggerKeyboardKeyDownNoText("Enter", .{});
+
+    var pending_browser_navigations = page._session.takePendingBrowserNavigations();
+    defer deinitPendingBrowserNavigationsForTest(page._session.browser.app.allocator, &pending_browser_navigations);
+
+    try testing.expectEqual(@as(usize, 1), pending_browser_navigations.items.len);
+    try testing.expectString("browser://history/traverse/0", pending_browser_navigations.items[0].url);
+    try testing.expect(page._queued_navigation == null);
 }
 
 test "Page handleClick queues named target GET form popup" {

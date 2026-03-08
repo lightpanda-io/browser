@@ -55,6 +55,9 @@ The fork already has a real headed Windows foundation:
   restore-session settings
 - headed `browse` now has a persisted script-popup policy with Win32 settings
   UI, blocked-runtime coverage, and allowed/blocked script popup acceptance
+- internal `browser://history`, `browser://bookmarks`, `browser://downloads`,
+  and `browser://settings` pages now support stateful actions, not just static
+  snapshots
 
 ## Achieved Gates
 
@@ -139,8 +142,16 @@ Current state inside Gate 1:
 - those browser pages are reachable through both native headed shortcuts and
   `browser://history`, `browser://bookmarks`, `browser://downloads`, and
   `browser://settings` address-bar aliases
-- next blocker: turn those generated browser pages into richer live surfaces
-  with better interaction and less dependence on the legacy overlay-only shell
+- those browser pages now execute real internal actions:
+  - history traverse and reload-safe reopen
+  - bookmark open/remove backed by the persisted bookmark store
+  - download source/remove backed by the persisted download store
+  - settings toggles for restore-session, script popups, default zoom, and
+    homepage mutation
+  - homepage navigation to an internal page plus restart-time restore of the
+    internal page in the session model
+- next blocker: make the internal pages the primary shell UI instead of
+  parallel overlay surfaces, and reduce dependence on the legacy overlay path
 
 ### Gate 2: Shared Subresource Loader And Profile
 

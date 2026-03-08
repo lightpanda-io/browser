@@ -116,6 +116,7 @@ const BrowseTab = struct {
     committed_surface: CommittedBrowseSurface = .{},
     restore_committed_surface: bool = false,
     last_presented_hash: u64 = 0,
+    last_internal_page_state_hash: u64 = 0,
     zoom_percent: i32 = 100,
 
     fn deinit(self: *BrowseTab, allocator: std.mem.Allocator) void {
@@ -190,6 +191,11 @@ const InternalBrowsePage = enum {
     bookmarks,
     downloads,
     settings,
+};
+
+const InternalBrowseRoute = union(enum) {
+    page: InternalBrowsePage,
+    command: BrowserCommand,
 };
 
 const BrowseDownloadStatus = enum(u8) {
@@ -672,6 +678,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
             else
                 tab.session.waitNoInput(0);
             try downloads.processPendingRequests(app, tab);
+            try processPendingBrowserNavigations(app, tab, &settings, &downloads);
         }
         const settled_tab_count = tabs.items.len;
         var tab_index: usize = 0;
@@ -686,6 +693,9 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         }
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
+        if (tabs.items[active_tab_index].session.currentPage()) |active_page| {
+            try refreshCurrentInternalBrowsePage(app, tabs.items[active_tab_index], active_page, &settings, &downloads, false);
+        }
         if (opened_pending_tab) {
             try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
             persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, settings.restore_previous_session, &last_saved_session_hash);
@@ -780,6 +790,9 @@ fn handleBrowseCommand(
         },
         .download_remove => |index| {
             _ = downloads.removeEntry(app.app_dir_path, index);
+        },
+        .bookmark_remove => |index| {
+            _ = removePersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index);
         },
         .download => |download| {
             if (tabs.items.len == 0) {
@@ -879,8 +892,16 @@ fn handleActiveBrowseCommand(
             };
             defer app.allocator.free(normalized_url);
 
-            if (parseInternalBrowsePage(normalized_url)) |internal_page| {
-                try openInternalBrowsePage(app, tab, page, settings, downloads, internal_page);
+            if (parseInternalBrowseRoute(normalized_url)) |route| {
+                switch (route) {
+                    .page => |internal_page| try openInternalBrowsePage(app, tab, page, settings, downloads, internal_page),
+                    .command => |internal_command| {
+                        try handleActiveBrowseCommand(app, tab, page, settings, downloads, internal_command);
+                        if (internalBrowseCommandKeepsCurrentPage(internal_command)) {
+                            try refreshCurrentInternalBrowsePage(app, tab, page, settings, downloads, true);
+                        }
+                    },
+                }
                 return;
             }
 
@@ -915,6 +936,10 @@ fn handleActiveBrowseCommand(
             if (page.url.len == 0) {
                 return;
             }
+            if (parseInternalBrowsePage(page.url)) |internal_page| {
+                try openInternalBrowsePage(app, tab, page, settings, downloads, internal_page);
+                return;
+            }
             try app.display.presentDocument("Lightpanda Browser", page.url, "Loading page...");
             tab.last_presented_hash = 0;
             try page.scheduleNavigation(page.url, .{
@@ -934,8 +959,32 @@ fn handleActiveBrowseCommand(
             tab.last_presented_hash = 0;
             _ = try session.navigation.navigateInner(url, .{ .traverse = index }, page);
         },
+        .bookmark_open => |index| {
+            const bookmark_url = loadPersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index) orelse return;
+            defer app.allocator.free(bookmark_url);
+            try handleActiveBrowseCommand(app, tab, page, settings, downloads, .{
+                .navigate = bookmark_url,
+            });
+        },
+        .bookmark_remove => |index| {
+            _ = removePersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index);
+        },
+        .download_source => |index| {
+            const download_url = loadDownloadUrlAtIndex(app.allocator, downloads, index) orelse return;
+            defer app.allocator.free(download_url);
+            try handleActiveBrowseCommand(app, tab, page, settings, downloads, .{
+                .navigate = download_url,
+            });
+        },
+        .download_remove => |index| {
+            _ = downloads.removeEntry(app.app_dir_path, index);
+        },
         .home => {
             const home_url = settings.homeUrl() orelse return;
+            if (parseInternalBrowsePage(home_url)) |internal_page| {
+                try openInternalBrowsePage(app, tab, page, settings, downloads, internal_page);
+                return;
+            }
             try app.display.presentDocument("Lightpanda Browser", home_url, "Loading page...");
             tab.last_presented_hash = 0;
             tab.restore_committed_surface = false;
@@ -976,7 +1025,7 @@ fn handleActiveBrowseCommand(
             settings.default_zoom_percent = applyDefaultZoomCommand(settings.default_zoom_percent, command);
         },
         .settings_set_homepage_to_current => {
-            const homepage = browseTabPersistentUrl(tab);
+            const homepage = browseTabHomepageCandidateUrl(tab) orelse return;
             try replaceBrowseHomepage(app.allocator, settings, homepage);
         },
         .settings_clear_homepage => {
@@ -995,6 +1044,30 @@ fn handleActiveBrowseCommand(
             }
         },
         else => {},
+    }
+}
+
+fn processPendingBrowserNavigations(
+    app: *App,
+    tab: *BrowseTab,
+    settings: *BrowseSettings,
+    downloads: *BrowseDownloads,
+) !void {
+    var pending = tab.session.takePendingBrowserNavigations();
+    defer {
+        while (pending.items.len > 0) {
+            var request = pending.items[pending.items.len - 1];
+            pending.items.len -= 1;
+            request.deinit(app.allocator);
+        }
+        pending.deinit(app.allocator);
+    }
+
+    const page = tab.session.currentPage() orelse return;
+    for (pending.items) |request| {
+        try handleActiveBrowseCommand(app, tab, page, settings, downloads, .{
+            .navigate = request.url,
+        });
     }
 }
 
@@ -1139,6 +1212,12 @@ fn navigateBrowseTabToOwnedUrl(tab: *BrowseTab, raw_url: []const u8, opts: Page.
         return;
     }
     const page = tab.session.currentPage() orelse return;
+    if (parseInternalBrowsePage(raw_url) != null) {
+        page.url = try page.arena.dupeZ(u8, raw_url);
+        tab.last_internal_page_state_hash = 0;
+        tab.last_presented_hash = 0;
+        return;
+    }
     if (pageIsBlankIdle(page)) {
         try page.navigateOwned(raw_url, opts);
         return;
@@ -1153,6 +1232,7 @@ fn resetBrowseTabSession(tab: *BrowseTab) !void {
     _ = try tab.session.createPage();
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;
+    tab.last_internal_page_state_hash = 0;
 }
 
 fn handleRenderedLinkActivation(
@@ -1160,7 +1240,11 @@ fn handleRenderedLinkActivation(
     page: *Page,
     activation: BrowserCommand.ActivateLinkRegion,
 ) !bool {
+    if (parseInternalBrowseRoute(activation.url) != null) {
+        return false;
+    }
     const had_pending_navigation = page._queued_navigation != null;
+    const had_pending_browser_navigations = tab.session.hasPendingBrowserNavigations();
     const had_pending_tab_opens = tab.session.hasPendingTabOpens();
     const had_pending_downloads = tab.session.hasPendingDownloads();
     var result = if (activation.dom_path.len > 0)
@@ -1182,6 +1266,9 @@ fn handleRenderedLinkActivation(
         return true;
     }
     if (!had_pending_navigation and page._queued_navigation != null) {
+        return true;
+    }
+    if (!had_pending_browser_navigations and tab.session.hasPendingBrowserNavigations()) {
         return true;
     }
     if (!had_pending_tab_opens and tab.session.hasPendingTabOpens()) {
@@ -1886,9 +1973,14 @@ fn createBrowseTab(
     tab.committed_surface = .{};
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;
+    tab.last_internal_page_state_hash = 0;
     tab.zoom_percent = std.math.clamp(default_zoom_percent, 30, 300);
 
     if (initial_url) |target_url| {
+        if (parseInternalBrowsePage(target_url) != null) {
+            page.url = try page.arena.dupeZ(u8, target_url);
+            return tab;
+        }
         const encoded_url = try URL.ensureEncoded(page.call_arena, target_url);
         _ = try page.navigate(encoded_url, .{
             .reason = .address_bar,
@@ -2005,6 +2097,36 @@ fn browseTabPersistentUrl(tab: *BrowseTab) []const u8 {
     return "about:blank";
 }
 
+fn browseTabHomepageCandidateUrl(tab: *BrowseTab) ?[]const u8 {
+    const page = tab.session.currentPage();
+    if (page) |current_page| {
+        if (trimmedOrNull(current_page.url)) |url| {
+            if (parseInternalBrowsePage(url) == null) {
+                return url;
+            }
+        }
+    }
+
+    const navigation_entries = tab.session.navigation.entries();
+    if (navigation_entries.len > 0) {
+        const current_index = tab.session.navigation.getCurrentIndex();
+        if (navigation_entries[current_index].url()) |url| {
+            if (trimmedOrNull(url)) |trimmed_url| {
+                if (parseInternalBrowsePage(trimmed_url) == null) {
+                    return trimmed_url;
+                }
+            }
+        }
+    }
+
+    if (trimmedOrNull(tab.committed_surface.url)) |url| {
+        if (parseInternalBrowsePage(url) == null) {
+            return url;
+        }
+    }
+    return null;
+}
+
 fn normalizeBrowseUrl(allocator: std.mem.Allocator, raw: []const u8) !?[:0]u8 {
     const trimmed = std.mem.trim(u8, raw, &std.ascii.whitespace);
     if (trimmed.len == 0) {
@@ -2060,13 +2182,7 @@ fn internalBrowsePageAlias(internal_page: InternalBrowsePage) []const u8 {
     };
 }
 
-fn parseInternalBrowsePage(raw_url: []const u8) ?InternalBrowsePage {
-    const trimmed = std.mem.trim(u8, raw_url, &std.ascii.whitespace);
-    if (!std.ascii.startsWithIgnoreCase(trimmed, "browser://")) {
-        return null;
-    }
-    const rest = trimmed["browser://".len..];
-    const page_name = rest[0..(std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len)];
+fn parseInternalBrowseNamedPage(page_name: []const u8) ?InternalBrowsePage {
     if (std.ascii.eqlIgnoreCase(page_name, "history")) {
         return .history;
     }
@@ -2080,6 +2196,83 @@ fn parseInternalBrowsePage(raw_url: []const u8) ?InternalBrowsePage {
         return .settings;
     }
     return null;
+}
+
+fn parseInternalBrowsePage(raw_url: []const u8) ?InternalBrowsePage {
+    const trimmed = std.mem.trim(u8, raw_url, &std.ascii.whitespace);
+    if (!std.ascii.startsWithIgnoreCase(trimmed, "browser://")) {
+        return null;
+    }
+    const rest = trimmed["browser://".len..];
+    const page_name = rest[0..(std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len)];
+    return parseInternalBrowseNamedPage(page_name);
+}
+
+fn parseInternalBrowseIndexAction(action_path: []const u8, prefix: []const u8) ?usize {
+    if (!std.ascii.startsWithIgnoreCase(action_path, prefix)) {
+        return null;
+    }
+    const raw_index = action_path[prefix.len..];
+    if (raw_index.len == 0) {
+        return null;
+    }
+    return std.fmt.parseInt(usize, raw_index, 10) catch null;
+}
+
+fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
+    const trimmed = std.mem.trim(u8, raw_url, &std.ascii.whitespace);
+    if (!std.ascii.startsWithIgnoreCase(trimmed, "browser://")) {
+        return null;
+    }
+
+    const rest = trimmed["browser://".len..];
+    const page_name_end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
+    const page_name = rest[0..page_name_end];
+    const page = parseInternalBrowseNamedPage(page_name) orelse return null;
+    if (page_name_end >= rest.len or rest[page_name_end] != '/') {
+        return .{ .page = page };
+    }
+
+    const action_path = rest[page_name_end + 1 ..];
+    const action = action_path[0..(std.mem.indexOfAny(u8, action_path, "?#") orelse action_path.len)];
+    if (action.len == 0) {
+        return .{ .page = page };
+    }
+
+    return switch (page) {
+        .history => if (parseInternalBrowseIndexAction(action, "traverse/")) |index|
+            .{ .command = .{ .history_traverse = index } }
+        else
+            .{ .page = .history },
+        .bookmarks => if (parseInternalBrowseIndexAction(action, "open/")) |index|
+            .{ .command = .{ .bookmark_open = index } }
+        else if (parseInternalBrowseIndexAction(action, "remove/")) |index|
+            .{ .command = .{ .bookmark_remove = index } }
+        else
+            .{ .page = .bookmarks },
+        .downloads => if (parseInternalBrowseIndexAction(action, "source/")) |index|
+            .{ .command = .{ .download_source = index } }
+        else if (parseInternalBrowseIndexAction(action, "remove/")) |index|
+            .{ .command = .{ .download_remove = index } }
+        else
+            .{ .page = .downloads },
+        .settings => if (std.ascii.eqlIgnoreCase(action, "toggle-restore-session"))
+            .{ .command = .settings_toggle_restore_session }
+        else if (std.ascii.eqlIgnoreCase(action, "toggle-script-popups"))
+            .{ .command = .settings_toggle_script_popups }
+        else if (std.ascii.eqlIgnoreCase(action, "default-zoom/in"))
+            .{ .command = .settings_default_zoom_in }
+        else if (std.ascii.eqlIgnoreCase(action, "default-zoom/out"))
+            .{ .command = .settings_default_zoom_out }
+        else if (std.ascii.eqlIgnoreCase(action, "default-zoom/reset"))
+            .{ .command = .settings_default_zoom_reset }
+        else if (std.ascii.eqlIgnoreCase(action, "homepage/set-current"))
+            .{ .command = .settings_set_homepage_to_current }
+        else if (std.ascii.eqlIgnoreCase(action, "homepage/clear"))
+            .{ .command = .settings_clear_homepage }
+        else
+            .{ .page = .settings },
+    };
 }
 
 fn openInternalBrowsePage(
@@ -2102,6 +2295,115 @@ fn openInternalBrowsePage(
 
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;
+    tab.last_internal_page_state_hash = hashInternalBrowsePageState(
+        app.allocator,
+        app.app_dir_path,
+        tab,
+        settings,
+        downloads,
+        internal_page,
+    );
+    try replacePageWithInternalHtml(
+        app.allocator,
+        page,
+        internalBrowsePageAlias(internal_page),
+        html,
+    );
+}
+
+fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
+    return switch (command) {
+        .bookmark_remove,
+        .download_remove,
+        .settings_toggle_restore_session,
+        .settings_toggle_script_popups,
+        .settings_default_zoom_in,
+        .settings_default_zoom_out,
+        .settings_default_zoom_reset,
+        .settings_set_homepage_to_current,
+        .settings_clear_homepage,
+        => true,
+        else => false,
+    };
+}
+
+fn hashOwnedStringSlice(items: []const []const u8) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    for (items) |item| {
+        hasher.update(item);
+    }
+    return hasher.final();
+}
+
+fn hashInternalHistoryPageState(tab: *BrowseTab) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    const entries = tab.session.navigation.entries();
+    const current_index = tab.session.navigation.getCurrentIndex();
+    hasher.update(std.mem.asBytes(&current_index));
+    for (entries) |entry| {
+        hasher.update(entry.url() orelse "about:blank");
+    }
+    return hasher.final();
+}
+
+fn hashInternalBrowsePageState(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    tab: *BrowseTab,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+    internal_page: InternalBrowsePage,
+) u64 {
+    return switch (internal_page) {
+        .history => hashInternalHistoryPageState(tab),
+        .bookmarks => blk: {
+            var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+            defer deinitOwnedStrings(allocator, &bookmarks);
+            break :blk hashOwnedStringSlice(bookmarks.items);
+        },
+        .downloads => hashSavedDownloads(downloads.entries.items),
+        .settings => hashBrowseSettings(settings),
+    };
+}
+
+fn refreshCurrentInternalBrowsePage(
+    app: *App,
+    tab: *BrowseTab,
+    page: *Page,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+    force: bool,
+) !void {
+    const internal_page = parseInternalBrowsePage(page.url) orelse {
+        tab.last_internal_page_state_hash = 0;
+        return;
+    };
+
+    const next_hash = hashInternalBrowsePageState(
+        app.allocator,
+        app.app_dir_path,
+        tab,
+        settings,
+        downloads,
+        internal_page,
+    );
+    if (!force and next_hash == tab.last_internal_page_state_hash) {
+        return;
+    }
+
+    const html = try buildInternalBrowsePageHtml(
+        app.allocator,
+        app.app_dir_path,
+        tab,
+        settings,
+        downloads,
+        internal_page,
+    );
+    defer app.allocator.free(html);
+
+    tab.restore_committed_surface = false;
+    tab.last_presented_hash = 0;
+    tab.last_internal_page_state_hash = next_hash;
     try replacePageWithInternalHtml(
         app.allocator,
         page,
@@ -2122,10 +2424,10 @@ fn buildInternalBrowsePageHtml(
     defer html.deinit();
 
     switch (internal_page) {
-        .history => try writeInternalHistoryPage(&html.writer, tab),
+        .history => try writeInternalHistoryPage(allocator, &html.writer, tab),
         .bookmarks => try writeInternalBookmarksPage(allocator, &html.writer, app_dir_path),
         .downloads => try writeInternalDownloadsPage(allocator, &html.writer, downloads),
-        .settings => try writeInternalSettingsPage(&html.writer, settings),
+        .settings => try writeInternalSettingsPage(&html.writer, tab, settings),
     }
 
     return try allocator.dupe(u8, html.written());
@@ -2193,7 +2495,15 @@ fn writeInternalPageEnd(writer: anytype) !void {
     try writer.writeAll("</body></html>");
 }
 
-fn writeInternalHistoryPage(writer: anytype, tab: *BrowseTab) !void {
+fn writeInternalActionLink(writer: anytype, href: []const u8, label: []const u8) !void {
+    try writer.writeAll("<a href=\"");
+    try writeHtmlEscaped(writer, href);
+    try writer.writeAll("\">");
+    try writeHtmlEscaped(writer, label);
+    try writer.writeAll("</a>");
+}
+
+fn writeInternalHistoryPage(allocator: std.mem.Allocator, writer: anytype, tab: *BrowseTab) !void {
     const entries = tab.session.navigation.entries();
     const current_index = if (entries.len == 0) 0 else tab.session.navigation.getCurrentIndex();
     try writer.print(
@@ -2208,15 +2518,16 @@ fn writeInternalHistoryPage(writer: anytype, tab: *BrowseTab) !void {
     try writer.writeAll("<ol>");
     for (entries, 0..) |entry, index| {
         const url = entry.url() orelse continue;
+        const traverse_href = try std.fmt.allocPrint(allocator, "browser://history/traverse/{d}", .{index});
+        defer allocator.free(traverse_href);
         try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, traverse_href, "Open");
+        try writer.writeAll(" ");
         if (index == current_index) {
             try writer.writeAll("<strong>Current</strong> ");
         }
-        try writer.writeAll("<a href=\"");
         try writeHtmlEscaped(writer, url);
-        try writer.writeAll("\">");
-        try writeHtmlEscaped(writer, url);
-        try writer.writeAll("</a></li>");
+        try writer.writeAll("</li>");
     }
     try writer.writeAll("</ol>");
     try writeInternalPageEnd(writer);
@@ -2240,12 +2551,18 @@ fn writeInternalBookmarksPage(
         return;
     }
     try writer.writeAll("<ol>");
-    for (bookmarks.items) |bookmark| {
-        try writer.writeAll("<li><a href=\"");
+    for (bookmarks.items, 0..) |bookmark, index| {
+        const open_href = try std.fmt.allocPrint(allocator, "browser://bookmarks/open/{d}", .{index});
+        defer allocator.free(open_href);
+        const remove_href = try std.fmt.allocPrint(allocator, "browser://bookmarks/remove/{d}", .{index});
+        defer allocator.free(remove_href);
+        try writer.writeAll("<li>");
+        try writeInternalActionLink(writer, remove_href, "Remove");
+        try writer.writeAll(" ");
+        try writeInternalActionLink(writer, open_href, "Open");
+        try writer.writeAll(" ");
         try writeHtmlEscaped(writer, bookmark);
-        try writer.writeAll("\">");
-        try writeHtmlEscaped(writer, bookmark);
-        try writer.writeAll("</a></li>");
+        try writer.writeAll("</li>");
     }
     try writer.writeAll("</ol>");
     try writeInternalPageEnd(writer);
@@ -2266,10 +2583,20 @@ fn writeInternalDownloadsPage(
         return;
     }
     try writer.writeAll("<ol>");
-    for (downloads.entries.items) |entry| {
+    for (downloads.entries.items, 0..) |entry, index| {
         const status = try formatDownloadStatusLabel(allocator, entry);
         defer allocator.free(status);
-        try writer.writeAll("<li><strong>");
+        try writer.writeAll("<li>");
+        if (!downloadEntryActive(downloads, index)) {
+            const remove_href = try std.fmt.allocPrint(allocator, "browser://downloads/remove/{d}", .{index});
+            defer allocator.free(remove_href);
+            try writeInternalActionLink(writer, remove_href, "Remove");
+            try writer.writeAll(" ");
+        }
+        const source_href = try std.fmt.allocPrint(allocator, "browser://downloads/source/{d}", .{index});
+        defer allocator.free(source_href);
+        try writeInternalActionLink(writer, source_href, "Source");
+        try writer.writeAll("<br><strong>");
         try writeHtmlEscaped(writer, entry.filename);
         try writer.writeAll("</strong> - ");
         try writeHtmlEscaped(writer, status);
@@ -2281,7 +2608,7 @@ fn writeInternalDownloadsPage(
     try writeInternalPageEnd(writer);
 }
 
-fn writeInternalSettingsPage(writer: anytype, settings: *const BrowseSettings) !void {
+fn writeInternalSettingsPage(writer: anytype, tab: *BrowseTab, settings: *const BrowseSettings) !void {
     try writeInternalPageStart(
         writer,
         "Browser Settings",
@@ -2290,12 +2617,34 @@ fn writeInternalSettingsPage(writer: anytype, settings: *const BrowseSettings) !
     );
     try writer.writeAll("<ul><li>Restore previous session: <strong>");
     try writer.writeAll(if (settings.restore_previous_session) "On" else "Off");
-    try writer.writeAll("</strong></li><li>Script popups: <strong>");
+    try writer.writeAll("</strong> ");
+    try writeInternalActionLink(writer, "browser://settings/toggle-restore-session", "Toggle");
+    try writer.writeAll("</li><li>Script popups: <strong>");
     try writer.writeAll(if (settings.allow_script_popups) "On" else "Off");
-    try writer.writeAll("</strong></li><li>Default zoom: <strong>");
-    try writer.print("{d}%</strong></li><li>Homepage: <strong>", .{settings.default_zoom_percent});
+    try writer.writeAll("</strong> ");
+    try writeInternalActionLink(writer, "browser://settings/toggle-script-popups", "Toggle");
+    try writer.writeAll("</li><li>Default zoom: <strong>");
+    try writer.print("{d}%</strong> ", .{settings.default_zoom_percent});
+    try writeInternalActionLink(writer, "browser://settings/default-zoom/out", "-");
+    try writer.writeAll(" ");
+    try writeInternalActionLink(writer, "browser://settings/default-zoom/reset", "Reset");
+    try writer.writeAll(" ");
+    try writeInternalActionLink(writer, "browser://settings/default-zoom/in", "+");
+    try writer.writeAll("</li><li>Homepage: <strong>");
     try writeHtmlEscaped(writer, settings.homeUrl() orelse "(none)");
-    try writer.writeAll("</strong></li></ul>");
+    try writer.writeAll("</strong>");
+    if (browseTabHomepageCandidateUrl(tab)) |candidate| {
+        try writer.writeAll(" ");
+        try writeInternalActionLink(writer, "browser://settings/homepage/set-current", "Use current site");
+        try writer.writeAll(" <small>(");
+        try writeHtmlEscaped(writer, candidate);
+        try writer.writeAll(")</small>");
+    }
+    if (settings.homeUrl() != null) {
+        try writer.writeAll(" ");
+        try writeInternalActionLink(writer, "browser://settings/homepage/clear", "Clear");
+    }
+    try writer.writeAll("</li></ul>");
     try writeInternalPageEnd(writer);
 }
 
@@ -2348,6 +2697,77 @@ fn loadPersistedBookmarks(
         };
     }
     return bookmarks;
+}
+
+fn savePersistedBookmarks(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    bookmarks: []const []const u8,
+) void {
+    const dir_path = app_dir_path orelse return;
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return;
+    defer dir.close();
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+
+    for (bookmarks) |bookmark| {
+        const trimmed = std.mem.trim(u8, bookmark, "\r\n\t ");
+        if (trimmed.len == 0) {
+            continue;
+        }
+        buf.writer.print("{s}\n", .{trimmed}) catch return;
+    }
+
+    dir.writeFile(.{
+        .sub_path = BROWSE_BOOKMARKS_FILE,
+        .data = buf.written(),
+    }) catch {};
+}
+
+fn removePersistedBookmarkAtIndex(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    index: usize,
+) bool {
+    var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+    defer deinitOwnedStrings(allocator, &bookmarks);
+
+    if (index >= bookmarks.items.len) {
+        return false;
+    }
+
+    const removed = bookmarks.orderedRemove(index);
+    allocator.free(removed);
+    savePersistedBookmarks(allocator, app_dir_path, bookmarks.items);
+    return true;
+}
+
+fn loadPersistedBookmarkAtIndex(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    index: usize,
+) ?[]u8 {
+    var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+    defer deinitOwnedStrings(allocator, &bookmarks);
+
+    if (index >= bookmarks.items.len) {
+        return null;
+    }
+
+    return allocator.dupe(u8, bookmarks.items[index]) catch null;
+}
+
+fn loadDownloadUrlAtIndex(
+    allocator: std.mem.Allocator,
+    downloads: *BrowseDownloads,
+    index: usize,
+) ?[]u8 {
+    if (index >= downloads.entries.items.len) {
+        return null;
+    }
+
+    return allocator.dupe(u8, downloads.entries.items[index].url) catch null;
 }
 
 fn deinitOwnedStrings(allocator: std.mem.Allocator, items: *std.ArrayListUnmanaged([]u8)) void {
@@ -2793,6 +3213,63 @@ test "parseInternalBrowsePage recognizes browser aliases" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), parseInternalBrowsePage("browser://downloads?recent=1"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), parseInternalBrowsePage("browser://settings#shell"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, null), parseInternalBrowsePage("https://example.com"));
+}
+
+test "parseInternalBrowseRoute recognizes interactive browser page actions" {
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .history_traverse = 2 } },
+        parseInternalBrowseRoute("browser://history/traverse/2").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .bookmark_open = 3 } },
+        parseInternalBrowseRoute("browser://bookmarks/open/3").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .bookmark_remove = 1 } },
+        parseInternalBrowseRoute("browser://bookmarks/remove/1").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .download_source = 4 } },
+        parseInternalBrowseRoute("browser://downloads/source/4").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .download_remove = 0 } },
+        parseInternalBrowseRoute("browser://downloads/remove/0").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .settings_toggle_script_popups },
+        parseInternalBrowseRoute("browser://settings/toggle-script-popups").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .settings_set_homepage_to_current },
+        parseInternalBrowseRoute("browser://settings/homepage/set-current").?,
+    );
+}
+
+test "removePersistedBookmarkAtIndex rewrites bookmark file" {
+    const rel_dir = ".zig-cache/tmp/internal-bookmark-remove-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+
+    var dir = try std.fs.openDirAbsolute(abs_dir, .{});
+    defer dir.close();
+    dir.writeFile(.{ .sub_path = BROWSE_BOOKMARKS_FILE, .data = 
+        \\http://one.test/
+        \\http://two.test/
+    }) catch |err| switch (err) {
+        else => return err,
+    };
+
+    try std.testing.expect(removePersistedBookmarkAtIndex(std.testing.allocator, abs_dir, 0));
+
+    var bookmarks = loadPersistedBookmarks(std.testing.allocator, abs_dir);
+    defer deinitOwnedStrings(std.testing.allocator, &bookmarks);
+    try std.testing.expectEqual(@as(usize, 1), bookmarks.items.len);
+    try std.testing.expectEqualStrings("http://two.test/", bookmarks.items[0]);
 }
 
 test "buildJsStringLiteral escapes control characters" {
