@@ -3091,27 +3091,27 @@ fn formatPresentationHintText(
     if (popup_hint.target_name.len > 0 and source_label.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} target [{s}]  Script popups {s}",
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} target [{s}]  Script popups {s}",
             .{ zoom_percent, source_label, popup_hint.target_name, popup_policy },
         );
     }
     if (popup_hint.target_name.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]  Script popups {s}",
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]  Script popups {s}",
             .{ zoom_percent, popup_hint.target_name, popup_policy },
         );
     }
     if (source_label.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} tab  Script popups {s}",
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} tab  Script popups {s}",
             .{ zoom_percent, source_label, popup_policy },
         );
     }
     return try std.fmt.allocPrint(
         allocator,
-        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Script popups {s}",
+        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Script popups {s}",
         .{ zoom_percent, popup_policy },
     );
 }
@@ -4954,6 +4954,27 @@ fn handlePresentationShortcutKey(
     if (modifiers.ctrl and modifiers.shift and vk == 'P') {
         return savePresentationPngAuto(backend);
     }
+    if (modifiers.ctrl and modifiers.alt and !modifiers.shift and !modifiers.meta) {
+        switch (vk) {
+            'H' => {
+                queueBrowserCommand(backend, .page_history);
+                return true;
+            },
+            'B' => {
+                queueBrowserCommand(backend, .page_bookmarks);
+                return true;
+            },
+            'J' => {
+                queueBrowserCommand(backend, .page_downloads);
+                return true;
+            },
+            'S' => {
+                queueBrowserCommand(backend, .page_settings);
+                return true;
+            },
+            else => {},
+        }
+    }
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and vk == c.VK_TAB) {
         queueBrowserCommand(backend, if (modifiers.shift) .tab_previous else .tab_next);
         return true;
@@ -6600,6 +6621,24 @@ test "win32 tab shortcuts enqueue commands" {
     try std.testing.expectEqual(BrowserCommand.tab_previous, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand{ .tab_activate = 1 }, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand{ .tab_close = 1 }, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
+}
+
+test "win32 ctrl+alt shortcuts enqueue internal browser pages" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_title = try std.testing.allocator.dupe(u8, "Browser");
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'H', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'B', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'S', .{ .ctrl = true, .alt = true }));
+
+    try std.testing.expectEqual(BrowserCommand.page_history, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.page_bookmarks, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.page_downloads, backend.nextBrowserCommand().?);
+    try std.testing.expectEqual(BrowserCommand.page_settings, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
 }
 

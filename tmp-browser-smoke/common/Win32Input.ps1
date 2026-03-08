@@ -72,6 +72,7 @@ public static class SmokeProbeUser32 {
     private const ushort VK_F = 0x46;
     private const ushort VK_H = 0x48;
     private const ushort VK_J = 0x4A;
+    private const ushort VK_S = 0x53;
     private const ushort VK_T = 0x54;
     private const ushort VK_W = 0x57;
     private const ushort VK_MENU = 0x12;
@@ -408,6 +409,86 @@ public static class SmokeProbeUser32 {
         EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlShiftD");
     }
 
+    public static void SendCtrlAltH() {
+        var inputs = new INPUT[6];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_MENU;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_H;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_H;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[4].type = INPUT_KEYBOARD;
+        inputs[4].U.ki.wVk = VK_MENU;
+        inputs[4].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[5].type = INPUT_KEYBOARD;
+        inputs[5].U.ki.wVk = VK_CONTROL;
+        inputs[5].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlAltH");
+    }
+
+    public static void SendCtrlAltB() {
+        var inputs = new INPUT[6];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_MENU;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_B;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_B;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[4].type = INPUT_KEYBOARD;
+        inputs[4].U.ki.wVk = VK_MENU;
+        inputs[4].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[5].type = INPUT_KEYBOARD;
+        inputs[5].U.ki.wVk = VK_CONTROL;
+        inputs[5].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlAltB");
+    }
+
+    public static void SendCtrlAltJ() {
+        var inputs = new INPUT[6];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_MENU;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_J;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_J;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[4].type = INPUT_KEYBOARD;
+        inputs[4].U.ki.wVk = VK_MENU;
+        inputs[4].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[5].type = INPUT_KEYBOARD;
+        inputs[5].U.ki.wVk = VK_CONTROL;
+        inputs[5].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlAltJ");
+    }
+
+    public static void SendCtrlAltS() {
+        var inputs = new INPUT[6];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].U.ki.wVk = VK_CONTROL;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].U.ki.wVk = VK_MENU;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].U.ki.wVk = VK_S;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].U.ki.wVk = VK_S;
+        inputs[3].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[4].type = INPUT_KEYBOARD;
+        inputs[4].U.ki.wVk = VK_MENU;
+        inputs[4].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[5].type = INPUT_KEYBOARD;
+        inputs[5].U.ki.wVk = VK_CONTROL;
+        inputs[5].U.ki.dwFlags = KEYEVENTF_KEYUP;
+        EnsureSent(SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(INPUT))), inputs.Length, "SendCtrlAltS");
+    }
+
     public static void SendAltHome() {
         var inputs = new INPUT[4];
         inputs[0].type = INPUT_KEYBOARD;
@@ -635,6 +716,22 @@ function Send-SmokeCtrlShiftT {
 
 function Send-SmokeCtrlShiftD {
   [SmokeProbeUser32]::SendCtrlShiftD()
+}
+
+function Send-SmokeCtrlAltH {
+  [SmokeProbeUser32]::SendCtrlAltH()
+}
+
+function Send-SmokeCtrlAltB {
+  [SmokeProbeUser32]::SendCtrlAltB()
+}
+
+function Send-SmokeCtrlAltJ {
+  [SmokeProbeUser32]::SendCtrlAltJ()
+}
+
+function Send-SmokeCtrlAltS {
+  [SmokeProbeUser32]::SendCtrlAltS()
 }
 
 function Send-SmokeAltHome {

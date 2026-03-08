@@ -180,9 +180,17 @@ const BrowseSettings = struct {
 const BROWSE_SESSION_FILE = "browse-session-v1.txt";
 const BROWSE_SETTINGS_FILE = "browse-settings-v1.txt";
 const BROWSE_DOWNLOADS_FILE = "downloads-v1.txt";
+const BROWSE_BOOKMARKS_FILE = "bookmarks.txt";
 const BROWSE_DOWNLOADS_DIR = "downloads";
 const MAX_CLOSED_BROWSE_TABS = 16;
 const MAX_DOWNLOADS_HISTORY = 64;
+
+const InternalBrowsePage = enum {
+    history,
+    bookmarks,
+    downloads,
+    settings,
+};
 
 const BrowseDownloadStatus = enum(u8) {
     queued,
@@ -811,7 +819,7 @@ fn handleBrowseCommand(
                 }, "_blank", true, .anchor);
                 return;
             }
-            try handleActiveBrowseCommand(app, tab, page, settings, .{
+            try handleActiveBrowseCommand(app, tab, page, settings, downloads, .{
                 .navigate = activation.url,
             });
         },
@@ -838,7 +846,7 @@ fn handleBrowseCommand(
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
             const tab = tabs.items[active_index];
             const page = tab.session.currentPage() orelse return;
-            try handleActiveBrowseCommand(app, tab, page, settings, command);
+            try handleActiveBrowseCommand(app, tab, page, settings, downloads, command);
         },
     }
 }
@@ -848,6 +856,7 @@ fn handleActiveBrowseCommand(
     tab: *BrowseTab,
     page: *Page,
     settings: *BrowseSettings,
+    downloads: *BrowseDownloads,
     command: BrowserCommand,
 ) !void {
     const session = tab.session;
@@ -869,6 +878,11 @@ fn handleActiveBrowseCommand(
                 return;
             };
             defer app.allocator.free(normalized_url);
+
+            if (parseInternalBrowsePage(normalized_url)) |internal_page| {
+                try openInternalBrowsePage(app, tab, page, settings, downloads, internal_page);
+                return;
+            }
 
             try app.display.presentDocument("Lightpanda Browser", normalized_url, "Loading page...");
             tab.last_presented_hash = 0;
@@ -930,6 +944,10 @@ fn handleActiveBrowseCommand(
                 .kind = .{ .push = null },
             }, .{ .script = null });
         },
+        .page_history => try openInternalBrowsePage(app, tab, page, settings, downloads, .history),
+        .page_bookmarks => try openInternalBrowsePage(app, tab, page, settings, downloads, .bookmarks),
+        .page_downloads => try openInternalBrowsePage(app, tab, page, settings, downloads, .downloads),
+        .page_settings => try openInternalBrowsePage(app, tab, page, settings, downloads, .settings),
         .stop => {
             tab.restore_committed_surface = tab.committed_surface.available();
             if (page._queued_navigation) |qn| {
@@ -2033,6 +2051,323 @@ fn hasHostPrefix(raw: []const u8, prefix: []const u8) bool {
     };
 }
 
+fn internalBrowsePageAlias(internal_page: InternalBrowsePage) []const u8 {
+    return switch (internal_page) {
+        .history => "browser://history",
+        .bookmarks => "browser://bookmarks",
+        .downloads => "browser://downloads",
+        .settings => "browser://settings",
+    };
+}
+
+fn parseInternalBrowsePage(raw_url: []const u8) ?InternalBrowsePage {
+    const trimmed = std.mem.trim(u8, raw_url, &std.ascii.whitespace);
+    if (!std.ascii.startsWithIgnoreCase(trimmed, "browser://")) {
+        return null;
+    }
+    const rest = trimmed["browser://".len..];
+    const page_name = rest[0..(std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len)];
+    if (std.ascii.eqlIgnoreCase(page_name, "history")) {
+        return .history;
+    }
+    if (std.ascii.eqlIgnoreCase(page_name, "bookmarks")) {
+        return .bookmarks;
+    }
+    if (std.ascii.eqlIgnoreCase(page_name, "downloads")) {
+        return .downloads;
+    }
+    if (std.ascii.eqlIgnoreCase(page_name, "settings")) {
+        return .settings;
+    }
+    return null;
+}
+
+fn openInternalBrowsePage(
+    app: *App,
+    tab: *BrowseTab,
+    page: *Page,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+    internal_page: InternalBrowsePage,
+) !void {
+    const html = try buildInternalBrowsePageHtml(
+        app.allocator,
+        app.app_dir_path,
+        tab,
+        settings,
+        downloads,
+        internal_page,
+    );
+    defer app.allocator.free(html);
+
+    tab.restore_committed_surface = false;
+    tab.last_presented_hash = 0;
+    try replacePageWithInternalHtml(
+        app.allocator,
+        page,
+        internalBrowsePageAlias(internal_page),
+        html,
+    );
+}
+
+fn buildInternalBrowsePageHtml(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    tab: *BrowseTab,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+    internal_page: InternalBrowsePage,
+) ![]u8 {
+    var html = std.Io.Writer.Allocating.init(allocator);
+    defer html.deinit();
+
+    switch (internal_page) {
+        .history => try writeInternalHistoryPage(&html.writer, tab),
+        .bookmarks => try writeInternalBookmarksPage(allocator, &html.writer, app_dir_path),
+        .downloads => try writeInternalDownloadsPage(allocator, &html.writer, downloads),
+        .settings => try writeInternalSettingsPage(&html.writer, settings),
+    }
+
+    return try allocator.dupe(u8, html.written());
+}
+
+fn replacePageWithInternalHtml(
+    allocator: std.mem.Allocator,
+    page: *Page,
+    alias: []const u8,
+    html: []const u8,
+) !void {
+    const html_literal = try buildJsStringLiteral(allocator, html);
+    defer allocator.free(html_literal);
+
+    const script = try std.fmt.allocPrint(
+        allocator,
+        "document.open();document.write({s});document.close();",
+        .{html_literal},
+    );
+    defer allocator.free(script);
+
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+    try ls.local.eval(script, "internal_browser_page");
+
+    page.url = try page.arena.dupeZ(u8, alias);
+}
+
+fn buildJsStringLiteral(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+
+    try buf.writer.writeByte('\'');
+    for (value) |byte| {
+        switch (byte) {
+            '\\' => try buf.writer.writeAll("\\\\"),
+            '\'' => try buf.writer.writeAll("\\'"),
+            '\n' => try buf.writer.writeAll("\\n"),
+            '\r' => try buf.writer.writeAll("\\r"),
+            '\t' => try buf.writer.writeAll("\\t"),
+            else => if (byte < 0x20)
+                try buf.writer.print("\\x{X:0>2}", .{byte})
+            else
+                try buf.writer.writeByte(byte),
+        }
+    }
+    try buf.writer.writeByte('\'');
+    return try allocator.dupe(u8, buf.written());
+}
+
+fn writeInternalPageStart(writer: anytype, title: []const u8, alias: []const u8, subtitle: []const u8) !void {
+    try writer.writeAll("<!doctype html><html><head><meta charset=\"utf-8\"><title>");
+    try writeHtmlEscaped(writer, title);
+    try writer.writeAll("</title></head><body><h1>");
+    try writeHtmlEscaped(writer, title);
+    try writer.writeAll("</h1><p>");
+    try writeHtmlEscaped(writer, subtitle);
+    try writer.writeAll("</p><p>Address alias: <code>");
+    try writeHtmlEscaped(writer, alias);
+    try writer.writeAll("</code></p>");
+}
+
+fn writeInternalPageEnd(writer: anytype) !void {
+    try writer.writeAll("</body></html>");
+}
+
+fn writeInternalHistoryPage(writer: anytype, tab: *BrowseTab) !void {
+    const entries = tab.session.navigation.entries();
+    const current_index = if (entries.len == 0) 0 else tab.session.navigation.getCurrentIndex();
+    try writer.print(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Browser History ({d})</title></head><body><h1>Browser History</h1><p>Current tab navigation entries.</p><p>Address alias: <code>browser://history</code></p>",
+        .{entries.len},
+    );
+    if (entries.len == 0) {
+        try writer.writeAll("<p>No history entries yet.</p>");
+        try writeInternalPageEnd(writer);
+        return;
+    }
+    try writer.writeAll("<ol>");
+    for (entries, 0..) |entry, index| {
+        const url = entry.url() orelse continue;
+        try writer.writeAll("<li>");
+        if (index == current_index) {
+            try writer.writeAll("<strong>Current</strong> ");
+        }
+        try writer.writeAll("<a href=\"");
+        try writeHtmlEscaped(writer, url);
+        try writer.writeAll("\">");
+        try writeHtmlEscaped(writer, url);
+        try writer.writeAll("</a></li>");
+    }
+    try writer.writeAll("</ol>");
+    try writeInternalPageEnd(writer);
+}
+
+fn writeInternalBookmarksPage(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    app_dir_path: ?[]const u8,
+) !void {
+    var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+    defer deinitOwnedStrings(allocator, &bookmarks);
+
+    try writer.print(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Browser Bookmarks ({d})</title></head><body><h1>Browser Bookmarks</h1><p>Persisted bookmark entries from the current browser profile.</p><p>Address alias: <code>browser://bookmarks</code></p>",
+        .{bookmarks.items.len},
+    );
+    if (bookmarks.items.len == 0) {
+        try writer.writeAll("<p>No bookmarks saved yet. Press Ctrl+D on a page first.</p>");
+        try writeInternalPageEnd(writer);
+        return;
+    }
+    try writer.writeAll("<ol>");
+    for (bookmarks.items) |bookmark| {
+        try writer.writeAll("<li><a href=\"");
+        try writeHtmlEscaped(writer, bookmark);
+        try writer.writeAll("\">");
+        try writeHtmlEscaped(writer, bookmark);
+        try writer.writeAll("</a></li>");
+    }
+    try writer.writeAll("</ol>");
+    try writeInternalPageEnd(writer);
+}
+
+fn writeInternalDownloadsPage(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    downloads: *BrowseDownloads,
+) !void {
+    try writer.print(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Browser Downloads ({d})</title></head><body><h1>Browser Downloads</h1><p>Download history for the current browser profile.</p><p>Address alias: <code>browser://downloads</code></p>",
+        .{downloads.entries.items.len},
+    );
+    if (downloads.entries.items.len == 0) {
+        try writer.writeAll("<p>No downloads recorded yet.</p>");
+        try writeInternalPageEnd(writer);
+        return;
+    }
+    try writer.writeAll("<ol>");
+    for (downloads.entries.items) |entry| {
+        const status = try formatDownloadStatusLabel(allocator, entry);
+        defer allocator.free(status);
+        try writer.writeAll("<li><strong>");
+        try writeHtmlEscaped(writer, entry.filename);
+        try writer.writeAll("</strong> - ");
+        try writeHtmlEscaped(writer, status);
+        try writer.writeAll("<br><small>");
+        try writeHtmlEscaped(writer, entry.path);
+        try writer.writeAll("</small></li>");
+    }
+    try writer.writeAll("</ol>");
+    try writeInternalPageEnd(writer);
+}
+
+fn writeInternalSettingsPage(writer: anytype, settings: *const BrowseSettings) !void {
+    try writeInternalPageStart(
+        writer,
+        "Browser Settings",
+        "browser://settings",
+        "Persisted shell settings for headed browse mode.",
+    );
+    try writer.writeAll("<ul><li>Restore previous session: <strong>");
+    try writer.writeAll(if (settings.restore_previous_session) "On" else "Off");
+    try writer.writeAll("</strong></li><li>Script popups: <strong>");
+    try writer.writeAll(if (settings.allow_script_popups) "On" else "Off");
+    try writer.writeAll("</strong></li><li>Default zoom: <strong>");
+    try writer.print("{d}%</strong></li><li>Homepage: <strong>", .{settings.default_zoom_percent});
+    try writeHtmlEscaped(writer, settings.homeUrl() orelse "(none)");
+    try writer.writeAll("</strong></li></ul>");
+    try writeInternalPageEnd(writer);
+}
+
+fn writeHtmlEscaped(writer: anytype, value: []const u8) !void {
+    for (value) |byte| {
+        switch (byte) {
+            '&' => try writer.writeAll("&amp;"),
+            '<' => try writer.writeAll("&lt;"),
+            '>' => try writer.writeAll("&gt;"),
+            '"' => try writer.writeAll("&quot;"),
+            '\'' => try writer.writeAll("&#39;"),
+            else => try writer.writeByte(byte),
+        }
+    }
+}
+
+fn loadPersistedBookmarks(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+) std.ArrayListUnmanaged([]u8) {
+    var bookmarks: std.ArrayListUnmanaged([]u8) = .{};
+    errdefer deinitOwnedStrings(allocator, &bookmarks);
+
+    const dir_path = app_dir_path orelse return bookmarks;
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return bookmarks;
+    defer dir.close();
+
+    const file = dir.openFile(BROWSE_BOOKMARKS_FILE, .{}) catch |err| switch (err) {
+        error.FileNotFound => return bookmarks,
+        else => return bookmarks,
+    };
+    defer file.close();
+
+    const data = file.readToEndAlloc(allocator, 1024 * 64) catch return bookmarks;
+    defer allocator.free(data);
+
+    var it = std.mem.splitScalar(u8, data, '\n');
+    while (it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r\n\t ");
+        if (line.len == 0) {
+            continue;
+        }
+        if (indexOfOwnedString(bookmarks.items, line) != null) {
+            continue;
+        }
+        const owned = allocator.dupe(u8, line) catch break;
+        bookmarks.append(allocator, owned) catch {
+            allocator.free(owned);
+            break;
+        };
+    }
+    return bookmarks;
+}
+
+fn deinitOwnedStrings(allocator: std.mem.Allocator, items: *std.ArrayListUnmanaged([]u8)) void {
+    while (items.items.len > 0) {
+        const owned = items.items[items.items.len - 1];
+        items.items.len -= 1;
+        allocator.free(owned);
+    }
+    items.deinit(allocator);
+}
+
+fn indexOfOwnedString(items: []const []u8, needle: []const u8) ?usize {
+    for (items, 0..) |item, index| {
+        if (std.mem.eql(u8, item, needle)) {
+            return index;
+        }
+    }
+    return null;
+}
+
 fn presentPage(
     app: *App,
     page: *Page,
@@ -2450,4 +2785,23 @@ test "normalizeBrowseUrl rejects blank input" {
 
 test "normalizeBrowseUrl rejects search-like input without a scheme" {
     try std.testing.expectError(error.InvalidUrl, normalizeBrowseUrl(std.testing.allocator, "two words"));
+}
+
+test "parseInternalBrowsePage recognizes browser aliases" {
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .history), parseInternalBrowsePage("browser://history"));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), parseInternalBrowsePage("browser://bookmarks/"));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), parseInternalBrowsePage("browser://downloads?recent=1"));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), parseInternalBrowsePage("browser://settings#shell"));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, null), parseInternalBrowsePage("https://example.com"));
+}
+
+test "buildJsStringLiteral escapes control characters" {
+    const literal = try buildJsStringLiteral(std.testing.allocator, "<title>'Browser'\\Settings\n</title>");
+    defer std.testing.allocator.free(literal);
+
+    try std.testing.expect(std.mem.startsWith(u8, literal, "'"));
+    try std.testing.expect(std.mem.endsWith(u8, literal, "'"));
+    try std.testing.expect(std.mem.indexOf(u8, literal, "\\'Browser\\'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, literal, "\\\\Settings") != null);
+    try std.testing.expect(std.mem.indexOf(u8, literal, "\\n") != null);
 }

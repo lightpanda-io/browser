@@ -133,9 +133,14 @@ Current state inside Gate 1:
 - rendered same-tab link activation now dispatches a real DOM click first, so
   `onclick`, `preventDefault`, and click-time href mutation are preserved on the
   headed surface before any direct navigation fallback
-- next blocker: move shell surfaces like history/bookmarks/downloads/settings
-  away from overlay-only state and toward dedicated browser pages backed by the
-  persisted stores already in place
+- dedicated internal browser pages now exist for history, bookmarks, downloads,
+  and settings, backed by current session state or the persisted stores already
+  in place
+- those browser pages are reachable through both native headed shortcuts and
+  `browser://history`, `browser://bookmarks`, `browser://downloads`, and
+  `browser://settings` address-bar aliases
+- next blocker: turn those generated browser pages into richer live surfaces
+  with better interaction and less dependence on the legacy overlay-only shell
 
 ### Gate 2: Shared Subresource Loader And Profile
 
