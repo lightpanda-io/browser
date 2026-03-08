@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Popup Script Named Start</title>
+<script>
+  setTimeout(() => {
+    eval("window.open('/script-popup-named-one.html?from=script', 'report')");
+  }, 120);
+  setTimeout(() => {
+    eval("window.open('/script-popup-named-two.html?from=script', 'report')");
+  }, 900);
+</script>

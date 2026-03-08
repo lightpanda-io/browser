@@ -277,12 +277,10 @@ pub fn getTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!vo
     }
 }
 
-pub fn getTextContentAlloc(self: *Node, allocator: Allocator) error{WriteFailed}![:0]const u8 {
+pub fn getTextContentAlloc(self: *Node, allocator: Allocator) (Allocator.Error || error{WriteFailed})![:0]const u8 {
     var buf = std.Io.Writer.Allocating.init(allocator);
     try self.getTextContent(&buf.writer);
-    try buf.writer.writeByte(0);
-    const data = buf.written();
-    return data[0 .. data.len - 1 :0];
+    return try buf.toOwnedSliceSentinel(0);
 }
 
 pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {

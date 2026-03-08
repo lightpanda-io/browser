@@ -22,6 +22,7 @@ const log = @import("../log.zig");
 const builtin = @import("builtin");
 pub const BrowserCommand = @import("BrowserCommand.zig").BrowserCommand;
 const DisplayList = @import("../render/DisplayList.zig").DisplayList;
+pub const PopupSource = @import("../browser/PopupSource.zig").PopupSource;
 
 const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig").Win32Backend else struct {
     page_count: u32 = 0,
@@ -79,6 +80,7 @@ pub const TabEntry = struct {
     url: []const u8,
     is_loading: bool,
     target_name: []const u8,
+    popup_source: PopupSource,
 };
 
 pub const DownloadEntry = struct {

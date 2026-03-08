@@ -88,11 +88,15 @@ pub fn closeSession(self: *Browser) void {
 }
 
 pub fn runMicrotasks(self: *Browser) void {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     self.env.runMicrotasks();
 }
 
 pub fn runMacrotasks(self: *Browser) !?u64 {
     const env = &self.env;
+    env.isolate.enter();
+    defer env.isolate.exit();
 
     const time_to_next = try self.env.runMacrotasks();
     env.pumpMessageLoop();
@@ -104,12 +108,18 @@ pub fn runMacrotasks(self: *Browser) !?u64 {
 }
 
 pub fn hasBackgroundTasks(self: *Browser) bool {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     return self.env.hasBackgroundTasks();
 }
 pub fn waitForBackgroundTasks(self: *Browser) void {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     self.env.waitForBackgroundTasks();
 }
 
 pub fn runIdleTasks(self: *const Browser) void {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     self.env.runIdleTasks();
 }

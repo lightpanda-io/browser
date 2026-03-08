@@ -26,6 +26,7 @@ const js = @import("js/js.zig");
 const storage = @import("webapi/storage/storage.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");
+pub const PopupSource = @import("PopupSource.zig").PopupSource;
 
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
@@ -55,6 +56,7 @@ pub const PendingDownload = struct {
 pub const PendingTabOpen = struct {
     url: [:0]u8,
     target_name: []u8,
+    popup_source: PopupSource = .none,
     opts: Page.NavigateOpts,
     activate: bool = true,
     zoom_percent: i32 = 100,
@@ -644,6 +646,7 @@ pub fn enqueueOpenInTargetTab(
     opts: Page.NavigateOpts,
     activate: bool,
     zoom_percent: i32,
+    popup_source: PopupSource,
 ) !void {
     const allocator = self.browser.app.allocator;
     const owned_url = try allocator.dupeZ(u8, url);
@@ -664,6 +667,7 @@ pub fn enqueueOpenInTargetTab(
     try self.pending_tab_opens.append(allocator, .{
         .url = owned_url,
         .target_name = owned_target_name,
+        .popup_source = popup_source,
         .opts = .{
             .cdp_id = opts.cdp_id,
             .reason = opts.reason,

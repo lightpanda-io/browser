@@ -44,6 +44,8 @@ const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
 const Selection = @import("Selection.zig");
+const URL = @import("../URL.zig");
+const PopupSource = @import("../PopupSource.zig").PopupSource;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
@@ -176,6 +178,42 @@ pub fn setLocation(self: *Window, url: [:0]const u8, page: *Page) !void {
     return page.scheduleNavigation(url, .{ .reason = .script, .kind = .{ .push = null } }, .{ .script = self._page });
 }
 
+const WindowOpenTarget = union(enum) {
+    same_context,
+    new_tab,
+    named: []const u8,
+};
+
+const WindowOpenAction = enum {
+    same_context,
+    popup,
+};
+
+fn normalizeWindowOpenUrl(url: ?[]const u8) []const u8 {
+    const value = url orelse return "about:blank";
+    if (value.len == 0) {
+        return "about:blank";
+    }
+    return value;
+}
+
+fn classifyWindowOpenTarget(target_value: ?[]const u8) WindowOpenTarget {
+    const target = std.mem.trim(u8, target_value orelse "", &std.ascii.whitespace);
+    if (target.len == 0) {
+        return .new_tab;
+    }
+    if (std.ascii.eqlIgnoreCase(target, "_self") or
+        std.ascii.eqlIgnoreCase(target, "_parent") or
+        std.ascii.eqlIgnoreCase(target, "_top"))
+    {
+        return .same_context;
+    }
+    if (std.ascii.eqlIgnoreCase(target, "_blank")) {
+        return .new_tab;
+    }
+    return .{ .named = target };
+}
+
 pub fn getHistory(_: *Window, page: *Page) *History {
     return &page._session.history;
 }
@@ -230,6 +268,58 @@ pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) void {
 
 pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
     return Fetch.init(input, options, page);
+}
+
+fn openInner(self: *Window, url: ?[]const u8, target: ?[]const u8, page: *Page) !WindowOpenAction {
+    const open_url = normalizeWindowOpenUrl(url);
+    switch (classifyWindowOpenTarget(target)) {
+        .same_context => {
+            try page.scheduleNavigation(
+                open_url,
+                .{ .reason = .script, .kind = .{ .push = null } },
+                .{ .script = self._page },
+            );
+            return .same_context;
+        },
+        .new_tab => {
+            const resolved = try URL.resolve(page.call_arena, page.base(), open_url, .{
+                .always_dupe = false,
+                .encode = true,
+            });
+            try page._session.enqueueOpenInTargetTab(
+                resolved,
+                "_blank",
+                .{ .reason = .script, .kind = .{ .push = null } },
+                true,
+                0,
+                PopupSource.script,
+            );
+            return .popup;
+        },
+        .named => |target_name| {
+            const resolved = try URL.resolve(page.call_arena, page.base(), open_url, .{
+                .always_dupe = false,
+                .encode = true,
+            });
+            try page._session.enqueueOpenInTargetTab(
+                resolved,
+                target_name,
+                .{ .reason = .script, .kind = .{ .push = null } },
+                true,
+                0,
+                PopupSource.script,
+            );
+            return .popup;
+        },
+    }
+}
+
+pub fn open(self: *Window, url: ?[]const u8, target: ?[]const u8, features: ?[]const u8, page: *Page) !?js.Value {
+    _ = features;
+    return switch (try openInner(self, url, target, page)) {
+        .same_context => try page.js.local.?.zigValueToJs(self, .{}),
+        .popup => null,
+    };
 }
 
 pub fn setTimeout(self: *Window, cb: js.Function.Temp, delay_ms: ?u32, params: []js.Value.Temp, page: *Page) !u32 {
@@ -796,6 +886,7 @@ pub const JsApi = struct {
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
+    pub const open = bridge.function(Window.open, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});
     pub const setTimeout = bridge.function(Window.setTimeout, .{});
     pub const clearTimeout = bridge.function(Window.clearTimeout, .{});
@@ -862,4 +953,108 @@ test "WebApi: Window" {
 
 test "WebApi: Window scroll" {
     try testing.htmlRunner("window_scroll.html", .{});
+}
+
+fn deinitPendingTabOpensForTest(
+    allocator: std.mem.Allocator,
+    pending: *std.ArrayListUnmanaged(@import("../Session.zig").PendingTabOpen),
+) void {
+    while (pending.items.len > 0) {
+        var request = pending.items[pending.items.len - 1];
+        pending.items.len -= 1;
+        request.deinit(allocator);
+    }
+    pending.deinit(allocator);
+}
+
+test "Window classifyWindowOpenTarget distinguishes context and popup targets" {
+    try std.testing.expectEqual(WindowOpenTarget.same_context, classifyWindowOpenTarget("_self"));
+    try std.testing.expectEqual(WindowOpenTarget.same_context, classifyWindowOpenTarget("_top"));
+    try std.testing.expectEqual(WindowOpenTarget.new_tab, classifyWindowOpenTarget(null));
+    try std.testing.expectEqual(WindowOpenTarget.new_tab, classifyWindowOpenTarget(""));
+    try std.testing.expectEqual(WindowOpenTarget.new_tab, classifyWindowOpenTarget("_blank"));
+
+    const named = classifyWindowOpenTarget("report");
+    try std.testing.expectEqualStrings(
+        "report",
+        switch (named) {
+            .named => |value| value,
+            else => return error.TestUnexpectedTargetKind,
+        },
+    );
+}
+
+test "Window open same-context queues navigation" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    const action = try openInner(
+        page.window,
+        "/src/browser/tests/page/popup-target-result.html?from=window-open",
+        "_self",
+        page,
+    );
+
+    try std.testing.expectEqual(WindowOpenAction.same_context, action);
+    try std.testing.expect(page._queued_navigation != null);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=window-open",
+        page._queued_navigation.?.url,
+    );
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+    try testing.expectEqual(@as(usize, 0), pending.items.len);
+}
+
+test "Window open _blank queues script popup tab" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    const action = try openInner(
+        page.window,
+        "/src/browser/tests/page/popup-target-result.html?from=blank-window-open",
+        "_blank",
+        page,
+    );
+
+    try std.testing.expectEqual(WindowOpenAction.popup, action);
+    try std.testing.expect(page._queued_navigation == null);
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expectString("_blank", pending.items[0].target_name);
+    try testing.expectEqual(PopupSource.script, pending.items[0].popup_source);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=blank-window-open",
+        pending.items[0].url,
+    );
+}
+
+test "Window open named target queues script popup tab" {
+    var page = try testing.pageTest("page/popup_target.html");
+    defer page._session.removePage();
+
+    const action = try openInner(
+        page.window,
+        "/src/browser/tests/page/popup-target-result.html?from=named-window-open",
+        "report",
+        page,
+    );
+
+    try std.testing.expectEqual(WindowOpenAction.popup, action);
+    try std.testing.expect(page._queued_navigation == null);
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectEqual(PopupSource.script, pending.items[0].popup_source);
+    try testing.expectString(
+        "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=named-window-open",
+        pending.items[0].url,
+    );
 }

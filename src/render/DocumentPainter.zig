@@ -1550,3 +1550,28 @@ test "paintDocument emits same-context link region with dom path" {
 
     try std.testing.expect(found);
 }
+
+test "paintDocument renders button controls without crashing" {
+    var page = try testing.pageTest("page/button_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found_control = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Button")) {
+                    found_control = true;
+                    break;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found_control);
+}

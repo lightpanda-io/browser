@@ -25,6 +25,7 @@ const Display = @import("Display.zig");
 const DisplayList = @import("../render/DisplayList.zig").DisplayList;
 const DisplayColor = @import("../render/DisplayList.zig").Color;
 const ImageCommand = @import("../render/DisplayList.zig").ImageCommand;
+const PopupSource = Display.PopupSource;
 
 const c = @cImport({
     @cDefine("WIN32_LEAN_AND_MEAN", "1");
@@ -416,7 +417,8 @@ pub const Win32Backend = struct {
                 if (entry.is_loading != existing.is_loading or
                     !std.mem.eql(u8, entry.title, existing.title) or
                     !std.mem.eql(u8, entry.url, existing.url) or
-                    !std.mem.eql(u8, entry.target_name, existing.target_name))
+                    !std.mem.eql(u8, entry.target_name, existing.target_name) or
+                    entry.popup_source != existing.popup_source)
                 {
                     unchanged = false;
                     break;
@@ -458,6 +460,7 @@ pub const Win32Backend = struct {
                 .url = owned_url,
                 .is_loading = entry.is_loading,
                 .target_name = owned_target_name,
+                .popup_source = entry.popup_source,
             });
         }
         self.presentation_active_tab_index = normalized_active_index;
@@ -1023,6 +1026,7 @@ const PresentationTabEntry = struct {
     url: []u8,
     is_loading: bool,
     target_name: []u8,
+    popup_source: PopupSource,
 
     fn deinit(self: *PresentationTabEntry, allocator: std.mem.Allocator) void {
         allocator.free(self.title);
@@ -1146,6 +1150,7 @@ fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
                     .url = owned_url,
                     .is_loading = entry.is_loading,
                     .target_name = owned_target_name,
+                    .popup_source = entry.popup_source,
                 });
             }
             break :blk tab_entries;
@@ -3021,11 +3026,24 @@ fn drawTabStrip(
 }
 
 fn formatTabStripLabel(allocator: std.mem.Allocator, entry: PresentationTabEntry) ![]u8 {
+    const source_label = entry.popup_source.label();
+    if (entry.target_name.len > 0 and source_label.len > 0) {
+        if (entry.is_loading) {
+            return try std.fmt.allocPrint(allocator, "* [{s}:{s}] {s}", .{ source_label, entry.target_name, entry.title });
+        }
+        return try std.fmt.allocPrint(allocator, "[{s}:{s}] {s}", .{ source_label, entry.target_name, entry.title });
+    }
     if (entry.target_name.len > 0) {
         if (entry.is_loading) {
             return try std.fmt.allocPrint(allocator, "* [{s}] {s}", .{ entry.target_name, entry.title });
         }
         return try std.fmt.allocPrint(allocator, "[{s}] {s}", .{ entry.target_name, entry.title });
+    }
+    if (source_label.len > 0) {
+        if (entry.is_loading) {
+            return try std.fmt.allocPrint(allocator, "* [{s}] {s}", .{ source_label, entry.title });
+        }
+        return try std.fmt.allocPrint(allocator, "[{s}] {s}", .{ source_label, entry.title });
     }
     if (entry.is_loading) {
         return try std.fmt.allocPrint(allocator, "* {s}", .{entry.title});
@@ -3033,24 +3051,48 @@ fn formatTabStripLabel(allocator: std.mem.Allocator, entry: PresentationTabEntry
     return entry.title;
 }
 
-fn activePopupTargetName(snapshot: *const PresentationSnapshot) []const u8 {
+const PopupHintState = struct {
+    target_name: []const u8,
+    popup_source: PopupSource,
+};
+
+fn activePopupHintState(snapshot: *const PresentationSnapshot) PopupHintState {
     if (snapshot.tab_entries.items.len == 0) {
-        return "";
+        return .{ .target_name = "", .popup_source = .none };
     }
     const active_index = @min(snapshot.active_tab_index, snapshot.tab_entries.items.len - 1);
-    return snapshot.tab_entries.items[active_index].target_name;
+    const entry = snapshot.tab_entries.items[active_index];
+    return .{
+        .target_name = entry.target_name,
+        .popup_source = entry.popup_source,
+    };
 }
 
 fn formatPresentationHintText(
     allocator: std.mem.Allocator,
     zoom_percent: i32,
-    active_popup_target: []const u8,
+    popup_hint: PopupHintState,
 ) ![]u8 {
-    if (active_popup_target.len > 0) {
+    const source_label = popup_hint.popup_source.label();
+    if (popup_hint.target_name.len > 0 and source_label.len > 0) {
+        return try std.fmt.allocPrint(
+            allocator,
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} target [{s}]",
+            .{ zoom_percent, source_label, popup_hint.target_name },
+        );
+    }
+    if (popup_hint.target_name.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
             "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]",
-            .{ zoom_percent, active_popup_target },
+            .{ zoom_percent, popup_hint.target_name },
+        );
+    }
+    if (source_label.len > 0) {
+        return try std.fmt.allocPrint(
+            allocator,
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} tab",
+            .{ zoom_percent, source_label },
         );
     }
     return try std.fmt.allocPrint(
@@ -4125,7 +4167,7 @@ fn renderPresentationScene(
     const hint_text = formatPresentationHintText(
         allocator,
         snapshot.zoom_percent,
-        activePopupTargetName(snapshot),
+        activePopupHintState(snapshot),
     ) catch return;
     defer allocator.free(hint_text);
     drawPresentationText(
@@ -6419,25 +6461,30 @@ test "win32 formatTabStripLabel includes popup target prefix" {
         .url = @constCast("http://popup.test/result"),
         .is_loading = false,
         .target_name = @constCast("report"),
+        .popup_source = .anchor,
     });
     defer std.testing.allocator.free(plain);
-    try std.testing.expectEqualStrings("[report] Result", plain);
+    try std.testing.expectEqualStrings("[anchor:report] Result", plain);
 
     const loading = try formatTabStripLabel(std.testing.allocator, .{
         .title = @constCast("Result"),
         .url = @constCast("http://popup.test/result"),
         .is_loading = true,
         .target_name = @constCast("report"),
+        .popup_source = .anchor,
     });
     defer std.testing.allocator.free(loading);
-    try std.testing.expectEqualStrings("* [report] Result", loading);
+    try std.testing.expectEqualStrings("* [anchor:report] Result", loading);
 }
 
 test "win32 formatPresentationHintText includes active popup target" {
-    const hint = try formatPresentationHintText(std.testing.allocator, 110, "report");
+    const hint = try formatPresentationHintText(std.testing.allocator, 110, .{
+        .target_name = "report",
+        .popup_source = .script,
+    });
     defer std.testing.allocator.free(hint);
     try std.testing.expect(std.mem.indexOf(u8, hint, "Zoom 110%") != null);
-    try std.testing.expect(std.mem.indexOf(u8, hint, "Popup target [report]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "Popup script target [report]") != null);
 }
 
 test "win32 chrome button hit test maps back forward reload" {
@@ -6456,9 +6503,10 @@ test "win32 tab strip hit test maps activate close and new" {
         url: []const u8,
         is_loading: bool,
         target_name: []const u8,
+        popup_source: PopupSource,
     }{
-        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "" },
-        .{ .title = "Two", .url = "http://two.test/", .is_loading = true, .target_name = "report" },
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "", .popup_source = .none },
+        .{ .title = "Two", .url = "http://two.test/", .is_loading = true, .target_name = "report", .popup_source = .script },
     };
     backend.setTabEntries(tabs[0..], 1);
 
@@ -6506,10 +6554,11 @@ test "win32 tab shortcuts enqueue commands" {
         url: []const u8,
         is_loading: bool,
         target_name: []const u8,
+        popup_source: PopupSource,
     }{
-        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "" },
-        .{ .title = "Two", .url = "http://two.test/", .is_loading = false, .target_name = "report" },
-        .{ .title = "Three", .url = "http://three.test/", .is_loading = false, .target_name = "" },
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "", .popup_source = .none },
+        .{ .title = "Two", .url = "http://two.test/", .is_loading = false, .target_name = "report", .popup_source = .anchor },
+        .{ .title = "Three", .url = "http://three.test/", .is_loading = false, .target_name = "", .popup_source = .none },
     };
     backend.setTabEntries(tabs[0..], 1);
     backend.presentation_title = try std.testing.allocator.dupe(u8, "Tabs");
@@ -6541,8 +6590,9 @@ test "win32 single tab close button is disabled" {
         url: []const u8,
         is_loading: bool,
         target_name: []const u8,
+        popup_source: PopupSource,
     }{
-        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "" },
+        .{ .title = "One", .url = "http://one.test/", .is_loading = false, .target_name = "", .popup_source = .none },
     };
     backend.setTabEntries(tabs[0..], 0);
 

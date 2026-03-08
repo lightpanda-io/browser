@@ -25,6 +25,7 @@ pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
 pub const Notification = @import("Notification.zig");
+const PopupSource = @import("browser/PopupSource.zig").PopupSource;
 
 pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
@@ -111,6 +112,7 @@ const BrowseTab = struct {
     browser: Browser,
     session: *Session,
     target_name: []u8 = &.{},
+    popup_source: PopupSource = .none,
     committed_surface: CommittedBrowseSurface = .{},
     restore_committed_surface: bool = false,
     last_presented_hash: u64 = 0,
@@ -797,14 +799,14 @@ fn handleBrowseCommand(
                 try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, tab.zoom_percent, activation.url, .{
                     .reason = .address_bar,
                     .kind = .{ .push = null },
-                }, activation.target_name, true);
+                }, activation.target_name, true, .anchor);
                 return;
             }
             if (activation.open_in_new_tab) {
                 try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, tab.zoom_percent, activation.url, .{
                     .reason = .address_bar,
                     .kind = .{ .push = null },
-                }, "_blank", true);
+                }, "_blank", true, .anchor);
                 return;
             }
             try handleActiveBrowseCommand(app, tab, page, settings, .{
@@ -817,7 +819,7 @@ fn handleBrowseCommand(
             try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, source_tab.zoom_percent, raw_url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
-            }, "_blank", true);
+            }, "_blank", true, .none);
         },
         .navigate_target_tab => |target| {
             const active_index = normalizeActiveTabIndex(active_tab_index.*, tabs.items.len);
@@ -825,7 +827,7 @@ fn handleBrowseCommand(
             try openOrReuseTargetedBrowseTab(app, tabs, active_tab_index, source_tab.zoom_percent, target.url, .{
                 .reason = .address_bar,
                 .kind = .{ .push = null },
-            }, target.target_name, true);
+            }, target.target_name, true, .none);
         },
         else => {
             if (tabs.items.len == 0) {
@@ -1006,6 +1008,7 @@ fn processPendingTabOpens(
             request.opts,
             request.target_name,
             request.activate,
+            request.popup_source,
         );
     }
 }
@@ -1059,9 +1062,19 @@ fn openOrReuseTargetedBrowseTab(
     opts: Page.NavigateOpts,
     target_name: []const u8,
     activate: bool,
+    popup_source: PopupSource,
 ) !void {
     if (findBrowseTabIndexByTargetName(tabs.items, target_name)) |target_index| {
         const tab = tabs.items[target_index];
+        tab.popup_source = popup_source;
+        const normalized_target = normalizeTopLevelTargetName(target_name);
+        if (popup_source == .script and normalized_target.len > 0 and !targetAlwaysOpensFreshTab(normalized_target)) {
+            if (tab.session.currentPage()) |target_page| {
+                if (!pageIsBlankIdle(target_page)) {
+                    try resetBrowseTabSession(tab);
+                }
+            }
+        }
         if (activate) {
             active_tab_index.* = target_index;
         }
@@ -1073,6 +1086,7 @@ fn openOrReuseTargetedBrowseTab(
     errdefer tab.deinit(app.allocator);
     tab.zoom_percent = zoom_percent;
     try setBrowseTabTargetName(app.allocator, tab, target_name);
+    tab.popup_source = popup_source;
     try appendBrowseTab(app.allocator, tabs, tab, active_tab_index, activate);
     try navigateBrowseTabToOwnedUrl(tab, raw_url, opts);
 }
@@ -1101,6 +1115,15 @@ fn navigateBrowseTabToOwnedUrl(tab: *BrowseTab, raw_url: []const u8, opts: Page.
         return;
     }
     try page.scheduleNavigation(raw_url, opts, .{ .script = null });
+}
+
+fn resetBrowseTabSession(tab: *BrowseTab) !void {
+    tab.committed_surface.deinit(tab.browser.app.allocator);
+    tab.browser.closeSession();
+    tab.session = try tab.browser.newSession(tab.notification);
+    _ = try tab.session.createPage();
+    tab.restore_committed_surface = false;
+    tab.last_presented_hash = 0;
 }
 
 fn handleRenderedLinkActivation(
@@ -1809,6 +1832,7 @@ fn createBrowseTab(app: *App, initial_url: ?[:0]const u8, default_zoom_percent: 
     tab.session = try tab.browser.newSession(tab.notification);
     const page = try tab.session.createPage();
     tab.target_name = &.{};
+    tab.popup_source = .none;
     tab.committed_surface = .{};
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;
@@ -1887,6 +1911,7 @@ fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
             .url = "about:blank",
             .is_loading = false,
             .target_name = tab.target_name,
+            .popup_source = tab.popup_source,
         };
     };
 
@@ -1896,6 +1921,7 @@ fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
             .url = "about:blank",
             .is_loading = false,
             .target_name = tab.target_name,
+            .popup_source = tab.popup_source,
         };
     }
 
@@ -1914,6 +1940,7 @@ fn browseTabEntry(tab: *BrowseTab) !Display.TabEntry {
         .url = url,
         .is_loading = pageIsLoading(page),
         .target_name = tab.target_name,
+        .popup_source = tab.popup_source,
     };
 }
 
@@ -2279,10 +2306,12 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
         opts,
         "report",
         true,
+        .script,
     );
     try std.testing.expectEqual(@as(usize, 2), tabs.items.len);
     try std.testing.expectEqual(@as(usize, 1), active_tab_index);
     try std.testing.expectEqualStrings("report", tabs.items[1].target_name);
+    try std.testing.expectEqual(PopupSource.script, tabs.items[1].popup_source);
     _ = tabs.items[1].session.wait(2000);
 
     active_tab_index = 0;
@@ -2295,14 +2324,66 @@ test "openOrReuseTargetedBrowseTab reuses existing named tab" {
         opts,
         "report",
         true,
+        .form,
     );
     try std.testing.expectEqual(@as(usize, 2), tabs.items.len);
     try std.testing.expectEqual(@as(usize, 1), active_tab_index);
     try std.testing.expectEqualStrings("report", tabs.items[1].target_name);
+    try std.testing.expectEqual(PopupSource.form, tabs.items[1].popup_source);
     _ = tabs.items[1].session.wait(2000);
 
     const target_page = tabs.items[1].session.currentPage() orelse return error.TestPageMissing;
     try std.testing.expectEqualStrings(second_url, target_page.url);
+}
+
+test "openOrReuseTargetedBrowseTab resets live named script popup tab before reuse" {
+    var tabs: std.ArrayListUnmanaged(*BrowseTab) = .{};
+    defer deinitBrowseTabs(testing.test_app.allocator, &tabs);
+
+    var active_tab_index: usize = 0;
+    const source = try createBrowseTab(testing.test_app, null, 100);
+    try appendBrowseTab(testing.test_app.allocator, &tabs, source, &active_tab_index, true);
+
+    const first_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=script-one";
+    const second_url = "http://127.0.0.1:9582/src/browser/tests/page/popup-target-post.html?from=script-two";
+    const opts: Page.NavigateOpts = .{
+        .reason = .address_bar,
+        .kind = .{ .push = null },
+    };
+
+    try openOrReuseTargetedBrowseTab(
+        testing.test_app,
+        &tabs,
+        &active_tab_index,
+        100,
+        first_url,
+        opts,
+        "report",
+        true,
+        .script,
+    );
+    _ = tabs.items[1].session.wait(2000);
+
+    const first_page = tabs.items[1].session.currentPage() orelse return error.TestPageMissing;
+    try std.testing.expectEqualStrings(first_url, first_page.url);
+
+    active_tab_index = 0;
+    try openOrReuseTargetedBrowseTab(
+        testing.test_app,
+        &tabs,
+        &active_tab_index,
+        100,
+        second_url,
+        opts,
+        "report",
+        true,
+        .script,
+    );
+    _ = tabs.items[1].session.wait(2000);
+
+    const second_page = tabs.items[1].session.currentPage() orelse return error.TestPageMissing;
+    try std.testing.expect(first_page != second_page);
+    try std.testing.expectEqualStrings(second_url, second_page.url);
 }
 
 test "sanitizeDownloadFileName replaces invalid windows characters" {

@@ -321,6 +321,7 @@ pub fn release(self: *Context, item: anytype) void {
 // Any operation on the context have to be made from a local.
 pub fn localScope(self: *Context, ls: *js.Local.Scope) void {
     const isolate = self.isolate;
+    isolate.enter();
     js.HandleScope.init(&ls.handle_scope, isolate);
 
     const local_v8_context: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
@@ -939,6 +940,7 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
 //    defer entered.exit();
 pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
     const isolate = self.isolate;
+    isolate.enter();
     js.HandleScope.init(hs, isolate);
 
     const page = self.page;
@@ -947,7 +949,7 @@ pub fn enter(self: *Context, hs: *js.HandleScope) Entered {
 
     const handle: *const v8.Context = @ptrCast(v8.v8__Global__Get(&self.handle, isolate.handle));
     v8.v8__Context__Enter(handle);
-    return .{ .original = original, .handle = handle, .handle_scope = hs };
+    return .{ .original = original, .handle = handle, .handle_scope = hs, .isolate = isolate };
 }
 
 const Entered = struct {
@@ -958,11 +960,13 @@ const Entered = struct {
     handle: *const v8.Context,
 
     handle_scope: *js.HandleScope,
+    isolate: js.Isolate,
 
     pub fn exit(self: Entered) void {
         self.original.page.js = self.original;
         v8.v8__Context__Exit(self.handle);
         self.handle_scope.deinit();
+        self.isolate.exit();
     }
 };
 

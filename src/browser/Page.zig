@@ -33,6 +33,7 @@ const String = @import("../string.zig").String;
 const Mime = @import("Mime.zig");
 const Factory = @import("Factory.zig");
 const Session = @import("Session.zig");
+const PopupSource = @import("PopupSource.zig").PopupSource;
 const EventManager = @import("EventManager.zig");
 const ScriptManager = @import("ScriptManager.zig");
 
@@ -3374,7 +3375,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                     try self._session.enqueueOpenInTargetTab(resolved_url, "_blank", .{
                         .reason = .script,
                         .kind = .{ .push = null },
-                    }, true, 0);
+                    }, true, 0, PopupSource.anchor);
                     return;
                 },
                 .named => |target_name| {
@@ -3388,7 +3389,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                     try self._session.enqueueOpenInTargetTab(resolved_url, target_name, .{
                         .reason = .script,
                         .kind = .{ .push = null },
-                    }, true, 0);
+                    }, true, 0, PopupSource.anchor);
                     return;
                 },
             }
@@ -4318,7 +4319,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
                 action,
                 .{ .always_dupe = false, .encode = true },
             );
-            try self._session.enqueueOpenInTargetTab(resolved_action, "_blank", opts, true, 0);
+            try self._session.enqueueOpenInTargetTab(resolved_action, "_blank", opts, true, 0, PopupSource.form);
             return;
         },
         .named => |target_name| {
@@ -4328,7 +4329,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
                 action,
                 .{ .always_dupe = false, .encode = true },
             );
-            try self._session.enqueueOpenInTargetTab(resolved_action, target_name, opts, true, 0);
+            try self._session.enqueueOpenInTargetTab(resolved_action, target_name, opts, true, 0, PopupSource.form);
             return;
         },
     }
@@ -4521,6 +4522,7 @@ test "Page handleClick queues named target anchor popup" {
 
     try testing.expectEqual(@as(usize, 1), pending.items.len);
     try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectEqual(PopupSource.anchor, pending.items[0].popup_source);
     try testing.expectString(
         "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=anchor",
         pending.items[0].url,
@@ -4540,6 +4542,7 @@ test "Page Enter on focused anchor queues named target popup" {
 
     try testing.expectEqual(@as(usize, 1), pending.items.len);
     try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectEqual(PopupSource.anchor, pending.items[0].popup_source);
     try testing.expectString(
         "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?from=anchor",
         pending.items[0].url,
@@ -4558,6 +4561,7 @@ test "Page handleClick queues named target GET form popup" {
 
     try testing.expectEqual(@as(usize, 1), pending.items.len);
     try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectEqual(PopupSource.form, pending.items[0].popup_source);
     try testing.expectString(
         "http://127.0.0.1:9582/src/browser/tests/page/popup-target-result.html?q=one",
         pending.items[0].url,
@@ -4578,6 +4582,7 @@ test "Page handleClick queues named target POST form popup" {
 
     try testing.expectEqual(@as(usize, 1), pending.items.len);
     try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectEqual(PopupSource.form, pending.items[0].popup_source);
     try testing.expectString(
         "http://127.0.0.1:9582/src/browser/tests/page/popup-target-post.html",
         pending.items[0].url,

@@ -6,9 +6,34 @@
   testing.expectEqual(window, self);
   testing.expectEqual(window, window.self);
   testing.expectEqual(null, window.opener);
+  testing.expectEqual('function', typeof window.open);
+
+  const open_ref = window.open;
+  testing.expectEqual('function', typeof open_ref);
+  testing.expectEqual('function', eval('typeof window.open'));
 
   testing.expectEqual(1080, innerHeight);
   testing.expectEqual(1920, innerWidth);
+</script>
+
+<script id=window_open_handler_reference>
+  const button = document.createElement('button');
+  button.id = 'window-open-handler-reference';
+  button.onclick = function() {
+    return window.open;
+  };
+  testing.expectEqual('function', typeof button.onclick);
+  testing.expectEqual('function', typeof button.onclick());
+</script>
+
+<script id=window_open_handler_eval_reference>
+  const eval_button = document.createElement('button');
+  eval_button.id = 'window-open-handler-eval-reference';
+  eval_button.onclick = function() {
+    return eval('typeof window.open');
+  };
+  testing.expectEqual('function', typeof eval_button.onclick);
+  testing.expectEqual('function', eval_button.onclick());
 </script>
 
 <script id=load>
