@@ -53,6 +53,9 @@ const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig"
     pub fn savePng(_: *@This(), _: []const u8) bool {
         return false;
     }
+    pub fn chooseFile(_: *@This(), _: []const u8, _: bool) ?[]u8 {
+        return null;
+    }
     pub fn nextBrowserCommand(_: *@This()) ?BrowserCommand {
         return null;
     }
@@ -310,6 +313,13 @@ pub fn presentPageView(self: *Display, title: []const u8, url: []const u8, body:
         },
         else => {},
     }
+}
+
+pub fn chooseFile(self: *Display, accept: []const u8, multiple: bool) ?[]u8 {
+    return switch (self.backend) {
+        .headed_windows => |*backend| backend.chooseFile(accept, multiple),
+        else => null,
+    };
 }
 
 pub fn nextBrowserCommand(self: *Display) ?BrowserCommand {

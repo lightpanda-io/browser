@@ -31,12 +31,19 @@ pub const BrowserCommand = union(enum) {
         open_in_new_tab: bool,
     };
 
+    pub const ActivateControlRegion = struct {
+        x: f64,
+        y: f64,
+        dom_path: []u16,
+    };
+
     pub const NavigateTarget = struct {
         url: []u8,
         target_name: []u8,
     };
 
     activate_link_region: ActivateLinkRegion,
+    activate_control_region: ActivateControlRegion,
     navigate: []u8,
     navigate_new_tab: []u8,
     navigate_target_tab: NavigateTarget,
@@ -107,6 +114,9 @@ pub const BrowserCommand = union(enum) {
                 allocator.free(activation.dom_path);
                 allocator.free(activation.suggested_filename);
                 allocator.free(activation.target_name);
+            },
+            .activate_control_region => |activation| {
+                allocator.free(activation.dom_path);
             },
             .navigate => |url| allocator.free(url),
             .navigate_new_tab => |url| allocator.free(url),

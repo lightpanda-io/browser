@@ -79,6 +79,10 @@ _checked: bool = false,
 _checked_dirty: bool = false,
 _input_type: Type = .text,
 _indeterminate: bool = false,
+_selected_file_path: ?[]const u8 = null,
+_selected_file_name: ?[]const u8 = null,
+_selected_file_content_type: ?[]const u8 = null,
+_selected_file_value: ?[]const u8 = null,
 
 _selection_start: u32 = 0,
 _selection_end: u32 = 0,
@@ -111,6 +115,13 @@ pub fn dispatchInputEvent(self: *Input, page: *Page) !void {
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
+pub fn dispatchChangeEvent(self: *Input, page: *Page) !void {
+    const event = try Event.initTrusted(comptime .wrap("change"), .{
+        .bubbles = true,
+    }, page);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+}
+
 pub fn asElement(self: *Input) *Element {
     return self._proto._proto;
 }
@@ -132,7 +143,7 @@ pub fn setType(self: *Input, typ: []const u8, page: *Page) !void {
 }
 
 pub fn getValue(self: *const Input) []const u8 {
-    if (self._input_type == .file) return "";
+    if (self._input_type == .file) return self._selected_file_value orelse "";
     return self._value orelse self._default_value orelse switch (self._input_type) {
         .checkbox, .radio => "on",
         else => "",
@@ -140,9 +151,13 @@ pub fn getValue(self: *const Input) []const u8 {
 }
 
 pub fn setValue(self: *Input, value: []const u8, page: *Page) !void {
-    // File inputs: setting to empty string is a no-op, anything else throws
+    // File inputs: setting to the empty string clears the selection; anything
+    // else throws.
     if (self._input_type == .file) {
-        if (value.len == 0) return;
+        if (value.len == 0) {
+            _ = self.clearSelectedFile();
+            return;
+        }
         return error.InvalidStateError;
     }
     // This should _not_ call setAttribute. It updates the current state only
@@ -359,6 +374,59 @@ pub fn setMultiple(self: *Input, multiple: bool, page: *Page) !void {
     } else {
         try self.asElement().removeAttribute(comptime .wrap("multiple"), page);
     }
+}
+
+pub const SelectedFile = struct {
+    path: []const u8,
+    name: []const u8,
+    content_type: []const u8,
+};
+
+pub fn getSelectedFile(self: *const Input) ?SelectedFile {
+    const path = self._selected_file_path orelse return null;
+    const name = self._selected_file_name orelse return null;
+    return .{
+        .path = path,
+        .name = name,
+        .content_type = self._selected_file_content_type orelse "application/octet-stream",
+    };
+}
+
+pub fn getSelectedFileName(self: *const Input) []const u8 {
+    return self._selected_file_name orelse "";
+}
+
+pub fn clearSelectedFile(self: *Input) bool {
+    const changed = self._selected_file_path != null or
+        self._selected_file_name != null or
+        self._selected_file_content_type != null or
+        self._selected_file_value != null;
+    self._selected_file_path = null;
+    self._selected_file_name = null;
+    self._selected_file_content_type = null;
+    self._selected_file_value = null;
+    return changed;
+}
+
+pub fn setSelectedFile(self: *Input, path: []const u8, content_type: ?[]const u8, page: *Page) !bool {
+    const file_name = basenameForSelectedFile(path) orelse return false;
+    const next_content_type = std.mem.trim(u8, content_type orelse guessSelectedFileContentType(file_name), &std.ascii.whitespace);
+
+    const current = self.getSelectedFile();
+    if (current) |selected| {
+        if (std.mem.eql(u8, selected.path, path) and
+            std.mem.eql(u8, selected.name, file_name) and
+            std.mem.eql(u8, selected.content_type, next_content_type))
+        {
+            return false;
+        }
+    }
+
+    self._selected_file_path = try page.arena.dupe(u8, path);
+    self._selected_file_name = try page.arena.dupe(u8, file_name);
+    self._selected_file_content_type = try page.arena.dupe(u8, next_content_type);
+    self._selected_file_value = try std.fmt.allocPrint(page.arena, "C:\\fakepath\\{s}", .{file_name});
+    return true;
 }
 
 pub fn getAutocomplete(self: *const Input) []const u8 {
@@ -605,6 +673,33 @@ fn sanitizeValue(self: *Input, comptime dupe: bool, value: []const u8, page: *Pa
         .file => return "", // File: always empty
         .checkbox, .radio, .submit, .image, .reset, .button, .hidden => return if (comptime dupe) try page.dupeString(value) else value, // no sanitization
     }
+}
+
+fn basenameForSelectedFile(path: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, path, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        return null;
+    }
+    const last_sep = std.mem.lastIndexOfAny(u8, trimmed, "/\\");
+    const base = if (last_sep) |index|
+        trimmed[index + 1 ..]
+    else
+        trimmed;
+    return if (base.len == 0) null else base;
+}
+
+fn guessSelectedFileContentType(file_name: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, file_name, ".txt")) return "text/plain";
+    if (std.mem.endsWith(u8, file_name, ".html") or std.mem.endsWith(u8, file_name, ".htm")) return "text/html";
+    if (std.mem.endsWith(u8, file_name, ".json")) return "application/json";
+    if (std.mem.endsWith(u8, file_name, ".xml")) return "text/xml";
+    if (std.mem.endsWith(u8, file_name, ".csv")) return "text/csv";
+    if (std.mem.endsWith(u8, file_name, ".png")) return "image/png";
+    if (std.mem.endsWith(u8, file_name, ".jpg") or std.mem.endsWith(u8, file_name, ".jpeg")) return "image/jpeg";
+    if (std.mem.endsWith(u8, file_name, ".gif")) return "image/gif";
+    if (std.mem.endsWith(u8, file_name, ".svg")) return "image/svg+xml";
+    if (std.mem.endsWith(u8, file_name, ".pdf")) return "application/pdf";
+    return "application/octet-stream";
 }
 
 /// WHATWG "valid floating-point number" grammar check + overflow detection.
@@ -968,7 +1063,11 @@ pub const Build = struct {
         const self = element.as(Input);
         switch (attribute) {
             .type => {
+                const previous_type = self._input_type;
                 self._input_type = Type.fromString(value.str());
+                if (previous_type == .file or self._input_type == .file) {
+                    _ = self.clearSelectedFile();
+                }
                 // Sanitize the current value according to the new type
                 if (self._value) |current_value| {
                     self._value = try self.sanitizeValue(false, current_value, page);
@@ -997,7 +1096,10 @@ pub const Build = struct {
         const attribute = std.meta.stringToEnum(enum { type, value, checked }, name.str()) orelse return;
         const self = element.as(Input);
         switch (attribute) {
-            .type => self._input_type = .text,
+            .type => {
+                self._input_type = .text;
+                _ = self.clearSelectedFile();
+            },
             .value => self._default_value = null,
             .checked => {
                 self._default_checked = false;
@@ -1021,6 +1123,10 @@ pub const Build = struct {
         clone._selection_start = source._selection_start;
         clone._selection_end = source._selection_end;
         clone._indeterminate = source._indeterminate;
+        clone._selected_file_path = source._selected_file_path;
+        clone._selected_file_name = source._selected_file_name;
+        clone._selected_file_content_type = source._selected_file_content_type;
+        clone._selected_file_value = source._selected_file_value;
     }
 };
 
@@ -1030,6 +1136,27 @@ test "WebApi: HTML.Input" {
     try testing.htmlRunner("element/html/input_click.html", .{});
     try testing.htmlRunner("element/html/input_radio.html", .{});
     try testing.htmlRunner("element/html/input-attrs.html", .{});
+}
+
+test "Input file selection exposes fakepath value and clears on empty assignment" {
+    var page = try testing.pageTest("page/upload_form.html");
+    defer page._session.removePage();
+
+    try std.fs.cwd().writeFile(.{ .sub_path = "tmp-input-upload.txt", .data = "abc" });
+    defer std.fs.cwd().deleteFile("tmp-input-upload.txt") catch {};
+    const abs_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, "tmp-input-upload.txt");
+    defer std.testing.allocator.free(abs_path);
+
+    const element = (try page.window._document.querySelector(.wrap("#upload"), page)).?;
+    const input = element.is(Input).?;
+
+    try std.testing.expect(try input.setSelectedFile(abs_path, "text/plain", page));
+    try std.testing.expectEqualStrings("tmp-input-upload.txt", input.getSelectedFileName());
+    try std.testing.expectEqualStrings("C:\\fakepath\\tmp-input-upload.txt", input.getValue());
+
+    try input.setValue("", page);
+    try std.testing.expectEqualStrings("", input.getSelectedFileName());
+    try std.testing.expectEqualStrings("", input.getValue());
 }
 
 test "isValidFloatingPoint" {

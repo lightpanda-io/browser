@@ -37,6 +37,14 @@ pub const LinkRegion = struct {
     target_name: []u8 = &.{},
 };
 
+pub const ControlRegion = struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    dom_path: []u16 = &.{},
+};
+
 pub const ImageCommand = struct {
     x: i32,
     y: i32,
@@ -92,6 +100,7 @@ pub const DisplayList = @This();
 
 commands: std.ArrayListUnmanaged(Command) = .{},
 link_regions: std.ArrayListUnmanaged(LinkRegion) = .{},
+control_regions: std.ArrayListUnmanaged(ControlRegion) = .{},
 content_height: i32 = 0,
 layout_scale: i32 = 100,
 page_margin: i32 = 0,
@@ -108,6 +117,10 @@ pub fn deinit(self: *DisplayList, allocator: std.mem.Allocator) void {
         allocator.free(region.target_name);
     }
     self.link_regions.deinit(allocator);
+    for (self.control_regions.items) |region| {
+        allocator.free(region.dom_path);
+    }
+    self.control_regions.deinit(allocator);
     self.* = .{};
 }
 
@@ -135,6 +148,16 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .download_filename = try allocator.dupe(u8, region.download_filename),
             .open_in_new_tab = region.open_in_new_tab,
             .target_name = try allocator.dupe(u8, region.target_name),
+        });
+    }
+    try copy.control_regions.ensureTotalCapacity(allocator, self.control_regions.items.len);
+    for (self.control_regions.items) |region| {
+        try copy.control_regions.append(allocator, .{
+            .x = region.x,
+            .y = region.y,
+            .width = region.width,
+            .height = region.height,
+            .dom_path = try allocator.dupe(u16, region.dom_path),
         });
     }
     return copy;
@@ -186,6 +209,17 @@ pub fn addLinkRegion(self: *DisplayList, allocator: std.mem.Allocator, region: L
         .download_filename = try allocator.dupe(u8, region.download_filename),
         .open_in_new_tab = region.open_in_new_tab,
         .target_name = try allocator.dupe(u8, region.target_name),
+    });
+    self.content_height = @max(self.content_height, region.y + region.height);
+}
+
+pub fn addControlRegion(self: *DisplayList, allocator: std.mem.Allocator, region: ControlRegion) !void {
+    try self.control_regions.append(allocator, .{
+        .x = region.x,
+        .y = region.y,
+        .width = region.width,
+        .height = region.height,
+        .dom_path = try allocator.dupe(u16, region.dom_path),
     });
     self.content_height = @max(self.content_height, region.y + region.height);
 }
@@ -246,5 +280,13 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(region.download_filename);
         hasher.update(std.mem.asBytes(&region.open_in_new_tab));
         hasher.update(region.target_name);
+    }
+    for (self.control_regions.items) |region| {
+        hasher.update("control_region");
+        hasher.update(std.mem.asBytes(&region.x));
+        hasher.update(std.mem.asBytes(&region.y));
+        hasher.update(std.mem.asBytes(&region.width));
+        hasher.update(std.mem.asBytes(&region.height));
+        hasher.update(std.mem.sliceAsBytes(region.dom_path));
     }
 }

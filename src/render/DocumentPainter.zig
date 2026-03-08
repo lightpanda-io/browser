@@ -9,6 +9,7 @@ const DisplayList = @import("DisplayList.zig").DisplayList;
 const Command = @import("DisplayList.zig").Command;
 const Color = @import("DisplayList.zig").Color;
 const LinkRegion = @import("DisplayList.zig").LinkRegion;
+const ControlRegion = @import("DisplayList.zig").ControlRegion;
 const ImageCommand = @import("DisplayList.zig").ImageCommand;
 
 pub const PaintOpts = struct {
@@ -205,6 +206,7 @@ const Painter = struct {
             .script, .style, .template, .head, .meta, .link, .title => true,
             else => false,
         }) return;
+        if (isHiddenFormControl(element)) return;
 
         const style = try self.page.window.getComputedStyle(element, null, self.page);
         const decl = style.asCSSStyleDeclaration();
@@ -360,6 +362,9 @@ const Painter = struct {
         if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
             try self.list.addLinkRegion(self.allocator, region);
         }
+        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+            try self.list.addControlRegion(self.allocator, region);
+        }
 
         if (inline_leaf) {
             cursor.advanceInlineLeaf(rect, margins, flowSpacingAfter(tag, block_like));
@@ -380,8 +385,20 @@ const Painter = struct {
                 return self.allocator.dupe(u8, "[image]");
             },
             .input => {
-                if (element.getAttributeSafe(comptime .wrap("value"))) |value| {
-                    return self.allocator.dupe(u8, value);
+                const input = element.as(Element.Html.Input);
+                if (input._input_type == .file) {
+                    const selected_name = input.getSelectedFileName();
+                    if (selected_name.len > 0) {
+                        return self.allocator.dupe(u8, selected_name);
+                    }
+                    if (element.getAttributeSafe(comptime .wrap("placeholder"))) |placeholder| {
+                        return self.allocator.dupe(u8, placeholder);
+                    }
+                    return self.allocator.dupe(u8, "[choose file]");
+                }
+                const current_value = input.getValue();
+                if (current_value.len > 0) {
+                    return self.allocator.dupe(u8, current_value);
                 }
                 if (element.getAttributeSafe(comptime .wrap("placeholder"))) |placeholder| {
                     return self.allocator.dupe(u8, placeholder);
@@ -611,6 +628,38 @@ fn resolvedLinkRegion(
         .download_filename = @constCast(element.getAttributeSafe(comptime .wrap("download")) orelse ""),
         .open_in_new_tab = linkOpensFreshTab(element),
         .target_name = @constCast(linkTargetName(element)),
+    };
+}
+
+fn resolvedControlRegion(
+    element: *Element,
+    page: *Page,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) !?ControlRegion {
+    const html = element.is(Element.Html) orelse return null;
+    switch (html._type) {
+        .input => |input| if (input._input_type == .hidden) return null,
+        .button, .select, .textarea => {},
+        else => return null,
+    }
+
+    return .{
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .dom_path = try encodeNodePath(page.call_arena, element.asNode()),
+    };
+}
+
+fn isHiddenFormControl(element: *Element) bool {
+    const html = element.is(Element.Html) orelse return false;
+    return switch (html._type) {
+        .input => |input| input._input_type == .hidden,
+        else => false,
     };
 }
 
@@ -1544,6 +1593,27 @@ test "paintDocument emits same-context link region with dom path" {
         try std.testing.expect(region.width > 0);
         try std.testing.expect(region.height > 0);
         try std.testing.expect(region.dom_path.len > 0);
+        found = true;
+        break;
+    }
+
+    try std.testing.expect(found);
+}
+
+test "paintDocument emits control region for file input" {
+    var page = try testing.pageTest("page/upload_form.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.control_regions.items) |region| {
+        if (region.dom_path.len == 0) {
+            continue;
+        }
         found = true;
         break;
     }

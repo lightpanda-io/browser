@@ -1257,6 +1257,17 @@ fn handleBrowseCommand(
             const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
             try downloads.startDownloadFromValues(app, shell.tabs.items[active_index], download.url, download.suggested_filename);
         },
+        .activate_control_region => |activation| {
+            if (shell.tabs.items.len == 0) {
+                return;
+            }
+            const active_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
+            const tab = shell.tabs.items[active_index];
+            const page = tab.session.currentPage() orelse return;
+            if (try handleRenderedControlActivation(tab, page, activation)) {
+                tab.last_presented_hash = 0;
+            }
+        },
         .activate_link_region => |activation| {
             if (shell.tabs.items.len == 0) {
                 return;
@@ -1936,6 +1947,48 @@ fn handleRenderedLinkActivation(
         return true;
     }
     return false;
+}
+
+fn handleRenderedControlActivation(
+    tab: *BrowseTab,
+    page: *Page,
+    activation: BrowserCommand.ActivateControlRegion,
+) !bool {
+    const had_pending_navigation = page._queued_navigation != null;
+    const had_pending_browser_navigations = tab.session.hasPendingBrowserNavigations();
+    const had_pending_tab_opens = tab.session.hasPendingTabOpens();
+    const had_pending_downloads = tab.session.hasPendingDownloads();
+    var result = if (activation.dom_path.len > 0)
+        try page.triggerMouseClickOnNodePathWithResult(activation.dom_path, activation.x, activation.y, .main, .{})
+    else
+        Page.MouseClickDispatchResult{
+            .dispatched = false,
+            .default_prevented = false,
+        };
+
+    if (!result.dispatched) {
+        result = try page.triggerMouseClickWithResult(activation.x, activation.y, .main, .{});
+    }
+
+    if (!result.dispatched) {
+        return false;
+    }
+    if (result.default_prevented) {
+        return true;
+    }
+    if (!had_pending_navigation and page._queued_navigation != null) {
+        return true;
+    }
+    if (!had_pending_browser_navigations and tab.session.hasPendingBrowserNavigations()) {
+        return true;
+    }
+    if (!had_pending_tab_opens and tab.session.hasPendingTabOpens()) {
+        return true;
+    }
+    if (!had_pending_downloads and tab.session.hasPendingDownloads()) {
+        return true;
+    }
+    return true;
 }
 
 fn applyZoomCommand(current_zoom: i32, default_zoom_percent: i32, command: BrowserCommand) i32 {

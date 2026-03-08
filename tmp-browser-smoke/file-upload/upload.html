@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>File Upload Smoke - Lightpanda Browser</title>
+</head>
+<body style="margin:40px; font-size:20px;">
+  <h1>File Upload Smoke</h1>
+  <p>Select a text file, then submit.</p>
+  <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+    <input id="upload" type="file" name="upload" accept=".txt" autofocus style="display:block; width:360px; height:44px; margin:24px 0;">
+    <button id="upload-submit" type="submit" style="display:block; width:180px; height:44px;">Upload</button>
+  </form>
+</body>
+</html>

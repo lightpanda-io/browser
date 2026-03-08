@@ -216,13 +216,16 @@ Current state inside Gate 1:
   directly into the headed download manager instead of aborting and issuing a
   second GET, with bounded headed probes proving a single request for
   address-bar, in-page link, and direct-startup attachment flows
+- headed Windows `browse` now has a native file chooser path for rendered file
+  inputs, real multipart form submission with selected files, and bounded
+  headed probes for select-submit, cancel, and replace flows
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
 
 ### Gate 2: Shared Subresource Loader And Profile
 
-Status: Planned
+Status: Active
 
 Goal:
 - move page assets and browser state onto a consistent browser-managed runtime
@@ -240,6 +243,9 @@ Current known gap entering Gate 2:
 - explicit download requests, adopted root-attachment transfers, and other
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
+- native file chooser and multipart upload flows now work end to end in headed
+  Windows `browse`, but upload transport still needs to converge with the same
+  broader shared runtime/policy path as other browser-managed resources
 
 ### Gate 3: Layout Engine Replacement
 

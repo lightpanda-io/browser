@@ -33,6 +33,7 @@ const c = @cImport({
     @cDefine("UNICODE", "1");
     @cDefine("_UNICODE", "1");
     @cInclude("windows.h");
+    @cInclude("commdlg.h");
     @cInclude("imm.h");
     @cInclude("urlmon.h");
 });
@@ -72,6 +73,11 @@ const LoadCursorWUnaligned = @extern(
     *const fn (c.HINSTANCE, ?*align(1) const anyopaque) callconv(.winapi) c.HCURSOR,
     .{ .name = "LoadCursorW" },
 );
+const SendMessageWUnaligned = @extern(
+    *const fn (?*align(1) anyopaque, c.UINT, c.WPARAM, c.LPARAM) callconv(.winapi) c.LRESULT,
+    .{ .name = "SendMessageW" },
+);
+const WM_APP_OPEN_FILE_DIALOG = c.WM_APP + 1;
 
 const GDIP_STATUS_OK: GpStatus = 0;
 
@@ -177,6 +183,14 @@ pub const Win32Backend = struct {
     thread_start_lock: std.Thread.Mutex = .{},
     thread_start_cond: std.Thread.Condition = .{},
     thread_started: bool = false,
+    window_hwnd: std.atomic.Value(usize) = .init(0),
+
+    const OpenFileDialogRequest = struct {
+        allocator: std.mem.Allocator,
+        accept: []const u8,
+        multiple: bool,
+        selected_path: ?[]u8 = null,
+    };
 
     const InputEvent = union(enum) {
         mouse_down: MouseEvent,
@@ -772,6 +786,23 @@ pub const Win32Backend = struct {
         return savePresentationPng(self, path);
     }
 
+    pub fn chooseFile(self: *Win32Backend, accept: []const u8, multiple: bool) ?[]u8 {
+        const hwnd_value = self.window_hwnd.load(.acquire);
+        if (hwnd_value == 0) {
+            log.warn(.app, "win choose file missing hwnd", .{});
+            return null;
+        }
+
+        const hwnd: ?*align(1) anyopaque = @ptrFromInt(hwnd_value);
+        var request: OpenFileDialogRequest = .{
+            .allocator = self.allocator,
+            .accept = accept,
+            .multiple = multiple,
+        };
+        _ = SendMessageWUnaligned(hwnd, WM_APP_OPEN_FILE_DIALOG, 0, @as(c.LPARAM, @bitCast(@intFromPtr(&request))));
+        return request.selected_path;
+    }
+
     pub fn userClosed(self: *const Win32Backend) bool {
         return self.user_closed.load(.acquire);
     }
@@ -836,6 +867,7 @@ pub const Win32Backend = struct {
                         continue;
                     };
                     if (hwnd) |window| {
+                        self.window_hwnd.store(@intFromPtr(window), .release);
                         last_resize_seq = self.resize_seq.load(.acquire);
                         last_presentation_seq = self.presentation_seq.load(.acquire);
                         syncWindowPresentation(window, self);
@@ -846,6 +878,7 @@ pub const Win32Backend = struct {
                 if (hwnd) |window| {
                     destroyWindow(window);
                     hwnd = null;
+                    self.window_hwnd.store(0, .release);
                 }
             }
 
@@ -853,6 +886,7 @@ pub const Win32Backend = struct {
                 if (c.IsWindow(window) == 0) {
                     hwnd = null;
                     creation_blocked = false;
+                    self.window_hwnd.store(0, .release);
                 } else {
                     const seq = self.resize_seq.load(.acquire);
                     if (seq != last_resize_seq) {
@@ -873,6 +907,7 @@ pub const Win32Backend = struct {
         if (hwnd) |window| {
             destroyWindow(window);
         }
+        self.window_hwnd.store(0, .release);
     }
 };
 
@@ -1330,6 +1365,25 @@ fn presentationNavigateCommandAtClientPoint(backend: *Win32Backend, x: f64, y: f
     } };
 }
 
+fn presentationControlCommandAtClientPoint(backend: *Win32Backend, x: f64, y: f64) ?BrowserCommand {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+
+    const display_list = backend.presentation_display_list orelse return null;
+    const point = presentationClientToDisplayListLocked(backend, x, y) orelse return null;
+    const region = findPresentationControlRegionLocked(backend, x, y) orelse return null;
+    const owned_dom_path = backend.allocator.dupe(u16, region.dom_path) catch |err| {
+        log.warn(.app, "win control dom path hit dupe", .{ .err = err });
+        return null;
+    };
+
+    return .{ .activate_control_region = .{
+        .x = point.x - @as(f64, @floatFromInt(display_list.page_margin)),
+        .y = point.y - @as(f64, @floatFromInt(display_list.page_margin)),
+        .dom_path = owned_dom_path,
+    } };
+}
+
 fn beginPendingPresentationCommand(backend: *Win32Backend, hwnd: c.HWND, x: f64, y: f64) bool {
     const command = presentationCommandAtClientPoint(backend, hwnd, x, y) orelse return false;
     backend.presentation_lock.lock();
@@ -1370,6 +1424,22 @@ fn findPresentationLinkRegionLocked(backend: *Win32Backend, x: f64, y: f64) ?Dis
     while (index > 0) {
         index -= 1;
         const region = display_list.link_regions.items[index];
+        if (px >= region.x and py >= region.y and px < region.x + region.width and py < region.y + region.height) {
+            return region;
+        }
+    }
+    return null;
+}
+
+fn findPresentationControlRegionLocked(backend: *Win32Backend, x: f64, y: f64) ?DisplayList.ControlRegion {
+    const display_list = backend.presentation_display_list orelse return null;
+    const point = presentationClientToDisplayListLocked(backend, x, y) orelse return null;
+    const px: i32 = @intFromFloat(point.x);
+    const py: i32 = @intFromFloat(point.y);
+    var index = display_list.control_regions.items.len;
+    while (index > 0) {
+        index -= 1;
+        const region = display_list.control_regions.items[index];
         if (px >= region.x and py >= region.y and px < region.x + region.width and py < region.y + region.height) {
             return region;
         }
@@ -2281,6 +2351,7 @@ fn presentationHasInteractiveAtClientPoint(backend: *Win32Backend, hwnd: c.HWND,
     return tabStripActionAtClientPoint(backend, client, x, y) != null or
         chromeCommandKindAtClientPointEnabled(backend, x, y) != null or
         presentationHasNavigateAtClientPoint(backend, x, y) or
+        presentationHasControlAtClientPoint(backend, x, y) or
         findChromeActionAtClientPoint(backend, client, x, y) != null or
         historyOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
         bookmarkOverlayChromeActionAtClientPoint(backend, client, x, y) != null or
@@ -2290,6 +2361,12 @@ fn presentationHasInteractiveAtClientPoint(backend: *Win32Backend, hwnd: c.HWND,
         bookmarkEntryCommandAtClientPoint(backend, client, x, y) != null or
         downloadPanelHitTest(backend, client, x, y) or
         settingsPanelHitTest(backend, client, x, y);
+}
+
+fn presentationHasControlAtClientPoint(backend: *Win32Backend, x: f64, y: f64) bool {
+    backend.presentation_lock.lock();
+    defer backend.presentation_lock.unlock();
+    return findPresentationControlRegionLocked(backend, x, y) != null;
 }
 
 fn presentationCommandAtClientPointWithClient(
@@ -2320,7 +2397,8 @@ fn presentationCommandAtClientPointWithClient(
             .reload => if (presentationChromeShowsStop(backend)) .stop else .reload,
         };
     }
-    return presentationNavigateCommandAtClientPoint(backend, x, y);
+    return presentationNavigateCommandAtClientPoint(backend, x, y) orelse
+        presentationControlCommandAtClientPoint(backend, x, y);
 }
 
 fn chromeCommandKindAtClientPoint(x: f64, y: f64) ?ChromeButtonKind {
@@ -5874,6 +5952,14 @@ fn getBackendPtr(hwnd: c.HWND) ?*Win32Backend {
 
 fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callconv(.winapi) c.LRESULT {
     switch (msg) {
+        WM_APP_OPEN_FILE_DIALOG => {
+            if (getBackendPtr(hwnd)) |backend| {
+                const request: *Win32Backend.OpenFileDialogRequest = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                request.selected_path = openFileDialogOnWindowThread(backend, hwnd, request.accept, request.multiple);
+                return if (request.selected_path != null) 1 else 0;
+            }
+            return 0;
+        },
         c.WM_NCCREATE => {
             const cs: *c.CREATESTRUCTW = @ptrFromInt(@as(usize, @bitCast(lparam)));
             const backend_ptr = cs.lpCreateParams orelse return 0;
@@ -6325,6 +6411,45 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
     }
 }
 
+fn openFileDialogOnWindowThread(
+    backend: *Win32Backend,
+    hwnd: c.HWND,
+    accept: []const u8,
+    multiple: bool,
+) ?[]u8 {
+    _ = multiple;
+
+    var file_buf: [4096]u16 = [_]u16{0} ** 4096;
+    const title_text = if (std.mem.trim(u8, accept, &std.ascii.whitespace).len > 0)
+        "Select file for upload"
+    else
+        "Select file";
+    const wide_title = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, title_text) catch return null;
+    defer std.heap.c_allocator.free(wide_title);
+
+    var ofn: c.OPENFILENAMEW = std.mem.zeroes(c.OPENFILENAMEW);
+    ofn.lStructSize = @sizeOf(c.OPENFILENAMEW);
+    ofn.hwndOwner = hwnd;
+    ofn.lpstrFile = &file_buf;
+    ofn.nMaxFile = file_buf.len;
+    ofn.lpstrTitle = wide_title.ptr;
+    ofn.Flags = c.OFN_EXPLORER | c.OFN_FILEMUSTEXIST | c.OFN_PATHMUSTEXIST | c.OFN_NOCHANGEDIR;
+
+    if (c.GetOpenFileNameW(&ofn) == 0) {
+        const error_code = c.CommDlgExtendedError();
+        if (error_code != 0) {
+            log.warn(.app, "win file chooser failed", .{ .code = error_code });
+        }
+        return null;
+    }
+
+    const path_len = std.mem.indexOfScalar(u16, file_buf[0..], 0) orelse file_buf.len;
+    return std.unicode.utf16LeToUtf8Alloc(backend.allocator, file_buf[0..path_len]) catch |err| {
+        log.warn(.app, "win chooser utf16 fail", .{ .err = err });
+        return null;
+    };
+}
+
 test "win32 mapVirtualKey includes modifiers and shifted digits" {
     var key_buf: [2]u8 = undefined;
 
@@ -6526,6 +6651,39 @@ test "win32 rendered target link queues activate_link_region" {
     });
     try std.testing.expect(switch (command) {
         .activate_link_region => |activation| activation.x > 0 and activation.y > 0,
+        else => return error.TestUnexpectedCommandType,
+    });
+}
+
+test "win32 rendered control queues activate_control_region" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    var display_list: DisplayList = .{};
+    errdefer display_list.deinit(std.testing.allocator);
+    try display_list.addControlRegion(std.testing.allocator, .{
+        .x = 24,
+        .y = 32,
+        .width = 220,
+        .height = 40,
+        .dom_path = @constCast(&[_]u16{ 1, 4, 2 }),
+    });
+
+    backend.presentation_display_list = display_list;
+
+    const command = presentationControlCommandAtClientPoint(
+        &backend,
+        @as(f64, @floatFromInt(PRESENTATION_MARGIN + 24 + 8)),
+        @as(f64, @floatFromInt(PRESENTATION_HEADER_HEIGHT + 8 + 32 + 8)),
+    ).?;
+    defer command.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), switch (command) {
+        .activate_control_region => |activation| activation.dom_path.len,
+        else => return error.TestUnexpectedCommandType,
+    });
+    try std.testing.expect(switch (command) {
+        .activate_control_region => |activation| activation.x > 0 and activation.y > 0,
         else => return error.TestUnexpectedCommandType,
     });
 }

@@ -3528,6 +3528,10 @@ pub fn handleClick(self: *Page, target: *Node) !void {
         },
         .input => |input| {
             try element.focus(self);
+            if (input._input_type == .file) {
+                try self.handleFileInputActivation(input);
+                return;
+            }
             if (input._input_type == .submit) {
                 return self.submitForm(element, input.getForm(self), .{});
             }
@@ -3546,6 +3550,19 @@ pub fn handleClick(self: *Page, target: *Node) !void {
         .select, .textarea => try element.focus(self),
         else => {},
     }
+}
+
+fn handleFileInputActivation(self: *Page, input: *Element.Html.Input) !void {
+    const accept = input.getAccept();
+    const multiple = input.getMultiple();
+    const selected_path = self._session.browser.app.display.chooseFile(accept, multiple) orelse return;
+    defer self._session.browser.app.allocator.free(selected_path);
+
+    if (!(try input.setSelectedFile(selected_path, null, self))) {
+        return;
+    }
+    try input.dispatchInputEvent(self);
+    try input.dispatchChangeEvent(self);
 }
 
 const TopLevelTarget = union(enum) {
@@ -4281,6 +4298,11 @@ pub fn handleKeydown(self: *Page, target: *Node, event: *Event) !void {
         const input_type = input._input_type;
 
         if (!keyboard_event.getCtrlKey() and !keyboard_event.getMetaKey() and !keyboard_event.getAltKey()) {
+            if (input_type == .file and (key == .Enter or isKeyboardSpaceKey(key))) {
+                const html_element = input.asElement().is(Element.Html).?;
+                try html_element.click(self);
+                return;
+            }
             if (key == .Enter) {
                 switch (input_type) {
                     .submit, .reset, .button, .image => {
@@ -4424,8 +4446,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     if (std.ascii.eqlIgnoreCase(method, "post")) {
         opts.method = .POST;
         opts.body = buf.written();
-        // form_data.write currently only supports this encoding, so we know this has to be the content type
-        opts.header = "Content-Type: application/x-www-form-urlencoded";
+        opts.header = try form_data.contentTypeHeader(encoding);
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
     }
@@ -4753,6 +4774,37 @@ test "Page handleClick queues named target POST form popup" {
     try testing.expectEqual(.POST, pending.items[0].opts.method);
     try testing.expectString("q=two", pending.items[0].opts.body.?);
     try testing.expectString("Content-Type: application/x-www-form-urlencoded", pending.items[0].opts.header.?);
+}
+
+test "Page handleClick serializes multipart file upload for named target form" {
+    var page = try testing.pageTest("page/upload_form.html");
+    defer page._session.removePage();
+
+    try std.fs.cwd().writeFile(.{ .sub_path = "tmp-page-upload.txt", .data = "hello upload" });
+    defer std.fs.cwd().deleteFile("tmp-page-upload.txt") catch {};
+    const abs_path = try std.fs.cwd().realpathAlloc(std.testing.allocator, "tmp-page-upload.txt");
+    defer std.testing.allocator.free(abs_path);
+
+    const input_element = (try page.window._document.querySelector(.wrap("#upload"), page)).?;
+    const input = input_element.is(Element.Html.Input).?;
+    _ = try input.setSelectedFile(abs_path, "text/plain", page);
+
+    const submitter = (try page.window._document.querySelector(.wrap("#upload_submit"), page)).?;
+    try page.handleClick(submitter.asNode());
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expectString("report", pending.items[0].target_name);
+    try testing.expectEqual(PopupSource.form, pending.items[0].popup_source);
+    try testing.expectString("http://127.0.0.1:9582/upload", pending.items[0].url);
+    try testing.expectEqual(.POST, pending.items[0].opts.method);
+    try testing.expect(std.mem.startsWith(u8, pending.items[0].opts.header.?, "Content-Type: multipart/form-data; boundary="));
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "Content-Disposition: form-data; name=\"note\"") != null);
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "Content-Disposition: form-data; name=\"upload\"; filename=\"tmp-page-upload.txt\"") != null);
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "Content-Type: text/plain") != null);
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "hello upload") != null);
 }
 
 test "Page triggerMouseClickWithResult respects anchor preventDefault" {

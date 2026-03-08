@@ -60,6 +60,7 @@ pub fn build(b: *Build) !void {
             mod.linkSystemLibrary("user32", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("gdi32", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("imm32", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("comdlg32", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("gdiplus", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("urlmon", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("winmm", .{ .use_pkg_config = .no });
