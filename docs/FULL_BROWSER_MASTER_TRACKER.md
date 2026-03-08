@@ -181,6 +181,12 @@ Current state inside Gate 1:
   but they are no longer the primary shell path
 - internal page titles now stay user-facing across active presentation,
   background tab state, restart restore, and the zero-count downloads case
+- headed navigation failures now promote into a structured `browser://error`
+  page instead of a raw placeholder document
+- that error state now remains visible across `browser://start` and
+  `browser://tabs`, with bounded headed probes for invalid-address handling,
+  disabled back/forward chrome on error, error-state preservation, and
+  recovery once the target becomes reachable again
 - next blocker: migrate richer interaction directly onto the internal pages so
   fewer browser-shell actions still depend on address-bar routes or secondary
   overlay surfaces

@@ -1072,6 +1072,10 @@ fn pageErrorCallback(ctx: *anyopaque, err: anyerror) void {
     };
 }
 
+pub fn failNavigation(self: *Page, err: anyerror) void {
+    pageErrorCallback(self, err);
+}
+
 pub fn isGoingAway(self: *const Page) bool {
     if (self._queued_navigation != null) {
         return true;

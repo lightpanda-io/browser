@@ -106,6 +106,57 @@ const CommittedBrowseSurface = struct {
     }
 };
 
+const BrowseErrorKind = enum {
+    invalid_address,
+    navigation_failed,
+};
+
+const BrowseErrorState = struct {
+    kind: BrowseErrorKind = .navigation_failed,
+    retry_value: []u8 = &.{},
+    display_value: []u8 = &.{},
+    detail: []u8 = &.{},
+
+    fn deinit(self: *BrowseErrorState, allocator: std.mem.Allocator) void {
+        allocator.free(self.retry_value);
+        allocator.free(self.display_value);
+        allocator.free(self.detail);
+        self.* = .{};
+    }
+
+    fn hasValue(self: *const BrowseErrorState) bool {
+        return self.retry_value.len > 0 or self.display_value.len > 0 or self.detail.len > 0;
+    }
+
+    fn replace(
+        self: *BrowseErrorState,
+        allocator: std.mem.Allocator,
+        kind: BrowseErrorKind,
+        retry_value: []const u8,
+        display_value: []const u8,
+        detail: []const u8,
+    ) !void {
+        const owned_retry = try allocator.dupe(u8, retry_value);
+        errdefer allocator.free(owned_retry);
+        const owned_display = try allocator.dupe(u8, display_value);
+        errdefer allocator.free(owned_display);
+        const owned_detail = try allocator.dupe(u8, detail);
+        errdefer allocator.free(owned_detail);
+
+        self.deinit(allocator);
+        self.* = .{
+            .kind = kind,
+            .retry_value = owned_retry,
+            .display_value = owned_display,
+            .detail = owned_detail,
+        };
+    }
+
+    fn clear(self: *BrowseErrorState, allocator: std.mem.Allocator) void {
+        self.deinit(allocator);
+    }
+};
+
 const BrowseTab = struct {
     http_client: *HttpClient.Client,
     notification: *Notification,
@@ -114,6 +165,7 @@ const BrowseTab = struct {
     target_name: []u8 = &.{},
     popup_source: PopupSource = .none,
     committed_surface: CommittedBrowseSurface = .{},
+    error_state: BrowseErrorState = .{},
     restore_committed_surface: bool = false,
     last_presented_hash: u64 = 0,
     last_internal_page_state_hash: u64 = 0,
@@ -122,6 +174,7 @@ const BrowseTab = struct {
     fn deinit(self: *BrowseTab, allocator: std.mem.Allocator) void {
         freeOwnedBrowseTabTargetName(allocator, self.target_name);
         self.committed_surface.deinit(allocator);
+        self.error_state.deinit(allocator);
         self.browser.deinit();
         self.notification.deinit();
         self.http_client.deinit();
@@ -194,6 +247,7 @@ const MAX_DOWNLOADS_HISTORY = 64;
 
 const InternalBrowsePage = enum {
     start,
+    error_page,
     tabs,
     history,
     bookmarks,
@@ -727,6 +781,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
                 tab.session.wait(opts.wait_ms)
             else
                 tab.session.waitNoInput(opts.wait_ms);
+            _ = try captureBrowseTabRuntimeError(app.allocator, tab);
             try downloads.processPendingRequests(app, tab);
         }
         var pending_nav_index: usize = 0;
@@ -746,6 +801,12 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         }
 
         active_tab_index = normalizeActiveTabIndex(active_tab_index, tabs.items.len);
+        if (tabs.items[active_tab_index].session.currentPage()) |active_page| {
+            const active_internal_page = parseInternalBrowsePage(active_page.url);
+            if (pageHasRuntimeError(active_page) and (active_internal_page == null or active_internal_page.? != .error_page)) {
+                try openInternalErrorPageForTab(app, tabs.items[active_tab_index], active_page, &settings);
+            }
+        }
         if (tabs.items[active_tab_index].session.currentPage()) |active_page| {
             try refreshCurrentInternalBrowsePage(app, &shell, active_tab_index, active_page, &settings, &downloads, false);
         }
@@ -971,17 +1032,27 @@ fn handleActiveBrowseCommand(
         .navigate => |raw_url| {
             tab.restore_committed_surface = false;
             const maybe_normalized_url = normalizeBrowseUrl(app.allocator, raw_url) catch {
-                try app.display.presentDocument(
-                    "Lightpanda Browser",
-                    page.url,
-                    "Invalid address. Enter a full URL, for example https://example.com",
+                try setBrowseTabErrorState(
+                    app.allocator,
+                    tab,
+                    .invalid_address,
+                    raw_url,
+                    raw_url,
+                    "Enter a full URL, for example https://example.com",
                 );
-                tab.last_presented_hash = 0;
+                try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, .error_page);
                 return;
             };
             const normalized_url = maybe_normalized_url orelse {
-                try app.display.presentDocument("Lightpanda Browser", page.url, "Enter a full URL, for example https://example.com");
-                tab.last_presented_hash = 0;
+                try setBrowseTabErrorState(
+                    app.allocator,
+                    tab,
+                    .invalid_address,
+                    raw_url,
+                    raw_url,
+                    "Enter a full URL, for example https://example.com",
+                );
+                try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, .error_page);
                 return;
             };
             defer app.allocator.free(normalized_url);
@@ -1019,6 +1090,7 @@ fn handleActiveBrowseCommand(
                 return;
             }
 
+            clearBrowseTabErrorState(app.allocator, tab);
             try app.display.presentDocument("Lightpanda Browser", normalized_url, "Loading page...");
             tab.last_presented_hash = 0;
 
@@ -1032,6 +1104,7 @@ fn handleActiveBrowseCommand(
             if (!session.navigation.getCanGoBack()) {
                 return;
             }
+            clearBrowseTabErrorState(app.allocator, tab);
             try app.display.presentDocument("Lightpanda Browser", page.url, "Loading page...");
             tab.last_presented_hash = 0;
             _ = try session.navigation.back(page);
@@ -1041,6 +1114,7 @@ fn handleActiveBrowseCommand(
             if (!session.navigation.getCanGoForward()) {
                 return;
             }
+            clearBrowseTabErrorState(app.allocator, tab);
             try app.display.presentDocument("Lightpanda Browser", page.url, "Loading page...");
             tab.last_presented_hash = 0;
             _ = try session.navigation.forward(page);
@@ -1051,9 +1125,14 @@ fn handleActiveBrowseCommand(
                 return;
             }
             if (parseInternalBrowsePage(page.url)) |internal_page| {
+                if (internal_page == .error_page) {
+                    try handleActiveBrowseCommand(app, shell, tab_index, settings, downloads, .error_retry);
+                    return;
+                }
                 try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, internal_page);
                 return;
             }
+            clearBrowseTabErrorState(app.allocator, tab);
             try app.display.presentDocument("Lightpanda Browser", page.url, "Loading page...");
             tab.last_presented_hash = 0;
             try page.scheduleNavigation(page.url, .{
@@ -1069,6 +1148,7 @@ fn handleActiveBrowseCommand(
                 return;
             }
             const url = entries[index].url() orelse return;
+            clearBrowseTabErrorState(app.allocator, tab);
             try app.display.presentDocument("Lightpanda Browser", page.url, "Loading page...");
             tab.last_presented_hash = 0;
             _ = try session.navigation.navigateInner(url, .{ .traverse = index }, page);
@@ -1109,9 +1189,11 @@ fn handleActiveBrowseCommand(
                 return;
             };
             if (parseInternalBrowsePage(home_url)) |internal_page| {
+                clearBrowseTabErrorState(app.allocator, tab);
                 try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, internal_page);
                 return;
             }
+            clearBrowseTabErrorState(app.allocator, tab);
             try app.display.presentDocument("Lightpanda Browser", home_url, "Loading page...");
             tab.last_presented_hash = 0;
             tab.restore_committed_surface = false;
@@ -1119,6 +1201,21 @@ fn handleActiveBrowseCommand(
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, .{ .script = null });
+        },
+        .page_start => {
+            try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, .start);
+        },
+        .error_retry => {
+            if (trimmedOrNull(tab.error_state.retry_value)) |retry_value| {
+                clearBrowseTabErrorState(app.allocator, tab);
+                try app.display.presentDocument("Lightpanda Browser", retry_value, "Loading page...");
+                tab.last_presented_hash = 0;
+                tab.restore_committed_surface = false;
+                try page.scheduleNavigation(retry_value, .{
+                    .reason = .address_bar,
+                    .kind = .{ .push = null },
+                }, .{ .script = null });
+            }
         },
         .page_tabs => try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, .tabs),
         .page_history => try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, .history),
@@ -1430,8 +1527,19 @@ fn applyDefaultZoomCommand(current_zoom: i32, command: BrowserCommand) i32 {
     };
 }
 
+fn pageRuntimeError(page: *Page) ?anyerror {
+    return switch (page._parse_state) {
+        .err => |err| err,
+        else => null,
+    };
+}
+
+fn pageHasRuntimeError(page: *Page) bool {
+    return pageRuntimeError(page) != null;
+}
+
 fn pageIsLoading(page: *Page) bool {
-    if (pageIsBlankIdle(page)) {
+    if (pageIsBlankIdle(page) or pageHasRuntimeError(page)) {
         return false;
     }
     return page._queued_navigation != null or page._parse_state != .complete;
@@ -2147,6 +2255,7 @@ fn createBrowseTab(
     tab.target_name = &.{};
     tab.popup_source = .none;
     tab.committed_surface = .{};
+    tab.error_state = .{};
     tab.restore_committed_surface = false;
     tab.last_presented_hash = 0;
     tab.last_internal_page_state_hash = 0;
@@ -2188,6 +2297,12 @@ fn updateActiveBrowseDisplay(
 
     const active_index = normalizeActiveTabIndex(active_tab_index, tabs.len);
     const active_tab = tabs[active_index];
+    const initial_page = active_tab.session.currentPage() orelse return;
+    const initial_internal_page = parseInternalBrowsePage(initial_page.url);
+    if (pageHasRuntimeError(initial_page) and (initial_internal_page == null or initial_internal_page.? != .error_page)) {
+        _ = try captureBrowseTabRuntimeError(app.allocator, active_tab);
+        try openInternalErrorPageForTab(app, active_tab, initial_page, settings);
+    }
     const page = active_tab.session.currentPage() orelse return;
     const show_committed_surface = active_tab.restore_committed_surface and
         active_tab.committed_surface.available() and
@@ -2235,6 +2350,73 @@ fn trimmedOrNull(value: []const u8) ?[]const u8 {
     return if (trimmed.len == 0) null else trimmed;
 }
 
+fn browseErrorTitle(kind: BrowseErrorKind) []const u8 {
+    return switch (kind) {
+        .invalid_address => "Invalid Address",
+        .navigation_failed => "Navigation Error",
+    };
+}
+
+fn browseErrorSummary(kind: BrowseErrorKind) []const u8 {
+    return switch (kind) {
+        .invalid_address => "The address could not be normalized into a URL.",
+        .navigation_failed => "The page could not be loaded by the current browser runtime.",
+    };
+}
+
+fn browseErrorDetailLabel(kind: BrowseErrorKind, detail: []const u8) []const u8 {
+    _ = kind;
+    return if (trimmedOrNull(detail)) |value| value else "Unknown";
+}
+
+fn hashBrowseErrorState(error_state: *const BrowseErrorState) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(&.{@intFromEnum(error_state.kind)});
+    hasher.update(error_state.retry_value);
+    hasher.update(error_state.display_value);
+    hasher.update(error_state.detail);
+    return hasher.final();
+}
+
+fn setBrowseTabErrorState(
+    allocator: std.mem.Allocator,
+    tab: *BrowseTab,
+    kind: BrowseErrorKind,
+    retry_value: []const u8,
+    display_value: []const u8,
+    detail: []const u8,
+) !void {
+    try tab.error_state.replace(allocator, kind, retry_value, display_value, detail);
+}
+
+fn clearBrowseTabErrorState(allocator: std.mem.Allocator, tab: *BrowseTab) void {
+    tab.error_state.clear(allocator);
+}
+
+fn captureBrowseTabRuntimeError(allocator: std.mem.Allocator, tab: *BrowseTab) !bool {
+    const page = tab.session.currentPage() orelse {
+        clearBrowseTabErrorState(allocator, tab);
+        return false;
+    };
+    const runtime_error = pageRuntimeError(page) orelse {
+        const internal_page = parseInternalBrowsePage(page.url);
+        if (internal_page == null and !pageIsLoading(page)) {
+            clearBrowseTabErrorState(allocator, tab);
+        }
+        return false;
+    };
+    const display_url = trimmedOrNull(page.url) orelse "about:blank";
+    try setBrowseTabErrorState(
+        allocator,
+        tab,
+        .navigation_failed,
+        display_url,
+        display_url,
+        @errorName(runtime_error),
+    );
+    return true;
+}
+
 fn browseTabEntryTitle(
     allocator: std.mem.Allocator,
     app_dir_path: ?[]const u8,
@@ -2252,6 +2434,10 @@ fn browseTabEntryTitle(
 
     if (pageIsBlankIdle(page)) {
         return allocator.dupe(u8, "New Tab");
+    }
+
+    if (tab.error_state.hasValue()) {
+        return allocator.dupe(u8, browseErrorTitle(tab.error_state.kind));
     }
 
     if (!pageIsLoading(page)) {
@@ -2294,6 +2480,7 @@ fn browseTabEntry(tab: *BrowseTab, title: []const u8) Display.TabEntry {
         .title = title,
         .url = url,
         .is_loading = if (page) |current_page| pageIsLoading(current_page) else false,
+        .has_error = tab.error_state.hasValue(),
         .target_name = tab.target_name,
         .popup_source = tab.popup_source,
     };
@@ -2301,6 +2488,13 @@ fn browseTabEntry(tab: *BrowseTab, title: []const u8) Display.TabEntry {
 
 fn browseTabPersistentUrl(tab: *BrowseTab) []const u8 {
     const page = tab.session.currentPage() orelse return "about:blank";
+    if (parseInternalBrowsePage(page.url)) |internal_page| {
+        if (internal_page == .error_page) {
+            if (trimmedOrNull(tab.error_state.retry_value)) |retry_value| {
+                return retry_value;
+            }
+        }
+    }
     if (trimmedOrNull(page.url)) |url| {
         return url;
     }
@@ -2313,6 +2507,15 @@ fn browseTabPersistentUrl(tab: *BrowseTab) []const u8 {
 fn browseTabHomepageCandidateUrl(tab: *BrowseTab) ?[]const u8 {
     const page = tab.session.currentPage();
     if (page) |current_page| {
+        if (parseInternalBrowsePage(current_page.url)) |internal_page| {
+            if (internal_page == .error_page) {
+                if (trimmedOrNull(tab.error_state.display_value)) |value| {
+                    if (parseInternalBrowsePage(value) == null and std.mem.indexOfScalar(u8, value, ' ') == null) {
+                        return value;
+                    }
+                }
+            }
+        }
         if (trimmedOrNull(current_page.url)) |url| {
             if (parseInternalBrowsePage(url) == null) {
                 return url;
@@ -2405,6 +2608,7 @@ fn hasHostPrefix(raw: []const u8, prefix: []const u8) bool {
 fn internalBrowsePageAlias(internal_page: InternalBrowsePage) []const u8 {
     return switch (internal_page) {
         .start => "browser://start",
+        .error_page => "browser://error",
         .tabs => "browser://tabs",
         .history => "browser://history",
         .bookmarks => "browser://bookmarks",
@@ -2416,6 +2620,9 @@ fn internalBrowsePageAlias(internal_page: InternalBrowsePage) []const u8 {
 fn parseInternalBrowseNamedPage(page_name: []const u8) ?InternalBrowsePage {
     if (std.ascii.eqlIgnoreCase(page_name, "start")) {
         return .start;
+    }
+    if (std.ascii.eqlIgnoreCase(page_name, "error")) {
+        return .error_page;
     }
     if (std.ascii.eqlIgnoreCase(page_name, "tabs")) {
         return .tabs;
@@ -2478,6 +2685,14 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
 
     return switch (page) {
         .start => .{ .page = .start },
+        .error_page => if (std.ascii.eqlIgnoreCase(action, "retry"))
+            .{ .command = .error_retry }
+        else if (std.ascii.eqlIgnoreCase(action, "home"))
+            .{ .command = .home }
+        else if (std.ascii.eqlIgnoreCase(action, "start"))
+            .{ .command = .page_start }
+        else
+            .{ .page = .error_page },
         .tabs => if (std.ascii.eqlIgnoreCase(action, "new"))
             .{ .command = .tab_new }
         else if (parseInternalBrowseIndexAction(action, "reopen-closed/")) |index|
@@ -2588,6 +2803,35 @@ fn openInternalBrowsePage(
     try presentPage(app, page, &tab.last_presented_hash, &tab.committed_surface, tab.zoom_percent, title_override);
 }
 
+fn openInternalErrorPageForTab(
+    app: *App,
+    tab: *BrowseTab,
+    page: *Page,
+    settings: *const BrowseSettings,
+) !void {
+    var html = std.Io.Writer.Allocating.init(app.allocator);
+    defer html.deinit();
+    try writeInternalErrorPage(&html.writer, tab, settings);
+
+    tab.restore_committed_surface = false;
+    tab.last_presented_hash = 0;
+    tab.last_internal_page_state_hash = hashBrowseErrorState(&tab.error_state);
+    try replacePageWithInternalHtml(
+        app.allocator,
+        page,
+        internalBrowsePageAlias(.error_page),
+        html.written(),
+    );
+    try presentPage(
+        app,
+        page,
+        &tab.last_presented_hash,
+        &tab.committed_surface,
+        tab.zoom_percent,
+        browseErrorTitle(tab.error_state.kind),
+    );
+}
+
 fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
     return switch (command) {
         .history_clear_session,
@@ -2676,6 +2920,8 @@ fn hashInternalTabsPageState(shell: *const BrowseShell) u64 {
     for (shell.tabs.items) |tab| {
         const url = browseTabPersistentUrl(tab);
         hasher.update(url);
+        const error_hash = hashBrowseErrorState(&tab.error_state);
+        hasher.update(std.mem.asBytes(&error_hash));
         hasher.update(tab.target_name);
         hasher.update(&.{@intFromEnum(tab.popup_source)});
         hasher.update(std.mem.asBytes(&tab.zoom_percent));
@@ -2724,6 +2970,7 @@ fn hashInternalBrowsePageState(
             hasher.update(std.mem.asBytes(&settings_hash));
             break :blk hasher.final();
         },
+        .error_page => hashBrowseErrorState(&tab.error_state),
         .tabs => hashInternalTabsPageState(shell),
         .history => hashInternalHistoryPageState(tab),
         .bookmarks => blk: {
@@ -2817,6 +3064,7 @@ fn buildInternalBrowsePageHtml(
     const tab = shell.tabs.items[tab_index];
     switch (internal_page) {
         .start => try writeInternalStartPage(allocator, &html.writer, app_dir_path, shell, tab_index, settings, downloads),
+        .error_page => try writeInternalErrorPage(&html.writer, tab, settings),
         .tabs => try writeInternalTabsPage(allocator, &html.writer, app_dir_path, shell, downloads),
         .history => try writeInternalHistoryPage(allocator, &html.writer, tab),
         .bookmarks => try writeInternalBookmarksPage(allocator, &html.writer, app_dir_path),
@@ -2848,6 +3096,7 @@ fn replacePageWithInternalHtml(
     defer ls.deinit();
     try ls.local.eval(script, "internal_browser_page");
 
+    page._parse_state = .{ .complete = {} };
     page.url = try page.arena.dupeZ(u8, alias);
 }
 
@@ -2902,9 +3151,21 @@ fn writeInternalShellNav(writer: anytype, current_page: InternalBrowsePage) !voi
     try writer.writeAll("</p>");
 }
 
+fn writeInternalShellNavNoSelection(writer: anytype) !void {
+    const nav_pages = [_]InternalBrowsePage{ .start, .tabs, .history, .bookmarks, .downloads, .settings };
+    for (nav_pages, 0..) |nav_page, index| {
+        if (index != 0) {
+            try writer.writeAll(" | ");
+        }
+        try writeInternalActionLink(writer, internalBrowsePageAlias(nav_page), internalBrowsePageTitle(nav_page));
+    }
+    try writer.writeAll("</p>");
+}
+
 fn internalBrowsePageTitle(internal_page: InternalBrowsePage) []const u8 {
     return switch (internal_page) {
         .start => "Start",
+        .error_page => "Error",
         .tabs => "Tabs",
         .history => "History",
         .bookmarks => "Bookmarks",
@@ -2923,6 +3184,13 @@ fn makeInternalBrowsePageDisplayTitle(
 ) ![]u8 {
     return switch (internal_page) {
         .start => allocator.dupe(u8, "Browser Start"),
+        .error_page => blk: {
+            if (tab_index >= tabs.len) {
+                break :blk allocator.dupe(u8, "Browser Error");
+            }
+            const tab = tabs[tab_index];
+            break :blk std.fmt.allocPrint(allocator, "{s}", .{browseErrorTitle(tab.error_state.kind)});
+        },
         .tabs => std.fmt.allocPrint(allocator, "Browser Tabs ({d})", .{tabs.len}),
         .history => blk: {
             if (tab_index >= tabs.len) {
@@ -2971,6 +3239,10 @@ fn writeInternalStartQuickActions(
     try writeInternalStartSectionTitle(writer, "Quick Actions");
     try writer.writeAll("<p>");
     try writeInternalActionLink(writer, "browser://tabs/new", "New tab");
+    if (tab.error_state.hasValue()) {
+        try writer.writeAll(" | ");
+        try writeInternalActionLink(writer, "browser://error", "Open current error");
+    }
     if (closed_tabs_count > 0) {
         try writer.writeAll(" | ");
         try writeInternalActionLink(writer, "browser://tabs/reopen-closed", "Reopen latest closed tab");
@@ -2988,6 +3260,52 @@ fn writeInternalStartQuickActions(
         try writeInternalActionLink(writer, "browser://downloads/clear", "Clear inactive downloads");
     }
     try writer.writeAll("</p>");
+}
+
+fn browseTabStatusLabel(tab: *BrowseTab) []const u8 {
+    if (tab.error_state.hasValue()) {
+        return browseErrorTitle(tab.error_state.kind);
+    }
+    const page = tab.session.currentPage() orelse return "No Page";
+    if (pageIsBlankIdle(page)) {
+        return "Blank";
+    }
+    if (pageIsLoading(page)) {
+        return "Loading";
+    }
+    return "Ready";
+}
+
+fn writeInternalStartCurrentTabStatusSection(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    app_dir_path: ?[]const u8,
+    shell: *const BrowseShell,
+    tab_index: usize,
+    downloads: *BrowseDownloads,
+) !void {
+    if (tab_index >= shell.tabs.items.len) {
+        return;
+    }
+    const tab = shell.tabs.items[tab_index];
+    const title = try browseTabEntryTitle(allocator, app_dir_path, shell.tabs.items, tab_index, downloads);
+    defer allocator.free(title);
+    try writeInternalStartSectionTitle(writer, "Current Tab Status");
+    try writer.writeAll("<ul><li><strong>Title:</strong> ");
+    try writeHtmlEscaped(writer, title);
+    try writer.writeAll("</li><li><strong>Status:</strong> ");
+    try writeHtmlEscaped(writer, browseTabStatusLabel(tab));
+    try writer.writeAll("</li><li><strong>URL:</strong> <code>");
+    try writeHtmlEscaped(writer, browseTabPersistentUrl(tab));
+    try writer.writeAll("</code></li>");
+    if (tab.error_state.hasValue()) {
+        try writer.writeAll("<li><strong>Reason:</strong> ");
+        try writeHtmlEscaped(writer, browseErrorDetailLabel(tab.error_state.kind, tab.error_state.detail));
+        try writer.writeAll(" (");
+        try writeInternalActionLink(writer, "browser://error", "details");
+        try writer.writeAll(")</li>");
+    }
+    try writer.writeAll("</ul>");
 }
 
 fn writeInternalStartRecentTabsSection(
@@ -3256,12 +3574,54 @@ fn writeInternalStartPage(
     try writeInternalShellNav(writer, .start);
     try writer.writeAll("<p>Browser shell dashboard with live previews and direct actions.</p>");
     try writeInternalStartQuickActions(writer, tab, settings, downloads, closed_tabs_count);
+    try writeInternalStartCurrentTabStatusSection(allocator, writer, app_dir_path, shell, tab_index, downloads);
     try writeInternalStartSettingsSection(writer, tab, settings);
     try writeInternalStartRecentTabsSection(allocator, writer, app_dir_path, shell, downloads);
     try writeInternalStartClosedTabsSection(allocator, writer, shell);
     try writeInternalStartHistorySection(allocator, writer, tab);
     try writeInternalStartBookmarksSection(allocator, writer, app_dir_path, tab);
     try writeInternalStartDownloadsSection(allocator, writer, downloads);
+    try writeInternalPageEnd(writer);
+}
+
+fn writeInternalErrorPage(writer: anytype, tab: *BrowseTab, settings: *const BrowseSettings) !void {
+    const error_state = &tab.error_state;
+    const title = browseErrorTitle(error_state.kind);
+    try writeInternalPageStart(
+        writer,
+        title,
+        "browser://error",
+        browseErrorSummary(error_state.kind),
+    );
+    try writeInternalShellNavNoSelection(writer);
+    try writer.writeAll("<p><strong>Status:</strong> Failed navigation in headed browse mode.</p>");
+    try writer.writeAll("<ul><li><strong>Reason:</strong> ");
+    try writeHtmlEscaped(writer, browseErrorDetailLabel(error_state.kind, error_state.detail));
+    try writer.writeAll("</li><li><strong>Requested value:</strong> <code>");
+    try writeHtmlEscaped(writer, if (trimmedOrNull(error_state.display_value)) |value| value else "(empty)");
+    try writer.writeAll("</code></li>");
+    if (trimmedOrNull(error_state.retry_value)) |retry_value| {
+        try writer.writeAll("<li><strong>Retry target:</strong> <code>");
+        try writeHtmlEscaped(writer, retry_value);
+        try writer.writeAll("</code></li>");
+    }
+    try writer.writeAll("</ul><p>");
+    try writeInternalActionLink(writer, "browser://error/retry", "Retry");
+    try writer.writeAll(" | ");
+    try writeInternalActionLink(writer, "browser://error/home", "Open home");
+    try writer.writeAll(" | ");
+    try writeInternalActionLink(writer, "browser://error/start", "Open start");
+    try writer.writeAll(" | ");
+    try writeInternalActionLink(writer, "browser://tabs", "Open tabs page");
+    try writer.writeAll("</p>");
+    if (settings.homeUrl()) |home_url| {
+        try writer.writeAll("<p><strong>Configured home:</strong> <code>");
+        try writeHtmlEscaped(writer, home_url);
+        try writer.writeAll("</code></p>");
+    } else {
+        try writer.writeAll("<p><strong>Configured home:</strong> (none, home will fall back to Start)</p>");
+    }
+    try writer.writeAll("<p>Tip: use Ctrl+L to correct the address directly, or Retry after a temporary network failure.</p>");
     try writeInternalPageEnd(writer);
 }
 
@@ -3348,6 +3708,9 @@ fn writeInternalTabsPage(
         if (entry.is_loading) {
             try writer.writeAll(" <strong>(Loading)</strong>");
         }
+        if (tab.error_state.hasValue()) {
+            try writer.writeAll(" <strong>(Error)</strong>");
+        }
         if (entry.target_name.len > 0) {
             try writer.writeAll(" <small>target=");
             try writeHtmlEscaped(writer, entry.target_name);
@@ -3360,7 +3723,18 @@ fn writeInternalTabsPage(
         }
         try writer.writeAll("<br><small>");
         try writeHtmlEscaped(writer, entry.url);
-        try writer.writeAll("</small></li>");
+        try writer.writeAll("</small>");
+        if (tab.error_state.hasValue()) {
+            try writer.writeAll("<br><small>Reason: ");
+            try writeHtmlEscaped(writer, browseErrorDetailLabel(tab.error_state.kind, tab.error_state.detail));
+            try writer.writeAll("</small>");
+            if (index == active_index) {
+                try writer.writeAll(" <small>(");
+                try writeInternalActionLink(writer, "browser://error", "details");
+                try writer.writeAll(")</small>");
+            }
+        }
+        try writer.writeAll("</li>");
         allocator.free(tab_title);
     }
     try writer.writeAll("</ol>");
@@ -4150,6 +4524,7 @@ test "normalizeBrowseUrl rejects search-like input without a scheme" {
 
 test "parseInternalBrowsePage recognizes browser aliases" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .start), parseInternalBrowsePage("browser://start"));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .error_page), parseInternalBrowsePage("browser://error"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .tabs), parseInternalBrowsePage("browser://tabs"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), parseInternalBrowsePage("browser://history"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), parseInternalBrowsePage("browser://bookmarks/"));
@@ -4162,6 +4537,22 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .page = .start },
         parseInternalBrowseRoute("browser://start").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .page = .error_page },
+        parseInternalBrowseRoute("browser://error").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .error_retry },
+        parseInternalBrowseRoute("browser://error/retry").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .home },
+        parseInternalBrowseRoute("browser://error/home").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .page_start },
+        parseInternalBrowseRoute("browser://error/start").?,
     );
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .page = .tabs },
@@ -4261,11 +4652,13 @@ test "hashInternalTabsPageState changes when active tab changes" {
     var tab_two: BrowseTab = undefined;
     tab_one.session = &session_one;
     tab_one.committed_surface = .{};
+    tab_one.error_state = .{};
     tab_one.target_name = &.{};
     tab_one.popup_source = .none;
     tab_one.zoom_percent = 100;
     tab_two.session = &session_two;
     tab_two.committed_surface = .{};
+    tab_two.error_state = .{};
     tab_two.target_name = &.{};
     tab_two.popup_source = .none;
     tab_two.zoom_percent = 125;
@@ -4283,7 +4676,7 @@ test "hashInternalTabsPageState changes when active tab changes" {
         .items = closed_item[0..],
         .capacity = closed_item.len,
     };
-    var active_index: usize = 0;
+    var active_index: usize = 1;
     var shell: BrowseShell = .{
         .tabs = &tabs,
         .closed_tabs = &closed_tabs,
@@ -4302,6 +4695,7 @@ test "hashInternalTabsPageState changes when closed tab content changes" {
     var tab: BrowseTab = undefined;
     tab.session = &session;
     tab.committed_surface = .{};
+    tab.error_state = .{};
     tab.target_name = &.{};
     tab.popup_source = .none;
     tab.zoom_percent = 100;
@@ -4319,7 +4713,7 @@ test "hashInternalTabsPageState changes when closed tab content changes" {
         .items = closed_items[0..],
         .capacity = closed_items.len,
     };
-    var active_index: usize = 0;
+    var active_index: usize = 1;
     const shell: BrowseShell = .{
         .tabs = &tabs,
         .closed_tabs = &closed_tabs,
@@ -4341,11 +4735,15 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
     var tab_two: BrowseTab = undefined;
     tab_one.session = &session_one;
     tab_one.committed_surface = .{};
+    tab_one.error_state = .{};
     tab_one.zoom_percent = 100;
     tab_one.target_name = @constCast("report");
     tab_one.popup_source = .script;
     tab_two.session = &session_two;
     tab_two.committed_surface = .{};
+    tab_two.error_state = .{};
+    try tab_two.error_state.replace(std.testing.allocator, .navigation_failed, "http://failed.test/", "http://failed.test/", "CouldntConnect");
+    defer tab_two.error_state.deinit(std.testing.allocator);
     tab_two.zoom_percent = 125;
     tab_two.target_name = &.{};
     tab_two.popup_source = .none;
@@ -4369,7 +4767,7 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
         .items = closed_item[0..],
         .capacity = closed_item.len,
     };
-    var active_index: usize = 0;
+    var active_index: usize = 1;
     const shell: BrowseShell = .{
         .tabs = &tabs,
         .closed_tabs = &closed_tabs,
@@ -4391,6 +4789,9 @@ test "writeInternalTabsPage includes indexed actions and popup metadata" {
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed/1") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "target=report") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "popup=script") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "(Error)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Reason: CouldntConnect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://error") != null);
 }
 
 test "makeClosedBrowseTabDisplayEntries returns newest first ui ordering" {
@@ -4455,6 +4856,9 @@ test "writeInternalStartPage includes preview sections and quick actions" {
     var tab: BrowseTab = undefined;
     tab.session = &session;
     tab.committed_surface = .{ .url = @constCast("http://current.test/") };
+    tab.error_state = .{};
+    try tab.error_state.replace(std.testing.allocator, .navigation_failed, "http://failed.test/", "http://failed.test/", "CouldntConnect");
+    defer tab.error_state.deinit(std.testing.allocator);
     tab.zoom_percent = 100;
     tab.target_name = &.{};
     tab.popup_source = .none;
@@ -4502,6 +4906,7 @@ test "writeInternalStartPage includes preview sections and quick actions" {
 
     try std.testing.expect(std.mem.indexOf(u8, html, "Quick Actions") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/new") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://error") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://tabs/reopen-closed") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/add-current") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/clear") != null);
@@ -4519,6 +4924,8 @@ test "writeInternalStartPage includes preview sections and quick actions" {
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/toggle-script-popups") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/default-zoom/reset") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/homepage/clear") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "Current Tab Status") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "CouldntConnect") != null);
 }
 
 test "addPersistedBookmark appends unique bookmark once" {
@@ -4583,6 +4990,9 @@ test "makeInternalBrowsePageDisplayTitle reflects live counts" {
     session.page = null;
     var tab: BrowseTab = undefined;
     tab.session = &session;
+    tab.error_state = .{};
+    try tab.error_state.replace(std.testing.allocator, .navigation_failed, "http://failed.test/", "http://failed.test/", "CouldntConnect");
+    defer tab.error_state.deinit(std.testing.allocator);
     tab.zoom_percent = 100;
     tab.target_name = &.{};
     tab.popup_source = .none;
@@ -4610,6 +5020,10 @@ test "makeInternalBrowsePageDisplayTitle reflects live counts" {
     const downloads_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .downloads);
     defer std.testing.allocator.free(downloads_title);
     try std.testing.expectEqualStrings("Browser Downloads (1)", downloads_title);
+
+    const error_title = try makeInternalBrowsePageDisplayTitle(std.testing.allocator, abs_dir, tabs[0..], 0, &downloads, .error_page);
+    defer std.testing.allocator.free(error_title);
+    try std.testing.expectEqualStrings("Navigation Error", error_title);
 }
 
 test "hashInternalBrowsePageState changes after bookmark and download mutations" {
@@ -4627,6 +5041,7 @@ test "hashInternalBrowsePageState changes after bookmark and download mutations"
     session.page = null;
     var tab: BrowseTab = undefined;
     tab.session = &session;
+    tab.error_state = .{};
     tab.zoom_percent = 100;
     tab.target_name = &.{};
     tab.popup_source = .none;
@@ -4666,6 +5081,80 @@ test "hashInternalBrowsePageState changes after bookmark and download mutations"
     try std.testing.expect(downloads.clearInactiveEntries(abs_dir));
     const second_downloads_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .downloads);
     try std.testing.expect(first_downloads_hash != second_downloads_hash);
+
+    const first_error_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .error_page);
+    try tab.error_state.replace(std.testing.allocator, .navigation_failed, "http://failed.test/", "http://failed.test/", "CouldntConnect");
+    defer tab.error_state.deinit(std.testing.allocator);
+    const second_error_hash = hashInternalBrowsePageState(std.testing.allocator, abs_dir, &shell, 0, &settings, &downloads, .error_page);
+    try std.testing.expect(first_error_hash != second_error_hash);
+}
+
+test "writeInternalErrorPage includes retry home and start actions" {
+    var tab: BrowseTab = undefined;
+    tab.error_state = .{};
+    defer tab.error_state.deinit(std.testing.allocator);
+    try tab.error_state.replace(std.testing.allocator, .invalid_address, "two words", "two words", "Enter a full URL, for example https://example.com");
+    var settings = BrowseSettings{};
+    defer settings.deinit(std.testing.allocator);
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+    try writeInternalErrorPage(&buf.writer, &tab, &settings);
+    const html = buf.written();
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://error/retry") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://error/home") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://error/start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "two words") != null);
+}
+
+test "browseTabPersistentUrl prefers retry target for error page" {
+    var session: Session = undefined;
+    session.page = null;
+    var page: Page = undefined;
+    page.url = @constCast("browser://error");
+    session.page = &page;
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.error_state = .{};
+    defer tab.error_state.deinit(std.testing.allocator);
+    try tab.error_state.replace(std.testing.allocator, .navigation_failed, "http://retry.test/", "http://retry.test/", "CouldntConnect");
+    try std.testing.expectEqualStrings("http://retry.test/", browseTabPersistentUrl(&tab));
+}
+
+test "captureBrowseTabRuntimeError preserves error state on internal pages" {
+    var session: Session = undefined;
+    var page: Page = undefined;
+    page.url = @constCast("browser://start");
+    page._queued_navigation = null;
+    page._parse_state = .{ .complete = {} };
+    session.page = &page;
+
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.error_state = .{};
+    defer tab.error_state.deinit(std.testing.allocator);
+    try tab.error_state.replace(std.testing.allocator, .navigation_failed, "http://retry.test/", "http://retry.test/", "CouldntConnect");
+
+    try std.testing.expect(!(try captureBrowseTabRuntimeError(std.testing.allocator, &tab)));
+    try std.testing.expect(tab.error_state.hasValue());
+}
+
+test "captureBrowseTabRuntimeError clears error state on successful external pages" {
+    var session: Session = undefined;
+    var page: Page = undefined;
+    page.url = @constCast("http://ok.test/");
+    page._queued_navigation = null;
+    page._parse_state = .{ .complete = {} };
+    session.page = &page;
+
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.error_state = .{};
+    defer tab.error_state.deinit(std.testing.allocator);
+    try tab.error_state.replace(std.testing.allocator, .navigation_failed, "http://retry.test/", "http://retry.test/", "CouldntConnect");
+
+    try std.testing.expect(!(try captureBrowseTabRuntimeError(std.testing.allocator, &tab)));
+    try std.testing.expect(!tab.error_state.hasValue());
 }
 
 test "internalBrowseCommandHostPage maps stateful internal actions" {

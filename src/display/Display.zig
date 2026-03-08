@@ -79,6 +79,7 @@ pub const TabEntry = struct {
     title: []const u8,
     url: []const u8,
     is_loading: bool,
+    has_error: bool,
     target_name: []const u8,
     popup_source: PopupSource,
 };

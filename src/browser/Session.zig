@@ -431,9 +431,11 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool)
                     }
                 }
             },
-            .err => |err| {
-                page._parse_state = .{ .raw_done = @errorName(err) };
-                return err;
+            .err => {
+                // Preserve the page error state so higher-level browse flows
+                // can promote it into structured browser UI instead of
+                // flattening it into raw_done immediately.
+                return .done;
             },
             .raw_done => {
                 if (exit_when_done) {
@@ -595,7 +597,9 @@ fn processRootQueuedNavigation(self: *Session) !void {
 
     new_page.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err });
-        return err;
+        new_page.url = new_page.arena.dupeZ(u8, qn.url) catch new_page.url;
+        new_page.failNavigation(err);
+        return;
     };
 }
 
