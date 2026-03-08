@@ -58,6 +58,8 @@ The fork already has a real headed Windows foundation:
 - internal `browser://history`, `browser://bookmarks`, `browser://downloads`,
   and `browser://settings` pages now support stateful actions, not just static
   snapshots
+- the normal headed shell shortcuts now target internal browser pages first,
+  while the legacy overlays are secondary diagnostic surfaces
 
 ## Achieved Gates
 
@@ -150,8 +152,18 @@ Current state inside Gate 1:
     homepage mutation
   - homepage navigation to an internal page plus restart-time restore of the
     internal page in the session model
-- next blocker: make the internal pages the primary shell UI instead of
-  parallel overlay surfaces, and reduce dependence on the legacy overlay path
+- the standard shell shortcuts now open those internal pages directly:
+  - `Ctrl+H` history
+  - `Ctrl+Shift+B` bookmarks
+  - `Ctrl+J` downloads
+  - `Ctrl+,` settings
+- the internal pages now include a shared shell header/nav plus a
+  `browser://start` hub page, and `Alt+Home` falls back to that start page when
+  no homepage is configured
+- legacy overlays are still available for diagnostics on secondary shortcuts,
+  but they are no longer the primary shell path
+- next blocker: migrate more shell behavior and richer interaction onto the
+  internal pages so the overlay path can keep shrinking without losing utility
 
 ### Gate 2: Shared Subresource Loader And Profile
 

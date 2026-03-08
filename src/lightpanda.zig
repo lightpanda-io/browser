@@ -187,6 +187,7 @@ const MAX_CLOSED_BROWSE_TABS = 16;
 const MAX_DOWNLOADS_HISTORY = 64;
 
 const InternalBrowsePage = enum {
+    start,
     history,
     bookmarks,
     downloads,
@@ -980,7 +981,10 @@ fn handleActiveBrowseCommand(
             _ = downloads.removeEntry(app.app_dir_path, index);
         },
         .home => {
-            const home_url = settings.homeUrl() orelse return;
+            const home_url = settings.homeUrl() orelse {
+                try openInternalBrowsePage(app, tab, page, settings, downloads, .start);
+                return;
+            };
             if (parseInternalBrowsePage(home_url)) |internal_page| {
                 try openInternalBrowsePage(app, tab, page, settings, downloads, internal_page);
                 return;
@@ -2175,6 +2179,7 @@ fn hasHostPrefix(raw: []const u8, prefix: []const u8) bool {
 
 fn internalBrowsePageAlias(internal_page: InternalBrowsePage) []const u8 {
     return switch (internal_page) {
+        .start => "browser://start",
         .history => "browser://history",
         .bookmarks => "browser://bookmarks",
         .downloads => "browser://downloads",
@@ -2183,6 +2188,9 @@ fn internalBrowsePageAlias(internal_page: InternalBrowsePage) []const u8 {
 }
 
 fn parseInternalBrowseNamedPage(page_name: []const u8) ?InternalBrowsePage {
+    if (std.ascii.eqlIgnoreCase(page_name, "start")) {
+        return .start;
+    }
     if (std.ascii.eqlIgnoreCase(page_name, "history")) {
         return .history;
     }
@@ -2240,6 +2248,7 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
     }
 
     return switch (page) {
+        .start => .{ .page = .start },
         .history => if (parseInternalBrowseIndexAction(action, "traverse/")) |index|
             .{ .command = .{ .history_traverse = index } }
         else
@@ -2355,6 +2364,20 @@ fn hashInternalBrowsePageState(
     internal_page: InternalBrowsePage,
 ) u64 {
     return switch (internal_page) {
+        .start => blk: {
+            var hasher = std.hash.Wyhash.init(0);
+            const history_hash = hashInternalHistoryPageState(tab);
+            hasher.update(std.mem.asBytes(&history_hash));
+            var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+            defer deinitOwnedStrings(allocator, &bookmarks);
+            const bookmark_hash = hashOwnedStringSlice(bookmarks.items);
+            hasher.update(std.mem.asBytes(&bookmark_hash));
+            const download_hash = hashSavedDownloads(downloads.entries.items);
+            hasher.update(std.mem.asBytes(&download_hash));
+            const settings_hash = hashBrowseSettings(settings);
+            hasher.update(std.mem.asBytes(&settings_hash));
+            break :blk hasher.final();
+        },
         .history => hashInternalHistoryPageState(tab),
         .bookmarks => blk: {
             var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
@@ -2424,6 +2447,7 @@ fn buildInternalBrowsePageHtml(
     defer html.deinit();
 
     switch (internal_page) {
+        .start => try writeInternalStartPage(allocator, &html.writer, app_dir_path, tab, settings, downloads),
         .history => try writeInternalHistoryPage(allocator, &html.writer, tab),
         .bookmarks => try writeInternalBookmarksPage(allocator, &html.writer, app_dir_path),
         .downloads => try writeInternalDownloadsPage(allocator, &html.writer, downloads),
@@ -2488,7 +2512,34 @@ fn writeInternalPageStart(writer: anytype, title: []const u8, alias: []const u8,
     try writeHtmlEscaped(writer, subtitle);
     try writer.writeAll("</p><p>Address alias: <code>");
     try writeHtmlEscaped(writer, alias);
-    try writer.writeAll("</code></p>");
+    try writer.writeAll("</code></p><p><strong>Shell:</strong> ");
+}
+
+fn writeInternalShellNav(writer: anytype, current_page: InternalBrowsePage) !void {
+    const nav_pages = [_]InternalBrowsePage{ .start, .history, .bookmarks, .downloads, .settings };
+    for (nav_pages, 0..) |nav_page, index| {
+        if (index != 0) {
+            try writer.writeAll(" | ");
+        }
+        if (nav_page == current_page) {
+            try writer.writeAll("<strong>");
+            try writeHtmlEscaped(writer, internalBrowsePageTitle(nav_page));
+            try writer.writeAll("</strong>");
+        } else {
+            try writeInternalActionLink(writer, internalBrowsePageAlias(nav_page), internalBrowsePageTitle(nav_page));
+        }
+    }
+    try writer.writeAll("</p>");
+}
+
+fn internalBrowsePageTitle(internal_page: InternalBrowsePage) []const u8 {
+    return switch (internal_page) {
+        .start => "Start",
+        .history => "History",
+        .bookmarks => "Bookmarks",
+        .downloads => "Downloads",
+        .settings => "Settings",
+    };
 }
 
 fn writeInternalPageEnd(writer: anytype) !void {
@@ -2503,13 +2554,63 @@ fn writeInternalActionLink(writer: anytype, href: []const u8, label: []const u8)
     try writer.writeAll("</a>");
 }
 
+fn writeInternalStartPage(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    app_dir_path: ?[]const u8,
+    tab: *BrowseTab,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+) !void {
+    var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
+    defer deinitOwnedStrings(allocator, &bookmarks);
+    const history_entries = tab.session.navigation.entries();
+
+    try writeInternalPageStart(
+        writer,
+        "Browser Start",
+        "browser://start",
+        "Internal browser shell hub for headed browse mode.",
+    );
+    try writeInternalShellNav(writer, .start);
+    try writer.writeAll("<ul>");
+    try writer.print("<li>History entries: <strong>{d}</strong> ", .{history_entries.len});
+    try writeInternalActionLink(writer, "browser://history", "Open history");
+    try writer.writeAll("</li>");
+    try writer.print("<li>Bookmarks: <strong>{d}</strong> ", .{bookmarks.items.len});
+    try writeInternalActionLink(writer, "browser://bookmarks", "Open bookmarks");
+    try writer.writeAll("</li>");
+    try writer.print("<li>Downloads: <strong>{d}</strong> ", .{downloads.entries.items.len});
+    try writeInternalActionLink(writer, "browser://downloads", "Open downloads");
+    try writer.writeAll("</li><li>Settings and policy: ");
+    try writeInternalActionLink(writer, "browser://settings", "Open settings");
+    try writer.writeAll("</li>");
+    if (settings.homeUrl()) |home_url| {
+        try writer.writeAll("<li>Homepage: ");
+        try writeInternalActionLink(writer, home_url, "Open homepage");
+        try writer.writeAll(" <small>(");
+        try writeHtmlEscaped(writer, home_url);
+        try writer.writeAll(")</small></li>");
+    } else {
+        try writer.writeAll("<li>No homepage set. Press Alt+Home to reopen this Start page.</li>");
+    }
+    try writer.writeAll("</ul>");
+    try writeInternalPageEnd(writer);
+}
+
 fn writeInternalHistoryPage(allocator: std.mem.Allocator, writer: anytype, tab: *BrowseTab) !void {
     const entries = tab.session.navigation.entries();
     const current_index = if (entries.len == 0) 0 else tab.session.navigation.getCurrentIndex();
-    try writer.print(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Browser History ({d})</title></head><body><h1>Browser History</h1><p>Current tab navigation entries.</p><p>Address alias: <code>browser://history</code></p>",
-        .{entries.len},
+    const title = try std.fmt.allocPrint(allocator, "Browser History ({d})", .{entries.len});
+    defer allocator.free(title);
+    try writeInternalPageStart(
+        writer,
+        title,
+        "browser://history",
+        "Current tab navigation entries.",
     );
+    try writeInternalShellNav(writer, .history);
+    try writer.print("<p><strong>Entries:</strong> {d}</p>", .{entries.len});
     if (entries.len == 0) {
         try writer.writeAll("<p>No history entries yet.</p>");
         try writeInternalPageEnd(writer);
@@ -2540,11 +2641,16 @@ fn writeInternalBookmarksPage(
 ) !void {
     var bookmarks = loadPersistedBookmarks(allocator, app_dir_path);
     defer deinitOwnedStrings(allocator, &bookmarks);
-
-    try writer.print(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Browser Bookmarks ({d})</title></head><body><h1>Browser Bookmarks</h1><p>Persisted bookmark entries from the current browser profile.</p><p>Address alias: <code>browser://bookmarks</code></p>",
-        .{bookmarks.items.len},
+    const title = try std.fmt.allocPrint(allocator, "Browser Bookmarks ({d})", .{bookmarks.items.len});
+    defer allocator.free(title);
+    try writeInternalPageStart(
+        writer,
+        title,
+        "browser://bookmarks",
+        "Persisted bookmark entries from the current browser profile.",
     );
+    try writeInternalShellNav(writer, .bookmarks);
+    try writer.print("<p><strong>Entries:</strong> {d}</p>", .{bookmarks.items.len});
     if (bookmarks.items.len == 0) {
         try writer.writeAll("<p>No bookmarks saved yet. Press Ctrl+D on a page first.</p>");
         try writeInternalPageEnd(writer);
@@ -2573,10 +2679,16 @@ fn writeInternalDownloadsPage(
     writer: anytype,
     downloads: *BrowseDownloads,
 ) !void {
-    try writer.print(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Browser Downloads ({d})</title></head><body><h1>Browser Downloads</h1><p>Download history for the current browser profile.</p><p>Address alias: <code>browser://downloads</code></p>",
-        .{downloads.entries.items.len},
+    const title = try std.fmt.allocPrint(allocator, "Browser Downloads ({d})", .{downloads.entries.items.len});
+    defer allocator.free(title);
+    try writeInternalPageStart(
+        writer,
+        title,
+        "browser://downloads",
+        "Download history for the current browser profile.",
     );
+    try writeInternalShellNav(writer, .downloads);
+    try writer.print("<p><strong>Entries:</strong> {d}</p>", .{downloads.entries.items.len});
     if (downloads.entries.items.len == 0) {
         try writer.writeAll("<p>No downloads recorded yet.</p>");
         try writeInternalPageEnd(writer);
@@ -2615,6 +2727,7 @@ fn writeInternalSettingsPage(writer: anytype, tab: *BrowseTab, settings: *const 
         "browser://settings",
         "Persisted shell settings for headed browse mode.",
     );
+    try writeInternalShellNav(writer, .settings);
     try writer.writeAll("<ul><li>Restore previous session: <strong>");
     try writer.writeAll(if (settings.restore_previous_session) "On" else "Off");
     try writer.writeAll("</strong> ");
@@ -3208,6 +3321,7 @@ test "normalizeBrowseUrl rejects search-like input without a scheme" {
 }
 
 test "parseInternalBrowsePage recognizes browser aliases" {
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .start), parseInternalBrowsePage("browser://start"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), parseInternalBrowsePage("browser://history"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), parseInternalBrowsePage("browser://bookmarks/"));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), parseInternalBrowsePage("browser://downloads?recent=1"));
@@ -3216,6 +3330,10 @@ test "parseInternalBrowsePage recognizes browser aliases" {
 }
 
 test "parseInternalBrowseRoute recognizes interactive browser page actions" {
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .page = .start },
+        parseInternalBrowseRoute("browser://start").?,
+    );
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .history_traverse = 2 } },
         parseInternalBrowseRoute("browser://history/traverse/2").?,
@@ -3244,6 +3362,20 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         InternalBrowseRoute{ .command = .settings_set_homepage_to_current },
         parseInternalBrowseRoute("browser://settings/homepage/set-current").?,
     );
+}
+
+test "writeInternalShellNav marks current section and links other shell pages" {
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+
+    try writeInternalShellNav(&buf.writer, .downloads);
+
+    const html = buf.written();
+    try std.testing.expect(std.mem.indexOf(u8, html, "<strong>Downloads</strong>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://start") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://history") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings") != null);
 }
 
 test "removePersistedBookmarkAtIndex rewrites bookmark file" {

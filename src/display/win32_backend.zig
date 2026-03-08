@@ -3091,27 +3091,27 @@ fn formatPresentationHintText(
     if (popup_hint.target_name.len > 0 and source_label.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} target [{s}]  Script popups {s}",
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history page  Ctrl+J downloads page  Ctrl+D bookmark  Ctrl+Shift+B bookmarks page  Ctrl+, settings page  Ctrl+Alt+H/B/J/S overlays  Alt+Home home/start  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} target [{s}]  Script popups {s}",
             .{ zoom_percent, source_label, popup_hint.target_name, popup_policy },
         );
     }
     if (popup_hint.target_name.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]  Script popups {s}",
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history page  Ctrl+J downloads page  Ctrl+D bookmark  Ctrl+Shift+B bookmarks page  Ctrl+, settings page  Ctrl+Alt+H/B/J/S overlays  Alt+Home home/start  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup target [{s}]  Script popups {s}",
             .{ zoom_percent, popup_hint.target_name, popup_policy },
         );
     }
     if (source_label.len > 0) {
         return try std.fmt.allocPrint(
             allocator,
-            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} tab  Script popups {s}",
+            "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history page  Ctrl+J downloads page  Ctrl+D bookmark  Ctrl+Shift+B bookmarks page  Ctrl+, settings page  Ctrl+Alt+H/B/J/S overlays  Alt+Home home/start  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Popup {s} tab  Script popups {s}",
             .{ zoom_percent, source_label, popup_policy },
         );
     }
     return try std.fmt.allocPrint(
         allocator,
-        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history  Ctrl+J downloads  Ctrl+D bookmark  Ctrl+Shift+B bookmarks  Ctrl+, settings  Ctrl+Alt+H/B/J/S pages  Alt+Home home  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Script popups {s}",
+        "Ctrl+T new tab  Ctrl+Shift+D duplicate  Ctrl+W close tab  Ctrl+Shift+T reopen  Ctrl+Tab next  Ctrl+Shift+Tab prev  Ctrl+L address  Ctrl+F find  Ctrl+H history page  Ctrl+J downloads page  Ctrl+D bookmark  Ctrl+Shift+B bookmarks page  Ctrl+, settings page  Ctrl+Alt+H/B/J/S overlays  Alt+Home home/start  Alt+Left back  Alt+Right forward  F5 reload  Esc stop  Ctrl++ zoom in  Ctrl+- zoom out  Ctrl+0 reset  Ctrl+Wheel zoom  Zoom {d}%  Script popups {s}",
         .{ zoom_percent, popup_policy },
     );
 }
@@ -3230,7 +3230,7 @@ fn drawHistoryOverlay(
     drawPresentationText(
         hdc,
         &header_rect,
-        "History  Up/Down Enter  Ctrl+H close",
+        "History  Up/Down Enter  Ctrl+Alt+H close",
         c.DT_LEFT | c.DT_TOP | c.DT_SINGLELINE | c.DT_NOPREFIX,
     );
     drawChromeButton(hdc, historyOverlayCloseButtonRect(panel), "x", true);
@@ -3323,7 +3323,7 @@ fn drawBookmarkOverlay(
     };
     const owned_header: ?[]u8 = std.fmt.allocPrint(
         allocator,
-        "Bookmarks {d}  Ctrl+Shift+B close",
+        "Bookmarks {d}  Ctrl+Alt+B close",
         .{entries.len},
     ) catch null;
     defer if (owned_header) |header| allocator.free(header);
@@ -3443,7 +3443,7 @@ fn drawDownloadOverlay(
     };
     const owned_header: ?[]u8 = std.fmt.allocPrint(
         allocator,
-        "Downloads {d}  Ctrl+J close",
+        "Downloads {d}  Ctrl+Alt+J close",
         .{entries.len},
     ) catch null;
     defer if (owned_header) |header| allocator.free(header);
@@ -3554,7 +3554,7 @@ fn drawSettingsOverlay(
     drawPresentationText(
         hdc,
         &header_rect,
-        "Settings  Ctrl+, close  Alt+Home home",
+        "Settings  Ctrl+Alt+S close  Alt+Home home/start",
         c.DT_LEFT | c.DT_TOP | c.DT_SINGLELINE | c.DT_NOPREFIX,
     );
     drawChromeButton(hdc, settingsOverlayClearButtonRect(panel), "Clr", snapshot.homepage_url.len > 0);
@@ -4957,19 +4957,26 @@ fn handlePresentationShortcutKey(
     if (modifiers.ctrl and modifiers.alt and !modifiers.shift and !modifiers.meta) {
         switch (vk) {
             'H' => {
-                queueBrowserCommand(backend, .page_history);
+                if (presentationHistoryEntryCount(backend) == 0) {
+                    return false;
+                }
+                _ = setHistoryOverlayOpen(backend, !presentationHistoryOverlayOpen(backend));
+                _ = c.InvalidateRect(hwnd, null, c.TRUE);
                 return true;
             },
             'B' => {
-                queueBrowserCommand(backend, .page_bookmarks);
+                _ = setBookmarkOverlayOpen(backend, !presentationBookmarkOverlayOpen(backend));
+                _ = c.InvalidateRect(hwnd, null, c.TRUE);
                 return true;
             },
             'J' => {
-                queueBrowserCommand(backend, .page_downloads);
+                _ = setDownloadOverlayOpen(backend, !presentationDownloadOverlayOpen(backend));
+                _ = c.InvalidateRect(hwnd, null, c.TRUE);
                 return true;
             },
             'S' => {
-                queueBrowserCommand(backend, .page_settings);
+                _ = setSettingsOverlayOpen(backend, !presentationSettingsOverlayOpen(backend));
+                _ = c.InvalidateRect(hwnd, null, c.TRUE);
                 return true;
             },
             else => {},
@@ -5010,8 +5017,7 @@ fn handlePresentationShortcutKey(
         return true;
     }
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == c.VK_OEM_COMMA) {
-        _ = setSettingsOverlayOpen(backend, !presentationSettingsOverlayOpen(backend));
-        _ = c.InvalidateRect(hwnd, null, c.TRUE);
+        queueBrowserCommand(backend, .page_settings);
         return true;
     }
     if ((modifiers.alt or modifiers.meta) and !modifiers.ctrl and !modifiers.shift and vk == c.VK_HOME) {
@@ -5112,11 +5118,7 @@ fn handlePresentationShortcutKey(
         return false;
     }
     if (modifiers.ctrl and modifiers.shift and !modifiers.alt and !modifiers.meta and vk == 'B') {
-        if (setBookmarkOverlayOpen(backend, !presentationBookmarkOverlayOpen(backend))) {
-            _ = c.InvalidateRect(hwnd, null, c.TRUE);
-        } else {
-            _ = c.InvalidateRect(hwnd, null, c.TRUE);
-        }
+        queueBrowserCommand(backend, .page_bookmarks);
         return true;
     }
 
@@ -5178,20 +5180,12 @@ fn handlePresentationShortcutKey(
     }
 
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'H') {
-        if (presentationHistoryEntryCount(backend) == 0) {
-            return false;
-        }
-        if (setHistoryOverlayOpen(backend, !presentationHistoryOverlayOpen(backend))) {
-            _ = c.InvalidateRect(hwnd, null, c.TRUE);
-        } else {
-            _ = c.InvalidateRect(hwnd, null, c.TRUE);
-        }
+        queueBrowserCommand(backend, .page_history);
         return true;
     }
 
     if (modifiers.ctrl and !modifiers.alt and !modifiers.meta and !modifiers.shift and vk == 'J') {
-        _ = setDownloadOverlayOpen(backend, !presentationDownloadOverlayOpen(backend));
-        _ = c.InvalidateRect(hwnd, null, c.TRUE);
+        queueBrowserCommand(backend, .page_downloads);
         return true;
     }
 
@@ -6624,16 +6618,16 @@ test "win32 tab shortcuts enqueue commands" {
     try std.testing.expectEqual(@as(?BrowserCommand, null), backend.nextBrowserCommand());
 }
 
-test "win32 ctrl+alt shortcuts enqueue internal browser pages" {
+test "win32 standard shell shortcuts enqueue internal browser pages" {
     var backend = Win32Backend.init(std.testing.allocator, 1, 1);
     defer backend.deinit();
 
     backend.presentation_title = try std.testing.allocator.dupe(u8, "Browser");
 
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'H', .{ .ctrl = true, .alt = true }));
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'B', .{ .ctrl = true, .alt = true }));
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true, .alt = true }));
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'S', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'H', .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'B', .{ .ctrl = true, .shift = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_OEM_COMMA, .{ .ctrl = true }));
 
     try std.testing.expectEqual(BrowserCommand.page_history, backend.nextBrowserCommand().?);
     try std.testing.expectEqual(BrowserCommand.page_bookmarks, backend.nextBrowserCommand().?);
@@ -6674,27 +6668,46 @@ test "win32 single tab close button is disabled" {
     );
 }
 
-test "win32 ctrl+j toggles downloads overlay" {
+test "win32 ctrl+alt+j toggles downloads overlay" {
     var backend = Win32Backend.init(std.testing.allocator, 1, 1);
     defer backend.deinit();
 
     backend.presentation_title = try std.testing.allocator.dupe(u8, "Downloads");
 
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true, .alt = true }));
     try std.testing.expect(presentationDownloadOverlayOpen(&backend));
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'J', .{ .ctrl = true, .alt = true }));
     try std.testing.expect(!presentationDownloadOverlayOpen(&backend));
 }
 
-test "win32 ctrl+comma toggles settings overlay" {
+test "win32 ctrl+alt history and bookmarks toggle overlays" {
+    var backend = Win32Backend.init(std.testing.allocator, 1, 1);
+    defer backend.deinit();
+
+    backend.presentation_title = try std.testing.allocator.dupe(u8, "Browser");
+    try backend.presentation_history_entries.append(std.testing.allocator, try std.testing.allocator.dupe(u8, "http://one.test/"));
+    try backend.presentation_bookmark_entries.append(std.testing.allocator, try std.testing.allocator.dupe(u8, "http://one.test/"));
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'H', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(presentationHistoryOverlayOpen(&backend));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'H', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(!presentationHistoryOverlayOpen(&backend));
+
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'B', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(presentationBookmarkOverlayOpen(&backend));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'B', .{ .ctrl = true, .alt = true }));
+    try std.testing.expect(!presentationBookmarkOverlayOpen(&backend));
+}
+
+test "win32 ctrl+alt+s toggles settings overlay" {
     var backend = Win32Backend.init(std.testing.allocator, 1, 1);
     defer backend.deinit();
 
     backend.presentation_title = try std.testing.allocator.dupe(u8, "Settings");
 
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_OEM_COMMA, .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'S', .{ .ctrl = true, .alt = true }));
     try std.testing.expect(presentationSettingsOverlayOpen(&backend));
-    try std.testing.expect(handlePresentationShortcutKey(null, &backend, c.VK_OEM_COMMA, .{ .ctrl = true }));
+    try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'S', .{ .ctrl = true, .alt = true }));
     try std.testing.expect(!presentationSettingsOverlayOpen(&backend));
 }
 
