@@ -167,17 +167,17 @@ pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     const query_end = if (query_start) |_| (fragment_start orelse url.len) else path_end;
 
     const path_to_encode = url[path_start..path_end];
-    const encoded_path = try percentEncodeSegment(allocator, path_to_encode, true);
+    const encoded_path = try percentEncodeSegment(allocator, path_to_encode, .path);
 
     const encoded_query = if (query_start) |qs| blk: {
         const query_to_encode = url[qs + 1 .. query_end];
-        const encoded = try percentEncodeSegment(allocator, query_to_encode, false);
+        const encoded = try percentEncodeSegment(allocator, query_to_encode, .query);
         break :blk encoded;
     } else null;
 
     const encoded_fragment = if (fragment_start) |fs| blk: {
         const fragment_to_encode = url[fs + 1 ..];
-        const encoded = try percentEncodeSegment(allocator, fragment_to_encode, false);
+        const encoded = try percentEncodeSegment(allocator, fragment_to_encode, .query);
         break :blk encoded;
     } else null;
 
@@ -204,11 +204,13 @@ pub fn ensureEncoded(allocator: Allocator, url: [:0]const u8) ![:0]const u8 {
     return buf.items[0 .. buf.items.len - 1 :0];
 }
 
-fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime is_path: bool) ![]const u8 {
+const EncodeSet = enum { path, query, userinfo };
+
+fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime encode_set: EncodeSet) ![]const u8 {
     // Check if encoding is needed
     var needs_encoding = false;
     for (segment) |c| {
-        if (shouldPercentEncode(c, is_path)) {
+        if (shouldPercentEncode(c, encode_set)) {
             needs_encoding = true;
             break;
         }
@@ -235,7 +237,7 @@ fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime is_p
             }
         }
 
-        if (shouldPercentEncode(c, is_path)) {
+        if (shouldPercentEncode(c, encode_set)) {
             try buf.writer(allocator).print("%{X:0>2}", .{c});
         } else {
             try buf.append(allocator, c);
@@ -245,16 +247,17 @@ fn percentEncodeSegment(allocator: Allocator, segment: []const u8, comptime is_p
     return buf.items;
 }
 
-fn shouldPercentEncode(c: u8, comptime is_path: bool) bool {
+fn shouldPercentEncode(c: u8, comptime encode_set: EncodeSet) bool {
     return switch (c) {
         // Unreserved characters (RFC 3986)
         'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => false,
-        // sub-delims allowed in both path and query
-        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => false,
-        // Separators allowed in both path and query
-        '/', ':', '@' => false,
-        // Query-specific: '?' is allowed in queries but not in paths
-        '?' => comptime is_path,
+        // sub-delims allowed in path/query but some must be encoded in userinfo
+        '!', '$', '&', '\'', '(', ')', '*', '+', ',' => false,
+        ';', '=' => encode_set == .userinfo,
+        // Separators: userinfo must encode these
+        '/', ':', '@' => encode_set == .userinfo,
+        // '?' is allowed in queries but not in paths or userinfo
+        '?' => encode_set != .query,
         // Everything else needs encoding (including space)
         else => true,
     };
@@ -514,7 +517,7 @@ pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) !
     const search = getSearch(current);
     const hash = getHash(current);
 
-    // Check if the host includes a port
+    // Check if the new value includes a port
     const colon_pos = std.mem.lastIndexOfScalar(u8, value, ':');
     const clean_host = if (colon_pos) |pos| blk: {
         const port_str = value[pos + 1 ..];
@@ -526,7 +529,14 @@ pub fn setHost(current: [:0]const u8, value: []const u8, allocator: Allocator) !
             break :blk value[0..pos];
         }
         break :blk value;
-    } else value;
+    } else blk: {
+        // No port in new value - preserve existing port
+        const current_port = getPort(current);
+        if (current_port.len > 0) {
+            break :blk try std.fmt.allocPrint(allocator, "{s}:{s}", .{ value, current_port });
+        }
+        break :blk value;
+    };
 
     return buildUrl(allocator, protocol, clean_host, pathname, search, hash);
 }
@@ -544,6 +554,9 @@ pub fn setHostname(current: [:0]const u8, value: []const u8, allocator: Allocato
 pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) ![:0]const u8 {
     const hostname = getHostname(current);
     const protocol = getProtocol(current);
+    const pathname = getPathname(current);
+    const search = getSearch(current);
+    const hash = getHash(current);
 
     // Handle null or default ports
     const new_host = if (value) |port_str| blk: {
@@ -560,7 +573,7 @@ pub fn setPort(current: [:0]const u8, value: ?[]const u8, allocator: Allocator) 
         break :blk try std.fmt.allocPrint(allocator, "{s}:{s}", .{ hostname, port_str });
     } else hostname;
 
-    return setHost(current, new_host, allocator);
+    return buildUrl(allocator, protocol, new_host, pathname, search, hash);
 }
 
 pub fn setPathname(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
@@ -606,6 +619,64 @@ pub fn setHash(current: [:0]const u8, value: []const u8, allocator: Allocator) !
         value;
 
     return buildUrl(allocator, protocol, host, pathname, search, hash);
+}
+
+pub fn setUsername(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const protocol = getProtocol(current);
+    const host = getHost(current);
+    const pathname = getPathname(current);
+    const search = getSearch(current);
+    const hash = getHash(current);
+    const password = getPassword(current);
+
+    const encoded_username = try percentEncodeSegment(allocator, value, .userinfo);
+    return buildUrlWithUserInfo(allocator, protocol, encoded_username, password, host, pathname, search, hash);
+}
+
+pub fn setPassword(current: [:0]const u8, value: []const u8, allocator: Allocator) ![:0]const u8 {
+    const protocol = getProtocol(current);
+    const host = getHost(current);
+    const pathname = getPathname(current);
+    const search = getSearch(current);
+    const hash = getHash(current);
+    const username = getUsername(current);
+
+    const encoded_password = try percentEncodeSegment(allocator, value, .userinfo);
+    return buildUrlWithUserInfo(allocator, protocol, username, encoded_password, host, pathname, search, hash);
+}
+
+fn buildUrlWithUserInfo(
+    allocator: Allocator,
+    protocol: []const u8,
+    username: []const u8,
+    password: []const u8,
+    host: []const u8,
+    pathname: []const u8,
+    search: []const u8,
+    hash: []const u8,
+) ![:0]const u8 {
+    if (username.len == 0 and password.len == 0) {
+        return buildUrl(allocator, protocol, host, pathname, search, hash);
+    } else if (password.len == 0) {
+        return std.fmt.allocPrintSentinel(allocator, "{s}//{s}@{s}{s}{s}{s}", .{
+            protocol,
+            username,
+            host,
+            pathname,
+            search,
+            hash,
+        }, 0);
+    } else {
+        return std.fmt.allocPrintSentinel(allocator, "{s}//{s}:{s}@{s}{s}{s}{s}", .{
+            protocol,
+            username,
+            password,
+            host,
+            pathname,
+            search,
+            hash,
+        }, 0);
+    }
 }
 
 pub fn concatQueryString(arena: Allocator, url: []const u8, query_string: []const u8) ![:0]const u8 {
