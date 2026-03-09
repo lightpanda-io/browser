@@ -258,7 +258,192 @@ fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []
         }
     }
 
+    // Canonicalize anchor-size() function: anchor name (dashed ident) comes before size keyword
+    if (std.mem.indexOf(u8, value, "anchor-size(") != null) {
+        return try canonicalizeAnchorSize(arena, value);
+    }
+
     return value;
+}
+
+// Canonicalize anchor-size() so that the dashed ident (anchor name) comes before the size keyword.
+// e.g. "anchor-size(width --foo)" -> "anchor-size(--foo width)"
+fn canonicalizeAnchorSize(arena: Allocator, value: []const u8) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(arena);
+    var i: usize = 0;
+
+    while (i < value.len) {
+        // Look for "anchor-size("
+        if (std.mem.startsWith(u8, value[i..], "anchor-size(")) {
+            try buf.writer.writeAll("anchor-size(");
+            i += "anchor-size(".len;
+
+            // Parse and canonicalize the arguments
+            i = try canonicalizeAnchorSizeArgs(value, i, &buf.writer);
+        } else {
+            try buf.writer.writeByte(value[i]);
+            i += 1;
+        }
+    }
+
+    return buf.written();
+}
+
+// Parse anchor-size arguments and write them in canonical order
+fn canonicalizeAnchorSizeArgs(value: []const u8, start: usize, writer: *std.Io.Writer) !usize {
+    var i = start;
+    var depth: usize = 1;
+
+    // Skip leading whitespace
+    while (i < value.len and value[i] == ' ') : (i += 1) {}
+
+    // Collect tokens before the comma or close paren
+    var first_token_start: ?usize = null;
+    var first_token_end: usize = 0;
+    var second_token_start: ?usize = null;
+    var second_token_end: usize = 0;
+    var comma_pos: ?usize = null;
+    var token_count: usize = 0;
+
+    const args_start = i;
+    var in_token = false;
+
+    // First pass: find the structure of arguments before comma/closing paren at depth 1
+    while (i < value.len and depth > 0) {
+        const c = value[i];
+
+        if (c == '(') {
+            depth += 1;
+            in_token = true;
+            i += 1;
+        } else if (c == ')') {
+            depth -= 1;
+            if (depth == 0) {
+                if (in_token) {
+                    if (token_count == 0) {
+                        first_token_end = i;
+                    } else if (token_count == 1) {
+                        second_token_end = i;
+                    }
+                }
+                break;
+            }
+            i += 1;
+        } else if (c == ',' and depth == 1) {
+            if (in_token) {
+                if (token_count == 0) {
+                    first_token_end = i;
+                } else if (token_count == 1) {
+                    second_token_end = i;
+                }
+            }
+            comma_pos = i;
+            break;
+        } else if (c == ' ') {
+            if (in_token and depth == 1) {
+                if (token_count == 0) {
+                    first_token_end = i;
+                    token_count = 1;
+                } else if (token_count == 1 and second_token_start != null) {
+                    second_token_end = i;
+                    token_count = 2;
+                }
+                in_token = false;
+            }
+            i += 1;
+        } else {
+            if (!in_token and depth == 1) {
+                if (token_count == 0) {
+                    first_token_start = i;
+                } else if (token_count == 1) {
+                    second_token_start = i;
+                }
+                in_token = true;
+            }
+            i += 1;
+        }
+    }
+
+    // Handle end of tokens
+    if (in_token and token_count == 1 and second_token_start != null) {
+        second_token_end = i;
+        token_count = 2;
+    } else if (in_token and token_count == 0) {
+        first_token_end = i;
+        token_count = 1;
+    }
+
+    // Check if we have exactly two tokens that need reordering
+    if (token_count == 2) {
+        const first_start = first_token_start orelse args_start;
+        const second_start = second_token_start orelse first_token_end;
+
+        const first_token = value[first_start..first_token_end];
+        const second_token = value[second_start..second_token_end];
+
+        // If second token is a dashed ident and first is a size keyword, swap them
+        if (std.mem.startsWith(u8, second_token, "--") and isAnchorSizeKeyword(first_token)) {
+            try writer.writeAll(second_token);
+            try writer.writeByte(' ');
+            try writer.writeAll(first_token);
+        } else {
+            // Keep original order
+            try writer.writeAll(first_token);
+            try writer.writeByte(' ');
+            try writer.writeAll(second_token);
+        }
+    } else if (first_token_start) |fts| {
+        // Single token, just copy it
+        try writer.writeAll(value[fts..first_token_end]);
+    }
+
+    // Handle comma and fallback value (may contain nested anchor-size)
+    if (comma_pos) |cp| {
+        try writer.writeAll(", ");
+        i = cp + 1;
+        // Skip whitespace after comma
+        while (i < value.len and value[i] == ' ') : (i += 1) {}
+
+        // Copy the fallback, recursively handling nested anchor-size
+        while (i < value.len and depth > 0) {
+            if (std.mem.startsWith(u8, value[i..], "anchor-size(")) {
+                try writer.writeAll("anchor-size(");
+                i += "anchor-size(".len;
+                depth += 1;
+                i = try canonicalizeAnchorSizeArgs(value, i, writer);
+                depth -= 1;
+            } else if (value[i] == '(') {
+                depth += 1;
+                try writer.writeByte(value[i]);
+                i += 1;
+            } else if (value[i] == ')') {
+                depth -= 1;
+                if (depth == 0) break;
+                try writer.writeByte(value[i]);
+                i += 1;
+            } else {
+                try writer.writeByte(value[i]);
+                i += 1;
+            }
+        }
+    }
+
+    // Write closing paren
+    try writer.writeByte(')');
+
+    return i + 1; // Skip past the closing paren
+}
+
+fn isAnchorSizeKeyword(token: []const u8) bool {
+    const keywords = std.StaticStringMap(void).initComptime(.{
+        .{ "width", {} },
+        .{ "height", {} },
+        .{ "block", {} },
+        .{ "inline", {} },
+        .{ "self-block", {} },
+        .{ "self-inline", {} },
+    });
+    return keywords.has(token);
 }
 
 // Check if a value is "X X" (duplicate) and return just "X"

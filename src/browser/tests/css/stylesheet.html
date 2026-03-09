@@ -341,3 +341,43 @@
     testing.expectEqual('10px 20px', div.style.gap);
 }
 </script>
+
+<script id="CSSStyleDeclaration_normalize_anchor_size">
+{
+    // anchor-size() should serialize with dashed ident (anchor name) before size keyword
+    const div = document.createElement('div');
+
+    // Already canonical order - should stay the same
+    div.style.width = 'anchor-size(--foo width)';
+    testing.expectEqual('anchor-size(--foo width)', div.style.width);
+
+    // Non-canonical order - should be reordered
+    div.style.width = 'anchor-size(width --foo)';
+    testing.expectEqual('anchor-size(--foo width)', div.style.width);
+
+    // With fallback value
+    div.style.width = 'anchor-size(height --bar, 100px)';
+    testing.expectEqual('anchor-size(--bar height, 100px)', div.style.width);
+
+    // Different size keywords
+    div.style.width = 'anchor-size(block --baz)';
+    testing.expectEqual('anchor-size(--baz block)', div.style.width);
+
+    div.style.width = 'anchor-size(inline --qux)';
+    testing.expectEqual('anchor-size(--qux inline)', div.style.width);
+
+    div.style.width = 'anchor-size(self-block --test)';
+    testing.expectEqual('anchor-size(--test self-block)', div.style.width);
+
+    div.style.width = 'anchor-size(self-inline --test)';
+    testing.expectEqual('anchor-size(--test self-inline)', div.style.width);
+
+    // Without anchor name (implicit default anchor)
+    div.style.width = 'anchor-size(width)';
+    testing.expectEqual('anchor-size(width)', div.style.width);
+
+    // Nested anchor-size in fallback
+    div.style.width = 'anchor-size(width --foo, anchor-size(height --bar))';
+    testing.expectEqual('anchor-size(--foo width, anchor-size(--bar height))', div.style.width);
+}
+</script>
