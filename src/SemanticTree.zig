@@ -385,9 +385,17 @@ const JsonVisitor = struct {
 };
 
 fn isStructuralRole(role: []const u8) bool {
+    // zig fmt: off
     return std.mem.eql(u8, role, "none") or
         std.mem.eql(u8, role, "generic") or
-        std.mem.eql(u8, role, "InlineTextBox");
+        std.mem.eql(u8, role, "InlineTextBox") or
+        std.mem.eql(u8, role, "banner") or
+        std.mem.eql(u8, role, "navigation") or
+        std.mem.eql(u8, role, "main") or
+        std.mem.eql(u8, role, "list") or
+        std.mem.eql(u8, role, "listitem") or
+        std.mem.eql(u8, role, "region");
+    // zig fmt: on
 }
 
 const TextVisitor = struct {
@@ -436,6 +444,17 @@ const TextVisitor = struct {
 
         try self.writer.writeByte('\n');
         self.depth += 1;
+
+        // If this is a leaf-like semantic node and we already have a name,
+        // skip children to avoid redundant StaticText or noise.
+        const is_leaf_semantic = std.mem.eql(u8, data.role, "link") or
+            std.mem.eql(u8, data.role, "button") or
+            std.mem.eql(u8, data.role, "heading") or
+            std.mem.eql(u8, data.role, "code");
+        if (is_leaf_semantic and data.name != null and data.name.?.len > 0) {
+            return false;
+        }
+
         return true;
     }
 

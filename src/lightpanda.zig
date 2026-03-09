@@ -113,12 +113,12 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
                 var registry = CDPNode.Registry.init(app.allocator);
                 defer registry.deinit();
 
-                const st = SemanticTree{
+                const st: SemanticTree = .{
                     .dom_node = page.window._document.asNode(),
                     .registry = &registry,
                     .page = page,
                     .arena = page.call_arena,
-                    .prune = true,
+                    .prune = false,
                 };
 
                 if (mode == .semantic_tree) {

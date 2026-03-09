@@ -888,10 +888,12 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                 => {},
                 else => {
                     // write text content if exists.
-                    var buf = std.Io.Writer.Allocating.init(page.call_arena);
-                    try el.getInnerText(&buf.writer);
-                    try writeString(buf.written(), w);
-                    return .contents;
+                    var buf: std.Io.Writer.Allocating = .init(page.call_arena);
+                    try writeAccessibleNameFallback(node, &buf.writer, page);
+                    if (buf.written().len > 0) {
+                        try writeString(buf.written(), w);
+                        return .contents;
+                    }
                 },
             }
 
@@ -913,6 +915,40 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
             return null;
         },
     };
+}
+
+fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, page: *Page) !void {
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        switch (child._type) {
+            .cdata => |cd| switch (cd._type) {
+                .text => |*text| try writer.writeAll(text.getWholeText()),
+                else => {},
+            },
+            .element => |el| {
+                if (el.getTag() == .img) {
+                    if (el.getAttributeSafe(.wrap("alt"))) |alt| {
+                        try writer.writeAll(alt);
+                        try writer.writeByte(' ');
+                    }
+                } else if (el.getTag() == .svg) {
+                    // Try to find a <title> inside SVG
+                    var sit = child.childrenIterator();
+                    while (sit.next()) |s_child| {
+                        if (s_child.is(DOMNode.Element)) |s_el| {
+                            if (std.mem.eql(u8, s_el.getTagNameLower(), "title")) {
+                                try writeAccessibleNameFallback(s_child, writer, page);
+                                try writer.writeByte(' ');
+                            }
+                        }
+                    }
+                } else {
+                    try writeAccessibleNameFallback(child, writer, page);
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 fn isHidden(elt: *DOMNode.Element) bool {
