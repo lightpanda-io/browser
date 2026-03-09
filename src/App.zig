@@ -64,6 +64,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.http = try Http.init(allocator, &app.robots, config);
     errdefer app.http.deinit();
+    app.display.setHttpRuntime(&app.http);
 
     app.platform = try Platform.init();
     errdefer app.platform.deinit();

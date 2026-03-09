@@ -229,6 +229,10 @@ Current state inside Gate 1:
   same-context upload-to-attachment with restored source page plus downloads
   page visibility, and target-tab upload-to-attachment with both managed
   download capture and source-tab preservation
+- headed network image requests in the Win32 renderer now use the shared
+  browser `Http` runtime when available instead of the old URLMon-only path,
+  with a bounded localhost probe proving the image request carries
+  `User-Agent: Lightpanda/1.0` and renders successfully on the headed surface
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -253,6 +257,9 @@ Current known gap entering Gate 2:
 - explicit download requests, adopted root-attachment transfers, and other
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
+- headed network images now ride the shared `Http` runtime path, but they
+  still do not inherit page/session request policy such as cookies, referer,
+  auth, or richer resource-type behavior
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

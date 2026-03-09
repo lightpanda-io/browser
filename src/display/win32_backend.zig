@@ -20,6 +20,9 @@ const std = @import("std");
 const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
 const URL = @import("../browser/URL.zig");
+const Http = @import("../http/Http.zig");
+const HttpClient = Http.Client;
+const Notification = @import("../Notification.zig");
 const BrowserCommand = @import("BrowserCommand.zig").BrowserCommand;
 const Display = @import("Display.zig");
 const DisplayList = @import("../render/DisplayList.zig").DisplayList;
@@ -112,6 +115,7 @@ const CachedImage = struct {
 pub const Win32Backend = struct {
     allocator: std.mem.Allocator,
     app_data_path: ?[]u8 = null,
+    http_runtime: ?*Http = null,
     page_count: u32 = 0,
 
     requested_width: std.atomic.Value(u32),
@@ -274,6 +278,10 @@ pub const Win32Backend = struct {
         self.requested_width.store(width, .release);
         self.requested_height.store(height, .release);
         _ = self.resize_seq.fetchAdd(1, .acq_rel);
+    }
+
+    pub fn setHttpRuntime(self: *Win32Backend, http: *Http) void {
+        self.http_runtime = http;
     }
 
     pub fn setNavigationState(self: *Win32Backend, can_go_back: bool, can_go_forward: bool, is_loading: bool, zoom_percent: i32) void {
@@ -3771,6 +3779,10 @@ fn ensureGdiplusStarted(backend: *Win32Backend) bool {
 }
 
 fn downloadHttpImageCacheFile(backend: *Win32Backend, url: []const u8) ![]u8 {
+    if (backend.http_runtime) |http| {
+        return try fetchHttpImageCacheFile(backend, http, url);
+    }
+
     const wide_url = try std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, url);
     defer std.heap.c_allocator.free(wide_url);
 
@@ -3789,6 +3801,128 @@ fn downloadHttpImageCacheFile(backend: *Win32Backend, url: []const u8) ![]u8 {
 
     const path_len = std.mem.indexOfScalar(u16, wide_path[0..], 0) orelse wide_path.len;
     return std.unicode.utf16LeToUtf8Alloc(backend.allocator, wide_path[0..path_len]);
+}
+
+const ImageFetchContext = struct {
+    allocator: std.mem.Allocator,
+    file: std.fs.File,
+    finished: bool = false,
+    failed: ?anyerror = null,
+    closed: bool = false,
+
+    fn close(self: *ImageFetchContext) void {
+        if (self.closed) {
+            return;
+        }
+        self.file.close();
+        self.closed = true;
+    }
+};
+
+fn imageUrlFileExtension(url: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, url, '?')) |query_index| {
+        return imageUrlFileExtension(url[0..query_index]);
+    }
+    if (std.mem.indexOfScalar(u8, url, '#')) |fragment_index| {
+        return imageUrlFileExtension(url[0..fragment_index]);
+    }
+
+    const base = std.fs.path.basename(url);
+    if (std.mem.lastIndexOfScalar(u8, base, '.')) |dot_index| {
+        const ext = base[dot_index + 1 ..];
+        if (ext.len > 0 and ext.len <= 8) {
+            return ext;
+        }
+    }
+    return "img";
+}
+
+fn fetchHttpImageCacheFile(
+    backend: *Win32Backend,
+    http: *Http,
+    url: []const u8,
+) ![]u8 {
+    const path = try tempImageCacheFilePath(backend.allocator, url, imageUrlFileExtension(url));
+    errdefer backend.allocator.free(path);
+
+    var file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
+    errdefer {
+        file.close();
+        std.fs.deleteFileAbsolute(path) catch {};
+    }
+
+    var ctx = ImageFetchContext{
+        .allocator = backend.allocator,
+        .file = file,
+    };
+    var arena = std.heap.ArenaAllocator.init(backend.allocator);
+    defer arena.deinit();
+
+    const notification = try Notification.init(backend.allocator);
+    defer notification.deinit();
+
+    const client = try http.createClient(backend.allocator);
+    defer client.deinit();
+
+    const temp = arena.allocator();
+    const url_z = try temp.dupeZ(u8, url);
+    const headers = try client.newHeaders();
+
+    try client.request(.{
+        .ctx = &ctx,
+        .frame_id = 0,
+        .url = url_z,
+        .method = .GET,
+        .headers = headers,
+        .cookie_jar = null,
+        .resource_type = .fetch,
+        .notification = notification,
+        .header_callback = imageFetchHeaderCallback,
+        .data_callback = imageFetchDataCallback,
+        .done_callback = imageFetchDoneCallback,
+        .error_callback = imageFetchErrorCallback,
+    });
+
+    while (!ctx.finished and ctx.failed == null) {
+        _ = try client.tick(50);
+    }
+
+    if (ctx.failed) |err| {
+        std.fs.deleteFileAbsolute(path) catch {};
+        return err;
+    }
+
+    return path;
+}
+
+fn imageFetchHeaderCallback(transfer: *HttpClient.Transfer) !bool {
+    const ctx: *ImageFetchContext = @ptrCast(@alignCast(transfer.ctx));
+    const response_header = transfer.response_header orelse return true;
+    if (response_header.status >= 400) {
+        ctx.failed = error.BadStatusCode;
+        return error.BadStatusCode;
+    }
+    return true;
+}
+
+fn imageFetchDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
+    const ctx: *ImageFetchContext = @ptrCast(@alignCast(transfer.ctx));
+    try ctx.file.writeAll(data);
+}
+
+fn imageFetchDoneCallback(raw_ctx: *anyopaque) !void {
+    const ctx: *ImageFetchContext = @ptrCast(@alignCast(raw_ctx));
+    ctx.close();
+    ctx.finished = true;
+}
+
+fn imageFetchErrorCallback(raw_ctx: *anyopaque, err: anyerror) void {
+    const ctx: *ImageFetchContext = @ptrCast(@alignCast(raw_ctx));
+    if (!ctx.finished) {
+        ctx.close();
+    }
+    ctx.failed = err;
+    ctx.finished = true;
 }
 
 const CachedImageSource = struct {
@@ -7227,6 +7361,12 @@ test "win32 buildOpenFileDialogFilter includes accepted and fallback groups" {
         "Accepted files|*.txt;*.json|All files|*.*|",
         flattened,
     );
+}
+
+test "win32 imageUrlFileExtension trims query and fragment" {
+    try std.testing.expectEqualStrings("png", imageUrlFileExtension("https://img.test/path/red.png?size=2"));
+    try std.testing.expectEqualStrings("jpg", imageUrlFileExtension("https://img.test/path/photo.jpg#frag"));
+    try std.testing.expectEqualStrings("img", imageUrlFileExtension("https://img.test/path/noext"));
 }
 
 test "win32 settings overlay keyboard queues settings commands" {
