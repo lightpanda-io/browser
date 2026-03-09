@@ -178,6 +178,37 @@ jobs:
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
           kill `cat LPD.pid` `cat PROXY.id`
 
+  wba-test:
+    name: wba-test
+    needs: zig-build-release
+
+    env:
+      LIGHTPANDA_DISABLE_TELEMETRY: true
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
+
+      - run: |
+          ./lightpanda fetch https://crawltest.com/cdn-cgi/web-bot-auth \
+            --log_level error \
+            --web_bot_auth_key_file private_key.pem \
+            --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
+            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }} \
+            --dump markdown \
+            | tee output.log
+
+      - run: cat output.log | grep -q "unknown public key or unknown verified bot ID for keyid"
+
   cdp-and-hyperfine-bench:
     name: cdp-and-hyperfine-bench
     needs: zig-build-release
