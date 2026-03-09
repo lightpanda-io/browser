@@ -2908,9 +2908,12 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
     }
     if (node.is(Element.Html.Script)) |script| {
         if ((comptime from_parser == false) and script._src.len == 0) {
-            // script was added via JavaScript, but without a src, don't try
-            // to execute it (we'll execute it if/when the src is set)
-            return;
+            // Script was added via JavaScript without a src attribute.
+            // Only skip if it has no inline content either — scripts with
+            // textContent/text should still execute per spec.
+            if (node.firstChild() == null) {
+                return;
+            }
         }
 
         self.scriptAddedCallback(from_parser, script) catch |err| {
