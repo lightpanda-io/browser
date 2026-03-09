@@ -35,6 +35,7 @@ dom_node: *Node,
 registry: *CDPNode.Registry,
 page: *Page,
 arena: std.mem.Allocator,
+prune: bool = false,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
@@ -155,12 +156,39 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
         .node_name = node_name,
     };
 
-    if (try visitor.visit(node, &data)) {
-        var it = node.childrenIterator();
-        while (it.next()) |child| {
-            try self.walk(child, xpath, visitor);
+    var should_visit = true;
+    if (self.prune) {
+        const structural = isStructuralRole(role);
+        const has_explicit_label = if (node.is(Element)) |el|
+            el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
+        else
+            false;
+
+        if (structural and !is_interactive and !has_explicit_label) {
+            should_visit = false;
         }
-        try visitor.leave(node, &data);
+
+        if (std.mem.eql(u8, role, "StaticText") and node._parent != null) {
+            const parent_axn = AXNode.fromNode(node._parent.?);
+            const parent_name = try parent_axn.getName(self.page, self.arena);
+            if (parent_name != null and name != null and std.mem.indexOf(u8, parent_name.?, name.?) != null) {
+                should_visit = false;
+            }
+        }
+    }
+
+    var did_visit = false;
+    if (should_visit) {
+        did_visit = try visitor.visit(node, &data);
+    }
+
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        try self.walk(child, xpath, visitor);
+    }
+
+    if (did_visit) {
+        try visitor.leave();
     }
 }
 
@@ -264,7 +292,7 @@ const JsonVisitor = struct {
         return true;
     }
 
-    pub fn leave(self: *JsonVisitor, _: *Node, _: *NodeData) !void {
+    pub fn leave(self: *JsonVisitor) !void {
         try self.jw.endArray();
         try self.jw.endObject();
     }
@@ -282,29 +310,6 @@ const TextVisitor = struct {
     depth: usize,
 
     pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !bool {
-        // Pruning Heuristic:
-        // If it's a structural node (none/generic) and has no unique label, unwrap it.
-        // We only keep 'none'/'generic' if they are interactive.
-        const structural = isStructuralRole(data.role);
-        const has_explicit_label = if (node.is(Element)) |el|
-            el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
-        else
-            false;
-
-        if (structural and !data.is_interactive and !has_explicit_label) {
-            // Just unwrap (don't print this node, but visit children at same depth)
-            return true;
-        }
-
-        // Skip redundant StaticText nodes if the parent already captures the text
-        if (std.mem.eql(u8, data.role, "StaticText") and node._parent != null) {
-            const parent_axn = AXNode.fromNode(node._parent.?);
-            const parent_name = try parent_axn.getName(self.tree.page, self.tree.arena);
-            if (parent_name != null and data.name != null and std.mem.indexOf(u8, parent_name.?, data.name.?) != null) {
-                return false;
-            }
-        }
-
         // Format: "  [12] link: Hacker News (value)"
         for (0..(self.depth * 2)) |_| {
             try self.writer.writeByte(' ');
@@ -334,16 +339,7 @@ const TextVisitor = struct {
         return true;
     }
 
-    pub fn leave(self: *TextVisitor, node: *Node, data: *NodeData) !void {
-        const structural = isStructuralRole(data.role);
-        const has_explicit_label = if (node.is(Element)) |el|
-            el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
-        else
-            false;
-
-        if (structural and !data.is_interactive and !has_explicit_label) {
-            return;
-        }
+    pub fn leave(self: *TextVisitor) !void {
         self.depth -= 1;
     }
 };

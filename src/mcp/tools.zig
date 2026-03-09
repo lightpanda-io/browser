@@ -134,6 +134,7 @@ const ToolStreamingText = struct {
                     .registry = self.registry.?,
                     .page = self.page,
                     .arena = self.arena.?,
+                    .prune = true,
                 };
 
                 st.textStringify(w) catch |err| {

@@ -39,6 +39,7 @@ pub fn processMessage(cmd: anytype) !void {
 fn getSemanticTree(cmd: anytype) !void {
     const Params = struct {
         format: ?[]const u8 = null,
+        prune: ?bool = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
 
@@ -46,15 +47,17 @@ fn getSemanticTree(cmd: anytype) !void {
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     const dom_node = page.document.asNode();
 
-    const st = SemanticTree{
+    var st = SemanticTree{
         .dom_node = dom_node,
         .registry = &bc.node_registry,
         .page = page,
         .arena = cmd.arena,
+        .prune = params.prune orelse false,
     };
 
     if (params.format) |format| {
         if (std.mem.eql(u8, format, "text")) {
+            st.prune = params.prune orelse true; // text format defaults to pruned
             var aw: std.Io.Writer.Allocating = .init(cmd.arena);
             defer aw.deinit();
             try st.textStringify(&aw.writer);
