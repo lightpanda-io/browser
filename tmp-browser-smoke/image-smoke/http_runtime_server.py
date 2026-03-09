@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 REQUEST_LOG = ROOT / "http-runtime.requests.jsonl"
+PORT = 8153
 
 
 def append_log(entry: dict) -> None:
@@ -24,12 +25,65 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/policy-page.html":
+            body = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Image Policy Smoke</title></head>
+<body><img src="/policy-red.png" alt="policy test"></body>
+</html>
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpimg=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/red.png":
             ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
             allowed = "Lightpanda/" in ua
             append_log({
                 "path": self.path,
                 "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/policy-red.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/policy-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpimg=ok" in cookie
+                and referer == expected_referer
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
                 "allowed": allowed,
             })
             if not allowed:
@@ -57,7 +111,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
+    global PORT
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8153
+    PORT = port
     if REQUEST_LOG.exists():
         REQUEST_LOG.unlink()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)

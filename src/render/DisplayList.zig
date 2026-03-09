@@ -52,6 +52,8 @@ pub const ImageCommand = struct {
     height: i32,
     url: []u8,
     alt: []u8,
+    request_cookie_value: []u8 = &.{},
+    request_referer_value: []u8 = &.{},
 };
 
 pub const Command = union(enum) {
@@ -80,6 +82,8 @@ pub const Command = union(enum) {
                 .height = image.height,
                 .url = try allocator.dupe(u8, image.url),
                 .alt = try allocator.dupe(u8, image.alt),
+                .request_cookie_value = try allocator.dupe(u8, image.request_cookie_value),
+                .request_referer_value = try allocator.dupe(u8, image.request_referer_value),
             } },
         };
     }
@@ -90,6 +94,8 @@ pub const Command = union(enum) {
             .image => |image| {
                 allocator.free(image.url);
                 allocator.free(image.alt);
+                allocator.free(image.request_cookie_value);
+                allocator.free(image.request_referer_value);
             },
             else => {},
         }
@@ -194,6 +200,8 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .height = image.height,
         .url = try allocator.dupe(u8, image.url),
         .alt = try allocator.dupe(u8, image.alt),
+        .request_cookie_value = try allocator.dupe(u8, image.request_cookie_value),
+        .request_referer_value = try allocator.dupe(u8, image.request_referer_value),
     } });
     self.content_height = @max(self.content_height, image.y + image.height);
 }
@@ -265,6 +273,8 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.height));
                 hasher.update(image.url);
                 hasher.update(image.alt);
+                hasher.update(image.request_cookie_value);
+                hasher.update(image.request_referer_value);
             },
         }
     }

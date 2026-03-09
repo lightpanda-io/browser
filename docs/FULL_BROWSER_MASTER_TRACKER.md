@@ -233,6 +233,10 @@ Current state inside Gate 1:
   browser `Http` runtime when available instead of the old URLMon-only path,
   with a bounded localhost probe proving the image request carries
   `User-Agent: Lightpanda/1.0` and renders successfully on the headed surface
+- those same headed network image requests now inherit page/session request
+  policy for cookies and referer, with a bounded localhost probe proving the
+  image request carries both the page cookie and the active page referer while
+  still rendering successfully on the headed surface
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -257,9 +261,9 @@ Current known gap entering Gate 2:
 - explicit download requests, adopted root-attachment transfers, and other
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
-- headed network images now ride the shared `Http` runtime path, but they
-  still do not inherit page/session request policy such as cookies, referer,
-  auth, or richer resource-type behavior
+- headed network images now ride the shared `Http` runtime path and inherit
+  page/session cookies plus referer, but they still do not carry broader auth
+  or richer resource-type behavior
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

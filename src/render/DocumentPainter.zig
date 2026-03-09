@@ -853,6 +853,8 @@ fn resolvedImageCommand(
     }
 
     const resolved = try URL.resolve(page.call_arena, page.base(), src, .{ .encode = true });
+    const resolved_z = try page.call_arena.dupeZ(u8, resolved);
+    const request_context = try resolveImageRequestContext(page, resolved_z);
     const alt = element.getAttributeSafe(comptime .wrap("alt")) orelse "";
     return .{
         .x = x,
@@ -861,7 +863,34 @@ fn resolvedImageCommand(
         .height = height,
         .url = @constCast(resolved),
         .alt = @constCast(alt),
+        .request_cookie_value = request_context.cookie_value,
+        .request_referer_value = request_context.referer_value,
     };
+}
+
+const ImageRequestContext = struct {
+    cookie_value: []u8 = &.{},
+    referer_value: []u8 = &.{},
+};
+
+fn resolveImageRequestContext(page: *Page, resolved_url: [:0]const u8) !ImageRequestContext {
+    var headers = try page._session.browser.http_client.newHeaders();
+    defer headers.deinit();
+
+    try page.headersForRequest(page.call_arena, resolved_url, &headers);
+
+    var context = ImageRequestContext{};
+    var it = headers.iterator();
+    while (it.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Cookie")) {
+            context.cookie_value = try page.call_arena.dupe(u8, header.value);
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Referer")) {
+            context.referer_value = try page.call_arena.dupe(u8, header.value);
+        }
+    }
+    return context;
 }
 
 fn resolveStrokeColor(decl: anytype, page: *Page, tag: Element.Tag) ?Color {

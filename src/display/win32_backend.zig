@@ -3778,10 +3778,12 @@ fn ensureGdiplusStarted(backend: *Win32Backend) bool {
     return true;
 }
 
-fn downloadHttpImageCacheFile(backend: *Win32Backend, url: []const u8) ![]u8 {
+fn downloadHttpImageCacheFile(backend: *Win32Backend, image: ImageCommand) ![]u8 {
     if (backend.http_runtime) |http| {
-        return try fetchHttpImageCacheFile(backend, http, url);
+        return try fetchHttpImageCacheFile(backend, http, image);
     }
+
+    const url = image.url;
 
     const wide_url = try std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, url);
     defer std.heap.c_allocator.free(wide_url);
@@ -3840,8 +3842,9 @@ fn imageUrlFileExtension(url: []const u8) []const u8 {
 fn fetchHttpImageCacheFile(
     backend: *Win32Backend,
     http: *Http,
-    url: []const u8,
+    image: ImageCommand,
 ) ![]u8 {
+    const url = image.url;
     const path = try tempImageCacheFilePath(backend.allocator, url, imageUrlFileExtension(url));
     errdefer backend.allocator.free(path);
 
@@ -3866,7 +3869,16 @@ fn fetchHttpImageCacheFile(
 
     const temp = arena.allocator();
     const url_z = try temp.dupeZ(u8, url);
-    const headers = try client.newHeaders();
+    var headers = try client.newHeaders();
+
+    if (image.request_cookie_value.len > 0) {
+        const cookie_header = try std.fmt.allocPrintSentinel(temp, "Cookie: {s}", .{image.request_cookie_value}, 0);
+        try headers.add(cookie_header);
+    }
+    if (image.request_referer_value.len > 0) {
+        const referer_header = try std.fmt.allocPrintSentinel(temp, "Referer: {s}", .{image.request_referer_value}, 0);
+        try headers.add(referer_header);
+    }
 
     try client.request(.{
         .ctx = &ctx,
@@ -4055,7 +4067,7 @@ fn resolveImageCacheSource(backend: *Win32Backend, url: []const u8) !CachedImage
     if (std.ascii.startsWithIgnoreCase(url, "http://") or
         std.ascii.startsWithIgnoreCase(url, "https://"))
     {
-        return .{ .path = try downloadHttpImageCacheFile(backend, url) };
+        return error.MissingImageRequestContext;
     }
     if (std.ascii.startsWithIgnoreCase(url, "file://")) {
         return .{ .path = try localFilePathFromUrl(backend.allocator, url) };
@@ -4066,14 +4078,23 @@ fn resolveImageCacheSource(backend: *Win32Backend, url: []const u8) !CachedImage
     return error.UnsupportedImageUrl;
 }
 
-fn loadCachedImageLocked(backend: *Win32Backend, image: *CachedImage, url: []const u8) void {
+fn resolveImageCacheSourceForCommand(backend: *Win32Backend, image_cmd: ImageCommand) !CachedImageSource {
+    if (std.ascii.startsWithIgnoreCase(image_cmd.url, "http://") or
+        std.ascii.startsWithIgnoreCase(image_cmd.url, "https://"))
+    {
+        return .{ .path = try downloadHttpImageCacheFile(backend, image_cmd) };
+    }
+    return resolveImageCacheSource(backend, image_cmd.url);
+}
+
+fn loadCachedImageLocked(backend: *Win32Backend, image: *CachedImage, image_cmd: ImageCommand) void {
     if (!ensureGdiplusStarted(backend)) {
         image.state = .failed;
         return;
     }
 
-    const source = resolveImageCacheSource(backend, url) catch |err| {
-        log.warn(.app, "win image src fail", .{ .url = url, .err = err });
+    const source = resolveImageCacheSourceForCommand(backend, image_cmd) catch |err| {
+        log.warn(.app, "win image src fail", .{ .url = image_cmd.url, .err = err });
         image.state = .failed;
         return;
     };
@@ -4178,7 +4199,7 @@ fn drawPresentationImage(
     backend.image_cache_lock.lock();
     defer backend.image_cache_lock.unlock();
 
-    const owned_key = backend.allocator.dupe(u8, image_cmd.url) catch {
+    const owned_key = imageRequestCacheKey(backend.allocator, image_cmd) catch {
         drawPresentationImagePlaceholder(hdc, rect, image_cmd);
         return;
     };
@@ -4197,7 +4218,7 @@ fn drawPresentationImage(
 
     const cached = gop.value_ptr;
     if (cached.state == .unloaded) {
-        loadCachedImageLocked(backend, cached, image_cmd.url);
+        loadCachedImageLocked(backend, cached, image_cmd);
     }
 
     if (cached.state != .loaded or cached.gp_image == null) {
@@ -4224,6 +4245,14 @@ fn drawPresentationImage(
     if (status != GDIP_STATUS_OK) {
         drawPresentationImagePlaceholder(hdc, rect, image_cmd);
     }
+}
+
+fn imageRequestCacheKey(allocator: std.mem.Allocator, image: ImageCommand) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}\nCOOKIE:{s}\nREFERER:{s}", .{
+        image.url,
+        image.request_cookie_value,
+        image.request_referer_value,
+    });
 }
 
 fn renderPresentationDisplayList(
@@ -7367,6 +7396,36 @@ test "win32 imageUrlFileExtension trims query and fragment" {
     try std.testing.expectEqualStrings("png", imageUrlFileExtension("https://img.test/path/red.png?size=2"));
     try std.testing.expectEqualStrings("jpg", imageUrlFileExtension("https://img.test/path/photo.jpg#frag"));
     try std.testing.expectEqualStrings("img", imageUrlFileExtension("https://img.test/path/noext"));
+}
+
+test "win32 imageRequestCacheKey includes request policy" {
+    const allocator = std.testing.allocator;
+    const one = try imageRequestCacheKey(allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 10,
+        .height = 10,
+        .url = @constCast("https://img.test/red.png"),
+        .alt = @constCast(""),
+        .request_cookie_value = @constCast("session=one"),
+        .request_referer_value = @constCast("https://img.test/page"),
+    });
+    defer allocator.free(one);
+    const two = try imageRequestCacheKey(allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 10,
+        .height = 10,
+        .url = @constCast("https://img.test/red.png"),
+        .alt = @constCast(""),
+        .request_cookie_value = @constCast("session=two"),
+        .request_referer_value = @constCast("https://img.test/page"),
+    });
+    defer allocator.free(two);
+
+    try std.testing.expect(!std.mem.eql(u8, one, two));
+    try std.testing.expect(std.mem.indexOf(u8, one, "session=one") != null);
+    try std.testing.expect(std.mem.indexOf(u8, one, "https://img.test/page") != null);
 }
 
 test "win32 settings overlay keyboard queues settings commands" {
