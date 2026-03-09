@@ -20,6 +20,10 @@ pub fn item(self: *const StyleSheetList, index: usize) ?*CSSStyleSheet {
     return self._sheets[index];
 }
 
+pub fn items(self: *const StyleSheetList) []*CSSStyleSheet {
+    return self._sheets;
+}
+
 pub fn setSheets(self: *StyleSheetList, page: *Page, sheets: []*CSSStyleSheet) !void {
     self._sheets = try page.arena.dupe(*CSSStyleSheet, sheets);
 }

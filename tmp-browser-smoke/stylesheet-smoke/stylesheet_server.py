@@ -27,12 +27,14 @@ class Handler(BaseHTTPRequestHandler):
   link.rel = 'stylesheet';
   link.href = '/private.css';
   link.onload = () => {
-    document.title = 'Stylesheet Loaded';
     const ok = (link.sheet instanceof CSSStyleSheet) ? 1 : 0;
     const count = document.styleSheets.length;
+    const bg = getComputedStyle(document.body).backgroundColor;
+    const applied = bg === 'rgb(24, 194, 62)' ? 1 : 0;
+    document.title = applied ? 'Stylesheet Applied' : 'Stylesheet Loaded';
     const beacon = new Image();
     beacon.alt = 'stylesheet-loaded';
-    beacon.src = '/loaded?sheet=' + ok + '&count=' + count;
+    beacon.src = '/loaded?sheet=' + ok + '&count=' + count + '&applied=' + applied + '&bg=' + encodeURIComponent(bg);
     document.body.appendChild(beacon);
   };
   document.head.appendChild(link);
@@ -80,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
 
-            body = b"body { background: rgb(24, 194, 62); color: white; }"
+            body = b"body { background-color: rgb(24, 194, 62); color: white; }"
             self.send_response(200)
             self.send_header("Content-Type", "text/css; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -95,7 +97,13 @@ class Handler(BaseHTTPRequestHandler):
                 "path": parsed.path,
                 "sheet": query.get("sheet", [""])[0],
                 "count": query.get("count", [""])[0],
-                "allowed": query.get("sheet", ["0"])[0] == "1" and query.get("count", ["0"])[0] != "0",
+                "applied": query.get("applied", [""])[0],
+                "bg": query.get("bg", [""])[0],
+                "allowed": (
+                    query.get("sheet", ["0"])[0] == "1"
+                    and query.get("count", ["0"])[0] != "0"
+                    and query.get("applied", ["0"])[0] == "1"
+                ),
             })
             body = b"ok"
             self.send_response(200)

@@ -160,6 +160,8 @@ fn dispatchLoad(self: *Link, page: *Page) !void {
 
 const StylesheetFetchContext = struct {
     html: *HtmlElement,
+    page: *Page,
+    sheet: *CSSStyleSheet,
     allocator: std.mem.Allocator,
     buffer: std.ArrayList(u8),
     status: u16 = 0,
@@ -200,6 +202,8 @@ fn fetchStylesheet(self: *Link, page: *Page) !void {
 
     var ctx = StylesheetFetchContext{
         .html = self._proto,
+        .page = page,
+        .sheet = self._sheet.?,
         .allocator = page.arena,
         .buffer = .{},
     };
@@ -276,6 +280,7 @@ fn stylesheetDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
 
 fn stylesheetDoneCallback(ctx_ptr: *anyopaque) !void {
     const ctx: *StylesheetFetchContext = @ptrCast(@alignCast(ctx_ptr));
+    try ctx.sheet.replaceSync(ctx.buffer.items, ctx.page);
     ctx.finished = true;
 }
 

@@ -263,6 +263,11 @@ Current state inside Gate 1:
   loads, with a bounded headed localhost probe proving the stylesheet request
   succeeds and the page observes both `link.sheet` and stylesheet load
   completion
+- those same connected internal and external stylesheets now populate
+  `cssRules` and feed the current `getComputedStyle` / headed painter path for
+  simple authored rules, with bounded tests and a headed localhost probe
+  proving a protected external stylesheet changes the computed page background
+  instead of only firing `load`
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -296,7 +301,8 @@ Current known gap entering Gate 2:
 - connected `link rel=stylesheet` requests now ride the same shared `Http`
   runtime path with `link.sheet` / `document.styleSheets` coverage and bounded
   protected-load auth/cookie/referer/`Accept` verification, but stylesheet
-  body application, broader script/font/resource parity, and one unified
+  body application now exists for the current simple authored-rule path while
+  broader CSS fidelity, script/font/resource parity, and one unified
   subresource ownership path are still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still

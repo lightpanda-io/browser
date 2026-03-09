@@ -28,8 +28,23 @@ const CSSStyleProperties = @This();
 _proto: *CSSStyleDeclaration,
 
 pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleProperties {
+    const proto = try CSSStyleDeclaration.init(element, is_computed, page);
+
+    if (is_computed) {
+        if (element) |el| {
+            const sheets = try page.window._document.getStyleSheets(page);
+            for (sheets.items()) |sheet| {
+                try sheet.applyMatchingRules(el, proto, page);
+            }
+
+            if (el.getAttributeSafe(comptime .wrap("style"))) |style_attr| {
+                try proto.applyDeclarationsText(style_attr, page);
+            }
+        }
+    }
+
     return page._factory.create(CSSStyleProperties{
-        ._proto = try CSSStyleDeclaration.init(element, is_computed, page),
+        ._proto = proto,
     });
 }
 

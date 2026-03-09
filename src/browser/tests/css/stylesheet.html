@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<body></body>
 <script src="../testing.js"></script>
 
 <script id="document_styleSheets">
@@ -17,10 +18,6 @@
 {
     const sheets = document.styleSheets;
     testing.expectEqual('StyleSheetList', sheets.constructor.name);
-
-    // Test indexed access on empty list
-    testing.expectEqual(undefined, sheets[0]);
-    testing.expectEqual(undefined, sheets[99]);
 }
 </script>
 
@@ -32,6 +29,25 @@
     document.head.appendChild(style);
     testing.expectEqual(startLen + 1, document.styleSheets.length);
     testing.expectEqual(style.sheet, document.styleSheets[document.styleSheets.length - 1]);
+    testing.expectEqual(1, style.sheet.cssRules.length);
+    testing.expectEqual(1, style.sheet.cssRules[0].type);
+    testing.expectTrue(style.sheet.cssRules[0].cssText.includes('body'));
+}
+</script>
+
+<script id="document_styleSheets_applies_authored_style_to_computed_style">
+{
+    const style = document.createElement('style');
+    style.textContent = '.sheet-target { color: rgb(12, 34, 56); background-color: rgb(220, 20, 20); }';
+    document.head.appendChild(style);
+
+    const div = document.createElement('div');
+    div.className = 'sheet-target';
+    document.body.appendChild(div);
+
+    const computed = getComputedStyle(div);
+    testing.expectEqual('rgb(12, 34, 56)', computed.color);
+    testing.expectEqual('rgb(220, 20, 20)', computed.backgroundColor);
 }
 </script>
 

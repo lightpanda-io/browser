@@ -102,6 +102,9 @@
     testing.expectEqual(testing.BASE_URL + 'element/html/link_stylesheet.css', link.sheet.href);
     testing.expectEqual(startLen + 1, document.styleSheets.length);
     testing.expectEqual(link.sheet, document.styleSheets[document.styleSheets.length - 1]);
+    testing.expectEqual(1, link.sheet.cssRules.length);
+    testing.expectEqual(1, link.sheet.cssRules[0].type);
+    testing.expectTrue(link.sheet.cssRules[0].cssText.includes('body'));
   });
 }
 </script>

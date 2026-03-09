@@ -91,8 +91,14 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
         return null;
     }
 
-    if (self._sheet) |sheet| return sheet;
+    if (self._sheet) |sheet| {
+        const text = try self.asNode().getTextContentAlloc(page.call_arena);
+        try sheet.replaceSync(text, page);
+        return sheet;
+    }
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
+    const text = try self.asNode().getTextContentAlloc(page.call_arena);
+    try sheet.replaceSync(text, page);
     self._sheet = sheet;
     return sheet;
 }
