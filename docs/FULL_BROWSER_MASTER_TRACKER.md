@@ -220,6 +220,10 @@ Current state inside Gate 1:
   inputs, including multi-select file inputs, plus real multipart form
   submission with selected files and bounded headed probes for single-file
   select-submit, cancel, replace, and multi-file submit flows
+- that same Win32 chooser path now derives native dialog file filters from
+  common `accept` hints (extensions plus common MIME and wildcard families)
+  instead of ignoring `accept` entirely, with focused helper coverage and full
+  headed upload regression sweeps
 - those same headed upload flows now compose cleanly with named popup targets
   and attachment responses: bounded probes cover target-tab multipart upload,
   same-context upload-to-attachment with restored source page plus downloads

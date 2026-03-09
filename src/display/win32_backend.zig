@@ -6424,6 +6424,11 @@ fn openFileDialogOnWindowThread(
         "Select file";
     const wide_title = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, title_text) catch return null;
     defer std.heap.c_allocator.free(wide_title);
+    const wide_filter = buildOpenFileDialogFilter(backend.allocator, accept) catch |err| {
+        log.warn(.app, "chooser filter build failed", .{ .err = err });
+        return null;
+    };
+    defer if (wide_filter) |filter| backend.allocator.free(filter);
 
     var ofn: c.OPENFILENAMEW = std.mem.zeroes(c.OPENFILENAMEW);
     ofn.lStructSize = @sizeOf(c.OPENFILENAMEW);
@@ -6431,6 +6436,10 @@ fn openFileDialogOnWindowThread(
     ofn.lpstrFile = &file_buf;
     ofn.nMaxFile = file_buf.len;
     ofn.lpstrTitle = wide_title.ptr;
+    if (wide_filter) |filter| {
+        ofn.lpstrFilter = filter.ptr;
+        ofn.nFilterIndex = 1;
+    }
     ofn.Flags = c.OFN_EXPLORER | c.OFN_FILEMUSTEXIST | c.OFN_PATHMUSTEXIST | c.OFN_NOCHANGEDIR;
     if (multiple) {
         ofn.Flags |= c.OFN_ALLOWMULTISELECT;
@@ -6448,6 +6457,186 @@ fn openFileDialogOnWindowThread(
         log.warn(.app, "chooser parse failed", .{ .err = err });
         return null;
     };
+}
+
+fn buildOpenFileDialogFilter(
+    allocator: std.mem.Allocator,
+    accept: []const u8,
+) !?[:0]u16 {
+    const pattern = try buildAcceptFileDialogPatternString(allocator, accept) orelse return null;
+    defer allocator.free(pattern);
+
+    var filter = std.ArrayList(u16){};
+    defer filter.deinit(allocator);
+
+    try appendUtf16FilterSegment(&filter, allocator, "Accepted files");
+    try filter.append(allocator, 0);
+    try appendUtf16FilterSegment(&filter, allocator, pattern);
+    try filter.append(allocator, 0);
+    try appendUtf16FilterSegment(&filter, allocator, "All files");
+    try filter.append(allocator, 0);
+    try appendUtf16FilterSegment(&filter, allocator, "*.*");
+    try filter.append(allocator, 0);
+    try filter.append(allocator, 0);
+
+    return try filter.toOwnedSliceSentinel(allocator, 0);
+}
+
+fn appendUtf16FilterSegment(
+    buffer: *std.ArrayList(u16),
+    allocator: std.mem.Allocator,
+    text: []const u8,
+) !void {
+    const wide = try std.unicode.utf8ToUtf16LeAlloc(allocator, text);
+    defer allocator.free(wide);
+    try buffer.appendSlice(allocator, wide);
+}
+
+fn buildAcceptFileDialogPatternString(
+    allocator: std.mem.Allocator,
+    accept: []const u8,
+) !?[]u8 {
+    var patterns = std.ArrayListUnmanaged([]u8){};
+    defer {
+        for (patterns.items) |pattern| {
+            allocator.free(pattern);
+        }
+        patterns.deinit(allocator);
+    }
+
+    var iter = std.mem.tokenizeScalar(u8, accept, ',');
+    while (iter.next()) |raw_token| {
+        try appendAcceptPatternsForToken(&patterns, allocator, raw_token);
+    }
+
+    if (patterns.items.len == 0) {
+        return null;
+    }
+
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+    for (patterns.items, 0..) |pattern, index| {
+        if (index != 0) {
+            try out.append(allocator, ';');
+        }
+        try out.appendSlice(allocator, pattern);
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
+fn appendAcceptPatternsForToken(
+    patterns: *std.ArrayListUnmanaged([]u8),
+    allocator: std.mem.Allocator,
+    raw_token: []const u8,
+) !void {
+    const token = std.mem.trim(u8, raw_token, &std.ascii.whitespace);
+    if (token.len == 0) {
+        return;
+    }
+
+    if (token[0] == '.') {
+        return appendAcceptExtensionPattern(patterns, allocator, token);
+    }
+
+    const lower = try allocator.alloc(u8, token.len);
+    defer allocator.free(lower);
+    _ = std.ascii.lowerString(lower, token);
+
+    if (std.mem.eql(u8, lower, "image/*")) {
+        return appendAcceptPatternGroup(patterns, allocator, &.{
+            "*.png",
+            "*.jpg",
+            "*.jpeg",
+            "*.gif",
+            "*.svg",
+            "*.webp",
+            "*.bmp",
+            "*.ico",
+        });
+    }
+    if (std.mem.eql(u8, lower, "audio/*")) {
+        return appendAcceptPatternGroup(patterns, allocator, &.{
+            "*.mp3",
+            "*.wav",
+            "*.ogg",
+            "*.flac",
+            "*.aac",
+            "*.m4a",
+        });
+    }
+    if (std.mem.eql(u8, lower, "video/*")) {
+        return appendAcceptPatternGroup(patterns, allocator, &.{
+            "*.mp4",
+            "*.webm",
+            "*.ogv",
+            "*.mov",
+            "*.mkv",
+        });
+    }
+
+    if (std.mem.eql(u8, lower, "text/plain")) return appendAcceptPattern(patterns, allocator, "*.txt");
+    if (std.mem.eql(u8, lower, "text/html")) return appendAcceptPatternGroup(patterns, allocator, &.{ "*.html", "*.htm" });
+    if (std.mem.eql(u8, lower, "application/json")) return appendAcceptPattern(patterns, allocator, "*.json");
+    if (std.mem.eql(u8, lower, "application/pdf")) return appendAcceptPattern(patterns, allocator, "*.pdf");
+    if (std.mem.eql(u8, lower, "image/png")) return appendAcceptPattern(patterns, allocator, "*.png");
+    if (std.mem.eql(u8, lower, "image/jpeg")) return appendAcceptPatternGroup(patterns, allocator, &.{ "*.jpg", "*.jpeg" });
+    if (std.mem.eql(u8, lower, "image/gif")) return appendAcceptPattern(patterns, allocator, "*.gif");
+    if (std.mem.eql(u8, lower, "image/svg+xml")) return appendAcceptPattern(patterns, allocator, "*.svg");
+    if (std.mem.eql(u8, lower, "image/webp")) return appendAcceptPattern(patterns, allocator, "*.webp");
+    if (std.mem.eql(u8, lower, "audio/mpeg")) return appendAcceptPattern(patterns, allocator, "*.mp3");
+    if (std.mem.eql(u8, lower, "audio/wav")) return appendAcceptPattern(patterns, allocator, "*.wav");
+    if (std.mem.eql(u8, lower, "audio/ogg")) return appendAcceptPattern(patterns, allocator, "*.ogg");
+    if (std.mem.eql(u8, lower, "audio/flac")) return appendAcceptPattern(patterns, allocator, "*.flac");
+    if (std.mem.eql(u8, lower, "audio/aac")) return appendAcceptPattern(patterns, allocator, "*.aac");
+    if (std.mem.eql(u8, lower, "audio/mp4")) return appendAcceptPattern(patterns, allocator, "*.m4a");
+    if (std.mem.eql(u8, lower, "video/mp4")) return appendAcceptPattern(patterns, allocator, "*.mp4");
+    if (std.mem.eql(u8, lower, "video/webm")) return appendAcceptPattern(patterns, allocator, "*.webm");
+    if (std.mem.eql(u8, lower, "video/ogg")) return appendAcceptPattern(patterns, allocator, "*.ogv");
+    if (std.mem.eql(u8, lower, "video/quicktime")) return appendAcceptPattern(patterns, allocator, "*.mov");
+}
+
+fn appendAcceptPatternGroup(
+    patterns: *std.ArrayListUnmanaged([]u8),
+    allocator: std.mem.Allocator,
+    globs: []const []const u8,
+) !void {
+    for (globs) |glob| {
+        try appendAcceptPattern(patterns, allocator, glob);
+    }
+}
+
+fn appendAcceptExtensionPattern(
+    patterns: *std.ArrayListUnmanaged([]u8),
+    allocator: std.mem.Allocator,
+    extension: []const u8,
+) !void {
+    if (extension.len < 2) {
+        return;
+    }
+    const pattern = try allocator.alloc(u8, extension.len + 1);
+    errdefer allocator.free(pattern);
+    pattern[0] = '*';
+    _ = std.ascii.lowerString(pattern[1..], extension);
+    for (patterns.items) |existing| {
+        if (std.ascii.eqlIgnoreCase(existing, pattern)) {
+            allocator.free(pattern);
+            return;
+        }
+    }
+    try patterns.append(allocator, pattern);
+}
+
+fn appendAcceptPattern(
+    patterns: *std.ArrayListUnmanaged([]u8),
+    allocator: std.mem.Allocator,
+    pattern: []const u8,
+) !void {
+    for (patterns.items) |existing| {
+        if (std.ascii.eqlIgnoreCase(existing, pattern)) {
+            return;
+        }
+    }
+    try patterns.append(allocator, try allocator.dupe(u8, pattern));
 }
 
 fn parseOpenFileDialogSelection(
@@ -6504,6 +6693,29 @@ fn parseOpenFileDialogSelection(
     }
 
     return .{ .paths = paths };
+}
+
+fn flattenOpenFileDialogFilterForTest(
+    allocator: std.mem.Allocator,
+    filter: [:0]const u16,
+) ![]u8 {
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+
+    for (filter, 0..) |unit, index| {
+        if (unit == 0) {
+            try out.append(allocator, '|');
+            if (index + 1 < filter.len and filter[index + 1] == 0) {
+                break;
+            }
+            continue;
+        }
+
+        var encoded: [4]u8 = undefined;
+        const len = try std.unicode.utf8Encode(@intCast(unit), &encoded);
+        try out.appendSlice(allocator, encoded[0..len]);
+    }
+    return try out.toOwnedSlice(allocator);
 }
 
 test "win32 mapVirtualKey includes modifiers and shifted digits" {
@@ -6987,6 +7199,34 @@ test "win32 ctrl+alt+s toggles settings overlay" {
     try std.testing.expect(presentationSettingsOverlayOpen(&backend));
     try std.testing.expect(handlePresentationShortcutKey(null, &backend, 'S', .{ .ctrl = true, .alt = true }));
     try std.testing.expect(!presentationSettingsOverlayOpen(&backend));
+}
+
+test "win32 buildAcceptFileDialogPatternString maps extensions and mime tokens" {
+    const pattern = (try buildAcceptFileDialogPatternString(std.testing.allocator, ".txt, application/json, image/*, .TXT")).?;
+    defer std.testing.allocator.free(pattern);
+
+    try std.testing.expectEqualStrings(
+        "*.txt;*.json;*.png;*.jpg;*.jpeg;*.gif;*.svg;*.webp;*.bmp;*.ico",
+        pattern,
+    );
+}
+
+test "win32 buildAcceptFileDialogPatternString ignores unsupported tokens" {
+    const pattern = try buildAcceptFileDialogPatternString(std.testing.allocator, "model/*, application/x-unknown");
+    try std.testing.expectEqual(@as(?[]u8, null), pattern);
+}
+
+test "win32 buildOpenFileDialogFilter includes accepted and fallback groups" {
+    const filter = (try buildOpenFileDialogFilter(std.testing.allocator, ".txt,.json")).?;
+    defer std.testing.allocator.free(filter);
+
+    const flattened = try flattenOpenFileDialogFilterForTest(std.testing.allocator, filter);
+    defer std.testing.allocator.free(flattened);
+
+    try std.testing.expectEqualStrings(
+        "Accepted files|*.txt;*.json|All files|*.*|",
+        flattened,
+    );
 }
 
 test "win32 settings overlay keyboard queues settings commands" {
