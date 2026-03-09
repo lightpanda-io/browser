@@ -14,7 +14,7 @@
 // GNU Affero General Public License for more details.
 //
 // You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// along with this program.  See <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
 
@@ -37,17 +37,131 @@ page: *Page,
 arena: std.mem.Allocator,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
-    self.dumpJson(self.dom_node, jw, "") catch |err| {
+    var visitor = JsonVisitor{ .jw = jw, .tree = self };
+    self.walk(self.dom_node, "", &visitor) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
 }
 
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
-    self.dumpText(self.dom_node, writer, 0) catch |err| {
+    var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
+    self.walk(self.dom_node, "", &visitor) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
+}
+
+const NodeData = struct {
+    id: u32,
+    axn: AXNode,
+    role: []const u8,
+    name: ?[]const u8,
+    value: ?[]const u8,
+    xpath: []const u8,
+    is_interactive: bool,
+    node_name: []const u8,
+};
+
+fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) !void {
+    // 1. Skip non-content nodes
+    if (node.is(Element)) |el| {
+        const tag = el.getTag();
+        if (tag.isMetadata() or tag == .svg) return;
+
+        // CSS display: none visibility check (inline style only for now)
+        if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
+            if (std.mem.indexOf(u8, style, "display: none") != null or
+                std.mem.indexOf(u8, style, "display:none") != null)
+            {
+                return;
+            }
+        }
+
+        if (el.is(Element.Html)) |html_el| {
+            if (html_el.getHidden()) return;
+        }
+    } else if (node.is(CData.Text) != null) {
+        const text_node = node.is(CData.Text).?;
+        const text = text_node.getWholeText();
+        if (isAllWhitespace(text)) {
+            return;
+        }
+    } else if (node._type != .document and node._type != .document_fragment) {
+        return;
+    }
+
+    const cdp_node = try self.registry.register(node);
+    const axn = AXNode.fromNode(node);
+    const role = try axn.getRole();
+
+    var is_interactive = false;
+    var value: ?[]const u8 = null;
+    var node_name: []const u8 = "text";
+
+    if (node.is(Element)) |el| {
+        node_name = el.getTagNameLower();
+
+        const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
+        is_interactive = ax_role.isInteractive();
+
+        const event_target = node.asEventTarget();
+        if (self.page._event_manager.hasListener(event_target, "click") or
+            self.page._event_manager.hasListener(event_target, "mousedown") or
+            self.page._event_manager.hasListener(event_target, "mouseup") or
+            self.page._event_manager.hasListener(event_target, "keydown") or
+            self.page._event_manager.hasListener(event_target, "change") or
+            self.page._event_manager.hasListener(event_target, "input"))
+        {
+            is_interactive = true;
+        }
+
+        if (el.is(Element.Html)) |html_el| {
+            if (html_el.hasAttributeFunction(.onclick, self.page) or
+                html_el.hasAttributeFunction(.onmousedown, self.page) or
+                html_el.hasAttributeFunction(.onmouseup, self.page) or
+                html_el.hasAttributeFunction(.onkeydown, self.page) or
+                html_el.hasAttributeFunction(.onchange, self.page) or
+                html_el.hasAttributeFunction(.oninput, self.page))
+            {
+                is_interactive = true;
+            }
+        }
+
+        if (el.is(Element.Html.Input)) |input| {
+            value = input.getValue();
+        } else if (el.is(Element.Html.TextArea)) |textarea| {
+            value = textarea.getValue();
+        } else if (el.is(Element.Html.Select)) |select| {
+            value = select.getValue(self.page);
+        }
+    } else if (node._type == .document or node._type == .document_fragment) {
+        node_name = "root";
+    }
+
+    const segment = try self.getXPathSegment(node);
+    const xpath = try std.mem.concat(self.arena, u8, &.{ parent_xpath, segment });
+
+    const name = try axn.getName(self.page, self.arena);
+
+    var data = NodeData{
+        .id = cdp_node.id,
+        .axn = axn,
+        .role = role,
+        .name = name,
+        .value = value,
+        .xpath = xpath,
+        .is_interactive = is_interactive,
+        .node_name = node_name,
+    };
+
+    if (try visitor.visit(node, &data)) {
+        var it = node.childrenIterator();
+        while (it.next()) |child| {
+            try self.walk(child, xpath, visitor);
+        }
+        try visitor.leave(node, &data);
+    }
 }
 
 fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
@@ -83,152 +197,78 @@ fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
     return "";
 }
 
-fn dumpJson(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
-    // 1. Skip non-content nodes
-    if (node.is(Element)) |el| {
-        const tag = el.getTag();
-        if (tag.isMetadata() or tag == .svg) return;
+const JsonVisitor = struct {
+    jw: *std.json.Stringify,
+    tree: Self,
 
-        // CSS display: none visibility check (inline style only for now)
-        if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
-            if (std.mem.indexOf(u8, style, "display: none") != null or
-                std.mem.indexOf(u8, style, "display:none") != null)
-            {
-                return;
+    pub fn visit(self: *JsonVisitor, node: *Node, data: *NodeData) !bool {
+        try self.jw.beginObject();
+
+        try self.jw.objectField("nodeId");
+        try self.jw.write(try std.fmt.allocPrint(self.tree.arena, "{d}", .{data.id}));
+
+        try self.jw.objectField("backendDOMNodeId");
+        try self.jw.write(data.id);
+
+        try self.jw.objectField("nodeName");
+        try self.jw.write(data.node_name);
+
+        try self.jw.objectField("xpath");
+        try self.jw.write(data.xpath);
+
+        if (node.is(Element)) |el| {
+            try self.jw.objectField("nodeType");
+            try self.jw.write(1);
+
+            try self.jw.objectField("isInteractive");
+            try self.jw.write(data.is_interactive);
+
+            try self.jw.objectField("role");
+            try self.jw.write(data.role);
+
+            if (data.name) |name| {
+                if (name.len > 0) {
+                    try self.jw.objectField("name");
+                    try self.jw.write(name);
+                }
             }
+
+            if (data.value) |value| {
+                try self.jw.objectField("value");
+                try self.jw.write(value);
+            }
+
+            if (el._attributes) |attrs| {
+                try self.jw.objectField("attributes");
+                try self.jw.beginObject();
+                var iter = attrs.iterator();
+                while (iter.next()) |attr| {
+                    try self.jw.objectField(attr._name.str());
+                    try self.jw.write(attr._value.str());
+                }
+                try self.jw.endObject();
+            }
+        } else if (node.is(CData.Text) != null) {
+            const text_node = node.is(CData.Text).?;
+            try self.jw.objectField("nodeType");
+            try self.jw.write(3);
+            try self.jw.objectField("nodeValue");
+            try self.jw.write(text_node.getWholeText());
+        } else {
+            try self.jw.objectField("nodeType");
+            try self.jw.write(9);
         }
 
-        if (el.is(Element.Html)) |html_el| {
-            if (html_el.getHidden()) return;
-        }
-    } else if (node.is(CData.Text) != null) {
-        const text_node = node.is(CData.Text).?;
-        const text = text_node.getWholeText();
-        if (isAllWhitespace(text)) {
-            return;
-        }
-    } else if (node._type != .document and node._type != .document_fragment) {
-        return;
+        try self.jw.objectField("children");
+        try self.jw.beginArray();
+        return true;
     }
 
-    const cdp_node = try self.registry.register(node);
-    const axn = AXNode.fromNode(node);
-
-    const role = try axn.getRole();
-
-    var is_interactive = false;
-    var node_name: []const u8 = "text";
-
-    if (node.is(Element)) |el| {
-        node_name = el.getTagNameLower();
-
-        const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
-        is_interactive = ax_role.isInteractive();
-
-        const event_target = node.asEventTarget();
-        if (self.page._event_manager.hasListener(event_target, "click") or
-            self.page._event_manager.hasListener(event_target, "mousedown") or
-            self.page._event_manager.hasListener(event_target, "mouseup") or
-            self.page._event_manager.hasListener(event_target, "keydown") or
-            self.page._event_manager.hasListener(event_target, "change") or
-            self.page._event_manager.hasListener(event_target, "input"))
-        {
-            is_interactive = true;
-        }
-
-        if (el.is(Element.Html)) |html_el| {
-            if (html_el.hasAttributeFunction(.onclick, self.page) or
-                html_el.hasAttributeFunction(.onmousedown, self.page) or
-                html_el.hasAttributeFunction(.onmouseup, self.page) or
-                html_el.hasAttributeFunction(.onkeydown, self.page) or
-                html_el.hasAttributeFunction(.onchange, self.page) or
-                html_el.hasAttributeFunction(.oninput, self.page))
-            {
-                is_interactive = true;
-            }
-        }
-    } else if (node._type == .document or node._type == .document_fragment) {
-        node_name = "root";
+    pub fn leave(self: *JsonVisitor, _: *Node, _: *NodeData) !void {
+        try self.jw.endArray();
+        try self.jw.endObject();
     }
-
-    const segment = try self.getXPathSegment(node);
-    const xpath = try std.mem.concat(self.arena, u8, &.{ parent_xpath, segment });
-
-    try jw.beginObject();
-
-    try jw.objectField("nodeId");
-    try jw.write(try std.fmt.allocPrint(self.arena, "{d}", .{cdp_node.id}));
-
-    try jw.objectField("backendDOMNodeId");
-    try jw.write(cdp_node.id);
-
-    try jw.objectField("nodeName");
-    try jw.write(node_name);
-
-    try jw.objectField("xpath");
-    try jw.write(xpath);
-
-    if (node.is(Element)) |el| {
-        try jw.objectField("nodeType");
-        try jw.write(1);
-
-        try jw.objectField("isInteractive");
-        try jw.write(is_interactive);
-
-        try jw.objectField("role");
-        try jw.write(role);
-
-        // Add accessible name (e.g. button label, aria-label, etc.)
-        if (try axn.getName(self.page, self.arena)) |name| {
-            if (name.len > 0) {
-                try jw.objectField("name");
-                try jw.write(name);
-            }
-        }
-
-        // Add value for input elements
-        if (el.is(Element.Html.Input)) |input| {
-            try jw.objectField("value");
-            try jw.write(input.getValue());
-        } else if (el.is(Element.Html.TextArea)) |textarea| {
-            try jw.objectField("value");
-            try jw.write(textarea.getValue());
-        } else if (el.is(Element.Html.Select)) |select| {
-            try jw.objectField("value");
-            try jw.write(select.getValue(self.page));
-        }
-
-        if (el._attributes) |attrs| {
-            try jw.objectField("attributes");
-            try jw.beginObject();
-            var iter = attrs.iterator();
-            while (iter.next()) |attr| {
-                try jw.objectField(attr._name.str());
-                try jw.write(attr._value.str());
-            }
-            try jw.endObject();
-        }
-    } else if (node.is(CData.Text) != null) {
-        const text_node = node.is(CData.Text).?;
-        try jw.objectField("nodeType");
-        try jw.write(3);
-        try jw.objectField("nodeValue");
-        try jw.write(text_node.getWholeText());
-    } else {
-        try jw.objectField("nodeType");
-        try jw.write(9);
-    }
-
-    try jw.objectField("children");
-    try jw.beginArray();
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        try self.dumpJson(child, jw, xpath);
-    }
-    try jw.endArray();
-
-    try jw.endObject();
-}
+};
 
 fn isStructuralRole(role: []const u8) bool {
     return std.mem.eql(u8, role, "none") or
@@ -236,134 +276,74 @@ fn isStructuralRole(role: []const u8) bool {
         std.mem.eql(u8, role, "InlineTextBox");
 }
 
-fn dumpText(self: Self, node: *Node, writer: *std.Io.Writer, depth: usize) !void {
-    // 1. Skip non-content nodes
-    if (node.is(Element)) |el| {
-        const tag = el.getTag();
-        if (tag.isMetadata() or tag == .svg) return;
+const TextVisitor = struct {
+    writer: *std.Io.Writer,
+    tree: Self,
+    depth: usize,
 
-        // CSS display: none visibility check (inline style only for now)
-        if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
-            if (std.mem.indexOf(u8, style, "display: none") != null or
-                std.mem.indexOf(u8, style, "display:none") != null)
-            {
-                return;
+    pub fn visit(self: *TextVisitor, node: *Node, data: *NodeData) !bool {
+        // Pruning Heuristic:
+        // If it's a structural node (none/generic) and has no unique label, unwrap it.
+        // We only keep 'none'/'generic' if they are interactive.
+        const structural = isStructuralRole(data.role);
+        const has_explicit_label = if (node.is(Element)) |el|
+            el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
+        else
+            false;
+
+        if (structural and !data.is_interactive and !has_explicit_label) {
+            // Just unwrap (don't print this node, but visit children at same depth)
+            return true;
+        }
+
+        // Skip redundant StaticText nodes if the parent already captures the text
+        if (std.mem.eql(u8, data.role, "StaticText") and node._parent != null) {
+            const parent_axn = AXNode.fromNode(node._parent.?);
+            const parent_name = try parent_axn.getName(self.tree.page, self.tree.arena);
+            if (parent_name != null and data.name != null and std.mem.indexOf(u8, parent_name.?, data.name.?) != null) {
+                return false;
             }
         }
 
-        if (el.is(Element.Html)) |html_el| {
-            if (html_el.getHidden()) return;
+        // Format: "  [12] link: Hacker News (value)"
+        for (0..(self.depth * 2)) |_| {
+            try self.writer.writeByte(' ');
         }
-    } else if (node.is(CData.Text) != null) {
-        const text_node = node.is(CData.Text).?;
-        const text = text_node.getWholeText();
-        if (isAllWhitespace(text)) {
-            return;
-        }
-    } else if (node._type != .document and node._type != .document_fragment) {
-        return;
-    }
+        try self.writer.print("[{d}] {s}: ", .{ data.id, data.role });
 
-    const cdp_node = try self.registry.register(node);
-    const axn = AXNode.fromNode(node);
-    const role = try axn.getRole();
-
-    var is_interactive = false;
-    var value: ?[]const u8 = null;
-
-    if (node.is(Element)) |el| {
-        const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
-        is_interactive = ax_role.isInteractive();
-
-        const event_target = node.asEventTarget();
-        if (self.page._event_manager.hasListener(event_target, "click") or
-            self.page._event_manager.hasListener(event_target, "mousedown") or
-            self.page._event_manager.hasListener(event_target, "mouseup") or
-            self.page._event_manager.hasListener(event_target, "keydown") or
-            self.page._event_manager.hasListener(event_target, "change") or
-            self.page._event_manager.hasListener(event_target, "input"))
-        {
-            is_interactive = true;
-        }
-
-        if (el.is(Element.Html)) |html_el| {
-            if (html_el.hasAttributeFunction(.onclick, self.page) or
-                html_el.hasAttributeFunction(.onmousedown, self.page) or
-                html_el.hasAttributeFunction(.onmouseup, self.page) or
-                html_el.hasAttributeFunction(.onkeydown, self.page) or
-                html_el.hasAttributeFunction(.onchange, self.page) or
-                html_el.hasAttributeFunction(.oninput, self.page))
-            {
-                is_interactive = true;
+        if (data.name) |n| {
+            if (n.len > 0) {
+                try self.writer.writeAll(n);
+            }
+        } else if (node.is(CData.Text) != null) {
+            const text_node = node.is(CData.Text).?;
+            const trimmed = std.mem.trim(u8, text_node.getWholeText(), " \t\r\n");
+            if (trimmed.len > 0) {
+                try self.writer.writeAll(trimmed);
             }
         }
 
-        if (el.is(Element.Html.Input)) |input| {
-            value = input.getValue();
-        } else if (el.is(Element.Html.TextArea)) |textarea| {
-            value = textarea.getValue();
-        } else if (el.is(Element.Html.Select)) |select| {
-            value = select.getValue(self.page);
+        if (data.value) |v| {
+            if (v.len > 0) {
+                try self.writer.print(" (value: {s})", .{v});
+            }
         }
+
+        try self.writer.writeByte('\n');
+        self.depth += 1;
+        return true;
     }
 
-    const name = try axn.getName(self.page, self.arena);
+    pub fn leave(self: *TextVisitor, node: *Node, data: *NodeData) !void {
+        const structural = isStructuralRole(data.role);
+        const has_explicit_label = if (node.is(Element)) |el|
+            el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
+        else
+            false;
 
-    // Pruning Heuristic:
-    // If it's a structural node (none/generic) and has no unique label, unwrap it.
-    // We only keep 'none'/'generic' if they are interactive.
-    const structural = isStructuralRole(role);
-    const has_explicit_label = if (node.is(Element)) |el|
-        el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
-    else
-        false;
-
-    if (structural and !is_interactive and !has_explicit_label) {
-        // Just unwrap and process children
-        var it = node.childrenIterator();
-        while (it.next()) |child| {
-            try self.dumpText(child, writer, depth);
-        }
-        return;
-    }
-
-    // Skip redundant StaticText nodes if the parent already captures the text
-    if (std.mem.eql(u8, role, "StaticText") and node._parent != null) {
-        const parent_axn = AXNode.fromNode(node._parent.?);
-        const parent_name = try parent_axn.getName(self.page, self.arena);
-        if (parent_name != null and name != null and std.mem.indexOf(u8, parent_name.?, name.?) != null) {
+        if (structural and !data.is_interactive and !has_explicit_label) {
             return;
         }
+        self.depth -= 1;
     }
-
-    // Format: "  [12] link: Hacker News (value)"
-    for (0..(depth * 2)) |_| {
-        try writer.writeByte(' ');
-    }
-    try writer.print("[{d}] {s}: ", .{ cdp_node.id, role });
-
-    if (name) |n| {
-        if (n.len > 0) {
-            try writer.writeAll(n);
-        }
-    } else if (node.is(CData.Text) != null) {
-        const text_node = node.is(CData.Text).?;
-        const trimmed = std.mem.trim(u8, text_node.getWholeText(), " \t\r\n");
-        if (trimmed.len > 0) {
-            try writer.writeAll(trimmed);
-        }
-    }
-
-    if (value) |v| {
-        if (v.len > 0) {
-            try writer.print(" (value: {s})", .{v});
-        }
-    }
-
-    try writer.writeByte('\n');
-
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        try self.dumpText(child, writer, depth + 1);
-    }
-}
+};
