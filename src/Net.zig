@@ -377,6 +377,10 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self.easy, .proxy_user_pwd, creds.ptr);
     }
 
+    pub fn setCredentials(self: *const Connection, creds: [:0]const u8) !void {
+        try libcurl.curl_easy_setopt(self.easy, .user_pwd, creds.ptr);
+    }
+
     pub fn setCallbacks(
         self: *const Connection,
         comptime header_cb: libcurl.CurlHeaderFunction,
