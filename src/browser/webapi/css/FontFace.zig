@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -41,8 +42,8 @@ pub fn init(family: []const u8, source: []const u8, page: *Page) !*FontFace {
     return self;
 }
 
-pub fn deinit(self: *FontFace, _: bool, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *FontFace, _: bool, session: *Session) void {
+    session.releaseArena(self._arena);
 }
 
 pub fn getFamily(self: *const FontFace) []const u8 {

@@ -608,7 +608,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
     };
 
     if (target._queued_navigation) |existing| {
-        target.arena_pool.release(existing.arena);
+        session.releaseArena(existing.arena);
     }
 
     target._queued_navigation = qn;
