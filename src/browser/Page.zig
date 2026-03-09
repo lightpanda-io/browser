@@ -419,7 +419,7 @@ pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
 // * referer
 pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
     try self.requestCookie(.{}).headersForRequest(temp, url, headers);
-    if (try authorizationHeaderValueForUrl(temp, url)) |authorization_value| {
+    if (try authorizationHeaderValueForRequest(temp, self.url, url)) |authorization_value| {
         const authorization_header = try std.fmt.allocPrintSentinel(temp, "Authorization: {s}", .{authorization_value}, 0);
         try headers.add(authorization_header);
     }
@@ -429,7 +429,8 @@ pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, header
         if (self.referer_header == null) {
             // build the cache
             if (std.mem.startsWith(u8, self.url, "http")) {
-                self.referer_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", self.url }, 0);
+                const referer_value = try refererValueForUrl(self.arena, self.url);
+                self.referer_header = try std.mem.concatWithSentinel(self.arena, u8, &.{ "Referer: ", referer_value }, 0);
             } else {
                 self.referer_header = "";
             }
@@ -442,6 +443,22 @@ pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, header
     if (referer.len > 0) {
         try headers.add(referer);
     }
+}
+
+fn authorizationHeaderValueForRequest(temp: Allocator, page_url: [:0]const u8, request_url: [:0]const u8) !?[]const u8 {
+    if (try authorizationHeaderValueForUrl(temp, request_url)) |authorization_value| {
+        return authorization_value;
+    }
+
+    if (URL.getUsername(page_url).len == 0) {
+        return null;
+    }
+
+    if (!(try urlsShareOrigin(temp, page_url, request_url))) {
+        return null;
+    }
+
+    return authorizationHeaderValueForUrl(temp, page_url);
 }
 
 fn authorizationHeaderValueForUrl(temp: Allocator, url: [:0]const u8) !?[]const u8 {
@@ -464,6 +481,25 @@ fn authorizationHeaderValueForUrl(temp: Allocator, url: [:0]const u8) !?[]const 
     const out = try arena.alloc(u8, out_len);
     _ = encoder.encode(out, userpwd);
     return try std.fmt.allocPrint(temp, "Basic {s}", .{out});
+}
+
+fn urlsShareOrigin(temp: Allocator, first: [:0]const u8, second: [:0]const u8) !bool {
+    const first_origin = try URL.getOrigin(temp, first) orelse return false;
+    const second_origin = try URL.getOrigin(temp, second) orelse return false;
+    return std.mem.eql(u8, first_origin, second_origin);
+}
+
+fn refererValueForUrl(allocator: Allocator, url: [:0]const u8) ![]const u8 {
+    if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) {
+        return "";
+    }
+
+    const protocol = URL.getProtocol(url);
+    const host = URL.getHost(url);
+    const pathname = URL.getPathname(url);
+    const search = URL.getSearch(url);
+    const referer = try URL.buildUrl(allocator, protocol, host, pathname, search, "");
+    return referer;
 }
 
 const GetArenaOpts = struct {
@@ -5049,6 +5085,16 @@ test "authorizationHeaderValueForUrl builds basic auth from userinfo" {
     try std.testing.expectEqualStrings("Basic aW1nIHVzZXI6cEBzcw==", value);
 }
 
+test "refererValueForUrl strips userinfo and fragment" {
+    const value = try refererValueForUrl(
+        std.testing.allocator,
+        "http://img%20user:p%40ss@127.0.0.1:9582/path/index.html?x=1#frag",
+    );
+    defer std.testing.allocator.free(value);
+
+    try std.testing.expectEqualStrings("http://127.0.0.1:9582/path/index.html?x=1", value);
+}
+
 test "Page headersForRequest includes Authorization from userinfo" {
     var page = try testing.pageTest("page/rendered_link_activation.html");
     defer page._session.removePage();
@@ -5078,6 +5124,56 @@ test "Page headersForRequest includes Authorization from userinfo" {
 
     try std.testing.expect(found_authorization);
     try std.testing.expect(found_referer);
+}
+
+test "Page headersForRequest inherits Authorization from same-origin page url" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+    page.url = "http://img%20user:p%40ss@127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html";
+    page.referer_header = null;
+
+    var headers = try Http.Headers.init(page._session.browser.app.config.http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try page.headersForRequest(page.arena, "http://127.0.0.1:9582/private.png", &headers);
+
+    var found_authorization = false;
+    var found_referer = false;
+    var iterator = headers.iterator();
+    while (iterator.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Authorization")) {
+            try std.testing.expectEqualStrings("Basic aW1nIHVzZXI6cEBzcw==", header.value);
+            found_authorization = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Referer")) {
+            try std.testing.expectEqualStrings(
+                "http://127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html",
+                header.value,
+            );
+            found_referer = true;
+        }
+    }
+
+    try std.testing.expect(found_authorization);
+    try std.testing.expect(found_referer);
+}
+
+test "Page headersForRequest does not inherit Authorization cross-origin" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+    page.url = "http://img%20user:p%40ss@127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html";
+    page.referer_header = null;
+
+    var headers = try Http.Headers.init(page._session.browser.app.config.http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try page.headersForRequest(page.arena, "http://127.0.0.1:9583/private.png", &headers);
+
+    var iterator = headers.iterator();
+    while (iterator.next()) |header| {
+        try std.testing.expect(!std.ascii.eqlIgnoreCase(header.name, "Authorization"));
+    }
 }
 
 test "WebApi: Frames" {

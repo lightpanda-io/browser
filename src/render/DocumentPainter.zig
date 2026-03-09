@@ -1729,6 +1729,39 @@ test "paintDocument suppresses image credentials for anonymous crossorigin" {
     try std.testing.expect(found);
 }
 
+test "paintDocument inherits image request authorization from same-origin page url" {
+    var page = try testing.pageTest("page/auth_image_inherited.html");
+    defer page._session.removePage();
+    page.url = "http://img%20user:p%40ss@127.0.0.1:9582/src/browser/tests/page/auth_image_inherited.html";
+    page.referer_header = null;
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (!std.mem.endsWith(u8, image.url, "/private-inherit.png")) {
+                    continue;
+                }
+                try std.testing.expect(image.request_include_credentials);
+                try std.testing.expectEqualStrings("Basic aW1nIHVzZXI6cEBzcw==", image.request_authorization_value);
+                try std.testing.expectEqualStrings(
+                    "http://127.0.0.1:9582/src/browser/tests/page/auth_image_inherited.html",
+                    image.request_referer_value,
+                );
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
 test "paintDocument renders button controls without crashing" {
     var page = try testing.pageTest("page/button_render.html");
     defer page._session.removePage();

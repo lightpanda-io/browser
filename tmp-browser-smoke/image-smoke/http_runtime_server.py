@@ -85,6 +85,36 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/auth-inherit-page.html":
+            body = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Image Inherited Auth Smoke</title></head>
+<body><img src="/auth-inherit-red.png" alt="inherited auth policy test"></body>
+</html>
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpimgauthinherit=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-script-page.html":
+            body = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Script Auth Smoke</title></head>
+<body><script src="/auth-inherit-script.js"></script></body>
+</html>
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpscriptauth=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/accept-page.html":
             body = b"""<!doctype html>
 <html>
@@ -304,6 +334,117 @@ class Handler(BaseHTTPRequestHandler):
                 "user_agent": ua,
                 "accept": accept,
                 "referer": referer,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-inherit-red.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-inherit-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpimgauthinherit=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-inherit-script.js":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-script-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpscriptauth=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"document.title='Script Auth Blocked';"
+                self.send_response(403)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"""document.title='Script Auth OK';(function(){var panel=document.createElement('div');panel.id='script-auth-panel';panel.textContent='script auth ok';panel.setAttribute('style','width:320px;height:160px;background:#18c23e;color:#ffffff;padding:24px;font-size:28px;');document.body.innerHTML='';document.body.appendChild(panel);var img=new Image();img.alt='script beacon';img.src='/script-beacon.png';document.body.appendChild(img);}());"""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/script-beacon.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-script-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpscriptauth=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
                 "allowed": allowed,
             })
             if not allowed:

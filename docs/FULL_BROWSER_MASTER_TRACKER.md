@@ -251,6 +251,11 @@ Current state inside Gate 1:
   real image subresources instead of generic fetches, with a bounded localhost
   probe proving the shared-runtime request carries an explicit image `Accept`
   header while still rendering successfully on the headed surface
+- same-origin protected subresources now inherit page-URL Basic auth on the
+  shared request-policy path without leaking URL userinfo through `Referer`,
+  with bounded localhost probes proving a relative headed image request and an
+  external script request both carry inherited auth, sanitized referer,
+  cookies, and that the authorized script actually executes afterward
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -276,10 +281,11 @@ Current known gap entering Gate 2:
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
 - headed network images now ride the shared `Http` runtime path and inherit
-  page/session cookies, referer, redirect-set cookies, URL-userinfo Basic
-  Authorization, anonymous credential suppression, and an explicit image
-  `Accept` header, but they still do not carry broader auth or richer
-  resource-type behavior
+  page/session cookies, sanitized referer, redirect-set cookies, URL-userinfo
+  Basic Authorization, same-origin page-URL Basic auth inheritance, anonymous
+  credential suppression, and an explicit image `Accept` header, but broader
+  auth beyond page-URL Basic credentials and richer resource-type behavior are
+  still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other
