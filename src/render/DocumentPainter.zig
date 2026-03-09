@@ -856,6 +856,7 @@ fn resolvedImageCommand(
     const resolved_z = try page.call_arena.dupeZ(u8, resolved);
     const request_context = try resolveImageRequestContext(page, resolved_z);
     const alt = element.getAttributeSafe(comptime .wrap("alt")) orelse "";
+    const include_credentials = imageRequestIncludesCredentials(element);
     return .{
         .x = x,
         .y = y,
@@ -863,9 +864,10 @@ fn resolvedImageCommand(
         .height = height,
         .url = @constCast(resolved),
         .alt = @constCast(alt),
-        .request_cookie_value = request_context.cookie_value,
+        .request_include_credentials = include_credentials,
+        .request_cookie_value = if (include_credentials) request_context.cookie_value else &.{},
         .request_referer_value = request_context.referer_value,
-        .request_authorization_value = request_context.authorization_value,
+        .request_authorization_value = if (include_credentials) request_context.authorization_value else &.{},
     };
 }
 
@@ -897,6 +899,11 @@ fn resolveImageRequestContext(page: *Page, resolved_url: [:0]const u8) !ImageReq
         }
     }
     return context;
+}
+
+fn imageRequestIncludesCredentials(element: *Element) bool {
+    const cross_origin = element.getAttributeSafe(comptime .wrap("crossorigin")) orelse return true;
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, cross_origin, " \t\r\n"), "use-credentials");
 }
 
 fn resolveStrokeColor(decl: anytype, page: *Page, tag: Element.Tag) ?Color {
@@ -1679,6 +1686,38 @@ test "paintDocument emits image request authorization from url userinfo" {
                 try std.testing.expectEqualStrings("Basic aW1nIHVzZXI6cEBzcw==", image.request_authorization_value);
                 try std.testing.expectEqualStrings(
                     "http://127.0.0.1:9582/src/browser/tests/page/auth_image.html",
+                    image.request_referer_value,
+                );
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
+test "paintDocument suppresses image credentials for anonymous crossorigin" {
+    var page = try testing.pageTest("page/auth_image_anonymous.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (!std.mem.eql(u8, image.url, "http://img%20user:p%40ss@127.0.0.1:9582/private.png")) {
+                    continue;
+                }
+                try std.testing.expect(!image.request_include_credentials);
+                try std.testing.expectEqualStrings("", image.request_cookie_value);
+                try std.testing.expectEqualStrings("", image.request_authorization_value);
+                try std.testing.expectEqualStrings(
+                    "http://127.0.0.1:9582/src/browser/tests/page/auth_image_anonymous.html",
                     image.request_referer_value,
                 );
                 found = true;

@@ -3886,27 +3886,29 @@ fn fetchHttpImageCacheFile(
     defer client.deinit();
 
     const temp = arena.allocator();
-    const url_z = try temp.dupeZ(u8, url);
+    const url_z = try imageRequestUrlForFetch(temp, image);
     var headers = try client.newHeaders();
 
-    if (cookie_jar) |jar| {
-        const page_url_z = try temp.dupeZ(u8, page_url);
-        const request_cookie = HttpClient.RequestCookie{
-            .jar = jar,
-            .origin = page_url_z,
-            .is_http = std.mem.startsWith(u8, page_url, "http://") or std.mem.startsWith(u8, page_url, "https://"),
-            .is_navigation = false,
-        };
-        try request_cookie.headersForRequest(temp, url_z, &headers);
-    } else if (image.request_cookie_value.len > 0) {
-        const cookie_header = try std.fmt.allocPrintSentinel(temp, "Cookie: {s}", .{image.request_cookie_value}, 0);
-        try headers.add(cookie_header);
+    if (image.request_include_credentials) {
+        if (cookie_jar) |jar| {
+            const page_url_z = try temp.dupeZ(u8, page_url);
+            const request_cookie = HttpClient.RequestCookie{
+                .jar = jar,
+                .origin = page_url_z,
+                .is_http = std.mem.startsWith(u8, page_url, "http://") or std.mem.startsWith(u8, page_url, "https://"),
+                .is_navigation = false,
+            };
+            try request_cookie.headersForRequest(temp, url_z, &headers);
+        } else if (image.request_cookie_value.len > 0) {
+            const cookie_header = try std.fmt.allocPrintSentinel(temp, "Cookie: {s}", .{image.request_cookie_value}, 0);
+            try headers.add(cookie_header);
+        }
     }
     if (image.request_referer_value.len > 0) {
         const referer_header = try std.fmt.allocPrintSentinel(temp, "Referer: {s}", .{image.request_referer_value}, 0);
         try headers.add(referer_header);
     }
-    if (image.request_authorization_value.len > 0) {
+    if (image.request_include_credentials and image.request_authorization_value.len > 0) {
         const authorization_header = try std.fmt.allocPrintSentinel(temp, "Authorization: {s}", .{image.request_authorization_value}, 0);
         try headers.add(authorization_header);
     }
@@ -3936,6 +3938,30 @@ fn fetchHttpImageCacheFile(
     }
 
     return path;
+}
+
+fn imageRequestUrlForFetch(allocator: std.mem.Allocator, image: ImageCommand) ![:0]const u8 {
+    if (image.request_include_credentials) {
+        return try allocator.dupeZ(u8, image.url);
+    }
+
+    var arena_instance = std.heap.ArenaAllocator.init(allocator);
+    defer arena_instance.deinit();
+    const arena = arena_instance.allocator();
+
+    const url_z = try arena.dupeZ(u8, image.url);
+    if (URL.getUsername(url_z).len == 0) {
+        return try allocator.dupeZ(u8, image.url);
+    }
+
+    return try URL.buildUrl(
+        allocator,
+        URL.getProtocol(url_z),
+        URL.getHost(url_z),
+        URL.getPathname(url_z),
+        URL.getSearch(url_z),
+        URL.getHash(url_z),
+    );
 }
 
 fn imageFetchHeaderCallback(transfer: *HttpClient.Transfer) !bool {
@@ -4295,8 +4321,9 @@ fn drawPresentationImage(
 }
 
 fn imageRequestCacheKey(allocator: std.mem.Allocator, image: ImageCommand) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}\nCOOKIE:{s}\nREFERER:{s}\nAUTH:{s}", .{
+    return std.fmt.allocPrint(allocator, "{s}\nINCLUDE_CREDENTIALS:{s}\nCOOKIE:{s}\nREFERER:{s}\nAUTH:{s}", .{
         image.url,
+        if (image.request_include_credentials) "1" else "0",
         image.request_cookie_value,
         image.request_referer_value,
         image.request_authorization_value,
@@ -7455,6 +7482,7 @@ test "win32 imageRequestCacheKey includes request policy" {
         .height = 10,
         .url = @constCast("https://img.test/red.png"),
         .alt = @constCast(""),
+        .request_include_credentials = true,
         .request_cookie_value = @constCast("session=one"),
         .request_referer_value = @constCast("https://img.test/page"),
         .request_authorization_value = @constCast("Basic dXNlcjpwYXNz"),
@@ -7467,6 +7495,7 @@ test "win32 imageRequestCacheKey includes request policy" {
         .height = 10,
         .url = @constCast("https://img.test/red.png"),
         .alt = @constCast(""),
+        .request_include_credentials = false,
         .request_cookie_value = @constCast("session=two"),
         .request_referer_value = @constCast("https://img.test/page"),
         .request_authorization_value = @constCast("Basic dXNlcjpvdGhlcg=="),
@@ -7474,9 +7503,37 @@ test "win32 imageRequestCacheKey includes request policy" {
     defer allocator.free(two);
 
     try std.testing.expect(!std.mem.eql(u8, one, two));
+    try std.testing.expect(std.mem.indexOf(u8, one, "INCLUDE_CREDENTIALS:1") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "session=one") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "https://img.test/page") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "Basic dXNlcjpwYXNz") != null);
+}
+
+test "win32 imageRequestUrlForFetch strips userinfo when credentials disabled" {
+    const allocator = std.testing.allocator;
+    const stripped = try imageRequestUrlForFetch(allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 10,
+        .height = 10,
+        .url = @constCast("http://img%20user:p%40ss@127.0.0.1:9582/private.png?x=1#frag"),
+        .alt = @constCast(""),
+        .request_include_credentials = false,
+    });
+    defer allocator.free(stripped);
+    try std.testing.expectEqualStrings("http://127.0.0.1:9582/private.png?x=1#frag", stripped);
+
+    const kept = try imageRequestUrlForFetch(allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 10,
+        .height = 10,
+        .url = @constCast("http://img%20user:p%40ss@127.0.0.1:9582/private.png?x=1#frag"),
+        .alt = @constCast(""),
+        .request_include_credentials = true,
+    });
+    defer allocator.free(kept);
+    try std.testing.expectEqualStrings("http://img%20user:p%40ss@127.0.0.1:9582/private.png?x=1#frag", kept);
 }
 
 test "win32 settings overlay keyboard queues settings commands" {

@@ -70,6 +70,21 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/auth-anon-page.html":
+            body = f"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Image Auth Anonymous Smoke</title></head>
+<body><img crossorigin="anonymous" src="http://img%20user:p%40ss@127.0.0.1:{PORT}/auth-anon-red.png" alt="auth anonymous policy test"></body>
+</html>
+""".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpimganon=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/red.png":
             ua = self.headers.get("User-Agent", "")
             cookie = self.headers.get("Cookie", "")
@@ -194,6 +209,43 @@ class Handler(BaseHTTPRequestHandler):
                 and "lpimgauth=ok" in cookie
                 and referer == expected_referer
                 and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-anon-red.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-anon-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and cookie == ""
+                and referer == expected_referer
+                and authorization == ""
             )
             append_log({
                 "path": self.path,

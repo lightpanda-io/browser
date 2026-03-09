@@ -52,6 +52,7 @@ pub const ImageCommand = struct {
     height: i32,
     url: []u8,
     alt: []u8,
+    request_include_credentials: bool = true,
     request_cookie_value: []u8 = &.{},
     request_referer_value: []u8 = &.{},
     request_authorization_value: []u8 = &.{},
@@ -83,6 +84,7 @@ pub const Command = union(enum) {
                 .height = image.height,
                 .url = try allocator.dupe(u8, image.url),
                 .alt = try allocator.dupe(u8, image.alt),
+                .request_include_credentials = image.request_include_credentials,
                 .request_cookie_value = try allocator.dupe(u8, image.request_cookie_value),
                 .request_referer_value = try allocator.dupe(u8, image.request_referer_value),
                 .request_authorization_value = try allocator.dupe(u8, image.request_authorization_value),
@@ -203,6 +205,7 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .height = image.height,
         .url = try allocator.dupe(u8, image.url),
         .alt = try allocator.dupe(u8, image.alt),
+        .request_include_credentials = image.request_include_credentials,
         .request_cookie_value = try allocator.dupe(u8, image.request_cookie_value),
         .request_referer_value = try allocator.dupe(u8, image.request_referer_value),
         .request_authorization_value = try allocator.dupe(u8, image.request_authorization_value),
@@ -277,6 +280,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.height));
                 hasher.update(image.url);
                 hasher.update(image.alt);
+                hasher.update(std.mem.asBytes(&image.request_include_credentials));
                 hasher.update(image.request_cookie_value);
                 hasher.update(image.request_referer_value);
                 hasher.update(image.request_authorization_value);
