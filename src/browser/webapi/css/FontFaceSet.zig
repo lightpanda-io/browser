@@ -28,7 +28,7 @@ const FontFaceSet = @This();
 _arena: Allocator,
 
 pub fn init(page: *Page) !*FontFaceSet {
-    const arena = try page.getArena(.{.debug = "FontFaceSet"});
+    const arena = try page.getArena(.{ .debug = "FontFaceSet" });
     errdefer page.releaseArena(arena);
 
     const self = try arena.create(FontFaceSet);
@@ -73,7 +73,7 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
         pub const weak = true;
-    pub const finalizer = bridge.finalizer(FontFaceSet.deinit);
+        pub const finalizer = bridge.finalizer(FontFaceSet.deinit);
     };
 
     pub const size = bridge.property(0, .{ .template = false, .readonly = true });
