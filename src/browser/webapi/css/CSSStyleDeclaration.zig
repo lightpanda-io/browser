@@ -26,6 +26,8 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 
+const Allocator = std.mem.Allocator;
+
 const CSSStyleDeclaration = @This();
 
 _element: ?*Element = null,
@@ -114,9 +116,12 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 
     const normalized = normalizePropertyName(property_name, &page.buf);
 
+    // Normalize the value for canonical serialization
+    const normalized_value = try normalizePropertyValue(page.call_arena, normalized, value);
+
     // Find existing property
     if (self.findProperty(normalized)) |existing| {
-        existing._value = try String.init(page.arena, value, .{});
+        existing._value = try String.init(page.arena, normalized_value, .{});
         existing._important = important;
         return;
     }
@@ -125,7 +130,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     const prop = try page._factory.create(Property{
         ._node = .{},
         ._name = try String.init(page.arena, normalized, .{}),
-        ._value = try String.init(page.arena, value, .{}),
+        ._value = try String.init(page.arena, normalized_value, .{}),
         ._important = important,
     });
     self._properties.append(&prop._node);
@@ -225,6 +230,166 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+// Normalize CSS property values for canonical serialization
+fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []const u8) ![]const u8 {
+    // Per CSSOM spec, unitless zero in length properties should serialize as "0px"
+    if (std.mem.eql(u8, value, "0") and isLengthProperty(property_name)) {
+        return "0px";
+    }
+
+    // "first baseline" serializes canonically as "baseline" (first is the default)
+    if (std.ascii.startsWithIgnoreCase(value, "first baseline")) {
+        if (value.len == 14) {
+            // Exact match "first baseline"
+            return "baseline";
+        }
+        if (value.len > 14 and value[14] == ' ') {
+            // "first baseline X" -> "baseline X"
+            return try std.mem.concat(arena, u8, &.{ "baseline", value[14..] });
+        }
+    }
+
+    // For 2-value shorthand properties, collapse "X X" to "X"
+    if (isTwoValueShorthand(property_name)) {
+        if (collapseDuplicateValue(value)) |single| {
+            return single;
+        }
+    }
+
+    return value;
+}
+
+// Check if a value is "X X" (duplicate) and return just "X"
+fn collapseDuplicateValue(value: []const u8) ?[]const u8 {
+    const space_idx = std.mem.indexOfScalar(u8, value, ' ') orelse return null;
+    if (space_idx == 0 or space_idx >= value.len - 1) return null;
+
+    const first = value[0..space_idx];
+    const rest = std.mem.trimLeft(u8, value[space_idx + 1 ..], " ");
+
+    // Check if there's only one more value (no additional spaces)
+    if (std.mem.indexOfScalar(u8, rest, ' ') != null) return null;
+
+    if (std.mem.eql(u8, first, rest)) {
+        return first;
+    }
+    return null;
+}
+
+fn isTwoValueShorthand(name: []const u8) bool {
+    const shorthands = std.StaticStringMap(void).initComptime(.{
+        .{ "place-content", {} },
+        .{ "place-items", {} },
+        .{ "place-self", {} },
+        .{ "margin-block", {} },
+        .{ "margin-inline", {} },
+        .{ "padding-block", {} },
+        .{ "padding-inline", {} },
+        .{ "inset-block", {} },
+        .{ "inset-inline", {} },
+        .{ "border-block-style", {} },
+        .{ "border-inline-style", {} },
+        .{ "border-block-width", {} },
+        .{ "border-inline-width", {} },
+        .{ "border-block-color", {} },
+        .{ "border-inline-color", {} },
+        .{ "overflow", {} },
+        .{ "overscroll-behavior", {} },
+        .{ "gap", {} },
+    });
+    return shorthands.has(name);
+}
+
+fn isLengthProperty(name: []const u8) bool {
+    // Properties that accept <length> or <length-percentage> values
+    const length_properties = std.StaticStringMap(void).initComptime(.{
+        // Sizing
+        .{ "width", {} },
+        .{ "height", {} },
+        .{ "min-width", {} },
+        .{ "min-height", {} },
+        .{ "max-width", {} },
+        .{ "max-height", {} },
+        // Margins
+        .{ "margin", {} },
+        .{ "margin-top", {} },
+        .{ "margin-right", {} },
+        .{ "margin-bottom", {} },
+        .{ "margin-left", {} },
+        .{ "margin-block", {} },
+        .{ "margin-block-start", {} },
+        .{ "margin-block-end", {} },
+        .{ "margin-inline", {} },
+        .{ "margin-inline-start", {} },
+        .{ "margin-inline-end", {} },
+        // Padding
+        .{ "padding", {} },
+        .{ "padding-top", {} },
+        .{ "padding-right", {} },
+        .{ "padding-bottom", {} },
+        .{ "padding-left", {} },
+        .{ "padding-block", {} },
+        .{ "padding-block-start", {} },
+        .{ "padding-block-end", {} },
+        .{ "padding-inline", {} },
+        .{ "padding-inline-start", {} },
+        .{ "padding-inline-end", {} },
+        // Positioning
+        .{ "top", {} },
+        .{ "right", {} },
+        .{ "bottom", {} },
+        .{ "left", {} },
+        .{ "inset", {} },
+        .{ "inset-block", {} },
+        .{ "inset-block-start", {} },
+        .{ "inset-block-end", {} },
+        .{ "inset-inline", {} },
+        .{ "inset-inline-start", {} },
+        .{ "inset-inline-end", {} },
+        // Border
+        .{ "border-width", {} },
+        .{ "border-top-width", {} },
+        .{ "border-right-width", {} },
+        .{ "border-bottom-width", {} },
+        .{ "border-left-width", {} },
+        .{ "border-block-width", {} },
+        .{ "border-block-start-width", {} },
+        .{ "border-block-end-width", {} },
+        .{ "border-inline-width", {} },
+        .{ "border-inline-start-width", {} },
+        .{ "border-inline-end-width", {} },
+        .{ "border-radius", {} },
+        .{ "border-top-left-radius", {} },
+        .{ "border-top-right-radius", {} },
+        .{ "border-bottom-left-radius", {} },
+        .{ "border-bottom-right-radius", {} },
+        // Text
+        .{ "font-size", {} },
+        .{ "line-height", {} },
+        .{ "letter-spacing", {} },
+        .{ "word-spacing", {} },
+        .{ "text-indent", {} },
+        // Flexbox/Grid
+        .{ "gap", {} },
+        .{ "row-gap", {} },
+        .{ "column-gap", {} },
+        .{ "flex-basis", {} },
+        // Outline
+        .{ "outline-width", {} },
+        .{ "outline-offset", {} },
+        // Other
+        .{ "border-spacing", {} },
+        .{ "text-shadow", {} },
+        .{ "box-shadow", {} },
+        .{ "baseline-shift", {} },
+        .{ "vertical-align", {} },
+        // Grid lanes
+        .{ "flow-tolerance", {} },
+    });
+
+    return length_properties.has(name);
 }
 
 fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []const u8) []const u8 {
