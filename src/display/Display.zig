@@ -24,6 +24,18 @@ pub const BrowserCommand = @import("BrowserCommand.zig").BrowserCommand;
 const DisplayList = @import("../render/DisplayList.zig").DisplayList;
 pub const PopupSource = @import("../browser/PopupSource.zig").PopupSource;
 
+pub const ChosenFiles = struct {
+    paths: [][]u8,
+
+    pub fn deinit(self: *ChosenFiles, allocator: std.mem.Allocator) void {
+        for (self.paths) |path| {
+            allocator.free(path);
+        }
+        allocator.free(self.paths);
+        self.* = undefined;
+    }
+};
+
 const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig").Win32Backend else struct {
     page_count: u32 = 0,
 
@@ -53,7 +65,7 @@ const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig"
     pub fn savePng(_: *@This(), _: []const u8) bool {
         return false;
     }
-    pub fn chooseFile(_: *@This(), _: []const u8, _: bool) ?[]u8 {
+    pub fn chooseFiles(_: *@This(), _: []const u8, _: bool) ?ChosenFiles {
         return null;
     }
     pub fn nextBrowserCommand(_: *@This()) ?BrowserCommand {
@@ -315,9 +327,9 @@ pub fn presentPageView(self: *Display, title: []const u8, url: []const u8, body:
     }
 }
 
-pub fn chooseFile(self: *Display, accept: []const u8, multiple: bool) ?[]u8 {
+pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {
     return switch (self.backend) {
-        .headed_windows => |*backend| backend.chooseFile(accept, multiple),
+        .headed_windows => |*backend| backend.chooseFiles(accept, multiple),
         else => null,
     };
 }

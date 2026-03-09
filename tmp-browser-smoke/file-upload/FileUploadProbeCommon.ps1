@@ -170,6 +170,25 @@ function Invoke-FileUploadChoosePath([IntPtr]$BrowserHwnd, [int]$BrowserPid, [st
   }
 }
 
+function Invoke-FileUploadChoosePaths([IntPtr]$BrowserHwnd, [int]$BrowserPid, [string[]]$Paths) {
+  if (-not $Paths -or $Paths.Count -lt 2) {
+    throw 'Invoke-FileUploadChoosePaths requires at least two paths'
+  }
+  $dialog = Invoke-FileUploadOpenDialog $BrowserHwnd $BrowserPid
+  if ($dialog -eq [IntPtr]::Zero) {
+    throw 'file chooser dialog did not appear'
+  }
+  Show-SmokeWindow $dialog
+  Start-Sleep -Milliseconds 180
+  $joined = ($Paths | ForEach-Object { '"' + $_ + '"' }) -join ' '
+  Send-SmokeText $joined
+  Start-Sleep -Milliseconds 120
+  Send-SmokeEnter
+  if (-not (Wait-UploadDialogClosed $BrowserPid 40 150)) {
+    throw 'file chooser dialog did not close after multi-selection'
+  }
+}
+
 function Invoke-FileUploadCancel([IntPtr]$BrowserHwnd, [int]$BrowserPid) {
   $dialog = Invoke-FileUploadOpenDialog $BrowserHwnd $BrowserPid
   if ($dialog -eq [IntPtr]::Zero) {

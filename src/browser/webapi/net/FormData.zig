@@ -196,13 +196,18 @@ fn collectForm(
             if (element.is(Form.Input)) |input| {
                 const input_type = input._input_type;
                 if (input_type == .file) {
-                    const selected = input.getSelectedFile() orelse continue;
-                    try file_entries.append(arena, .{
-                        .name = try arena.dupe(u8, name),
-                        .path = try arena.dupe(u8, selected.path),
-                        .filename = try arena.dupe(u8, selected.name),
-                        .content_type = try arena.dupe(u8, selected.content_type),
-                    });
+                    const selected_files = input.getSelectedFiles();
+                    if (selected_files.len == 0) {
+                        continue;
+                    }
+                    for (selected_files) |selected| {
+                        try file_entries.append(arena, .{
+                            .name = try arena.dupe(u8, name),
+                            .path = try arena.dupe(u8, selected.path),
+                            .filename = try arena.dupe(u8, selected.name),
+                            .content_type = try arena.dupe(u8, selected.content_type),
+                        });
+                    }
                     continue;
                 }
                 if (input_type == .checkbox or input_type == .radio) {
@@ -396,6 +401,59 @@ test "FormData write multipart/form-data includes file parts" {
     try std.testing.expect(std.mem.indexOf(u8, buf.written(), "Content-Disposition: form-data; name=\"upload\"; filename=\"sample.txt\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, buf.written(), "Content-Type: text/plain") != null);
     try std.testing.expect(std.mem.indexOf(u8, buf.written(), "hello upload") != null);
+}
+
+test "FormData write multipart/form-data includes multiple files for one field" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var list = KeyValueList.init();
+    try list.append(arena, "title", "hello");
+
+    var file_entries: std.ArrayListUnmanaged(FileEntry) = .{};
+
+    const temp_path_a = "tmp-formdata-upload-a.txt";
+    const temp_path_b = "tmp-formdata-upload-b.json";
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_path_a, .data = "file-a" });
+    defer std.fs.cwd().deleteFile(temp_path_a) catch {};
+    try std.fs.cwd().writeFile(.{ .sub_path = temp_path_b, .data = "{\"file\":2}" });
+    defer std.fs.cwd().deleteFile(temp_path_b) catch {};
+
+    const abs_path_a = try std.fs.cwd().realpathAlloc(std.testing.allocator, temp_path_a);
+    defer std.testing.allocator.free(abs_path_a);
+    const abs_path_b = try std.fs.cwd().realpathAlloc(std.testing.allocator, temp_path_b);
+    defer std.testing.allocator.free(abs_path_b);
+
+    try file_entries.append(arena, .{
+        .name = try arena.dupe(u8, "upload"),
+        .path = try arena.dupe(u8, abs_path_a),
+        .filename = try arena.dupe(u8, "sample-a.txt"),
+        .content_type = try arena.dupe(u8, "text/plain"),
+    });
+    try file_entries.append(arena, .{
+        .name = try arena.dupe(u8, "upload"),
+        .path = try arena.dupe(u8, abs_path_b),
+        .filename = try arena.dupe(u8, "sample-b.json"),
+        .content_type = try arena.dupe(u8, "application/json"),
+    });
+
+    const form_data = FormData{
+        ._arena = arena,
+        ._list = list,
+        ._file_entries = file_entries,
+        ._multipart_boundary = "BOUNDARY",
+    };
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+
+    try form_data.write("multipart/form-data", &buf.writer);
+    const body = buf.written();
+    try std.testing.expect(std.mem.indexOf(u8, body, "name=\"upload\"; filename=\"sample-a.txt\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "name=\"upload\"; filename=\"sample-b.json\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "file-a") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "{\"file\":2}") != null);
 }
 
 test "FormData contentTypeHeader includes multipart boundary" {

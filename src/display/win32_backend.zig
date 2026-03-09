@@ -189,7 +189,7 @@ pub const Win32Backend = struct {
         allocator: std.mem.Allocator,
         accept: []const u8,
         multiple: bool,
-        selected_path: ?[]u8 = null,
+        selected_files: ?Display.ChosenFiles = null,
     };
 
     const InputEvent = union(enum) {
@@ -786,7 +786,7 @@ pub const Win32Backend = struct {
         return savePresentationPng(self, path);
     }
 
-    pub fn chooseFile(self: *Win32Backend, accept: []const u8, multiple: bool) ?[]u8 {
+    pub fn chooseFiles(self: *Win32Backend, accept: []const u8, multiple: bool) ?Display.ChosenFiles {
         const hwnd_value = self.window_hwnd.load(.acquire);
         if (hwnd_value == 0) {
             log.warn(.app, "win choose file missing hwnd", .{});
@@ -800,7 +800,7 @@ pub const Win32Backend = struct {
             .multiple = multiple,
         };
         _ = SendMessageWUnaligned(hwnd, WM_APP_OPEN_FILE_DIALOG, 0, @as(c.LPARAM, @bitCast(@intFromPtr(&request))));
-        return request.selected_path;
+        return request.selected_files;
     }
 
     pub fn userClosed(self: *const Win32Backend) bool {
@@ -5955,8 +5955,8 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
         WM_APP_OPEN_FILE_DIALOG => {
             if (getBackendPtr(hwnd)) |backend| {
                 const request: *Win32Backend.OpenFileDialogRequest = @ptrFromInt(@as(usize, @bitCast(lparam)));
-                request.selected_path = openFileDialogOnWindowThread(backend, hwnd, request.accept, request.multiple);
-                return if (request.selected_path != null) 1 else 0;
+                request.selected_files = openFileDialogOnWindowThread(backend, hwnd, request.accept, request.multiple);
+                return if (request.selected_files != null) 1 else 0;
             }
             return 0;
         },
@@ -6416,9 +6416,7 @@ fn openFileDialogOnWindowThread(
     hwnd: c.HWND,
     accept: []const u8,
     multiple: bool,
-) ?[]u8 {
-    _ = multiple;
-
+) ?Display.ChosenFiles {
     var file_buf: [4096]u16 = [_]u16{0} ** 4096;
     const title_text = if (std.mem.trim(u8, accept, &std.ascii.whitespace).len > 0)
         "Select file for upload"
@@ -6434,6 +6432,9 @@ fn openFileDialogOnWindowThread(
     ofn.nMaxFile = file_buf.len;
     ofn.lpstrTitle = wide_title.ptr;
     ofn.Flags = c.OFN_EXPLORER | c.OFN_FILEMUSTEXIST | c.OFN_PATHMUSTEXIST | c.OFN_NOCHANGEDIR;
+    if (multiple) {
+        ofn.Flags |= c.OFN_ALLOWMULTISELECT;
+    }
 
     if (c.GetOpenFileNameW(&ofn) == 0) {
         const error_code = c.CommDlgExtendedError();
@@ -6443,11 +6444,66 @@ fn openFileDialogOnWindowThread(
         return null;
     }
 
-    const path_len = std.mem.indexOfScalar(u16, file_buf[0..], 0) orelse file_buf.len;
-    return std.unicode.utf16LeToUtf8Alloc(backend.allocator, file_buf[0..path_len]) catch |err| {
-        log.warn(.app, "win chooser utf16 fail", .{ .err = err });
+    return parseOpenFileDialogSelection(backend.allocator, file_buf[0..]) catch |err| {
+        log.warn(.app, "chooser parse failed", .{ .err = err });
         return null;
     };
+}
+
+fn parseOpenFileDialogSelection(
+    allocator: std.mem.Allocator,
+    raw: []const u16,
+) !Display.ChosenFiles {
+    var segments = std.ArrayListUnmanaged([]const u16){};
+    defer segments.deinit(allocator);
+
+    var index: usize = 0;
+    while (index < raw.len and raw[index] != 0) {
+        const start = index;
+        while (index < raw.len and raw[index] != 0) : (index += 1) {}
+        if (start != index) {
+            try segments.append(allocator, raw[start..index]);
+        }
+        if (index < raw.len) {
+            index += 1;
+        }
+    }
+
+    if (segments.items.len == 0) {
+        return error.NoSelection;
+    }
+
+    if (segments.items.len == 1) {
+        const only_path = try std.unicode.utf16LeToUtf8Alloc(allocator, segments.items[0]);
+        errdefer allocator.free(only_path);
+        const paths = try allocator.alloc([]u8, 1);
+        paths[0] = only_path;
+        return .{ .paths = paths };
+    }
+
+    const directory = try std.unicode.utf16LeToUtf8Alloc(allocator, segments.items[0]);
+    defer allocator.free(directory);
+
+    const paths = try allocator.alloc([]u8, segments.items.len - 1);
+    errdefer {
+        for (paths[0 .. segments.items.len - 1]) |path| {
+            if (path.len > 0) {
+                allocator.free(path);
+            }
+        }
+        allocator.free(paths);
+    }
+    for (paths) |*slot| {
+        slot.* = "";
+    }
+
+    for (segments.items[1..], 0..) |segment, part_index| {
+        const filename = try std.unicode.utf16LeToUtf8Alloc(allocator, segment);
+        defer allocator.free(filename);
+        paths[part_index] = try std.fs.path.join(allocator, &.{ directory, filename });
+    }
+
+    return .{ .paths = paths };
 }
 
 test "win32 mapVirtualKey includes modifiers and shifted digits" {

@@ -387,6 +387,10 @@ const Painter = struct {
             .input => {
                 const input = element.as(Element.Html.Input);
                 if (input._input_type == .file) {
+                    const selected_files = input.getSelectedFiles();
+                    if (selected_files.len > 1) {
+                        return std.fmt.allocPrint(self.allocator, "{d} files selected", .{selected_files.len});
+                    }
                     const selected_name = input.getSelectedFileName();
                     if (selected_name.len > 0) {
                         return self.allocator.dupe(u8, selected_name);

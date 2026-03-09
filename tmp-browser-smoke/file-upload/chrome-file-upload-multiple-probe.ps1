@@ -1,17 +1,18 @@
 $ErrorActionPreference = 'Stop'
 $repo = 'C:\Users\adyba\src\lightpanda-browser'
 $root = Join-Path $repo 'tmp-browser-smoke\file-upload'
-$profileRoot = Join-Path $root 'profile-upload-submit'
-$port = 8162
-$browserOut = Join-Path $root 'upload-submit.browser.stdout.txt'
-$browserErr = Join-Path $root 'upload-submit.browser.stderr.txt'
-$serverOut = Join-Path $root 'upload-submit.server.stdout.txt'
-$serverErr = Join-Path $root 'upload-submit.server.stderr.txt'
+$profileRoot = Join-Path $root 'profile-upload-multiple'
+$port = 8169
+$browserOut = Join-Path $root 'upload-multiple.browser.stdout.txt'
+$browserErr = Join-Path $root 'upload-multiple.browser.stderr.txt'
+$serverOut = Join-Path $root 'upload-multiple.server.stdout.txt'
+$serverErr = Join-Path $root 'upload-multiple.server.stderr.txt'
 
 Remove-Item $browserOut,$browserErr,$serverOut,$serverErr -Force -ErrorAction SilentlyContinue
 . "$PSScriptRoot\FileUploadProbeCommon.ps1"
 
-$samplePath = (Resolve-Path (Join-Path $root 'sample-upload.txt')).Path
+$samplePathA = (Resolve-Path (Join-Path $root 'sample-upload.txt')).Path
+$samplePathB = (Resolve-Path (Join-Path $root 'sample-upload-second.txt')).Path
 $server = $null
 $browser = $null
 $ready = $false
@@ -21,6 +22,7 @@ $serverSawUpload = $false
 $failure = $null
 $titleBefore = $null
 $titleAfterSubmit = $null
+$log = ''
 
 try {
   Reset-FileUploadProfile $profileRoot | Out-Null
@@ -28,28 +30,31 @@ try {
   $ready = Wait-FileUploadServer $port
   if (-not $ready) { throw 'file upload server did not become ready' }
 
-  $browser = Start-FileUploadBrowser "http://127.0.0.1:$port/upload.html" $browserOut $browserErr
+  $browser = Start-FileUploadBrowser "http://127.0.0.1:$port/upload-multiple.html" $browserOut $browserErr
   $hwnd = Wait-TabWindowHandle $browser.Id
   if ($hwnd -eq [IntPtr]::Zero) { throw 'file upload browser window handle not found' }
 
-  $titleBefore = Wait-FileUploadTitle $browser.Id 'File Upload Smoke' 40
-  if (-not $titleBefore) { throw 'file upload page did not load' }
+  $titleBefore = Wait-FileUploadTitle $browser.Id 'File Upload Multiple Smoke' 40
+  if (-not $titleBefore) { throw 'file upload multiple page did not load' }
 
-  Invoke-FileUploadChoosePath $hwnd $browser.Id $samplePath
+  Invoke-FileUploadChoosePaths $hwnd $browser.Id @($samplePathA, $samplePathB)
   $selectedWorked = $true
 
   Invoke-FileUploadSubmit $hwnd
   $titleAfterSubmit = Wait-FileUploadTitle $browser.Id 'Upload Submitted sample-upload.txt' 40
-  $serverSawUpload = Wait-FileUploadLogNeedle $serverErr 'UPLOAD files=1' 40 200
+  $serverSawUpload = Wait-FileUploadLogNeedle $serverErr 'UPLOAD files=2' 40 200
   if ((-not $titleAfterSubmit) -or (-not $serverSawUpload)) {
-    throw 'multipart upload did not complete with the selected file'
+    throw 'multipart multi-file upload did not complete'
   }
-  $submittedWorked = $true
 
   $log = if (Test-Path $serverErr) { Get-Content $serverErr -Raw } else { '' }
   if ($log -notmatch 'sample-upload\.txt:38:primary upload payload from sample one') {
-    throw 'upload server did not receive the expected file payload'
+    throw 'server log did not include the first uploaded file'
   }
+  if ($log -notmatch 'sample-upload-second\.txt:42:replacement upload payload from sample two') {
+    throw 'server log did not include the second uploaded file'
+  }
+  $submittedWorked = $true
 } catch {
   $failure = $_.Exception.Message
 } finally {
@@ -58,6 +63,8 @@ try {
   Start-Sleep -Milliseconds 200
   $browserGone = if ($browser) { -not (Get-Process -Id $browser.Id -ErrorAction SilentlyContinue) } else { $true }
   $serverGone = if ($server) { -not (Get-Process -Id $server.Id -ErrorAction SilentlyContinue) } else { $true }
+  $serverCommand = if ($serverMeta) { $serverMeta.CommandLine } else { $null }
+  $browserCommand = if ($browserMeta) { $browserMeta.CommandLine } else { $null }
 
   [ordered]@{
     server_pid = if ($server) { $server.Id } else { 0 }
@@ -69,8 +76,8 @@ try {
     submitted_worked = $submittedWorked
     server_saw_upload = $serverSawUpload
     error = $failure
-    server_meta = $serverMeta
-    browser_meta = $browserMeta
+    server_command = $serverCommand
+    browser_command = $browserCommand
     browser_gone = $browserGone
     server_gone = $serverGone
   } | ConvertTo-Json -Depth 7

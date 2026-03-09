@@ -42,7 +42,7 @@ try {
 
   Invoke-FileUploadSubmit $hwnd
   $titleTarget = Wait-FileUploadTitle $browser.Id 'Upload Target Submitted sample-upload.txt' 40
-  $serverSawUpload = Wait-FileUploadLogNeedle $serverErr 'UPLOAD_TARGET filename=sample-upload.txt' 40 200
+  $serverSawUpload = Wait-FileUploadLogNeedle $serverErr 'UPLOAD_TARGET files=1' 40 200
   if ((-not $titleTarget) -or (-not $serverSawUpload)) {
     throw 'named target upload did not open the expected result tab'
   }

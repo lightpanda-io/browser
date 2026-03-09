@@ -217,8 +217,9 @@ Current state inside Gate 1:
   second GET, with bounded headed probes proving a single request for
   address-bar, in-page link, and direct-startup attachment flows
 - headed Windows `browse` now has a native file chooser path for rendered file
-  inputs, real multipart form submission with selected files, and bounded
-  headed probes for select-submit, cancel, and replace flows
+  inputs, including multi-select file inputs, plus real multipart form
+  submission with selected files and bounded headed probes for single-file
+  select-submit, cancel, replace, and multi-file submit flows
 - those same headed upload flows now compose cleanly with named popup targets
   and attachment responses: bounded probes cover target-tab multipart upload,
   same-context upload-to-attachment with restored source page plus downloads
@@ -248,9 +249,10 @@ Current known gap entering Gate 2:
 - explicit download requests, adopted root-attachment transfers, and other
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
-- native file chooser and multipart upload flows now work end to end in headed
-  Windows `browse`, but upload transport still needs to converge with the same
-  broader shared runtime/policy path as other browser-managed resources
+- native file chooser, multi-select file inputs, and multipart upload flows
+  now work end to end in headed Windows `browse`, but upload transport still
+  needs to converge with the same broader shared runtime/policy path as other
+  browser-managed resources
 - popup-target and attachment-response upload combinations are now runtime-
   covered; the remaining work is less about basic composition and more about
   converging those flows with the same broader shared transfer/runtime policy

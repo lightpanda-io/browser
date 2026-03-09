@@ -3555,10 +3555,15 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 fn handleFileInputActivation(self: *Page, input: *Element.Html.Input) !void {
     const accept = input.getAccept();
     const multiple = input.getMultiple();
-    const selected_path = self._session.browser.app.display.chooseFile(accept, multiple) orelse return;
-    defer self._session.browser.app.allocator.free(selected_path);
+    var selected_files = self._session.browser.app.display.chooseFiles(accept, multiple) orelse return;
+    defer selected_files.deinit(self._session.browser.app.allocator);
 
-    if (!(try input.setSelectedFile(selected_path, null, self))) {
+    const selected_specs = try self.call_arena.alloc(Element.Html.Input.SelectedFileSpec, selected_files.paths.len);
+    for (selected_files.paths, 0..) |selected_path, index| {
+        selected_specs[index] = .{ .path = selected_path };
+    }
+
+    if (!(try input.setSelectedFiles(selected_specs, self))) {
         return;
     }
     try input.dispatchInputEvent(self);
@@ -4805,6 +4810,43 @@ test "Page handleClick serializes multipart file upload for named target form" {
     try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "Content-Disposition: form-data; name=\"upload\"; filename=\"tmp-page-upload.txt\"") != null);
     try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "Content-Type: text/plain") != null);
     try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "hello upload") != null);
+}
+
+test "Page handleClick serializes multipart form with multiple selected files" {
+    var page = try testing.pageTest("page/upload_form.html");
+    defer page._session.removePage();
+
+    try std.fs.cwd().writeFile(.{ .sub_path = "tmp-page-upload-a.txt", .data = "hello upload a" });
+    defer std.fs.cwd().deleteFile("tmp-page-upload-a.txt") catch {};
+    try std.fs.cwd().writeFile(.{ .sub_path = "tmp-page-upload-b.json", .data = "{\"hello\":\"b\"}" });
+    defer std.fs.cwd().deleteFile("tmp-page-upload-b.json") catch {};
+
+    const abs_path_a = try std.fs.cwd().realpathAlloc(std.testing.allocator, "tmp-page-upload-a.txt");
+    defer std.testing.allocator.free(abs_path_a);
+    const abs_path_b = try std.fs.cwd().realpathAlloc(std.testing.allocator, "tmp-page-upload-b.json");
+    defer std.testing.allocator.free(abs_path_b);
+
+    const input_element = (try page.window._document.querySelector(.wrap("#upload"), page)).?;
+    const input = input_element.is(Element.Html.Input).?;
+    try input.setMultiple(true, page);
+
+    const files = [_]Element.Html.Input.SelectedFileSpec{
+        .{ .path = abs_path_a, .content_type = "text/plain" },
+        .{ .path = abs_path_b, .content_type = "application/json" },
+    };
+    _ = try input.setSelectedFiles(files[0..], page);
+
+    const submitter = (try page.window._document.querySelector(.wrap("#upload_submit"), page)).?;
+    try page.handleClick(submitter.asNode());
+
+    var pending = page._session.takePendingTabOpens();
+    defer deinitPendingTabOpensForTest(page._session.browser.app.allocator, &pending);
+
+    try testing.expectEqual(@as(usize, 1), pending.items.len);
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "filename=\"tmp-page-upload-a.txt\"") != null);
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "hello upload a") != null);
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "filename=\"tmp-page-upload-b.json\"") != null);
+    try testing.expect(std.mem.indexOf(u8, pending.items[0].opts.body.?, "{\"hello\":\"b\"}") != null);
 }
 
 test "Page triggerMouseClickWithResult respects anchor preventDefault" {

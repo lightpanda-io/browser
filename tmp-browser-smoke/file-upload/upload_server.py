@@ -28,6 +28,8 @@ class Handler(BaseHTTPRequestHandler):
     def _fixture_path(path: str) -> str | None:
         if path in ("/", "/upload.html"):
             return os.path.join(ROOT, "upload.html")
+        if path == "/upload-multiple.html":
+            return os.path.join(ROOT, "upload-multiple.html")
         if path == "/upload-target.html":
             return os.path.join(ROOT, "upload-target.html")
         if path == "/upload-attachment.html":
@@ -98,43 +100,48 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"not found")
             return
 
-        note, upload_name, payload = parse_multipart_form(self.headers, self.rfile)
-        if not upload_name:
+        note, uploads = parse_multipart_form(self.headers, self.rfile)
+        if not uploads:
             sys.stderr.write("UPLOAD_EMPTY\n")
             sys.stderr.flush()
             self._write_html_response(400, "Upload Missing - Lightpanda Browser", "<h1>Upload missing</h1>")
             return
 
-        filename = os.path.basename(upload_name)
-        preview = payload.decode("utf-8", "replace").replace("\r", "\\r").replace("\n", "\\n")
+        first_filename = os.path.basename(uploads[0][0])
+        summaries = []
+        for upload_name, payload in uploads:
+            filename = os.path.basename(upload_name)
+            preview = payload.decode("utf-8", "replace").replace("\r", "\\r").replace("\n", "\\n")
+            summaries.append(f"{filename}:{len(payload)}:{preview}")
+        summary = " | ".join(summaries)
         if self.path == "/upload":
-            sys.stderr.write(f"UPLOAD filename={filename} note={note} size={len(payload)} payload={preview}\n")
+            sys.stderr.write(f"UPLOAD files={len(uploads)} note={note} entries={summary}\n")
         elif self.path == "/upload-target":
-            sys.stderr.write(f"UPLOAD_TARGET filename={filename} note={note} size={len(payload)} payload={preview}\n")
+            sys.stderr.write(f"UPLOAD_TARGET files={len(uploads)} note={note} entries={summary}\n")
         elif self.path == "/upload-attachment":
-            sys.stderr.write(f"UPLOAD_ATTACHMENT filename={filename} note={note} size={len(payload)} payload={preview}\n")
+            sys.stderr.write(f"UPLOAD_ATTACHMENT files={len(uploads)} note={note} entries={summary}\n")
         else:
-            sys.stderr.write(f"UPLOAD_TARGET_ATTACHMENT filename={filename} note={note} size={len(payload)} payload={preview}\n")
+            sys.stderr.write(f"UPLOAD_TARGET_ATTACHMENT files={len(uploads)} note={note} entries={summary}\n")
         sys.stderr.flush()
 
         if self.path == "/upload":
             self._write_html_response(
                 200,
-                f"Upload Submitted {filename} - Lightpanda Browser",
-                f"<h1>Uploaded {html.escape(filename)}</h1><p>{html.escape(note)}</p>",
+                f"Upload Submitted {first_filename} - Lightpanda Browser",
+                f"<h1>Uploaded {html.escape(first_filename)}</h1><p>{html.escape(note)}</p>",
             )
             return
 
         if self.path == "/upload-target":
             self._write_html_response(
                 200,
-                f"Upload Target Submitted {filename} - Lightpanda Browser",
-                f"<h1>Uploaded {html.escape(filename)} in target tab</h1><p>{html.escape(note)}</p>",
+                f"Upload Target Submitted {first_filename} - Lightpanda Browser",
+                f"<h1>Uploaded {html.escape(first_filename)} in target tab</h1><p>{html.escape(note)}</p>",
             )
             return
 
-        attachment_name = f"uploaded-{filename}"
-        attachment_payload = payload if payload else filename.encode("utf-8")
+        attachment_name = f"uploaded-{first_filename}"
+        attachment_payload = uploads[0][1] if uploads[0][1] else first_filename.encode("utf-8")
         self._write_attachment_response(attachment_name, attachment_payload)
 
 
@@ -147,11 +154,10 @@ def parse_multipart_form(headers, stream):
     )
     message = BytesParser(policy=policy.default).parsebytes(parser_input)
     if not message.is_multipart():
-        return "", None, b""
+        return "", []
 
     note = ""
-    upload_name = None
-    upload_payload = b""
+    uploads = []
 
     for part in message.iter_parts():
         disposition = part.get_content_disposition()
@@ -161,12 +167,11 @@ def parse_multipart_form(headers, stream):
         filename = part.get_filename()
         payload = part.get_payload(decode=True) or b""
         if filename:
-            upload_name = filename
-            upload_payload = payload
+            uploads.append((filename, payload))
         elif field_name == "note":
             note = payload.decode("utf-8", "replace")
 
-    return note, upload_name, upload_payload
+    return note, uploads
 
 
 def main() -> int:

@@ -44,10 +44,10 @@ try {
   if (-not $titleAfterSubmit) { throw 'replacement upload did not submit the second file' }
 
   $log = if (Test-Path $serverErr) { Get-Content $serverErr -Raw } else { '' }
-  if ($log -notmatch 'UPLOAD filename=sample-upload-second.txt') {
+  if ($log -notmatch 'UPLOAD files=1') {
     throw 'upload server did not receive the replacement file name'
   }
-  if ($log -notmatch 'payload=replacement upload payload from sample two') {
+  if ($log -notmatch 'sample-upload-second\.txt:42:replacement upload payload from sample two') {
     throw 'upload server did not receive the replacement file payload'
   }
   $submittedWorked = $true

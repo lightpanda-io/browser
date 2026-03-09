@@ -44,7 +44,7 @@ try {
   $selectedWorked = $true
 
   Invoke-FileUploadSubmit $hwnd
-  $serverSawUpload = Wait-FileUploadLogNeedle $serverErr 'UPLOAD_TARGET_ATTACHMENT filename=sample-upload.txt' 40 200
+  $serverSawUpload = Wait-FileUploadLogNeedle $serverErr 'UPLOAD_TARGET_ATTACHMENT files=1' 40 200
   if (-not $serverSawUpload) { throw 'target attachment upload server did not receive the selected file' }
   if (-not (Wait-FileUploadFileExists $downloadPath 40 200)) {
     throw 'target attachment upload did not create the expected downloaded file'
