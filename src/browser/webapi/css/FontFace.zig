@@ -30,7 +30,7 @@ _family: []const u8,
 pub fn init(family: []const u8, source: []const u8, page: *Page) !*FontFace {
     _ = source;
 
-    const arena = try page.getArena(.{.debug = "FontFace"});
+    const arena = try page.getArena(.{ .debug = "FontFace" });
     errdefer page.releaseArena(arena);
 
     const self = try arena.create(FontFace);
