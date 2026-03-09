@@ -2911,7 +2911,7 @@ fn nodeIsReady(self: *Page, comptime from_parser: bool, node: *Node) !void {
             // Script was added via JavaScript without a src attribute.
             // Only skip if it has no inline content either — scripts with
             // textContent/text should still execute per spec.
-            if (script.asConstElement().asConstNode().firstChild() == null) {
+            if (node.firstChild() == null) {
                 return;
             }
         }
