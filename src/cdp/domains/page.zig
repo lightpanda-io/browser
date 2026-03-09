@@ -19,6 +19,8 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 
+const screenshot_png = @embedFile("screenshot.png");
+
 const id = @import("../id.zig");
 const log = @import("../../log.zig");
 const js = @import("../../browser/js/js.zig");
@@ -39,6 +41,7 @@ pub fn processMessage(cmd: anytype) !void {
         navigate,
         stopLoading,
         close,
+        captureScreenshot,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -50,6 +53,7 @@ pub fn processMessage(cmd: anytype) !void {
         .navigate => return navigate(cmd),
         .stopLoading => return cmd.sendResult(null, .{}),
         .close => return close(cmd),
+        .captureScreenshot => return captureScreenshot(cmd),
     }
 }
 
@@ -514,6 +518,57 @@ const LifecycleEvent = struct {
     timestamp: u64,
 };
 
+const Viewport = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale: f64,
+};
+
+fn base64Encode(comptime input: []const u8) [std.base64.standard.Encoder.calcSize(input.len)]u8 {
+    const encoder = std.base64.standard.Encoder;
+    var buf: [encoder.calcSize(input.len)]u8 = undefined;
+    _ = encoder.encode(&buf, input);
+    return buf;
+}
+
+fn captureScreenshot(cmd: anytype) !void {
+    const Params = struct {
+        format: ?[]const u8 = "png",
+        quality: ?u8 = null,
+        clip: ?Viewport = null,
+        fromSurface: ?bool = false,
+        captureBeyondViewport: ?bool = false,
+        optimizeForSpeed: ?bool = false,
+    };
+    const params = try cmd.params(Params) orelse Params{};
+
+    const format = params.format orelse "png";
+
+    if (!std.mem.eql(u8, format, "png")) {
+        log.warn(.not_implemented, "Page.captureScreenshot params", .{ .format = format });
+        return cmd.sendError(-32000, "unsupported screenshot format.", .{});
+    }
+    if (params.quality != null) {
+        log.warn(.not_implemented, "Page.captureScreenshot params", .{ .quality = params.quality });
+    }
+    if (params.clip != null) {
+        log.warn(.not_implemented, "Page.captureScreenshot params", .{ .clip = params.clip });
+    }
+    if (params.fromSurface orelse false or params.captureBeyondViewport orelse false or params.optimizeForSpeed orelse false) {
+        log.warn(.not_implemented, "Page.captureScreenshot params", .{
+            .fromSurface = params.fromSurface,
+            .captureBeyondViewport = params.captureBeyondViewport,
+            .optimizeForSpeed = params.optimizeForSpeed,
+        });
+    }
+
+    return cmd.sendResult(.{
+        .data = base64Encode(screenshot_png),
+    }, .{});
+}
+
 const testing = @import("../testing.zig");
 test "cdp.page: getFrameTree" {
     var ctx = testing.context();
@@ -544,6 +599,22 @@ test "cdp.page: getFrameTree" {
                     .gatedAPIFeatures = [_][]const u8{},
                 },
             },
+        }, .{ .id = 11 });
+    }
+}
+
+test "cdp.page: captureScreenshot" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+    {
+        try ctx.processMessage(.{ .id = 10, .method = "Page.captureScreenshot", .params = .{ .format = "jpg" } });
+        try ctx.expectSentError(-32000, "unsupported screenshot format.", .{ .id = 10 });
+    }
+
+    {
+        try ctx.processMessage(.{ .id = 11, .method = "Page.captureScreenshot" });
+        try ctx.expectSentResult(.{
+            .data = base64Encode(screenshot_png),
         }, .{ .id = 11 });
     }
 }
