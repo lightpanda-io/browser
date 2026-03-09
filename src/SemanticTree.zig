@@ -39,7 +39,8 @@ prune: bool = false,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
-    self.walk(self.dom_node, "", &visitor) catch |err| {
+    var xpath_buffer: std.ArrayList(u8) = .{};
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -47,7 +48,8 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
-    self.walk(self.dom_node, "", &visitor) catch |err| {
+    var xpath_buffer: std.ArrayList(u8) = .empty;
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -71,7 +73,26 @@ const NodeData = struct {
     node_name: []const u8,
 };
 
-fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) !void {
+fn isDisplayNone(style: []const u8) bool {
+    var it = std.mem.splitScalar(u8, style, ';');
+    while (it.next()) |decl| {
+        var decl_it = std.mem.splitScalar(u8, decl, ':');
+        const prop = decl_it.next() orelse continue;
+        const value = decl_it.next() orelse continue;
+
+        const prop_trimmed = std.mem.trim(u8, prop, &std.ascii.whitespace);
+        const value_trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+
+        if (std.ascii.eqlIgnoreCase(prop_trimmed, "display") and
+            std.ascii.eqlIgnoreCase(value_trimmed, "none"))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -82,9 +103,7 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
 
         // CSS display: none visibility check (inline style only for now)
         if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
-            if (std.mem.indexOf(u8, style, "display: none") != null or
-                std.mem.indexOf(u8, style, "display:none") != null)
-            {
+            if (isDisplayNone(style)) {
                 return;
             }
         }
@@ -155,8 +174,9 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
         node_name = "root";
     }
 
-    const segment = try self.getXPathSegment(node);
-    const xpath = try std.mem.concat(self.arena, u8, &.{ parent_xpath, segment });
+    const initial_xpath_len = xpath_buffer.items.len;
+    try appendXPathSegment(node, xpath_buffer.writer(self.arena));
+    const xpath = xpath_buffer.items;
 
     const name = try axn.getName(self.page, self.arena);
 
@@ -185,8 +205,6 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
         }
 
         if (std.mem.eql(u8, role, "StaticText") and node._parent != null) {
-            const parent_axn = AXNode.fromNode(node._parent.?);
-            const parent_name = try parent_axn.getName(self.page, self.arena);
             if (parent_name != null and name != null and std.mem.indexOf(u8, parent_name.?, name.?) != null) {
                 should_visit = false;
             }
@@ -208,13 +226,15 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
         // we walk the children iterator.
         var it = node.childrenIterator();
         while (it.next()) |child| {
-            try self.walk(child, xpath, visitor);
+            try self.walk(child, xpath_buffer, name, visitor);
         }
     }
 
     if (did_visit) {
         try visitor.leave();
     }
+
+    xpath_buffer.shrinkRetainingCapacity(initial_xpath_len);
 }
 
 fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]OptionData {
@@ -246,17 +266,15 @@ fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]O
 }
 
 fn extractDataListOptions(list_id: []const u8, page: *Page, arena: std.mem.Allocator) !?[]OptionData {
-    const doc = page.document.asNode();
-    const datalist = @import("browser/webapi/selector/Selector.zig").querySelector(doc, try std.fmt.allocPrint(arena, "#{s}", .{list_id}), page) catch null;
-    if (datalist) |dl| {
-        if (dl.getTag() == .datalist) {
-            return try extractSelectOptions(dl.asNode(), page, arena);
+    if (page.document.getElementById(list_id, page)) |referenced_el| {
+        if (referenced_el.getTag() == .datalist) {
+            return try extractSelectOptions(referenced_el.asNode(), page, arena);
         }
     }
     return null;
 }
 
-fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
+fn appendXPathSegment(node: *Node, writer: anytype) !void {
     if (node.is(Element)) |el| {
         const tag = el.getTagNameLower();
         var index: usize = 1;
@@ -272,7 +290,7 @@ fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
                 }
             }
         }
-        return std.fmt.allocPrint(self.arena, "/{s}[{d}]", .{ tag, index });
+        try std.fmt.format(writer, "/{s}[{d}]", .{ tag, index });
     } else if (node.is(CData.Text) != null) {
         var index: usize = 1;
         if (node._parent) |parent| {
@@ -284,9 +302,8 @@ fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
                 }
             }
         }
-        return std.fmt.allocPrint(self.arena, "/text()[{d}]", .{index});
+        try std.fmt.format(writer, "/text()[{d}]", .{index});
     }
-    return "";
 }
 
 const JsonVisitor = struct {
