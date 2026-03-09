@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<head></head>
+<script src="../../../testing.js"></script>
+
+<script id=textContent_inline>
+  window.inline_executed = false;
+  const s1 = document.createElement('script');
+  s1.textContent = 'window.inline_executed = true;';
+  document.head.appendChild(s1);
+  testing.expectTrue(window.inline_executed);
+</script>
+
+<script id=text_property_inline>
+  window.text_executed = false;
+  const s2 = document.createElement('script');
+  s2.text = 'window.text_executed = true;';
+  document.head.appendChild(s2);
+  testing.expectTrue(window.text_executed);
+</script>
+
+<script id=innerHTML_inline>
+  window.innerHTML_executed = false;
+  const s3 = document.createElement('script');
+  s3.innerHTML = 'window.innerHTML_executed = true;';
+  document.head.appendChild(s3);
+  testing.expectTrue(window.innerHTML_executed);
+</script>
+
+<script id=no_double_execute_inline>
+  window.inline_counter = 0;
+  const s4 = document.createElement('script');
+  s4.textContent = 'window.inline_counter++;';
+  document.head.appendChild(s4);
+  document.head.appendChild(s4);
+  testing.expectEqual(1, window.inline_counter);
+</script>
+
+<script id=empty_script_no_execute>
+  window.empty_ran = false;
+  const s5 = document.createElement('script');
+  document.head.appendChild(s5);
+  testing.expectFalse(window.empty_ran);
+</script>
+
+<script id=module_inline>
+  window.module_executed = false;
+  const s6 = document.createElement('script');
+  s6.type = 'module';
+  s6.textContent = 'window.module_executed = true;';
+  document.head.appendChild(s6);
+  testing.eventually(() => {
+    testing.expectTrue(window.module_executed);
+  });
+</script>

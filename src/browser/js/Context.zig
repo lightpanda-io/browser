@@ -535,6 +535,14 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
             nested_gop.key_ptr.* = owned_specifier;
             nested_gop.value_ptr.* = .{};
             try script_manager.preloadImport(owned_specifier, url);
+        } else if (nested_gop.value_ptr.module == null) {
+            // Entry exists but module failed to compile previously.
+            // The imported_modules entry may have been consumed, so
+            // re-preload to ensure waitForImport can find it.
+            // Key was stored via dupeZ so it has a sentinel in memory.
+            const key = nested_gop.key_ptr.*;
+            const key_z: [:0]const u8 = key.ptr[0..key.len :0];
+            try script_manager.preloadImport(key_z, url);
         }
     }
 }
@@ -683,7 +691,15 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
         return local.toLocal(m).handle;
     }
 
-    var source = try self.script_manager.?.waitForImport(normalized_specifier);
+    var source = self.script_manager.?.waitForImport(normalized_specifier) catch |err| switch (err) {
+        error.UnknownModule => blk: {
+            // Module is in cache but was consumed from imported_modules
+            // (e.g., by a previous failed resolution). Re-preload and retry.
+            try self.script_manager.?.preloadImport(normalized_specifier, referrer_path);
+            break :blk try self.script_manager.?.waitForImport(normalized_specifier);
+        },
+        else => return err,
+    };
     defer source.deinit();
 
     var try_catch: js.TryCatch = undefined;
