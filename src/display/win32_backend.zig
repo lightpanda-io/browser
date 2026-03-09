@@ -82,6 +82,8 @@ const SendMessageWUnaligned = @extern(
     .{ .name = "SendMessageW" },
 );
 const WM_APP_OPEN_FILE_DIALOG = c.WM_APP + 1;
+const IMAGE_ACCEPT_HEADER: [:0]const u8 =
+    "Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8";
 
 const GDIP_STATUS_OK: GpStatus = 0;
 
@@ -3888,6 +3890,7 @@ fn fetchHttpImageCacheFile(
     const temp = arena.allocator();
     const url_z = try imageRequestUrlForFetch(temp, image);
     var headers = try client.newHeaders();
+    try headers.add(IMAGE_ACCEPT_HEADER);
 
     if (image.request_include_credentials) {
         if (cookie_jar) |jar| {
@@ -3920,7 +3923,7 @@ fn fetchHttpImageCacheFile(
         .method = .GET,
         .headers = headers,
         .cookie_jar = cookie_jar,
-        .resource_type = .fetch,
+        .resource_type = .image,
         .notification = notification,
         .header_callback = imageFetchHeaderCallback,
         .data_callback = imageFetchDataCallback,
@@ -7507,6 +7510,13 @@ test "win32 imageRequestCacheKey includes request policy" {
     try std.testing.expect(std.mem.indexOf(u8, one, "session=one") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "https://img.test/page") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "Basic dXNlcjpwYXNz") != null);
+}
+
+test "win32 image accept header advertises image subresource types" {
+    try std.testing.expect(std.mem.indexOf(u8, IMAGE_ACCEPT_HEADER, "image/avif") != null);
+    try std.testing.expect(std.mem.indexOf(u8, IMAGE_ACCEPT_HEADER, "image/webp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, IMAGE_ACCEPT_HEADER, "image/*") != null);
+    try std.testing.expect(std.mem.indexOf(u8, IMAGE_ACCEPT_HEADER, "*/*;q=0.8") != null);
 }
 
 test "win32 imageRequestUrlForFetch strips userinfo when credentials disabled" {

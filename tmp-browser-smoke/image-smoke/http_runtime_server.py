@@ -85,6 +85,20 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/accept-page.html":
+            body = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Image Accept Policy Smoke</title></head>
+<body><img src="/accept-red.png" alt="accept policy test"></body>
+</html>
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/red.png":
             ua = self.headers.get("User-Agent", "")
             cookie = self.headers.get("Cookie", "")
@@ -253,6 +267,43 @@ class Handler(BaseHTTPRequestHandler):
                 "cookie": cookie,
                 "referer": referer,
                 "authorization": authorization,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/accept-red.png":
+            ua = self.headers.get("User-Agent", "")
+            accept = self.headers.get("Accept", "")
+            referer = self.headers.get("Referer", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/accept-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "image/avif" in accept
+                and "image/webp" in accept
+                and "image/*" in accept
+                and "*/*;q=0.8" in accept
+                and referer == expected_referer
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "accept": accept,
+                "referer": referer,
                 "allowed": allowed,
             })
             if not allowed:

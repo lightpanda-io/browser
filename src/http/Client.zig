@@ -936,6 +936,7 @@ pub const Request = struct {
 
     const ResourceType = enum {
         document,
+        image,
         xhr,
         script,
         fetch,
@@ -947,6 +948,7 @@ pub const Request = struct {
         pub fn string(self: ResourceType) []const u8 {
             return switch (self) {
                 .document => "Document",
+                .image => "Image",
                 .xhr => "XHR",
                 .script => "Script",
                 .fetch => "Fetch",
@@ -954,6 +956,10 @@ pub const Request = struct {
         }
     };
 };
+
+test "Request.ResourceType.image string is Image" {
+    try std.testing.expectEqualStrings("Image", Request.ResourceType.image.string());
+}
 
 const AuthChallenge = Net.AuthChallenge;
 

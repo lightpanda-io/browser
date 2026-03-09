@@ -247,6 +247,10 @@ Current state inside Gate 1:
   auth image still carries page cookie, referer, and URL-userinfo Basic
   `Authorization`, while `crossorigin="anonymous"` suppresses both cookie and
   auth header and still renders successfully on the headed surface
+- those same headed network image requests now identify themselves more like
+  real image subresources instead of generic fetches, with a bounded localhost
+  probe proving the shared-runtime request carries an explicit image `Accept`
+  header while still rendering successfully on the headed surface
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -273,8 +277,8 @@ Current known gap entering Gate 2:
   for transfer ownership, persistence, and policy
 - headed network images now ride the shared `Http` runtime path and inherit
   page/session cookies, referer, redirect-set cookies, URL-userinfo Basic
-  Authorization, and anonymous credential suppression, but they still do not
-  carry broader auth or richer
+  Authorization, anonymous credential suppression, and an explicit image
+  `Accept` header, but they still do not carry broader auth or richer
   resource-type behavior
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
