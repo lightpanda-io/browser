@@ -81,6 +81,17 @@
 }
 </script>
 
+<script id="is_empty">
+{
+    // Empty :is() and :where() are valid per spec and match nothing
+    const isEmptyResult = document.querySelectorAll(':is()');
+    testing.expectEqual(0, isEmptyResult.length);
+
+    const whereEmptyResult = document.querySelectorAll(':where()');
+    testing.expectEqual(0, whereEmptyResult.length);
+}
+</script>
+
 <div id=escaped class=":popover-open"></div>
 <script id="escaped">
 {
