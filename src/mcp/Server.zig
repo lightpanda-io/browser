@@ -18,7 +18,6 @@ http_client: *HttpClient,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
-page: *lp.Page,
 node_registry: CDPNode.Registry,
 
 writer: *std.io.Writer,
@@ -47,13 +46,10 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
         .http_client = http_client,
         .notification = notification,
         .session = undefined,
-        .page = undefined,
         .node_registry = CDPNode.Registry.init(allocator),
     };
 
     self.session = try self.browser.newSession(self.notification);
-    self.page = try self.session.createPage();
-
     return self;
 }
 
@@ -91,7 +87,7 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
-    try self.sendResponse(protocol.Response{
+    try self.sendResponse(.{
         .id = id,
         .@"error" = protocol.Error{
             .code = @intFromEnum(code),

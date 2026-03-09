@@ -8,6 +8,7 @@ const Element = @import("../browser/webapi/Element.zig");
 const Selector = @import("../browser/webapi/selector/Selector.zig");
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
+const CDPNode = @import("../cdp/Node.zig");
 
 pub const tool_list = [_]protocol.Tool{
     .{
@@ -90,17 +91,18 @@ const EvaluateParams = struct {
 };
 
 const ToolStreamingText = struct {
-    server: *Server,
+    page: *lp.Page,
     action: enum { markdown, links, semantic_tree },
-    arena: std.mem.Allocator,
+    registry: ?*CDPNode.Registry = null,
+    arena: ?std.mem.Allocator = null,
 
     pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
         switch (self.action) {
             .markdown => {
                 try jw.beginWriteRaw();
                 try jw.writer.writeByte('"');
-                var escaped = protocol.JsonEscapingWriter.init(jw.writer);
-                lp.markdown.dump(self.server.page.document.asNode(), .{}, &escaped.writer, self.server.page) catch |err| {
+                var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
+                lp.markdown.dump(self.page.document.asNode(), .{}, &escaped.writer, self.page) catch |err| {
                     log.err(.mcp, "markdown dump failed", .{ .err = err });
                 };
                 try jw.writer.writeByte('"');
@@ -109,14 +111,14 @@ const ToolStreamingText = struct {
             .links => {
                 try jw.beginWriteRaw();
                 try jw.writer.writeByte('"');
-                var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+                var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
                 const w = &escaped.writer;
-                if (Selector.querySelectorAll(self.server.page.document.asNode(), "a[href]", self.server.page)) |list| {
-                    defer list.deinit(self.server.page);
+                if (Selector.querySelectorAll(self.page.document.asNode(), "a[href]", self.page)) |list| {
+                    defer list.deinit(self.page);
                     var first = true;
                     for (list._nodes) |node| {
                         if (node.is(Element.Html.Anchor)) |anchor| {
-                            const href = anchor.getHref(self.server.page) catch |err| {
+                            const href = anchor.getHref(self.page) catch |err| {
                                 log.err(.mcp, "resolve href failed", .{ .err = err });
                                 continue;
                             };
@@ -138,13 +140,13 @@ const ToolStreamingText = struct {
                 // Return the highly compressed Stagehand-style text format for maximum token efficiency
                 try jw.beginWriteRaw();
                 try jw.writer.writeByte('"');
-                var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+                var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
 
                 const st = lp.SemanticTree{
-                    .dom_node = self.server.page.document.asNode(),
-                    .registry = &self.server.node_registry,
-                    .page = self.server.page,
-                    .arena = self.arena,
+                    .dom_node = self.page.document.asNode(),
+                    .registry = self.registry.?,
+                    .page = self.page,
+                    .arena = self.arena.?,
                 };
 
                 st.textStringify(&escaped.writer) catch |err| {
@@ -177,8 +179,8 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
-    if (req.params == null) {
-        return server.sendError(req.id.?, .InvalidParams, "Missing params");
+    if (req.params == null or req.id == null) {
+        return server.sendError(req.id orelse .{ .integer = -1 }, .InvalidParams, "Missing params");
     }
 
     const CallParams = struct {
@@ -222,9 +224,12 @@ fn handleMarkdown(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
             }
         } else |_| {}
     }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .server = server, .action = .markdown, .arena = arena },
+        .text = .{ .page = page, .action = .markdown },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
@@ -240,9 +245,12 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
             }
         } else |_| {}
     }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .server = server, .action = .links, .arena = arena },
+        .text = .{ .page = page, .action = .links },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
@@ -258,9 +266,12 @@ fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Va
             }
         } else |_| {}
     }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
-        .text = .{ .server = server, .action = .semantic_tree, .arena = arena },
+        .text = .{ .page = page, .action = .semantic_tree, .registry = &server.node_registry, .arena = arena },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }
@@ -271,9 +282,12 @@ fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value,
     if (args.url) |url| {
         try performGoto(server, url, id);
     }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
 
     var ls: js.Local.Scope = undefined;
-    server.page.js.localScope(&ls);
+    page.js.localScope(&ls);
     defer ls.deinit();
 
     var try_catch: js.TryCatch = undefined;
@@ -308,7 +322,12 @@ fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.js
 }
 
 fn performGoto(server: *Server, url: [:0]const u8, id: std.json.Value) !void {
-    _ = server.page.navigate(url, .{
+    const session = server.session;
+    if (session.page != null) {
+        session.removePage();
+    }
+    const page = try session.createPage();
+    page.navigate(url, .{
         .reason = .address_bar,
         .kind = .{ .push = null },
     }) catch {
@@ -332,6 +351,7 @@ test "MCP - evaluate error reporting" {
 
     var server = try Server.init(allocator, app, &out_alloc.writer);
     defer server.deinit();
+    _ = try server.session.createPage();
 
     const aa = testing.arena_allocator;
 
