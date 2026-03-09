@@ -53,12 +53,19 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
     };
 }
 
+const OptionData = struct {
+    value: []const u8,
+    text: []const u8,
+    selected: bool,
+};
+
 const NodeData = struct {
     id: u32,
     axn: AXNode,
     role: []const u8,
     name: ?[]const u8,
     value: ?[]const u8,
+    options: ?[]OptionData = null,
     xpath: []const u8,
     is_interactive: bool,
     node_name: []const u8,
@@ -69,6 +76,9 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
     if (node.is(Element)) |el| {
         const tag = el.getTag();
         if (tag.isMetadata() or tag == .svg) return;
+
+        // We handle options/optgroups natively inside their parents, skip them in the general walk
+        if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // CSS display: none visibility check (inline style only for now)
         if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
@@ -98,6 +108,7 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
 
     var is_interactive = false;
     var value: ?[]const u8 = null;
+    var options: ?[]OptionData = null;
     var node_name: []const u8 = "text";
 
     if (node.is(Element)) |el| {
@@ -131,10 +142,14 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
 
         if (el.is(Element.Html.Input)) |input| {
             value = input.getValue();
+            if (el.getAttributeSafe(comptime lp.String.wrap("list"))) |list_id| {
+                options = try extractDataListOptions(list_id, self.page, self.arena);
+            }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
             value = textarea.getValue();
         } else if (el.is(Element.Html.Select)) |select| {
             value = select.getValue(self.page);
+            options = try extractSelectOptions(el.asNode(), self.page, self.arena);
         }
     } else if (node._type == .document or node._type == .document_fragment) {
         node_name = "root";
@@ -151,6 +166,7 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
         .role = role,
         .name = name,
         .value = value,
+        .options = options,
         .xpath = xpath,
         .is_interactive = is_interactive,
         .node_name = node_name,
@@ -178,18 +194,66 @@ fn walk(self: @This(), node: *Node, parent_xpath: []const u8, visitor: anytype) 
     }
 
     var did_visit = false;
+    var should_walk_children = true;
     if (should_visit) {
-        did_visit = try visitor.visit(node, &data);
+        should_walk_children = try visitor.visit(node, &data);
+        did_visit = true; // Always true if should_visit was true, because visit() executed and opened structures
+    } else {
+        // If we skip the node, we must NOT tell the visitor to close it later
+        did_visit = false;
     }
 
-    var it = node.childrenIterator();
-    while (it.next()) |child| {
-        try self.walk(child, xpath, visitor);
+    if (should_walk_children) {
+        // If we are printing this node normally OR skipping it and unrolling its children,
+        // we walk the children iterator.
+        var it = node.childrenIterator();
+        while (it.next()) |child| {
+            try self.walk(child, xpath, visitor);
+        }
     }
 
     if (did_visit) {
         try visitor.leave();
     }
+}
+
+fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]OptionData {
+    var options = std.ArrayListUnmanaged(OptionData){};
+    var it = node.childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Element)) |el| {
+            if (el.getTag() == .option) {
+                if (el.is(Element.Html.Option)) |opt| {
+                    const text = opt.getText();
+                    const value = opt.getValue(page);
+                    const selected = opt.getSelected();
+                    try options.append(arena, .{ .text = text, .value = value, .selected = selected });
+                }
+            } else if (el.getTag() == .optgroup) {
+                var group_it = child.childrenIterator();
+                while (group_it.next()) |group_child| {
+                    if (group_child.is(Element.Html.Option)) |opt| {
+                        const text = opt.getText();
+                        const value = opt.getValue(page);
+                        const selected = opt.getSelected();
+                        try options.append(arena, .{ .text = text, .value = value, .selected = selected });
+                    }
+                }
+            }
+        }
+    }
+    return options.toOwnedSlice(arena);
+}
+
+fn extractDataListOptions(list_id: []const u8, page: *Page, arena: std.mem.Allocator) !?[]OptionData {
+    const doc = page.document.asNode();
+    const datalist = @import("browser/webapi/selector/Selector.zig").querySelector(doc, try std.fmt.allocPrint(arena, "#{s}", .{list_id}), page) catch null;
+    if (datalist) |dl| {
+        if (dl.getTag() == .datalist) {
+            return try extractSelectOptions(dl.asNode(), page, arena);
+        }
+    }
+    return null;
 }
 
 fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
@@ -276,6 +340,22 @@ const JsonVisitor = struct {
                 }
                 try self.jw.endObject();
             }
+
+            if (data.options) |options| {
+                try self.jw.objectField("options");
+                try self.jw.beginArray();
+                for (options) |opt| {
+                    try self.jw.beginObject();
+                    try self.jw.objectField("value");
+                    try self.jw.write(opt.value);
+                    try self.jw.objectField("text");
+                    try self.jw.write(opt.text);
+                    try self.jw.objectField("selected");
+                    try self.jw.write(opt.selected);
+                    try self.jw.endObject();
+                }
+                try self.jw.endArray();
+            }
         } else if (node.is(CData.Text) != null) {
             const text_node = node.is(CData.Text).?;
             try self.jw.objectField("nodeType");
@@ -289,6 +369,12 @@ const JsonVisitor = struct {
 
         try self.jw.objectField("children");
         try self.jw.beginArray();
+
+        if (data.options != null) {
+            // Signal to not walk children, as we handled them natively
+            return false;
+        }
+
         return true;
     }
 
@@ -334,12 +420,28 @@ const TextVisitor = struct {
             }
         }
 
+        if (data.options) |options| {
+            try self.writer.writeAll(" options: [");
+            for (options, 0..) |opt, i| {
+                if (i > 0) try self.writer.writeAll(", ");
+                try self.writer.print("'{s}'", .{opt.value});
+                if (opt.selected) {
+                    try self.writer.writeAll(" (selected)");
+                }
+            }
+            try self.writer.writeAll("]\n");
+            self.depth += 1;
+            return false; // Native handling complete, do not walk children
+        }
+
         try self.writer.writeByte('\n');
         self.depth += 1;
         return true;
     }
 
     pub fn leave(self: *TextVisitor) !void {
-        self.depth -= 1;
+        if (self.depth > 0) {
+            self.depth -= 1;
+        }
     }
 };
