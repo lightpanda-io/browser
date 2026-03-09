@@ -5415,6 +5415,7 @@ fn presentPage(
     }
 
     if (page._queued_navigation != null or page._parse_state != .complete) {
+        app.display.setImageRequestCookieJar(&page._session.cookie_jar);
         const title = title_override orelse
             trimmedOrNull(committed_surface.title) orelse
             trimmedOrNull(page.url) orelse
@@ -5446,6 +5447,7 @@ fn presentPage(
     const title = title_override orelse ((try page.getTitle()) orelse "");
     const url = page.url;
     const text = body.written();
+    app.display.setImageRequestCookieJar(&page._session.cookie_jar);
 
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(title);
@@ -5470,6 +5472,7 @@ fn restoreCommittedBrowseSurface(
     if (!committed_surface.available()) {
         return;
     }
+    app.display.setImageRequestCookieJar(null);
     last_presented_hash.* = committed_surface.hash;
     try app.display.presentPageView(
         committed_surface.title,

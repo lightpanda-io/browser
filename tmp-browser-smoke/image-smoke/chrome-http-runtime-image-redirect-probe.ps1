@@ -1,15 +1,15 @@
 $ErrorActionPreference = "Stop"
 $root = "C:\Users\adyba\src\lightpanda-browser\tmp-browser-smoke\image-smoke"
-$profileRoot = Join-Path $root "profile-http-runtime-policy"
+$profileRoot = Join-Path $root "profile-http-runtime-redirect"
 $appDataRoot = Join-Path $profileRoot "lightpanda"
-$port = 8154
+$port = 8155
 $browserExe = "C:\Users\adyba\src\lightpanda-browser\zig-out\bin\lightpanda.exe"
 $serverScript = Join-Path $root "http_runtime_server.py"
-$outPng = Join-Path $root "http-runtime-policy.png"
-$browserOut = Join-Path $root "http-runtime-policy.browser.stdout.txt"
-$browserErr = Join-Path $root "http-runtime-policy.browser.stderr.txt"
-$serverOut = Join-Path $root "http-runtime-policy.server.stdout.txt"
-$serverErr = Join-Path $root "http-runtime-policy.server.stderr.txt"
+$outPng = Join-Path $root "http-runtime-redirect.png"
+$browserOut = Join-Path $root "http-runtime-redirect.browser.stdout.txt"
+$browserErr = Join-Path $root "http-runtime-redirect.browser.stderr.txt"
+$serverOut = Join-Path $root "http-runtime-redirect.server.stdout.txt"
+$serverErr = Join-Path $root "http-runtime-redirect.server.stderr.txt"
 $requestLog = Join-Path $root "http-runtime.requests.jsonl"
 
 Remove-Item $outPng,$browserOut,$browserErr,$serverOut,$serverErr,$requestLog -Force -ErrorAction SilentlyContinue
@@ -30,15 +30,15 @@ $ready = $false
 for ($i = 0; $i -lt 40; $i++) {
   Start-Sleep -Milliseconds 250
   try {
-    $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/policy-page.html" -TimeoutSec 2
+    $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/redirect-policy-page.html" -TimeoutSec 2
     if ($resp.StatusCode -eq 200) { $ready = $true; break }
   } catch {}
 }
 if (-not $ready) {
-  throw "localhost image policy server did not become ready"
+  throw "localhost image redirect server did not become ready"
 }
 
-$browser = Start-Process -FilePath $browserExe -ArgumentList "browse","http://127.0.0.1:$port/policy-page.html","--screenshot_png",$outPng -PassThru -RedirectStandardOutput $browserOut -RedirectStandardError $browserErr
+$browser = Start-Process -FilePath $browserExe -ArgumentList "browse","http://127.0.0.1:$port/redirect-policy-page.html","--screenshot_png",$outPng -PassThru -RedirectStandardOutput $browserOut -RedirectStandardError $browserErr
 $pngReady = $false
 for ($i = 0; $i -lt 80; $i++) {
   Start-Sleep -Milliseconds 250
@@ -76,8 +76,10 @@ $requestEntries = @()
 if (Test-Path $requestLog) {
   $requestEntries = Get-Content $requestLog | Where-Object { $_.Trim().Length -gt 0 } | ForEach-Object { $_ | ConvertFrom-Json }
 }
-$imageEntries = @($requestEntries | Where-Object { $_.path -eq "/policy-red.png" })
-$lastImage = if ($imageEntries.Count -gt 0) { $imageEntries[-1] } else { $null }
+$firstHop = @($requestEntries | Where-Object { $_.path -eq "/redirect-one.png" })
+$finalHop = @($requestEntries | Where-Object { $_.path -eq "/redirect-final.png" })
+$lastFirstHop = if ($firstHop.Count -gt 0) { $firstHop[-1] } else { $null }
+$lastFinalHop = if ($finalHop.Count -gt 0) { $finalHop[-1] } else { $null }
 
 $serverMeta = Get-CimInstance Win32_Process -Filter "ProcessId=$($server.Id)" | Select-Object Name,ProcessId,CommandLine,CreationDate
 $browserMeta = Get-CimInstance Win32_Process -Filter "ProcessId=$($browser.Id)" | Select-Object Name,ProcessId,CommandLine,CreationDate
@@ -102,11 +104,13 @@ $serverGone = -not (Get-Process -Id $server.Id -ErrorAction SilentlyContinue)
   screenshot_path = $outPng
   screenshot_length = if (Test-Path $outPng) { (Get-Item $outPng).Length } else { 0 }
   analysis = $analysis
-  image_request_count = $imageEntries.Count
-  image_request_allowed = if ($lastImage) { [bool]$lastImage.allowed } else { $false }
-  image_user_agent = if ($lastImage) { [string]$lastImage.user_agent } else { "" }
-  image_cookie = if ($lastImage) { [string]$lastImage.cookie } else { "" }
-  image_referer = if ($lastImage) { [string]$lastImage.referer } else { "" }
+  redirect_first_count = $firstHop.Count
+  redirect_final_count = $finalHop.Count
+  redirect_first_cookie = if ($lastFirstHop) { [string]$lastFirstHop.cookie } else { "" }
+  redirect_first_referer = if ($lastFirstHop) { [string]$lastFirstHop.referer } else { "" }
+  redirect_final_cookie = if ($lastFinalHop) { [string]$lastFinalHop.cookie } else { "" }
+  redirect_final_allowed = if ($lastFinalHop) { [bool]$lastFinalHop.allowed } else { $false }
+  redirect_final_user_agent = if ($lastFinalHop) { [string]$lastFinalHop.user_agent } else { "" }
   browser_meta = $browserMeta
   server_meta = $serverMeta
   browser_gone = $browserGone

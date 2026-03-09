@@ -40,6 +40,21 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/redirect-policy-page.html":
+            body = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Image Redirect Policy Smoke</title></head>
+<body><img src="/redirect-one.png" alt="redirect policy test"></body>
+</html>
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "page=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/red.png":
             ua = self.headers.get("User-Agent", "")
             cookie = self.headers.get("Cookie", "")
@@ -78,6 +93,56 @@ class Handler(BaseHTTPRequestHandler):
                 "Lightpanda/" in ua
                 and "lpimg=ok" in cookie
                 and referer == expected_referer
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/redirect-one.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "allowed": "Lightpanda/" in ua and "page=ok" in cookie,
+            })
+            self.send_response(302)
+            self.send_header("Location", "/redirect-final.png")
+            self.send_header("Set-Cookie", "redirect=ok; Path=/")
+            self.end_headers()
+            return
+
+        if self.path == "/redirect-final.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            allowed = (
+                "Lightpanda/" in ua
+                and "page=ok" in cookie
+                and "redirect=ok" in cookie
             )
             append_log({
                 "path": self.path,

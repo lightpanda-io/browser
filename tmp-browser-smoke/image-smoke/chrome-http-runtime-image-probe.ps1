@@ -1,5 +1,7 @@
 $ErrorActionPreference = "Stop"
 $root = "C:\Users\adyba\src\lightpanda-browser\tmp-browser-smoke\image-smoke"
+$profileRoot = Join-Path $root "profile-http-runtime"
+$appDataRoot = Join-Path $profileRoot "lightpanda"
 $port = 8153
 $browserExe = "C:\Users\adyba\src\lightpanda-browser\zig-out\bin\lightpanda.exe"
 $serverScript = Join-Path $root "http_runtime_server.py"
@@ -11,6 +13,17 @@ $serverErr = Join-Path $root "http-runtime.server.stderr.txt"
 $requestLog = Join-Path $root "http-runtime.requests.jsonl"
 
 Remove-Item $outPng,$browserOut,$browserErr,$serverOut,$serverErr,$requestLog -Force -ErrorAction SilentlyContinue
+cmd /c "rmdir /s /q `"$profileRoot`"" | Out-Null
+New-Item -ItemType Directory -Force -Path $appDataRoot | Out-Null
+$env:APPDATA = $profileRoot
+$env:LOCALAPPDATA = $profileRoot
+@"
+lightpanda-browse-settings-v1
+restore_previous_session	0
+allow_script_popups	0
+default_zoom_percent	100
+homepage_url	
+"@ | Set-Content -Path (Join-Path $appDataRoot "browse-settings-v1.txt") -NoNewline
 
 $server = Start-Process -FilePath "python" -ArgumentList $serverScript,$port -WorkingDirectory $root -PassThru -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
 $ready = $false

@@ -983,6 +983,8 @@ pub const Transfer = struct {
     _conn: ?*Net.Connection = null,
 
     _redirecting: bool = false,
+    _redirect_location: ?[]const u8 = null,
+    _redirect_set_cookie_values: std.ArrayListUnmanaged([]const u8) = .{},
     _auth_challenge: ?AuthChallenge = null,
 
     // number of times the transfer has been tried.
@@ -1014,6 +1016,8 @@ pub const Transfer = struct {
         lp.assert(self._header_done_called == false, "Transfer.reset header_done_called", .{});
 
         self._redirecting = false;
+        self._redirect_location = null;
+        self._redirect_set_cookie_values.clearRetainingCapacity();
         self._auth_challenge = null;
         self._notified_fail = false;
         self.response_header = null;
@@ -1156,24 +1160,33 @@ pub const Transfer = struct {
 
         // retrieve cookies from the redirect's response.
         if (req.cookie_jar) |jar| {
-            var i: usize = 0;
-            while (true) {
-                const ct = conn.getResponseHeader("set-cookie", i);
-                if (ct == null) break;
-                try jar.populateFromResponse(transfer.url, ct.?.value);
-                i += 1;
-                if (i >= ct.?.amount) break;
+            if (transfer._redirect_set_cookie_values.items.len > 0) {
+                for (transfer._redirect_set_cookie_values.items) |value| {
+                    try jar.populateFromResponse(transfer.url, value);
+                }
+            } else {
+                var i: usize = 0;
+                while (true) {
+                    const ct = conn.getResponseHeader("set-cookie", i);
+                    if (ct == null) break;
+                    try jar.populateFromResponse(transfer.url, ct.?.value);
+                    i += 1;
+                    if (i >= ct.?.amount) break;
+                }
             }
         }
 
         // set cookies for the following redirection's request.
-        const location = conn.getResponseHeader("location", 0) orelse {
-            return error.LocationNotFound;
+        const location_value = if (transfer._redirect_location) |location|
+            location
+        else blk: {
+            const location = conn.getResponseHeader("location", 0) orelse {
+                return error.LocationNotFound;
+            };
+            break :blk location.value;
         };
 
-        const base_url = try conn.getEffectiveUrl();
-
-        const url = try URL.resolve(arena, std.mem.span(base_url), location.value, .{});
+        const url = try URL.resolve(arena, transfer.url, location_value, .{});
         transfer.url = url;
 
         if (req.cookie_jar) |jar| {
@@ -1260,6 +1273,14 @@ pub const Transfer = struct {
 
         if (buf_len < 3) {
             // could be \r\n or \n.
+            if (transfer._redirecting) {
+                redirectionCookies(transfer, &conn) catch |err| {
+                    if (comptime IS_DEBUG) {
+                        log.debug(.http, "redirection cookies", .{ .err = err });
+                    }
+                    return 0;
+                };
+            }
             return buf_len;
         }
 
@@ -1301,6 +1322,8 @@ pub const Transfer = struct {
 
             if (status >= 300 and status <= 399) {
                 transfer._redirecting = true;
+                transfer._redirect_location = null;
+                transfer._redirect_set_cookie_values.clearRetainingCapacity();
                 return buf_len;
             }
             transfer._redirecting = false;
@@ -1327,6 +1350,20 @@ pub const Transfer = struct {
         }
 
         if (buf_len > 2) {
+            if (transfer._redirecting) {
+                const arena = transfer.arena.allocator();
+                if (std.ascii.startsWithIgnoreCase(header, "Location:")) {
+                    const value = std.mem.trim(u8, header["Location:".len..], " \t");
+                    transfer._redirect_location = arena.dupe(u8, value) catch return 0;
+                    return buf_len;
+                }
+                if (std.ascii.startsWithIgnoreCase(header, "Set-Cookie:")) {
+                    const value = std.mem.trim(u8, header["Set-Cookie:".len..], " \t");
+                    const duped = arena.dupe(u8, value) catch return 0;
+                    transfer._redirect_set_cookie_values.append(arena, duped) catch return 0;
+                    return buf_len;
+                }
+            }
             if (transfer._auth_challenge != null) {
                 // try to parse auth challenge.
                 if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
@@ -1344,19 +1381,6 @@ pub const Transfer = struct {
                     transfer._auth_challenge = ac;
                 }
             }
-            return buf_len;
-        }
-
-        // Starting here, we get the last header line.
-
-        if (transfer._redirecting) {
-            // parse and set cookies for the redirection.
-            redirectionCookies(transfer, &conn) catch |err| {
-                if (comptime IS_DEBUG) {
-                    log.debug(.http, "redirection cookies", .{ .err = err });
-                }
-                return 0;
-            };
             return buf_len;
         }
 

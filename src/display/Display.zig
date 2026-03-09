@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Config = @import("../Config.zig");
+const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Http = @import("../http/Http.zig");
 const log = @import("../log.zig");
 const builtin = @import("builtin");
@@ -58,6 +59,7 @@ const Win32Backend = if (builtin.os.tag == .windows) @import("win32_backend.zig"
     pub fn setSettingsState(_: *@This(), _: SettingsState) void {}
     pub fn setAppDataPath(_: *@This(), _: ?[]const u8) void {}
     pub fn setHttpRuntime(_: *@This(), _: *Http) void {}
+    pub fn setImageRequestCookieJar(_: *@This(), _: ?*CookieJar) void {}
     pub fn dispatchInput(_: *@This(), _: anytype) !void {}
     pub fn presentDocument(_: *@This(), _: []const u8, _: []const u8, _: []const u8) !void {}
     pub fn presentPageView(_: *@This(), _: []const u8, _: []const u8, _: []const u8, _: ?*const DisplayList) !void {}
@@ -293,6 +295,13 @@ pub fn setAppDataPath(self: *Display, path: ?[]const u8) void {
 pub fn setHttpRuntime(self: *Display, http: *Http) void {
     switch (self.backend) {
         .headed_windows => |*backend| backend.setHttpRuntime(http),
+        else => {},
+    }
+}
+
+pub fn setImageRequestCookieJar(self: *Display, cookie_jar: ?*CookieJar) void {
+    switch (self.backend) {
+        .headed_windows => |*backend| backend.setImageRequestCookieJar(cookie_jar),
         else => {},
     }
 }

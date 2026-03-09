@@ -20,6 +20,7 @@ const std = @import("std");
 const log = @import("../log.zig");
 const Page = @import("../browser/Page.zig");
 const URL = @import("../browser/URL.zig");
+const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Http = @import("../http/Http.zig");
 const HttpClient = Http.Client;
 const Notification = @import("../Notification.zig");
@@ -138,6 +139,7 @@ pub const Win32Backend = struct {
     presentation_title: []u8 = &.{},
     presentation_url: []u8 = &.{},
     presentation_body: []u8 = &.{},
+    presentation_image_request_cookie_jar: ?*CookieJar = null,
     presentation_display_list: ?DisplayList = null,
     presentation_seq: std.atomic.Value(u64) = .init(0),
     presentation_scroll_px: i32 = 0,
@@ -282,6 +284,12 @@ pub const Win32Backend = struct {
 
     pub fn setHttpRuntime(self: *Win32Backend, http: *Http) void {
         self.http_runtime = http;
+    }
+
+    pub fn setImageRequestCookieJar(self: *Win32Backend, cookie_jar: ?*CookieJar) void {
+        self.presentation_lock.lock();
+        defer self.presentation_lock.unlock();
+        self.presentation_image_request_cookie_jar = cookie_jar;
     }
 
     pub fn setNavigationState(self: *Win32Backend, can_go_back: bool, can_go_forward: bool, is_loading: bool, zoom_percent: i32) void {
@@ -957,6 +965,7 @@ const PresentationSnapshot = struct {
     download_overlay_open: bool,
     download_selected_index: usize,
     download_scroll_index: usize,
+    image_request_cookie_jar: ?*CookieJar,
     restore_previous_session: bool,
     allow_script_popups: bool,
     default_zoom_percent: i32,
@@ -1254,6 +1263,7 @@ fn copyPresentationSnapshot(backend: *Win32Backend) !PresentationSnapshot {
         .download_overlay_open = backend.download_overlay_open,
         .download_selected_index = backend.download_overlay_selected_index,
         .download_scroll_index = backend.download_overlay_scroll_index,
+        .image_request_cookie_jar = backend.presentation_image_request_cookie_jar,
         .restore_previous_session = backend.presentation_restore_previous_session,
         .allow_script_popups = backend.presentation_allow_script_popups,
         .default_zoom_percent = backend.presentation_default_zoom_percent,
@@ -3778,9 +3788,14 @@ fn ensureGdiplusStarted(backend: *Win32Backend) bool {
     return true;
 }
 
-fn downloadHttpImageCacheFile(backend: *Win32Backend, image: ImageCommand) ![]u8 {
+fn downloadHttpImageCacheFile(
+    backend: *Win32Backend,
+    image: ImageCommand,
+    page_url: []const u8,
+    cookie_jar: ?*CookieJar,
+) ![]u8 {
     if (backend.http_runtime) |http| {
-        return try fetchHttpImageCacheFile(backend, http, image);
+        return try fetchHttpImageCacheFile(backend, http, image, page_url, cookie_jar);
     }
 
     const url = image.url;
@@ -3808,6 +3823,7 @@ fn downloadHttpImageCacheFile(backend: *Win32Backend, image: ImageCommand) ![]u8
 const ImageFetchContext = struct {
     allocator: std.mem.Allocator,
     file: std.fs.File,
+    response_status: u16 = 0,
     finished: bool = false,
     failed: ?anyerror = null,
     closed: bool = false,
@@ -3843,6 +3859,8 @@ fn fetchHttpImageCacheFile(
     backend: *Win32Backend,
     http: *Http,
     image: ImageCommand,
+    page_url: []const u8,
+    cookie_jar: ?*CookieJar,
 ) ![]u8 {
     const url = image.url;
     const path = try tempImageCacheFilePath(backend.allocator, url, imageUrlFileExtension(url));
@@ -3871,7 +3889,16 @@ fn fetchHttpImageCacheFile(
     const url_z = try temp.dupeZ(u8, url);
     var headers = try client.newHeaders();
 
-    if (image.request_cookie_value.len > 0) {
+    if (cookie_jar) |jar| {
+        const page_url_z = try temp.dupeZ(u8, page_url);
+        const request_cookie = HttpClient.RequestCookie{
+            .jar = jar,
+            .origin = page_url_z,
+            .is_http = std.mem.startsWith(u8, page_url, "http://") or std.mem.startsWith(u8, page_url, "https://"),
+            .is_navigation = false,
+        };
+        try request_cookie.headersForRequest(temp, url_z, &headers);
+    } else if (image.request_cookie_value.len > 0) {
         const cookie_header = try std.fmt.allocPrintSentinel(temp, "Cookie: {s}", .{image.request_cookie_value}, 0);
         try headers.add(cookie_header);
     }
@@ -3886,7 +3913,7 @@ fn fetchHttpImageCacheFile(
         .url = url_z,
         .method = .GET,
         .headers = headers,
-        .cookie_jar = null,
+        .cookie_jar = cookie_jar,
         .resource_type = .fetch,
         .notification = notification,
         .header_callback = imageFetchHeaderCallback,
@@ -3910,15 +3937,18 @@ fn fetchHttpImageCacheFile(
 fn imageFetchHeaderCallback(transfer: *HttpClient.Transfer) !bool {
     const ctx: *ImageFetchContext = @ptrCast(@alignCast(transfer.ctx));
     const response_header = transfer.response_header orelse return true;
+    ctx.response_status = response_header.status;
     if (response_header.status >= 400) {
         ctx.failed = error.BadStatusCode;
-        return error.BadStatusCode;
     }
     return true;
 }
 
 fn imageFetchDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     const ctx: *ImageFetchContext = @ptrCast(@alignCast(transfer.ctx));
+    if (ctx.failed != null or (ctx.response_status >= 300 and ctx.response_status <= 399)) {
+        return;
+    }
     try ctx.file.writeAll(data);
 }
 
@@ -4078,22 +4108,33 @@ fn resolveImageCacheSource(backend: *Win32Backend, url: []const u8) !CachedImage
     return error.UnsupportedImageUrl;
 }
 
-fn resolveImageCacheSourceForCommand(backend: *Win32Backend, image_cmd: ImageCommand) !CachedImageSource {
+fn resolveImageCacheSourceForCommand(
+    backend: *Win32Backend,
+    image_cmd: ImageCommand,
+    page_url: []const u8,
+    cookie_jar: ?*CookieJar,
+) !CachedImageSource {
     if (std.ascii.startsWithIgnoreCase(image_cmd.url, "http://") or
         std.ascii.startsWithIgnoreCase(image_cmd.url, "https://"))
     {
-        return .{ .path = try downloadHttpImageCacheFile(backend, image_cmd) };
+        return .{ .path = try downloadHttpImageCacheFile(backend, image_cmd, page_url, cookie_jar) };
     }
     return resolveImageCacheSource(backend, image_cmd.url);
 }
 
-fn loadCachedImageLocked(backend: *Win32Backend, image: *CachedImage, image_cmd: ImageCommand) void {
+fn loadCachedImageLocked(
+    backend: *Win32Backend,
+    image: *CachedImage,
+    image_cmd: ImageCommand,
+    page_url: []const u8,
+    cookie_jar: ?*CookieJar,
+) void {
     if (!ensureGdiplusStarted(backend)) {
         image.state = .failed;
         return;
     }
 
-    const source = resolveImageCacheSourceForCommand(backend, image_cmd) catch |err| {
+    const source = resolveImageCacheSourceForCommand(backend, image_cmd, page_url, cookie_jar) catch |err| {
         log.warn(.app, "win image src fail", .{ .url = image_cmd.url, .err = err });
         image.state = .failed;
         return;
@@ -4195,6 +4236,8 @@ fn drawPresentationImage(
     hdc: c.HDC,
     rect: c.RECT,
     image_cmd: ImageCommand,
+    page_url: []const u8,
+    cookie_jar: ?*CookieJar,
 ) void {
     backend.image_cache_lock.lock();
     defer backend.image_cache_lock.unlock();
@@ -4218,7 +4261,7 @@ fn drawPresentationImage(
 
     const cached = gop.value_ptr;
     if (cached.state == .unloaded) {
-        loadCachedImageLocked(backend, cached, image_cmd);
+        loadCachedImageLocked(backend, cached, image_cmd, page_url, cookie_jar);
     }
 
     if (cached.state != .loaded or cached.gp_image == null) {
@@ -4377,7 +4420,7 @@ fn renderPresentationDisplayList(
                     .right = client.left + PRESENTATION_MARGIN + left + width,
                     .bottom = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px + height,
                 };
-                drawPresentationImage(backend, hdc, rect, image_cmd);
+                drawPresentationImage(backend, hdc, rect, image_cmd, snapshot.url, snapshot.image_request_cookie_jar);
             },
         }
     }
