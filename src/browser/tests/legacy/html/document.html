@@ -6,6 +6,7 @@
 </html>
 
 <script src="../testing.js"></script>
+<applet></applet>
 
 <script id=document>
   testing.expectEqual('HTMLDocument', document.__proto__.constructor.name);
@@ -23,7 +24,7 @@
   testing.expectEqual(2, document.scripts.length);
   testing.expectEqual(0, document.forms.length);
   testing.expectEqual(1, document.links.length);
-  testing.expectEqual(0, document.applets.length);
+  testing.expectEqual(0, document.applets.length); // deprecated, always returns 0
   testing.expectEqual(0, document.anchors.length);
   testing.expectEqual(7, document.all.length);
   testing.expectEqual('document', document.currentScript.id);

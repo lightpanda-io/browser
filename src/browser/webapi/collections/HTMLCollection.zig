@@ -36,6 +36,7 @@ const Mode = enum {
     links,
     anchors,
     form,
+    empty,
 };
 
 const HTMLCollection = @This();
@@ -52,22 +53,26 @@ _data: union(Mode) {
     links: NodeLive(.links),
     anchors: NodeLive(.anchors),
     form: NodeLive(.form),
+    empty: void,
 },
 
 pub fn length(self: *HTMLCollection, page: *const Page) u32 {
     return switch (self._data) {
+        .empty => 0,
         inline else => |*impl| impl.length(page),
     };
 }
 
 pub fn getAtIndex(self: *HTMLCollection, index: usize, page: *const Page) ?*Element {
     return switch (self._data) {
+        .empty => null,
         inline else => |*impl| impl.getAtIndex(index, page),
     };
 }
 
 pub fn getByName(self: *HTMLCollection, name: []const u8, page: *Page) ?*Element {
     return switch (self._data) {
+        .empty => null,
         inline else => |*impl| impl.getByName(name, page),
     };
 }
@@ -87,6 +92,7 @@ pub fn iterator(self: *HTMLCollection, page: *Page) !*Iterator {
             .links => |*impl| .{ .links = impl._tw.clone() },
             .anchors => |*impl| .{ .anchors = impl._tw.clone() },
             .form => |*impl| .{ .form = impl._tw.clone() },
+            .empty => .empty,
         },
     }, page);
 }
@@ -106,6 +112,7 @@ pub const Iterator = GenericIterator(struct {
         links: TreeWalker.FullExcludeSelf,
         anchors: TreeWalker.FullExcludeSelf,
         form: TreeWalker.FullExcludeSelf,
+        empty: void,
     },
 
     pub fn next(self: *@This(), _: *Page) ?*Element {
@@ -121,6 +128,7 @@ pub const Iterator = GenericIterator(struct {
             .links => |*impl| impl.nextTw(&self.tw.links),
             .anchors => |*impl| impl.nextTw(&self.tw.anchors),
             .form => |*impl| impl.nextTw(&self.tw.form),
+            .empty => return null,
         };
     }
 }, null);
