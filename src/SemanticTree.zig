@@ -37,15 +37,15 @@ page: *Page,
 arena: std.mem.Allocator,
 
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
-    self.dump(self.dom_node, jw, "") catch |err| {
-        log.err(.cdp, "semantic tree dump failed", .{ .err = err });
+    self.dumpJson(self.dom_node, jw, "") catch |err| {
+        log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
 }
 
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     self.dumpText(self.dom_node, writer, 0) catch |err| {
-        log.err(.cdp, "semantic tree text dump failed", .{ .err = err });
+        log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
 }
@@ -83,7 +83,7 @@ fn getXPathSegment(self: @This(), node: *Node) ![]const u8 {
     return "";
 }
 
-fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
+fn dumpJson(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const u8) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -223,7 +223,7 @@ fn dump(self: Self, node: *Node, jw: *std.json.Stringify, parent_xpath: []const 
     try jw.beginArray();
     var it = node.childrenIterator();
     while (it.next()) |child| {
-        try self.dump(child, jw, xpath);
+        try self.dumpJson(child, jw, xpath);
     }
     try jw.endArray();
 
