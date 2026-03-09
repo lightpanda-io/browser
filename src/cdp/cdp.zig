@@ -759,7 +759,7 @@ const IsolatedWorld = struct {
 
     pub fn removeContext(self: *IsolatedWorld) !void {
         const ctx = self.context orelse return error.NoIsolatedContextToRemove;
-        self.browser.env.destroyContext(ctx);
+        self.browser.env.destroyContext(ctx, false);
         self.context = null;
     }
 

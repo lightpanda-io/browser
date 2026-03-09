@@ -345,11 +345,12 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     }
 
     const session = self._session;
-    session.browser.env.destroyContext(self.js);
+    const is_root = self.parent == null;
+    session.browser.env.destroyContext(self.js, is_root);
 
     self._script_manager.shutdown = true;
 
-    if (self.parent == null) {
+    if (is_root) {
         session.browser.http_client.abort();
     } else if (abort_http) {
         // a small optimization, it's faster to abort _everything_ on the root

@@ -73,7 +73,17 @@ isolate_params: *v8.CreateParams,
 
 context_id: usize,
 
-// Maps origin -> shared Origin contains, for v8 values shared across same-origin Contexts
+// Maps origin -> shared Origin contains, for v8 values shared across
+// same-origin Contexts. There's a mismatch here between our JS model and our
+// Browser model. Origins only live as long as the root page of a session exists.
+// It would be wrong/dangerous to re-use an Origin across root page navigations.
+// But we have no mechanism to capture that lifetime in js. We used to have a
+// js.BrowserContext which mapped to a Session (oops, I took it out), but even
+// that wouldn't match correctly, because 1 session can have have muliple non-
+// concurrent pages. We deal with this in destroyContext by checking if we're
+// destroying the root context and, if so, making sure origins is empty. But, if
+// we ever add multiple Sessions to a Browser or mulitple Pages to a Session,
+// this map will have to live in a new, better scoped, container.
 origins: std.StringHashMapUnmanaged(*Origin) = .empty,
 
 // Global handles that need to be freed on deinit
@@ -348,7 +358,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     return context;
 }
 
-pub fn destroyContext(self: *Env, context: *Context) void {
+pub fn destroyContext(self: *Env, context: *Context, is_root: bool) void {
     for (self.contexts[0..self.context_count], 0..) |ctx, i| {
         if (ctx == context) {
             // Swap with last element and decrement count
@@ -371,6 +381,24 @@ pub fn destroyContext(self: *Env, context: *Context) void {
     }
 
     context.deinit();
+
+    if (is_root) {
+        // When the root is destroyed, the all of our contexts should be gone
+        // and with them, all of our origins. Keep origins around longer than
+        // intended would cause issues, so we're going to be defensive here and
+        // clean things up.
+        if (comptime IS_DEBUG) {
+            std.debug.assert(self.context_count == 0);
+            std.debug.assert(self.origins.count() == 0);
+        }
+
+        const app = self.app;
+        var it = self.origins.valueIterator();
+        while (it.next()) |value| {
+            value.*.deinit(app);
+        }
+        self.origins.clearRetainingCapacity();
+    }
 }
 
 pub fn getOrCreateOrigin(self: *Env, key_: ?[]const u8) !*Origin {
