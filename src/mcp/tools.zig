@@ -97,22 +97,16 @@ const ToolStreamingText = struct {
     arena: ?std.mem.Allocator = null,
 
     pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
+        try jw.beginWriteRaw();
+        try jw.writer.writeByte('"');
+        var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
+        const w = &escaped.writer;
+
         switch (self.action) {
-            .markdown => {
-                try jw.beginWriteRaw();
-                try jw.writer.writeByte('"');
-                var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
-                lp.markdown.dump(self.page.document.asNode(), .{}, &escaped.writer, self.page) catch |err| {
-                    log.err(.mcp, "markdown dump failed", .{ .err = err });
-                };
-                try jw.writer.writeByte('"');
-                jw.endWriteRaw();
+            .markdown => lp.markdown.dump(self.page.document.asNode(), .{}, w, self.page) catch |err| {
+                log.err(.mcp, "markdown dump failed", .{ .err = err });
             },
             .links => {
-                try jw.beginWriteRaw();
-                try jw.writer.writeByte('"');
-                var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
-                const w = &escaped.writer;
                 if (Selector.querySelectorAll(self.page.document.asNode(), "a[href]", self.page)) |list| {
                     defer list.deinit(self.page);
                     var first = true;
@@ -133,15 +127,8 @@ const ToolStreamingText = struct {
                 } else |err| {
                     log.err(.mcp, "query links failed", .{ .err = err });
                 }
-                try jw.writer.writeByte('"');
-                jw.endWriteRaw();
             },
             .semantic_tree => {
-                // Return the highly compressed Stagehand-style text format for maximum token efficiency
-                try jw.beginWriteRaw();
-                try jw.writer.writeByte('"');
-                var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
-
                 const st = lp.SemanticTree{
                     .dom_node = self.page.document.asNode(),
                     .registry = self.registry.?,
@@ -149,14 +136,14 @@ const ToolStreamingText = struct {
                     .arena = self.arena.?,
                 };
 
-                st.textStringify(&escaped.writer) catch |err| {
+                st.textStringify(w) catch |err| {
                     log.err(.mcp, "semantic tree dump failed", .{ .err = err });
                 };
-
-                try jw.writer.writeByte('"');
-                jw.endWriteRaw();
             },
         }
+
+        try jw.writer.writeByte('"');
+        jw.endWriteRaw();
     }
 };
 
