@@ -1023,7 +1023,7 @@
 }
 </script>
 
-<script id=getBoundingClientRect>
+<script id=getBoundingClientRect_collapsed>
 {
   const range = new Range();
   const rect = range.getBoundingClientRect();
@@ -1035,10 +1035,37 @@
 }
 </script>
 
-<script id=getClientRects>
+<script id=getBoundingClientRect_element>
+{
+  const range = new Range();
+  const p = document.getElementById('p1');
+  range.selectNodeContents(p);
+  const rect = range.getBoundingClientRect();
+  testing.expectTrue(rect instanceof DOMRect);
+  // Non-collapsed range delegates to the container element
+  const elemRect = p.getBoundingClientRect();
+  testing.expectEqual(elemRect.x, rect.x);
+  testing.expectEqual(elemRect.y, rect.y);
+  testing.expectEqual(elemRect.width, rect.width);
+  testing.expectEqual(elemRect.height, rect.height);
+}
+</script>
+
+<script id=getClientRects_collapsed>
 {
   const range = new Range();
   const rects = range.getClientRects();
   testing.expectEqual(0, rects.length);
+}
+</script>
+
+<script id=getClientRects_element>
+{
+  const range = new Range();
+  const p = document.getElementById('p1');
+  range.selectNodeContents(p);
+  const rects = range.getClientRects();
+  const elemRects = p.getClientRects();
+  testing.expectEqual(elemRects.length, rects.length);
 }
 </script>

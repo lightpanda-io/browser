@@ -644,13 +644,31 @@ fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
     return null;
 }
 
-// Headless browser has no layout — return a zero-valued DOMRect.
-pub fn getBoundingClientRect(_: *const Range) DOMRect {
-    return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+pub fn getBoundingClientRect(self: *const Range, page: *Page) DOMRect {
+    if (self._proto.getCollapsed()) {
+        return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+    }
+    const element = self.getContainerElement() orelse {
+        return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+    };
+    return element.getBoundingClientRect(page);
 }
 
-pub fn getClientRects(_: *const Range) []DOMRect {
-    return &.{};
+pub fn getClientRects(self: *const Range, page: *Page) ![]DOMRect {
+    if (self._proto.getCollapsed()) {
+        return &.{};
+    }
+    const element = self.getContainerElement() orelse {
+        return &.{};
+    };
+    return element.getClientRects(page);
+}
+
+fn getContainerElement(self: *const Range) ?*Node.Element {
+    const container = self._proto.getCommonAncestorContainer();
+    if (container.is(Node.Element)) |el| return el;
+    const parent = container.parentNode() orelse return null;
+    return parent.is(Node.Element);
 }
 
 pub const JsApi = struct {
