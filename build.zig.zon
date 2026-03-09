@@ -5,11 +5,8 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .v8 = .{
-            .url = "https://github.com/lightpanda-io/zig-v8-fork/archive/refs/tags/v0.3.1.tar.gz",
-            .hash = "v8-0.0.0-xddH64J7BAC81mkf6G9RbEJxS-W3TIRl5iFnShwbqCqy",
-
+            .path = "../zig-v8-fork",
         },
-        //.v8 = .{ .path = "../zig-v8-fork" },
         .brotli = .{
             // v1.2.0
             .url = "https://github.com/google/brotli/archive/028fb5a23661f123017c060daa546b55cf4bde29.tar.gz",
@@ -24,8 +21,7 @@
             .hash = "N-V-__8AAL15vQCI63ZL6Zaz5hJg6JTEgYXGbLnMFSnf7FT3",
         },
         .@"boringssl-zig" = .{
-            .url = "git+https://github.com/Syndica/boringssl-zig.git#c53df00d06b02b755ad88bbf4d1202ed9687b096",
-            .hash = "boringssl-0.1.0-VtJeWehMAAA4RNnwRnzEvKcS9rjsR1QVRw1uJrwXxmVK",
+            .path = "../boringssl-zig",
         },
         .curl = .{
             .url = "https://github.com/curl/curl/releases/download/curl-8_18_0/curl-8.18.0.tar.gz",

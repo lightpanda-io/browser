@@ -431,12 +431,33 @@ pub fn getActiveElement(self: *Document) ?*Element {
 }
 
 pub fn getStyleSheets(self: *Document, page: *Page) !*StyleSheetList {
-    if (self._style_sheets) |sheets| {
-        return sheets;
+    if (self._style_sheets == null) {
+        self._style_sheets = try StyleSheetList.init(page);
     }
-    const sheets = try StyleSheetList.init(page);
-    self._style_sheets = sheets;
+
+    const sheets = self._style_sheets.?;
+    var collected: std.ArrayList(*@import("css/CSSStyleSheet.zig")) = .{};
+    defer collected.deinit(page.call_arena);
+    try collectStyleSheets(self.asNode(), page, &collected);
+    try sheets.setSheets(page, collected.items);
     return sheets;
+}
+
+fn collectStyleSheets(node: *Node, page: *Page, out: *std.ArrayList(*@import("css/CSSStyleSheet.zig"))) !void {
+    if (node.is(Element.Html.Style)) |style| {
+        if (try style.getSheet(page)) |sheet| {
+            try out.append(page.call_arena, sheet);
+        }
+    } else if (node.is(Element.Html.Link)) |link| {
+        if (try link.getSheet(page)) |sheet| {
+            try out.append(page.call_arena, sheet);
+        }
+    }
+
+    var child = node.firstChild();
+    while (child) |current| : (child = current.nextSibling()) {
+        try collectStyleSheets(current, page, out);
+    }
 }
 
 pub fn getFonts(self: *Document, page: *Page) !*FontFaceSet {

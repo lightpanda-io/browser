@@ -131,6 +131,13 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     self._properties.append(&prop._node);
 }
 
+pub fn applyDeclarationsText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !void {
+    var it = CssParser.parseDeclarationsList(text);
+    while (it.next()) |declaration| {
+        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
+    }
+}
+
 pub fn removeProperty(self: *CSSStyleDeclaration, property_name: []const u8, page: *Page) ![]const u8 {
     const result = try self.removePropertyImpl(property_name, page);
     try self.syncStyleAttribute(page);

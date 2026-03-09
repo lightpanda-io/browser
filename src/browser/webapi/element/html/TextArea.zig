@@ -55,6 +55,14 @@ fn dispatchSelectionChangeEvent(self: *TextArea, page: *Page) !void {
     try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
 }
 
+pub fn dispatchInputEvent(self: *TextArea, page: *Page) !void {
+    const event = try Event.initTrusted(comptime .wrap("input"), .{
+        .bubbles = true,
+        .composed = true,
+    }, page);
+    try page._event_manager.dispatch(self.asElement().asEventTarget(), event);
+}
+
 pub fn asElement(self: *TextArea) *Element {
     return self._proto._proto;
 }
@@ -162,6 +170,7 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             self._selection_end = @intCast(new_value.len);
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
+            try self.dispatchInputEvent(page);
         },
         .partial => |range| {
             // if the text area is partially selected, replace the selected content.
@@ -181,12 +190,31 @@ pub fn innerInsert(self: *TextArea, str: []const u8, page: *Page) !void {
             self._selection_end = @intCast(new_pos);
             self._selection_direction = .none;
             try self.dispatchSelectionChangeEvent(page);
+            try self.dispatchInputEvent(page);
         },
         .none => {
             // if the text area is not selected, just insert at cursor.
             const current_value = self.getValue();
-            const new_value = try std.mem.concat(arena, u8, &.{ current_value, str });
+            const len = current_value.len;
+            var start = @min(@as(usize, @intCast(self._selection_start)), len);
+            const end = @min(@as(usize, @intCast(self._selection_end)), len);
+            if (end < start) {
+                start = end;
+            }
+            const cursor = start;
+
+            const new_value = try std.mem.concat(
+                arena,
+                u8,
+                &.{ current_value[0..cursor], str, current_value[cursor..] },
+            );
             try self.setValue(new_value, page);
+            const new_pos: u32 = @intCast(cursor + str.len);
+            self._selection_start = new_pos;
+            self._selection_end = new_pos;
+            self._selection_direction = .none;
+            try self.dispatchSelectionChangeEvent(page);
+            try self.dispatchInputEvent(page);
         },
     }
 }

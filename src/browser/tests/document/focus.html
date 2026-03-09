@@ -1,10 +1,18 @@
 <!DOCTYPE html>
 <script src="../testing.js"></script>
 <body>
-  <input id="input1" type="text">
+  <input id="input1" type="text" autofocus>
   <input id="input2" type="text">
   <button id="btn1">Button</button>
 </body>
+
+<script id="autofocus_initial_focus">
+{
+  testing.eventually(() => {
+    testing.expectEqual($('#input1'), document.activeElement);
+  });
+}
+</script>
 
 <script id="activeElement_default">
 {

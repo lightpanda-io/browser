@@ -27,7 +27,7 @@ const ResolveOpts = struct {
 // path is anytype, so that it can be used with both []const u8 and [:0]const u8
 pub fn resolve(allocator: Allocator, base: [:0]const u8, path: anytype, comptime opts: ResolveOpts) ![:0]const u8 {
     const PT = @TypeOf(path);
-    if (base.len == 0 or isCompleteHTTPUrl(path)) {
+    if (base.len == 0 or hasAbsoluteScheme(path)) {
         if (comptime opts.always_dupe or !isNullTerminated(PT)) {
             const duped = try allocator.dupeZ(u8, path);
             return processResolved(allocator, duped, opts);
@@ -264,6 +264,28 @@ fn isNullTerminated(comptime value: type) bool {
     return @typeInfo(value).pointer.sentinel_ptr != null;
 }
 
+pub fn hasAbsoluteScheme(url: []const u8) bool {
+    if (url.len < 2) {
+        return false;
+    }
+
+    const colon_pos = std.mem.indexOfScalar(u8, url, ':') orelse return false;
+    if (colon_pos == 0) {
+        return false;
+    }
+
+    const scheme = url[0..colon_pos];
+    if (!std.ascii.isAlphabetic(scheme[0])) {
+        return false;
+    }
+    for (scheme[1..]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
 pub fn isCompleteHTTPUrl(url: []const u8) bool {
     if (url.len < 3) { // Minimum is "x://"
         return false;
@@ -282,24 +304,7 @@ pub fn isCompleteHTTPUrl(url: []const u8) bool {
         return false;
     }
 
-    // Validate that everything before the colon is a valid scheme
-    // A scheme must start with a letter and contain only letters, digits, +, -, .
-    if (colon_pos == 0) {
-        return false;
-    }
-
-    const scheme = url[0..colon_pos];
-    if (!std.ascii.isAlphabetic(scheme[0])) {
-        return false;
-    }
-
-    for (scheme[1..]) |c| {
-        if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') {
-            return false;
-        }
-    }
-
-    return true;
+    return hasAbsoluteScheme(url);
 }
 
 pub fn getUsername(raw: [:0]const u8) []const u8 {
@@ -703,6 +708,23 @@ test "URL: resolve regression (#1093)" {
         const result = try resolve(testing.arena_allocator, case.base, case.path, .{});
         try testing.expectString(case.expected, result);
     }
+}
+
+test "URL: resolve absolute scheme" {
+    defer testing.reset();
+
+    try testing.expectString(
+        "data:image/png;base64,AAAA",
+        try resolve(testing.arena_allocator, "https://example/index.html", "data:image/png;base64,AAAA", .{}),
+    );
+    try testing.expectString(
+        "file:///C:/tmp/test.png",
+        try resolve(testing.arena_allocator, "https://example/index.html", "file:///C:/tmp/test.png", .{}),
+    );
+    try testing.expectString(
+        "mailto:test@example.com",
+        try resolve(testing.arena_allocator, "https://example/index.html", "mailto:test@example.com", .{}),
+    );
 }
 
 test "URL: resolve" {

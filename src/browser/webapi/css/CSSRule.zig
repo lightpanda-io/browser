@@ -24,6 +24,7 @@ pub const Type = enum(u16) {
 };
 
 _type: Type,
+_css_text: []const u8 = "",
 
 pub fn init(rule_type: Type, page: *Page) !*CSSRule {
     return page._factory.create(CSSRule{
@@ -36,15 +37,12 @@ pub fn getType(self: *const CSSRule) u16 {
 }
 
 pub fn getCssText(self: *const CSSRule, page: *Page) []const u8 {
-    _ = self;
     _ = page;
-    return "";
+    return self._css_text;
 }
 
 pub fn setCssText(self: *CSSRule, text: []const u8, page: *Page) !void {
-    _ = self;
-    _ = text;
-    _ = page;
+    self._css_text = try page.dupeString(text);
 }
 
 pub fn getParentRule(self: *const CSSRule) ?*CSSRule {

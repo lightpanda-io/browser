@@ -19,6 +19,10 @@
 
 <label id="l2" for="input1"><span>Name</span></label>
 <input id="input2" type="text">
+<label id="check-label" for="check1"><span>Agree</span></label>
+<input id="check1" type="checkbox">
+<label id="disabled-check-label" for="disabled-check1">Disabled</label>
+<input id="disabled-check1" type="checkbox" disabled>
 <input id="input-hidden" type="hidden">
 <select id="sel1"><option>a</option></select>
 <button id="btn1">Click</button>
@@ -70,5 +74,47 @@
     // label with no for and not in document -> null
     const lDetached = document.createElement('label');
     testing.expectEqual(null, lDetached.control);
+  }
+</script>
+
+<script id="click_focuses_associated_control">
+  {
+    const input1 = document.getElementById('input1');
+    const input2 = document.getElementById('input2');
+    input2.focus();
+    testing.expectEqual(input2, document.activeElement);
+
+    document.getElementById('l2').click();
+    testing.expectEqual(input1, document.activeElement);
+  }
+</script>
+
+<script id="click_on_label_descendant_focuses_control">
+  {
+    const input1 = document.getElementById('input1');
+    document.getElementById('input2').focus();
+
+    document.querySelector('#l2 span').click();
+    testing.expectEqual(input1, document.activeElement);
+  }
+</script>
+
+<script id="click_toggles_associated_checkbox">
+  {
+    const checkbox = document.getElementById('check1');
+    testing.expectEqual(false, checkbox.checked);
+
+    document.getElementById('check-label').click();
+    testing.expectEqual(true, checkbox.checked);
+  }
+</script>
+
+<script id="click_disabled_label_does_not_toggle_control">
+  {
+    const checkbox = document.getElementById('disabled-check1');
+    testing.expectEqual(false, checkbox.checked);
+
+    document.getElementById('disabled-check-label').click();
+    testing.expectEqual(false, checkbox.checked);
   }
 </script>

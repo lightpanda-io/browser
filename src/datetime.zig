@@ -551,7 +551,7 @@ pub fn milliTimestamp(comptime mode: TimestampMode) u64 {
 
 pub fn timespec() posix.timespec {
     if (comptime is_posix == false) {
-        @compileError("`timespec` should not be called when `is_posix` is false");
+        @panic("`timespec` should not be called when `is_posix` is false");
     }
 
     const clock_id = switch (@import("builtin").os.tag) {

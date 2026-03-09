@@ -22,6 +22,10 @@ pub fn item(self: *const CSSRuleList, index: usize) ?*CSSRule {
     return self._rules[index];
 }
 
+pub fn setRules(self: *CSSRuleList, page: *Page, rules: []*CSSRule) !void {
+    self._rules = try page.arena.dupe(*CSSRule, rules);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSRuleList);
 

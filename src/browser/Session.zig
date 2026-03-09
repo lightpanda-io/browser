@@ -26,6 +26,8 @@ const js = @import("js/js.zig");
 const storage = @import("webapi/storage/storage.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");
+pub const PopupSource = @import("PopupSource.zig").PopupSource;
+const HttpClient = @import("../http/Client.zig");
 
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
@@ -41,6 +43,52 @@ const IS_DEBUG = builtin.mode == .Debug;
 // deinit a page before running another one.
 const Session = @This();
 
+pub const PendingDownload = struct {
+    url: []u8,
+    suggested_filename: []u8,
+
+    pub fn deinit(self: *PendingDownload, allocator: Allocator) void {
+        allocator.free(self.url);
+        allocator.free(self.suggested_filename);
+        self.* = undefined;
+    }
+};
+
+pub const RootAttachmentDownloadHandler = struct {
+    ctx: *anyopaque,
+    promote: *const fn (ctx: *anyopaque, page: *Page, transfer: *HttpClient.Transfer, suggested_filename: []const u8) anyerror!void,
+};
+
+pub const PendingBrowserNavigate = struct {
+    url: []u8,
+
+    pub fn deinit(self: *PendingBrowserNavigate, allocator: Allocator) void {
+        allocator.free(self.url);
+        self.* = undefined;
+    }
+};
+
+pub const PendingTabOpen = struct {
+    url: [:0]u8,
+    target_name: []u8,
+    popup_source: PopupSource = .none,
+    opts: Page.NavigateOpts,
+    activate: bool = true,
+    zoom_percent: i32 = 100,
+
+    pub fn deinit(self: *PendingTabOpen, allocator: Allocator) void {
+        allocator.free(self.url);
+        allocator.free(self.target_name);
+        if (self.opts.body) |body| {
+            allocator.free(body);
+        }
+        if (self.opts.header) |header| {
+            allocator.free(header);
+        }
+        self.* = undefined;
+    }
+};
+
 browser: *Browser,
 notification: *Notification,
 
@@ -49,6 +97,11 @@ queued_navigation: std.ArrayList(*Page),
 // We process async navigations first (safe from re-entrance), then sync
 // about:blank navigations (which may add to queued_navigation).
 queued_queued_navigation: std.ArrayList(*Page),
+pending_browser_navigations: std.ArrayListUnmanaged(PendingBrowserNavigate),
+pending_downloads: std.ArrayListUnmanaged(PendingDownload),
+pending_tab_opens: std.ArrayListUnmanaged(PendingTabOpen),
+pending_attachment_promotions: usize = 0,
+root_attachment_download_handler: ?RootAttachmentDownloadHandler = null,
 
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
@@ -59,7 +112,9 @@ storage_shed: storage.Shed,
 history: History,
 navigation: Navigation,
 
-page: ?Page,
+page: ?*Page,
+suspended_page: ?*Page,
+allow_script_popups: bool,
 
 frame_id_gen: u32,
 
@@ -70,6 +125,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
 
     self.* = .{
         .page = null,
+        .suspended_page = null,
         .arena = arena,
         .history = .{},
         .frame_id_gen = 0,
@@ -79,16 +135,43 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .browser = browser,
         .queued_navigation = .{},
         .queued_queued_navigation = .{},
+        .pending_browser_navigations = .{},
+        .pending_downloads = .{},
+        .pending_tab_opens = .{},
+        .pending_attachment_promotions = 0,
+        .root_attachment_download_handler = null,
         .notification = notification,
         .cookie_jar = storage.Cookie.Jar.init(allocator),
+        .allow_script_popups = browser.allow_script_popups,
     };
 }
 
 pub fn deinit(self: *Session) void {
     if (self.page != null) {
         self.removePage();
+    } else if (self.suspended_page) |page| {
+        destroyPage(self, page, false);
+        self.suspended_page = null;
     }
     self.cookie_jar.deinit();
+    while (self.pending_browser_navigations.items.len > 0) {
+        var pending_browser_navigation = self.pending_browser_navigations.items[self.pending_browser_navigations.items.len - 1];
+        self.pending_browser_navigations.items.len -= 1;
+        pending_browser_navigation.deinit(self.browser.app.allocator);
+    }
+    self.pending_browser_navigations.deinit(self.browser.app.allocator);
+    while (self.pending_downloads.items.len > 0) {
+        var pending = self.pending_downloads.items[self.pending_downloads.items.len - 1];
+        self.pending_downloads.items.len -= 1;
+        pending.deinit(self.browser.app.allocator);
+    }
+    self.pending_downloads.deinit(self.browser.app.allocator);
+    while (self.pending_tab_opens.items.len > 0) {
+        var pending = self.pending_tab_opens.items[self.pending_tab_opens.items.len - 1];
+        self.pending_tab_opens.items.len -= 1;
+        pending.deinit(self.browser.app.allocator);
+    }
+    self.pending_tab_opens.deinit(self.browser.app.allocator);
 
     const browser = self.browser;
     self.storage_shed.deinit(browser.app.allocator);
@@ -99,10 +182,12 @@ pub fn deinit(self: *Session) void {
 // the pointer on Page is just returned as a convenience
 pub fn createPage(self: *Session) !*Page {
     lp.assert(self.page == null, "Session.createPage - page not null", .{});
-
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
+    lp.assert(self.suspended_page == null, "Session.createPage - suspended page not null", .{});
+    const page = try self.allocPage();
+    errdefer self.destroyAllocPage(page);
     try Page.init(page, self.nextFrameId(), self, null);
+    self.page = page;
+    self.browser.app.display.onPageCreated();
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(page);
@@ -122,7 +207,12 @@ pub fn removePage(self: *Session) void {
     self.notification.dispatch(.page_remove, .{});
     lp.assert(self.page != null, "Session.removePage - page is null", .{});
 
-    self.page.?.deinit(false);
+    destroyPage(self, self.page.?, true);
+    if (self.suspended_page) |page| {
+        destroyPage(self, page, false);
+        self.suspended_page = null;
+    }
+    self.browser.app.display.onPageRemoved();
     self.page = null;
 
     self.navigation.onRemovePage();
@@ -139,21 +229,22 @@ pub fn replacePage(self: *Session) !*Page {
 
     lp.assert(self.page != null, "Session.replacePage null page", .{});
 
-    var current = self.page.?;
+    const current = self.page.?;
     const frame_id = current._frame_id;
     const parent = current.parent;
-    current.deinit(false);
+    destroyPage(self, current, true);
 
     self.browser.env.memoryPressureNotification(.moderate);
 
-    self.page = @as(Page, undefined);
-    const page = &self.page.?;
+    const page = try self.allocPage();
+    errdefer self.destroyAllocPage(page);
     try Page.init(page, frame_id, self, parent);
+    self.page = page;
     return page;
 }
 
 pub fn currentPage(self: *Session) ?*Page {
-    return &(self.page orelse return null);
+    return self.page;
 }
 
 pub const WaitResult = enum {
@@ -168,9 +259,17 @@ pub fn findPage(self: *Session, frame_id: u32) ?*Page {
 }
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
-    var page = &(self.page orelse return .no_page);
+    return self.waitWithInput(wait_ms, true);
+}
+
+pub fn waitNoInput(self: *Session, wait_ms: u32) WaitResult {
+    return self.waitWithInput(wait_ms, false);
+}
+
+fn waitWithInput(self: *Session, wait_ms: u32, dispatch_native_input: bool) WaitResult {
+    var page = self.page orelse return .no_page;
     while (true) {
-        const wait_result = self._wait(page, wait_ms) catch |err| {
+        const wait_result = self._wait(page, wait_ms, dispatch_native_input) catch |err| {
             switch (err) {
                 error.JsError => {}, // already logged (with hopefully more context)
                 else => log.err(.browser, "session wait", .{
@@ -187,14 +286,14 @@ pub fn wait(self: *Session, wait_ms: u32) WaitResult {
                     return .done;
                 }
                 self.processQueuedNavigation() catch return .done;
-                page = &self.page.?; // might have changed
+                page = self.page.?; // might have changed
             },
             else => |result| return result,
         }
     }
 }
 
-fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
+fn _wait(self: *Session, page: *Page, wait_ms: u32, dispatch_native_input: bool) !WaitResult {
     var timer = try std.time.Timer.start();
     var ms_remaining = wait_ms;
 
@@ -214,6 +313,15 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
     const exit_when_done = http_client.cdp_client == null;
 
     while (true) {
+        if (dispatch_native_input) {
+            self.browser.app.display.dispatchNativeInput(page) catch |err| {
+                log.err(.browser, "native input dispatch", .{
+                    .err = err,
+                    .url = page.url,
+                });
+            };
+        }
+
         switch (page._parse_state) {
             .pre, .raw, .text, .image => {
                 // The main page hasn't started/finished navigating.
@@ -333,10 +441,13 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                     }
                 }
             },
-            .err => |err| {
-                page._parse_state = .{ .raw_done = @errorName(err) };
-                return err;
+            .err => {
+                // Preserve the page error state so higher-level browse flows
+                // can promote it into structured browser UI instead of
+                // flattening it into raw_done immediately.
+                return .done;
             },
+            .attachment_promoted => return .done,
             .raw_done => {
                 if (exit_when_done) {
                     return .done;
@@ -459,7 +570,7 @@ fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !v
 }
 
 fn processRootQueuedNavigation(self: *Session) !void {
-    const current_page = &self.page.?;
+    const current_page = self.page.?;
     const frame_id = current_page._frame_id;
 
     // create a copy before the page is cleared
@@ -467,10 +578,26 @@ fn processRootQueuedNavigation(self: *Session) !void {
     current_page._queued_navigation = null;
     defer self.browser.arena_pool.release(qn.arena);
 
-    self.removePage();
-    self.page = @as(Page, undefined);
-    const new_page = &self.page.?;
+    const browser = self.browser;
+
+    // Scheduled navigation replaces the page/context, but the browser window
+    // belongs to the session and should remain open across navigations.
+    self.notification.dispatch(.page_remove, .{});
+    self.navigation.onRemovePage();
+
+    const should_suspend_current = self.suspended_page == null and canSuspendCurrentPage(self, current_page);
+    if (should_suspend_current) {
+        current_page.setSuspended(true);
+        self.suspended_page = current_page;
+    } else {
+        destroyPage(self, current_page, false);
+        browser.env.memoryPressureNotification(.moderate);
+    }
+
+    const new_page = try self.allocPage();
+    errdefer self.destroyAllocPage(new_page);
     try Page.init(new_page, frame_id, self, null);
+    self.page = new_page;
 
     // Creates a new NavigationEventTarget for this page.
     try self.navigation.onNewPage(new_page);
@@ -481,12 +608,206 @@ fn processRootQueuedNavigation(self: *Session) !void {
 
     new_page.navigate(qn.url, qn.opts) catch |err| {
         log.err(.browser, "queued navigation error", .{ .err = err });
-        return err;
+        new_page.url = new_page.arena.dupeZ(u8, qn.url) catch new_page.url;
+        new_page.failNavigation(err);
+        return;
     };
+}
+
+pub fn restoreSuspendedPage(self: *Session) !?*Page {
+    const suspended = self.suspended_page orelse return null;
+    const current = self.page orelse {
+        suspended.setSuspended(false);
+        self.page = suspended;
+        self.suspended_page = null;
+        try self.navigation.onNewPage(suspended);
+        self.notification.dispatch(.page_created, suspended);
+        return suspended;
+    };
+
+    if (current == suspended) {
+        suspended.setSuspended(false);
+        self.suspended_page = null;
+        return current;
+    }
+
+    self.notification.dispatch(.page_remove, .{});
+    self.navigation.onRemovePage();
+    destroyPage(self, current, false);
+
+    suspended.setSuspended(false);
+    self.page = suspended;
+    self.suspended_page = null;
+    try self.navigation.onNewPage(suspended);
+    self.notification.dispatch(.page_created, suspended);
+    return suspended;
+}
+
+pub fn finalizeCommittedNavigation(self: *Session, page: *Page) void {
+    if (self.page != page) {
+        return;
+    }
+    if (self.suspended_page) |suspended| {
+        destroyPage(self, suspended, false);
+        self.suspended_page = null;
+        self.browser.env.memoryPressureNotification(.moderate);
+    }
 }
 
 pub fn nextFrameId(self: *Session) u32 {
     const id = self.frame_id_gen +% 1;
     self.frame_id_gen = id;
     return id;
+}
+
+pub fn enqueueDownload(self: *Session, url: []const u8, suggested_filename: []const u8) !void {
+    const allocator = self.browser.app.allocator;
+    const owned_url = try allocator.dupe(u8, url);
+    errdefer allocator.free(owned_url);
+    const owned_filename = try allocator.dupe(u8, suggested_filename);
+    errdefer allocator.free(owned_filename);
+
+    try self.pending_downloads.append(allocator, .{
+        .url = owned_url,
+        .suggested_filename = owned_filename,
+    });
+}
+
+pub fn setRootAttachmentDownloadHandler(self: *Session, handler: ?RootAttachmentDownloadHandler) void {
+    self.root_attachment_download_handler = handler;
+}
+
+pub fn promoteRootAttachmentDownload(
+    self: *Session,
+    page: *Page,
+    transfer: *HttpClient.Transfer,
+    suggested_filename: []const u8,
+) !bool {
+    if (self.root_attachment_download_handler) |handler| {
+        handler.promote(handler.ctx, page, transfer, suggested_filename) catch |err| {
+            log.warn(.browser, "attachment adopt fallback", .{ .err = err, .url = page.url });
+            try self.enqueueDownload(page.url, suggested_filename);
+            return false;
+        };
+        return true;
+    }
+    try self.enqueueDownload(page.url, suggested_filename);
+    return false;
+}
+
+pub fn enqueueBrowserNavigation(self: *Session, url: []const u8) !void {
+    const allocator = self.browser.app.allocator;
+    const owned_url = try allocator.dupe(u8, url);
+    errdefer allocator.free(owned_url);
+
+    try self.pending_browser_navigations.append(allocator, .{
+        .url = owned_url,
+    });
+}
+
+pub fn enqueueOpenInTargetTab(
+    self: *Session,
+    url: []const u8,
+    target_name: []const u8,
+    opts: Page.NavigateOpts,
+    activate: bool,
+    zoom_percent: i32,
+    popup_source: PopupSource,
+) !void {
+    const allocator = self.browser.app.allocator;
+    const owned_url = try allocator.dupeZ(u8, url);
+    errdefer allocator.free(owned_url);
+    const owned_target_name = try allocator.dupe(u8, target_name);
+    errdefer allocator.free(owned_target_name);
+    const owned_body = if (opts.body) |body|
+        try allocator.dupe(u8, body)
+    else
+        null;
+    errdefer if (owned_body) |body| allocator.free(body);
+    const owned_header = if (opts.header) |header|
+        try allocator.dupeZ(u8, header)
+    else
+        null;
+    errdefer if (owned_header) |header| allocator.free(header);
+
+    try self.pending_tab_opens.append(allocator, .{
+        .url = owned_url,
+        .target_name = owned_target_name,
+        .popup_source = popup_source,
+        .opts = .{
+            .cdp_id = opts.cdp_id,
+            .reason = opts.reason,
+            .method = opts.method,
+            .body = owned_body,
+            .header = owned_header,
+            .force = opts.force,
+            .kind = opts.kind,
+        },
+        .activate = activate,
+        .zoom_percent = zoom_percent,
+    });
+}
+
+pub fn takePendingBrowserNavigations(self: *Session) std.ArrayListUnmanaged(PendingBrowserNavigate) {
+    var pending: std.ArrayListUnmanaged(PendingBrowserNavigate) = .{};
+    std.mem.swap(std.ArrayListUnmanaged(PendingBrowserNavigate), &pending, &self.pending_browser_navigations);
+    return pending;
+}
+
+pub fn hasPendingBrowserNavigations(self: *const Session) bool {
+    return self.pending_browser_navigations.items.len > 0;
+}
+
+pub fn takePendingDownloads(self: *Session) std.ArrayListUnmanaged(PendingDownload) {
+    var pending: std.ArrayListUnmanaged(PendingDownload) = .{};
+    std.mem.swap(std.ArrayListUnmanaged(PendingDownload), &pending, &self.pending_downloads);
+    return pending;
+}
+
+pub fn hasPendingDownloads(self: *const Session) bool {
+    return self.pending_downloads.items.len > 0;
+}
+
+pub fn takePendingTabOpens(self: *Session) std.ArrayListUnmanaged(PendingTabOpen) {
+    var pending: std.ArrayListUnmanaged(PendingTabOpen) = .{};
+    std.mem.swap(std.ArrayListUnmanaged(PendingTabOpen), &pending, &self.pending_tab_opens);
+    return pending;
+}
+
+pub fn hasPendingTabOpens(self: *const Session) bool {
+    return self.pending_tab_opens.items.len > 0;
+}
+
+pub fn noteAttachmentPromotion(self: *Session) void {
+    self.pending_attachment_promotions += 1;
+}
+
+pub fn takePendingAttachmentPromotions(self: *Session) usize {
+    const pending = self.pending_attachment_promotions;
+    self.pending_attachment_promotions = 0;
+    return pending;
+}
+
+pub fn hasPendingAttachmentPromotions(self: *const Session) bool {
+    return self.pending_attachment_promotions != 0;
+}
+
+fn allocPage(self: *Session) !*Page {
+    return try self.browser.app.allocator.create(Page);
+}
+
+fn destroyAllocPage(self: *Session, page: *Page) void {
+    self.browser.app.allocator.destroy(page);
+}
+
+fn canSuspendCurrentPage(self: *Session, page: *Page) bool {
+    return switch (self.browser.app.config.mode) {
+        .browse => page.parent == null,
+        else => false,
+    };
+}
+
+fn destroyPage(self: *Session, page: *Page, abort_http: bool) void {
+    page.deinit(abort_http);
+    self.destroyAllocPage(page);
 }

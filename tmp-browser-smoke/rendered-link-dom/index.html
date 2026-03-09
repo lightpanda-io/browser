@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rendered Link DOM Start</title>
+</head>
+<body>
+  <main style="display:block;padding:24px;">
+    <p style="display:block;margin:0 0 18px 0;font-size:20px;">Rendered link activation should honor onclick and preventDefault before any direct fallback.</p>
+    <a
+      id="prevent-link"
+      href="/prevent-default-should-not-load.html"
+      style="display:block;width:520px;padding:24px;margin:0 0 24px 0;font-size:30px;color:#004c99;background:#ddeeff;"
+    >PREVENT DEFAULT</a>
+    <a
+      id="mutate-link"
+      href="/original-target.html"
+      style="display:block;width:520px;padding:24px;font-size:30px;color:#0a5c0a;background:#ddffdd;"
+    >MUTATE HREF</a>
+  </main>
+  <script>
+    document.getElementById('prevent-link').onclick = function (event) {
+      event.preventDefault();
+      document.title = 'Rendered Prevented Click';
+    };
+
+    document.getElementById('mutate-link').onclick = function () {
+      this.href = '/mutated-target.html?from=onclick';
+    };
+  </script>
+</body>
+</html>

@@ -24,6 +24,7 @@ const log = @import("log.zig");
 const Config = @import("Config.zig");
 const Snapshot = @import("browser/js/Snapshot.zig");
 const Platform = @import("browser/js/Platform.zig");
+const Display = @import("display/Display.zig");
 const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const RobotStore = @import("browser/Robots.zig").RobotStore;
 
@@ -35,6 +36,7 @@ const App = @This();
 http: Http,
 config: *const Config,
 platform: Platform,
+display: Display,
 snapshot: Snapshot,
 telemetry: Telemetry,
 allocator: Allocator,
@@ -50,6 +52,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.* = .{
         .config = config,
         .allocator = allocator,
+        .display = Display.init(allocator, config),
         .robots = RobotStore.init(allocator),
         .http = undefined,
         .platform = undefined,
@@ -61,6 +64,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
 
     app.http = try Http.init(allocator, &app.robots, config);
     errdefer app.http.deinit();
+    app.display.setHttpRuntime(&app.http);
 
     app.platform = try Platform.init();
     errdefer app.platform.deinit();
@@ -69,6 +73,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     errdefer app.snapshot.deinit();
 
     app.app_dir_path = getAndMakeAppDir(allocator);
+    app.display.setAppDataPath(app.app_dir_path);
 
     app.telemetry = try Telemetry.init(app, config.mode);
     errdefer app.telemetry.deinit();
@@ -93,6 +98,7 @@ pub fn deinit(self: *App) void {
     self.robots.deinit();
     self.http.deinit();
     self.snapshot.deinit();
+    self.display.deinit();
     self.platform.deinit();
     self.arena_pool.deinit();
 

@@ -43,11 +43,13 @@ pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
 
 pub const CurlGlobalFlags = packed struct(u8) {
     ssl: bool = false,
-    _reserved: u7 = 0,
+    win32: bool = false,
+    _reserved: u6 = 0,
 
     pub fn to_c(self: @This()) c_long {
         var flags: c_long = 0;
         if (self.ssl) flags |= c.CURL_GLOBAL_SSL;
+        if (self.win32) flags |= c.CURL_GLOBAL_WIN32;
         return flags;
     }
 };
@@ -129,6 +131,7 @@ pub const CurlOption = enum(c.CURLoption) {
     follow_location = c.CURLOPT_FOLLOWLOCATION,
     redir_protocols_str = c.CURLOPT_REDIR_PROTOCOLS_STR,
     proxy = c.CURLOPT_PROXY,
+    no_proxy = c.CURLOPT_NOPROXY,
     ca_info_blob = c.CURLOPT_CAINFO_BLOB,
     proxy_ca_info_blob = c.CURLOPT_PROXY_CAINFO_BLOB,
     ssl_verify_host = c.CURLOPT_SSL_VERIFYHOST,
@@ -510,6 +513,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .url,
         .redir_protocols_str,
         .proxy,
+        .no_proxy,
         .accept_encoding,
         .custom_request,
         .cookie,

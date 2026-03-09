@@ -60,7 +60,10 @@ pub fn run(self: *TestHTTPServer, wg: *std.Thread.WaitGroup) !void {
 
     while (true) {
         const conn = listener.accept() catch |err| {
-            if (self.shutdown.load(.acquire) or err == error.SocketNotListening) {
+            if ((@import("builtin").target.os.tag == .windows and err == error.Unexpected) or
+                self.shutdown.load(.acquire) or
+                err == error.SocketNotListening)
+            {
                 return;
             }
             return err;
@@ -78,23 +81,18 @@ fn handleConnection(self: *TestHTTPServer, conn: std.net.Server.Connection) !voi
     var conn_writer = conn.stream.writer(&req_buf);
 
     var http_server = std.http.Server.init(conn_reader.interface(), &conn_writer.interface);
+    var req = http_server.receiveHead() catch |err| switch (err) {
+        error.ReadFailed, error.HttpConnectionClosing => return,
+        else => {
+            std.debug.print("Test HTTP Server error: {}\n", .{err});
+            return err;
+        },
+    };
 
-    while (true) {
-        var req = http_server.receiveHead() catch |err| switch (err) {
-            error.ReadFailed => continue,
-            error.HttpConnectionClosing => continue,
-            else => {
-                std.debug.print("Test HTTP Server error: {}\n", .{err});
-                return err;
-            },
-        };
-
-        self.handler(&req) catch |err| {
-            std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
-            try req.respond("server error", .{ .status = .internal_server_error });
-            return;
-        };
-    }
+    self.handler(&req) catch |err| {
+        std.debug.print("test http error '{s}': {}\n", .{ req.head.target, err });
+        try req.respond("server error", .{ .status = .internal_server_error });
+    };
 }
 
 pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
@@ -129,6 +127,10 @@ pub fn sendFile(req: *std.http.Server.Request, file_path: []const u8) !void {
 fn getContentType(file_path: []const u8) []const u8 {
     if (std.mem.endsWith(u8, file_path, ".js")) {
         return "application/json";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".css")) {
+        return "text/css";
     }
 
     if (std.mem.endsWith(u8, file_path, ".html")) {

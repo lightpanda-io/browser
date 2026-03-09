@@ -44,6 +44,7 @@ session: ?Session,
 allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: *HttpClient,
+allow_script_popups: bool = true,
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
@@ -63,6 +64,7 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
         .allocator = allocator,
         .arena_pool = &app.arena_pool,
         .http_client = opts.http_client,
+        .allow_script_popups = true,
     };
 }
 
@@ -88,11 +90,15 @@ pub fn closeSession(self: *Browser) void {
 }
 
 pub fn runMicrotasks(self: *Browser) void {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     self.env.runMicrotasks();
 }
 
 pub fn runMacrotasks(self: *Browser) !?u64 {
     const env = &self.env;
+    env.isolate.enter();
+    defer env.isolate.exit();
 
     const time_to_next = try self.env.runMacrotasks();
     env.pumpMessageLoop();
@@ -104,12 +110,18 @@ pub fn runMacrotasks(self: *Browser) !?u64 {
 }
 
 pub fn hasBackgroundTasks(self: *Browser) bool {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     return self.env.hasBackgroundTasks();
 }
 pub fn waitForBackgroundTasks(self: *Browser) void {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     self.env.waitForBackgroundTasks();
 }
 
 pub fn runIdleTasks(self: *const Browser) void {
+    self.env.isolate.enter();
+    defer self.env.isolate.exit();
     self.env.runIdleTasks();
 }

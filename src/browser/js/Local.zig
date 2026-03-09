@@ -1364,6 +1364,7 @@ pub const Scope = struct {
     pub fn deinit(self: *Scope) void {
         v8.v8__Context__Exit(self.local.handle);
         self.handle_scope.deinit();
+        self.local.isolate.exit();
     }
 
     pub fn toLocal(self: *Scope, global: anytype) ToLocalReturnType(@TypeOf(global)) {

@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Popup Background Timer Start</title>
+<script>
+  setTimeout(() => {
+    window.open('/script-popup-blank-result.html?from=background-timer', '_blank');
+  }, 120);
+  setTimeout(() => {
+    document.title = 'Popup Background Timer Fired';
+  }, 900);
+</script>

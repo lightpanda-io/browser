@@ -90,8 +90,46 @@ fn getWindowForTarget(cmd: anytype) !void {
     } }, .{});
 }
 
-// TODO: noop method
 fn setWindowBounds(cmd: anytype) !void {
+    const params = (try cmd.params(struct {
+        windowId: u64,
+        bounds: struct {
+            left: ?i32 = null,
+            top: ?i32 = null,
+            width: ?u32 = null,
+            height: ?u32 = null,
+            windowState: ?[]const u8 = null,
+        },
+    })) orelse return error.InvalidParams;
+
+    _ = params.windowId;
+
+    const display = &cmd.cdp.browser.app.display;
+    var width = display.viewport.width;
+    var height = display.viewport.height;
+    var changed = false;
+
+    if (params.bounds.width) |w| {
+        if (w == 0) return error.InvalidParams;
+        width = w;
+        changed = true;
+    }
+    if (params.bounds.height) |h| {
+        if (h == 0) return error.InvalidParams;
+        height = h;
+        changed = true;
+    }
+
+    if (changed) {
+        display.setViewport(width, height, display.viewport.device_pixel_ratio);
+
+        if (cmd.cdp.browser.session) |*session| {
+            if (session.currentPage()) |page| {
+                try page.setViewport(display.viewport.width, display.viewport.height, display.viewport.device_pixel_ratio);
+            }
+        }
+    }
+
     return cmd.sendResult(null, .{});
 }
 

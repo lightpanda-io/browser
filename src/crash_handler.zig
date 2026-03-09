@@ -72,7 +72,7 @@ pub noinline fn crash(
 }
 
 fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
-    if (comptime IS_DEBUG) {
+    if (comptime IS_DEBUG or builtin.os.tag == .windows) {
         return;
     }
 
@@ -143,6 +143,10 @@ fn report(reason: []const u8, begin_addr: usize, args: anytype) !void {
 }
 
 fn curlPath(buf: []u8) ?usize {
+    if (builtin.os.tag == .windows) {
+        return null;
+    }
+
     const path = std.posix.getenv("PATH") orelse return null;
     var it = std.mem.tokenizeScalar(u8, path, std.fs.path.delimiter);
 

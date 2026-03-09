@@ -1,6 +1,7 @@
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
 const datetime = @import("../../datetime.zig");
+const builtin = @import("builtin");
 
 pub fn registerTypes() []const type {
     return &.{ Performance, Entry, Mark, Measure, PerformanceTiming, PerformanceNavigation };
@@ -18,8 +19,12 @@ _navigation: PerformanceNavigation = .{},
 /// Get high-resolution timestamp in microseconds, rounded to 5μs increments
 /// to match browser behavior (prevents fingerprinting)
 fn highResTimestamp() u64 {
-    const ts = datetime.timespec();
-    const micros = @as(u64, @intCast(ts.sec)) * 1_000_000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000)));
+    const micros = if (builtin.os.tag == .windows or builtin.os.tag == .wasi or builtin.os.tag == .uefi) blk: {
+        break :blk @as(u64, @intCast(std.time.microTimestamp()));
+    } else blk: {
+        const ts = datetime.timespec();
+        break :blk @as(u64, @intCast(ts.sec)) * 1_000_000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000)));
+    };
     // Round to nearest 5 microseconds (like Firefox default)
     const rounded = @divTrunc(micros + 2, 5) * 5;
     return rounded;
