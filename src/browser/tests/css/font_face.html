@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id="constructor_basic">
+{
+    const face = new FontFace("TestFont", "url(test.woff)");
+    testing.expectTrue(face instanceof FontFace);
+}
+</script>
+
+<script id="constructor_name">
+{
+    testing.expectEqual('FontFace', FontFace.name);
+}
+</script>
+
+<script id="family_property">
+{
+    const face = new FontFace("MyFont", "url(font.woff2)");
+    testing.expectEqual("MyFont", face.family);
+}
+</script>
+
+<script id="status_is_loaded">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectEqual("loaded", face.status);
+}
+</script>
+
+<script id="loaded_is_promise">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectTrue(face.loaded instanceof Promise);
+}
+</script>
+
+<script id="load_returns_promise">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectTrue(face.load() instanceof Promise);
+}
+</script>
+
+<script id="default_descriptors">
+{
+    const face = new FontFace("F", "url(f.woff)");
+    testing.expectEqual("normal", face.style);
+    testing.expectEqual("normal", face.weight);
+    testing.expectEqual("normal", face.stretch);
+    testing.expectEqual("normal", face.variant);
+    testing.expectEqual("normal", face.featureSettings);
+    testing.expectEqual("auto", face.display);
+}
+</script>
+
+<script id="document_fonts_add">
+{
+    const face = new FontFace("AddedFont", "url(added.woff)");
+    const result = document.fonts.add(face);
+    testing.expectTrue(result === document.fonts);
+}
+</script>

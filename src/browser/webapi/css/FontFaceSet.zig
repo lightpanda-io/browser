@@ -1,6 +1,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const FontFace = @import("FontFace.zig");
 
 const FontFaceSet = @This();
 
@@ -29,6 +30,11 @@ pub fn load(_: *FontFaceSet, font: []const u8, page: *Page) !js.Promise {
     return page.js.local.?.resolvePromise({});
 }
 
+// add(fontFace) - no-op; headless browser does not track loaded fonts.
+pub fn add(self: *FontFaceSet, _: *FontFace) *FontFaceSet {
+    return self;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(FontFaceSet);
 
@@ -43,6 +49,7 @@ pub const JsApi = struct {
     pub const ready = bridge.accessor(FontFaceSet.getReady, null, .{});
     pub const check = bridge.function(FontFaceSet.check, .{});
     pub const load = bridge.function(FontFaceSet.load, .{});
+    pub const add = bridge.function(FontFaceSet.add, .{});
 };
 
 const testing = @import("../../../testing.zig");
