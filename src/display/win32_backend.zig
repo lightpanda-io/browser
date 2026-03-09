@@ -3906,6 +3906,10 @@ fn fetchHttpImageCacheFile(
         const referer_header = try std.fmt.allocPrintSentinel(temp, "Referer: {s}", .{image.request_referer_value}, 0);
         try headers.add(referer_header);
     }
+    if (image.request_authorization_value.len > 0) {
+        const authorization_header = try std.fmt.allocPrintSentinel(temp, "Authorization: {s}", .{image.request_authorization_value}, 0);
+        try headers.add(authorization_header);
+    }
 
     try client.request(.{
         .ctx = &ctx,
@@ -4291,10 +4295,11 @@ fn drawPresentationImage(
 }
 
 fn imageRequestCacheKey(allocator: std.mem.Allocator, image: ImageCommand) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}\nCOOKIE:{s}\nREFERER:{s}", .{
+    return std.fmt.allocPrint(allocator, "{s}\nCOOKIE:{s}\nREFERER:{s}\nAUTH:{s}", .{
         image.url,
         image.request_cookie_value,
         image.request_referer_value,
+        image.request_authorization_value,
     });
 }
 
@@ -7452,6 +7457,7 @@ test "win32 imageRequestCacheKey includes request policy" {
         .alt = @constCast(""),
         .request_cookie_value = @constCast("session=one"),
         .request_referer_value = @constCast("https://img.test/page"),
+        .request_authorization_value = @constCast("Basic dXNlcjpwYXNz"),
     });
     defer allocator.free(one);
     const two = try imageRequestCacheKey(allocator, .{
@@ -7463,12 +7469,14 @@ test "win32 imageRequestCacheKey includes request policy" {
         .alt = @constCast(""),
         .request_cookie_value = @constCast("session=two"),
         .request_referer_value = @constCast("https://img.test/page"),
+        .request_authorization_value = @constCast("Basic dXNlcjpvdGhlcg=="),
     });
     defer allocator.free(two);
 
     try std.testing.expect(!std.mem.eql(u8, one, two));
     try std.testing.expect(std.mem.indexOf(u8, one, "session=one") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "https://img.test/page") != null);
+    try std.testing.expect(std.mem.indexOf(u8, one, "Basic dXNlcjpwYXNz") != null);
 }
 
 test "win32 settings overlay keyboard queues settings commands" {

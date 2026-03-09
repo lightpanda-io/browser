@@ -419,6 +419,10 @@ pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
 // * referer
 pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
     try self.requestCookie(.{}).headersForRequest(temp, url, headers);
+    if (try authorizationHeaderValueForUrl(temp, url)) |authorization_value| {
+        const authorization_header = try std.fmt.allocPrintSentinel(temp, "Authorization: {s}", .{authorization_value}, 0);
+        try headers.add(authorization_header);
+    }
 
     // Build the referer
     const referer = blk: {
@@ -438,6 +442,28 @@ pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, header
     if (referer.len > 0) {
         try headers.add(referer);
     }
+}
+
+fn authorizationHeaderValueForUrl(temp: Allocator, url: [:0]const u8) !?[]const u8 {
+    const username_raw = URL.getUsername(url);
+    if (username_raw.len == 0) {
+        return null;
+    }
+
+    var arena_instance = std.heap.ArenaAllocator.init(temp);
+    defer arena_instance.deinit();
+    const arena = arena_instance.allocator();
+
+    const password_raw = URL.getPassword(url);
+    const username = try URL.unescape(arena, username_raw);
+    const password = try URL.unescape(arena, password_raw);
+    const userpwd = try std.fmt.allocPrint(arena, "{s}:{s}", .{ username, password });
+
+    const encoder = std.base64.standard.Encoder;
+    const out_len = encoder.calcSize(userpwd.len);
+    const out = try arena.alloc(u8, out_len);
+    _ = encoder.encode(out, userpwd);
+    return try std.fmt.allocPrint(temp, "Basic {s}", .{out});
 }
 
 const GetArenaOpts = struct {
@@ -5011,6 +5037,47 @@ test "contentDispositionSuggestedFilename parses quoted filename" {
     defer std.testing.allocator.free(filename);
 
     try std.testing.expectEqualStrings("server-report.txt", filename);
+}
+
+test "authorizationHeaderValueForUrl builds basic auth from userinfo" {
+    const value = (try authorizationHeaderValueForUrl(
+        std.testing.allocator,
+        "http://img%20user:p%40ss@127.0.0.1/private.png",
+    )).?;
+    defer std.testing.allocator.free(value);
+
+    try std.testing.expectEqualStrings("Basic aW1nIHVzZXI6cEBzcw==", value);
+}
+
+test "Page headersForRequest includes Authorization from userinfo" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+
+    var headers = try Http.Headers.init(page._session.browser.app.config.http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try page.headersForRequest(page.arena, "http://img%20user:p%40ss@127.0.0.1/private.png", &headers);
+
+    var found_authorization = false;
+    var found_referer = false;
+    var iterator = headers.iterator();
+    while (iterator.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Authorization")) {
+            try std.testing.expectEqualStrings("Basic aW1nIHVzZXI6cEBzcw==", header.value);
+            found_authorization = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Referer")) {
+            try std.testing.expectEqualStrings(
+                "http://127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html",
+                header.value,
+            );
+            found_referer = true;
+        }
+    }
+
+    try std.testing.expect(found_authorization);
+    try std.testing.expect(found_referer);
 }
 
 test "WebApi: Frames" {

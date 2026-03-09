@@ -267,8 +267,9 @@ Current known gap entering Gate 2:
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
 - headed network images now ride the shared `Http` runtime path and inherit
-  page/session cookies, referer, and redirect-set cookies, but they still do
-  not carry broader auth or richer resource-type behavior
+  page/session cookies, referer, redirect-set cookies, and URL-userinfo Basic
+  Authorization, but they still do not carry broader auth or richer
+  resource-type behavior
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

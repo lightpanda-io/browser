@@ -865,12 +865,14 @@ fn resolvedImageCommand(
         .alt = @constCast(alt),
         .request_cookie_value = request_context.cookie_value,
         .request_referer_value = request_context.referer_value,
+        .request_authorization_value = request_context.authorization_value,
     };
 }
 
 const ImageRequestContext = struct {
     cookie_value: []u8 = &.{},
     referer_value: []u8 = &.{},
+    authorization_value: []u8 = &.{},
 };
 
 fn resolveImageRequestContext(page: *Page, resolved_url: [:0]const u8) !ImageRequestContext {
@@ -888,6 +890,10 @@ fn resolveImageRequestContext(page: *Page, resolved_url: [:0]const u8) !ImageReq
         }
         if (std.ascii.eqlIgnoreCase(header.name, "Referer")) {
             context.referer_value = try page.call_arena.dupe(u8, header.value);
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Authorization")) {
+            context.authorization_value = try page.call_arena.dupe(u8, header.value);
         }
     }
     return context;
@@ -1649,6 +1655,36 @@ test "paintDocument emits control region for file input" {
         }
         found = true;
         break;
+    }
+
+    try std.testing.expect(found);
+}
+
+test "paintDocument emits image request authorization from url userinfo" {
+    var page = try testing.pageTest("page/auth_image.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (!std.mem.eql(u8, image.url, "http://img%20user:p%40ss@127.0.0.1:9582/private.png")) {
+                    continue;
+                }
+                try std.testing.expectEqualStrings("Basic aW1nIHVzZXI6cEBzcw==", image.request_authorization_value);
+                try std.testing.expectEqualStrings(
+                    "http://127.0.0.1:9582/src/browser/tests/page/auth_image.html",
+                    image.request_referer_value,
+                );
+                found = true;
+            },
+            else => {},
+        }
     }
 
     try std.testing.expect(found);
