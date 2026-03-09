@@ -4,9 +4,17 @@
 
 <script id=basic>
 {
-  const parser = new DOMParser();
-  testing.expectEqual('object', typeof parser);
-  testing.expectEqual('function', typeof parser.parseFromString);
+  {
+    const parser = new DOMParser();
+    testing.expectEqual('object', typeof parser);
+    testing.expectEqual('function', typeof parser.parseFromString);
+  }
+
+  {
+    // Empty XML is a parse error (no root element)
+    const parser = new DOMParser();
+    testing.expectError('Error', () => parser.parseFromString('', 'text/xml'));
+  }
 }
 </script>
 
