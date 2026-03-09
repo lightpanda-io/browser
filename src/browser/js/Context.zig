@@ -153,7 +153,7 @@ pub fn deinit(self: *Context) void {
         v8.v8__Global__Reset(global);
     }
 
-    env.releaseOrigin(self.origin);
+    self.session.releaseOrigin(self.origin);
 
     v8.v8__Global__Reset(&self.handle);
     env.isolate.notifyContextDisposed();
@@ -167,8 +167,8 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     const env = self.env;
     const isolate = env.isolate;
 
-    const origin = try env.getOrCreateOrigin(key);
-    errdefer env.releaseOrigin(origin);
+    const origin = try self.session.getOrCreateOrigin(key);
+    errdefer self.session.releaseOrigin(origin);
 
     try self.origin.transferTo(origin);
     self.origin.deinit(env.app);

@@ -62,6 +62,9 @@ factory: Factory,
 
 page_arena: Allocator,
 
+// Origin map for same-origin context sharing. Scoped to the root page lifetime.
+origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
+
 // Shared resources for all pages in this session.
 // These live for the duration of the page tree (root + frames).
 arena_pool: *ArenaPool,
@@ -194,6 +197,41 @@ pub fn releaseArena(self: *Session, allocator: Allocator) void {
     return self.arena_pool.release(allocator);
 }
 
+pub fn getOrCreateOrigin(self: *Session, key_: ?[]const u8) !*js.Origin {
+    const key = key_ orelse {
+        var opaque_origin: [36]u8 = undefined;
+        @import("../id.zig").uuidv4(&opaque_origin);
+        // Origin.init will dupe opaque_origin. It's fine that this doesn't
+        // get added to self.origins. In fact, it further isolates it. When the
+        // context is freed, it'll call session.releaseOrigin which will free it.
+        return js.Origin.init(self.browser.app, self.browser.env.isolate, &opaque_origin);
+    };
+
+    const gop = try self.origins.getOrPut(self.arena, key);
+    if (gop.found_existing) {
+        const origin = gop.value_ptr.*;
+        origin.rc += 1;
+        return origin;
+    }
+
+    errdefer _ = self.origins.remove(key);
+
+    const origin = try js.Origin.init(self.browser.app, self.browser.env.isolate, key);
+    gop.key_ptr.* = origin.key;
+    gop.value_ptr.* = origin;
+    return origin;
+}
+
+pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
+    const rc = origin.rc;
+    if (rc == 1) {
+        _ = self.origins.remove(origin.key);
+        origin.deinit(self.browser.app);
+    } else {
+        origin.rc = rc - 1;
+    }
+}
+
 /// Reset page_arena and factory for a clean slate.
 /// Called when root page is removed.
 fn resetPageResources(self: *Session) void {
@@ -206,6 +244,20 @@ fn resetPageResources(self: *Session) void {
             }
         }
         self._arena_pool_leak_track.clearRetainingCapacity();
+    }
+
+    // All origins should have been released when contexts were destroyed
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.origins.count() == 0);
+    }
+    // Defensive cleanup in case origins leaked
+    {
+        const app = self.browser.app;
+        var it = self.origins.valueIterator();
+        while (it.next()) |value| {
+            value.*.deinit(app);
+        }
+        self.origins.clearRetainingCapacity();
     }
 
     // Release old page_arena and acquire fresh one

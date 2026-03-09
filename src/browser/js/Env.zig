@@ -77,14 +77,6 @@ context_id: usize,
 // same-origin Contexts. There's a mismatch here between our JS model and our
 // Browser model. Origins only live as long as the root page of a session exists.
 // It would be wrong/dangerous to re-use an Origin across root page navigations.
-// But we have no mechanism to capture that lifetime in js. We used to have a
-// js.BrowserContext which mapped to a Session (oops, I took it out), but even
-// that wouldn't match correctly, because 1 session can have have muliple non-
-// concurrent pages. We deal with this in destroyContext by checking if we're
-// destroying the root context and, if so, making sure origins is empty. But, if
-// we ever add multiple Sessions to a Browser or mulitple Pages to a Session,
-// this map will have to live in a new, better scoped, container.
-origins: std.StringHashMapUnmanaged(*Origin) = .empty,
 
 // Global handles that need to be freed on deinit
 eternal_function_templates: []v8.Eternal,
@@ -248,14 +240,6 @@ pub fn deinit(self: *Env) void {
     const app = self.app;
     const allocator = app.allocator;
 
-    {
-        var it = self.origins.valueIterator();
-        while (it.next()) |value| {
-            value.*.deinit(app);
-        }
-        self.origins.deinit(allocator);
-    }
-
     if (self.inspector) |i| {
         i.deinit(allocator);
     }
@@ -323,8 +307,8 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
-    const origin = try self.getOrCreateOrigin(null);
-    errdefer self.releaseOrigin(origin);
+    const origin = try page._session.getOrCreateOrigin(null);
+    errdefer page._session.releaseOrigin(origin);
 
     const context = try context_arena.create(Context);
     context.* = .{
@@ -383,56 +367,11 @@ pub fn destroyContext(self: *Env, context: *Context, is_root: bool) void {
     context.deinit();
 
     if (is_root) {
-        // When the root is destroyed, the all of our contexts should be gone
-        // and with them, all of our origins. Keep origins around longer than
-        // intended would cause issues, so we're going to be defensive here and
-        // clean things up.
+        // When the root is destroyed, all of our contexts should be gone.
+        // Origin cleanup happens in Session.resetPageResources.
         if (comptime IS_DEBUG) {
             std.debug.assert(self.context_count == 0);
-            std.debug.assert(self.origins.count() == 0);
         }
-
-        const app = self.app;
-        var it = self.origins.valueIterator();
-        while (it.next()) |value| {
-            value.*.deinit(app);
-        }
-        self.origins.clearRetainingCapacity();
-    }
-}
-
-pub fn getOrCreateOrigin(self: *Env, key_: ?[]const u8) !*Origin {
-    const key = key_ orelse {
-        var opaque_origin: [36]u8 = undefined;
-        @import("../../id.zig").uuidv4(&opaque_origin);
-        // Origin.init will dupe opaque_origin. It's fine that this doesn't
-        // get added to self.origins. In fact, it further isolates it. When the
-        // context is freed, it'll call env.releaseOrigin which will free it.
-        return Origin.init(self.app, self.isolate, &opaque_origin);
-    };
-
-    const gop = try self.origins.getOrPut(self.allocator, key);
-    if (gop.found_existing) {
-        const origin = gop.value_ptr.*;
-        origin.rc += 1;
-        return origin;
-    }
-
-    errdefer _ = self.origins.remove(key);
-
-    const origin = try Origin.init(self.app, self.isolate, key);
-    gop.key_ptr.* = origin.key;
-    gop.value_ptr.* = origin;
-    return origin;
-}
-
-pub fn releaseOrigin(self: *Env, origin: *Origin) void {
-    const rc = origin.rc;
-    if (rc == 1) {
-        _ = self.origins.remove(origin.key);
-        origin.deinit(self.app);
-    } else {
-        origin.rc = rc - 1;
     }
 }
 
