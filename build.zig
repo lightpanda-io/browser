@@ -52,6 +52,17 @@ pub fn build(b: *Build) !void {
         mod.addImport("lightpanda", mod); // allow circular "lightpanda" import
         mod.addImport("build_config", opts.createModule());
 
+        // Format check
+        const fmt_step = b.step("fmt", "Check code formatting");
+        const fmt = b.addFmt(.{
+            .paths = &.{ "src", "build.zig", "build.zig.zon" },
+            .check = true,
+        });
+        fmt_step.dependOn(&fmt.step);
+
+        // Set default behavior
+        b.default_step.dependOn(fmt_step);
+
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
         try linkCurl(b, mod);
         try linkHtml5Ever(b, mod);
