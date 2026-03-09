@@ -128,6 +128,16 @@ function Wait-FileUploadLogNeedle([string]$LogPath, [string]$Needle, [int]$Attem
   return $false
 }
 
+function Wait-FileUploadFileExists([string]$Path, [int]$Attempts = 40, [int]$SleepMs = 200) {
+  for ($i = 0; $i -lt $Attempts; $i++) {
+    Start-Sleep -Milliseconds $SleepMs
+    if (Test-Path -LiteralPath $Path) {
+      return $true
+    }
+  }
+  return $false
+}
+
 function Invoke-FileUploadOpenDialog([IntPtr]$BrowserHwnd, [int]$BrowserPid) {
   Show-SmokeWindow $BrowserHwnd
   Start-Sleep -Milliseconds 150

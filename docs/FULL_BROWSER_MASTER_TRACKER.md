@@ -219,6 +219,11 @@ Current state inside Gate 1:
 - headed Windows `browse` now has a native file chooser path for rendered file
   inputs, real multipart form submission with selected files, and bounded
   headed probes for select-submit, cancel, and replace flows
+- those same headed upload flows now compose cleanly with named popup targets
+  and attachment responses: bounded probes cover target-tab multipart upload,
+  same-context upload-to-attachment with restored source page plus downloads
+  page visibility, and target-tab upload-to-attachment with both managed
+  download capture and source-tab preservation
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -246,6 +251,9 @@ Current known gap entering Gate 2:
 - native file chooser and multipart upload flows now work end to end in headed
   Windows `browse`, but upload transport still needs to converge with the same
   broader shared runtime/policy path as other browser-managed resources
+- popup-target and attachment-response upload combinations are now runtime-
+  covered; the remaining work is less about basic composition and more about
+  converging those flows with the same broader shared transfer/runtime policy
 
 ### Gate 3: Layout Engine Replacement
 

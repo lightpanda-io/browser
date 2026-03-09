@@ -24,6 +24,47 @@ def html_page(title: str, body: str) -> bytes:
 
 
 class Handler(BaseHTTPRequestHandler):
+    @staticmethod
+    def _fixture_path(path: str) -> str | None:
+        if path in ("/", "/upload.html"):
+            return os.path.join(ROOT, "upload.html")
+        if path == "/upload-target.html":
+            return os.path.join(ROOT, "upload-target.html")
+        if path == "/upload-attachment.html":
+            return os.path.join(ROOT, "upload-attachment.html")
+        if path == "/upload-target-attachment.html":
+            return os.path.join(ROOT, "upload-target-attachment.html")
+        return None
+
+    def _write_fixture(self, path: str) -> bool:
+        fixture = self._fixture_path(path)
+        if not fixture:
+            return False
+        with open(fixture, "rb") as handle:
+            data = handle.read()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
+    def _write_html_response(self, status: int, title: str, body: str) -> None:
+        data = html_page(title, body)
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _write_attachment_response(self, filename: str, payload: bytes) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def log_message(self, format, *args):
         sys.stderr.write("HTTP " + (format % args) + "\n")
         sys.stderr.flush()
@@ -36,14 +77,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b"ok")
             return
 
-        if self.path == "/" or self.path == "/upload.html":
-            with open(os.path.join(ROOT, "upload.html"), "rb") as handle:
-                data = handle.read()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+        if self._write_fixture(self.path):
             return
 
         self.send_response(404)
@@ -52,7 +86,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"not found")
 
     def do_POST(self):
-        if self.path != "/upload":
+        if self.path not in (
+            "/upload",
+            "/upload-target",
+            "/upload-attachment",
+            "/upload-target-attachment",
+        ):
             self.send_response(404)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -63,28 +102,40 @@ class Handler(BaseHTTPRequestHandler):
         if not upload_name:
             sys.stderr.write("UPLOAD_EMPTY\n")
             sys.stderr.flush()
-            body = html_page("Upload Missing - Lightpanda Browser", "<h1>Upload missing</h1>")
-            self.send_response(400)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._write_html_response(400, "Upload Missing - Lightpanda Browser", "<h1>Upload missing</h1>")
             return
 
         filename = os.path.basename(upload_name)
         preview = payload.decode("utf-8", "replace").replace("\r", "\\r").replace("\n", "\\n")
-        sys.stderr.write(f"UPLOAD filename={filename} note={note} size={len(payload)} payload={preview}\n")
+        if self.path == "/upload":
+            sys.stderr.write(f"UPLOAD filename={filename} note={note} size={len(payload)} payload={preview}\n")
+        elif self.path == "/upload-target":
+            sys.stderr.write(f"UPLOAD_TARGET filename={filename} note={note} size={len(payload)} payload={preview}\n")
+        elif self.path == "/upload-attachment":
+            sys.stderr.write(f"UPLOAD_ATTACHMENT filename={filename} note={note} size={len(payload)} payload={preview}\n")
+        else:
+            sys.stderr.write(f"UPLOAD_TARGET_ATTACHMENT filename={filename} note={note} size={len(payload)} payload={preview}\n")
         sys.stderr.flush()
 
-        body = html_page(
-            f"Upload Submitted {filename} - Lightpanda Browser",
-            f"<h1>Uploaded {html.escape(filename)}</h1><p>{html.escape(note)}</p>",
-        )
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        if self.path == "/upload":
+            self._write_html_response(
+                200,
+                f"Upload Submitted {filename} - Lightpanda Browser",
+                f"<h1>Uploaded {html.escape(filename)}</h1><p>{html.escape(note)}</p>",
+            )
+            return
+
+        if self.path == "/upload-target":
+            self._write_html_response(
+                200,
+                f"Upload Target Submitted {filename} - Lightpanda Browser",
+                f"<h1>Uploaded {html.escape(filename)} in target tab</h1><p>{html.escape(note)}</p>",
+            )
+            return
+
+        attachment_name = f"uploaded-{filename}"
+        attachment_payload = payload if payload else filename.encode("utf-8")
+        self._write_attachment_response(attachment_name, attachment_payload)
 
 
 def parse_multipart_form(headers, stream):
