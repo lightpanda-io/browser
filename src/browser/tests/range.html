@@ -1022,3 +1022,23 @@
   testing.expectEqual('Stnd', div.textContent);
 }
 </script>
+
+<script id=getBoundingClientRect>
+{
+  const range = new Range();
+  const rect = range.getBoundingClientRect();
+  testing.expectTrue(rect instanceof DOMRect);
+  testing.expectEqual(0, rect.x);
+  testing.expectEqual(0, rect.y);
+  testing.expectEqual(0, rect.width);
+  testing.expectEqual(0, rect.height);
+}
+</script>
+
+<script id=getClientRects>
+{
+  const range = new Range();
+  const rects = range.getClientRects();
+  testing.expectEqual(0, rects.length);
+}
+</script>

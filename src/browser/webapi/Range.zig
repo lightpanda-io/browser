@@ -25,6 +25,7 @@ const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
 const AbstractRange = @import("AbstractRange.zig");
+const DOMRect = @import("DOMRect.zig");
 
 const Range = @This();
 
@@ -643,6 +644,15 @@ fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
     return null;
 }
 
+// Headless browser has no layout — return a zero-valued DOMRect.
+pub fn getBoundingClientRect(_: *const Range) DOMRect {
+    return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+}
+
+pub fn getClientRects(_: *const Range) []DOMRect {
+    return &.{};
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Range);
 
@@ -681,6 +691,8 @@ pub const JsApi = struct {
     pub const surroundContents = bridge.function(Range.surroundContents, .{ .dom_exception = true });
     pub const createContextualFragment = bridge.function(Range.createContextualFragment, .{ .dom_exception = true });
     pub const toString = bridge.function(Range.toString, .{ .dom_exception = true });
+    pub const getBoundingClientRect = bridge.function(Range.getBoundingClientRect, .{});
+    pub const getClientRects = bridge.function(Range.getClientRects, .{});
 };
 
 const testing = @import("../../testing.zig");
