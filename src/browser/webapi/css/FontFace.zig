@@ -1,62 +1,52 @@
+// Copyright (C) 2023-2026  Lightpanda (Selecy SAS)
+//
+// Francis Bouvier <francis@lightpanda.io>
+// Pierre Tachoire <pierre@lightpanda.io>
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
+const Allocator = std.mem.Allocator;
+
 const FontFace = @This();
 
+_arena: Allocator,
 _family: []const u8,
-_source: []const u8,
-_style: []const u8,
-_weight: []const u8,
-_stretch: []const u8,
-_unicode_range: []const u8,
-_variant: []const u8,
-_feature_settings: []const u8,
-_display: []const u8,
 
 pub fn init(family: []const u8, source: []const u8, page: *Page) !*FontFace {
-    return page._factory.create(FontFace{
-        ._family = try page.dupeString(family),
-        ._source = try page.dupeString(source),
-        ._style = "normal",
-        ._weight = "normal",
-        ._stretch = "normal",
-        ._unicode_range = "U+0-10FFFF",
-        ._variant = "normal",
-        ._feature_settings = "normal",
-        ._display = "auto",
-    });
+    _ = source;
+
+    const arena = try page.getArena(.{.debug = "FontFace"});
+    errdefer page.releaseArena(arena);
+
+    const self = try arena.create(FontFace);
+    self.* = .{
+        ._arena = arena,
+        ._family = try arena.dupe(u8, family),
+    };
+    return self;
+}
+
+pub fn deinit(self: *FontFace, _: bool, page: *Page) void {
+    page.releaseArena(self._arena);
 }
 
 pub fn getFamily(self: *const FontFace) []const u8 {
     return self._family;
-}
-
-pub fn getStyle(self: *const FontFace) []const u8 {
-    return self._style;
-}
-
-pub fn getWeight(self: *const FontFace) []const u8 {
-    return self._weight;
-}
-
-pub fn getStretch(self: *const FontFace) []const u8 {
-    return self._stretch;
-}
-
-pub fn getUnicodeRange(self: *const FontFace) []const u8 {
-    return self._unicode_range;
-}
-
-pub fn getVariant(self: *const FontFace) []const u8 {
-    return self._variant;
-}
-
-pub fn getFeatureSettings(self: *const FontFace) []const u8 {
-    return self._feature_settings;
-}
-
-pub fn getDisplay(self: *const FontFace) []const u8 {
-    return self._display;
 }
 
 // load() - resolves immediately; headless browser has no real font loading.
@@ -76,18 +66,20 @@ pub const JsApi = struct {
         pub const name = "FontFace";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(FontFace.deinit);
     };
 
     pub const constructor = bridge.constructor(FontFace.init, .{});
     pub const family = bridge.accessor(FontFace.getFamily, null, .{});
-    pub const style = bridge.accessor(FontFace.getStyle, null, .{});
-    pub const weight = bridge.accessor(FontFace.getWeight, null, .{});
-    pub const stretch = bridge.accessor(FontFace.getStretch, null, .{});
-    pub const unicodeRange = bridge.accessor(FontFace.getUnicodeRange, null, .{});
-    pub const variant = bridge.accessor(FontFace.getVariant, null, .{});
-    pub const featureSettings = bridge.accessor(FontFace.getFeatureSettings, null, .{});
-    pub const display = bridge.accessor(FontFace.getDisplay, null, .{});
     pub const status = bridge.property("loaded", .{ .template = false, .readonly = true });
+    pub const style = bridge.property("normal", .{ .template = false, .readonly = true });
+    pub const weight = bridge.property("normal", .{ .template = false, .readonly = true });
+    pub const stretch = bridge.property("normal", .{ .template = false, .readonly = true });
+    pub const unicodeRange = bridge.property("U+0-10FFFF", .{ .template = false, .readonly = true });
+    pub const variant = bridge.property("normal", .{ .template = false, .readonly = true });
+    pub const featureSettings = bridge.property("normal", .{ .template = false, .readonly = true });
+    pub const display = bridge.property("auto", .{ .template = false, .readonly = true });
     pub const loaded = bridge.accessor(FontFace.getLoaded, null, .{});
     pub const load = bridge.function(FontFace.load, .{});
 };
