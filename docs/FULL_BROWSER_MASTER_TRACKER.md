@@ -256,6 +256,13 @@ Current state inside Gate 1:
   with bounded localhost probes proving a relative headed image request and an
   external script request both carry inherited auth, sanitized referer,
   cookies, and that the authorized script actually executes afterward
+- connected `link rel=stylesheet` elements now load through the shared browser
+  `Http` runtime path, expose `link.sheet`, participate in
+  `document.styleSheets`, and carry page cookie, sanitized referer, inherited
+  auth, and an explicit stylesheet `Accept` header on protected same-origin
+  loads, with a bounded headed localhost probe proving the stylesheet request
+  succeeds and the page observes both `link.sheet` and stylesheet load
+  completion
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -268,7 +275,7 @@ Goal:
 - move page assets and browser state onto a consistent browser-managed runtime
 
 Exit criteria:
-- images, CSS, scripts, fonts, and other subresources use the shared browser
+- images, connected stylesheets, scripts, fonts, and other subresources use the shared browser
   network/client path
 - cookies, cache, auth, proxy, redirects, uploads, downloads, and persistent
   profile storage behave consistently
@@ -286,6 +293,11 @@ Current known gap entering Gate 2:
   credential suppression, and an explicit image `Accept` header, but broader
   auth beyond page-URL Basic credentials and richer resource-type behavior are
   still open
+- connected `link rel=stylesheet` requests now ride the same shared `Http`
+  runtime path with `link.sheet` / `document.styleSheets` coverage and bounded
+  protected-load auth/cookie/referer/`Accept` verification, but stylesheet
+  body application, broader script/font/resource parity, and one unified
+  subresource ownership path are still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

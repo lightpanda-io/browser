@@ -196,6 +196,7 @@ pub fn requestIntercept(bc: anytype, intercept: *const Notification.RequestInter
         .frameId = &id.toFrameId(transfer.req.frame_id),
         .request = network.TransferAsRequestWriter.init(transfer),
         .resourceType = switch (transfer.req.resource_type) {
+            .stylesheet => "Stylesheet",
             .image => "Image",
             .script => "Script",
             .xhr => "XHR",
@@ -401,6 +402,7 @@ pub fn requestAuthRequired(bc: anytype, intercept: *const Notification.RequestAu
         .frameId = &id.toFrameId(transfer.req.frame_id),
         .request = network.TransferAsRequestWriter.init(transfer),
         .resourceType = switch (transfer.req.resource_type) {
+            .stylesheet => "Stylesheet",
             .image => "Image",
             .script => "Script",
             .xhr => "XHR",

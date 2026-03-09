@@ -24,6 +24,17 @@
 }
 </script>
 
+<script id="document_styleSheets_connected_style">
+{
+    const startLen = document.styleSheets.length;
+    const style = document.createElement('style');
+    style.textContent = 'body { color: red; }';
+    document.head.appendChild(style);
+    testing.expectEqual(startLen + 1, document.styleSheets.length);
+    testing.expectEqual(style.sheet, document.styleSheets[document.styleSheets.length - 1]);
+}
+</script>
+
 <script id="CSSStyleDeclaration_setCssText_basic">
 {
     const div = document.createElement('div');

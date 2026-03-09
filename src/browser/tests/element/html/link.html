@@ -25,7 +25,7 @@
   // A link with rel=stylesheet and a non-empty href fires a load event when appended to the DOM
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = 'https://lightpanda.io/opensource-browser/15';
+  link.href = 'link_stylesheet.css';
 
   testing.async(async () => {
     const result = await new Promise(resolve => {
@@ -79,8 +79,29 @@
   // Append to DOM,
   document.head.appendChild(link);
   // then set href.
-  link.href = 'https://lightpanda.io/opensource-browser/15';
+  link.href = 'link_stylesheet.css';
 
   testing.eventually(() => testing.expectEqual(true, result));
+}
+</script>
+
+<script id="link-sheet">
+{
+  const startLen = document.styleSheets.length;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'link_stylesheet.css';
+
+  testing.async(async () => {
+    await new Promise(resolve => {
+      link.addEventListener('load', () => resolve(true));
+      document.head.appendChild(link);
+    });
+
+    testing.expectEqual(true, link.sheet instanceof CSSStyleSheet);
+    testing.expectEqual(testing.BASE_URL + 'element/html/link_stylesheet.css', link.sheet.href);
+    testing.expectEqual(startLen + 1, document.styleSheets.length);
+    testing.expectEqual(link.sheet, document.styleSheets[document.styleSheets.length - 1]);
+  });
 }
 </script>
