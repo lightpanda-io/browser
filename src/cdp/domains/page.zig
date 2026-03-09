@@ -42,6 +42,7 @@ pub fn processMessage(cmd: anytype) !void {
         stopLoading,
         close,
         captureScreenshot,
+        getLayoutMetrics,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -54,6 +55,7 @@ pub fn processMessage(cmd: anytype) !void {
         .stopLoading => return cmd.sendResult(null, .{}),
         .close => return close(cmd),
         .captureScreenshot => return captureScreenshot(cmd),
+        .getLayoutMetrics => return getLayoutMetrics(cmd),
     }
 }
 
@@ -569,6 +571,58 @@ fn captureScreenshot(cmd: anytype) !void {
     }, .{});
 }
 
+fn getLayoutMetrics(cmd: anytype) !void {
+    const width = 1920;
+    const height = 1080;
+
+    return cmd.sendResult(.{
+        .layoutViewport = .{
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+        },
+        .visualViewport = .{
+            .offsetX = 0,
+            .offsetY = 0,
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+            .scale = 1,
+            .zoom = 1,
+        },
+        .contentSize = .{
+            .x = 0,
+            .y = 0,
+            .width = width,
+            .height = height,
+        },
+        .cssLayoutViewport = .{
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+        },
+        .cssVisualViewport = .{
+            .offsetX = 0,
+            .offsetY = 0,
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+            .scale = 1,
+            .zoom = 1,
+        },
+        .cssContentSize = .{
+            .x = 0,
+            .y = 0,
+            .width = width,
+            .height = height,
+        },
+    }, .{});
+}
+
 const testing = @import("../testing.zig");
 test "cdp.page: getFrameTree" {
     var ctx = testing.context();
@@ -617,4 +671,62 @@ test "cdp.page: captureScreenshot" {
             .data = base64Encode(screenshot_png),
         }, .{ .id = 11 });
     }
+}
+
+test "cdp.page: getLayoutMetrics" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    _ = try ctx.loadBrowserContext(.{ .id = "BID-9", .url = "hi.html", .target_id = "FID-000000000X".* });
+
+    const width = 1920;
+    const height = 1080;
+
+    try ctx.processMessage(.{ .id = 12, .method = "Page.getLayoutMetrics" });
+    try ctx.expectSentResult(.{
+        .layoutViewport = .{
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+        },
+        .visualViewport = .{
+            .offsetX = 0,
+            .offsetY = 0,
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+            .scale = 1,
+            .zoom = 1,
+        },
+        .contentSize = .{
+            .x = 0,
+            .y = 0,
+            .width = width,
+            .height = height,
+        },
+        .cssLayoutViewport = .{
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+        },
+        .cssVisualViewport = .{
+            .offsetX = 0,
+            .offsetY = 0,
+            .pageX = 0,
+            .pageY = 0,
+            .clientWidth = width,
+            .clientHeight = height,
+            .scale = 1,
+            .zoom = 1,
+        },
+        .cssContentSize = .{
+            .x = 0,
+            .y = 0,
+            .width = width,
+            .height = height,
+        },
+    }, .{ .id = 12 });
 }
