@@ -24,10 +24,11 @@ const std = @import("std");
 const js = @import("js.zig");
 
 const App = @import("../../App.zig");
+const Session = @import("../Session.zig");
 
 const v8 = js.v8;
 const Allocator = std.mem.Allocator;
-const IS_DEBUG = @import("build").mode == .Debug;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const Origin = @This();
 
@@ -62,6 +63,29 @@ globals: std.ArrayList(v8.Global) = .empty,
 // Key is global.data_ptr.
 temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 
+// Any type that is stored in the identity_map which has a finalizer declared
+// will have its finalizer stored here. This is only used when shutting down
+// if v8 hasn't called the finalizer directly itself.
+finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
+finalizer_callback_pool: std.heap.MemoryPool(FinalizerCallback),
+
+// A type that has a finalizer can have its finalizer called one of two ways.
+// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
+// guaranteed to fire, so we track this in finalizer_callbacks and call them on
+// origin shutdown.
+pub const FinalizerCallback = struct {
+    origin: *Origin,
+    session: *Session,
+    ptr: *anyopaque,
+    global: v8.Global,
+    finalizerFn: *const fn (ptr: *anyopaque, session: *Session) void,
+
+    pub fn deinit(self: *FinalizerCallback) void {
+        self.finalizerFn(self.ptr, self.session);
+        self.origin.finalizer_callback_pool.destroy(self);
+    }
+};
+
 pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
     const arena = try app.arena_pool.acquire();
     errdefer app.arena_pool.release(arena);
@@ -83,11 +107,21 @@ pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
         .globals = .empty,
         .temps = .empty,
         .security_token = token_global,
+        .finalizer_callback_pool = .init(arena),
     };
     return self;
 }
 
 pub fn deinit(self: *Origin, app: *App) void {
+    // Call finalizers before releasing anything
+    {
+        var it = self.finalizer_callbacks.valueIterator();
+        while (it.next()) |finalizer| {
+            finalizer.*.deinit();
+        }
+        self.finalizer_callback_pool.deinit();
+    }
+
     v8.v8__Global__Reset(&self.security_token);
 
     {
@@ -117,6 +151,52 @@ pub fn trackGlobal(self: *Origin, global: v8.Global) !void {
 
 pub fn trackTemp(self: *Origin, global: v8.Global) !void {
     return self.temps.put(self.arena, global.data_ptr, global);
+}
+
+pub fn releaseTemp(self: *Origin, global: v8.Global) void {
+    if (self.temps.fetchRemove(global.data_ptr)) |kv| {
+        var g = kv.value;
+        v8.v8__Global__Reset(&g);
+    }
+}
+
+/// Release an item from the identity_map (called after finalizer runs from V8)
+pub fn release(self: *Origin, item: *anyopaque) void {
+    var global = self.identity_map.fetchRemove(@intFromPtr(item)) orelse {
+        if (comptime IS_DEBUG) {
+            std.debug.assert(false);
+        }
+        return;
+    };
+    v8.v8__Global__Reset(&global.value);
+
+    // The item has been finalized, remove it from the finalizer callback so that
+    // we don't try to call it again on shutdown.
+    const fc = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
+        if (comptime IS_DEBUG) {
+            std.debug.assert(false);
+        }
+        return;
+    };
+    self.finalizer_callback_pool.destroy(fc.value);
+}
+
+pub fn createFinalizerCallback(
+    self: *Origin,
+    session: *Session,
+    global: v8.Global,
+    ptr: *anyopaque,
+    finalizerFn: *const fn (ptr: *anyopaque, session: *Session) void,
+) !*FinalizerCallback {
+    const fc = try self.finalizer_callback_pool.create();
+    fc.* = .{
+        .origin = self,
+        .session = session,
+        .ptr = ptr,
+        .global = global,
+        .finalizerFn = finalizerFn,
+    };
+    return fc;
 }
 
 pub fn transferTo(self: *Origin, dest: *Origin) !void {

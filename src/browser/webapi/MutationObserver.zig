@@ -21,6 +21,7 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const Node = @import("Node.zig");
 const Element = @import("Element.zig");
 const log = @import("../../log.zig");
@@ -84,13 +85,13 @@ pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
     return self;
 }
 
-pub fn deinit(self: *MutationObserver, shutdown: bool, page: *Page) void {
-    page.js.release(self._callback);
+pub fn deinit(self: *MutationObserver, shutdown: bool, session: *Session) void {
+    self._callback.release();
     if ((comptime IS_DEBUG) and !shutdown) {
         std.debug.assert(self._observing.items.len == 0);
     }
 
-    page.releaseArena(self._arena);
+    session.releaseArena(self._arena);
 }
 
 pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
@@ -171,7 +172,7 @@ pub fn disconnect(self: *MutationObserver, page: *Page) void {
     page.unregisterMutationObserver(self);
     self._observing.clearRetainingCapacity();
     for (self._pending_records.items) |record| {
-        record.deinit(false, page);
+        record.deinit(false, page._session);
     }
     self._pending_records.clearRetainingCapacity();
     page.js.safeWeakRef(self);
@@ -363,8 +364,8 @@ pub const MutationRecord = struct {
         characterData,
     };
 
-    pub fn deinit(self: *const MutationRecord, _: bool, page: *Page) void {
-        page.releaseArena(self._arena);
+    pub fn deinit(self: *MutationRecord, _: bool, session: *Session) void {
+        session.releaseArena(self._arena);
     }
 
     pub fn getType(self: *const MutationRecord) []const u8 {

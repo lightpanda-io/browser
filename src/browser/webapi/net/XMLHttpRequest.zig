@@ -26,6 +26,8 @@ const net_http = @import("../../../network/http.zig");
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
+
 const Node = @import("../Node.zig");
 const Event = @import("../Event.zig");
 const Headers = @import("Headers.zig");
@@ -93,7 +95,7 @@ pub fn init(page: *Page) !*XMLHttpRequest {
     });
 }
 
-pub fn deinit(self: *XMLHttpRequest, shutdown: bool, page: *Page) void {
+pub fn deinit(self: *XMLHttpRequest, shutdown: bool, session: *Session) void {
     if (self._transfer) |transfer| {
         if (shutdown) {
             transfer.terminate();
@@ -103,37 +105,36 @@ pub fn deinit(self: *XMLHttpRequest, shutdown: bool, page: *Page) void {
         self._transfer = null;
     }
 
-    const js_ctx = page.js;
     if (self._on_ready_state_change) |func| {
-        js_ctx.release(func);
+        func.release();
     }
 
     {
         const proto = self._proto;
         if (proto._on_abort) |func| {
-            js_ctx.release(func);
+            func.release();
         }
         if (proto._on_error) |func| {
-            js_ctx.release(func);
+            func.release();
         }
         if (proto._on_load) |func| {
-            js_ctx.release(func);
+            func.release();
         }
         if (proto._on_load_end) |func| {
-            js_ctx.release(func);
+            func.release();
         }
         if (proto._on_load_start) |func| {
-            js_ctx.release(func);
+            func.release();
         }
         if (proto._on_progress) |func| {
-            js_ctx.release(func);
+            func.release();
         }
         if (proto._on_timeout) |func| {
-            js_ctx.release(func);
+            func.release();
         }
     }
 
-    page.releaseArena(self._arena);
+    session.releaseArena(self._arena);
 }
 
 fn asEventTarget(self: *XMLHttpRequest) *EventTarget {

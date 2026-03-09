@@ -21,6 +21,7 @@ const std = @import("std");
 const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 const Node = @import("../Node.zig");
 
 const ChildNodes = @import("ChildNodes.zig");
@@ -38,7 +39,7 @@ _data: union(enum) {
 },
 _rc: usize = 0,
 
-pub fn deinit(self: *NodeList, _: bool, page: *Page) void {
+pub fn deinit(self: *NodeList, _: bool, session: *Session) void {
     const rc = self._rc;
     if (rc > 1) {
         self._rc = rc - 1;
@@ -46,8 +47,8 @@ pub fn deinit(self: *NodeList, _: bool, page: *Page) void {
     }
 
     switch (self._data) {
-        .selector_list => |list| list.deinit(page),
-        .child_nodes => |cn| cn.deinit(page),
+        .selector_list => |list| list.deinit(session),
+        .child_nodes => |cn| cn.deinit(session),
         else => {},
     }
 }
@@ -118,8 +119,8 @@ const Iterator = struct {
 
     const Entry = struct { u32, *Node };
 
-    pub fn deinit(self: *Iterator, shutdown: bool, page: *Page) void {
-        self.list.deinit(shutdown, page);
+    pub fn deinit(self: *Iterator, shutdown: bool, session: *Session) void {
+        self.list.deinit(shutdown, session);
     }
 
     pub fn acquireRef(self: *Iterator) void {

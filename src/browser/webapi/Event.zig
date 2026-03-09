@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const EventTarget = @import("EventTarget.zig");
 const Node = @import("Node.zig");
 const String = @import("../../string.zig").String;
@@ -139,9 +140,9 @@ pub fn acquireRef(self: *Event) void {
     self._rc += 1;
 }
 
-pub fn deinit(self: *Event, shutdown: bool, page: *Page) void {
+pub fn deinit(self: *Event, shutdown: bool, session: *Session) void {
     if (shutdown) {
-        page.releaseArena(self._arena);
+        session.releaseArena(self._arena);
         return;
     }
 
@@ -151,7 +152,7 @@ pub fn deinit(self: *Event, shutdown: bool, page: *Page) void {
     }
 
     if (rc == 1) {
-        page.releaseArena(self._arena);
+        session.releaseArena(self._arena);
     } else {
         self._rc = rc - 1;
     }

@@ -27,6 +27,7 @@ const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const ScriptManager = @import("../ScriptManager.zig");
 
 const v8 = js.v8;
@@ -42,6 +43,7 @@ const Context = @This();
 id: usize,
 env: *Env,
 page: *Page,
+session: *Session,
 isolate: js.Isolate,
 
 // Per-context microtask queue for isolation between contexts
@@ -76,12 +78,6 @@ call_depth: usize = 0,
 local: ?*const js.Local = null,
 
 origin: *Origin,
-
-// Any type that is stored in the identity_map which has a finalizer declared
-// will have its finalizer stored here. This is only used when shutting down
-// if v8 hasn't called the finalizer directly itself.
-finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
-finalizer_callback_pool: std.heap.MemoryPool(FinalizerCallback),
 
 // Unlike other v8 types, like functions or objects, modules are not shared
 // across origins.
@@ -153,14 +149,6 @@ pub fn deinit(self: *Context) void {
     // this can release objects
     self.scheduler.deinit();
 
-    {
-        var it = self.finalizer_callbacks.valueIterator();
-        while (it.next()) |finalizer| {
-            finalizer.*.deinit();
-        }
-        self.finalizer_callback_pool.deinit();
-    }
-
     for (self.global_modules.items) |*global| {
         v8.v8__Global__Reset(global);
     }
@@ -208,7 +196,7 @@ pub fn trackTemp(self: *Context, global: v8.Global) !void {
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
-    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -219,7 +207,7 @@ pub fn weakRef(self: *Context, obj: anytype) void {
 }
 
 pub fn safeWeakRef(self: *Context, obj: anytype) void {
-    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -231,7 +219,7 @@ pub fn safeWeakRef(self: *Context, obj: anytype) void {
 }
 
 pub fn strongRef(self: *Context, obj: anytype) void {
-    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -239,45 +227,6 @@ pub fn strongRef(self: *Context, obj: anytype) void {
         return;
     };
     v8.v8__Global__ClearWeak(&fc.global);
-}
-
-pub fn release(self: *Context, item: anytype) void {
-    if (@TypeOf(item) == *anyopaque) {
-        // Existing *anyopaque path for identity_map. Called internally from
-        // finalizers
-        var global = self.origin.identity_map.fetchRemove(@intFromPtr(item)) orelse {
-            if (comptime IS_DEBUG) {
-                // should not be possible
-                std.debug.assert(false);
-            }
-            return;
-        };
-        v8.v8__Global__Reset(&global.value);
-
-        // The item has been fianalized, remove it for the finalizer callback so that
-        // we don't try to call it again on shutdown.
-        const fc = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
-            if (comptime IS_DEBUG) {
-                // should not be possible
-                std.debug.assert(false);
-            }
-            return;
-        };
-        self.finalizer_callback_pool.destroy(fc.value);
-        return;
-    }
-
-    if (comptime IS_DEBUG) {
-        switch (@TypeOf(item)) {
-            js.Value.Temp, js.Promise.Temp, js.Function.Temp => {},
-            else => |T| @compileError("Context.release cannot be called with a " ++ @typeName(T)),
-        }
-    }
-
-    if (self.origin.temps.fetchRemove(item.handle.data_ptr)) |kv| {
-        var global = kv.value;
-        v8.v8__Global__Reset(&global);
-    }
 }
 
 // Any operation on the context have to be made from a local.
@@ -1004,34 +953,6 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     // Use context-specific microtask queue instead of isolate queue
     v8.v8__MicrotaskQueue__EnqueueMicrotaskFunc(self.microtask_queue, self.isolate.handle, cb.handle);
 }
-
-pub fn createFinalizerCallback(self: *Context, global: v8.Global, ptr: *anyopaque, finalizerFn: *const fn (ptr: *anyopaque, page: *Page) void) !*FinalizerCallback {
-    const fc = try self.finalizer_callback_pool.create();
-    fc.* = .{
-        .ctx = self,
-        .ptr = ptr,
-        .global = global,
-        .finalizerFn = finalizerFn,
-    };
-    return fc;
-}
-
-// == Misc ==
-// A type that has a finalizer can have its finalizer called one of two ways.
-// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
-// guaranteed to fire, so we track this in ctx._finalizers and call them on
-// context shutdown.
-pub const FinalizerCallback = struct {
-    ctx: *Context,
-    ptr: *anyopaque,
-    global: v8.Global,
-    finalizerFn: *const fn (ptr: *anyopaque, page: *Page) void,
-
-    pub fn deinit(self: *FinalizerCallback) void {
-        self.finalizerFn(self.ptr, self.ctx.page);
-        self.ctx.finalizer_callback_pool.destroy(self);
-    }
-};
 
 // == Profiler ==
 pub fn startCpuProfiler(self: *Context) void {

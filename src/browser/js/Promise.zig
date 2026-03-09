@@ -63,21 +63,24 @@ fn _persist(self: *const Promise, comptime is_global: bool) !(if (is_global) Glo
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
     if (comptime is_global) {
         try ctx.trackGlobal(global);
-    } else {
-        try ctx.trackTemp(global);
+        return .{ .handle = global, .origin = {} };
     }
-    return .{ .handle = global };
+    try ctx.trackTemp(global);
+    return .{ .handle = global, .origin = ctx.origin };
 }
 
-pub const Temp = G(0);
-pub const Global = G(1);
+pub const Temp = G(.temp);
+pub const Global = G(.global);
 
-fn G(comptime discriminator: u8) type {
+const GlobalType = enum(u8) {
+    temp,
+    global,
+};
+
+fn G(comptime global_type: GlobalType) type {
     return struct {
         handle: v8.Global,
-
-        // makes the types different (G(0) != G(1)), without taking up space
-        comptime _: u8 = discriminator,
+        origin: if (global_type == .temp) *js.Origin else void,
 
         const Self = @This();
 
@@ -90,6 +93,10 @@ fn G(comptime discriminator: u8) type {
                 .local = l,
                 .handle = @ptrCast(v8.v8__Global__Get(&self.handle, l.isolate.handle)),
             };
+        }
+
+        pub fn release(self: *const Self) void {
+            self.origin.releaseTemp(self.handle);
         }
     };
 }

@@ -205,7 +205,7 @@ pub fn dispatch(self: *EventManager, target: *EventTarget, event: *Event) Dispat
 
 pub fn dispatchOpts(self: *EventManager, target: *EventTarget, event: *Event, comptime opts: DispatchOpts) DispatchError!void {
     event.acquireRef();
-    defer event.deinit(false, self.page);
+    defer event.deinit(false, self.page._session);
 
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.dispatch", .{ .type = event._type_string.str(), .bubbles = event._bubbles });
@@ -234,7 +234,7 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
     const page = self.page;
 
     event.acquireRef();
-    defer event.deinit(false, page);
+    defer event.deinit(false, page._session);
 
     if (comptime IS_DEBUG) {
         log.debug(.event, "dispatchDirect", .{ .type = event._type_string, .context = opts.context });

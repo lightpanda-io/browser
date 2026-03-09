@@ -330,6 +330,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     context.* = .{
         .env = self,
         .page = page,
+        .session = page._session,
         .origin = origin,
         .id = context_id,
         .isolate = isolate,
@@ -340,7 +341,6 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .microtask_queue = microtask_queue,
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
-        .finalizer_callback_pool = std.heap.MemoryPool(Context.FinalizerCallback).init(self.app.allocator),
     };
     try context.origin.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
 
