@@ -25,6 +25,7 @@ const Page = @import("../Page.zig");
 const Node = @import("Node.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
 const AbstractRange = @import("AbstractRange.zig");
+const DOMRect = @import("DOMRect.zig");
 
 const Range = @This();
 
@@ -643,6 +644,33 @@ fn nextAfterSubtree(node: *Node, root: *Node) ?*Node {
     return null;
 }
 
+pub fn getBoundingClientRect(self: *const Range, page: *Page) DOMRect {
+    if (self._proto.getCollapsed()) {
+        return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+    }
+    const element = self.getContainerElement() orelse {
+        return .{ ._x = 0, ._y = 0, ._width = 0, ._height = 0 };
+    };
+    return element.getBoundingClientRect(page);
+}
+
+pub fn getClientRects(self: *const Range, page: *Page) ![]DOMRect {
+    if (self._proto.getCollapsed()) {
+        return &.{};
+    }
+    const element = self.getContainerElement() orelse {
+        return &.{};
+    };
+    return element.getClientRects(page);
+}
+
+fn getContainerElement(self: *const Range) ?*Node.Element {
+    const container = self._proto.getCommonAncestorContainer();
+    if (container.is(Node.Element)) |el| return el;
+    const parent = container.parentNode() orelse return null;
+    return parent.is(Node.Element);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Range);
 
@@ -681,6 +709,8 @@ pub const JsApi = struct {
     pub const surroundContents = bridge.function(Range.surroundContents, .{ .dom_exception = true });
     pub const createContextualFragment = bridge.function(Range.createContextualFragment, .{ .dom_exception = true });
     pub const toString = bridge.function(Range.toString, .{ .dom_exception = true });
+    pub const getBoundingClientRect = bridge.function(Range.getBoundingClientRect, .{});
+    pub const getClientRects = bridge.function(Range.getClientRects, .{});
 };
 
 const testing = @import("../../testing.zig");
