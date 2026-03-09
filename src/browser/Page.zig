@@ -652,6 +652,10 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
         .navigation_type = std.meta.activeTag(nt),
     };
 
+    if (target._queued_navigation) |existing| {
+        target.arena_pool.release(existing.arena);
+    }
+
     target._queued_navigation = qn;
     return session.scheduleNavigation(target);
 }
