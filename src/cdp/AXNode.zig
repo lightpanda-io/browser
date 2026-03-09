@@ -760,9 +760,8 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
 
-    // We need to bypass the strict JSON writer used in writeName
-    // We'll create a dummy writer that just writes to our buffer
-    const DummyWriter = struct {
+    // writeName expects a std.json.Stringify instance.
+    const TextCaptureWriter = struct {
         aw: *std.Io.Writer.Allocating,
         writer: *std.Io.Writer,
 
@@ -773,52 +772,27 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
             } else if (comptime std.meta.hasMethod(T, "format")) {
                 try std.fmt.format(w.aw.writer, "{s}", .{val});
             } else {
-                // Ignore unexpected types to avoid garbage output
+                // Ignore unexpected types (e.g. booleans) to avoid garbage output
             }
         }
 
-        pub fn beginWriteRaw(w: @This()) !void {
-            _ = w;
-        }
-        pub fn endWriteRaw(w: @This()) void {
-            _ = w;
-        }
-        pub fn writeByte(w: @This(), b: u8) !void {
-            try w.aw.writer.writeByte(b);
-        }
-        pub fn writeAll(w: @This(), s: []const u8) !void {
-            try w.aw.writer.writeAll(s);
-        }
-
-        // Mock object methods
-        pub fn objectField(w: @This(), name: []const u8) !void {
-            _ = w;
-            _ = name;
-        }
-        pub fn beginObject(w: @This()) !void {
-            _ = w;
-        }
-        pub fn endObject(w: @This()) !void {
-            _ = w;
-        }
-        pub fn beginArray(w: @This()) !void {
-            _ = w;
-        }
-        pub fn endArray(w: @This()) !void {
-            _ = w;
-        }
+        // Mock JSON Stringifier lifecycle methods
+        pub fn beginWriteRaw(_: @This()) !void {}
+        pub fn endWriteRaw(_: @This()) void {}
+        pub fn objectField(_: @This(), _: []const u8) !void {}
+        pub fn beginObject(_: @This()) !void {}
+        pub fn endObject(_: @This()) !void {}
+        pub fn beginArray(_: @This()) !void {}
+        pub fn endArray(_: @This()) !void {}
     };
 
-    const w = DummyWriter{ .aw = &aw, .writer = &aw.writer };
+    const w = TextCaptureWriter{ .aw = &aw, .writer = &aw.writer };
 
     const source = try self.writeName(w, page);
     if (source != null) {
-        var str = aw.written();
-        // writeString manually injects literal quotes for JSON, we need to strip them
-        if (str.len >= 2 and str[0] == '"' and str[str.len - 1] == '"') {
-            str = str[1 .. str.len - 1];
-        }
-        return try allocator.dupe(u8, str);
+        // Remove literal quotes inserted by writeString.
+        const raw_text = std.mem.trim(u8, aw.written(), "\"");
+        return try allocator.dupe(u8, raw_text);
     }
 
     return null;
