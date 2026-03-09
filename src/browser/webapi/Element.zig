@@ -1582,45 +1582,31 @@ pub const Tag = enum {
     }
 
     pub fn isBlock(self: Tag) bool {
+        // zig fmt: off
         return switch (self) {
-            .p,
-            .div,
-            .section,
-            .article,
-            .main,
-            .header,
-            .footer,
-            .nav,
-            .aside,
-            .h1,
-            .h2,
-            .h3,
-            .h4,
-            .h5,
-            .h6,
-            .ul,
-            .ol,
-            .blockquote,
-            .pre,
+            // Semantic Layout
+            .article, .aside, .footer, .header, .main, .nav, .section,
+            // Grouping / Containers
+            .address, .div, .fieldset, .figure, .p,
+            // Headings
+            .h1, .h2, .h3, .h4, .h5, .h6,
+            // Lists
+            .dl, .ol, .ul,
+            // Preformatted / Quotes
+            .blockquote, .pre,
+            // Tables
             .table,
+            // Other
             .hr,
             => true,
             else => false,
         };
+        // zig fmt: on
     }
 
     pub fn isMetadata(self: Tag) bool {
         return switch (self) {
-            .script,
-            .style,
-            .meta,
-            .link,
-            .noscript,
-            .head,
-            .title,
-            .base,
-            .template,
-            => true,
+            .base, .head, .link, .meta, .noscript, .script, .style, .template, .title => true,
             else => false,
         };
     }
