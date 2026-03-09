@@ -117,6 +117,67 @@ jobs:
           BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
           kill `cat LPD.pid` `cat PROXY.id`
 
+  # e2e tests w/ web-bot-auth configuration on.
+  wba-demo-scripts:
+    name: wba-demo-scripts
+    needs: zig-build-release
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: npm install
+
+      - name: download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lightpanda-build-release
+
+      - run: chmod a+x ./lightpanda
+
+      - run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
+
+      - name: run end to end tests
+        run: |
+          ./lightpanda serve \
+            --web_bot_auth_key_file private_key.pem \
+            --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
+            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }} \
+            & echo $! > LPD.pid
+          go run runner/main.go
+          kill `cat LPD.pid`
+
+      - name: build proxy
+        run: |
+          cd proxy
+          go build
+
+      - name: run end to end tests through proxy
+        run: |
+          ./proxy/proxy & echo $! > PROXY.id
+          ./lightpanda serve \
+            --web_bot_auth_key_file private_key.pem \
+            --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
+            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }} \
+            --http_proxy 'http://127.0.0.1:3000' \
+            & echo $! > LPD.pid
+          go run runner/main.go
+          kill `cat LPD.pid` `cat PROXY.id`
+
+      - name: run request interception through proxy
+        run: |
+          export PROXY_USERNAME=username PROXY_PASSWORD=password
+          ./proxy/proxy & echo $! > PROXY.id
+          ./lightpanda serve & echo $! > LPD.pid
+          URL=https://demo-browser.lightpanda.io/campfire-commerce/ node puppeteer/proxy_auth.js
+          BASE_URL=https://demo-browser.lightpanda.io/ node playwright/proxy_auth.js
+          kill `cat LPD.pid` `cat PROXY.id`
+
   cdp-and-hyperfine-bench:
     name: cdp-and-hyperfine-bench
     needs: zig-build-release
