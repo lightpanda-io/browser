@@ -12,8 +12,6 @@
     // Empty functional pseudo-classes should error
     testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':has()'));
     testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':not()'));
-    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':is()'));
-    testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':where()'));
     testing.expectError("Error: InvalidPseudoClass", () => container.querySelector(':lang()'));
 }
 </script>

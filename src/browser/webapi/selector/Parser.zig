@@ -487,7 +487,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
 
-            if (selectors.items.len == 0) return error.InvalidPseudoClass;
+            // Empty :is() is valid per spec - matches nothing
             return .{ .is = selectors.items };
         }
 
@@ -514,7 +514,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
             if (self.peek() != ')') return error.InvalidPseudoClass;
             self.input = self.input[1..];
 
-            if (selectors.items.len == 0) return error.InvalidPseudoClass;
+            // Empty :where() is valid per spec - matches nothing
             return .{ .where = selectors.items };
         }
 
