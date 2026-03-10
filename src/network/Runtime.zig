@@ -61,12 +61,9 @@ fn globalDeinit() void {
     libcurl.curl_global_cleanup();
 }
 
-var global_init_once = std.once(globalInit);
-var global_deinit_once = std.once(globalDeinit);
-
 pub fn init(allocator: Allocator, config: *const Config) !Runtime {
-    global_init_once.call();
-    errdefer global_deinit_once.call();
+    globalInit();
+    errdefer globalDeinit();
 
     const pipe = try posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
 
@@ -107,14 +104,14 @@ pub fn deinit(self: *Runtime) void {
         self.allocator.free(data[0..ca_blob.len]);
     }
 
-    global_deinit_once.call();
+    globalDeinit();
 }
 
 pub fn bind(
     self: *Runtime,
     address: net.Address,
     ctx: *anyopaque,
-    onAccept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
+    on_accept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
 ) !void {
     const flags = posix.SOCK.STREAM | posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK;
     const listener = try posix.socket(address.any.family, flags, posix.IPPROTO.TCP);
@@ -133,7 +130,7 @@ pub fn bind(
     self.listener = .{
         .socket = listener,
         .ctx = ctx,
-        .onAccept = onAccept,
+        .onAccept = on_accept,
     };
     self.pollfds[1] = .{
         .fd = listener,

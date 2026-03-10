@@ -62,7 +62,6 @@ const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 
-const Net = @import("../network/http.zig");
 const HttpClient = @import("HttpClient.zig");
 const ArenaPool = App.ArenaPool;
 
@@ -396,7 +395,7 @@ pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
 // Add comon headers for a request:
 // * cookies
 // * referer
-pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *Net.Headers) !void {
+pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *HttpClient.Headers) !void {
     try self.requestCookie(.{}).headersForRequest(temp, url, headers);
 
     // Build the referer
@@ -3052,7 +3051,7 @@ pub const NavigateReason = enum {
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: Net.Method = .GET,
+    method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     force: bool = false,
@@ -3062,7 +3061,7 @@ pub const NavigateOpts = struct {
 pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: Net.Method = .GET,
+    method: HttpClient.Method = .GET,
 };
 
 const NavigationType = enum {

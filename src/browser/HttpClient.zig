@@ -36,9 +36,10 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
-const Method = Net.Method;
-const ResponseHead = Net.ResponseHead;
-const HeaderIterator = Net.HeaderIterator;
+pub const Method = Net.Method;
+pub const Headers = Net.Headers;
+pub const ResponseHead = Net.ResponseHead;
+pub const HeaderIterator = Net.HeaderIterator;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
