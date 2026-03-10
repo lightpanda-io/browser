@@ -791,24 +791,19 @@ fn _documentIsComplete(self: *Page) !void {
     try self.dispatchLoad();
 
     // Dispatch window.load event.
-    const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
-    // This event is weird, it's dispatched directly on the window, but
-    // with the document as the target.
-    event._target = self.document.asEventTarget();
-    try self._event_manager.dispatchDirect(
-        self.window.asEventTarget(),
-        event,
-        self.window._on_load,
-        .{ .inject_target = false, .context = "page load" },
-    );
+    const window_target = self.window.asEventTarget();
+    if (self._event_manager.hasDirectListeners(window_target, "load", self.window._on_load)) {
+        const event = try Event.initTrusted(comptime .wrap("load"), .{}, self);
+        // This event is weird, it's dispatched directly on the window, but
+        // with the document as the target.
+        event._target = self.document.asEventTarget();
+        try self._event_manager.dispatchDirect(window_target, event, self.window._on_load, .{ .inject_target = false, .context = "page load" });
+    }
 
-    const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
-    try self._event_manager.dispatchDirect(
-        self.window.asEventTarget(),
-        pageshow_event,
-        self.window._on_pageshow,
-        .{ .context = "page show" },
-    );
+    if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
+        const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
+        try self._event_manager.dispatchDirect(window_target, pageshow_event, self.window._on_pageshow, .{ .context = "page show" });
+    }
 
     self.notifyParentLoadComplete();
 }

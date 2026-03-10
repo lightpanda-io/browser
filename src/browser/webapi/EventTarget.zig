@@ -138,6 +138,7 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .screen => writer.writeAll("<Screen>"),
         .screen_orientation => writer.writeAll("<ScreenOrientation>"),
         .visual_viewport => writer.writeAll("<VisualViewport>"),
+        .file_reader => writer.writeAll("<FileReader>"),
     };
 }
 

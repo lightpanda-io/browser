@@ -79,13 +79,11 @@ fn goInner(delta: i32, page: *Page) !void {
 
     if (entry._url) |url| {
         if (try page.isSameOrigin(url)) {
-            const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, page)).asEvent();
-            try page._event_manager.dispatchDirect(
-                page.window.asEventTarget(),
-                event,
-                page.window._on_popstate,
-                .{ .context = "Pop State" },
-            );
+            const target = page.window.asEventTarget();
+            if (page._event_manager.hasDirectListeners(target, "popstate", page.window._on_popstate)) {
+                const event = (try PopStateEvent.initTrusted(comptime .wrap("popstate"), .{ .state = entry._state.value }, page)).asEvent();
+                try page._event_manager.dispatchDirect(target, event, page.window._on_popstate, .{ .context = "Pop State" });
+            }
         }
     }
 
