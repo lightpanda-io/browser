@@ -18,7 +18,9 @@
 
 const std = @import("std");
 const js = @import("../../../js/js.zig");
+const URL = @import("../../../URL.zig");
 const Page = @import("../../../Page.zig");
+
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
@@ -85,6 +87,19 @@ pub fn getElements(self: *Form, page: *Page) !*collections.HTMLFormControlsColle
     });
 }
 
+pub fn getAction(self: *Form, page: *Page) ![]const u8 {
+    const element = self.asElement();
+    const action = element.getAttributeSafe(comptime .wrap("action")) orelse return page.url;
+    if (action.len == 0) {
+        return page.url;
+    }
+    return URL.resolve(page.call_arena, page.base(), action, .{ .encode = true });
+}
+
+pub fn setAction(self: *Form, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), page);
+}
+
 pub fn getLength(self: *Form, page: *Page) !u32 {
     const elements = try self.getElements(page);
     return elements.length(page);
@@ -104,6 +119,7 @@ pub const JsApi = struct {
 
     pub const name = bridge.accessor(Form.getName, Form.setName, .{});
     pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{});
+    pub const action = bridge.accessor(Form.getAction, Form.setAction, .{});
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
