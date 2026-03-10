@@ -82,6 +82,21 @@ pub fn setCharset(self: *Script, value: []const u8, page: *Page) !void {
     return self.asElement().setAttributeSafe(comptime .wrap("charset"), .wrap(value), page);
 }
 
+pub fn getCrossOrigin(self: *const Script) ?[]const u8 {
+    return self.asConstElement().getAttributeSafe(comptime .wrap("crossorigin"));
+}
+
+pub fn setCrossOrigin(self: *Script, value: ?[]const u8, page: *Page) !void {
+    if (value) |raw| {
+        var normalized: []const u8 = "anonymous";
+        if (std.ascii.eqlIgnoreCase(raw, "use-credentials")) {
+            normalized = "use-credentials";
+        }
+        return self.asElement().setAttributeSafe(comptime .wrap("crossorigin"), .wrap(normalized), page);
+    }
+    return self.asElement().removeAttribute(comptime .wrap("crossorigin"), page);
+}
+
 pub fn getAsync(self: *const Script) bool {
     return self.asConstElement().getAttributeSafe(comptime .wrap("async")) != null;
 }
@@ -129,6 +144,7 @@ pub const JsApi = struct {
     pub const @"type" = bridge.accessor(Script.getType, Script.setType, .{});
     pub const nonce = bridge.accessor(Script.getNonce, Script.setNonce, .{});
     pub const charset = bridge.accessor(Script.getCharset, Script.setCharset, .{});
+    pub const crossOrigin = bridge.accessor(Script.getCrossOrigin, Script.setCrossOrigin, .{});
     pub const noModule = bridge.accessor(Script.getNoModule, null, .{});
     pub const innerText = bridge.accessor(_innerText, Script.setInnerText, .{});
     fn _innerText(self: *Script, page: *const Page) ![]const u8 {

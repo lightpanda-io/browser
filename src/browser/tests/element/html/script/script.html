@@ -7,6 +7,12 @@
    let attribute_load = false;
 
    let s = document.createElement('script');
+   s.crossOrigin = 'nope';
+   testing.expectEqual('anonymous', s.crossOrigin);
+
+   s.crossOrigin = 'use-Credentials';
+   testing.expectEqual('use-credentials', s.crossOrigin);
+
    document.documentElement.addEventListener('load', (e) => {
       testing.expectEqual(s, e.target);
       dom_load = true;

@@ -115,6 +115,21 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/auth-script-anonymous-page.html":
+            body = f"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Script Anonymous Smoke</title></head>
+<body><script crossorigin="anonymous" src="http://img%20user:p%40ss@127.0.0.1:{PORT}/auth-anon-script.js"></script></body>
+</html>
+""".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpscriptanon=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/accept-page.html":
             body = b"""<!doctype html>
 <html>
@@ -427,6 +442,46 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/auth-anon-script.js":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-script-anonymous-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and cookie == ""
+                and referer == expected_referer
+                and authorization == ""
+                and "*/*" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"document.title='Script Anonymous Blocked';"
+                self.send_response(403)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"""document.title='Script Anonymous OK';(function(){var panel=document.createElement('div');panel.id='script-auth-anon-panel';panel.textContent='script anonymous ok';panel.setAttribute('style','width:320px;height:160px;background:#147ad6;color:#ffffff;padding:24px;font-size:28px;');document.body.innerHTML='';document.body.appendChild(panel);var img=new Image();img.alt='script anonymous beacon';img.src='/script-anon-beacon.png';document.body.appendChild(img);}());"""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/script-beacon.png":
             ua = self.headers.get("User-Agent", "")
             cookie = self.headers.get("Cookie", "")
@@ -436,6 +491,43 @@ class Handler(BaseHTTPRequestHandler):
             allowed = (
                 "Lightpanda/" in ua
                 and "lpscriptauth=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/script-anon-beacon.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-script-anonymous-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpscriptanon=ok" in cookie
                 and referer == expected_referer
                 and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
             )

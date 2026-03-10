@@ -35,6 +35,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 const IS_DEBUG = builtin.mode == .Debug;
+const SCRIPT_ACCEPT_HEADER: [:0]const u8 = "Accept: */*";
 
 const ScriptManager = @This();
 
@@ -141,9 +142,12 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-pub fn getHeaders(self: *ScriptManager, url: [:0]const u8) !Http.Headers {
+pub fn getHeaders(self: *ScriptManager, url: [:0]const u8, include_credentials: bool) !Http.Headers {
     var headers = try self.client.newHeaders();
-    try self.page.headersForRequest(self.page.arena, url, &headers);
+    try headers.add(SCRIPT_ACCEPT_HEADER);
+    try self.page.headersForRequestWithPolicy(self.page.arena, url, &headers, .{
+        .include_credentials = include_credentials,
+    });
     return headers;
 }
 
@@ -254,6 +258,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     }
 
     if (remote_url) |url| {
+        const include_credentials = scriptRequestIncludesCredentials(script_element);
+        const request_url = try scriptRequestUrlForFetch(page.arena, url, include_credentials);
+        script.url = request_url;
         errdefer {
             if (is_blocking == false) {
                 self.scriptList(script).remove(&script.node);
@@ -262,13 +269,13 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
 
         try self.client.request(.{
-            .url = url,
+            .url = request_url,
             .ctx = script,
             .method = .GET,
             .frame_id = page._frame_id,
-            .headers = try self.getHeaders(url),
+            .headers = try self.getHeaders(request_url, include_credentials),
             .blocking = is_blocking,
-            .cookie_jar = &page._session.cookie_jar,
+            .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
             .resource_type = .script,
             .notification = page._session.notification,
             .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -319,6 +326,38 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         }
         return script.eval(page);
     }
+}
+
+fn scriptRequestIncludesCredentials(script_element: *Element.Html.Script) bool {
+    return scriptRequestAttributeIncludesCredentials(script_element.getCrossOrigin());
+}
+
+fn scriptRequestAttributeIncludesCredentials(cross_origin: ?[]const u8) bool {
+    const value = cross_origin orelse return true;
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, value, " \t\r\n"), "use-credentials");
+}
+
+fn scriptRequestUrlForFetch(
+    allocator: Allocator,
+    url: [:0]const u8,
+    include_credentials: bool,
+) ![:0]const u8 {
+    if (include_credentials) {
+        return try allocator.dupeZ(u8, url);
+    }
+
+    if (URL.getUsername(url).len == 0) {
+        return try allocator.dupeZ(u8, url);
+    }
+
+    return try URL.buildUrl(
+        allocator,
+        URL.getProtocol(url),
+        URL.getHost(url),
+        URL.getPathname(url),
+        URL.getSearch(url),
+        URL.getHash(url),
+    );
 }
 
 fn scriptList(self: *ScriptManager, script: *const Script) *std.DoublyLinkedList {
@@ -385,7 +424,7 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .ctx = script,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(url),
+        .headers = try self.getHeaders(url, true),
         .cookie_jar = &page._session.cookie_jar,
         .resource_type = .script,
         .notification = page._session.notification,
@@ -488,7 +527,7 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
         .url = url,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(url),
+        .headers = try self.getHeaders(url, true),
         .ctx = script,
         .resource_type = .script,
         .cookie_jar = &page._session.cookie_jar,
@@ -1095,6 +1134,25 @@ test "DataURI: parse invalid" {
     try assertInvalidDataURI("atad:,foo");
     try assertInvalidDataURI("data:foo");
     try assertInvalidDataURI("data:");
+}
+
+test "scriptRequestAttributeIncludesCredentials requires use-credentials when crossorigin is present" {
+    try std.testing.expect(scriptRequestAttributeIncludesCredentials(null));
+    try std.testing.expect(!scriptRequestAttributeIncludesCredentials(""));
+    try std.testing.expect(!scriptRequestAttributeIncludesCredentials("anonymous"));
+    try std.testing.expect(!scriptRequestAttributeIncludesCredentials(" nope "));
+    try std.testing.expect(scriptRequestAttributeIncludesCredentials("use-credentials"));
+}
+
+test "scriptRequestUrlForFetch strips userinfo when credentials are disabled" {
+    const stripped = try scriptRequestUrlForFetch(
+        std.testing.allocator,
+        "http://img%20user:p%40ss@127.0.0.1:9582/private.js?x=1#frag",
+        false,
+    );
+    defer std.testing.allocator.free(stripped);
+
+    try std.testing.expectEqualStrings("http://127.0.0.1:9582/private.js?x=1#frag", stripped);
 }
 
 fn assertValidDataURI(uri: []const u8, expected: []const u8) !void {
