@@ -137,3 +137,79 @@
     testing.expectEqual('PROPFIND', req.method);
   }
 </script>
+
+<script id=body_methods>
+  testing.async(async () => {
+    const req = new Request('https://example.com/api', {
+      method: 'POST',
+      body: 'Hello, World!',
+      headers: { 'Content-Type': 'text/plain' }
+    });
+
+    const text = await req.text();
+    testing.expectEqual('Hello, World!', text);
+  });
+
+  testing.async(async () => {
+    const req = new Request('https://example.com/api', {
+      method: 'POST',
+      body: '{"name": "test"}',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const json = await req.json();
+    testing.expectEqual('test', json.name);
+  });
+
+  testing.async(async () => {
+    const req = new Request('https://example.com/api', {
+      method: 'POST',
+      body: 'binary data',
+      headers: { 'Content-Type': 'application/octet-stream' }
+    });
+
+    const buffer = await req.arrayBuffer();
+    testing.expectEqual(true, buffer instanceof ArrayBuffer);
+    testing.expectEqual(11, buffer.byteLength);
+  });
+
+  testing.async(async () => {
+    const req = new Request('https://example.com/api', {
+      method: 'POST',
+      body: 'blob content',
+      headers: { 'Content-Type': 'text/plain' }
+    });
+
+    const blob = await req.blob();
+    testing.expectEqual(true, blob instanceof Blob);
+    testing.expectEqual(12, blob.size);
+    testing.expectEqual('text/plain', blob.type);
+  });
+
+  testing.async(async () => {
+    const req = new Request('https://example.com/api', {
+      method: 'POST',
+      body: 'bytes'
+    });
+
+    const bytes = await req.bytes();
+    testing.expectEqual(true, bytes instanceof Uint8Array);
+    testing.expectEqual(5, bytes.length);
+  });
+</script>
+
+<script id=clone>
+  {
+    const req1 = new Request('https://example.com/api', {
+      method: 'POST',
+      body: 'test body',
+      headers: { 'X-Custom': 'value' }
+    });
+
+    const req2 = req1.clone();
+
+    testing.expectEqual(req1.url, req2.url);
+    testing.expectEqual(req1.method, req2.method);
+    testing.expectEqual('value', req2.headers.get('X-Custom'));
+  }
+</script>

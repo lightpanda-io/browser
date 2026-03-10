@@ -24,6 +24,7 @@ const Http = @import("../../../http/Http.zig");
 const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
 const Headers = @import("Headers.zig");
+const Blob = @import("../Blob.zig");
 const Allocator = std.mem.Allocator;
 
 const Request = @This();
@@ -153,6 +154,55 @@ pub fn getHeaders(self: *Request, page: *Page) !*Headers {
     return headers;
 }
 
+pub fn blob(self: *Request, page: *Page) !js.Promise {
+    const body = self._body orelse "";
+    const headers = try self.getHeaders(page);
+    const content_type = try headers.get("content-type", page) orelse "";
+
+    const b = try Blob.initWithMimeValidation(
+        &.{body},
+        .{ .type = content_type },
+        true,
+        page,
+    );
+
+    return page.js.local.?.resolvePromise(b);
+}
+
+pub fn text(self: *const Request, page: *Page) !js.Promise {
+    const body = self._body orelse "";
+    return page.js.local.?.resolvePromise(body);
+}
+
+pub fn json(self: *const Request, page: *Page) !js.Promise {
+    const body = self._body orelse "";
+    const local = page.js.local.?;
+    const value = local.parseJSON(body) catch |err| {
+        return local.rejectPromise(.{@errorName(err)});
+    };
+    return local.resolvePromise(try value.persist());
+}
+
+pub fn arrayBuffer(self: *const Request, page: *Page) !js.Promise {
+    return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
+}
+
+pub fn bytes(self: *const Request, page: *Page) !js.Promise {
+    return page.js.local.?.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
+}
+
+pub fn clone(self: *const Request, page: *Page) !*Request {
+    return page._factory.create(Request{
+        ._url = self._url,
+        ._arena = self._arena,
+        ._method = self._method,
+        ._headers = self._headers,
+        ._cache = self._cache,
+        ._credentials = self._credentials,
+        ._body = self._body,
+    });
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Request);
 
@@ -168,6 +218,12 @@ pub const JsApi = struct {
     pub const headers = bridge.accessor(Request.getHeaders, null, .{});
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
+    pub const blob = bridge.function(Request.blob, .{});
+    pub const text = bridge.function(Request.text, .{});
+    pub const json = bridge.function(Request.json, .{});
+    pub const arrayBuffer = bridge.function(Request.arrayBuffer, .{});
+    pub const bytes = bridge.function(Request.bytes, .{});
+    pub const clone = bridge.function(Request.clone, .{});
 };
 
 const testing = @import("../../../testing.zig");

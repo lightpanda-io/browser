@@ -21,6 +21,7 @@ const Writer = std.Io.Writer;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Mime = @import("../Mime.zig");
 
 /// https://w3c.github.io/FileAPI/#blob-section
 /// https://developer.mozilla.org/en-US/docs/Web/API/Blob
@@ -50,21 +51,50 @@ const InitOptions = struct {
     endings: []const u8 = "transparent",
 };
 
-/// Creates a new Blob.
+/// Creates a new Blob (JS constructor).
 pub fn init(
     maybe_blob_parts: ?[]const []const u8,
     maybe_options: ?InitOptions,
     page: *Page,
 ) !*Blob {
+    return initWithMimeValidation(maybe_blob_parts, maybe_options, false, page);
+}
+
+/// Creates a new Blob with optional MIME validation.
+/// When validate_mime is true, uses full MIME parsing (for Response/Request).
+/// When false, uses simple ASCII validation per FileAPI spec (for Blob constructor).
+pub fn initWithMimeValidation(
+    maybe_blob_parts: ?[]const []const u8,
+    maybe_options: ?InitOptions,
+    validate_mime: bool,
+    page: *Page,
+) !*Blob {
     const options: InitOptions = maybe_options orelse .{};
-    // Setup MIME; This can be any string according to my observations.
+
     const mime: []const u8 = blk: {
         const t = options.type;
         if (t.len == 0) {
             break :blk "";
         }
 
-        break :blk try page.arena.dupe(u8, t);
+        const buf = try page.arena.dupe(u8, t);
+
+        if (validate_mime) {
+            // Full MIME parsing per MIME sniff spec (for Content-Type headers)
+            _ = Mime.parse(buf) catch break :blk "";
+        } else {
+            // Simple validation per FileAPI spec (for Blob constructor):
+            // - If any char is outside U+0020-U+007E, return empty string
+            // - Otherwise lowercase
+            for (t) |c| {
+                if (c < 0x20 or c > 0x7E) {
+                    break :blk "";
+                }
+            }
+            _ = std.ascii.lowerString(buf, buf);
+        }
+
+        break :blk buf;
     };
 
     const data = blk: {

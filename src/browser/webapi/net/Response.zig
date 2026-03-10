@@ -23,6 +23,7 @@ const Http = @import("../../../http/Http.zig");
 const Page = @import("../../Page.zig");
 const Headers = @import("Headers.zig");
 const ReadableStream = @import("../streams/ReadableStream.zig");
+const Blob = @import("../Blob.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -147,6 +148,47 @@ pub fn arrayBuffer(self: *const Response, page: *Page) !js.Promise {
     return page.js.local.?.resolvePromise(js.ArrayBuffer{ .values = self._body orelse "" });
 }
 
+pub fn blob(self: *const Response, page: *Page) !js.Promise {
+    const body = self._body orelse "";
+    const content_type = try self._headers.get("content-type", page) orelse "";
+
+    const b = try Blob.initWithMimeValidation(
+        &.{body},
+        .{ .type = content_type },
+        true,
+        page,
+    );
+
+    return page.js.local.?.resolvePromise(b);
+}
+
+pub fn bytes(self: *const Response, page: *Page) !js.Promise {
+    return page.js.local.?.resolvePromise(js.TypedArray(u8){ .values = self._body orelse "" });
+}
+
+pub fn clone(self: *const Response, page: *Page) !*Response {
+    const arena = try page.getArena(.{ .debug = "Response.clone" });
+    errdefer page.releaseArena(arena);
+
+    const body = if (self._body) |b| try arena.dupe(u8, b) else null;
+    const status_text = try arena.dupe(u8, self._status_text);
+    const url = try arena.dupeZ(u8, self._url);
+
+    const cloned = try arena.create(Response);
+    cloned.* = .{
+        ._arena = arena,
+        ._status = self._status,
+        ._status_text = status_text,
+        ._url = url,
+        ._body = body,
+        ._type = self._type,
+        ._is_redirected = self._is_redirected,
+        ._headers = try Headers.init(.{ .obj = self._headers }, page),
+        ._transfer = null,
+    };
+    return cloned;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Response);
 
@@ -170,6 +212,9 @@ pub const JsApi = struct {
     pub const url = bridge.accessor(Response.getURL, null, .{});
     pub const redirected = bridge.accessor(Response.isRedirected, null, .{});
     pub const arrayBuffer = bridge.function(Response.arrayBuffer, .{});
+    pub const blob = bridge.function(Response.blob, .{});
+    pub const bytes = bridge.function(Response.bytes, .{});
+    pub const clone = bridge.function(Response.clone, .{});
 };
 
 const testing = @import("../../../testing.zig");
