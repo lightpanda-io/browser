@@ -734,7 +734,7 @@ fn getArgs(comptime F: type, comptime offset: usize, local: *const Local, info: 
         if (last_parameter_type_info == .pointer and last_parameter_type_info.pointer.size == .slice) {
             const slice_type = last_parameter_type_info.pointer.child;
             const corresponding_js_value = info.getArg(@intCast(last_js_parameter), local);
-            if (corresponding_js_value.isArray() == false and corresponding_js_value.isTypedArray() == false and slice_type != u8) {
+            if (slice_type == js.Value or (corresponding_js_value.isArray() == false and corresponding_js_value.isTypedArray() == false and slice_type != u8)) {
                 is_variadic = true;
                 if (js_parameter_count == 0) {
                     @field(args, tupleFieldName(params_to_map.len + offset - 1)) = &.{};
