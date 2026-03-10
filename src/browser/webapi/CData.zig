@@ -271,9 +271,9 @@ pub fn isEqualNode(self: *const CData, other: *const CData) bool {
 }
 
 pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
-    const old_value = self._data;
-    self._data = try String.concat(page.arena, &.{ self._data.str(), data });
-    page.characterDataChange(self.asNode(), old_value);
+    // Per DOM spec, appendData(data) is replaceData(length, 0, data).
+    const length = self.getLength();
+    try self.replaceData(length, 0, data, page);
 }
 
 pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void {
