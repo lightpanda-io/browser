@@ -493,11 +493,6 @@ fn isTwoValueShorthand(name: []const u8) bool {
         .{ "border-image-repeat", {} },
         .{ "mask-repeat", {} },
         .{ "mask-size", {} },
-        // Other
-        .{ "contain-intrinsic-size", {} },
-        .{ "scale", {} },
-        .{ "text-box-edge", {} },
-        .{ "animation-range", {} },
     });
     return shorthands.has(name);
 }
@@ -567,7 +562,6 @@ fn isLengthProperty(name: []const u8) bool {
         .{ "border-bottom-right-radius", {} },
         // Text
         .{ "font-size", {} },
-        .{ "line-height", {} },
         .{ "letter-spacing", {} },
         .{ "word-spacing", {} },
         .{ "text-indent", {} },
@@ -784,7 +778,7 @@ test "normalizePropertyValue: collapse duplicate two-value shorthands" {
         .{ "gap", "10px 10px", "10px" },
         .{ "scroll-snap-align", "start start", "start" },
         .{ "scroll-padding-block", "5px 5px", "5px" },
-        .{ "background-size", "cover cover", "cover" },
+        .{ "background-size", "auto auto", "auto" },
         .{ "overscroll-behavior", "auto auto", "auto" },
         // Different values should NOT collapse
         .{ "overflow", "hidden scroll", "hidden scroll" },
