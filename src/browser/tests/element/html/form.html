@@ -23,6 +23,22 @@
   }
 </script>
 
+<script id="action">
+  {
+    const form = document.createElement('form')
+    testing.expectEqual(testing.BASE_URL + 'element/html/form.html', form.action)
+
+    form.action = 'hello';
+    testing.expectEqual(testing.BASE_URL + 'element/html/hello', form.action)
+
+    form.action = '/hello';
+    testing.expectEqual(testing.ORIGIN + 'hello', form.action)
+
+    form.action = 'https://lightpanda.io/hello';
+    testing.expectEqual('https://lightpanda.io/hello', form.action)
+  }
+</script>
+
 <!-- Test fixtures for form.method -->
 <form id="form_get" method="get"></form>
 <form id="form_post" method="post"></form>
