@@ -22,6 +22,7 @@ const Page = @import("../../../Page.zig");
 const Http = @import("../../../../http/Http.zig");
 
 const URL = @import("../../URL.zig");
+const RawURL = @import("../../../URL.zig");
 const Node = @import("../../Node.zig");
 const Element = @import("../../Element.zig");
 const Event = @import("../../Event.zig");
@@ -209,17 +210,21 @@ fn fetchStylesheet(self: *Link, page: *Page) !void {
     };
     defer ctx.buffer.deinit(page.arena);
 
+    const include_credentials = stylesheetRequestIncludesCredentials(self);
+    const request_url = try stylesheetRequestUrlForFetch(temp, url, include_credentials);
     var headers = try page._session.browser.http_client.newHeaders();
     try headers.add(STYLESHEET_ACCEPT_HEADER);
-    try page.headersForRequest(page.arena, url, &headers);
+    try page.headersForRequestWithPolicy(page.arena, request_url, &headers, .{
+        .include_credentials = include_credentials,
+    });
 
     try page._session.browser.http_client.request(.{
-        .url = url,
+        .url = request_url,
         .ctx = &ctx,
         .method = .GET,
         .frame_id = page._frame_id,
         .headers = headers,
-        .cookie_jar = &page._session.cookie_jar,
+        .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
         .resource_type = .stylesheet,
         .notification = page._session.notification,
         .header_callback = stylesheetHeaderCallback,
@@ -235,6 +240,38 @@ fn fetchStylesheet(self: *Link, page: *Page) !void {
     if (ctx.failed) |err| {
         return err;
     }
+}
+
+fn stylesheetRequestIncludesCredentials(self: *const Link) bool {
+    return stylesheetRequestAttributeIncludesCredentials(self.getCrossOrigin());
+}
+
+fn stylesheetRequestAttributeIncludesCredentials(cross_origin: ?[]const u8) bool {
+    const value = cross_origin orelse return true;
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, value, " \t\r\n"), "use-credentials");
+}
+
+fn stylesheetRequestUrlForFetch(
+    allocator: std.mem.Allocator,
+    url: [:0]const u8,
+    include_credentials: bool,
+) ![:0]const u8 {
+    if (include_credentials) {
+        return try allocator.dupeZ(u8, url);
+    }
+
+    if (RawURL.getUsername(url).len == 0) {
+        return try allocator.dupeZ(u8, url);
+    }
+
+    return try RawURL.buildUrl(
+        allocator,
+        RawURL.getProtocol(url),
+        RawURL.getHost(url),
+        RawURL.getPathname(url),
+        RawURL.getSearch(url),
+        RawURL.getHash(url),
+    );
 }
 
 pub const JsApi = struct {
@@ -290,6 +327,25 @@ fn stylesheetErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
 }
 
 const testing = @import("../../../../testing.zig");
+test "stylesheetRequestAttributeIncludesCredentials requires use-credentials when crossorigin is present" {
+    try std.testing.expect(stylesheetRequestAttributeIncludesCredentials(null));
+    try std.testing.expect(!stylesheetRequestAttributeIncludesCredentials(""));
+    try std.testing.expect(!stylesheetRequestAttributeIncludesCredentials("anonymous"));
+    try std.testing.expect(!stylesheetRequestAttributeIncludesCredentials(" nope "));
+    try std.testing.expect(stylesheetRequestAttributeIncludesCredentials("use-credentials"));
+}
+
+test "stylesheetRequestUrlForFetch strips userinfo when credentials are disabled" {
+    const stripped = try stylesheetRequestUrlForFetch(
+        std.testing.allocator,
+        "http://css%20user:p%40ss@127.0.0.1:9582/private.css?x=1#frag",
+        false,
+    );
+    defer std.testing.allocator.free(stripped);
+
+    try std.testing.expectEqualStrings("http://127.0.0.1:9582/private.css?x=1#frag", stripped);
+}
+
 test "WebApi: HTML.Link" {
     try testing.htmlRunner("element/html/link.html", .{});
 }

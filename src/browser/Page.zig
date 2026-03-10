@@ -418,10 +418,26 @@ pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
 // * cookies
 // * referer
 pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
-    try self.requestCookie(.{}).headersForRequest(temp, url, headers);
-    if (try authorizationHeaderValueForRequest(temp, self.url, url)) |authorization_value| {
-        const authorization_header = try std.fmt.allocPrintSentinel(temp, "Authorization: {s}", .{authorization_value}, 0);
-        try headers.add(authorization_header);
+    return self.headersForRequestWithPolicy(temp, url, headers, .{});
+}
+
+pub const RequestHeaderPolicy = struct {
+    include_credentials: bool = true,
+};
+
+pub fn headersForRequestWithPolicy(
+    self: *Page,
+    temp: Allocator,
+    url: [:0]const u8,
+    headers: *Http.Headers,
+    policy: RequestHeaderPolicy,
+) !void {
+    if (policy.include_credentials) {
+        try self.requestCookie(.{}).headersForRequest(temp, url, headers);
+        if (try authorizationHeaderValueForRequest(temp, self.url, url)) |authorization_value| {
+            const authorization_header = try std.fmt.allocPrintSentinel(temp, "Authorization: {s}", .{authorization_value}, 0);
+            try headers.add(authorization_header);
+        }
     }
 
     // Build the referer
@@ -5174,6 +5190,47 @@ test "Page headersForRequest does not inherit Authorization cross-origin" {
     while (iterator.next()) |header| {
         try std.testing.expect(!std.ascii.eqlIgnoreCase(header.name, "Authorization"));
     }
+}
+
+test "Page headersForRequestWithPolicy suppresses credentials when disabled" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+    page.url = "http://img%20user:p%40ss@127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html";
+    page.referer_header = null;
+    try page._session.cookie_jar.populateFromResponse(page.url, "lpcss=ok; Path=/");
+
+    var headers = try Http.Headers.init(page._session.browser.app.config.http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try page.headersForRequestWithPolicy(page.arena, "http://127.0.0.1:9582/private.css", &headers, .{
+        .include_credentials = false,
+    });
+
+    var found_cookie = false;
+    var found_authorization = false;
+    var found_referer = false;
+    var iterator = headers.iterator();
+    while (iterator.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Cookie")) {
+            found_cookie = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Authorization")) {
+            found_authorization = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Referer")) {
+            try std.testing.expectEqualStrings(
+                "http://127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html",
+                header.value,
+            );
+            found_referer = true;
+        }
+    }
+
+    try std.testing.expect(!found_cookie);
+    try std.testing.expect(!found_authorization);
+    try std.testing.expect(found_referer);
 }
 
 test "WebApi: Frames" {

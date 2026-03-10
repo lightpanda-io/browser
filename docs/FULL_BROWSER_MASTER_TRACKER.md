@@ -263,6 +263,11 @@ Current state inside Gate 1:
   loads, with a bounded headed localhost probe proving the stylesheet request
   succeeds and the page observes both `link.sheet` and stylesheet load
   completion
+- those same connected external stylesheets now also distinguish credentialed
+  vs anonymous fetch policy, with a bounded headed localhost probe proving
+  `crossorigin="anonymous"` suppresses both cookie and auth while preserving
+  sanitized referer, stylesheet `Accept`, successful stylesheet load, and
+  computed-style application on the headed surface
 - those same connected internal and external stylesheets now populate
   `cssRules` and feed the current `getComputedStyle` / headed painter path for
   simple authored rules, with bounded tests and a headed localhost probe
@@ -300,10 +305,11 @@ Current known gap entering Gate 2:
   still open
 - connected `link rel=stylesheet` requests now ride the same shared `Http`
   runtime path with `link.sheet` / `document.styleSheets` coverage and bounded
-  protected-load auth/cookie/referer/`Accept` verification, but stylesheet
-  body application now exists for the current simple authored-rule path while
-  broader CSS fidelity, script/font/resource parity, and one unified
-  subresource ownership path are still open
+  protected-load auth/cookie/referer/`Accept` verification plus anonymous
+  credential suppression, but stylesheet body application now exists for the
+  current simple authored-rule path while broader CSS fidelity,
+  script/font/resource parity, and one unified subresource ownership path are
+  still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other
