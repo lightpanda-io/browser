@@ -19,6 +19,7 @@
 const std = @import("std");
 
 const Page = @import("Page.zig");
+const URL = @import("URL.zig");
 const TreeWalker = @import("webapi/TreeWalker.zig");
 const Element = @import("webapi/Element.zig");
 const Node = @import("webapi/Node.zig");
@@ -125,8 +126,8 @@ pub const InteractiveElement = struct {
 /// Collect all interactive elements under `root`.
 pub fn collectInteractiveElements(
     root: *Node,
-    page: *Page,
     arena: Allocator,
+    page: *Page,
 ) ![]InteractiveElement {
     // Pre-build a map of event_target pointer → event type names,
     // so classify and getListenerTypes are both O(1) per element.
@@ -134,7 +135,7 @@ pub fn collectInteractiveElements(
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
-    var tw = TreeWalker.FullExcludeSelf.init(root, .{});
+    var tw = TreeWalker.Full.init(root, .{});
     while (tw.next()) |node| {
         const el = node.is(Element) orelse continue;
         const html_el = el.is(Element.Html) orelse continue;
@@ -163,7 +164,10 @@ pub fn collectInteractiveElements(
             .tab_index = html_el.getTabIndex(),
             .id = el.getAttributeSafe(comptime .wrap("id")),
             .class = el.getAttributeSafe(comptime .wrap("class")),
-            .href = el.getAttributeSafe(comptime .wrap("href")),
+            .href = if (el.getAttributeSafe(comptime .wrap("href"))) |href|
+                URL.resolve(arena, page.base(), href, .{ .encode = true }) catch href
+            else
+                null,
             .input_type = getInputType(el),
             .value = getInputValue(el),
             .element_name = el.getAttributeSafe(comptime .wrap("name")),
@@ -348,7 +352,34 @@ fn getTextContent(node: *Node) ?[]const u8 {
 }
 
 fn isDisabled(el: *Element) bool {
-    return el.getAttributeSafe(comptime .wrap("disabled")) != null;
+    if (el.getAttributeSafe(comptime .wrap("disabled")) != null) return true;
+    return isDisabledByFieldset(el);
+}
+
+/// Check if an element is disabled by an ancestor <fieldset disabled>.
+/// Per spec, elements inside the first <legend> child of a disabled fieldset
+/// are NOT disabled by that fieldset.
+fn isDisabledByFieldset(el: *Element) bool {
+    const element_node = el.asNode();
+    var current: ?*Node = element_node._parent;
+    while (current) |node| {
+        current = node._parent;
+        const ancestor = node.is(Element) orelse continue;
+
+        if (ancestor.getTag() == .fieldset and ancestor.getAttributeSafe(comptime .wrap("disabled")) != null) {
+            // Check if element is inside the first <legend> child of this fieldset
+            var child = ancestor.firstElementChild();
+            while (child) |c| {
+                if (c.getTag() == .legend) {
+                    if (c.asNode().contains(element_node)) return false;
+                    break;
+                }
+                child = c.nextElementSibling();
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 fn getInputType(el: *Element) ?[]const u8 {
@@ -381,7 +412,7 @@ fn testInteractive(html: []const u8) ![]InteractiveElement {
     const div = try doc.createElement("div", null, page);
     try page.parseHtmlAsChildren(div.asNode(), html);
 
-    return collectInteractiveElements(div.asNode(), page, page.call_arena);
+    return collectInteractiveElements(div.asNode(), page.call_arena, page);
 }
 
 test "browser.interactive: button" {
@@ -452,6 +483,20 @@ test "browser.interactive: disabled" {
     const elements = try testInteractive("<button disabled>Off</button>");
     try testing.expectEqual(1, elements.len);
     try testing.expect(elements[0].disabled);
+}
+
+test "browser.interactive: disabled by fieldset" {
+    const elements = try testInteractive(
+        \\<fieldset disabled>
+        \\  <button>Disabled</button>
+        \\  <legend><button>In legend</button></legend>
+        \\</fieldset>
+    );
+    try testing.expectEqual(2, elements.len);
+    // Button outside legend is disabled by fieldset
+    try testing.expect(elements[0].disabled);
+    // Button inside first legend is NOT disabled
+    try testing.expect(!elements[1].disabled);
 }
 
 test "browser.interactive: non-interactive div" {

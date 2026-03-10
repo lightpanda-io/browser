@@ -71,7 +71,7 @@ fn getInteractiveElements(cmd: anytype) !void {
     else
         page.document.asNode();
 
-    const elements = try interactive.collectInteractiveElements(root, page, cmd.arena);
+    const elements = try interactive.collectInteractiveElements(root, cmd.arena, page);
 
     // Register nodes so nodeIds are valid for subsequent CDP calls.
     var node_ids: std.ArrayList(Node.Id) = try .initCapacity(cmd.arena, elements.len);
