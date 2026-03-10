@@ -219,6 +219,106 @@
   }
 
   {
+    const url = new URL('https://example.com/path');
+    url.username = 'newuser';
+    testing.expectEqual('newuser', url.username);
+    testing.expectEqual('https://newuser@example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('https://olduser@example.com/path');
+    url.username = 'newuser';
+    testing.expectEqual('newuser', url.username);
+    testing.expectEqual('https://newuser@example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('https://olduser:pass@example.com/path');
+    url.username = 'newuser';
+    testing.expectEqual('newuser', url.username);
+    testing.expectEqual('pass', url.password);
+    testing.expectEqual('https://newuser:pass@example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('https://user@example.com/path');
+    url.password = 'secret';
+    testing.expectEqual('user', url.username);
+    testing.expectEqual('secret', url.password);
+    testing.expectEqual('https://user:secret@example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('https://user:oldpass@example.com/path');
+    url.password = 'newpass';
+    testing.expectEqual('user', url.username);
+    testing.expectEqual('newpass', url.password);
+    testing.expectEqual('https://user:newpass@example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('https://user:pass@example.com/path');
+    url.username = '';
+    url.password = '';
+    testing.expectEqual('', url.username);
+    testing.expectEqual('', url.password);
+    testing.expectEqual('https://example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('https://example.com/path');
+    url.username = 'user@domain';
+    testing.expectEqual('user%40domain', url.username);
+    testing.expectEqual('https://user%40domain@example.com/path', url.href);
+  }
+
+  {
+    const url = new URL('https://example.com/path');
+    url.username = 'user:name';
+    testing.expectEqual('user%3Aname', url.username);
+  }
+
+  {
+    const url = new URL('https://example.com/path');
+    url.password = 'pass@word';
+    testing.expectEqual('pass%40word', url.password);
+  }
+
+  {
+    const url = new URL('https://example.com/path');
+    url.password = 'pass:word';
+    testing.expectEqual('pass%3Aword', url.password);
+  }
+
+  {
+    const url = new URL('https://example.com/path');
+    url.username = 'user/name';
+    testing.expectEqual('user%2Fname', url.username);
+  }
+
+  {
+    const url = new URL('https://example.com/path');
+    url.password = 'pass?word';
+    testing.expectEqual('pass%3Fword', url.password);
+  }
+
+  {
+    const url = new URL('https://user%40domain:pass%3Aword@example.com/path');
+    testing.expectEqual('user%40domain', url.username);
+    testing.expectEqual('pass%3Aword', url.password);
+  }
+
+  {
+    const url = new URL('https://example.com:8080/path?a=b#hash');
+    url.username = 'user';
+    url.password = 'pass';
+    testing.expectEqual('https://user:pass@example.com:8080/path?a=b#hash', url.href);
+    testing.expectEqual('8080', url.port);
+    testing.expectEqual('?a=b', url.search);
+    testing.expectEqual('#hash', url.hash);
+  }
+
+  {
     const url = new URL('http://user:pass@example.com:8080/path?query=1#hash');
     testing.expectEqual('http:', url.protocol);
     testing.expectEqual('example.com', url.hostname);
@@ -437,9 +537,9 @@
 {
   const url = new URL('https://example.com:8080/path');
   url.host = 'newhost.com';
-  testing.expectEqual('https://newhost.com/path', url.href);
+  testing.expectEqual('https://newhost.com:8080/path', url.href);
   testing.expectEqual('newhost.com', url.hostname);
-  testing.expectEqual('', url.port);
+  testing.expectEqual('8080', url.port);
 }
 
 {
