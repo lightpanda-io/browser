@@ -22,6 +22,7 @@ const log = @import("../../log.zig");
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
 const interactive = lp.interactive;
+const structured_data = lp.structured_data;
 const Node = @import("../Node.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 
@@ -30,12 +31,14 @@ pub fn processMessage(cmd: anytype) !void {
         getMarkdown,
         getSemanticTree,
         getInteractiveElements,
+        getStructuredData,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .getMarkdown => return getMarkdown(cmd),
         .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
+        .getStructuredData => return getStructuredData(cmd),
     }
 }
 
@@ -128,6 +131,21 @@ fn getInteractiveElements(cmd: anytype) !void {
     }, .{});
 }
 
+fn getStructuredData(cmd: anytype) !void {
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const data = try structured_data.collectStructuredData(
+        page.document.asNode(),
+        cmd.arena,
+        page,
+    );
+
+    return cmd.sendResult(.{
+        .structuredData = data,
+    }, .{});
+}
+
 const testing = @import("../testing.zig");
 test "cdp.lp: getMarkdown" {
     var ctx = testing.context();
@@ -160,4 +178,20 @@ test "cdp.lp: getInteractiveElements" {
     const result = ctx.client.?.sent.items[0].object.get("result").?.object;
     try testing.expect(result.get("elements") != null);
     try testing.expect(result.get("nodeIds") != null);
+}
+
+test "cdp.lp: getStructuredData" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.getStructuredData",
+    });
+
+    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    try testing.expect(result.get("structuredData") != null);
 }

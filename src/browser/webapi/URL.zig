@@ -66,8 +66,18 @@ pub fn getUsername(self: *const URL) []const u8 {
     return U.getUsername(self._raw);
 }
 
+pub fn setUsername(self: *URL, value: []const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setUsername(self._raw, value, allocator);
+}
+
 pub fn getPassword(self: *const URL) []const u8 {
     return U.getPassword(self._raw);
+}
+
+pub fn setPassword(self: *URL, value: []const u8) !void {
+    const allocator = self._arena orelse return error.NoAllocator;
+    self._raw = try U.setPassword(self._raw, value, allocator);
 }
 
 pub fn getPathname(self: *const URL) []const u8 {
@@ -272,8 +282,8 @@ pub const JsApi = struct {
     pub const search = bridge.accessor(URL.getSearch, URL.setSearch, .{});
     pub const hash = bridge.accessor(URL.getHash, URL.setHash, .{});
     pub const pathname = bridge.accessor(URL.getPathname, URL.setPathname, .{});
-    pub const username = bridge.accessor(URL.getUsername, null, .{});
-    pub const password = bridge.accessor(URL.getPassword, null, .{});
+    pub const username = bridge.accessor(URL.getUsername, URL.setUsername, .{});
+    pub const password = bridge.accessor(URL.getPassword, URL.setPassword, .{});
     pub const hostname = bridge.accessor(URL.getHostname, URL.setHostname, .{});
     pub const host = bridge.accessor(URL.getHost, URL.setHost, .{});
     pub const port = bridge.accessor(URL.getPort, URL.setPort, .{});

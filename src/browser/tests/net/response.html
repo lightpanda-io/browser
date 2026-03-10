@@ -2,51 +2,113 @@
 <script src="../testing.js"></script>
 
 <script id=response>
-  // let response = new Response("Hello, World!");
-  // testing.expectEqual(200, response.status);
-  // testing.expectEqual("", response.statusText);
-  // testing.expectEqual(true, response.ok);
-  // testing.expectEqual("", response.url);
-  // testing.expectEqual(false, response.redirected);
+  {
+    let response = new Response("Hello, World!");
+    testing.expectEqual(200, response.status);
+    testing.expectEqual("", response.statusText);
+    testing.expectEqual(true, response.ok);
+    testing.expectEqual("", response.url);
+    testing.expectEqual(false, response.redirected);
+  }
 
-  let response2 = new Response("Error occurred", {
-    status: 404,
-    statusText: "Not Found",
-    headers: {
-        "Content-Type": "text/plain",
-        "X-Custom": "test-value",
-        "Cache-Control": "no-cache"
-    }
-  });
-  testing.expectEqual(true, true);
-  // testing.expectEqual(404, response2.status);
-  // testing.expectEqual("Not Found", response2.statusText);
-  // testing.expectEqual(false, response2.ok);
-  // testing.expectEqual("text/plain", response2.headers);
-  // testing.expectEqual("test-value", response2.headers.get("X-Custom"));
-  testing.expectEqual("no-cache", response2.headers.get("cache-control"));
-
-  // let response3 = new Response("Created", { status: 201, statusText: "Created" });
-  // testing.expectEqual("basic", response3.type);
-  // testing.expectEqual(201, response3.status);
-  // testing.expectEqual("Created", response3.statusText);
-  // testing.expectEqual(true, response3.ok);
-
-  // let nullResponse = new Response(null);
-  // testing.expectEqual(200, nullResponse.status);
-  // testing.expectEqual("", nullResponse.statusText);
-
-  // let emptyResponse = new Response("");
-  // testing.expectEqual(200, emptyResponse.status);
-</script>
-
-<!-- <script id=json>
-  testing.async(async () => {
-    const json = await new Promise((resolve) => {
-      let response = new Response('[]');
-      response.json().then(resolve)
+  {
+    let response2 = new Response("Error occurred", {
+      status: 404,
+      statusText: "Not Found",
+      headers: {
+          "Content-Type": "text/plain",
+          "X-Custom": "test-value",
+          "Cache-Control": "no-cache"
+      }
     });
-    testing.expectEqual([], json);
+    testing.expectEqual(404, response2.status);
+    testing.expectEqual("Not Found", response2.statusText);
+    testing.expectEqual(false, response2.ok);
+    testing.expectEqual("test-value", response2.headers.get("X-Custom"));
+    testing.expectEqual("no-cache", response2.headers.get("cache-control"));
+  }
+
+  {
+    let response3 = new Response("Created", { status: 201, statusText: "Created" });
+    testing.expectEqual("basic", response3.type);
+    testing.expectEqual(201, response3.status);
+    testing.expectEqual("Created", response3.statusText);
+    testing.expectEqual(true, response3.ok);
+  }
+
+  {
+    let nullResponse = new Response(null);
+    testing.expectEqual(200, nullResponse.status);
+    testing.expectEqual("", nullResponse.statusText);
+  }
+
+  {
+    let emptyResponse = new Response("");
+    testing.expectEqual(200, emptyResponse.status);
+  }
+</script>
+
+<script id=body_methods>
+  testing.async(async () => {
+    const response = new Response('Hello, World!');
+    const text = await response.text();
+    testing.expectEqual('Hello, World!', text);
+  });
+
+  testing.async(async () => {
+    const response = new Response('{"name": "test"}');
+    const json = await response.json();
+    testing.expectEqual('test', json.name);
+  });
+
+  testing.async(async () => {
+    const response = new Response('binary data');
+    const buffer = await response.arrayBuffer();
+    testing.expectEqual(true, buffer instanceof ArrayBuffer);
+    testing.expectEqual(11, buffer.byteLength);
+  });
+
+  testing.async(async () => {
+    const response = new Response('blob content', {
+      headers: { 'Content-Type': 'text/plain' }
+    });
+    const blob = await response.blob();
+    testing.expectEqual(true, blob instanceof Blob);
+    testing.expectEqual(12, blob.size);
+    testing.expectEqual('text/plain', blob.type);
+  });
+
+  testing.async(async () => {
+    const response = new Response('bytes');
+    const bytes = await response.bytes();
+    testing.expectEqual(true, bytes instanceof Uint8Array);
+    testing.expectEqual(5, bytes.length);
   });
 </script>
- -->
+
+<script id=clone>
+  {
+    const response1 = new Response('test body', {
+      status: 201,
+      statusText: 'Created',
+      headers: { 'X-Custom': 'value' }
+    });
+
+    const response2 = response1.clone();
+
+    testing.expectEqual(response1.status, response2.status);
+    testing.expectEqual(response1.statusText, response2.statusText);
+    testing.expectEqual('value', response2.headers.get('X-Custom'));
+  }
+
+  testing.async(async () => {
+    const response1 = new Response('cloned body');
+    const response2 = response1.clone();
+
+    const text1 = await response1.text();
+    const text2 = await response2.text();
+
+    testing.expectEqual('cloned body', text1);
+    testing.expectEqual('cloned body', text2);
+  });
+</script>

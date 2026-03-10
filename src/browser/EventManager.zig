@@ -373,6 +373,29 @@ fn getFunction(handler: anytype, local: *const js.Local) ?js.Function {
     };
 }
 
+/// Check if there are any listeners for a direct dispatch (non-DOM target).
+/// Use this to avoid creating an event when there are no listeners.
+pub fn hasDirectListeners(self: *EventManager, target: *EventTarget, typ: []const u8, handler: anytype) bool {
+    if (hasHandler(handler)) {
+        return true;
+    }
+    return self.lookup.get(.{
+        .event_target = @intFromPtr(target),
+        .type_string = .wrap(typ),
+    }) != null;
+}
+
+fn hasHandler(handler: anytype) bool {
+    const ti = @typeInfo(@TypeOf(handler));
+    if (ti == .null) {
+        return false;
+    }
+    if (ti == .optional) {
+        return handler != null;
+    }
+    return true;
+}
+
 fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts: DispatchOpts) !void {
     const ShadowRoot = @import("webapi/ShadowRoot.zig");
 

@@ -26,6 +26,8 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 
+const Allocator = std.mem.Allocator;
+
 const CSSStyleDeclaration = @This();
 
 _element: ?*Element = null,
@@ -114,9 +116,12 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 
     const normalized = normalizePropertyName(property_name, &page.buf);
 
+    // Normalize the value for canonical serialization
+    const normalized_value = try normalizePropertyValue(page.call_arena, normalized, value);
+
     // Find existing property
     if (self.findProperty(normalized)) |existing| {
-        existing._value = try String.init(page.arena, value, .{});
+        existing._value = try String.init(page.arena, normalized_value, .{});
         existing._important = important;
         return;
     }
@@ -125,7 +130,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
     const prop = try page._factory.create(Property{
         ._node = .{},
         ._name = try String.init(page.arena, normalized, .{}),
-        ._value = try String.init(page.arena, value, .{}),
+        ._value = try String.init(page.arena, normalized_value, .{}),
         ._important = important,
     });
     self._properties.append(&prop._node);
@@ -225,6 +230,351 @@ fn normalizePropertyName(name: []const u8, buf: []u8) []const u8 {
         return name;
     }
     return std.ascii.lowerString(buf, name);
+}
+
+// Normalize CSS property values for canonical serialization
+fn normalizePropertyValue(arena: Allocator, property_name: []const u8, value: []const u8) ![]const u8 {
+    // Per CSSOM spec, unitless zero in length properties should serialize as "0px"
+    if (std.mem.eql(u8, value, "0") and isLengthProperty(property_name)) {
+        return "0px";
+    }
+
+    // "first baseline" serializes canonically as "baseline" (first is the default)
+    if (std.ascii.startsWithIgnoreCase(value, "first baseline")) {
+        if (value.len == 14) {
+            // Exact match "first baseline"
+            return "baseline";
+        }
+        if (value.len > 14 and value[14] == ' ') {
+            // "first baseline X" -> "baseline X"
+            return try std.mem.concat(arena, u8, &.{ "baseline", value[14..] });
+        }
+    }
+
+    // For 2-value shorthand properties, collapse "X X" to "X"
+    if (isTwoValueShorthand(property_name)) {
+        if (collapseDuplicateValue(value)) |single| {
+            return single;
+        }
+    }
+
+    // Canonicalize anchor-size() function: anchor name (dashed ident) comes before size keyword
+    if (std.mem.indexOf(u8, value, "anchor-size(") != null) {
+        return try canonicalizeAnchorSize(arena, value);
+    }
+
+    return value;
+}
+
+// Canonicalize anchor-size() so that the dashed ident (anchor name) comes before the size keyword.
+// e.g. "anchor-size(width --foo)" -> "anchor-size(--foo width)"
+fn canonicalizeAnchorSize(arena: Allocator, value: []const u8) ![]const u8 {
+    var buf = std.Io.Writer.Allocating.init(arena);
+    var i: usize = 0;
+
+    while (i < value.len) {
+        // Look for "anchor-size("
+        if (std.mem.startsWith(u8, value[i..], "anchor-size(")) {
+            try buf.writer.writeAll("anchor-size(");
+            i += "anchor-size(".len;
+
+            // Parse and canonicalize the arguments
+            i = try canonicalizeAnchorSizeArgs(value, i, &buf.writer);
+        } else {
+            try buf.writer.writeByte(value[i]);
+            i += 1;
+        }
+    }
+
+    return buf.written();
+}
+
+// Parse anchor-size arguments and write them in canonical order
+fn canonicalizeAnchorSizeArgs(value: []const u8, start: usize, writer: *std.Io.Writer) !usize {
+    var i = start;
+    var depth: usize = 1;
+
+    // Skip leading whitespace
+    while (i < value.len and value[i] == ' ') : (i += 1) {}
+
+    // Collect tokens before the comma or close paren
+    var first_token_start: ?usize = null;
+    var first_token_end: usize = 0;
+    var second_token_start: ?usize = null;
+    var second_token_end: usize = 0;
+    var comma_pos: ?usize = null;
+    var token_count: usize = 0;
+
+    const args_start = i;
+    var in_token = false;
+
+    // First pass: find the structure of arguments before comma/closing paren at depth 1
+    while (i < value.len and depth > 0) {
+        const c = value[i];
+
+        if (c == '(') {
+            depth += 1;
+            in_token = true;
+            i += 1;
+        } else if (c == ')') {
+            depth -= 1;
+            if (depth == 0) {
+                if (in_token) {
+                    if (token_count == 0) {
+                        first_token_end = i;
+                    } else if (token_count == 1) {
+                        second_token_end = i;
+                    }
+                }
+                break;
+            }
+            i += 1;
+        } else if (c == ',' and depth == 1) {
+            if (in_token) {
+                if (token_count == 0) {
+                    first_token_end = i;
+                } else if (token_count == 1) {
+                    second_token_end = i;
+                }
+            }
+            comma_pos = i;
+            break;
+        } else if (c == ' ') {
+            if (in_token and depth == 1) {
+                if (token_count == 0) {
+                    first_token_end = i;
+                    token_count = 1;
+                } else if (token_count == 1 and second_token_start != null) {
+                    second_token_end = i;
+                    token_count = 2;
+                }
+                in_token = false;
+            }
+            i += 1;
+        } else {
+            if (!in_token and depth == 1) {
+                if (token_count == 0) {
+                    first_token_start = i;
+                } else if (token_count == 1) {
+                    second_token_start = i;
+                }
+                in_token = true;
+            }
+            i += 1;
+        }
+    }
+
+    // Handle end of tokens
+    if (in_token and token_count == 1 and second_token_start != null) {
+        second_token_end = i;
+        token_count = 2;
+    } else if (in_token and token_count == 0) {
+        first_token_end = i;
+        token_count = 1;
+    }
+
+    // Check if we have exactly two tokens that need reordering
+    if (token_count == 2) {
+        const first_start = first_token_start orelse args_start;
+        const second_start = second_token_start orelse first_token_end;
+
+        const first_token = value[first_start..first_token_end];
+        const second_token = value[second_start..second_token_end];
+
+        // If second token is a dashed ident and first is a size keyword, swap them
+        if (std.mem.startsWith(u8, second_token, "--") and isAnchorSizeKeyword(first_token)) {
+            try writer.writeAll(second_token);
+            try writer.writeByte(' ');
+            try writer.writeAll(first_token);
+        } else {
+            // Keep original order
+            try writer.writeAll(first_token);
+            try writer.writeByte(' ');
+            try writer.writeAll(second_token);
+        }
+    } else if (first_token_start) |fts| {
+        // Single token, just copy it
+        try writer.writeAll(value[fts..first_token_end]);
+    }
+
+    // Handle comma and fallback value (may contain nested anchor-size)
+    if (comma_pos) |cp| {
+        try writer.writeAll(", ");
+        i = cp + 1;
+        // Skip whitespace after comma
+        while (i < value.len and value[i] == ' ') : (i += 1) {}
+
+        // Copy the fallback, recursively handling nested anchor-size
+        while (i < value.len and depth > 0) {
+            if (std.mem.startsWith(u8, value[i..], "anchor-size(")) {
+                try writer.writeAll("anchor-size(");
+                i += "anchor-size(".len;
+                depth += 1;
+                i = try canonicalizeAnchorSizeArgs(value, i, writer);
+                depth -= 1;
+            } else if (value[i] == '(') {
+                depth += 1;
+                try writer.writeByte(value[i]);
+                i += 1;
+            } else if (value[i] == ')') {
+                depth -= 1;
+                if (depth == 0) break;
+                try writer.writeByte(value[i]);
+                i += 1;
+            } else {
+                try writer.writeByte(value[i]);
+                i += 1;
+            }
+        }
+    }
+
+    // Write closing paren
+    try writer.writeByte(')');
+
+    return i + 1; // Skip past the closing paren
+}
+
+fn isAnchorSizeKeyword(token: []const u8) bool {
+    const keywords = std.StaticStringMap(void).initComptime(.{
+        .{ "width", {} },
+        .{ "height", {} },
+        .{ "block", {} },
+        .{ "inline", {} },
+        .{ "self-block", {} },
+        .{ "self-inline", {} },
+    });
+    return keywords.has(token);
+}
+
+// Check if a value is "X X" (duplicate) and return just "X"
+fn collapseDuplicateValue(value: []const u8) ?[]const u8 {
+    const space_idx = std.mem.indexOfScalar(u8, value, ' ') orelse return null;
+    if (space_idx == 0 or space_idx >= value.len - 1) return null;
+
+    const first = value[0..space_idx];
+    const rest = std.mem.trimLeft(u8, value[space_idx + 1 ..], " ");
+
+    // Check if there's only one more value (no additional spaces)
+    if (std.mem.indexOfScalar(u8, rest, ' ') != null) return null;
+
+    if (std.mem.eql(u8, first, rest)) {
+        return first;
+    }
+    return null;
+}
+
+fn isTwoValueShorthand(name: []const u8) bool {
+    const shorthands = std.StaticStringMap(void).initComptime(.{
+        .{ "place-content", {} },
+        .{ "place-items", {} },
+        .{ "place-self", {} },
+        .{ "margin-block", {} },
+        .{ "margin-inline", {} },
+        .{ "padding-block", {} },
+        .{ "padding-inline", {} },
+        .{ "inset-block", {} },
+        .{ "inset-inline", {} },
+        .{ "border-block-style", {} },
+        .{ "border-inline-style", {} },
+        .{ "border-block-width", {} },
+        .{ "border-inline-width", {} },
+        .{ "border-block-color", {} },
+        .{ "border-inline-color", {} },
+        .{ "overflow", {} },
+        .{ "overscroll-behavior", {} },
+        .{ "gap", {} },
+    });
+    return shorthands.has(name);
+}
+
+fn isLengthProperty(name: []const u8) bool {
+    // Properties that accept <length> or <length-percentage> values
+    const length_properties = std.StaticStringMap(void).initComptime(.{
+        // Sizing
+        .{ "width", {} },
+        .{ "height", {} },
+        .{ "min-width", {} },
+        .{ "min-height", {} },
+        .{ "max-width", {} },
+        .{ "max-height", {} },
+        // Margins
+        .{ "margin", {} },
+        .{ "margin-top", {} },
+        .{ "margin-right", {} },
+        .{ "margin-bottom", {} },
+        .{ "margin-left", {} },
+        .{ "margin-block", {} },
+        .{ "margin-block-start", {} },
+        .{ "margin-block-end", {} },
+        .{ "margin-inline", {} },
+        .{ "margin-inline-start", {} },
+        .{ "margin-inline-end", {} },
+        // Padding
+        .{ "padding", {} },
+        .{ "padding-top", {} },
+        .{ "padding-right", {} },
+        .{ "padding-bottom", {} },
+        .{ "padding-left", {} },
+        .{ "padding-block", {} },
+        .{ "padding-block-start", {} },
+        .{ "padding-block-end", {} },
+        .{ "padding-inline", {} },
+        .{ "padding-inline-start", {} },
+        .{ "padding-inline-end", {} },
+        // Positioning
+        .{ "top", {} },
+        .{ "right", {} },
+        .{ "bottom", {} },
+        .{ "left", {} },
+        .{ "inset", {} },
+        .{ "inset-block", {} },
+        .{ "inset-block-start", {} },
+        .{ "inset-block-end", {} },
+        .{ "inset-inline", {} },
+        .{ "inset-inline-start", {} },
+        .{ "inset-inline-end", {} },
+        // Border
+        .{ "border-width", {} },
+        .{ "border-top-width", {} },
+        .{ "border-right-width", {} },
+        .{ "border-bottom-width", {} },
+        .{ "border-left-width", {} },
+        .{ "border-block-width", {} },
+        .{ "border-block-start-width", {} },
+        .{ "border-block-end-width", {} },
+        .{ "border-inline-width", {} },
+        .{ "border-inline-start-width", {} },
+        .{ "border-inline-end-width", {} },
+        .{ "border-radius", {} },
+        .{ "border-top-left-radius", {} },
+        .{ "border-top-right-radius", {} },
+        .{ "border-bottom-left-radius", {} },
+        .{ "border-bottom-right-radius", {} },
+        // Text
+        .{ "font-size", {} },
+        .{ "line-height", {} },
+        .{ "letter-spacing", {} },
+        .{ "word-spacing", {} },
+        .{ "text-indent", {} },
+        // Flexbox/Grid
+        .{ "gap", {} },
+        .{ "row-gap", {} },
+        .{ "column-gap", {} },
+        .{ "flex-basis", {} },
+        // Outline
+        .{ "outline-width", {} },
+        .{ "outline-offset", {} },
+        // Other
+        .{ "border-spacing", {} },
+        .{ "text-shadow", {} },
+        .{ "box-shadow", {} },
+        .{ "baseline-shift", {} },
+        .{ "vertical-align", {} },
+        // Grid lanes
+        .{ "flow-tolerance", {} },
+    });
+
+    return length_properties.has(name);
 }
 
 fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []const u8) []const u8 {

@@ -98,6 +98,64 @@
   }
 </script>
 
+<script id=mime_parsing>
+  // MIME types are lowercased
+  {
+    const blob = new Blob([], { type: "TEXT/HTML" });
+    testing.expectEqual("text/html", blob.type);
+  }
+
+  {
+    const blob = new Blob([], { type: "Application/JSON" });
+    testing.expectEqual("application/json", blob.type);
+  }
+
+  // MIME with parameters - lowercased
+  {
+    const blob = new Blob([], { type: "text/html; charset=UTF-8" });
+    testing.expectEqual("text/html; charset=utf-8", blob.type);
+  }
+
+  // Any ASCII string is accepted and lowercased (no MIME structure validation)
+  {
+    const blob = new Blob([], { type: "invalid" });
+    testing.expectEqual("invalid", blob.type);
+  }
+
+  {
+    const blob = new Blob([], { type: "/" });
+    testing.expectEqual("/", blob.type);
+  }
+
+  // Non-ASCII characters cause empty string (chars outside U+0020-U+007E)
+  {
+    const blob = new Blob([], { type: "ý/x" });
+    testing.expectEqual("", blob.type);
+  }
+
+  {
+    const blob = new Blob([], { type: "text/plàin" });
+    testing.expectEqual("", blob.type);
+  }
+
+  // Control characters cause empty string
+  {
+    const blob = new Blob([], { type: "text/html\x00" });
+    testing.expectEqual("", blob.type);
+  }
+
+  // Empty type stays empty
+  {
+    const blob = new Blob([]);
+    testing.expectEqual("", blob.type);
+  }
+
+  {
+    const blob = new Blob([], { type: "" });
+    testing.expectEqual("", blob.type);
+  }
+</script>
+
 <script id=slice>
   {
     const parts = ["la", "symphonie", "des", "éclairs"];
