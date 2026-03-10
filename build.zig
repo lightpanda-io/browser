@@ -64,7 +64,7 @@ pub fn build(b: *Build) !void {
         b.default_step.dependOn(fmt_step);
 
         try linkV8(b, mod, enable_asan, enable_tsan, prebuilt_v8_path);
-        try linkCurl(b, mod);
+        try linkCurl(b, mod, enable_tsan);
         try linkHtml5Ever(b, mod);
 
         break :blk mod;
@@ -200,19 +200,19 @@ fn linkHtml5Ever(b: *Build, mod: *Build.Module) !void {
     mod.addObjectFile(obj);
 }
 
-fn linkCurl(b: *Build, mod: *Build.Module) !void {
+fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
     const target = mod.resolved_target.?;
 
-    const curl = buildCurl(b, target, mod.optimize.?);
+    const curl = buildCurl(b, target, mod.optimize.?, is_tsan);
     mod.linkLibrary(curl);
 
-    const zlib = buildZlib(b, target, mod.optimize.?);
+    const zlib = buildZlib(b, target, mod.optimize.?, is_tsan);
     curl.root_module.linkLibrary(zlib);
 
-    const brotli = buildBrotli(b, target, mod.optimize.?);
+    const brotli = buildBrotli(b, target, mod.optimize.?, is_tsan);
     for (brotli) |lib| curl.root_module.linkLibrary(lib);
 
-    const nghttp2 = buildNghttp2(b, target, mod.optimize.?);
+    const nghttp2 = buildNghttp2(b, target, mod.optimize.?, is_tsan);
     curl.root_module.linkLibrary(nghttp2);
 
     const boringssl = buildBoringSsl(b, target, mod.optimize.?);
@@ -229,13 +229,14 @@ fn linkCurl(b: *Build, mod: *Build.Module) !void {
     }
 }
 
-fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
+fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
     const dep = b.dependency("zlib", .{});
 
     const mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_thread = is_tsan,
     });
 
     const lib = b.addLibrary(.{ .name = "z", .root_module = mod });
@@ -260,13 +261,14 @@ fn buildZlib(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.Opti
     return lib;
 }
 
-fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) [3]*Build.Step.Compile {
+fn buildBrotli(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) [3]*Build.Step.Compile {
     const dep = b.dependency("brotli", .{});
 
     const mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_thread = is_tsan,
     });
     mod.addIncludePath(dep.path("c/include"));
 
@@ -322,13 +324,14 @@ fn buildBoringSsl(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin
     return .{ ssl, crypto };
 }
 
-fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *Build.Step.Compile {
+fn buildNghttp2(b: *Build, target: Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, is_tsan: bool) *Build.Step.Compile {
     const dep = b.dependency("nghttp2", .{});
 
     const mod = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_thread = is_tsan,
     });
     mod.addIncludePath(dep.path("lib/includes"));
 
@@ -373,6 +376,7 @@ fn buildCurl(
     b: *Build,
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    is_tsan: bool,
 ) *Build.Step.Compile {
     const dep = b.dependency("curl", .{});
 
@@ -380,6 +384,7 @@ fn buildCurl(
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .sanitize_thread = is_tsan,
     });
     mod.addIncludePath(dep.path("lib"));
     mod.addIncludePath(dep.path("include"));
