@@ -483,6 +483,16 @@ fn isTwoValueShorthand(name: []const u8) bool {
         .{ "overflow", {} },
         .{ "overscroll-behavior", {} },
         .{ "gap", {} },
+        .{ "grid-gap", {} },
+        // Scroll
+        .{ "scroll-padding-block", {} },
+        .{ "scroll-padding-inline", {} },
+        .{ "scroll-snap-align", {} },
+        // Background/Mask
+        .{ "background-size", {} },
+        .{ "border-image-repeat", {} },
+        .{ "mask-repeat", {} },
+        .{ "mask-size", {} },
     });
     return shorthands.has(name);
 }
@@ -552,7 +562,6 @@ fn isLengthProperty(name: []const u8) bool {
         .{ "border-bottom-right-radius", {} },
         // Text
         .{ "font-size", {} },
-        .{ "line-height", {} },
         .{ "letter-spacing", {} },
         .{ "word-spacing", {} },
         .{ "text-indent", {} },
@@ -561,17 +570,52 @@ fn isLengthProperty(name: []const u8) bool {
         .{ "row-gap", {} },
         .{ "column-gap", {} },
         .{ "flex-basis", {} },
+        // Legacy grid aliases
+        .{ "grid-column-gap", {} },
+        .{ "grid-row-gap", {} },
         // Outline
+        .{ "outline", {} },
         .{ "outline-width", {} },
         .{ "outline-offset", {} },
+        // Multi-column
+        .{ "column-rule-width", {} },
+        .{ "column-width", {} },
+        // Scroll
+        .{ "scroll-margin", {} },
+        .{ "scroll-margin-top", {} },
+        .{ "scroll-margin-right", {} },
+        .{ "scroll-margin-bottom", {} },
+        .{ "scroll-margin-left", {} },
+        .{ "scroll-padding", {} },
+        .{ "scroll-padding-top", {} },
+        .{ "scroll-padding-right", {} },
+        .{ "scroll-padding-bottom", {} },
+        .{ "scroll-padding-left", {} },
+        // Shapes
+        .{ "shape-margin", {} },
+        // Motion path
+        .{ "offset-distance", {} },
+        // Transforms
+        .{ "translate", {} },
+        // Animations
+        .{ "animation-range-end", {} },
+        .{ "animation-range-start", {} },
         // Other
         .{ "border-spacing", {} },
         .{ "text-shadow", {} },
         .{ "box-shadow", {} },
         .{ "baseline-shift", {} },
         .{ "vertical-align", {} },
+        .{ "text-decoration-inset", {} },
+        .{ "block-step-size", {} },
         // Grid lanes
         .{ "flow-tolerance", {} },
+        .{ "column-rule-edge-inset", {} },
+        .{ "column-rule-interior-inset", {} },
+        .{ "row-rule-edge-inset", {} },
+        .{ "row-rule-interior-inset", {} },
+        .{ "rule-edge-inset", {} },
+        .{ "rule-interior-inset", {} },
     });
 
     return length_properties.has(name);
@@ -693,3 +737,55 @@ pub const JsApi = struct {
     pub const removeProperty = bridge.function(CSSStyleDeclaration.removeProperty, .{});
     pub const cssFloat = bridge.accessor(CSSStyleDeclaration.getFloat, CSSStyleDeclaration.setFloat, .{});
 };
+
+const testing = @import("std").testing;
+
+test "normalizePropertyValue: unitless zero to 0px" {
+    const cases = .{
+        .{ "width", "0", "0px" },
+        .{ "height", "0", "0px" },
+        .{ "scroll-margin-top", "0", "0px" },
+        .{ "scroll-padding-bottom", "0", "0px" },
+        .{ "column-width", "0", "0px" },
+        .{ "column-rule-width", "0", "0px" },
+        .{ "outline", "0", "0px" },
+        .{ "shape-margin", "0", "0px" },
+        .{ "offset-distance", "0", "0px" },
+        .{ "translate", "0", "0px" },
+        .{ "grid-column-gap", "0", "0px" },
+        .{ "grid-row-gap", "0", "0px" },
+        // Non-length properties should NOT normalize
+        .{ "opacity", "0", "0" },
+        .{ "z-index", "0", "0" },
+    };
+    inline for (cases) |case| {
+        const result = try normalizePropertyValue(testing.allocator, case[0], case[1]);
+        try testing.expectEqualStrings(case[2], result);
+    }
+}
+
+test "normalizePropertyValue: first baseline to baseline" {
+    const result = try normalizePropertyValue(testing.allocator, "align-items", "first baseline");
+    try testing.expectEqualStrings("baseline", result);
+
+    const result2 = try normalizePropertyValue(testing.allocator, "align-self", "last baseline");
+    try testing.expectEqualStrings("last baseline", result2);
+}
+
+test "normalizePropertyValue: collapse duplicate two-value shorthands" {
+    const cases = .{
+        .{ "overflow", "hidden hidden", "hidden" },
+        .{ "gap", "10px 10px", "10px" },
+        .{ "scroll-snap-align", "start start", "start" },
+        .{ "scroll-padding-block", "5px 5px", "5px" },
+        .{ "background-size", "auto auto", "auto" },
+        .{ "overscroll-behavior", "auto auto", "auto" },
+        // Different values should NOT collapse
+        .{ "overflow", "hidden scroll", "hidden scroll" },
+        .{ "gap", "10px 20px", "10px 20px" },
+    };
+    inline for (cases) |case| {
+        const result = try normalizePropertyValue(testing.allocator, case[0], case[1]);
+        try testing.expectEqualStrings(case[2], result);
+    }
+}
