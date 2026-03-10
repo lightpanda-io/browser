@@ -33,6 +33,9 @@ _start_offset: u32,
 _end_container: *Node,
 _start_container: *Node,
 
+// Intrusive linked list node for tracking live ranges on the Page.
+_range_link: std.DoublyLinkedList.Node = .{},
+
 pub const Type = union(enum) {
     range: *Range,
     // TODO: static_range: *StaticRange,

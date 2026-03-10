@@ -322,6 +322,11 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
     const container = self._proto._start_container;
     const offset = self._proto._start_offset;
 
+    // Per spec: if range is collapsed, end offset should extend to include
+    // the inserted node. Capture before insertion since live range updates
+    // in the insert path will adjust non-collapsed ranges automatically.
+    const was_collapsed = self._proto.getCollapsed();
+
     if (container.is(Node.CData)) |_| {
         // If container is a text node, we need to split it
         const parent = container.parentNode() orelse return error.InvalidNodeType;
@@ -351,9 +356,10 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
         _ = try container.insertBefore(node, ref_child, page);
     }
 
-    // Update range to be after the inserted node
-    if (self._proto._start_container == self._proto._end_container) {
-        self._proto._end_offset += 1;
+    // Per spec step 11: if range was collapsed, extend end to include inserted node.
+    // Non-collapsed ranges are already handled by the live range update in the insert path.
+    if (was_collapsed and self._proto._start_container == self._proto._end_container) {
+        self._proto._end_offset = self._proto._start_offset + 1;
     }
 }
 
@@ -375,9 +381,12 @@ pub fn deleteContents(self: *Range, page: *Page) !void {
             );
             page.characterDataChange(self._proto._start_container, old_value);
         } else {
-            // Delete child nodes in range
-            var offset = self._proto._start_offset;
-            while (offset < self._proto._end_offset) : (offset += 1) {
+            // Delete child nodes in range.
+            // Capture count before the loop: removeChild triggers live range
+            // updates that decrement _end_offset on each removal.
+            const count = self._proto._end_offset - self._proto._start_offset;
+            var i: u32 = 0;
+            while (i < count) : (i += 1) {
                 if (self._proto._start_container.getChildAt(self._proto._start_offset)) |child| {
                     _ = try self._proto._start_container.removeChild(child, page);
                 }
@@ -716,4 +725,7 @@ pub const JsApi = struct {
 const testing = @import("../../testing.zig");
 test "WebApi: Range" {
     try testing.htmlRunner("range.html", .{});
+}
+test "WebApi: Range mutations" {
+    try testing.htmlRunner("range_mutations.html", .{});
 }

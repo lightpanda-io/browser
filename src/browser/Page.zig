@@ -54,6 +54,7 @@ const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const VisualViewport = @import("webapi/VisualViewport.zig");
 const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
+const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -142,6 +143,9 @@ _blob_urls: std.StringHashMapUnmanaged(*Blob) = .{},
 _to_load: std.ArrayList(*Element.Html) = .{},
 
 _script_manager: ScriptManager,
+
+// List of active live ranges (for mutation updates per DOM spec)
+_live_ranges: std.DoublyLinkedList = .{},
 
 // List of active MutationObservers
 _mutation_observers: std.DoublyLinkedList = .{},
@@ -2434,6 +2438,12 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     const previous_sibling = child.previousSibling();
     const next_sibling = child.nextSibling();
 
+    // Capture child's index before removal for live range updates (DOM spec remove steps 4-7)
+    const child_index_for_ranges: ?u32 = if (self._live_ranges.first != null)
+        parent.getChildIndex(child)
+    else
+        null;
+
     const children = parent._children.?;
     switch (children.*) {
         .one => |n| {
@@ -2461,6 +2471,11 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
 
     child._parent = null;
     child._child_link = .{};
+
+    // Update live ranges for removal (DOM spec remove steps 4-7)
+    if (child_index_for_ranges) |idx| {
+        self.updateRangesForNodeRemoval(parent, child, idx);
+    }
 
     // Handle slot assignment removal before mutation observers
     if (child.is(Element)) |el| {
@@ -2608,6 +2623,21 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         },
     }
     child._parent = parent;
+
+    // Update live ranges for insertion (DOM spec insert step 6).
+    // For .before/.after the child was inserted at a specific position;
+    // ranges on parent with offsets past that position must be incremented.
+    // For .append no range update is needed (spec: "if child is non-null").
+    if (self._live_ranges.first != null) {
+        switch (relative) {
+            .append => {},
+            .before, .after => {
+                if (parent.getChildIndex(child)) |idx| {
+                    self.updateRangesForNodeInsertion(parent, idx);
+                }
+            },
+        }
+    }
 
     // Tri-state behavior for mutations:
     // 1. from_parser=true, parse_mode=document -> no mutations (initial document parse)
@@ -2865,6 +2895,121 @@ pub fn childListChange(
             log.err(.page, "childListChange.notifyObserver", .{ .err = err, .type = self._type, .url = self.url });
         };
     }
+}
+
+// --- Live range update methods (DOM spec §4.2.3, §4.2.4, §4.7, §4.8) ---
+
+/// Update all live ranges after a replaceData mutation on a CharacterData node.
+/// Per DOM spec: insertData = replaceData(offset, 0, data),
+///               deleteData = replaceData(offset, count, "").
+/// All parameters are in UTF-16 code unit offsets.
+pub fn updateRangesForCharacterDataReplace(self: *Page, target: *Node, offset: u32, count: u32, data_len: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+
+        if (ar._start_container == target) {
+            if (ar._start_offset > offset and ar._start_offset <= offset + count) {
+                ar._start_offset = offset;
+            } else if (ar._start_offset > offset + count) {
+                // Use i64 intermediate to avoid u32 underflow when count > data_len
+                ar._start_offset = @intCast(@as(i64, ar._start_offset) + @as(i64, data_len) - @as(i64, count));
+            }
+        }
+
+        if (ar._end_container == target) {
+            if (ar._end_offset > offset and ar._end_offset <= offset + count) {
+                ar._end_offset = offset;
+            } else if (ar._end_offset > offset + count) {
+                ar._end_offset = @intCast(@as(i64, ar._end_offset) + @as(i64, data_len) - @as(i64, count));
+            }
+        }
+    }
+}
+
+/// Update all live ranges after a splitText operation.
+/// Steps 7b-7e of the DOM spec splitText algorithm.
+/// Steps 7d-7e complement (not overlap) updateRangesForNodeInsertion:
+/// the insert update handles offsets > child_index, while 7d/7e handle
+/// offsets == node_index+1 (these are equal values but with > vs == checks).
+pub fn updateRangesForSplitText(self: *Page, target: *Node, new_node: *Node, offset: u32, parent: *Node, node_index: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+
+        // Step 7b: ranges on the original node with start > offset move to new node
+        if (ar._start_container == target and ar._start_offset > offset) {
+            ar._start_container = new_node;
+            ar._start_offset = ar._start_offset - offset;
+        }
+        // Step 7c: ranges on the original node with end > offset move to new node
+        if (ar._end_container == target and ar._end_offset > offset) {
+            ar._end_container = new_node;
+            ar._end_offset = ar._end_offset - offset;
+        }
+        // Step 7d: ranges on parent with start == node_index + 1 increment
+        if (ar._start_container == parent and ar._start_offset == node_index + 1) {
+            ar._start_offset += 1;
+        }
+        // Step 7e: ranges on parent with end == node_index + 1 increment
+        if (ar._end_container == parent and ar._end_offset == node_index + 1) {
+            ar._end_offset += 1;
+        }
+    }
+}
+
+/// Update all live ranges after a node insertion.
+/// Per DOM spec insert algorithm step 6: only applies when inserting before a
+/// non-null reference node.
+pub fn updateRangesForNodeInsertion(self: *Page, parent: *Node, child_index: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+
+        if (ar._start_container == parent and ar._start_offset > child_index) {
+            ar._start_offset += 1;
+        }
+        if (ar._end_container == parent and ar._end_offset > child_index) {
+            ar._end_offset += 1;
+        }
+    }
+}
+
+/// Update all live ranges after a node removal.
+/// Per DOM spec remove algorithm steps 4-7.
+pub fn updateRangesForNodeRemoval(self: *Page, parent: *Node, child: *Node, child_index: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+
+        // Steps 4-5: ranges whose start/end is an inclusive descendant of child
+        // get moved to (parent, child_index).
+        if (isInclusiveDescendantOf(ar._start_container, child)) {
+            ar._start_container = parent;
+            ar._start_offset = child_index;
+        }
+        if (isInclusiveDescendantOf(ar._end_container, child)) {
+            ar._end_container = parent;
+            ar._end_offset = child_index;
+        }
+
+        // Steps 6-7: ranges on parent at offsets > child_index get decremented.
+        if (ar._start_container == parent and ar._start_offset > child_index) {
+            ar._start_offset -= 1;
+        }
+        if (ar._end_container == parent and ar._end_offset > child_index) {
+            ar._end_offset -= 1;
+        }
+    }
+}
+
+fn isInclusiveDescendantOf(node: *Node, potential_ancestor: *Node) bool {
+    var current: ?*Node = node;
+    while (current) |n| {
+        if (n == potential_ancestor) return true;
+        current = n.parentNode();
+    }
+    return false;
 }
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
