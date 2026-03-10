@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<body onload="called++"></body>
+<script src="../testing.js"></script>
+
+<script id=bodyOnLoad3>
+  // Per spec, the handler is compiled as: function(event) { called++ }
+  // Verify: handler fires exactly once, and body.onload reflects to window.onload.
+  let called = 0;
+
+  testing.eventually(() => {
+    // The attribute handler should have fired exactly once.
+    testing.expectEqual(1, called);
+
+    // body.onload is a Window-reflecting handler per spec.
+    testing.expectEqual("function", typeof document.body.onload);
+    testing.expectEqual(document.body.onload, window.onload);
+
+    // Setting body.onload via property replaces the attribute handler.
+    let propertyCalled = false;
+    document.body.onload = function() { propertyCalled = true; };
+    testing.expectEqual(document.body.onload, window.onload);
+
+    // Setting onload to null removes the handler.
+    document.body.onload = null;
+    testing.expectEqual(null, document.body.onload);
+    testing.expectEqual(null, window.onload);
+  });
+</script>
