@@ -148,6 +148,7 @@ pub const CurlOption = enum(c.CURLoption) {
     cookie = c.CURLOPT_COOKIE,
     private = c.CURLOPT_PRIVATE,
     proxy_user_pwd = c.CURLOPT_PROXYUSERPWD,
+    user_pwd = c.CURLOPT_USERPWD,
     header_data = c.CURLOPT_HEADERDATA,
     header_function = c.CURLOPT_HEADERFUNCTION,
     write_data = c.CURLOPT_WRITEDATA,
@@ -512,6 +513,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .accept_encoding,
         .custom_request,
         .cookie,
+        .user_pwd,
         .proxy_user_pwd,
         .copy_post_fields,
         => blk: {

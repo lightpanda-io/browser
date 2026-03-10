@@ -33,6 +33,7 @@ pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
 pub const SemanticTree = @import("SemanticTree.zig");
 pub const CDPNode = @import("cdp/Node.zig");
+pub const interactive = @import("browser/interactive.zig");
 pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");

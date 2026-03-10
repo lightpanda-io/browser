@@ -90,15 +90,16 @@ pub fn parseFromString(
                 return pe.err;
             }
 
-            // If first node is a `ProcessingInstruction`, skip it.
             const first_child = doc_node.firstChild() orelse {
-                // Parsing should fail if there aren't any nodes.
-                unreachable;
+                // Empty XML or no root element - this is a parse error.
+                // TODO: Return a document with a <parsererror> element per spec.
+                return error.JsException;
             };
 
+            // If first node is a `ProcessingInstruction`, skip it.
             if (first_child.getNodeType() == 7) {
                 // We're sure that firstChild exist, this cannot fail.
-                _ = doc_node.removeChild(first_child, page) catch unreachable;
+                _ = try doc_node.removeChild(first_child, page);
             }
 
             return doc.asDocument();

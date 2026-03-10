@@ -718,7 +718,11 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
 
         // add credentials
         if (req.credentials) |creds| {
-            try conn.setProxyCredentials(creds);
+            if (transfer._auth_challenge != null and transfer._auth_challenge.?.source == .proxy) {
+                try conn.setProxyCredentials(creds);
+            } else {
+                try conn.setCredentials(creds);
+            }
         }
     }
 

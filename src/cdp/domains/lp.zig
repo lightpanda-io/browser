@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 const markdown = lp.markdown;
 const SemanticTree = lp.SemanticTree;
+const interactive = lp.interactive;
 const Node = @import("../Node.zig");
 const DOMNode = @import("../../browser/webapi/Node.zig");
 
@@ -28,11 +29,13 @@ pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         getMarkdown,
         getSemanticTree,
+        getInteractiveElements,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .getMarkdown => return getMarkdown(cmd),
         .getSemanticTree => return getSemanticTree(cmd),
+        .getInteractiveElements => return getInteractiveElements(cmd),
     }
 }
 
@@ -96,6 +99,35 @@ fn getMarkdown(cmd: anytype) !void {
     }, .{});
 }
 
+fn getInteractiveElements(cmd: anytype) !void {
+    const Params = struct {
+        nodeId: ?Node.Id = null,
+    };
+    const params = (try cmd.params(Params)) orelse Params{};
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const root = if (params.nodeId) |nodeId|
+        (bc.node_registry.lookup_by_id.get(nodeId) orelse return error.InvalidNodeId).dom
+    else
+        page.document.asNode();
+
+    const elements = try interactive.collectInteractiveElements(root, cmd.arena, page);
+
+    // Register nodes so nodeIds are valid for subsequent CDP calls.
+    var node_ids: std.ArrayList(Node.Id) = try .initCapacity(cmd.arena, elements.len);
+    for (elements) |el| {
+        const registered = try bc.node_registry.register(el.node);
+        node_ids.appendAssumeCapacity(registered.id);
+    }
+
+    return cmd.sendResult(.{
+        .elements = elements,
+        .nodeIds = node_ids.items,
+    }, .{});
+}
+
 const testing = @import("../testing.zig");
 test "cdp.lp: getMarkdown" {
     var ctx = testing.context();
@@ -111,4 +143,21 @@ test "cdp.lp: getMarkdown" {
 
     const result = ctx.client.?.sent.items[0].object.get("result").?.object;
     try testing.expect(result.get("markdown") != null);
+}
+
+test "cdp.lp: getInteractiveElements" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    _ = try bc.session.createPage();
+
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.getInteractiveElements",
+    });
+
+    const result = ctx.client.?.sent.items[0].object.get("result").?.object;
+    try testing.expect(result.get("elements") != null);
+    try testing.expect(result.get("nodeIds") != null);
 }
