@@ -93,11 +93,41 @@ pub const StructuredData = struct {
     }
 };
 
+/// Serializes properties as a JSON object. When a key appears multiple times
+/// (e.g. multiple og:image tags), values are grouped into an array.
+/// Alternatives considered: always-array values (verbose), or an array of
+/// {key, value} pairs (preserves order but less ergonomic for consumers).
 fn writeProperties(jw: anytype, properties: []const Property) !void {
     try jw.beginObject();
-    for (properties) |prop| {
+    for (properties, 0..) |prop, i| {
+        // Skip keys already written by an earlier occurrence.
+        var already_written = false;
+        for (properties[0..i]) |prev| {
+            if (std.mem.eql(u8, prev.key, prop.key)) {
+                already_written = true;
+                break;
+            }
+        }
+        if (already_written) continue;
+
+        // Count total occurrences to decide string vs array.
+        var count: usize = 0;
+        for (properties) |p| {
+            if (std.mem.eql(u8, p.key, prop.key)) count += 1;
+        }
+
         try jw.objectField(prop.key);
-        try jw.write(prop.value);
+        if (count == 1) {
+            try jw.write(prop.value);
+        } else {
+            try jw.beginArray();
+            for (properties) |p| {
+                if (std.mem.eql(u8, p.key, prop.key)) {
+                    try jw.write(p.value);
+                }
+            }
+            try jw.endArray();
+        }
     }
     try jw.endObject();
 }
@@ -194,16 +224,16 @@ fn collectMeta(
 
     // Open Graph: <meta property="og:...">
     if (el.getAttributeSafe(comptime .wrap("property"))) |property| {
-        if (startsWith(property, "og:")) {
+        if (std.mem.startsWith(u8, property, "og:")) {
             try open_graph.append(arena, .{ .key = property[3..], .value = content });
             return;
         }
         // Article, profile, etc. are OG sub-namespaces.
-        if (startsWith(property, "article:") or
-            startsWith(property, "profile:") or
-            startsWith(property, "book:") or
-            startsWith(property, "music:") or
-            startsWith(property, "video:"))
+        if (std.mem.startsWith(u8, property, "article:") or
+            std.mem.startsWith(u8, property, "profile:") or
+            std.mem.startsWith(u8, property, "book:") or
+            std.mem.startsWith(u8, property, "music:") or
+            std.mem.startsWith(u8, property, "video:"))
         {
             try open_graph.append(arena, .{ .key = property, .value = content });
             return;
@@ -212,7 +242,7 @@ fn collectMeta(
 
     // Twitter Cards: <meta name="twitter:...">
     if (el.getAttributeSafe(comptime .wrap("name"))) |name| {
-        if (startsWith(name, "twitter:")) {
+        if (std.mem.startsWith(u8, name, "twitter:")) {
             try twitter_card.append(arena, .{ .key = name[8..], .value = content });
             return;
         }
@@ -283,11 +313,6 @@ fn collectLink(
     }
 }
 
-fn startsWith(haystack: []const u8, prefix: []const u8) bool {
-    if (haystack.len < prefix.len) return false;
-    return std.mem.eql(u8, haystack[0..prefix.len], prefix);
-}
-
 // --- Tests ---
 
 const testing = @import("../testing.zig");
@@ -342,6 +367,35 @@ test "structured_data: open graph" {
     try testing.expectEqual("My Page", findProperty(data.open_graph, "title").?);
     try testing.expectEqual("article", findProperty(data.open_graph, "type").?);
     try testing.expectEqual("2026-03-10", findProperty(data.open_graph, "article:published_time").?);
+}
+
+test "structured_data: open graph duplicate keys" {
+    const data = try testStructuredData(
+        \\<meta property="og:title" content="My Page">
+        \\<meta property="og:image" content="https://example.com/img1.jpg">
+        \\<meta property="og:image" content="https://example.com/img2.jpg">
+        \\<meta property="og:image" content="https://example.com/img3.jpg">
+    );
+    // Duplicate keys are preserved as separate Property entries.
+    try testing.expectEqual(4, data.open_graph.len);
+
+    // Verify serialization groups duplicates into arrays.
+    const json = try std.json.Stringify.valueAlloc(testing.allocator, data, .{});
+    defer testing.allocator.free(json);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+    const og = parsed.value.object.get("openGraph").?.object;
+    // "title" appears once → string.
+    switch (og.get("title").?) {
+        .string => {},
+        else => return error.TestUnexpectedResult,
+    }
+    // "image" appears 3 times → array.
+    switch (og.get("image").?) {
+        .array => |arr| try testing.expectEqual(3, arr.items.len),
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "structured_data: twitter card" {
