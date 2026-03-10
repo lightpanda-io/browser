@@ -30,6 +30,7 @@ pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
+pub const interactive = @import("browser/interactive.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
