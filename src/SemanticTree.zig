@@ -40,7 +40,7 @@ prune: bool = false,
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
     var xpath_buffer: std.ArrayList(u8) = .{};
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor) catch |err| {
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -49,7 +49,7 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
     var xpath_buffer: std.ArrayList(u8) = .empty;
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor) catch |err| {
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -73,26 +73,7 @@ const NodeData = struct {
     node_name: []const u8,
 };
 
-fn isDisplayNone(style: []const u8) bool {
-    var it = std.mem.splitScalar(u8, style, ';');
-    while (it.next()) |decl| {
-        var decl_it = std.mem.splitScalar(u8, decl, ':');
-        const prop = decl_it.next() orelse continue;
-        const value = decl_it.next() orelse continue;
-
-        const prop_trimmed = std.mem.trim(u8, prop, &std.ascii.whitespace);
-        const value_trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
-
-        if (std.ascii.eqlIgnoreCase(prop_trimmed, "display") and
-            std.ascii.eqlIgnoreCase(value_trimmed, "none"))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype) !void {
+fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -101,11 +82,9 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         // We handle options/optgroups natively inside their parents, skip them in the general walk
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
-        // CSS display: none visibility check (inline style only for now)
-        if (el.getAttributeSafe(comptime lp.String.wrap("style"))) |style| {
-            if (isDisplayNone(style)) {
-                return;
-            }
+        // Check visibility using the engine's checkVisibility which handles CSS display: none
+        if (!el.checkVisibility(self.page)) {
+            return;
         }
 
         if (el.is(Element.Html)) |html_el| {
@@ -136,6 +115,26 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
         is_interactive = ax_role.isInteractive();
 
+        if (el.is(Element.Html.Input)) |input| {
+            // Force all non-hidden inputs to be interactive
+            if (input._input_type != .hidden) {
+                is_interactive = true;
+            }
+            value = input.getValue();
+            if (el.getAttributeSafe(comptime lp.String.wrap("list"))) |list_id| {
+                options = try extractDataListOptions(list_id, self.page, self.arena);
+            }
+        } else if (el.is(Element.Html.TextArea)) |textarea| {
+            is_interactive = true;
+            value = textarea.getValue();
+        } else if (el.is(Element.Html.Select)) |select| {
+            is_interactive = true;
+            value = select.getValue(self.page);
+            options = try extractSelectOptions(el.asNode(), self.page, self.arena);
+        } else if (el.getTag() == .button) {
+            is_interactive = true;
+        }
+
         const event_target = node.asEventTarget();
         if (self.page._event_manager.hasListener(event_target, "click") or
             self.page._event_manager.hasListener(event_target, "mousedown") or
@@ -158,24 +157,12 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
                 is_interactive = true;
             }
         }
-
-        if (el.is(Element.Html.Input)) |input| {
-            value = input.getValue();
-            if (el.getAttributeSafe(comptime lp.String.wrap("list"))) |list_id| {
-                options = try extractDataListOptions(list_id, self.page, self.arena);
-            }
-        } else if (el.is(Element.Html.TextArea)) |textarea| {
-            value = textarea.getValue();
-        } else if (el.is(Element.Html.Select)) |select| {
-            value = select.getValue(self.page);
-            options = try extractSelectOptions(el.asNode(), self.page, self.arena);
-        }
     } else if (node._type == .document or node._type == .document_fragment) {
         node_name = "root";
     }
 
     const initial_xpath_len = xpath_buffer.items.len;
-    try appendXPathSegment(node, xpath_buffer.writer(self.arena));
+    try appendXPathSegment(node, xpath_buffer.writer(self.arena), index);
     const xpath = xpath_buffer.items;
 
     const name = try axn.getName(self.page, self.arena);
@@ -225,8 +212,20 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         // If we are printing this node normally OR skipping it and unrolling its children,
         // we walk the children iterator.
         var it = node.childrenIterator();
+        var tag_counts = std.StringArrayHashMap(usize).init(self.arena);
         while (it.next()) |child| {
-            try self.walk(child, xpath_buffer, name, visitor);
+            var tag: []const u8 = "text()";
+            if (child.is(Element)) |el| {
+                tag = el.getTagNameLower();
+            }
+
+            const gop = try tag_counts.getOrPut(tag);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = 0;
+            }
+            gop.value_ptr.* += 1;
+
+            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*);
         }
     }
 
@@ -274,34 +273,11 @@ fn extractDataListOptions(list_id: []const u8, page: *Page, arena: std.mem.Alloc
     return null;
 }
 
-fn appendXPathSegment(node: *Node, writer: anytype) !void {
+fn appendXPathSegment(node: *Node, writer: anytype, index: usize) !void {
     if (node.is(Element)) |el| {
         const tag = el.getTagNameLower();
-        var index: usize = 1;
-
-        if (node._parent) |parent| {
-            var it = parent.childrenIterator();
-            while (it.next()) |sibling| {
-                if (sibling == node) break;
-                if (sibling.is(Element)) |s_el| {
-                    if (std.mem.eql(u8, s_el.getTagNameLower(), tag)) {
-                        index += 1;
-                    }
-                }
-            }
-        }
         try std.fmt.format(writer, "/{s}[{d}]", .{ tag, index });
     } else if (node.is(CData.Text) != null) {
-        var index: usize = 1;
-        if (node._parent) |parent| {
-            var it = parent.childrenIterator();
-            while (it.next()) |sibling| {
-                if (sibling == node) break;
-                if (sibling.is(CData.Text) != null) {
-                    index += 1;
-                }
-            }
-        }
         try std.fmt.format(writer, "/text()[{d}]", .{index});
     }
 }

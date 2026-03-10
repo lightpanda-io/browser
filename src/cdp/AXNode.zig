@@ -557,10 +557,10 @@ pub const Writer = struct {
 
 pub const AXRole = enum(u8) {
     // zig fmt: off
-    none, article, banner, blockquote, button, caption, cell, checkbox, code,
-    columnheader, combobox, complementary, contentinfo, definition, deletion,
-    dialog, document, emphasis, figure, form, group, heading, image, insertion,
-    link, list, listbox, listitem, main, marquee, menuitem, meter, navigation, option,
+    none, article, banner, blockquote, button, caption, cell, checkbox, code, color,
+    columnheader, combobox, complementary, contentinfo, date, definition, deletion,
+    dialog, document, emphasis, figure, file, form, group, heading, image, insertion,
+    link, list, listbox, listitem, main, marquee, menuitem, meter, month, navigation, option,
     paragraph, presentation, progressbar, radio, region, row, rowgroup,
     rowheader, searchbox, separator, slider, spinbutton, status, strong,
     subscript, superscript, @"switch", table, term, textbox, time, RootWebArea, LineBreak,
@@ -580,6 +580,10 @@ pub const AXRole = enum(u8) {
             .spinbutton,
             .@"switch",
             .menuitem,
+            .color,
+            .date,
+            .file,
+            .month,
             => true,
             else => false,
         };
@@ -638,9 +642,13 @@ pub const AXRole = enum(u8) {
                         .number => .spinbutton,
                         .search => .searchbox,
                         .checkbox => .checkbox,
+                        .color => .color,
+                        .date => .date,
+                        .file => .file,
+                        .month => .month,
+                        .@"datetime-local", .week, .time => .combobox,
                         // zig fmt: off
-                        .password, .@"datetime-local", .hidden, .month, .color,
-                        .week, .time, .file, .date => .none,
+                        .password, .hidden => .none,
                         // zig fmt: on
                     };
                 },
@@ -883,7 +891,7 @@ fn writeName(axnode: AXNode, w: anytype, page: *Page) !?AXSource {
                 .object, .progress, .meter, .main, .nav, .aside, .header,
                 .footer, .form, .section, .article, .ul, .ol, .dl, .menu,
                 .thead, .tbody, .tfoot, .tr, .td, .div, .span, .p, .details, .li,
-                .style, .script,
+                .style, .script, .html, .body,
                 // zig fmt: on
                 => {},
                 else => {
@@ -943,7 +951,9 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, page: *Pa
                         }
                     }
                 } else {
-                    try writeAccessibleNameFallback(child, writer, page);
+                    if (!el.getTag().isMetadata()) {
+                        try writeAccessibleNameFallback(child, writer, page);
+                    }
                 }
             },
             else => {},
