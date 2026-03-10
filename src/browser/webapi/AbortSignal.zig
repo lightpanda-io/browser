@@ -76,13 +76,11 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     }
 
     // Dispatch abort event
-    const event = try Event.initTrusted(comptime .wrap("abort"), .{}, page);
-    try page._event_manager.dispatchDirect(
-        self.asEventTarget(),
-        event,
-        self._on_abort,
-        .{ .context = "abort signal" },
-    );
+    const target = self.asEventTarget();
+    if (page._event_manager.hasDirectListeners(target, "abort", self._on_abort)) {
+        const event = try Event.initTrusted(comptime .wrap("abort"), .{}, page);
+        try page._event_manager.dispatchDirect(target, event, self._on_abort, .{ .context = "abort signal" });
+    }
 }
 
 // Static method to create an already-aborted signal

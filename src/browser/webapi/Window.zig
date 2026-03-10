@@ -551,17 +551,14 @@ pub fn unhandledPromiseRejection(self: *Window, rejection: js.PromiseRejection, 
         });
     }
 
-    const event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
-        .reason = if (rejection.reason()) |r| try r.temp() else null,
-        .promise = try rejection.promise().temp(),
-    }, page)).asEvent();
-
-    try page._event_manager.dispatchDirect(
-        self.asEventTarget(),
-        event,
-        self._on_unhandled_rejection,
-        .{ .inject_target = true, .context = "window.unhandledrejection" },
-    );
+    const target = self.asEventTarget();
+    if (page._event_manager.hasDirectListeners(target, "unhandledrejection", self._on_unhandled_rejection)) {
+        const event = (try @import("event/PromiseRejectionEvent.zig").init("unhandledrejection", .{
+            .reason = if (rejection.reason()) |r| try r.temp() else null,
+            .promise = try rejection.promise().temp(),
+        }, page)).asEvent();
+        try page._event_manager.dispatchDirect(target, event, self._on_unhandled_rejection, .{ .context = "window.unhandledrejection" });
+    }
 }
 
 const ScheduleOpts = struct {

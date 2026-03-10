@@ -508,13 +508,11 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
 
     self._ready_state = state;
 
-    const event = try Event.initTrusted(.wrap("readystatechange"), .{}, page);
-    try page._event_manager.dispatchDirect(
-        self.asEventTarget(),
-        event,
-        self._on_ready_state_change,
-        .{ .context = "XHR state change" },
-    );
+    const target = self.asEventTarget();
+    if (page._event_manager.hasDirectListeners(target, "readystatechange", self._on_ready_state_change)) {
+        const event = try Event.initTrusted(.wrap("readystatechange"), .{}, page);
+        try page._event_manager.dispatchDirect(target, event, self._on_ready_state_change, .{ .context = "XHR state change" });
+    }
 }
 
 fn parseMethod(method: []const u8) !Http.Method {
