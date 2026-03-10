@@ -219,7 +219,14 @@ pub fn NodeLive(comptime mode: Mode) type {
             switch (mode) {
                 .tag => {
                     const el = node.is(Element) orelse return false;
-                    return el.getTag() == self._filter;
+                    // For HTML namespace elements, we can use the optimized tag comparison.
+                    // For other namespaces (XML, SVG custom elements, etc.), fall back to string comparison.
+                    if (el._namespace == .html) {
+                        return el.getTag() == self._filter;
+                    }
+                    // For non-HTML elements, compare by tag name string
+                    const element_tag = el.getTagNameLower();
+                    return std.mem.eql(u8, element_tag, @tagName(self._filter));
                 },
                 .tag_name => {
                     // If we're in `tag_name` mode, then the tag_name isn't

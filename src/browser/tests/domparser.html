@@ -397,3 +397,25 @@
   }
 }
 </script>
+
+<script id=getElementsByTagName-xml>
+{
+  const parser = new DOMParser();
+  const doc = parser.parseFromString('<layout><row><col>A</col><col>B</col></row></layout>', 'text/xml');
+
+  // Test getElementsByTagName on document
+  const rows = doc.getElementsByTagName('row');
+  testing.expectEqual(1, rows.length);
+
+  // Test getElementsByTagName on element
+  const row = rows[0];
+  const cols = row.getElementsByTagName('col');
+  testing.expectEqual(2, cols.length);
+  testing.expectEqual('A', cols[0].textContent);
+  testing.expectEqual('B', cols[1].textContent);
+
+  // Test getElementsByTagName('*') on element
+  const allElements = row.getElementsByTagName('*');
+  testing.expectEqual(2, allElements.length);
+}
+</script>
