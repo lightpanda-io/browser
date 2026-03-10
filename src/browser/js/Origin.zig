@@ -67,24 +67,6 @@ temps: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 // will have its finalizer stored here. This is only used when shutting down
 // if v8 hasn't called the finalizer directly itself.
 finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
-finalizer_callback_pool: std.heap.MemoryPool(FinalizerCallback),
-
-// A type that has a finalizer can have its finalizer called one of two ways.
-// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
-// guaranteed to fire, so we track this in finalizer_callbacks and call them on
-// origin shutdown.
-pub const FinalizerCallback = struct {
-    origin: *Origin,
-    session: *Session,
-    ptr: *anyopaque,
-    global: v8.Global,
-    finalizerFn: *const fn (ptr: *anyopaque, session: *Session) void,
-
-    pub fn deinit(self: *FinalizerCallback) void {
-        self.finalizerFn(self.ptr, self.session);
-        self.origin.finalizer_callback_pool.destroy(self);
-    }
-};
 
 pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
     const arena = try app.arena_pool.acquire();
@@ -107,7 +89,6 @@ pub fn init(app: *App, isolate: js.Isolate, key: []const u8) !*Origin {
         .globals = .empty,
         .temps = .empty,
         .security_token = token_global,
-        .finalizer_callback_pool = .init(arena),
     };
     return self;
 }
@@ -119,7 +100,6 @@ pub fn deinit(self: *Origin, app: *App) void {
         while (it.next()) |finalizer| {
             finalizer.*.deinit();
         }
-        self.finalizer_callback_pool.deinit();
     }
 
     v8.v8__Global__Reset(&self.security_token);
@@ -172,13 +152,14 @@ pub fn release(self: *Origin, item: *anyopaque) void {
 
     // The item has been finalized, remove it from the finalizer callback so that
     // we don't try to call it again on shutdown.
-    const fc = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
+    const kv = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
         if (comptime IS_DEBUG) {
             std.debug.assert(false);
         }
         return;
     };
-    self.finalizer_callback_pool.destroy(fc.value);
+    const fc = kv.value;
+    fc.session.releaseArena(fc.arena);
 }
 
 pub fn createFinalizerCallback(
@@ -186,15 +167,18 @@ pub fn createFinalizerCallback(
     session: *Session,
     global: v8.Global,
     ptr: *anyopaque,
-    finalizerFn: *const fn (ptr: *anyopaque, session: *Session) void,
+    zig_finalizer: *const fn (ptr: *anyopaque, session: *Session) void,
 ) !*FinalizerCallback {
-    const fc = try self.finalizer_callback_pool.create();
+    const arena = try session.getArena(.{ .debug = "FinalizerCallback" });
+    errdefer session.releaseArena(arena);
+    const fc = try arena.create(FinalizerCallback);
     fc.* = .{
+        .arena = arena,
         .origin = self,
         .session = session,
         .ptr = ptr,
         .global = global,
-        .finalizerFn = finalizerFn,
+        .zig_finalizer = zig_finalizer,
     };
     return fc;
 }
@@ -218,6 +202,16 @@ pub fn transferTo(self: *Origin, dest: *Origin) !void {
     }
 
     {
+        try dest.finalizer_callbacks.ensureUnusedCapacity(arena, self.finalizer_callbacks.count());
+        var it = self.finalizer_callbacks.iterator();
+        while (it.next()) |kv| {
+            kv.value_ptr.*.origin = dest;
+            try dest.finalizer_callbacks.put(arena, kv.key_ptr.*, kv.value_ptr.*);
+        }
+        self.finalizer_callbacks.clearRetainingCapacity();
+    }
+
+    {
         try dest.identity_map.ensureUnusedCapacity(arena, self.identity_map.count());
         var it = self.identity_map.iterator();
         while (it.next()) |kv| {
@@ -226,3 +220,21 @@ pub fn transferTo(self: *Origin, dest: *Origin) !void {
         self.identity_map.clearRetainingCapacity();
     }
 }
+
+// A type that has a finalizer can have its finalizer called one of two ways.
+// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
+// guaranteed to fire, so we track this in finalizer_callbacks and call them on
+// origin shutdown.
+pub const FinalizerCallback = struct {
+    arena: Allocator,
+    origin: *Origin,
+    session: *Session,
+    ptr: *anyopaque,
+    global: v8.Global,
+    zig_finalizer: *const fn (ptr: *anyopaque, session: *Session) void,
+
+    pub fn deinit(self: *FinalizerCallback) void {
+        self.zig_finalizer(self.ptr, self.session);
+        self.session.releaseArena(self.arena);
+    }
+};

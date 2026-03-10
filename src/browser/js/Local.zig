@@ -226,6 +226,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // can't figure out how to make that work, since it depends on
                 // the [runtime] `value`.
                 // We need the resolved finalizer, which we have in resolved.
+                //
                 // The above if statement would be more clear as:
                 //    if (resolved.finalizer_from_v8) |finalizer| {
                 // But that's a runtime check.
