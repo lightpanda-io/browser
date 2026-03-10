@@ -104,6 +104,8 @@ pub fn deinit(self: *Runtime) void {
         self.allocator.free(data[0..ca_blob.len]);
     }
 
+    self.robot_store.deinit();
+
     globalDeinit();
 }
 
