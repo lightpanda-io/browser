@@ -369,7 +369,7 @@ pub const Connection = struct {
     pub fn setProxyCredentials(self: *const Connection, creds: [:0]const u8) !void {
         try libcurl.curl_easy_setopt(self.easy, .proxy_user_pwd, creds.ptr);
     }
-    
+
     pub fn setCredentials(self: *const Connection, creds: [:0]const u8) !void {
         try libcurl.curl_easy_setopt(self.easy, .user_pwd, creds.ptr);
     }
