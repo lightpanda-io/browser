@@ -567,28 +567,6 @@ pub const AXRole = enum(u8) {
     StaticText,
     // zig fmt: on
 
-    pub fn isInteractive(self: AXRole) bool {
-        return switch (self) {
-            .button,
-            .link,
-            .checkbox,
-            .radio,
-            .textbox,
-            .combobox,
-            .searchbox,
-            .slider,
-            .spinbutton,
-            .@"switch",
-            .menuitem,
-            .color,
-            .date,
-            .file,
-            .month,
-            => true,
-            else => false,
-        };
-    }
-
     fn fromNode(node: *DOMNode) !AXRole {
         return switch (node._type) {
             .document => return .RootWebArea, // Chrome specific.

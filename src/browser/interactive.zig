@@ -178,12 +178,12 @@ pub fn collectInteractiveElements(
     return results.items;
 }
 
-const ListenerTargetMap = std.AutoHashMapUnmanaged(usize, std.ArrayList([]const u8));
+pub const ListenerTargetMap = std.AutoHashMapUnmanaged(usize, std.ArrayList([]const u8));
 
 /// Pre-build a map from event_target pointer → list of event type names.
 /// This lets both classifyInteractivity (O(1) "has any?") and
 /// getListenerTypes (O(1) "which ones?") avoid re-iterating per element.
-fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap {
+pub fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap {
     var map = ListenerTargetMap{};
 
     // addEventListener registrations
@@ -209,7 +209,7 @@ fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap {
     return map;
 }
 
-fn classifyInteractivity(
+pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,

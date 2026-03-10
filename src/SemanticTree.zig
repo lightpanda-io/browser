@@ -22,6 +22,7 @@ const lp = @import("lightpanda");
 const log = @import("log.zig");
 const isAllWhitespace = @import("string.zig").isAllWhitespace;
 const Page = lp.Page;
+const interactive = @import("browser/interactive.zig");
 
 const CData = @import("browser/webapi/CData.zig");
 const Element = @import("browser/webapi/Element.zig");
@@ -40,7 +41,11 @@ prune: bool = false,
 pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!void {
     var visitor = JsonVisitor{ .jw = jw, .tree = self };
     var xpath_buffer: std.ArrayList(u8) = .{};
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1) catch |err| {
+    const listener_targets = interactive.buildListenerTargetMap(self.page, self.arena) catch |err| {
+        log.err(.app, "listener map failed", .{ .err = err });
+        return error.WriteFailed;
+    };
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -49,7 +54,11 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
 pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!void {
     var visitor = TextVisitor{ .writer = writer, .tree = self, .depth = 0 };
     var xpath_buffer: std.ArrayList(u8) = .empty;
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1) catch |err| {
+    const listener_targets = interactive.buildListenerTargetMap(self.page, self.arena) catch |err| {
+        log.err(.app, "listener map failed", .{ .err = err });
+        return error.WriteFailed;
+    };
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -73,7 +82,7 @@ const NodeData = struct {
     node_name: []const u8,
 };
 
-fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize) !void {
+fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -112,48 +121,20 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
     if (node.is(Element)) |el| {
         node_name = el.getTagNameLower();
 
-        const ax_role = std.meta.stringToEnum(AXNode.AXRole, role) orelse .none;
-        is_interactive = ax_role.isInteractive();
-
         if (el.is(Element.Html.Input)) |input| {
-            // Force all non-hidden inputs to be interactive
-            if (input._input_type != .hidden) {
-                is_interactive = true;
-            }
             value = input.getValue();
             if (el.getAttributeSafe(comptime lp.String.wrap("list"))) |list_id| {
                 options = try extractDataListOptions(list_id, self.page, self.arena);
             }
         } else if (el.is(Element.Html.TextArea)) |textarea| {
-            is_interactive = true;
             value = textarea.getValue();
         } else if (el.is(Element.Html.Select)) |select| {
-            is_interactive = true;
             value = select.getValue(self.page);
             options = try extractSelectOptions(el.asNode(), self.page, self.arena);
-        } else if (el.getTag() == .button) {
-            is_interactive = true;
-        }
-
-        const event_target = node.asEventTarget();
-        if (self.page._event_manager.hasListener(event_target, "click") or
-            self.page._event_manager.hasListener(event_target, "mousedown") or
-            self.page._event_manager.hasListener(event_target, "mouseup") or
-            self.page._event_manager.hasListener(event_target, "keydown") or
-            self.page._event_manager.hasListener(event_target, "change") or
-            self.page._event_manager.hasListener(event_target, "input"))
-        {
-            is_interactive = true;
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (html_el.hasAttributeFunction(.onclick, self.page) or
-                html_el.hasAttributeFunction(.onmousedown, self.page) or
-                html_el.hasAttributeFunction(.onmouseup, self.page) or
-                html_el.hasAttributeFunction(.onkeydown, self.page) or
-                html_el.hasAttributeFunction(.onchange, self.page) or
-                html_el.hasAttributeFunction(.oninput, self.page))
-            {
+            if (interactive.classifyInteractivity(el, html_el, listener_targets) != null) {
                 is_interactive = true;
             }
         }
@@ -225,7 +206,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
             }
             gop.value_ptr.* += 1;
 
-            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*);
+            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets);
         }
     }
 
