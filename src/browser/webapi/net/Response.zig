@@ -18,7 +18,7 @@
 
 const std = @import("std");
 const js = @import("../../js/js.zig");
-const Http = @import("../../../http/Http.zig");
+const HttpClient = @import("../../HttpClient.zig");
 
 const Page = @import("../../Page.zig");
 const Headers = @import("Headers.zig");
@@ -45,7 +45,7 @@ _type: Type,
 _status_text: []const u8,
 _url: [:0]const u8,
 _is_redirected: bool,
-_transfer: ?*Http.Transfer = null,
+_transfer: ?*HttpClient.Transfer = null,
 
 const InitOpts = struct {
     status: u16 = 200,

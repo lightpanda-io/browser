@@ -18,6 +18,7 @@
 
 const std = @import("std");
 pub const App = @import("App.zig");
+pub const Network = @import("network/Runtime.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const URL = @import("browser/URL.zig");
@@ -36,6 +37,7 @@ pub const mcp = @import("mcp.zig");
 pub const build_config = @import("build_config");
 pub const crash_handler = @import("crash_handler.zig");
 
+pub const HttpClient = @import("browser/HttpClient.zig");
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
 pub const FetchOpts = struct {
@@ -45,7 +47,7 @@ pub const FetchOpts = struct {
     writer: ?*std.Io.Writer = null,
 };
 pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
-    const http_client = try app.http.createClient(app.allocator);
+    const http_client = try HttpClient.init(app.allocator, &app.network);
     defer http_client.deinit();
 
     const notification = try Notification.init(app.allocator);

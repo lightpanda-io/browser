@@ -62,8 +62,7 @@ const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 
-const Http = App.Http;
-const Net = @import("../Net.zig");
+const HttpClient = @import("HttpClient.zig");
 const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -396,7 +395,7 @@ pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
 // Add comon headers for a request:
 // * cookies
 // * referer
-pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
+pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *HttpClient.Headers) !void {
     try self.requestCookie(.{}).headersForRequest(temp, url, headers);
 
     // Build the referer
@@ -823,7 +822,7 @@ fn notifyParentLoadComplete(self: *Page) void {
     parent.iframeCompletedLoading(self.iframe.?);
 }
 
-fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
+fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
     // would be different than self.url in the case of a redirect
@@ -845,7 +844,7 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     return true;
 }
 
-fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
     if (self._parse_state == .pre) {
@@ -3047,7 +3046,7 @@ pub const NavigateReason = enum {
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: Http.Method = .GET,
+    method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     force: bool = false,
@@ -3057,7 +3056,7 @@ pub const NavigateOpts = struct {
 pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: Http.Method = .GET,
+    method: HttpClient.Method = .GET,
 };
 
 const NavigationType = enum {
@@ -3302,7 +3301,7 @@ const RequestCookieOpts = struct {
     is_http: bool = true,
     is_navigation: bool = false,
 };
-pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
+pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
     return .{
         .jar = &self._session.cookie_jar,
         .origin = self.url,

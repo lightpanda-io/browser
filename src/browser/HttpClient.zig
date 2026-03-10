@@ -17,28 +17,29 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 const std = @import("std");
-const lp = @import("lightpanda");
-
-const log = @import("../log.zig");
 const builtin = @import("builtin");
+const posix = std.posix;
 
-const Net = @import("../Net.zig");
+const lp = @import("lightpanda");
+const log = @import("../log.zig");
+const Net = @import("../network/http.zig");
+const Network = @import("../network/Runtime.zig");
 const Config = @import("../Config.zig");
 const URL = @import("../browser/URL.zig");
 const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
-const Robots = @import("../browser/Robots.zig");
+const Robots = @import("../network/Robots.zig");
 const RobotStore = Robots.RobotStore;
-const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 const IS_DEBUG = builtin.mode == .Debug;
 
-const Method = Net.Method;
-const ResponseHead = Net.ResponseHead;
-const HeaderIterator = Net.HeaderIterator;
+pub const Method = Net.Method;
+pub const Headers = Net.Headers;
+pub const ResponseHead = Net.ResponseHead;
+pub const HeaderIterator = Net.HeaderIterator;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
 // XHR requests, and loading imports all happens through here. Sine the app
@@ -77,8 +78,7 @@ queue: TransferQueue,
 // The main app allocator
 allocator: Allocator,
 
-// Reference to the App-owned Robot Store.
-robot_store: *RobotStore,
+network: *Network,
 // Queue of requests that depend on a robots.txt.
 // Allows us to fetch the robots.txt just once.
 pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empty,
@@ -96,8 +96,6 @@ http_proxy: ?[:0]const u8 = null,
 // We can't use http_proxy because we want also to track proxy configured via
 // CDP.
 use_proxy: bool,
-
-config: *const Config,
 
 cdp_client: ?CDPClient = null,
 
@@ -121,14 +119,14 @@ pub const CDPClient = struct {
 
 const TransferQueue = std.DoublyLinkedList;
 
-pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, config: *const Config) !*Client {
+pub fn init(allocator: Allocator, network: *Network) !*Client {
     var transfer_pool = std.heap.MemoryPool(Transfer).init(allocator);
     errdefer transfer_pool.deinit();
 
     const client = try allocator.create(Client);
     errdefer allocator.destroy(client);
 
-    var handles = try Net.Handles.init(allocator, ca_blob, config);
+    var handles = try Net.Handles.init(allocator, network.ca_blob, network.config);
     errdefer handles.deinit(allocator);
 
     // Set transfer callbacks on each connection.
@@ -136,7 +134,7 @@ pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, 
         try conn.setCallbacks(Transfer.headerCallback, Transfer.dataCallback);
     }
 
-    const http_proxy = config.httpProxy();
+    const http_proxy = network.config.httpProxy();
 
     client.* = .{
         .queue = .{},
@@ -144,10 +142,9 @@ pub fn init(allocator: Allocator, ca_blob: ?Net.Blob, robot_store: *RobotStore, 
         .intercepted = 0,
         .handles = handles,
         .allocator = allocator,
-        .robot_store = robot_store,
+        .network = network,
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
-        .config = config,
         .transfer_pool = transfer_pool,
     };
 
@@ -170,7 +167,7 @@ pub fn deinit(self: *Client) void {
 }
 
 pub fn newHeaders(self: *const Client) !Net.Headers {
-    return Net.Headers.init(self.config.http_headers.user_agent_header);
+    return Net.Headers.init(self.network.config.http_headers.user_agent_header);
 }
 
 pub fn abort(self: *Client) void {
@@ -255,12 +252,12 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 }
 
 pub fn request(self: *Client, req: Request) !void {
-    if (self.config.obeyRobots()) {
+    if (self.network.config.obeyRobots()) {
         const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
         errdefer self.allocator.free(robots_url);
 
         // If we have this robots cached, we can take a fast path.
-        if (self.robot_store.get(robots_url)) |robot_entry| {
+        if (self.network.robot_store.get(robots_url)) |robot_entry| {
             defer self.allocator.free(robots_url);
 
             switch (robot_entry) {
@@ -401,18 +398,18 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
     switch (ctx.status) {
         200 => {
             if (ctx.buffer.items.len > 0) {
-                const robots: ?Robots = ctx.client.robot_store.robotsFromBytes(
-                    ctx.client.config.http_headers.user_agent,
+                const robots: ?Robots = ctx.client.network.robot_store.robotsFromBytes(
+                    ctx.client.network.config.http_headers.user_agent,
                     ctx.buffer.items,
                 ) catch blk: {
                     log.warn(.browser, "failed to parse robots", .{ .robots_url = ctx.robots_url });
                     // If we fail to parse, we just insert it as absent and ignore.
-                    try ctx.client.robot_store.putAbsent(ctx.robots_url);
+                    try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
                     break :blk null;
                 };
 
                 if (robots) |r| {
-                    try ctx.client.robot_store.put(ctx.robots_url, r);
+                    try ctx.client.network.robot_store.put(ctx.robots_url, r);
                     const path = URL.getPathname(ctx.req.url);
                     allowed = r.isAllowed(path);
                 }
@@ -421,12 +418,12 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
         404 => {
             log.debug(.http, "robots not found", .{ .url = ctx.robots_url });
             // If we get a 404, we just insert it as absent.
-            try ctx.client.robot_store.putAbsent(ctx.robots_url);
+            try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
         },
         else => {
             log.debug(.http, "unexpected status on robots", .{ .url = ctx.robots_url, .status = ctx.status });
             // If we get an unexpected status, we just insert as absent.
-            try ctx.client.robot_store.putAbsent(ctx.robots_url);
+            try ctx.client.network.robot_store.putAbsent(ctx.robots_url);
         },
     }
 
@@ -609,7 +606,7 @@ fn makeTransfer(self: *Client, req: Request) !*Transfer {
         .req = req,
         .ctx = req.ctx,
         .client = self,
-        .max_response_size = self.config.httpMaxResponseSize(),
+        .max_response_size = self.network.config.httpMaxResponseSize(),
     };
     return transfer;
 }
@@ -706,7 +703,7 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         }
 
         var header_list = req.headers;
-        try conn.secretHeaders(&header_list, &self.config.http_headers); // Add headers that must be hidden from intercepts
+        try conn.secretHeaders(&header_list, &self.network.config.http_headers); // Add headers that must be hidden from intercepts
         try conn.setHeaders(&header_list);
 
         // Add cookies.
