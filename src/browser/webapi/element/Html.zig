@@ -387,22 +387,17 @@ pub fn getAttributeFunction(
     }
 
     const attr = element.getAttributeSafe(.wrap(@tagName(listener_type))) orelse return null;
-    const callback = page.js.stringToPersistedFunction(attr) catch |err| switch (err) {
-        error.OutOfMemory => return err,
-        else => {
-            // Not a valid expression; log this to find out if its something we should be supporting.
-            log.warn(.js, "Html.getAttributeFunction", .{
-                .expression = attr,
-                .err = err,
-            });
-
-            return null;
-        },
+    const function = page.js.stringToPersistedFunction(attr, &.{"event"}, &.{}) catch |err| {
+        // Not a valid expression; log this to find out if its something we should be supporting.
+        log.warn(.js, "Html.getAttributeFunction", .{
+            .expression = attr,
+            .err = err,
+        });
+        return null;
     };
 
-    try self.setAttributeListener(listener_type, callback, page);
-
-    return callback;
+    try self.setAttributeListener(listener_type, function, page);
+    return function;
 }
 
 pub fn hasAttributeFunction(self: *HtmlElement, listener_type: GlobalEventHandler, page: *const Page) bool {
