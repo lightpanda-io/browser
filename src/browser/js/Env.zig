@@ -313,7 +313,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out
-    v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, 1, @ptrCast(context));
+    v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, Context.embedder_data_index, @ptrCast(context));
 
     const count = self.context_count;
     if (count >= self.contexts.len) {

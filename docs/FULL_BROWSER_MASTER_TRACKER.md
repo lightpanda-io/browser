@@ -262,6 +262,11 @@ Current state inside Gate 1:
   successfully, while `crossorigin="anonymous"` suppresses both cookie and
   auth on the script request itself and still executes successfully on the
   headed surface
+- connected external module scripts now ride the same shared request-policy
+  path for both root and child imports, with bounded localhost probes proving
+  credentialed and anonymous static module graphs carry the correct
+  cookie/referer/auth policy on both the root request and the child request,
+  and that the module graph executes successfully on the headed surface
 - connected `link rel=stylesheet` elements now load through the shared browser
   `Http` runtime path, expose `link.sheet`, participate in
   `document.styleSheets`, and carry page cookie, sanitized referer, inherited
@@ -309,10 +314,11 @@ Current known gap entering Gate 2:
   credential suppression, and an explicit image `Accept` header, but broader
   auth beyond page-URL Basic credentials and richer resource-type behavior are
   still open
-- connected external scripts now ride the shared `Http` runtime path with
-  inherited auth, sanitized referer, cookie policy, explicit script `Accept`,
-  and anonymous credential suppression coverage, but broader script/resource
-  parity and one unified subresource ownership path are still open
+- connected external scripts and static module imports now ride the shared
+  `Http` runtime path with inherited auth, sanitized referer, cookie policy,
+  explicit script `Accept`, and anonymous credential suppression coverage, but
+  broader script/resource parity and one unified subresource ownership path
+  are still open
 - connected `link rel=stylesheet` requests now ride the same shared `Http`
   runtime path with `link.sheet` / `document.styleSheets` coverage and bounded
   protected-load auth/cookie/referer/`Accept` verification plus anonymous

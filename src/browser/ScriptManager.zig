@@ -142,11 +142,17 @@ fn clearList(list: *std.DoublyLinkedList) void {
     }
 }
 
-pub fn getHeaders(self: *ScriptManager, url: [:0]const u8, include_credentials: bool) !Http.Headers {
+pub fn getHeaders(
+    self: *ScriptManager,
+    url: [:0]const u8,
+    include_credentials: bool,
+    referer_override_url: ?[]const u8,
+) !Http.Headers {
     var headers = try self.client.newHeaders();
     try headers.add(SCRIPT_ACCEPT_HEADER);
     try self.page.headersForRequestWithPolicy(self.page.arena, url, &headers, .{
         .include_credentials = include_credentials,
+        .referer_override_url = referer_override_url,
     });
     return headers;
 }
@@ -260,7 +266,9 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
     if (remote_url) |url| {
         const include_credentials = scriptRequestIncludesCredentials(script_element);
         const request_url = try scriptRequestUrlForFetch(page.arena, url, include_credentials);
+        const request_headers = try self.getHeaders(request_url, include_credentials, null);
         script.url = request_url;
+        script.include_credentials = include_credentials;
         errdefer {
             if (is_blocking == false) {
                 self.scriptList(script).remove(&script.node);
@@ -273,7 +281,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .ctx = script,
             .method = .GET,
             .frame_id = page._frame_id,
-            .headers = try self.getHeaders(request_url, include_credentials),
+            .headers = request_headers,
             .blocking = is_blocking,
             .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
             .resource_type = .script,
@@ -378,10 +386,11 @@ pub fn resolveSpecifier(self: *ScriptManager, arena: Allocator, base: [:0]const 
     return URL.resolve(arena, base, specifier, .{ .always_dupe = true });
 }
 
-pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const u8) !void {
+pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const u8, include_credentials: bool) !void {
     const gop = try self.imported_modules.getOrPut(self.allocator, url);
     if (gop.found_existing) {
         gop.value_ptr.waiters += 1;
+        gop.value_ptr.include_credentials = include_credentials;
         return;
     }
     errdefer _ = self.imported_modules.remove(url);
@@ -389,19 +398,22 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
     const script = try self.script_pool.create();
     errdefer self.script_pool.destroy(script);
 
+    const request_url = try scriptRequestUrlForFetch(self.allocator, url, include_credentials);
     script.* = .{
         .kind = .module,
-        .url = url,
+        .url = request_url,
         .node = .{},
         .manager = self,
         .complete = false,
         .script_element = null,
         .source = .{ .remote = .{} },
         .mode = .import,
+        .include_credentials = include_credentials,
     };
 
     gop.value_ptr.* = ImportedModule{
         .manager = self,
+        .include_credentials = include_credentials,
     };
 
     const page = self.page;
@@ -419,13 +431,22 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         });
     }
 
+    self.async_scripts.append(&script.node);
+    errdefer self.async_scripts.remove(&script.node);
+
+    const request_headers = try self.getHeaders(request_url, include_credentials, referrer);
+
+    const was_evaluating = self.is_evaluating;
+    self.is_evaluating = true;
+    defer self.is_evaluating = was_evaluating;
+
     try self.client.request(.{
-        .url = url,
+        .url = request_url,
         .ctx = script,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(url, true),
-        .cookie_jar = &page._session.cookie_jar,
+        .headers = request_headers,
+        .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
         .resource_type = .script,
         .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
@@ -434,12 +455,6 @@ pub fn preloadImport(self: *ScriptManager, url: [:0]const u8, referrer: []const 
         .done_callback = Script.doneCallback,
         .error_callback = Script.errorCallback,
     });
-
-    // This seems wrong since we're not dealing with an async import (unlike
-    // getAsyncModule below), but all we're trying to do here is pre-load the
-    // script for execution at some point in the future (when waitForImport is
-    // called).
-    self.async_scripts.append(&script.node);
 }
 
 pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
@@ -482,13 +497,15 @@ pub fn waitForImport(self: *ScriptManager, url: [:0]const u8) !ModuleSource {
     }
 }
 
-pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8) !void {
+pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.Callback, cb_data: *anyopaque, referrer: []const u8, include_credentials: bool) !void {
     const script = try self.script_pool.create();
     errdefer self.script_pool.destroy(script);
 
+    const request_url = try scriptRequestUrlForFetch(self.allocator, url, include_credentials);
+
     script.* = .{
         .kind = .module,
-        .url = url,
+        .url = request_url,
         .node = .{},
         .manager = self,
         .complete = false,
@@ -498,6 +515,7 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
             .callback = cb,
             .data = cb_data,
         } },
+        .include_credentials = include_credentials,
     };
 
     const page = self.page;
@@ -524,13 +542,13 @@ pub fn getAsyncImport(self: *ScriptManager, url: [:0]const u8, cb: ImportAsync.C
     defer self.is_evaluating = was_evaluating;
 
     try self.client.request(.{
-        .url = url,
+        .url = request_url,
         .method = .GET,
         .frame_id = page._frame_id,
-        .headers = try self.getHeaders(url, true),
+        .headers = try self.getHeaders(request_url, include_credentials, referrer),
         .ctx = script,
         .resource_type = .script,
-        .cookie_jar = &page._session.cookie_jar,
+        .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
         .notification = page._session.notification,
         .start_callback = if (log.enabled(.http, .debug)) Script.startCallback else null,
         .header_callback = Script.headerCallback,
@@ -657,6 +675,7 @@ pub const Script = struct {
     status: u16 = 0,
     source: Source,
     url: []const u8,
+    include_credentials: bool = true,
     mode: ExecutionMode,
     node: std.DoublyLinkedList.Node,
     script_element: ?*Element.Html.Script,
@@ -925,7 +944,7 @@ pub const Script = struct {
                 .javascript => _ = local.eval(content, url) catch break :blk false,
                 .module => {
                     // We don't care about waiting for the evaluation here.
-                    page.js.module(false, local, content, url, cacheable) catch break :blk false;
+                    page.js.module(false, local, content, url, cacheable, self.include_credentials) catch break :blk false;
                 },
                 .importmap => unreachable, // handled before the try/catch.
             }
@@ -1076,6 +1095,7 @@ const ImportedModule = struct {
     state: State = .loading,
     buffer: std.ArrayList(u8) = .{},
     waiters: u16 = 1,
+    include_credentials: bool = true,
 
     const State = enum {
         err,

@@ -37,6 +37,10 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 
 // Loosely maps to a Browser Page.
 const Context = @This();
+threadlocal var module_resolution_context: ?*Context = null;
+threadlocal var module_resolution_referrer: ?[:0]const u8 = null;
+
+pub const embedder_data_index: c_int = 2;
 
 id: usize,
 env: *Env,
@@ -117,6 +121,7 @@ module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
 // given is the specifier, we can form the full path. The full path is
 // necessary to lookup/store the dependent module in the module_cache.
 module_identifier: std.AutoHashMapUnmanaged(u32, [:0]const u8) = .empty,
+module_resolution_order: std.StringHashMapUnmanaged(ModuleResolutionOrder) = .empty,
 
 // the page's script manager
 script_manager: ?*ScriptManager,
@@ -134,6 +139,7 @@ const ModuleEntry = struct {
     // Can be null if we're asynchrously loading the module, in
     // which case resolver_promise cannot be null.
     module: ?js.Module.Global = null,
+    include_credentials: bool = true,
 
     // The promise of the evaluating module. The resolved value is
     // meaningless to us, but the resolver promise needs to chain
@@ -148,8 +154,64 @@ const ModuleEntry = struct {
     resolver_promise: ?js.Promise.Global = null,
 };
 
+const ModuleResolutionOrder = struct {
+    referrer_path: [:0]const u8 = "",
+    specifiers: std.ArrayListUnmanaged([:0]const u8) = .empty,
+    next: usize = 0,
+};
+
+fn precompileStaticModuleDependencies(
+    self: *Context,
+    referrer_path: [:0]const u8,
+    local: *const js.Local,
+    visited: *std.StringHashMapUnmanaged(void),
+) !void {
+    const gop = try visited.getOrPut(self.call_arena, referrer_path);
+    if (gop.found_existing) {
+        return;
+    }
+
+    const order = self.module_resolution_order.getPtr(referrer_path) orelse return;
+    for (order.specifiers.items) |normalized_specifier| {
+        const entry = self.module_cache.getPtr(normalized_specifier) orelse continue;
+        if (entry.module == null) {
+            var source = try self.script_manager.?.waitForImport(normalized_specifier);
+            defer source.deinit();
+
+            var try_catch: js.TryCatch = undefined;
+            try_catch.init(local);
+            defer try_catch.deinit();
+
+            const mod = try compileModule(local, source.src(), normalized_specifier);
+            try self.postCompileModule(mod, normalized_specifier, local);
+            const refreshed_entry = self.module_cache.getPtr(normalized_specifier).?;
+            if (refreshed_entry.module == null) {
+                refreshed_entry.module = try mod.persist();
+            }
+        }
+
+        try self.precompileStaticModuleDependencies(normalized_specifier, local, visited);
+
+        const instantiated_entry = self.module_cache.getPtr(normalized_specifier) orelse continue;
+        const cached_module = local.toLocal(instantiated_entry.module orelse continue);
+        if (cached_module.getStatus() == .kUninstantiated) {
+            self.resetModuleResolutionOrder(normalized_specifier);
+            const previous_resolution_context = module_resolution_context;
+            const previous_resolution_referrer = module_resolution_referrer;
+            module_resolution_context = self;
+            module_resolution_referrer = normalized_specifier;
+            defer module_resolution_context = previous_resolution_context;
+            defer module_resolution_referrer = previous_resolution_referrer;
+            if (try cached_module.instantiate(resolveModuleCallback) == false) {
+                return error.ModuleInstantiationError;
+            }
+        }
+    }
+}
+
 pub fn fromC(c_context: *const v8.Context) *Context {
-    return @ptrCast(@alignCast(v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, 1)));
+    const raw = v8.v8__Context__GetAlignedPointerFromEmbedderData(c_context, embedder_data_index);
+    return @ptrFromInt(@intFromPtr(raw));
 }
 
 pub fn fromIsolate(isolate: js.Isolate) *Context {
@@ -365,7 +427,15 @@ pub fn stringToPersistedFunction(self: *Context, str: []const u8) !js.Function.G
     return try (js.Function{ .local = &ls.local, .handle = @ptrCast(js_val.handle) }).persist();
 }
 
-pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
+pub fn module(
+    self: *Context,
+    comptime want_result: bool,
+    local: *const js.Local,
+    src: []const u8,
+    url: []const u8,
+    cacheable: bool,
+    include_credentials: bool,
+) !(if (want_result) ModuleEntry else void) {
     const mod, const owned_url = blk: {
         const arena = self.arena;
 
@@ -374,6 +444,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         if (cacheable) {
             gop = try self.module_cache.getOrPut(arena, url);
             if (gop.found_existing) {
+                gop.value_ptr.include_credentials = include_credentials;
                 if (gop.value_ptr.module) |cache_mod| {
                     if (gop.value_ptr.module_promise == null) {
                         // This an usual case, but it can happen if a module is
@@ -397,7 +468,7 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
                 }
             } else {
                 // first time seeing this
-                gop.value_ptr.* = .{};
+                gop.value_ptr.* = .{ .include_credentials = include_credentials };
             }
         }
 
@@ -417,7 +488,17 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
     };
 
     try self.postCompileModule(mod, owned_url, local);
+    var precompiled_static_modules: std.StringHashMapUnmanaged(void) = .empty;
+    defer precompiled_static_modules.deinit(self.call_arena);
+    try self.precompileStaticModuleDependencies(owned_url, local, &precompiled_static_modules);
 
+    self.resetModuleResolutionOrder(owned_url);
+    const previous_resolution_context = module_resolution_context;
+    const previous_resolution_referrer = module_resolution_referrer;
+    module_resolution_context = self;
+    module_resolution_referrer = owned_url;
+    defer module_resolution_context = previous_resolution_context;
+    defer module_resolution_referrer = previous_resolution_referrer;
     if (try mod.instantiate(resolveModuleCallback) == false) {
         return error.ModuleInstantiationError;
     }
@@ -443,7 +524,6 @@ fn evaluateModule(self: *Context, comptime want_result: bool, mod: js.Module, ur
         });
         return error.EvaluationError;
     };
-
     // https://v8.github.io/api/head/classv8_1_1Module.html#a1f1758265a4082595757c3251bb40e0f
     // Must be a promise that gets returned here.
     lp.assert(evaluated.isPromise(), "Context.module non-promise", .{});
@@ -519,7 +599,17 @@ fn compileModule(local: *const js.Local, src: []const u8, name: []const u8) !js.
 // we always want to track its identity (so that, if this module imports other
 // modules, we can resolve the full URL), and preload any dependent modules.
 fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *const js.Local) !void {
-    try self.module_identifier.putNoClobber(self.arena, mod.getIdentityHash(), url);
+    const module_identity = mod.getIdentityHash();
+    try self.module_identifier.putNoClobber(self.arena, module_identity, url);
+    const include_credentials = if (self.module_cache.getPtr(url)) |entry| entry.include_credentials else true;
+    const order_gop = try self.module_resolution_order.getOrPut(self.arena, url);
+    if (!order_gop.found_existing) {
+        order_gop.value_ptr.* = .{ .referrer_path = url };
+    } else {
+        order_gop.value_ptr.referrer_path = url;
+        order_gop.value_ptr.specifiers.clearRetainingCapacity();
+        order_gop.value_ptr.next = 0;
+    }
 
     // Non-async modules are blocking. We can download them in parallel, but
     // they need to be processed serially. So we want to get the list of
@@ -534,12 +624,14 @@ fn postCompileModule(self: *Context, mod: js.Module, url: [:0]const u8, local: *
             url,
             try specifier.toSliceZ(),
         );
+        const resolution_specifier = try self.arena.dupeZ(u8, normalized_specifier);
+        try order_gop.value_ptr.specifiers.append(self.arena, resolution_specifier);
         const nested_gop = try self.module_cache.getOrPut(self.arena, normalized_specifier);
         if (!nested_gop.found_existing) {
             const owned_specifier = try self.arena.dupeZ(u8, normalized_specifier);
             nested_gop.key_ptr.* = owned_specifier;
-            nested_gop.value_ptr.* = .{};
-            try script_manager.preloadImport(owned_specifier, url);
+            nested_gop.value_ptr.* = .{ .include_credentials = include_credentials };
+            try script_manager.preloadImport(owned_specifier, url, include_credentials);
         }
     }
 }
@@ -562,28 +654,61 @@ fn resolveModuleCallback(
     import_attributes: ?*const v8.FixedArray,
     c_referrer: ?*const v8.Module,
 ) callconv(.c) ?*const v8.Module {
+    _ = c_specifier;
     _ = import_attributes;
 
-    const self = fromC(c_context.?);
+    const self = module_resolution_context orelse return null;
     const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
         .isolate = self.isolate,
         .call_arena = self.call_arena,
     };
-
-    const specifier = js.String.toSliceZ(.{ .local = &local, .handle = c_specifier.? }) catch |err| {
+    const referrer_path = blk: {
+        if (c_referrer) |handle| {
+            const referrer = js.Module{
+                .local = &local,
+                .handle = handle,
+            };
+            if (self.module_identifier.get(referrer.getIdentityHash())) |path| {
+                break :blk path;
+            }
+        }
+        break :blk module_resolution_referrer orelse return null;
+    };
+    const resolution = self.nextModuleResolution(referrer_path) catch |err| {
         log.err(.js, "resolve module", .{ .err = err });
         return null;
     };
-    const referrer = js.Module{ .local = &local, .handle = c_referrer.? };
-
-    return self._resolveModuleCallback(referrer, specifier, &local) catch |err| {
+    const resolved = self.resolvePrecomputedModule(resolution.referrer_path, resolution.specifier, &local) catch |err| {
         log.err(.js, "resolve module", .{
             .err = err,
-            .specifier = specifier,
+            .specifier = resolution.specifier,
         });
         return null;
+    };
+    const resolved_module = js.Module{
+        .local = &local,
+        .handle = resolved orelse return null,
+    };
+    return resolved_module.handle;
+}
+
+const ModuleResolution = struct {
+    referrer_path: [:0]const u8,
+    specifier: [:0]const u8,
+};
+
+fn nextModuleResolution(self: *Context, referrer_path: [:0]const u8) !ModuleResolution {
+    const order = self.module_resolution_order.getPtr(referrer_path) orelse return error.UnknownModuleReferrer;
+    if (order.next >= order.specifiers.items.len) {
+        return error.UnknownModuleSpecifier;
+    }
+    const specifier = order.specifiers.items[order.next];
+    order.next += 1;
+    return .{
+        .referrer_path = order.referrer_path,
+        .specifier = specifier,
     };
 }
 
@@ -682,7 +807,6 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
         referrer_path,
         specifier,
     );
-
     const entry = self.module_cache.getPtr(normalized_specifier).?;
     if (entry.module) |m| {
         return local.toLocal(m).handle;
@@ -697,12 +821,38 @@ fn _resolveModuleCallback(self: *Context, referrer: js.Module, specifier: [:0]co
 
     const mod = try compileModule(local, source.src(), normalized_specifier);
     try self.postCompileModule(mod, normalized_specifier, local);
-    entry.module = try mod.persist();
+    const refreshed_entry = self.module_cache.getPtr(normalized_specifier).?;
+    refreshed_entry.module = try mod.persist();
     // Note: We don't instantiate/evaluate here - V8 will handle instantiation
     // as part of the parent module's dependency chain. If there's a resolver
     // waiting, it will be handled when the module is eventually evaluated
     // (either as a top-level module or when accessed via dynamic import)
-    return mod.handle;
+    return local.toLocal(refreshed_entry.module.?).handle;
+}
+
+fn resolvePrecomputedModule(self: *Context, referrer_path: [:0]const u8, specifier: [:0]const u8, local: *const js.Local) !?*const v8.Module {
+    const normalized_specifier = try self.script_manager.?.resolveSpecifier(
+        self.arena,
+        referrer_path,
+        specifier,
+    );
+    const entry = self.module_cache.getPtr(normalized_specifier).?;
+    if (entry.module) |m| {
+        return local.toLocal(m).handle;
+    }
+
+    var source = try self.script_manager.?.waitForImport(normalized_specifier);
+    defer source.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(local);
+    defer try_catch.deinit();
+
+    const mod = try compileModule(local, source.src(), normalized_specifier);
+    try self.postCompileModule(mod, normalized_specifier, local);
+    const refreshed_entry = self.module_cache.getPtr(normalized_specifier).?;
+    refreshed_entry.module = try mod.persist();
+    return local.toLocal(refreshed_entry.module.?).handle;
 }
 
 // Will get passed to ScriptManager and then passed back to us when
@@ -754,7 +904,9 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         };
 
         // Next, we need to actually load it.
-        self.script_manager.?.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer) catch |err| {
+        const referrer_include_credentials = if (self.module_cache.getPtr(referrer)) |entry| entry.include_credentials else true;
+        gop.value_ptr.include_credentials = referrer_include_credentials;
+        self.script_manager.?.getAsyncImport(specifier, dynamicModuleSourceCallback, state, referrer, referrer_include_credentials) catch |err| {
             const error_msg = local.newString(@errorName(err));
             _ = resolver.reject("dynamic module get async", error_msg);
         };
@@ -792,6 +944,16 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
         } else {
             // the module was loaded, but not evaluated, we _have_ to evaluate it now
             if (status == .kUninstantiated) {
+                var precompiled_static_modules: std.StringHashMapUnmanaged(void) = .empty;
+                defer precompiled_static_modules.deinit(self.call_arena);
+                try self.precompileStaticModuleDependencies(specifier, local, &precompiled_static_modules);
+                self.resetModuleResolutionOrder(specifier);
+                const previous_resolution_context = module_resolution_context;
+                const previous_resolution_referrer = module_resolution_referrer;
+                module_resolution_context = self;
+                module_resolution_referrer = specifier;
+                defer module_resolution_context = previous_resolution_context;
+                defer module_resolution_referrer = previous_resolution_referrer;
                 if (try mod.instantiate(resolveModuleCallback) == false) {
                     _ = resolver.reject("module instantiation", local.newString("Module instantiation failed"));
                     return promise;
@@ -826,6 +988,7 @@ fn _dynamicModuleCallback(self: *Context, specifier: [:0]const u8, referrer: []c
 fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptManager.ModuleSource) void {
     const state: *DynamicModuleResolveState = @ptrCast(@alignCast(ctx));
     var self = state.context;
+    const include_credentials = if (self.module_cache.getPtr(state.specifier)) |entry| entry.include_credentials else true;
 
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
@@ -845,7 +1008,7 @@ fn dynamicModuleSourceCallback(ctx: *anyopaque, module_source_: anyerror!ScriptM
         try_catch.init(local);
         defer try_catch.deinit();
 
-        break :blk self.module(true, local, ms.src(), state.specifier, true) catch |err| {
+        break :blk self.module(true, local, ms.src(), state.specifier, true, include_credentials) catch |err| {
             const caught = try_catch.caughtOrError(self.call_arena, err);
             log.err(.js, "module compilation failed", .{
                 .caught = caught,
@@ -931,6 +1094,12 @@ fn resolveDynamicModule(self: *Context, state: *DynamicModuleResolveState, modul
         });
         _ = local.toLocal(state.resolver).reject("module promise", local.newString("Failed to evaluate promise"));
     };
+}
+
+fn resetModuleResolutionOrder(self: *Context, referrer_path: [:0]const u8) void {
+    if (self.module_resolution_order.getPtr(referrer_path)) |order| {
+        order.next = 0;
+    }
 }
 
 // Used to make temporarily enter and exit a context, updating and restoring

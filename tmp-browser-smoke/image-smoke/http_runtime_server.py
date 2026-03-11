@@ -130,6 +130,36 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/auth-module-page.html":
+            body = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Module Auth Smoke</title></head>
+<body><script type="module" src="/auth-module-root.js"></script></body>
+</html>
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpmoduleauth=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-module-anonymous-page.html":
+            body = f"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Module Anonymous Smoke</title></head>
+<body><script type="module" crossorigin="anonymous" src="http://img%20user:p%40ss@127.0.0.1:{PORT}/auth-module-anon-root.js"></script></body>
+</html>
+""".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpmoduleanon=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/accept-page.html":
             body = b"""<!doctype html>
 <html>
@@ -482,6 +512,166 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/auth-module-root.js":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-module-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpmoduleauth=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+                and "*/*" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"throw new Error('blocked root module');"
+                self.send_response(403)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"import { mountModuleAuth } from './auth-module-child.js'; mountModuleAuth();"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-module-child.js":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-module-root.js"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpmoduleauth=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+                and "*/*" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"throw new Error('blocked child module');"
+                self.send_response(403)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"""export function mountModuleAuth(){document.title='Module Auth OK';var panel=document.createElement('div');panel.id='module-auth-panel';panel.textContent='module auth ok';panel.setAttribute('style','width:320px;height:160px;background:#18c23e;color:#ffffff;padding:24px;font-size:28px;');document.body.innerHTML='';document.body.appendChild(panel);var img=new Image();img.alt='module auth beacon';img.src='/module-auth-beacon.png';document.body.appendChild(img);}"""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-module-anon-root.js":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-module-anonymous-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and cookie == ""
+                and referer == expected_referer
+                and authorization == ""
+                and "*/*" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"throw new Error('blocked anonymous root module');"
+                self.send_response(403)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"import { mountModuleAnonymous } from './auth-module-anon-child.js'; mountModuleAnonymous();"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-module-anon-child.js":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-module-anon-root.js"
+            allowed = (
+                "Lightpanda/" in ua
+                and cookie == ""
+                and referer == expected_referer
+                and authorization == ""
+                and "*/*" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"throw new Error('blocked anonymous child module');"
+                self.send_response(403)
+                self.send_header("Content-Type", "application/javascript; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"""export function mountModuleAnonymous(){document.title='Module Anonymous OK';var panel=document.createElement('div');panel.id='module-anon-panel';panel.textContent='module anonymous ok';panel.setAttribute('style','width:320px;height:160px;background:#147ad6;color:#ffffff;padding:24px;font-size:28px;');document.body.innerHTML='';document.body.appendChild(panel);var img=new Image();img.alt='module anonymous beacon';img.src='/module-anon-beacon.png';document.body.appendChild(img);}"""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/script-beacon.png":
             ua = self.headers.get("User-Agent", "")
             cookie = self.headers.get("Cookie", "")
@@ -528,6 +718,80 @@ class Handler(BaseHTTPRequestHandler):
             allowed = (
                 "Lightpanda/" in ua
                 and "lpscriptanon=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/module-auth-beacon.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-module-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpmoduleauth=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"blocked"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (ROOT / "red.png").read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/module-anon-beacon.png":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-module-anonymous-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpmoduleanon=ok" in cookie
                 and referer == expected_referer
                 and authorization == "Basic aW1nIHVzZXI6cEBzcw=="
             )

@@ -423,6 +423,7 @@ pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, header
 
 pub const RequestHeaderPolicy = struct {
     include_credentials: bool = true,
+    referer_override_url: ?[]const u8 = null,
 };
 
 pub fn headersForRequestWithPolicy(
@@ -442,6 +443,15 @@ pub fn headersForRequestWithPolicy(
 
     // Build the referer
     const referer = blk: {
+        if (policy.referer_override_url) |override_url| {
+            if (!std.mem.startsWith(u8, override_url, "http")) {
+                break :blk "";
+            }
+            const override_url_z = try temp.dupeZ(u8, override_url);
+            const referer_value = try refererValueForUrl(temp, override_url_z);
+            break :blk try std.mem.concatWithSentinel(temp, u8, &.{ "Referer: ", referer_value }, 0);
+        }
+
         if (self.referer_header == null) {
             // build the cache
             if (std.mem.startsWith(u8, self.url, "http")) {
