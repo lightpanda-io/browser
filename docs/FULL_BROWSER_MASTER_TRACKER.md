@@ -359,6 +359,10 @@ Current state inside Gate 1:
   coexistence, with a bounded probe proving a wrapped later-row radio can be
   selected by click and that `Tab` then `Enter` still reaches and activates a
   later-row link in the same paragraph
+- that same dense later-row mixed-inline control coverage now also includes
+  radio/button/link coexistence, with a bounded probe proving one wrapped
+  paragraph can handle later-row radio click selection, later-row button click
+  activation, and then `Tab`/`Enter` traversal into a later-row link
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
