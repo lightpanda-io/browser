@@ -400,6 +400,12 @@ Current state inside Gate 1:
   radio, `Tab`+`Space` selection of the second radio in the same group,
   `Tab`-driven text entry into the later-row input, and `Tab`+`Space`
   submission through the real headed form-submit path
+- that same later-row mixed-inline form coverage now also includes a wrapped
+  mixed-family paragraph where checkbox, radio, text input, and submit coexist
+  in DOM order, with a bounded probe proving click activation on the checkbox,
+  `Tab`+`Space` activation on the later-row radio, typed input on the later-row
+  text field, and `Tab`+`Space` submission through the real headed form-submit
+  path
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces

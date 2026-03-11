@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mixed Inline Checkbox Radio Input Submit Flow</title>
+</head>
+<body style="margin:0;background:white;color:black;font:18px sans-serif;">
+  <main style="display:block;padding:24px;width:320px;">
+    <form action="/submitted-checkbox-radio-input.html" method="get">
+      <p style="display:block;margin:0 0 24px 0;width:220px;">
+        Lead text before the checkbox
+        <input
+          type="checkbox"
+          name="choice-check"
+          value="check"
+          style="display:inline;color:white;background-color:#27965d;padding:6px 10px;width:150px;border:0;"
+        >
+        bridge words before the radio
+        <input
+          type="radio"
+          name="choice-radio"
+          value="radio"
+          style="display:inline;color:white;background-color:#d38a1d;padding:6px 10px;width:150px;border:0;"
+        >
+        bridge words before the input
+        <input
+          name="entry"
+          type="text"
+          value=""
+          style="display:inline;color:white;background-color:#1db6d2;padding:6px 10px;width:170px;border:0;"
+        >
+        bridge words before submit
+        <button type="submit" style="display:inline;color:white;background-color:#c13db5;padding:6px 12px;border:0;">
+          Submit
+        </button>
+      </p>
+    </form>
+    <p style="display:block;margin:0;">Below paragraph stays below the checkbox, radio, input, and submit flow.</p>
+  </main>
+</body>
+</html>
