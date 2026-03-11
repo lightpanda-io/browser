@@ -116,6 +116,49 @@ pub fn exec(self: *const Local, src: []const u8, name: ?[]const u8) !js.Value {
     return self.compileAndRun(src, name);
 }
 
+/// Compiles a function body as function.
+///
+/// https://v8.github.io/api/head/classv8_1_1ScriptCompiler.html#a3a15bb5a7dfc3f998e6ac789e6b4646a
+pub fn compileFunction(
+    self: *const Local,
+    function_body: []const u8,
+    /// We tend to know how many params we'll pass; can remove the comptime if necessary.
+    comptime parameter_names: []const []const u8,
+    extensions: []const v8.Object,
+) !js.Function {
+    // TODO: Make configurable.
+    const script_name = self.isolate.initStringHandle("anonymous");
+    const script_source = self.isolate.initStringHandle(function_body);
+
+    var parameter_list: [parameter_names.len]*const v8.String = undefined;
+    inline for (0..parameter_names.len) |i| {
+        parameter_list[i] = self.isolate.initStringHandle(parameter_names[i]);
+    }
+
+    // Create `ScriptOrigin`.
+    var origin: v8.ScriptOrigin = undefined;
+    v8.v8__ScriptOrigin__CONSTRUCT(&origin, script_name);
+
+    // Create `ScriptCompilerSource`.
+    var script_compiler_source: v8.ScriptCompilerSource = undefined;
+    v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, null, &script_compiler_source);
+    defer v8.v8__ScriptCompiler__Source__DESTRUCT(&script_compiler_source);
+
+    // Compile the function.
+    const result = v8.v8__ScriptCompiler__CompileFunction(
+        self.handle,
+        &script_compiler_source,
+        parameter_list.len,
+        &parameter_list,
+        extensions.len,
+        @ptrCast(&extensions),
+        v8.kNoCompileOptions,
+        v8.kNoCacheNoReason,
+    ) orelse return error.CompilationError;
+
+    return .{ .local = self, .handle = result };
+}
+
 pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js.Value {
     const script_name = self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = self.isolate.initStringHandle(src);

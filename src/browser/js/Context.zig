@@ -251,28 +251,18 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
     return l.toLocal(global);
 }
 
-// This isn't expected to be called often. It's for converting attributes into
-// function calls, e.g. <body onload="doSomething"> will turn that "doSomething"
-// string into a js.Function which looks like: function(e) { doSomething(e) }
-// There might be more efficient ways to do this, but doing it this way means
-// our code only has to worry about js.Funtion, not some union of a js.Function
-// or a string.
-pub fn stringToPersistedFunction(self: *Context, str: []const u8) !js.Function.Global {
+pub fn stringToPersistedFunction(
+    self: *Context,
+    function_body: []const u8,
+    comptime parameter_names: []const []const u8,
+    extensions: []const v8.Object,
+) !js.Function.Global {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
     defer ls.deinit();
 
-    var extra: []const u8 = "";
-    const normalized = std.mem.trim(u8, str, &std.ascii.whitespace);
-    if (normalized.len > 0 and normalized[normalized.len - 1] != ')') {
-        extra = "(e)";
-    }
-    const full = try std.fmt.allocPrintSentinel(self.call_arena, "(function(e) {{ {s}{s} }})", .{ normalized, extra }, 0);
-    const js_val = try ls.local.compileAndRun(full, null);
-    if (!js_val.isFunction()) {
-        return error.StringFunctionError;
-    }
-    return try (js.Function{ .local = &ls.local, .handle = @ptrCast(js_val.handle) }).persist();
+    const js_function = try ls.local.compileFunction(function_body, parameter_names, extensions);
+    return js_function.persist();
 }
 
 pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
