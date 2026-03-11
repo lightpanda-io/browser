@@ -2411,6 +2411,39 @@ test "paintDocument treats br as a real line break inside mixed inline flow" {
     try std.testing.expect(below_y.? > green_y.? + 12);
 }
 
+test "paintDocument wraps mixed inline anchor text across multiple rows" {
+    var page = try testing.pageTest("page/mixed_inline_wrap_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var min_y: ?i32 = null;
+    var max_y: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (!(std.mem.eql(u8, text.text, "go ") or
+                    std.mem.eql(u8, text.text, "LINK") or
+                    std.mem.eql(u8, text.text, "now ") or
+                    std.mem.eql(u8, text.text, "suffix ")))
+                {
+                    continue;
+                }
+                min_y = if (min_y) |current| @min(current, text.y) else text.y;
+                max_y = if (max_y) |current| @max(current, text.y + text.height) else (text.y + text.height);
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(min_y != null);
+    try std.testing.expect(max_y != null);
+    try std.testing.expect(max_y.? > min_y.? + 24);
+}
+
 test "paintDocument carries loaded private font faces for headed rendering" {
     var page = try testing.pageTest("page/font_private_render.html");
     defer page._session.removePage();
