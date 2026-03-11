@@ -367,21 +367,22 @@ const JsonVisitor = struct {
 };
 
 fn isStructuralRole(role: []const u8) bool {
-    // zig fmt: off
-    return std.mem.eql(u8, role, "none") or
-        std.mem.eql(u8, role, "generic") or
-        std.mem.eql(u8, role, "InlineTextBox") or
-        std.mem.eql(u8, role, "banner") or
-        std.mem.eql(u8, role, "navigation") or
-        std.mem.eql(u8, role, "main") or
-        std.mem.eql(u8, role, "list") or
-        std.mem.eql(u8, role, "listitem") or
-        std.mem.eql(u8, role, "table") or
-        std.mem.eql(u8, role, "rowgroup") or
-        std.mem.eql(u8, role, "row") or
-        std.mem.eql(u8, role, "cell") or
-        std.mem.eql(u8, role, "region");
-    // zig fmt: on
+    const structural_roles = std.StaticStringMap(void).initComptime(.{
+        .{ "none", {} },
+        .{ "generic", {} },
+        .{ "InlineTextBox", {} },
+        .{ "banner", {} },
+        .{ "navigation", {} },
+        .{ "main", {} },
+        .{ "list", {} },
+        .{ "listitem", {} },
+        .{ "table", {} },
+        .{ "rowgroup", {} },
+        .{ "row", {} },
+        .{ "cell", {} },
+        .{ "region", {} },
+    });
+    return structural_roles.has(role);
 }
 
 const TextVisitor = struct {

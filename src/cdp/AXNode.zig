@@ -767,7 +767,7 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
         pub fn endWriteRaw(_: @This()) void {}
     };
 
-    const w = TextCaptureWriter{ .aw = &aw, .writer = &aw.writer };
+    const w: TextCaptureWriter = .{ .aw = &aw, .writer = &aw.writer };
 
     const source = try self.writeName(w, page);
     if (source != null) {
