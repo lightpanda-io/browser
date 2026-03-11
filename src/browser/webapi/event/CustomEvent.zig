@@ -21,6 +21,7 @@ const String = @import("../../../string.zig").String;
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 const Event = @import("../Event.zig");
 const Allocator = std.mem.Allocator;
 
@@ -72,11 +73,11 @@ pub fn initCustomEvent(
     self._detail = detail_;
 }
 
-pub fn deinit(self: *CustomEvent, shutdown: bool, page: *Page) void {
+pub fn deinit(self: *CustomEvent, shutdown: bool, session: *Session) void {
     if (self._detail) |d| {
-        page.js.release(d);
+        d.release();
     }
-    self._proto.deinit(shutdown, page);
+    self._proto.deinit(shutdown, session);
 }
 
 pub fn asEvent(self: *CustomEvent) *Event {

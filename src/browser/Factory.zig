@@ -48,13 +48,11 @@ const Factory = @This();
 _arena: Allocator,
 _slab: SlabAllocator,
 
-pub fn init(arena: Allocator) !*Factory {
-    const self = try arena.create(Factory);
-    self.* = .{
+pub fn init(arena: Allocator) Factory {
+    return .{
         ._arena = arena,
         ._slab = SlabAllocator.init(arena, 128),
     };
-    return self;
 }
 
 // this is a root object

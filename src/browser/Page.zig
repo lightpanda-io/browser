@@ -190,6 +190,8 @@ _queued_navigation: ?*QueuedNavigation = null,
 // The URL of the current page
 url: [:0]const u8 = "about:blank",
 
+origin: ?[]const u8 = null,
+
 // The base url specifies the base URL used to resolve the relative urls.
 // It is set by a <base> tag.
 // If null the url must be used.
@@ -211,14 +213,6 @@ arena: Allocator,
 // An arena with a lifetime guaranteed to be for 1 invoking of a Zig function
 // from JS. Best arena to use, when possible.
 call_arena: Allocator,
-
-arena_pool: *ArenaPool,
-// In Debug, we use this to see if anything fails to release an arena back to
-// the pool.
-_arena_pool_leak_track: (if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, struct {
-    owner: []const u8,
-    count: usize,
-}) else void) = if (IS_DEBUG) .empty else {},
 
 parent: ?*Page,
 window: *Window,
@@ -246,17 +240,11 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.init", .{});
     }
-    const browser = session.browser;
-    const arena_pool = browser.arena_pool;
 
-    const page_arena = if (parent) |p| p.arena else try arena_pool.acquire();
-    errdefer if (parent == null) arena_pool.release(page_arena);
+    const call_arena = try session.getArena(.{ .debug = "call_arena" });
+    errdefer session.releaseArena(call_arena);
 
-    var factory = if (parent) |p| p._factory else try Factory.init(page_arena);
-
-    const call_arena = try arena_pool.acquire();
-    errdefer arena_pool.release(call_arena);
-
+    const factory = &session.factory;
     const document = (try factory.document(Node.Document.HTMLDocument{
         ._proto = undefined,
     })).asDocument();
@@ -264,10 +252,9 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     self.* = .{
         .js = undefined,
         .parent = parent,
-        .arena = page_arena,
+        .arena = session.page_arena,
         .document = document,
         .window = undefined,
-        .arena_pool = arena_pool,
         .call_arena = call_arena,
         ._frame_id = frame_id,
         ._session = session,
@@ -275,7 +262,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
         ._script_manager = undefined,
-        ._event_manager = EventManager.init(page_arena, self),
+        ._event_manager = EventManager.init(session.page_arena, self),
     };
 
     var screen: *Screen = undefined;
@@ -303,6 +290,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._visual_viewport = visual_viewport,
     });
 
+    const browser = session.browser;
     self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
     errdefer self._script_manager.deinit();
 
@@ -338,11 +326,12 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         // stats.print(&stream) catch unreachable;
     }
 
+    const session = self._session;
+
     if (self._queued_navigation) |qn| {
-        self.arena_pool.release(qn.arena);
+        session.releaseArena(qn.arena);
     }
 
-    const session = self._session;
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
@@ -358,23 +347,7 @@ pub fn deinit(self: *Page, abort_http: bool) void {
 
     self._script_manager.deinit();
 
-    if (comptime IS_DEBUG) {
-        var it = self._arena_pool_leak_track.valueIterator();
-        while (it.next()) |value_ptr| {
-            if (value_ptr.count > 0) {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type, .url = self.url });
-                if (comptime builtin.is_test) {
-                    @panic("ArenaPool Leak");
-                }
-            }
-        }
-    }
-
-    self.arena_pool.release(self.call_arena);
-
-    if (self.parent == null) {
-        self.arena_pool.release(self.arena);
-    }
+    session.releaseArena(self.call_arena);
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
@@ -386,10 +359,6 @@ pub fn getTitle(self: *Page) !?[]const u8 {
         return try html_doc.getTitle(self);
     }
     return null;
-}
-
-pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
-    return try URL.getOrigin(allocator, self.url);
 }
 
 // Add comon headers for a request:
@@ -418,38 +387,16 @@ pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, header
     }
 }
 
-const GetArenaOpts = struct {
-    debug: []const u8,
-};
-pub fn getArena(self: *Page, comptime opts: GetArenaOpts) !Allocator {
-    const allocator = try self.arena_pool.acquire();
-    if (comptime IS_DEBUG) {
-        const gop = try self._arena_pool_leak_track.getOrPut(self.arena, @intFromPtr(allocator.ptr));
-        if (gop.found_existing) {
-            std.debug.assert(gop.value_ptr.count == 0);
-        }
-        gop.value_ptr.* = .{ .owner = opts.debug, .count = 1 };
-    }
-    return allocator;
+pub fn getArena(self: *Page, comptime opts: Session.GetArenaOpts) !Allocator {
+    return self._session.getArena(opts);
 }
 
 pub fn releaseArena(self: *Page, allocator: Allocator) void {
-    if (comptime IS_DEBUG) {
-        const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
-        if (found.count != 1) {
-            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type, .url = self.url });
-            if (comptime builtin.is_test) {
-                @panic("ArenaPool Double Free");
-            }
-            return;
-        }
-        found.count = 0;
-    }
-    return self.arena_pool.release(allocator);
+    return self._session.releaseArena(allocator);
 }
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
-    const current_origin = (try URL.getOrigin(self.call_arena, self.url)) orelse return false;
+    const current_origin = self.origin orelse return false;
     return std.mem.startsWith(u8, url, current_origin);
 }
 
@@ -472,6 +419,14 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     // page and dispatch the events.
     if (std.mem.eql(u8, "about:blank", request_url)) {
         self.url = "about:blank";
+
+        if (self.parent) |parent| {
+            self.origin = parent.origin;
+        } else {
+            self.origin = null;
+        }
+        try self.js.setOrigin(self.origin);
+
         // Assume we parsed the document.
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
@@ -518,6 +473,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     var http_client = session.browser.http_client;
 
     self.url = try self.arena.dupeZ(u8, request_url);
+    self.origin = try URL.getOrigin(self.arena, self.url);
 
     self._req_id = req_id;
     self._navigated_options = .{
@@ -578,8 +534,8 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
     if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
         return;
     }
-    const arena = try self.arena_pool.acquire();
-    errdefer self.arena_pool.release(arena);
+    const arena = try self._session.getArena(.{ .debug = "scheduleNavigation" });
+    errdefer self._session.releaseArena(arena);
     return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
 }
 
@@ -618,9 +574,8 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
-        // doin't defer this, the caller, the caller is responsible for freeing
-        // it on error
-        target.arena_pool.release(arena);
+        // don't defer this, the caller is responsible for freeing it on error
+        session.releaseArena(arena);
         return;
     }
 
@@ -652,7 +607,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
     };
 
     if (target._queued_navigation) |existing| {
-        target.arena_pool.release(existing.arena);
+        session.releaseArena(existing.arena);
     }
 
     target._queued_navigation = qn;
@@ -825,9 +780,15 @@ fn notifyParentLoadComplete(self: *Page) void {
 fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
-    // would be different than self.url in the case of a redirect
     const header = &transfer.response_header.?;
-    self.url = try self.arena.dupeZ(u8, std.mem.span(header.url));
+
+    const response_url = std.mem.span(header.url);
+    if (std.mem.eql(u8, response_url, self.url) == false) {
+        // would be different than self.url in the case of a redirect
+        self.url = try self.arena.dupeZ(u8, response_url);
+        self.origin = try URL.getOrigin(self.arena, self.url);
+    }
+    try self.js.setOrigin(self.origin);
 
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
@@ -3163,7 +3124,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
     const element = self.window._document._active_element orelse {
-        keyboard_event.deinit(false, self);
+        keyboard_event.deinit(false, self._session);
         return;
     };
 
@@ -3239,7 +3200,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
         // so submit_event is still valid when we check _prevent_default
         submit_event.acquireRef();
-        defer submit_event.deinit(false, self);
+        defer submit_event.deinit(false, self._session);
 
         try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
         // If the submit event was prevented, don't submit the form
@@ -3253,8 +3214,8 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, self);
 
-    const arena = try self.arena_pool.acquire();
-    errdefer self.arena_pool.release(arena);
+    const arena = try self._session.getArena(.{ .debug = "submitForm" });
+    errdefer self._session.releaseArena(arena);
 
     const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));
 

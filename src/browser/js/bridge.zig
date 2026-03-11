@@ -21,11 +21,13 @@ const js = @import("js.zig");
 const lp = @import("lightpanda");
 const log = @import("../../log.zig");
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 
 const v8 = js.v8;
 
 const Caller = @import("Caller.zig");
 const Context = @import("Context.zig");
+const Origin = @import("Origin.zig");
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -104,24 +106,24 @@ pub fn Builder(comptime T: type) type {
             return entries;
         }
 
-        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool, page: *Page) void) Finalizer {
+        pub fn finalizer(comptime func: *const fn (self: *T, shutdown: bool, session: *Session) void) Finalizer {
             return .{
                 .from_zig = struct {
-                    fn wrap(ptr: *anyopaque, page: *Page) void {
-                        func(@ptrCast(@alignCast(ptr)), true, page);
+                    fn wrap(ptr: *anyopaque, session: *Session) void {
+                        func(@ptrCast(@alignCast(ptr)), true, session);
                     }
                 }.wrap,
 
                 .from_v8 = struct {
                     fn wrap(handle: ?*const v8.WeakCallbackInfo) callconv(.c) void {
                         const ptr = v8.v8__WeakCallbackInfo__GetParameter(handle.?).?;
-                        const fc: *Context.FinalizerCallback = @ptrCast(@alignCast(ptr));
+                        const fc: *Origin.FinalizerCallback = @ptrCast(@alignCast(ptr));
 
-                        const ctx = fc.ctx;
+                        const origin = fc.origin;
                         const value_ptr = fc.ptr;
-                        if (ctx.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
-                            func(@ptrCast(@alignCast(value_ptr)), false, ctx.page);
-                            ctx.release(value_ptr);
+                        if (origin.finalizer_callbacks.contains(@intFromPtr(value_ptr))) {
+                            func(@ptrCast(@alignCast(value_ptr)), false, fc.session);
+                            origin.release(value_ptr);
                         } else {
                             // A bit weird, but v8 _requires_ that we release it
                             // If we don't. We'll 100% crash.
@@ -413,12 +415,12 @@ pub const Property = struct {
 };
 
 const Finalizer = struct {
-    // The finalizer wrapper when called fro Zig. This is only called on
-    // Context.deinit
-    from_zig: *const fn (ctx: *anyopaque, page: *Page) void,
+    // The finalizer wrapper when called from Zig. This is only called on
+    // Origin.deinit
+    from_zig: *const fn (ctx: *anyopaque, session: *Session) void,
 
     // The finalizer wrapper when called from V8. This may never be called
-    // (hence why we fallback to calling in Context.denit). If it is called,
+    // (hence why we fallback to calling in Origin.deinit). If it is called,
     // it is only ever called after we SetWeak on the Global.
     from_v8: *const fn (?*const v8.WeakCallbackInfo) callconv(.c) void,
 };

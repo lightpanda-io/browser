@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 const Allocator = std.mem.Allocator;
 
 const TextDecoder = @This();
@@ -59,8 +60,8 @@ pub fn init(label_: ?[]const u8, opts_: ?InitOpts, page: *Page) !*TextDecoder {
     return self;
 }
 
-pub fn deinit(self: *TextDecoder, _: bool, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *TextDecoder, _: bool, session: *Session) void {
+    session.releaseArena(self._arena);
 }
 
 pub fn getIgnoreBOM(self: *const TextDecoder) bool {

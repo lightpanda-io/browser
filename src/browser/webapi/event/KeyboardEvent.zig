@@ -21,6 +21,7 @@ const String = @import("../../../string.zig").String;
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 
 const Event = @import("../Event.zig");
 const UIEvent = @import("UIEvent.zig");
@@ -221,8 +222,8 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *KeyboardEvent, shutdown: bool, page: *Page) void {
-    self._proto.deinit(shutdown, page);
+pub fn deinit(self: *KeyboardEvent, shutdown: bool, session: *Session) void {
+    self._proto.deinit(shutdown, session);
 }
 
 pub fn asEvent(self: *KeyboardEvent) *Event {

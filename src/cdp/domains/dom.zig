@@ -98,7 +98,7 @@ fn performSearch(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
     const list = try Selector.querySelectorAll(page.window._document.asNode(), params.query, page);
-    defer list.deinit(page);
+    defer list.deinit(page._session);
 
     const search = try bc.node_search_list.create(list._nodes);
 
@@ -249,7 +249,7 @@ fn querySelectorAll(cmd: anytype) !void {
     };
 
     const selected_nodes = try Selector.querySelectorAll(node.dom, params.selector, page);
-    defer selected_nodes.deinit(page);
+    defer selected_nodes.deinit(page._session);
 
     const nodes = selected_nodes._nodes;
 

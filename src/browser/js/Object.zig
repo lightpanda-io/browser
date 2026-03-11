@@ -97,7 +97,7 @@ pub fn persist(self: Object) !Global {
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
 
-    try ctx.global_objects.append(ctx.arena, global);
+    try ctx.trackGlobal(global);
 
     return .{ .handle = global };
 }

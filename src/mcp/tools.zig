@@ -92,7 +92,8 @@ const ToolStreamingText = struct {
             },
             .links => {
                 if (Selector.querySelectorAll(self.page.document.asNode(), "a[href]", self.page)) |list| {
-                    defer list.deinit(self.page);
+                    defer list.deinit(self.page._session);
+
                     var first = true;
                     for (list._nodes) |node| {
                         if (node.is(Element.Html.Anchor)) |anchor| {

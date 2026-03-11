@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const String = @import("../../../string.zig").String;
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 const js = @import("../../js/js.zig");
 
 const Event = @import("../Event.zig");
@@ -69,8 +70,8 @@ fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool
     return event;
 }
 
-pub fn deinit(self: *FocusEvent, shutdown: bool, page: *Page) void {
-    self._proto.deinit(shutdown, page);
+pub fn deinit(self: *FocusEvent, shutdown: bool, session: *Session) void {
+    self._proto.deinit(shutdown, session);
 }
 
 pub fn asEvent(self: *FocusEvent) *Event {

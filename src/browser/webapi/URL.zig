@@ -243,11 +243,10 @@ pub fn createObjectURL(blob: *Blob, page: *Page) ![]const u8 {
     var uuid_buf: [36]u8 = undefined;
     @import("../../id.zig").uuidv4(&uuid_buf);
 
-    const origin = (try page.getOrigin(page.call_arena)) orelse "null";
     const blob_url = try std.fmt.allocPrint(
         page.arena,
         "blob:{s}/{s}",
-        .{ origin, uuid_buf },
+        .{ page.origin orelse "null", uuid_buf },
     );
     try page._blob_urls.put(page.arena, blob_url, blob);
     return blob_url;

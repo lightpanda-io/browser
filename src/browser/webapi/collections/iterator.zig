@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 
 pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
     const R = reflect(Inner, field);
@@ -39,9 +40,9 @@ pub fn Entry(comptime Inner: type, comptime field: ?[]const u8) type {
             return page._factory.create(Self{ .inner = inner });
         }
 
-        pub fn deinit(self: *Self, shutdown: bool, page: *Page) void {
+        pub fn deinit(self: *Self, shutdown: bool, session: *Session) void {
             if (@hasDecl(Inner, "deinit")) {
-                self.inner.deinit(shutdown, page);
+                self.inner.deinit(shutdown, session);
             }
         }
 

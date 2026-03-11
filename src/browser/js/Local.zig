@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
@@ -171,7 +172,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
         .pointer => |ptr| {
             const resolved = resolveValue(value);
 
-            const gop = try ctx.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
+            const gop = try ctx.origin.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
                 return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);
@@ -225,16 +226,17 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // can't figure out how to make that work, since it depends on
                 // the [runtime] `value`.
                 // We need the resolved finalizer, which we have in resolved.
+                //
                 // The above if statement would be more clear as:
                 //    if (resolved.finalizer_from_v8) |finalizer| {
                 // But that's a runtime check.
                 // Instead, we check if the base has finalizer. The assumption
                 // here is that if a resolve type has a finalizer, then the base
                 // should have a finalizer too.
-                const fc = try ctx.createFinalizerCallback(gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
+                const fc = try ctx.origin.createFinalizerCallback(ctx.session, gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
                 {
                     errdefer fc.deinit();
-                    try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), fc);
+                    try ctx.origin.finalizer_callbacks.put(ctx.origin.arena, @intFromPtr(resolved.ptr), fc);
                 }
 
                 conditionallyReference(value);
@@ -1083,7 +1085,7 @@ const Resolved = struct {
     class_id: u16,
     prototype_chain: []const @import("TaggedOpaque.zig").PrototypeChainEntry,
     finalizer_from_v8: ?*const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void = null,
-    finalizer_from_zig: ?*const fn (ptr: *anyopaque, page: *Page) void = null,
+    finalizer_from_zig: ?*const fn (ptr: *anyopaque, session: *Session) void = null,
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));
