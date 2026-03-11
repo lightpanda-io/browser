@@ -326,7 +326,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
     };
-    try context.origin.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
+    try context.origin.identity_map.putNoClobber(origin.arena, @intFromPtr(page.window), global_global);
 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out

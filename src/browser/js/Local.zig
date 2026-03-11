@@ -202,20 +202,20 @@ pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js
 //      we can just grab it from the identity_map)
 pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, value: anytype) !js.Object {
     const ctx = self.ctx;
-    const arena = ctx.arena;
+    const origin_arena = ctx.origin.arena;
 
     const T = @TypeOf(value);
     switch (@typeInfo(T)) {
         .@"struct" => {
             // Struct, has to be placed on the heap
-            const heap = try arena.create(T);
+            const heap = try origin_arena.create(T);
             heap.* = value;
             return self.mapZigInstanceToJs(js_obj_handle, heap);
         },
         .pointer => |ptr| {
             const resolved = resolveValue(value);
 
-            const gop = try ctx.origin.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
+            const gop = try ctx.origin.addIdentity(@intFromPtr(resolved.ptr));
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
                 return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);
@@ -244,7 +244,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // The TAO contains the pointer to our Zig instance as
                 // well as any meta data we'll need to use it later.
                 // See the TaggedOpaque struct for more details.
-                const tao = try arena.create(TaggedOpaque);
+                const tao = try origin_arena.create(TaggedOpaque);
                 tao.* = .{
                     .value = resolved.ptr,
                     .prototype_chain = resolved.prototype_chain.ptr,

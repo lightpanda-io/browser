@@ -129,6 +129,19 @@ pub fn trackGlobal(self: *Origin, global: v8.Global) !void {
     return self.globals.append(self.arena, global);
 }
 
+pub const IdentityResult = struct {
+    value_ptr: *v8.Global,
+    found_existing: bool,
+};
+
+pub fn addIdentity(self: *Origin, ptr: usize) !IdentityResult {
+    const gop = try self.identity_map.getOrPut(self.arena, ptr);
+    return .{
+        .value_ptr = gop.value_ptr,
+        .found_existing = gop.found_existing,
+    };
+}
+
 pub fn trackTemp(self: *Origin, global: v8.Global) !void {
     return self.temps.put(self.arena, global.data_ptr, global);
 }

@@ -171,6 +171,7 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     errdefer self.session.releaseOrigin(origin);
 
     try self.origin.transferTo(origin);
+    lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
     self.origin.deinit(env.app);
 
     self.origin = origin;
