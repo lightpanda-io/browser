@@ -21,26 +21,32 @@ const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Session = @import("../../Session.zig");
 const FontFace = @import("FontFace.zig");
+const EventTarget = @import("../EventTarget.zig");
+const Event = @import("../Event.zig");
 
 const Allocator = std.mem.Allocator;
 
 const FontFaceSet = @This();
 
+_proto: *EventTarget,
 _arena: Allocator,
 
 pub fn init(page: *Page) !*FontFaceSet {
     const arena = try page.getArena(.{ .debug = "FontFaceSet" });
     errdefer page.releaseArena(arena);
 
-    const self = try arena.create(FontFaceSet);
-    self.* = .{
+    return page._factory.eventTargetWithAllocator(arena, FontFaceSet{
+        ._proto = undefined,
         ._arena = arena,
-    };
-    return self;
+    });
 }
 
 pub fn deinit(self: *FontFaceSet, _: bool, session: *Session) void {
     session.releaseArena(self._arena);
+}
+
+pub fn asEventTarget(self: *FontFaceSet) *EventTarget {
+    return self._proto;
 }
 
 // FontFaceSet.ready - returns an already-resolved Promise.
@@ -56,8 +62,24 @@ pub fn check(_: *const FontFaceSet, font: []const u8) bool {
 }
 
 // load(font, text?) - resolves immediately with an empty array.
-pub fn load(_: *FontFaceSet, font: []const u8, page: *Page) !js.Promise {
+pub fn load(self: *FontFaceSet, font: []const u8, page: *Page) !js.Promise {
+    // TODO parse font to check if the font has been added before dispatching
+    // events.
     _ = font;
+
+    // Dispatch loading event
+    const target = self.asEventTarget();
+    if (page._event_manager.hasDirectListeners(target, "loading", null)) {
+        const event = try Event.initTrusted(comptime .wrap("loading"), .{}, page);
+        try page._event_manager.dispatchDirect(target, event, null, .{ .context = "load font face set" });
+    }
+
+    // Dispatch loadingdone event
+    if (page._event_manager.hasDirectListeners(target, "loadingdone", null)) {
+        const event = try Event.initTrusted(comptime .wrap("loadingdone"), .{}, page);
+        try page._event_manager.dispatchDirect(target, event, null, .{ .context = "load font face set" });
+    }
+
     return page.js.local.?.resolvePromise({});
 }
 
