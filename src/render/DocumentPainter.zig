@@ -2948,6 +2948,47 @@ test "paintDocument keeps wrapped inline radio pair and later submit in DOM orde
     try std.testing.expect(below_y.? > submit_region.y + 8);
 }
 
+test "paintDocument keeps wrapped inline checkbox pair input and later submit in DOM order" {
+    var page = try testing.pageTest("page/mixed_inline_checkbox_pair_input_submit_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var lead_y: ?i32 = null;
+    var below_y: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.startsWith(u8, text.text, "Lead ")) {
+                    lead_y = text.y;
+                } else if (std.mem.startsWith(u8, text.text, "Below ")) {
+                    below_y = text.y;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 4), display_list.control_regions.items.len);
+    try std.testing.expectEqual(@as(usize, 0), display_list.link_regions.items.len);
+    try std.testing.expect(lead_y != null);
+    try std.testing.expect(below_y != null);
+
+    const checkbox_one_region = display_list.control_regions.items[0];
+    const checkbox_two_region = display_list.control_regions.items[1];
+    const input_region = display_list.control_regions.items[2];
+    const submit_region = display_list.control_regions.items[3];
+
+    try std.testing.expect(checkbox_one_region.y > lead_y.? + 8);
+    try std.testing.expect(checkbox_two_region.y >= checkbox_one_region.y + 8);
+    try std.testing.expect(input_region.y >= checkbox_two_region.y + 8);
+    try std.testing.expect(submit_region.y >= input_region.y + 8);
+    try std.testing.expect(below_y.? > submit_region.y + 8);
+}
+
 test "paintDocument carries loaded private font faces for headed rendering" {
     var page = try testing.pageTest("page/font_private_render.html");
     defer page._session.removePage();

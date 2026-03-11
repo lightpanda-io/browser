@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mixed Inline Checkbox Pair Input Submit</title>
+</head>
+<body style="margin:0;background:white;color:black;font:18px sans-serif;">
+  <main style="display:block;padding:24px;width:320px;">
+    <form action="/submitted-checkbox-input.html" method="get">
+      <p style="display:block;margin:0 0 24px 0;width:220px;">
+        Lead text before the first checkbox
+        <input
+          id="target-checkbox-one"
+          type="checkbox"
+          name="choice-one"
+          value="one"
+          onchange="document.title='Dense Checkbox Input one ' + this.checked;"
+          style="display:inline;color:white;background-color:#27965d;padding:6px 10px;width:150px;border:0;"
+        >
+        bridge words before the second checkbox
+        <input
+          id="target-checkbox-two"
+          type="checkbox"
+          name="choice-two"
+          value="two"
+          onchange="document.title='Dense Checkbox Input two ' + this.checked;"
+          style="display:inline;color:white;background-color:#d38a1d;padding:6px 10px;width:150px;border:0;"
+        >
+        bridge words before the input
+        <input
+          id="target-entry"
+          name="entry"
+          type="text"
+          value=""
+          style="display:inline;color:white;background-color:#1db6d2;padding:6px 10px;width:170px;border:0;"
+          oninput="document.title='Dense Checkbox Input entry ' + this.value;"
+        >
+        bridge words before submit
+        <button
+          id="target-submit"
+          type="submit"
+          style="display:inline;color:white;background-color:#c13db5;padding:6px 12px;border:0;"
+        >
+          Submit
+        </button>
+      </p>
+    </form>
+    <p style="display:block;margin:0;">Below paragraph stays below the checkbox pair, input, and submit flow.</p>
+  </main>
+</body>
+</html>
