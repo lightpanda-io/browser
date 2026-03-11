@@ -680,6 +680,10 @@ fn getContainerElement(self: *const Range) ?*Node.Element {
     return parent.is(Node.Element);
 }
 
+pub fn deinit(self: *Range, _: bool, page: *Page) void {
+    page._live_ranges.remove(&self._proto._range_link);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Range);
 
@@ -687,6 +691,8 @@ pub const JsApi = struct {
         pub const name = "Range";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(Range.deinit);
     };
 
     // Constants for compareBoundaryPoints
