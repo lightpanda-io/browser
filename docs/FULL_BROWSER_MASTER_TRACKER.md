@@ -383,6 +383,11 @@ Current state inside Gate 1:
   bounded probe proving click activation on the first checkbox, `Tab`+`Space`
   activation on the second checkbox, and `Tab`+`Space` submission through the
   real headed form-submit path
+- that same later-row mixed-inline same-family radio coverage now also
+  includes a wrapped form paragraph with a later-row submit control, with a
+  bounded probe proving click activation on the first radio, `Tab`+`Space`
+  selection of the second radio in the same group, and `Tab`+`Space`
+  submission through the real headed form-submit path
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
