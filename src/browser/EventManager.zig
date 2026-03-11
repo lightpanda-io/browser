@@ -98,14 +98,6 @@ pub const Callback = union(enum) {
     object: js.Object,
 };
 
-pub fn hasListener(self: *EventManager, target: *EventTarget, typ: []const u8) bool {
-    const type_string = String.wrap(typ);
-    return self.lookup.contains(.{
-        .event_target = @intFromPtr(target),
-        .type_string = type_string,
-    });
-}
-
 pub fn register(self: *EventManager, target: *EventTarget, typ: []const u8, callback: Callback, opts: RegisterOptions) !void {
     if (comptime IS_DEBUG) {
         log.debug(.event, "eventManager.register", .{ .type = typ, .capture = opts.capture, .once = opts.once, .target = target.toString() });
