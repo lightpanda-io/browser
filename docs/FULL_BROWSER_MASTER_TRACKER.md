@@ -63,6 +63,10 @@ The fork already has a real headed Windows foundation:
   live as the sort mode changes
 - the normal headed shell shortcuts now target internal browser pages first,
   while the legacy overlays are secondary diagnostic surfaces
+- the headed painter now keeps direct paragraph text in the same inline flow as
+  inline child chips and links for the current simple mixed-inline path,
+  instead of splitting the paragraph into a separate text band above the inline
+  controls
 
 ## Achieved Gates
 
@@ -310,6 +314,11 @@ Current state inside Gate 1:
   fallback over an earlier unsupported WOFF/WOFF2 source when present, with a
   bounded headed screenshot probe proving a later truetype fallback still
   affects the surface after an earlier missing `woff2` source
+- the current headed painter now also keeps simple block paragraphs with mixed
+  direct text plus inline child elements on one shared inline row instead of
+  splitting the direct text into a separate label band above the inline chips,
+  with a bounded headed screenshot probe proving left-side paragraph text and
+  inline chips share the same content row
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces

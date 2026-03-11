@@ -169,7 +169,9 @@ const Painter = struct {
         const parent_style = try self.page.window.getComputedStyle(parent, null, self.page);
         const parent_decl = parent_style.asCSSStyleDeclaration();
         const parent_display = parent_decl.getPropertyValue("display", self.page);
-        if (!isInlineDisplay(parent_display)) {
+        const inline_text_parent = isInlineDisplay(parent_display) or
+            try usesInlineContentFlowContainer(parent, parent_decl, self.page, parent_display);
+        if (!inline_text_parent) {
             return;
         }
 
@@ -188,12 +190,50 @@ const Painter = struct {
         const font_family = resolveCssPropertyValue(parent_decl, self.page, parent, "font-family");
         const font_weight = parseCssFontWeight(resolveCssPropertyValue(parent_decl, self.page, parent, "font-weight"));
         const italic = parseCssFontItalic(resolveCssPropertyValue(parent_decl, self.page, parent, "font-style"));
+        var segment_start: usize = 0;
+        while (segment_start < normalized.len) {
+            while (segment_start < normalized.len and normalized[segment_start] == ' ') : (segment_start += 1) {}
+            if (segment_start >= normalized.len) break;
+
+            var segment_end = segment_start;
+            while (segment_end < normalized.len and normalized[segment_end] != ' ') : (segment_end += 1) {}
+            while (segment_end < normalized.len and normalized[segment_end] == ' ') : (segment_end += 1) {}
+
+            try self.paintInlineTextSegment(
+                normalized[segment_start..segment_end],
+                parent,
+                parent_decl,
+                parent_tag,
+                font_size,
+                font_family,
+                font_weight,
+                italic,
+                cursor,
+            );
+            segment_start = segment_end;
+        }
+    }
+
+    fn paintInlineTextSegment(
+        self: *Painter,
+        segment: []const u8,
+        parent: *Element,
+        parent_decl: anytype,
+        parent_tag: Element.Tag,
+        font_size: i32,
+        font_family: []const u8,
+        font_weight: i32,
+        italic: bool,
+        cursor: *FlowCursor,
+    ) !void {
+        if (segment.len == 0) return;
+
         const width = std.math.clamp(
-            estimateTextWidth(normalized, font_size, font_family, font_weight, italic) + 8,
+            estimateTextWidth(segment, font_size, font_family, font_weight, italic) + 8,
             8,
             @max(@as(i32, 16), cursor.width),
         );
-        const height = @max(font_size + 8, estimateTextHeight(normalized, width, font_size, font_family, font_weight, italic) + 8);
+        const height = @max(font_size + 8, estimateTextHeight(segment, width, font_size, font_family, font_weight, italic) + 8);
         const pos = cursor.beginInlineLeaf(width, .{});
 
         try self.list.addText(self.allocator, .{
@@ -207,7 +247,7 @@ const Painter = struct {
             .italic = italic,
             .color = resolveTextColor(parent_decl, self.page, parent, parent_tag),
             .underline = shouldUnderlineText(parent, parent_decl, self.page, parent_tag),
-            .text = normalized,
+            .text = @constCast(segment),
         });
 
         cursor.advanceInlineLeaf(.{
@@ -242,6 +282,7 @@ const Painter = struct {
         const font_family = resolveCssPropertyValue(decl, self.page, element, "font-family");
         const font_weight = parseCssFontWeight(resolveCssPropertyValue(decl, self.page, element, "font-weight"));
         const italic = parseCssFontItalic(resolveCssPropertyValue(decl, self.page, element, "font-style"));
+        const inline_content_flow = block_like and try usesInlineContentFlowContainer(element, decl, self.page, display);
 
         const label = try self.elementLabel(element);
         defer self.allocator.free(label);
@@ -280,6 +321,38 @@ const Painter = struct {
             cursor.beginBlock(margins);
         const x = pos.x;
         const y = pos.y;
+        if (inline_content_flow) {
+            var child_cursor = FlowCursor.init(x + padding.left, y + padding.top, @max(@as(i32, 40), width - padding.left - padding.right));
+            var child_it = element.asNode().childrenIterator();
+            while (child_it.next()) |child| {
+                try self.paintNode(child, &child_cursor);
+            }
+
+            const child_height = child_cursor.consumedHeightSince(y + padding.top);
+            const explicit_height = resolveExplicitHeight(element, decl, self.page, tag);
+            const height = @max(
+                resolveMinimumHeight(self, tag, block_like, 0),
+                @max(explicit_height, padding.top + child_height + padding.bottom),
+            );
+            const rect = .{
+                .x = x,
+                .y = y,
+                .width = width,
+                .height = height,
+            };
+
+            if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
+                try self.list.addStrokeRect(self.allocator, .{
+                    .x = rect.x,
+                    .y = rect.y,
+                    .width = rect.width,
+                    .height = rect.height,
+                    .color = stroke,
+                });
+            }
+            cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            return;
+        }
         const own_content_height = resolveOwnContentHeight(
             self,
             element,
@@ -1062,6 +1135,52 @@ fn hasRenderableChildElements(element: *Element) bool {
         }
     }
     return false;
+}
+
+fn usesInlineContentFlowContainer(
+    element: *Element,
+    decl: anytype,
+    page: *Page,
+    display: []const u8,
+) !bool {
+    if (isInlineDisplay(display)) return false;
+    if (hasVisibleBorder(decl, page)) return false;
+    if (parseCssColor(resolveCssPropertyValue(decl, page, element, "background-color"))) |background| {
+        if (background.a > 0) return false;
+    }
+
+    return try hasOnlyInlineFlowChildren(element, page);
+}
+
+fn hasOnlyInlineFlowChildren(element: *Element, page: *Page) !bool {
+    var saw_flow_child = false;
+    var it = element.asNode().childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(Node.CData.Text)) |text| {
+            if (std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace).len > 0) {
+                saw_flow_child = true;
+            }
+            continue;
+        }
+        if (child.is(Element)) |child_el| {
+            if (switch (child_el.getTag()) {
+                .script, .style, .template, .head, .meta, .link, .title => true,
+                else => false,
+            }) continue;
+            if (child_el.getTag() == .br) {
+                saw_flow_child = true;
+                continue;
+            }
+
+            const child_style = try page.window.getComputedStyle(child_el, null, page);
+            const child_display = child_style.asCSSStyleDeclaration().getPropertyValue("display", page);
+            if (!isInlineDisplay(child_display)) {
+                return false;
+            }
+            saw_flow_child = true;
+        }
+    }
+    return saw_flow_child;
 }
 
 fn isFlowBlockLike(tag: Element.Tag, display: []const u8, has_child_elements: bool) bool {
@@ -2166,6 +2285,35 @@ test "paintDocument measures button widths from authored font families" {
     const first = display_list.control_regions.items[0];
     const second = display_list.control_regions.items[1];
     try std.testing.expect(first.width != second.width);
+}
+
+test "paintDocument keeps direct paragraph text in the same inline flow as child chips" {
+    var page = try testing.pageTest("page/mixed_inline_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var prefix_y: ?i32 = null;
+    var red_y: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Prefix ")) {
+                    prefix_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "RED")) {
+                    red_y = text.y;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(prefix_y != null);
+    try std.testing.expect(red_y != null);
+    try std.testing.expect(@abs(prefix_y.? - red_y.?) <= 4);
 }
 
 test "paintDocument carries loaded private font faces for headed rendering" {
