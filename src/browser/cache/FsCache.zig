@@ -18,6 +18,8 @@
 
 const std = @import("std");
 const Cache = @import("Cache.zig");
+const CachedMetadata = Cache.CachedMetadata;
+const CachedResponse = Cache.CachedResponse;
 
 pub const FsCache = @This();
 
@@ -32,7 +34,7 @@ pub fn init(allocator: std.mem.Allocator, path: []const u8) !FsCache {
         else => return err,
     };
 
-    const dir = std.fs.openDirAbsolute(path, .{ .iterate = true });
+    const dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
     return .{
         .allocator = allocator,
         .dir = dir,
@@ -55,21 +57,168 @@ fn hashKey(key: []const u8) [64]u8 {
     return hex;
 }
 
-fn parseMeta(allocator: std.mem.Allocator, bytes: []const u8) !void {}
+fn serializeMeta(writer: anytype, meta: *const CachedMetadata) !void {
+    try writer.print("{d}\n{d}\n{d}\n{d}\n", .{
+        meta.status,
+        meta.stored_at,
+        meta.age_at_store,
+        meta.max_age,
+    });
+    try writer.print("{s}\n", .{meta.etag orelse "null"});
+    try writer.print("{s}\n", .{meta.last_modified orelse "null"});
+    try writer.print("{s}\n", .{meta.vary orelse "null"});
+    try writer.print("{}\n{}\n{}\n", .{
+        meta.must_revalidate,
+        meta.no_cache,
+        meta.immutable,
+    });
+}
+
+fn deserializeMetaOptionalString(bytes: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, bytes, "null")) return null else return bytes;
+}
+
+fn deserializeMetaBoolean(bytes: []const u8) !bool {
+    if (std.mem.eql(u8, bytes, "true")) return true;
+    if (std.mem.eql(u8, bytes, "false")) return false;
+    return error.Malformed;
+}
+
+fn deserializeMeta(allocator: std.mem.Allocator, bytes: []const u8) !CachedMetadata {
+    _ = allocator;
+
+    var iter = std.mem.splitScalar(u8, bytes, '\n');
+
+    const status = std.fmt.parseInt(
+        u16,
+        iter.next() orelse return error.Malformed,
+        10,
+    ) catch return error.Malformed;
+    const stored_at = std.fmt.parseInt(
+        i64,
+        iter.next() orelse return error.Malformed,
+        10,
+    ) catch return error.Malformed;
+    const age_at_store = std.fmt.parseInt(
+        u64,
+        iter.next() orelse return error.Malformed,
+        10,
+    ) catch return error.Malformed;
+    const max_age = std.fmt.parseInt(
+        u64,
+        iter.next() orelse return error.Malformed,
+        10,
+    ) catch return error.Malformed;
+
+    const etag = try deserializeMetaOptionalString(
+        iter.next() orelse return error.Malformed,
+    );
+
+    const last_modified = try deserializeMetaOptionalString(
+        iter.next() orelse return error.Malformed,
+    );
+
+    const vary = try deserializeMetaOptionalString(
+        iter.next() orelse return error.Malformed,
+    );
+
+    const must_revalidate = try deserializeMetaBoolean(
+        iter.next() orelse return error.Malformed,
+    );
+    const no_cache = try deserializeMetaBoolean(
+        iter.next() orelse return error.Malformed,
+    );
+    const immutable = try deserializeMetaBoolean(
+        iter.next() orelse return error.Malformed,
+    );
+
+    return .{
+        .status = status,
+        .stored_at = stored_at,
+        .age_at_store = age_at_store,
+        .max_age = max_age,
+        .etag = etag,
+        .last_modified = last_modified,
+        .must_revalidate = must_revalidate,
+        .no_cache = no_cache,
+        .immutable = immutable,
+        .vary = vary,
+    };
+}
 
 pub fn get(ptr: *anyopaque, key: []const u8) ?Cache.CachedResponse {
     const self: *FsCache = @ptrCast(@alignCast(ptr));
     const hashed_key = hashKey(key);
 
-    var meta_filename: [64 + 5]u8 = undefined;
-    const meta_path = std.fmt.bufPrint(&meta_filename, "{s}.meta", .{hashed_key}) catch unreachable;
+    var meta_path: [64 + 5]u8 = undefined;
+    _ = std.fmt.bufPrint(&meta_path, "{s}.meta", .{hashed_key}) catch @panic("FsCache.get meta path overflowed");
 
-    const meta_bytes = self.dir.readFileAlloc(self.allocator, meta_filename, MAX_CACHE_SIZE_BYTES) catch return null;
-    defer self.allocator.free(meta_bytes);
+    var body_path: [64 + 5]u8 = undefined;
+    _ = std.fmt.bufPrint(&body_path, "{s}.body", .{hashed_key}) catch @panic("FsCache.get body path overflowed");
 
-    const meta = parseMeta(self.allocator, meta_bytes) catch return null;
+    const meta_bytes = self.dir.readFileAlloc(self.allocator, meta_path, MAX_CACHE_SIZE_BYTES) catch return null;
 
-    // check is meta is valid
+    const meta = deserializeMeta(self.allocator, meta_bytes) catch return null;
 
-    // get the actual file that corresponds to this hash
+    // Ensure age is still valid.
+    const now = std.time.timestamp();
+    const age = meta.age_at_store + @as(u64, @intCast(now - meta.stored_at));
+    if (age > meta.max_age) {
+        self.dir.deleteFile(&meta_path) catch {};
+        self.dir.deleteFile(&body_path) catch {};
+        return null;
+    }
+
+    const body = self.dir.readFileAlloc(self.allocator, &body_path, MAX_CACHE_SIZE_BYTES) catch return null;
+
+    return .{ .meta = meta, .body = .{ .file = body } };
+}
+
+pub fn put(ptr: *anyopaque, key: []const u8, response: CachedResponse) !void {
+    const self: *FsCache = @ptrCast(@alignCast(ptr));
+    const hashed_key = hashKey(key);
+
+    // Write meta to a temp file, then atomically rename into place
+    var meta_path: [64 + 5]u8 = undefined;
+    _ = std.fmt.bufPrint(&meta_path, "{s}.meta", .{hashed_key}) catch
+        @panic("FsCache.put meta path overflowed");
+
+    var meta_tmp_path: [64 + 9]u8 = undefined;
+    _ = std.fmt.bufPrint(&meta_tmp_path, "{s}.meta.tmp", .{hashed_key}) catch
+        @panic("FsCache.put meta tmp path overflowed");
+
+    {
+        const meta_file = try self.dir.createFile(&meta_tmp_path, .{});
+        errdefer {
+            meta_file.close();
+            self.dir.deleteFile(&meta_tmp_path) catch {};
+        }
+        try serializeMeta(meta_file.writer(), &response.meta);
+        meta_file.close();
+    }
+    errdefer self.dir.deleteFile(&meta_tmp_path) catch {};
+    try self.dir.rename(&meta_tmp_path, &meta_path);
+
+    // Write body to a temp file, then atomically rename into place
+    var body_path: [64 + 5]u8 = undefined;
+    _ = std.fmt.bufPrint(&body_path, "{s}.body", .{hashed_key}) catch
+        @panic("FsCache.put body path overflowed");
+
+    var body_tmp_path: [64 + 9]u8 = undefined;
+    _ = std.fmt.bufPrint(&body_tmp_path, "{s}.body.tmp", .{hashed_key}) catch
+        @panic("FsCache.put body tmp path overflowed");
+
+    {
+        const body_file = try self.dir.createFile(&body_tmp_path, .{});
+        errdefer {
+            body_file.close();
+            self.dir.deleteFile(&body_tmp_path) catch {};
+        }
+        try body_file.writeAll(response.body);
+        body_file.close();
+    }
+    errdefer self.dir.deleteFile(&body_tmp_path) catch {};
+
+    errdefer self.dir.deleteFile(&meta_path) catch {};
+    try self.dir.rename(&body_tmp_path, &body_path);
 }

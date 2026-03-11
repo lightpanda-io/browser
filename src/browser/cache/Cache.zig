@@ -57,12 +57,21 @@ pub const CachedData = union(enum) {
 
 pub const CachedMetadata = struct {
     status: u16,
-    headers: std.StringHashMap([]const u8),
-
-    // RFC 9111 Metadata
     stored_at: i64,
     age_at_store: u64,
     max_age: u64,
+
+    // for If-None-Match
+    etag: ?[]const u8,
+    // for If-Modified-Since
+    last_modified: ?[]const u8,
+
+    must_revalidate: bool,
+    no_cache: bool,
+    immutable: bool,
+
+    // If non-null, must be incorporated into cache key.
+    vary: ?[]const u8,
 };
 
 pub const CachedResponse = struct {

@@ -283,6 +283,11 @@ pub fn request(self: *Client, req: Request) !void {
 }
 
 fn processRequest(self: *Client, req: Request) !void {
+    if (self.network.cache.get(req.url)) |cached| {
+        _ = cached;
+        unreachable;
+    }
+
     const transfer = try self.makeTransfer(req);
 
     transfer.req.notification.dispatch(.http_request_start, &.{ .transfer = transfer });

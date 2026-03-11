@@ -28,6 +28,7 @@ const libcurl = @import("../sys/libcurl.zig");
 
 const net_http = @import("http.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
+const Cache = @import("../browser/cache/Cache.zig");
 
 const Runtime = @This();
 
@@ -42,6 +43,8 @@ allocator: Allocator,
 config: *const Config,
 ca_blob: ?net_http.Blob,
 robot_store: RobotStore,
+
+cache: Cache,
 
 pollfds: []posix.pollfd,
 listener: ?Listener = null,
@@ -84,6 +87,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
         .config = config,
         .ca_blob = ca_blob,
         .robot_store = RobotStore.init(allocator),
+        .cache = 
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
     };
