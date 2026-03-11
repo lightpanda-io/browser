@@ -100,7 +100,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
             if (html_el.getHidden()) return;
         }
     } else if (node.is(CData.Text) != null) {
-        const text_node = node.is(CData.Text).?;
+        const text_node = node.as(CData.Text);
         const text = text_node.getWholeText();
         if (isAllWhitespace(text)) {
             return;
