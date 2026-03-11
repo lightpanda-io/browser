@@ -186,9 +186,16 @@ jobs:
       LIGHTPANDA_DISABLE_TELEMETRY: true
 
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: 'lightpanda-io/demo'
+          fetch-depth: 0
+
+      - run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
+
       - name: download artifact
         uses: actions/download-artifact@v4
         with:
@@ -196,18 +203,18 @@ jobs:
 
       - run: chmod a+x ./lightpanda
 
-      - run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
+      - name: run wba test
+        run: |
+          node webbotauth/validator.js &
+          VALIDATOR_PID=$!
+          sleep 1
 
-      - run: |
-          ./lightpanda fetch https://crawltest.com/cdn-cgi/web-bot-auth \
-            --log_level error \
+          ./lightpanda fetch http://127.0.0.1:8989/ \
             --web_bot_auth_key_file private_key.pem \
             --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
-            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }} \
-            --dump markdown \
-            | tee output.log
+            --web_bot_auth_domain ${{ vars.WBA_DOMAIN }}
 
-      - run: cat output.log | grep -q "unknown public key or unknown verified bot ID for keyid"
+          wait $VALIDATOR_PID
 
   cdp-and-hyperfine-bench:
     name: cdp-and-hyperfine-bench
