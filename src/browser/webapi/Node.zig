@@ -492,6 +492,11 @@ pub fn ownerDocument(self: *const Node, page: *const Page) ?*Document {
     return page.document;
 }
 
+pub fn ownerPage(self: *const Node, default: *Page) *Page {
+    const doc = self.ownerDocument(default) orelse return default;
+    return doc._page orelse default;
+}
+
 pub fn isSameDocumentAs(self: *const Node, other: *const Node, page: *const Page) bool {
     // Get the root document for each node
     const self_doc = if (self._type == .document) self._type.document else self.ownerDocument(page);

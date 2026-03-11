@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<iframe name=f1 id=frame1></iframe>
+<a id=l1 target=f1 href=support/page.html></a>
+<script id=anchor>
+  $('#l1').click();
+  testing.eventually(() => {
+    testing.expectEqual('<html><head></head><body>a-page\n</body></html>', $('#frame1').contentDocument.documentElement.outerHTML);
+  });
+</script>
+
+<script id=form>
+  {
+    let frame2 = document.createElement('iframe');
+    frame2.name = 'frame2';
+    document.documentElement.appendChild(frame2);
+
+    let form = document.createElement('form');
+    form.target = 'frame2';
+    form.action = 'support/page.html';
+    form.submit();
+
+    testing.eventually(() => {
+      testing.expectEqual('<html><head></head><body>a-page\n</body></html>', frame2.contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
+
+<iframe name=frame3 id=f3></iframe>
+<form target="_top" action="support/page.html">
+  <input type=submit id=submit1 formtarget="frame3">
+</form>
+
+<script id=formtarget>
+  {
+    $('#submit1').click();
+    testing.eventually(() => {
+      testing.expectEqual('<html><head></head><body>a-page\n</body></html>', $('#f3').contentDocument.documentElement.outerHTML);
+    });
+  }
+</script>
