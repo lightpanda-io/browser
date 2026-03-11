@@ -23,6 +23,9 @@ const h5e = @import("html5ever.zig");
 const Page = @import("../Page.zig");
 const Node = @import("../webapi/Node.zig");
 const Element = @import("../webapi/Element.zig");
+
+pub const AttributeIterator = h5e.AttributeIterator;
+
 const Allocator = std.mem.Allocator;
 const IS_DEBUG = @import("builtin").mode == .Debug;
 

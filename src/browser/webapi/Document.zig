@@ -63,6 +63,11 @@ _script_created_parser: ?Parser.Streaming = null,
 _adopted_style_sheets: ?js.Object.Global = null,
 _selection: Selection = .init,
 
+// https://html.spec.whatwg.org/multipage/dynamic-markup-insertion.html#throw-on-dynamic-markup-insertion-counter
+// Incremented during custom element reactions when parsing. When > 0,
+// document.open/close/write/writeln must throw InvalidStateError.
+_throw_on_dynamic_markup_insertion_counter: u32 = 0,
+
 _on_selectionchange: ?js.Function.Global = null,
 
 pub fn getOnSelectionChange(self: *Document) ?js.Function.Global {
@@ -641,6 +646,10 @@ pub fn write(self: *Document, text: []const []const u8, page: *Page) !void {
         return error.InvalidStateError;
     }
 
+    if (self._throw_on_dynamic_markup_insertion_counter > 0) {
+        return error.InvalidStateError;
+    }
+
     const html = blk: {
         var joined: std.ArrayList(u8) = .empty;
         for (text) |str| {
@@ -723,6 +732,10 @@ pub fn open(self: *Document, page: *Page) !*Document {
         return error.InvalidStateError;
     }
 
+    if (self._throw_on_dynamic_markup_insertion_counter > 0) {
+        return error.InvalidStateError;
+    }
+
     if (page._load_state == .parsing) {
         return self;
     }
@@ -758,6 +771,10 @@ pub fn open(self: *Document, page: *Page) !*Document {
 
 pub fn close(self: *Document, page: *Page) !void {
     if (self._type == .xml) {
+        return error.InvalidStateError;
+    }
+
+    if (self._throw_on_dynamic_markup_insertion_counter > 0) {
         return error.InvalidStateError;
     }
 
