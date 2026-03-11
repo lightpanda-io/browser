@@ -43,7 +43,8 @@ const BookmarkSortMode = BrowserCommand.BookmarkSortMode;
 const DownloadSortMode = BrowserCommand.DownloadSortMode;
 const testing = @import("testing.zig");
 
-const IS_DEBUG = @import("builtin").mode == .Debug;
+const builtin = @import("builtin");
+const IS_DEBUG = builtin.mode == .Debug;
 
 pub const FetchOpts = struct {
     wait_ms: u32 = 5000,
@@ -283,6 +284,7 @@ const BROWSE_SETTINGS_FILE = "browse-settings-v1.txt";
 const BROWSE_DOWNLOADS_FILE = "downloads-v1.txt";
 const BROWSE_BOOKMARKS_FILE = "bookmarks.txt";
 const BROWSE_DOWNLOADS_DIR = "downloads";
+const DOWNLOAD_SHELL_LOG_ENV = "LIGHTPANDA_DOWNLOAD_SHELL_LOG";
 const MAX_CLOSED_BROWSE_TABS = 16;
 const MAX_DOWNLOADS_HISTORY = 64;
 
@@ -736,6 +738,12 @@ const BrowseDownloads = struct {
         saveBrowseDownloads(self.allocator, app_dir_path, self.entries.items);
         self.last_saved_hash = hash;
     }
+};
+
+const DownloadShellAction = enum {
+    open_file,
+    reveal_file,
+    open_folder,
 };
 
 const ActiveBrowseDownload = struct {
@@ -1354,6 +1362,21 @@ fn handleBrowseCommand(
                 .reason = .address_bar,
                 .kind = .{ .push = null },
             }, "_blank", true, .none);
+        },
+        .download_open_file => |index| {
+            const file_path = resolveDownloadEntryShellPath(app.allocator, app.app_dir_path, downloads, index) orelse return;
+            defer app.allocator.free(file_path);
+            _ = performDownloadShellAction(app.allocator, .open_file, file_path);
+        },
+        .download_reveal_file => |index| {
+            const file_path = resolveDownloadEntryShellPath(app.allocator, app.app_dir_path, downloads, index) orelse return;
+            defer app.allocator.free(file_path);
+            _ = performDownloadShellAction(app.allocator, .reveal_file, file_path);
+        },
+        .download_open_folder => {
+            const downloads_dir = resolveBrowseDownloadsDirShellPath(app.allocator, app.app_dir_path) orelse return;
+            defer app.allocator.free(downloads_dir);
+            _ = performDownloadShellAction(app.allocator, .open_folder, downloads_dir);
         },
         else => {
             if (shell.tabs.items.len == 0) {
@@ -2578,6 +2601,138 @@ fn ensureBrowseDownloadsDir(allocator: std.mem.Allocator, app_dir_path: []const 
     return try std.fs.path.join(allocator, &.{ app_dir_path, BROWSE_DOWNLOADS_DIR });
 }
 
+fn downloadShellActionLabel(action: DownloadShellAction) []const u8 {
+    return switch (action) {
+        .open_file => "open-file",
+        .reveal_file => "reveal-file",
+        .open_folder => "open-folder",
+    };
+}
+
+fn absolutePathIsWithinRoot(root_path: []const u8, candidate_path: []const u8) bool {
+    if (candidate_path.len < root_path.len) {
+        return false;
+    }
+
+    const prefix_matches = if (builtin.os.tag == .windows)
+        std.ascii.eqlIgnoreCase(root_path, candidate_path[0..root_path.len])
+    else
+        std.mem.eql(u8, root_path, candidate_path[0..root_path.len]);
+    if (!prefix_matches) {
+        return false;
+    }
+    if (candidate_path.len == root_path.len) {
+        return true;
+    }
+    if (root_path.len > 0 and std.fs.path.isSep(root_path[root_path.len - 1])) {
+        return true;
+    }
+    return std.fs.path.isSep(candidate_path[root_path.len]);
+}
+
+fn downloadEntryCanUseShellFileActions(downloads: *BrowseDownloads, index: usize) bool {
+    if (index >= downloads.entries.items.len or downloadEntryActive(downloads, index)) {
+        return false;
+    }
+    const entry = downloads.entries.items[index];
+    if (entry.status != .completed or entry.path.len == 0 or !std.fs.path.isAbsolute(entry.path)) {
+        return false;
+    }
+    std.fs.accessAbsolute(entry.path, .{}) catch return false;
+    return true;
+}
+
+fn resolveBrowseDownloadsDirShellPath(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) ?[]u8 {
+    const root_path = app_dir_path orelse return null;
+    const downloads_dir = ensureBrowseDownloadsDir(allocator, root_path) catch return null;
+    defer allocator.free(downloads_dir);
+    return std.fs.realpathAlloc(allocator, downloads_dir) catch allocator.dupe(u8, downloads_dir) catch null;
+}
+
+fn resolveDownloadEntryShellPath(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    downloads: *BrowseDownloads,
+    index: usize,
+) ?[]u8 {
+    if (!downloadEntryCanUseShellFileActions(downloads, index)) {
+        return null;
+    }
+
+    const downloads_root = resolveBrowseDownloadsDirShellPath(allocator, app_dir_path) orelse return null;
+    defer allocator.free(downloads_root);
+
+    const resolved_path = std.fs.realpathAlloc(allocator, downloads.entries.items[index].path) catch return null;
+    if (!absolutePathIsWithinRoot(downloads_root, resolved_path)) {
+        allocator.free(resolved_path);
+        return null;
+    }
+    return resolved_path;
+}
+
+fn appendDownloadShellLog(log_path: []const u8, action: DownloadShellAction, target_path: []const u8) !void {
+    var log_file = std.fs.openFileAbsolute(log_path, .{ .mode = .write_only }) catch |err| switch (err) {
+        error.FileNotFound => try std.fs.createFileAbsolute(log_path, .{ .read = true, .truncate = false }),
+        else => return err,
+    };
+    defer log_file.close();
+    try log_file.seekFromEnd(0);
+    var buffer: [512]u8 = undefined;
+    var writer = log_file.writer(&buffer);
+    try writer.interface.print("{s}\t{s}\n", .{ downloadShellActionLabel(action), target_path });
+    try writer.end();
+}
+
+fn runWindowsDownloadShellAction(
+    allocator: std.mem.Allocator,
+    action: DownloadShellAction,
+    target_path: []const u8,
+) !void {
+    var reveal_arg: ?[]u8 = null;
+    defer if (reveal_arg) |owned| allocator.free(owned);
+
+    const argv = switch (action) {
+        .open_file => &[_][]const u8{ "cmd.exe", "/c", "start", "", target_path },
+        .reveal_file => blk: {
+            reveal_arg = try std.fmt.allocPrint(allocator, "/select,{s}", .{target_path});
+            break :blk &[_][]const u8{ "cmd.exe", "/c", "start", "", "explorer.exe", reveal_arg.? };
+        },
+        .open_folder => &[_][]const u8{ "cmd.exe", "/c", "start", "", "explorer.exe", target_path },
+    };
+
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv,
+        .max_output_bytes = 16 * 1024,
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    switch (result.term) {
+        .Exited => |code| if (code != 0) return error.UnexpectedExitCode,
+        else => return error.ShellLaunchFailed,
+    }
+}
+
+fn performDownloadShellAction(
+    allocator: std.mem.Allocator,
+    action: DownloadShellAction,
+    target_path: []const u8,
+) bool {
+    const log_path = std.process.getEnvVarOwned(allocator, DOWNLOAD_SHELL_LOG_ENV) catch null;
+    defer if (log_path) |owned| allocator.free(owned);
+
+    if (log_path) |owned| {
+        appendDownloadShellLog(owned, action, target_path) catch return false;
+        return true;
+    }
+    if (builtin.os.tag != .windows) {
+        return false;
+    }
+    runWindowsDownloadShellAction(allocator, action, target_path) catch return false;
+    return true;
+}
+
 fn deriveDownloadFileName(
     allocator: std.mem.Allocator,
     url: []const u8,
@@ -3437,6 +3592,10 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .command = .{ .download_source = index } }
         else if (parseInternalBrowseIndexAction(action, "source-new-tab/")) |index|
             .{ .command = .{ .download_source_new_tab = index } }
+        else if (parseInternalBrowseIndexAction(action, "open-file/")) |index|
+            .{ .command = .{ .download_open_file = index } }
+        else if (parseInternalBrowseIndexAction(action, "reveal-file/")) |index|
+            .{ .command = .{ .download_reveal_file = index } }
         else if (parseInternalBrowseIndexAction(action, "retry/")) |index|
             .{ .command = .{ .download_retry = index } }
         else if (parseInternalBrowseDownloadSortAction(action)) |mode|
@@ -3447,6 +3606,8 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .command = .download_filter_clear }
         else if (parseInternalBrowseIndexAction(action, "remove/")) |index|
             .{ .command = .{ .download_remove = index } }
+        else if (std.ascii.eqlIgnoreCase(action, "open-folder"))
+            .{ .command = .download_open_folder }
         else if (std.ascii.eqlIgnoreCase(action, "clear"))
             .{ .command = .download_clear }
         else
@@ -3572,6 +3733,9 @@ fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
         .bookmark_move_down,
         .bookmark_remove,
         .download_clear,
+        .download_open_file,
+        .download_reveal_file,
+        .download_open_folder,
         .download_sort_set,
         .download_source_new_tab,
         .download_retry,
@@ -3615,6 +3779,9 @@ fn internalBrowseCommandUsesBrowseLoopHandler(command: BrowserCommand) bool {
         .bookmark_move_up,
         .bookmark_move_down,
         .download_source_new_tab,
+        .download_open_file,
+        .download_reveal_file,
+        .download_open_folder,
         .download_retry,
         .download_sort_set,
         .download_filter_set,
@@ -3648,6 +3815,9 @@ fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
         => .bookmarks,
         .download_source,
         .download_source_new_tab,
+        .download_open_file,
+        .download_reveal_file,
+        .download_open_folder,
         .download_retry,
         .download_remove,
         .download_clear,
@@ -5108,6 +5278,8 @@ fn writeInternalDownloadsPage(
     try writeInternalFilterSetLink(writer, "browser://downloads", "interrupted", "interrupted");
     try writer.writeAll("</p><p>");
     try writeInternalActionLink(writer, "browser://downloads/clear", "Clear inactive downloads");
+    try writer.writeAll(" | ");
+    try writeInternalActionLink(writer, "browser://downloads/open-folder", "Open downloads folder");
     try writer.writeAll("</p>");
     if (downloads.entries.items.len == 0) {
         try writer.writeAll("<p>No downloads recorded yet.</p>");
@@ -5130,16 +5302,33 @@ fn writeInternalDownloadsPage(
         const status = try formatDownloadStatusLabel(allocator, entry);
         defer allocator.free(status);
         try writer.writeAll("<li>");
+        var wrote_action = false;
         if (!downloadEntryActive(downloads, index)) {
             const remove_href = try std.fmt.allocPrint(allocator, "browser://downloads/remove/{d}", .{index});
             defer allocator.free(remove_href);
             try writeInternalActionLink(writer, remove_href, "Remove");
-            try writer.writeAll(" ");
+            wrote_action = true;
+        }
+        if (downloadEntryCanUseShellFileActions(downloads, index)) {
+            const open_file_href = try std.fmt.allocPrint(allocator, "browser://downloads/open-file/{d}", .{index});
+            defer allocator.free(open_file_href);
+            const reveal_file_href = try std.fmt.allocPrint(allocator, "browser://downloads/reveal-file/{d}", .{index});
+            defer allocator.free(reveal_file_href);
+            if (wrote_action) {
+                try writer.writeAll(" | ");
+            }
+            try writeInternalActionLink(writer, open_file_href, "Open file");
+            try writer.writeAll(" | ");
+            try writeInternalActionLink(writer, reveal_file_href, "Reveal file");
+            wrote_action = true;
         }
         const source_href = try std.fmt.allocPrint(allocator, "browser://downloads/source/{d}", .{index});
         defer allocator.free(source_href);
         const source_new_tab_href = try std.fmt.allocPrint(allocator, "browser://downloads/source-new-tab/{d}", .{index});
         defer allocator.free(source_new_tab_href);
+        if (wrote_action) {
+            try writer.writeAll(" | ");
+        }
         try writeInternalActionLink(writer, source_href, "Source");
         try writer.writeAll(" | ");
         try writeInternalActionLink(writer, source_new_tab_href, "Source in new tab");
@@ -6046,6 +6235,14 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://downloads/source-new-tab/1").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .download_open_file = 2 } },
+        parseInternalBrowseRoute("browser://downloads/open-file/2").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .{ .download_reveal_file = 3 } },
+        parseInternalBrowseRoute("browser://downloads/reveal-file/3").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .download_retry = 1 } },
         parseInternalBrowseRoute("browser://downloads/retry/1").?,
     );
@@ -6056,6 +6253,10 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .download_clear },
         parseInternalBrowseRoute("browser://downloads/clear").?,
+    );
+    try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .download_open_folder },
+        parseInternalBrowseRoute("browser://downloads/open-folder").?,
     );
     try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .download_filter_clear },
@@ -6585,6 +6786,127 @@ test "writeInternalDownloadsPage applies filter state and renders quick links" {
     try std.testing.expect(std.mem.indexOf(u8, html, "seed.txt") == null);
 }
 
+test "resolveDownloadEntryShellPath validates completed files under downloads root" {
+    const rel_dir = ".zig-cache/tmp/internal-download-shell-path-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+    const downloads_dir = try ensureBrowseDownloadsDir(std.testing.allocator, abs_dir);
+    defer std.testing.allocator.free(downloads_dir);
+
+    const valid_path = try std.fs.path.join(std.testing.allocator, &.{ downloads_dir, "seed.txt" });
+    defer std.testing.allocator.free(valid_path);
+    const valid_file = try std.fs.createFileAbsolute(valid_path, .{ .truncate = true });
+    valid_file.close();
+
+    const outside_path = try std.fs.path.join(std.testing.allocator, &.{ abs_dir, "outside.txt" });
+    defer std.testing.allocator.free(outside_path);
+    const outside_file = try std.fs.createFileAbsolute(outside_path, .{ .truncate = true });
+    outside_file.close();
+
+    const missing_path = try std.fs.path.join(std.testing.allocator, &.{ downloads_dir, "missing.txt" });
+    defer std.testing.allocator.free(missing_path);
+
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "seed.txt"),
+        .path = try std.testing.allocator.dupe(u8, valid_path),
+        .url = try std.testing.allocator.dupe(u8, "http://127.0.0.1:8190/seed.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "outside.txt"),
+        .path = try std.testing.allocator.dupe(u8, outside_path),
+        .url = try std.testing.allocator.dupe(u8, "http://127.0.0.1:8190/outside.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "missing.txt"),
+        .path = try std.testing.allocator.dupe(u8, missing_path),
+        .url = try std.testing.allocator.dupe(u8, "http://127.0.0.1:8190/missing.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+
+    const resolved = resolveDownloadEntryShellPath(std.testing.allocator, abs_dir, &downloads, 0) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(resolved);
+    const expected = try std.fs.realpathAlloc(std.testing.allocator, valid_path);
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, resolved);
+    try std.testing.expect(resolveDownloadEntryShellPath(std.testing.allocator, abs_dir, &downloads, 1) == null);
+    try std.testing.expect(resolveDownloadEntryShellPath(std.testing.allocator, abs_dir, &downloads, 2) == null);
+}
+
+test "writeInternalDownloadsPage renders shell actions only for completed existing files" {
+    const rel_dir = ".zig-cache/tmp/internal-download-shell-html-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+    const existing_path = try std.fs.path.join(std.testing.allocator, &.{ abs_dir, "existing.txt" });
+    defer std.testing.allocator.free(existing_path);
+    const existing_file = try std.fs.createFileAbsolute(existing_path, .{ .truncate = true });
+    existing_file.close();
+    const missing_path = try std.fs.path.join(std.testing.allocator, &.{ abs_dir, "missing.txt" });
+    defer std.testing.allocator.free(missing_path);
+
+    var session: Session = undefined;
+    session.page = null;
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.committed_surface = .{};
+    tab.error_state = .{};
+    tab.internal_filters = .{};
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+    tab.zoom_percent = 100;
+    defer tab.internal_filters.deinit(std.testing.allocator);
+
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "existing.txt"),
+        .path = try std.testing.allocator.dupe(u8, existing_path),
+        .url = try std.testing.allocator.dupe(u8, "http://127.0.0.1:8190/existing.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "missing.txt"),
+        .path = try std.testing.allocator.dupe(u8, missing_path),
+        .url = try std.testing.allocator.dupe(u8, "http://127.0.0.1:8190/missing.txt"),
+        .detail = try std.testing.allocator.dupe(u8, ""),
+        .status = .completed,
+    });
+    try downloads.entries.append(std.testing.allocator, .{
+        .filename = try std.testing.allocator.dupe(u8, "failed.txt"),
+        .path = try std.testing.allocator.dupe(u8, existing_path),
+        .url = try std.testing.allocator.dupe(u8, "http://127.0.0.1:8190/failed.txt"),
+        .detail = try std.testing.allocator.dupe(u8, "Failed"),
+        .status = .failed,
+    });
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+    try writeInternalDownloadsPage(std.testing.allocator, &buf.writer, &downloads, &tab);
+    const html = buf.written();
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/open-folder") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/open-file/0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/reveal-file/0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/open-file/1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/reveal-file/1") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/open-file/2") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://downloads/reveal-file/2") == null);
+}
+
 test "writeInternalHistoryPage applies newest-first sort ordering" {
     const NavigationHistoryEntry = @import("browser/webapi/navigation/NavigationHistoryEntry.zig");
     var session: Session = undefined;
@@ -7080,6 +7402,9 @@ test "internalBrowseCommandHostPage maps stateful internal actions" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.bookmark_filter_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_source_new_tab = 0 }));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_open_file = 0 }));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_reveal_file = 0 }));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_open_folder));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_retry = 0 }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_sort_set = .newest_first }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_filter_set = "one" }));
@@ -7107,6 +7432,9 @@ test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reo
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .bookmark_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.bookmark_filter_clear));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_source_new_tab = 0 }));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_open_file = 0 }));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_reveal_file = 0 }));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.download_open_folder));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_retry = 0 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_sort_set = .newest_first }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_filter_set = "one" }));
@@ -7126,6 +7454,9 @@ test "internalBrowseCommandKeepsCurrentPage includes internal open in new tab ac
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_move_down = 0 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_sort_set = .alphabetical }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_source_new_tab = 0 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_open_file = 0 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_reveal_file = 0 }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.download_open_folder));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_retry = 0 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_sort_set = .newest_first }));
     try std.testing.expect(!internalBrowseCommandKeepsCurrentPage(.{ .download_source = 0 }));

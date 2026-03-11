@@ -215,6 +215,10 @@ Current state inside Gate 1:
   bookmark rows in new background tabs based on the page's active filter and
   sort state, with a bounded headed probe proving the filtered bookmarks page
   stays active while the visible bookmark targets open in saved-order
+- `browser://downloads` now also supports native shell actions for completed
+  entries, including `Open file`, `Reveal file`, and `Open downloads folder`,
+  with bounded headed probes proving each action fires while the originating
+  downloads page remains active
 - root `Content-Disposition: attachment` navigations now promote into the
   headed download manager instead of degrading into navigation errors:
   address-bar navigations, in-page link activations, and direct startup URLs

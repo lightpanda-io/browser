@@ -66,8 +66,37 @@ function Start-BrowserPagesServer([int]$Port, [string]$Stdout, [string]$Stderr) 
   return Start-Process -FilePath "python" -ArgumentList "-m","http.server",$Port,"--bind","127.0.0.1" -WorkingDirectory $script:Root -PassThru -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
 }
 
-function Start-BrowserPagesBrowser([string]$StartupUrl, [string]$Stdout, [string]$Stderr) {
-  return Start-Process -FilePath $script:BrowserExe -ArgumentList "browse",$StartupUrl,"--window_width","960","--window_height","640" -WorkingDirectory $script:Repo -PassThru -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
+function Start-BrowserPagesBrowser {
+  param(
+    [string]$StartupUrl,
+    [string]$Stdout,
+    [string]$Stderr,
+    [string]$DownloadShellLog = ""
+  )
+
+  $hadPreviousLog = Test-Path Env:LIGHTPANDA_DOWNLOAD_SHELL_LOG
+  $previousLog = if ($hadPreviousLog) { $env:LIGHTPANDA_DOWNLOAD_SHELL_LOG } else { $null }
+  try {
+    if ([string]::IsNullOrWhiteSpace($DownloadShellLog)) {
+      Remove-Item Env:LIGHTPANDA_DOWNLOAD_SHELL_LOG -ErrorAction SilentlyContinue
+    } else {
+      $env:LIGHTPANDA_DOWNLOAD_SHELL_LOG = $DownloadShellLog
+    }
+    return Start-Process -FilePath $script:BrowserExe -ArgumentList "browse",$StartupUrl,"--window_width","960","--window_height","640" -WorkingDirectory $script:Repo -PassThru -RedirectStandardOutput $Stdout -RedirectStandardError $Stderr
+  } finally {
+    if ($hadPreviousLog) {
+      $env:LIGHTPANDA_DOWNLOAD_SHELL_LOG = $previousLog
+    } else {
+      Remove-Item Env:LIGHTPANDA_DOWNLOAD_SHELL_LOG -ErrorAction SilentlyContinue
+    }
+  }
+}
+
+function Read-BrowserPagesShellLog([string]$LogPath) {
+  if (-not (Test-Path $LogPath)) {
+    return ,@()
+  }
+  return ,@(Get-Content $LogPath)
 }
 
 function Invoke-BrowserPagesAddressCommit([IntPtr]$Hwnd, [string]$Url) {

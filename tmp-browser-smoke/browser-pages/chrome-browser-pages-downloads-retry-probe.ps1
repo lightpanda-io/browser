@@ -23,8 +23,28 @@ $opened = $false
 $retryWorked = $false
 $failedCleared = $false
 $downloadSourceRequests = 0
+$retryCount = -1
 $titles = [ordered]@{}
 $failure = $null
+
+function Find-DownloadRetryCount([IntPtr]$Hwnd, [int]$BrowserId, [string]$RetryPath, [string]$ServerErrPath) {
+  foreach ($count in 16..19) {
+    if (Test-Path $RetryPath) {
+      Remove-Item $RetryPath -Force -ErrorAction SilentlyContinue
+    }
+    Invoke-BrowserPagesAddressNavigate $Hwnd $BrowserId "browser://downloads" "Browser Downloads (1)" | Out-Null
+    $before = @((Get-Content $ServerErrPath -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
+    Invoke-BrowserPagesDocumentActionNoNavigate $Hwnd $count 900
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+      Start-Sleep -Milliseconds 200
+      $after = @((Get-Content $ServerErrPath -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
+      if ($after -gt $before -and (Test-Path $RetryPath) -and ((Get-Item $RetryPath).Length -gt 0)) {
+        return [pscustomobject]@{ Worked = $true; Count = $count; Requests = $after }
+      }
+    }
+  }
+  return [pscustomobject]@{ Worked = $false; Count = -1; Requests = @((Get-Content $ServerErrPath -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count }
+}
 
 try {
   $server = Start-BrowserPagesServer -Port $port -Stdout $serverOut -Stderr $serverErr
@@ -43,15 +63,10 @@ try {
   $opened = [bool]$titles.downloads
   if (-not $opened) { throw "browser://downloads did not load" }
 
-  Invoke-BrowserPagesDocumentActionNoNavigate $hwnd 16 900
-  for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    Start-Sleep -Milliseconds 200
-    $downloadSourceRequests = @((Get-Content $serverErr -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
-    if ($downloadSourceRequests -ge 1 -and (Test-Path $retryPath) -and ((Get-Item $retryPath).Length -gt 0)) {
-      $retryWorked = $true
-      break
-    }
-  }
+  $retryAttempt = Find-DownloadRetryCount $hwnd $browser.Id $retryPath $serverErr
+  $retryWorked = [bool]$retryAttempt.Worked
+  $retryCount = [int]$retryAttempt.Count
+  $downloadSourceRequests = [int]$retryAttempt.Requests
   $titles.after_retry = Get-SmokeWindowTitle $hwnd
   if (-not $retryWorked) { throw "download retry document action did not create a new completed file" }
 
@@ -74,6 +89,7 @@ try {
     opened = $opened
     retry_worked = $retryWorked
     failed_cleared = $failedCleared
+    retry_count = $retryCount
     download_source_requests = $downloadSourceRequests
     titles = $titles
     error = $failure

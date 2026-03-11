@@ -17,9 +17,24 @@ $ready = $false
 $downloadsOpened = $false
 $openNewTabWorked = $false
 $returnedWorked = $false
+$openCount = -1
 $downloadSourceRequests = 0
 $titles = [ordered]@{}
 $failure = $null
+
+function Find-DownloadOpenNewTabCount([IntPtr]$Hwnd, [int]$BrowserId, [string]$ServerErrPath) {
+  foreach ($count in 15..20) {
+    Invoke-BrowserPagesAddressNavigate $Hwnd $BrowserId "browser://downloads" "Browser Downloads (1)" | Out-Null
+    $before = @((Get-Content $ServerErrPath -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
+    $result = Invoke-BrowserPagesDocumentAction $Hwnd $count $BrowserId "download.txt" 12
+    Start-Sleep -Milliseconds 400
+    $after = @((Get-Content $ServerErrPath -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
+    if ($result -or ($after -gt $before)) {
+      return [pscustomobject]@{ Worked = $true; Count = $count; Title = $result; Requests = $after }
+    }
+  }
+  return [pscustomobject]@{ Worked = $false; Count = -1; Title = $null; Requests = @((Get-Content $ServerErrPath -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count }
+}
 
 try {
   $server = Start-BrowserPagesServer -Port $port -Stdout $serverOut -Stderr $serverErr
@@ -38,10 +53,11 @@ try {
   $downloadsOpened = [bool]$titles.downloads
   if (-not $downloadsOpened) { throw "browser://downloads did not load" }
 
-  $titles.opened = Invoke-BrowserPagesDocumentAction $hwnd 15 $browser.Id "download.txt"
-  Start-Sleep -Milliseconds 600
-  $downloadSourceRequests = @((Get-Content $serverErr -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
-  $openNewTabWorked = [bool]$titles.opened -or ($downloadSourceRequests -ge 1)
+  $openAttempt = Find-DownloadOpenNewTabCount $hwnd $browser.Id $serverErr
+  $titles.opened = $openAttempt.Title
+  $openCount = [int]$openAttempt.Count
+  $downloadSourceRequests = [int]$openAttempt.Requests
+  $openNewTabWorked = [bool]$openAttempt.Worked
   if (-not $openNewTabWorked) { throw "download source-in-new-tab document action did not open download.txt" }
 
   Send-SmokeCtrlShiftTab
@@ -64,6 +80,7 @@ try {
     downloads_opened = $downloadsOpened
     open_new_tab_worked = $openNewTabWorked
     returned_worked = $returnedWorked
+    open_count = $openCount
     download_source_requests = $downloadSourceRequests
     titles = $titles
     error = $failure

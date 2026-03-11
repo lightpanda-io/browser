@@ -21,25 +21,13 @@ $newPath = Join-Path $app.DownloadsDir "newer.txt"
 "@ | Set-Content -Path $downloadsFile -NoNewline
 
 function Find-DownloadSortTabCount([IntPtr]$Hwnd, [int]$BrowserId) {
-  foreach ($count in @(7)) {
+  foreach ($count in @(7, 8, 9)) {
     Invoke-BrowserPagesAddressNavigate $Hwnd $BrowserId "browser://downloads/filter-clear" "Browser Downloads (2)" | Out-Null
     Invoke-BrowserPagesAddressNavigate $Hwnd $BrowserId "browser://downloads" "Browser Downloads (2)" | Out-Null
     Invoke-BrowserPagesDocumentActionNoNavigate $Hwnd $count 500
     $title = Get-SmokeWindowTitle $Hwnd
     if ($title -like "*Browser Downloads (2, newest first)*") {
       return [pscustomobject]@{ Worked = $true; Count = $count; Title = $title }
-    }
-  }
-  return [pscustomobject]@{ Worked = $false; Count = -1; Title = (Get-SmokeWindowTitle $Hwnd) }
-}
-
-function Find-DownloadOpenTabCount([IntPtr]$Hwnd, [int]$BrowserId) {
-  foreach ($count in @(14, 15)) {
-    Invoke-BrowserPagesAddressNavigate $Hwnd $BrowserId "browser://downloads/filter-clear" "Browser Downloads (2)" | Out-Null
-    Invoke-BrowserPagesAddressNavigate $Hwnd $BrowserId "browser://downloads/sort/newest-first" "Browser Downloads (2, newest first)" | Out-Null
-    $result = Invoke-BrowserPagesDocumentAction $Hwnd $count $BrowserId "download.txt"
-    if ($result) {
-      return [pscustomobject]@{ Worked = $true; Count = $count; Title = $result }
     }
   }
   return [pscustomobject]@{ Worked = $false; Count = -1; Title = (Get-SmokeWindowTitle $Hwnd) }
@@ -80,12 +68,12 @@ try {
   $titles.sorted = $sortAttempt.Title
   if (-not $sortWorked) { throw "download sort document action did not reach newest first" }
 
-  $openAttempt = Find-DownloadOpenTabCount $hwnd $browser.Id
+  $beforeOpenRequests = @((Get-Content $serverErr -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
+  $titles.opened = Invoke-BrowserPagesAddressNavigate $hwnd $browser.Id "browser://downloads/source/1" "download.txt"
   Start-Sleep -Milliseconds 400
   $downloadSourceRequests = @((Get-Content $serverErr -ErrorAction SilentlyContinue) | Where-Object { $_ -match 'GET /download\.txt' }).Count
-  $openWorked = [bool]$openAttempt.Worked -or ($downloadSourceRequests -ge 1)
-  $openCount = [int]$openAttempt.Count
-  $titles.opened = $openAttempt.Title
+  $openWorked = [bool]$titles.opened -or ($downloadSourceRequests -gt $beforeOpenRequests)
+  $openCount = -1
   if (-not $openWorked) { throw "download sorted first-row source action did not reach download.txt" }
 } catch {
   $failure = $_.Exception.Message
