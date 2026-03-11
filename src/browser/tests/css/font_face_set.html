@@ -56,3 +56,25 @@
     testing.expectEqual('FontFaceSet', document.fonts.constructor.name);
 }
 </script>
+
+<script id="document_fonts_addEventListener">
+{
+    let loading = false;
+    document.fonts.addEventListener('loading', function() {
+        loading = true;
+    });
+
+    let loadingdone = false;
+    document.fonts.addEventListener('loadingdone', function() {
+        loadingdone = true;
+    });
+
+    document.fonts.load("italic bold 16px Roboto");
+
+    testing.eventually(() => {
+      testing.expectEqual(true, loading);
+      testing.expectEqual(true, loadingdone);
+    });
+    testing.expectEqual(true, true);
+}
+</script>
