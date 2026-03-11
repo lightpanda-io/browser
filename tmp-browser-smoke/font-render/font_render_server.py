@@ -5,6 +5,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 REPO_FONT = ROOT.parent.parent / "src" / "browser" / "tests" / "css" / "private_font_test.ttf"
+REPO_FONT_WOFF2 = ROOT.parent.parent / "src" / "browser" / "tests" / "css" / "font_face_test.woff2"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8163
 
 
@@ -17,6 +18,14 @@ class Handler(SimpleHTTPRequestHandler):
             data = REPO_FONT.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "font/ttf")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path == "/font_face_test.woff2":
+            data = REPO_FONT_WOFF2.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "font/woff2")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

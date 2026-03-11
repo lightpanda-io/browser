@@ -65,10 +65,12 @@ pub const FontFaceFormat = enum(u8) {
     unknown,
     truetype,
     opentype,
+    woff,
+    woff2,
 
     pub fn supportsWin32PrivateRegistration(self: FontFaceFormat) bool {
         return switch (self) {
-            .truetype, .opentype => true,
+            .truetype, .opentype, .woff, .woff2 => true,
             else => false,
         };
     }

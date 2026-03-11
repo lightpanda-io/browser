@@ -660,7 +660,7 @@ fn detectFontFaceFormat(url: [:0]const u8) FontFaceEntry.Format {
 
 fn formatSupportsEmbeddedBytes(format: FontFaceEntry.Format) bool {
     return switch (format) {
-        .truetype, .opentype => true,
+        .truetype, .opentype, .woff, .woff2 => true,
         else => false,
     };
 }
@@ -812,8 +812,8 @@ test "detectFontFaceFormat recognizes supported font extensions" {
 test "formatSupportsEmbeddedBytes only retains ttf and otf bytes" {
     try std.testing.expect(formatSupportsEmbeddedBytes(.truetype));
     try std.testing.expect(formatSupportsEmbeddedBytes(.opentype));
-    try std.testing.expect(!formatSupportsEmbeddedBytes(.woff));
-    try std.testing.expect(!formatSupportsEmbeddedBytes(.woff2));
+    try std.testing.expect(formatSupportsEmbeddedBytes(.woff));
+    try std.testing.expect(formatSupportsEmbeddedBytes(.woff2));
     try std.testing.expect(!formatSupportsEmbeddedBytes(.unknown));
 }
 

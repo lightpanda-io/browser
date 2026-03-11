@@ -353,11 +353,11 @@ Current known gap entering Gate 2:
   the same protected vs anonymous policy as the root request; stylesheet-
   backed `@font-face` fetches and `document.fonts` now ride that same path,
   and headed Win32 text rendering now honors both authored installed-font
-  family/style/weight and private TTF/OTF stylesheet-backed `@font-face`
-  rendering on the surface, including later renderable TTF/OTF fallbacks in
-  multi-source `src:` lists, but broader CSS fidelity, real text shaping,
-  WOFF/WOFF2 private font use, script/font/resource parity, and one unified
-  subresource ownership path are still open
+  family/style/weight and private TTF/OTF plus WOFF2 stylesheet-backed
+  `@font-face` rendering on the surface, including later renderable
+  fallbacks in multi-source `src:` lists, but broader CSS fidelity, real
+  text shaping, wider font-format parity, script/font/resource parity, and
+  one unified subresource ownership path are still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

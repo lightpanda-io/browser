@@ -1385,6 +1385,8 @@ fn mapFontFaceFormat(format: CSSStyleSheet.FontFaceEntry.Format) FontFaceFormat 
     return switch (format) {
         .truetype => .truetype,
         .opentype => .opentype,
+        .woff => .woff,
+        .woff2 => .woff2,
         else => .unknown,
     };
 }
@@ -1952,4 +1954,19 @@ test "paintDocument carries loaded private font faces for headed rendering" {
     }
 
     try std.testing.expect(found_private_run);
+}
+
+test "paintDocument carries loaded woff2 private font faces for headed rendering" {
+    var page = try testing.pageTest("page/font_private_woff2_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.font_faces.items.len);
+    try std.testing.expectEqualStrings("IBM Plex Mono", display_list.font_faces.items[0].family);
+    try std.testing.expectEqual(FontFaceFormat.woff2, display_list.font_faces.items[0].format);
+    try std.testing.expect(display_list.font_faces.items[0].bytes.len > 0);
 }

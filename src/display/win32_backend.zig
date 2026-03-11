@@ -42,6 +42,67 @@ const c = @cImport({
     @cInclude("urlmon.h");
 });
 
+const DWRITE_FACTORY_TYPE_SHARED: c_int = 0;
+const DWRITE_CONTAINER_TYPE_UNKNOWN: c_int = 0;
+const DWRITE_CONTAINER_TYPE_WOFF: c_int = 1;
+const DWRITE_CONTAINER_TYPE_WOFF2: c_int = 2;
+
+const IID_IDWriteFactory5 = c.GUID{
+    .Data1 = 0x958db99a,
+    .Data2 = 0xbe2a,
+    .Data3 = 0x4f09,
+    .Data4 = .{ 0xaf, 0x7d, 0x65, 0x18, 0x98, 0x03, 0xd1, 0xd3 },
+};
+
+const IDWriteFactory5 = extern struct {
+    lpVtbl: *const IDWriteFactory5Vtbl,
+};
+
+const IDWriteFactory5Vtbl = extern struct {
+    QueryInterface: ?*const anyopaque,
+    AddRef: ?*const anyopaque,
+    Release: *const fn (*IDWriteFactory5) callconv(.winapi) c.ULONG,
+    inherited_methods: [43]?*const anyopaque,
+    AnalyzeContainerType: *const fn (
+        *IDWriteFactory5,
+        ?*const anyopaque,
+        c.UINT32,
+    ) callconv(.winapi) c_int,
+    UnpackFontFile: *const fn (
+        *IDWriteFactory5,
+        c_int,
+        ?*const anyopaque,
+        c.UINT32,
+        *?*IDWriteFontFileStream,
+    ) callconv(.winapi) c.HRESULT,
+};
+
+const IDWriteFontFileStream = extern struct {
+    lpVtbl: *const IDWriteFontFileStreamVtbl,
+};
+
+const IDWriteFontFileStreamVtbl = extern struct {
+    QueryInterface: ?*const anyopaque,
+    AddRef: ?*const anyopaque,
+    Release: *const fn (*IDWriteFontFileStream) callconv(.winapi) c.ULONG,
+    ReadFileFragment: *const fn (
+        *IDWriteFontFileStream,
+        *?*const anyopaque,
+        c.UINT64,
+        c.UINT64,
+        *?*anyopaque,
+    ) callconv(.winapi) c.HRESULT,
+    ReleaseFileFragment: *const fn (*IDWriteFontFileStream, ?*anyopaque) callconv(.winapi) void,
+    GetFileSize: *const fn (*IDWriteFontFileStream, *c.UINT64) callconv(.winapi) c.HRESULT,
+    GetLastWriteTime: ?*const anyopaque,
+};
+
+extern "dwrite" fn DWriteCreateFactory(
+    c_int,
+    *const c.GUID,
+    *?*anyopaque,
+) callconv(.winapi) c.HRESULT;
+
 const GpStatus = c_int;
 const GpImage = opaque {};
 const GpGraphics = opaque {};
@@ -3850,7 +3911,7 @@ fn ensurePrivateFontRegistered(backend: *Win32Backend, font_face: DisplayList.Fo
 
     const owned_family = try backend.allocator.dupe(u8, font_face.family);
     errdefer backend.allocator.free(owned_family);
-    const owned_bytes = try backend.allocator.dupe(u8, font_face.bytes);
+    const owned_bytes = try preparePrivateFontBytesForRegistration(backend.allocator, font_face);
     errdefer backend.allocator.free(owned_bytes);
 
     var font_count: c.DWORD = 0;
@@ -3873,6 +3934,87 @@ fn ensurePrivateFontRegistered(backend: *Win32Backend, font_face: DisplayList.Fo
         .bytes = owned_bytes,
         .handle = handle,
     });
+}
+
+fn preparePrivateFontBytesForRegistration(
+    allocator: std.mem.Allocator,
+    font_face: DisplayList.FontFaceResource,
+) ![]u8 {
+    return switch (font_face.format) {
+        .woff, .woff2 => try unpackWin32FontContainerToSfnt(allocator, font_face.format, font_face.bytes),
+        else => try allocator.dupe(u8, font_face.bytes),
+    };
+}
+
+fn unpackWin32FontContainerToSfnt(
+    allocator: std.mem.Allocator,
+    format: DisplayList.FontFaceFormat,
+    container_bytes: []const u8,
+) ![]u8 {
+    const data_len_u32 = std.math.cast(c.UINT32, container_bytes.len) orelse return error.PrivateFontUnpackTooLarge;
+
+    var factory: ?*IDWriteFactory5 = null;
+    var factory_any: ?*anyopaque = null;
+    const create_hr = DWriteCreateFactory(
+        DWRITE_FACTORY_TYPE_SHARED,
+        &IID_IDWriteFactory5,
+        &factory_any,
+    );
+    factory = if (factory_any) |ptr| @ptrCast(@alignCast(ptr)) else null;
+    if (create_hr < 0 or factory == null) {
+        return error.PrivateFontUnpackFactoryFailed;
+    }
+    defer _ = factory.?.lpVtbl.Release(factory.?);
+
+    const expected_container = switch (format) {
+        .woff => DWRITE_CONTAINER_TYPE_WOFF,
+        .woff2 => DWRITE_CONTAINER_TYPE_WOFF2,
+        else => return error.PrivateFontUnsupportedContainer,
+    };
+    const detected_container = factory.?.lpVtbl.AnalyzeContainerType(factory.?, container_bytes.ptr, data_len_u32);
+    if (detected_container == DWRITE_CONTAINER_TYPE_UNKNOWN or detected_container != expected_container) {
+        return error.PrivateFontUnknownContainer;
+    }
+
+    var stream: ?*IDWriteFontFileStream = null;
+    const unpack_hr = factory.?.lpVtbl.UnpackFontFile(
+        factory.?,
+        detected_container,
+        container_bytes.ptr,
+        data_len_u32,
+        &stream,
+    );
+    if (unpack_hr < 0 or stream == null) {
+        return error.PrivateFontUnpackFailed;
+    }
+    defer _ = stream.?.lpVtbl.Release(stream.?);
+
+    var file_size: c.UINT64 = 0;
+    const size_hr = stream.?.lpVtbl.GetFileSize(stream.?, &file_size);
+    if (size_hr < 0 or file_size == 0) {
+        return error.PrivateFontUnpackFailed;
+    }
+    const sfnt_len = std.math.cast(usize, file_size) orelse return error.PrivateFontUnpackTooLarge;
+    const sfnt_bytes = try allocator.alloc(u8, sfnt_len);
+    errdefer allocator.free(sfnt_bytes);
+
+    var fragment_start: ?*const anyopaque = null;
+    var fragment_context: ?*anyopaque = null;
+    const read_hr = stream.?.lpVtbl.ReadFileFragment(
+        stream.?,
+        &fragment_start,
+        0,
+        file_size,
+        &fragment_context,
+    );
+    if (read_hr < 0 or fragment_start == null) {
+        return error.PrivateFontUnpackFailed;
+    }
+    defer stream.?.lpVtbl.ReleaseFileFragment(stream.?, fragment_context);
+
+    const fragment_bytes: [*]const u8 = @ptrCast(fragment_start.?);
+    @memcpy(sfnt_bytes, fragment_bytes[0..sfnt_len]);
+    return sfnt_bytes;
 }
 
 fn hashPrivateFontFace(font_face: DisplayList.FontFaceResource) u64 {
@@ -8136,6 +8278,33 @@ test "win32 presentationFontWeight clamps css weight into GDI range" {
     try std.testing.expectEqual(@as(c_int, 100), presentationFontWeight(1));
     try std.testing.expectEqual(@as(c_int, 400), presentationFontWeight(400));
     try std.testing.expectEqual(@as(c_int, 900), presentationFontWeight(1200));
+}
+
+test "win32 preparePrivateFontBytesForRegistration keeps ttf bytes intact" {
+    const allocator = std.testing.allocator;
+    const ttf_bytes = @embedFile("../browser/tests/css/private_font_test.ttf");
+    const prepared = try preparePrivateFontBytesForRegistration(allocator, .{
+        .family = @constCast("ABeeZee"),
+        .format = .truetype,
+        .bytes = @constCast(ttf_bytes),
+    });
+    defer allocator.free(prepared);
+
+    try std.testing.expectEqualStrings(ttf_bytes, prepared);
+}
+
+test "win32 preparePrivateFontBytesForRegistration unpacks woff2 bytes into sfnt" {
+    const allocator = std.testing.allocator;
+    const woff2_bytes = @embedFile("../browser/tests/css/font_face_test.woff2");
+    const prepared = try preparePrivateFontBytesForRegistration(allocator, .{
+        .family = @constCast("ABeeZeeWoff2"),
+        .format = .woff2,
+        .bytes = @constCast(woff2_bytes),
+    });
+    defer allocator.free(prepared);
+
+    try std.testing.expect(prepared.len > 0);
+    try std.testing.expect(!std.mem.startsWith(u8, prepared, "wOF2"));
 }
 
 test "win32 wheel zoom command maps sign to zoom action" {
