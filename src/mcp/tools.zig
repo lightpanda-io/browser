@@ -61,6 +61,30 @@ pub const tool_list = [_]protocol.Tool{
             \\}
         ),
     },
+    .{
+        .name = "interactiveElements",
+        .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting interactive elements." }
+            \\  }
+            \\}
+        ),
+    },
+    .{
+        .name = "structuredData",
+        .description = "Extract structured data (like JSON-LD, OpenGraph, etc) from the opened page. If a url is provided, it navigates to that url first.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before extracting structured data." }
+            \\  }
+            \\}
+        ),
+    },
 };
 
 pub fn handleList(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -124,6 +148,8 @@ const ToolAction = enum {
     navigate,
     markdown,
     links,
+    interactiveElements,
+    structuredData,
     evaluate,
 };
 
@@ -132,6 +158,8 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "navigate", .navigate },
     .{ "markdown", .markdown },
     .{ "links", .links },
+    .{ "interactiveElements", .interactiveElements },
+    .{ "structuredData", .structuredData },
     .{ "evaluate", .evaluate },
 });
 
@@ -157,6 +185,8 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .goto, .navigate => try handleGoto(server, arena, req.id.?, call_params.arguments),
         .markdown => try handleMarkdown(server, arena, req.id.?, call_params.arguments),
         .links => try handleLinks(server, arena, req.id.?, call_params.arguments),
+        .interactiveElements => try handleInteractiveElements(server, arena, req.id.?, call_params.arguments),
+        .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
         .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
     }
 }
@@ -209,6 +239,58 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         .text = .{ .page = page, .action = .links },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
+}
+
+fn handleInteractiveElements(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        url: ?[:0]const u8 = null,
+    };
+    if (arguments) |args_raw| {
+        if (std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
+            if (args.url) |u| {
+                try performGoto(server, u, id);
+            }
+        } else |_| {}
+    }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const elements = lp.interactive.collectInteractiveElements(page.document.asNode(), arena, page) catch |err| {
+        log.err(.mcp, "elements collection failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to collect interactive elements");
+    };
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(elements, .{}, &aw.writer);
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
+}
+
+fn handleStructuredData(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const Params = struct {
+        url: ?[:0]const u8 = null,
+    };
+    if (arguments) |args_raw| {
+        if (std.json.parseFromValueLeaky(Params, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
+            if (args.url) |u| {
+                try performGoto(server, u, id);
+            }
+        } else |_| {}
+    }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const data = lp.structured_data.collectStructuredData(page.document.asNode(), arena, page) catch |err| {
+        log.err(.mcp, "struct data collection failed", .{ .err = err });
+        return server.sendError(id, .InternalError, "Failed to collect structured data");
+    };
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    try std.json.Stringify.value(data, .{}, &aw.writer);
+
+    const content = [_]protocol.TextContent([]const u8){.{ .text = aw.written() }};
+    try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
 
 fn handleEvaluate(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
