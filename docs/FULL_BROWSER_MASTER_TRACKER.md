@@ -327,6 +327,10 @@ Current state inside Gate 1:
 - wrapped mixed-inline anchors now also have bounded headed click coverage on a
   lower wrapped fragment row, proving the lower-row link fragment still
   navigates correctly after the inline-flow and wrapping changes
+- that same mixed-inline interaction coverage now also includes `<br>`-split
+  inline links and longer wrapped anchors with multiple later fragments, with
+  bounded headed probes proving navigation still works from those later visual
+  fragments instead of only from the first row
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
