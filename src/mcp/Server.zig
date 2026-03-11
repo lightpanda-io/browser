@@ -7,6 +7,7 @@ const HttpClient = @import("../browser/HttpClient.zig");
 const testing = @import("../testing.zig");
 const protocol = @import("protocol.zig");
 const router = @import("router.zig");
+const CDPNode = @import("../cdp/Node.zig");
 
 const Self = @This();
 
@@ -17,6 +18,7 @@ http_client: *HttpClient,
 notification: *lp.Notification,
 browser: lp.Browser,
 session: *lp.Session,
+node_registry: CDPNode.Registry,
 
 writer: *std.io.Writer,
 mutex: std.Thread.Mutex = .{},
@@ -44,12 +46,15 @@ pub fn init(allocator: std.mem.Allocator, app: *App, writer: *std.io.Writer) !*S
         .http_client = http_client,
         .notification = notification,
         .session = undefined,
+        .node_registry = CDPNode.Registry.init(allocator),
     };
+
     self.session = try self.browser.newSession(self.notification);
     return self;
 }
 
 pub fn deinit(self: *Self) void {
+    self.node_registry.deinit();
     self.aw.deinit();
     self.browser.deinit();
     self.notification.deinit();
@@ -82,7 +87,7 @@ pub fn sendResult(self: *Self, id: std.json.Value, result: anytype) !void {
 }
 
 pub fn sendError(self: *Self, id: std.json.Value, code: protocol.ErrorCode, message: []const u8) !void {
-    try self.sendResponse(protocol.Response{
+    try self.sendResponse(.{
         .id = id,
         .@"error" = protocol.Error{
             .code = @intFromEnum(code),

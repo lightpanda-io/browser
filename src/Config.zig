@@ -200,6 +200,8 @@ pub const DumpFormat = enum {
     html,
     markdown,
     wpt,
+    semantic_tree,
+    semantic_tree_text,
 };
 
 pub const Fetch = struct {
@@ -346,7 +348,7 @@ pub fn printUsageAndExit(self: *const Config, success: bool) void {
         \\
         \\Options:
         \\--dump          Dumps document to stdout.
-        \\                Argument must be 'html' or 'markdown'.
+        \\                Argument must be 'html', 'markdown', 'semantic_tree', or 'semantic_tree_text'.
         \\                Defaults to no dump.
         \\
         \\--strip_mode    Comma separated list of tag groups to remove from dump

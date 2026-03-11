@@ -8,6 +8,7 @@ const Element = @import("../browser/webapi/Element.zig");
 const Selector = @import("../browser/webapi/selector/Selector.zig");
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
+const CDPNode = @import("../cdp/Node.zig");
 
 pub const tool_list = [_]protocol.Tool{
     .{
@@ -62,6 +63,18 @@ pub const tool_list = [_]protocol.Tool{
         ),
     },
     .{
+        .name = "semantic_tree",
+        .description = "Get the page content as a simplified semantic DOM tree for AI reasoning. If a url is provided, it navigates to that url first.",
+        .inputSchema = protocol.minify(
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "url": { "type": "string", "description": "Optional URL to navigate to before fetching the semantic tree." }
+            \\  }
+            \\}
+        ),
+    },
+    .{
         .name = "interactiveElements",
         .description = "Extract interactive elements from the opened page. If a url is provided, it navigates to that url first.",
         .inputSchema = protocol.minify(
@@ -103,13 +116,16 @@ const EvaluateParams = struct {
 
 const ToolStreamingText = struct {
     page: *lp.Page,
-    action: enum { markdown, links },
+    action: enum { markdown, links, semantic_tree },
+    registry: ?*CDPNode.Registry = null,
+    arena: ?std.mem.Allocator = null,
 
     pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) !void {
         try jw.beginWriteRaw();
         try jw.writer.writeByte('"');
-        var escaped = protocol.JsonEscapingWriter.init(jw.writer);
+        var escaped: protocol.JsonEscapingWriter = .init(jw.writer);
         const w = &escaped.writer;
+
         switch (self.action) {
             .markdown => lp.markdown.dump(self.page.document.asNode(), .{}, w, self.page) catch |err| {
                 log.err(.mcp, "markdown dump failed", .{ .err = err });
@@ -137,7 +153,21 @@ const ToolStreamingText = struct {
                     log.err(.mcp, "query links failed", .{ .err = err });
                 }
             },
+            .semantic_tree => {
+                const st = lp.SemanticTree{
+                    .dom_node = self.page.document.asNode(),
+                    .registry = self.registry.?,
+                    .page = self.page,
+                    .arena = self.arena.?,
+                    .prune = true,
+                };
+
+                st.textStringify(w) catch |err| {
+                    log.err(.mcp, "semantic tree dump failed", .{ .err = err });
+                };
+            },
         }
+
         try jw.writer.writeByte('"');
         jw.endWriteRaw();
     }
@@ -151,6 +181,7 @@ const ToolAction = enum {
     interactiveElements,
     structuredData,
     evaluate,
+    semantic_tree,
 };
 
 const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
@@ -161,6 +192,7 @@ const tool_map = std.StaticStringMap(ToolAction).initComptime(.{
     .{ "interactiveElements", .interactiveElements },
     .{ "structuredData", .structuredData },
     .{ "evaluate", .evaluate },
+    .{ "semantic_tree", .semantic_tree },
 });
 
 pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Request) !void {
@@ -188,6 +220,7 @@ pub fn handleCall(server: *Server, arena: std.mem.Allocator, req: protocol.Reque
         .interactiveElements => try handleInteractiveElements(server, arena, req.id.?, call_params.arguments),
         .structuredData => try handleStructuredData(server, arena, req.id.?, call_params.arguments),
         .evaluate => try handleEvaluate(server, arena, req.id.?, call_params.arguments),
+        .semantic_tree => try handleSemanticTree(server, arena, req.id.?, call_params.arguments),
     }
 }
 
@@ -237,6 +270,27 @@ fn handleLinks(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
 
     const content = [_]protocol.TextContent(ToolStreamingText){.{
         .text = .{ .page = page, .action = .links },
+    }};
+    try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
+}
+
+fn handleSemanticTree(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arguments: ?std.json.Value) !void {
+    const TreeParams = struct {
+        url: ?[:0]const u8 = null,
+    };
+    if (arguments) |args_raw| {
+        if (std.json.parseFromValueLeaky(TreeParams, arena, args_raw, .{ .ignore_unknown_fields = true })) |args| {
+            if (args.url) |u| {
+                try performGoto(server, u, id);
+            }
+        } else |_| {}
+    }
+    const page = server.session.currentPage() orelse {
+        return server.sendError(id, .PageNotLoaded, "Page not loaded");
+    };
+
+    const content = [_]protocol.TextContent(ToolStreamingText){.{
+        .text = .{ .page = page, .action = .semantic_tree, .registry = &server.node_registry, .arena = arena },
     }};
     try server.sendResult(id, protocol.CallToolResult(ToolStreamingText){ .content = &content });
 }

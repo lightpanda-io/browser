@@ -22,6 +22,7 @@ pub const Network = @import("network/Runtime.zig");
 pub const Server = @import("Server.zig");
 pub const Config = @import("Config.zig");
 pub const URL = @import("browser/URL.zig");
+pub const String = @import("string.zig").String;
 pub const Page = @import("browser/Page.zig");
 pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
@@ -31,6 +32,8 @@ pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
 pub const dump = @import("browser/dump.zig");
 pub const markdown = @import("browser/markdown.zig");
+pub const SemanticTree = @import("SemanticTree.zig");
+pub const CDPNode = @import("cdp/Node.zig");
 pub const interactive = @import("browser/interactive.zig");
 pub const structured_data = @import("browser/structured_data.zig");
 pub const mcp = @import("mcp.zig");
@@ -110,6 +113,24 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
         switch (mode) {
             .html => try dump.root(page.window._document, opts.dump, writer, page),
             .markdown => try markdown.dump(page.window._document.asNode(), .{}, writer, page),
+            .semantic_tree, .semantic_tree_text => {
+                var registry = CDPNode.Registry.init(app.allocator);
+                defer registry.deinit();
+
+                const st: SemanticTree = .{
+                    .dom_node = page.window._document.asNode(),
+                    .registry = &registry,
+                    .page = page,
+                    .arena = page.call_arena,
+                    .prune = (mode == .semantic_tree_text),
+                };
+
+                if (mode == .semantic_tree) {
+                    try std.json.Stringify.value(st, .{}, writer);
+                } else {
+                    try st.textStringify(writer);
+                }
+            },
             .wpt => try dumpWPT(page, writer),
         }
     }

@@ -157,7 +157,7 @@ pub fn collectInteractiveElements(
             .node = node,
             .tag_name = el.getTagNameLower(),
             .role = getRole(el),
-            .name = getAccessibleName(el),
+            .name = try getAccessibleName(el, arena),
             .interactivity_type = itype,
             .listener_types = listener_types,
             .disabled = isDisabled(el),
@@ -178,12 +178,12 @@ pub fn collectInteractiveElements(
     return results.items;
 }
 
-const ListenerTargetMap = std.AutoHashMapUnmanaged(usize, std.ArrayList([]const u8));
+pub const ListenerTargetMap = std.AutoHashMapUnmanaged(usize, std.ArrayList([]const u8));
 
 /// Pre-build a map from event_target pointer → list of event type names.
 /// This lets both classifyInteractivity (O(1) "has any?") and
 /// getListenerTypes (O(1) "which ones?") avoid re-iterating per element.
-fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap {
+pub fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap {
     var map = ListenerTargetMap{};
 
     // addEventListener registrations
@@ -209,7 +209,7 @@ fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap {
     return map;
 }
 
-fn classifyInteractivity(
+pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
@@ -296,7 +296,7 @@ fn getRole(el: *Element) ?[]const u8 {
     };
 }
 
-fn getAccessibleName(el: *Element) ?[]const u8 {
+fn getAccessibleName(el: *Element, arena: Allocator) !?[]const u8 {
     // aria-label
     if (el.getAttributeSafe(comptime .wrap("aria-label"))) |v| {
         if (v.len > 0) return v;
@@ -325,11 +325,15 @@ fn getAccessibleName(el: *Element) ?[]const u8 {
     }
 
     // Text content (first non-empty text node, trimmed)
-    return getTextContent(el.asNode());
+    return try getTextContent(el.asNode(), arena);
 }
 
-fn getTextContent(node: *Node) ?[]const u8 {
-    var tw = TreeWalker.FullExcludeSelf.init(node, .{});
+fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
+    var tw: TreeWalker.FullExcludeSelf = .init(node, .{});
+
+    var arr: std.ArrayList(u8) = .empty;
+    var single_chunk: ?[]const u8 = null;
+
     while (tw.next()) |child| {
         // Skip text inside script/style elements.
         if (child.is(Element)) |el| {
@@ -344,13 +348,29 @@ fn getTextContent(node: *Node) ?[]const u8 {
         if (child.is(Node.CData)) |cdata| {
             if (cdata.is(Node.CData.Text)) |text| {
                 const content = std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace);
-                if (content.len > 0) return content;
+                if (content.len > 0) {
+                    if (single_chunk == null and arr.items.len == 0) {
+                        single_chunk = content;
+                    } else {
+                        if (single_chunk) |sc| {
+                            try arr.appendSlice(arena, sc);
+                            try arr.append(arena, ' ');
+                            single_chunk = null;
+                        }
+                        try arr.appendSlice(arena, content);
+                        try arr.append(arena, ' ');
+                    }
+                }
             }
         }
     }
-    return null;
-}
 
+    if (single_chunk) |sc| return sc;
+    if (arr.items.len == 0) return null;
+
+    // strip out trailing space
+    return arr.items[0 .. arr.items.len - 1];
+}
 fn isDisabled(el: *Element) bool {
     if (el.getAttributeSafe(comptime .wrap("disabled")) != null) return true;
     return isDisabledByFieldset(el);

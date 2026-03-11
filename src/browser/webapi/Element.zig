@@ -1580,6 +1580,36 @@ pub const Tag = enum {
             else => tag,
         };
     }
+
+    pub fn isBlock(self: Tag) bool {
+        // zig fmt: off
+        return switch (self) {
+            // Semantic Layout
+            .article, .aside, .footer, .header, .main, .nav, .section,
+            // Grouping / Containers
+            .address, .div, .fieldset, .figure, .p,
+            // Headings
+            .h1, .h2, .h3, .h4, .h5, .h6,
+            // Lists
+            .dl, .ol, .ul,
+            // Preformatted / Quotes
+            .blockquote, .pre,
+            // Tables
+            .table,
+            // Other
+            .hr,
+            => true,
+            else => false,
+        };
+        // zig fmt: on
+    }
+
+    pub fn isMetadata(self: Tag) bool {
+        return switch (self) {
+            .base, .head, .link, .meta, .noscript, .script, .style, .template, .title => true,
+            else => false,
+        };
+    }
 };
 
 pub const JsApi = struct {

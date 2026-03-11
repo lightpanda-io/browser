@@ -18,23 +18,65 @@
 
 const std = @import("std");
 const lp = @import("lightpanda");
+const log = @import("../../log.zig");
 const markdown = lp.markdown;
+const SemanticTree = lp.SemanticTree;
 const interactive = lp.interactive;
 const structured_data = lp.structured_data;
 const Node = @import("../Node.zig");
+const DOMNode = @import("../../browser/webapi/Node.zig");
 
 pub fn processMessage(cmd: anytype) !void {
     const action = std.meta.stringToEnum(enum {
         getMarkdown,
+        getSemanticTree,
         getInteractiveElements,
         getStructuredData,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
         .getMarkdown => return getMarkdown(cmd),
+        .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
         .getStructuredData => return getStructuredData(cmd),
     }
+}
+
+fn getSemanticTree(cmd: anytype) !void {
+    const Params = struct {
+        format: ?enum { text } = null,
+        prune: ?bool = null,
+    };
+    const params = (try cmd.params(Params)) orelse Params{};
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+    const dom_node = page.document.asNode();
+
+    var st = SemanticTree{
+        .dom_node = dom_node,
+        .registry = &bc.node_registry,
+        .page = page,
+        .arena = cmd.arena,
+        .prune = params.prune orelse false,
+    };
+
+    if (params.format) |format| {
+        if (format == .text) {
+            st.prune = params.prune orelse true;
+            var aw: std.Io.Writer.Allocating = .init(cmd.arena);
+            defer aw.deinit();
+            try st.textStringify(&aw.writer);
+
+            return cmd.sendResult(.{
+                .semanticTree = aw.written(),
+            }, .{});
+        }
+    }
+
+    return cmd.sendResult(.{
+        .semanticTree = st,
+    }, .{});
 }
 
 fn getMarkdown(cmd: anytype) !void {
@@ -51,7 +93,7 @@ fn getMarkdown(cmd: anytype) !void {
     else
         page.document.asNode();
 
-    var aw = std.Io.Writer.Allocating.init(cmd.arena);
+    var aw: std.Io.Writer.Allocating = .init(cmd.arena);
     defer aw.deinit();
     try markdown.dump(dom_node, .{}, &aw.writer, page);
 
