@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Inline Break Input Submit</title>
+</head>
+<body style="margin:0;background:white;color:black;font:18px sans-serif;">
+  <main style="display:block;padding:24px;width:480px;">
+    <form id="inline-form" action="/submitted.html" method="get">
+      <p style="display:block;margin:0 0 24px 0;">
+        Prefix text before the explicit break
+        <br>
+        After break
+        <input
+          id="entry"
+          name="entry"
+          type="text"
+          value=""
+          placeholder="TYPE HERE"
+          style="display:inline;color:white;background-color:#1db6d2;padding:6px 10px;width:170px;border:0;"
+          oninput="document.title='Inline Input ' + this.value;"
+        >
+        tail text after input
+      </p>
+      <p style="display:block;margin:0;">Below paragraph stays below the break and inline input.</p>
+      <button id="submitter" type="submit" style="display:none;">submit</button>
+    </form>
+  </main>
+</body>
+</html>

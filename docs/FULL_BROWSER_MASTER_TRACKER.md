@@ -335,6 +335,10 @@ Current state inside Gate 1:
   controls, with bounded probes proving a wrapped inline button still
   activates from its lower row and a `<br>`-split inline text input still
   focuses and accepts typed text from the later row on the headed surface
+- that same later-row mixed-inline control path now also keeps keyboard
+  behavior after focus, with bounded probes proving a wrapped inline button
+  can be re-activated with `Space` and a `<br>`-split inline text input can
+  submit its form on `Enter` from the headed surface
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
