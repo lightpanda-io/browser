@@ -91,6 +91,13 @@ const FlowCursor = struct {
         self.line_height = 0;
     }
 
+    fn forceLineBreak(self: *FlowCursor, min_height: i32, spacing: i32) void {
+        const line_height = @max(self.line_height, min_height);
+        self.cursor_y += line_height + spacing;
+        self.cursor_x = self.left;
+        self.line_height = 0;
+    }
+
     fn beginBlock(self: *FlowCursor, margins: EdgeSizes) Position {
         self.finishInlineRow(0);
         return .{
@@ -272,13 +279,18 @@ const Painter = struct {
             return;
         }
 
+        const font_size = parseFontSizePx(decl.getPropertyValue("font-size", self.page)) orelse defaultFontSize(tag);
+        if (tag == .br) {
+            cursor.forceLineBreak(@max(font_size + 8, 20), 2);
+            return;
+        }
+
         const display = decl.getPropertyValue("display", self.page);
         const has_child_elements = hasRenderableChildElements(element);
         const block_like = isFlowBlockLike(tag, display, has_child_elements);
         const inline_leaf = !block_like and !has_child_elements;
         const margins = resolveEdgeSizes(decl, self.page, "margin");
         const padding = resolveEdgeSizes(decl, self.page, "padding");
-        const font_size = parseFontSizePx(decl.getPropertyValue("font-size", self.page)) orelse defaultFontSize(tag);
         const font_family = resolveCssPropertyValue(decl, self.page, element, "font-family");
         const font_weight = parseCssFontWeight(resolveCssPropertyValue(decl, self.page, element, "font-weight"));
         const italic = parseCssFontItalic(resolveCssPropertyValue(decl, self.page, element, "font-style"));
@@ -2314,6 +2326,89 @@ test "paintDocument keeps direct paragraph text in the same inline flow as child
     try std.testing.expect(prefix_y != null);
     try std.testing.expect(red_y != null);
     try std.testing.expect(@abs(prefix_y.? - red_y.?) <= 4);
+}
+
+test "paintDocument wraps mixed inline paragraph content without splitting it into a separate label band" {
+    var page = try testing.pageTest("page/mixed_inline_wrap_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var prefix_y: ?i32 = null;
+    var red_y: ?i32 = null;
+    var lower_chip_y: ?i32 = null;
+    var below_y: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Prefix ")) {
+                    prefix_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "RED")) {
+                    red_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "GREEN") or std.mem.eql(u8, text.text, "LINK")) {
+                    lower_chip_y = if (lower_chip_y) |current| @max(current, text.y) else text.y;
+                } else if (std.mem.eql(u8, text.text, "Below ")) {
+                    below_y = text.y;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(prefix_y != null);
+    try std.testing.expect(red_y != null);
+    try std.testing.expect(lower_chip_y != null);
+    try std.testing.expect(below_y != null);
+    _ = red_y.?;
+    try std.testing.expect(lower_chip_y.? > red_y.? + 8);
+    try std.testing.expect(below_y.? > lower_chip_y.? + 12);
+}
+
+test "paintDocument treats br as a real line break inside mixed inline flow" {
+    var page = try testing.pageTest("page/mixed_inline_break_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var prefix_y: ?i32 = null;
+    var red_y: ?i32 = null;
+    var after_break_y: ?i32 = null;
+    var green_y: ?i32 = null;
+    var below_y: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Prefix ")) {
+                    prefix_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "RED")) {
+                    red_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "After ")) {
+                    after_break_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "GREEN")) {
+                    green_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "Below ")) {
+                    below_y = text.y;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(prefix_y != null);
+    try std.testing.expect(red_y != null);
+    try std.testing.expect(after_break_y != null);
+    try std.testing.expect(green_y != null);
+    try std.testing.expect(below_y != null);
+    try std.testing.expect(red_y.? >= prefix_y.? - 4);
+    try std.testing.expect(after_break_y.? > red_y.? + 12);
+    try std.testing.expect(green_y.? >= after_break_y.? - 4);
+    try std.testing.expect(below_y.? > green_y.? + 12);
 }
 
 test "paintDocument carries loaded private font faces for headed rendering" {

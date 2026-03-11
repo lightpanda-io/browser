@@ -319,6 +319,11 @@ Current state inside Gate 1:
   splitting the direct text into a separate label band above the inline chips,
   with a bounded headed screenshot probe proving left-side paragraph text and
   inline chips share the same content row
+- that same mixed-inline painter path now also keeps narrow wrapped mixed
+  inline paragraphs in one shared flow across multiple rows and treats `<br>`
+  as a real line break inside that flow, with bounded headed screenshot probes
+  proving wrapped chips/text stay in one content flow and the following
+  paragraph remains below the wrapped or broken inline content
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
