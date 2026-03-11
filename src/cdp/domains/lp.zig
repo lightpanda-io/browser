@@ -44,7 +44,7 @@ pub fn processMessage(cmd: anytype) !void {
 
 fn getSemanticTree(cmd: anytype) !void {
     const Params = struct {
-        format: ?[]const u8 = null,
+        format: ?enum { text } = null,
         prune: ?bool = null,
     };
     const params = (try cmd.params(Params)) orelse Params{};
@@ -62,8 +62,8 @@ fn getSemanticTree(cmd: anytype) !void {
     };
 
     if (params.format) |format| {
-        if (std.mem.eql(u8, format, "text")) {
-            st.prune = params.prune orelse true; // text format defaults to pruned
+        if (format == .text) {
+            st.prune = params.prune orelse true;
             var aw: std.Io.Writer.Allocating = .init(cmd.arena);
             defer aw.deinit();
             try st.textStringify(&aw.writer);
