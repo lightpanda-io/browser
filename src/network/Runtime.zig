@@ -43,6 +43,10 @@ config: *const Config,
 ca_blob: ?net_http.Blob,
 robot_store: RobotStore,
 
+connections: []net_http.Connection,
+available: std.DoublyLinkedList = .{},
+conn_mutex: std.Thread.Mutex = .{},
+
 pollfds: []posix.pollfd,
 listener: ?Listener = null,
 
@@ -79,11 +83,23 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
         ca_blob = try loadCerts(allocator);
     }
 
+    const count: usize = config.httpMaxConcurrent();
+    const connections = try allocator.alloc(net_http.Connection, count);
+    errdefer allocator.free(connections);
+
+    var available: std.DoublyLinkedList = .{};
+    for (0..count) |i| {
+        connections[i] = try net_http.Connection.init(ca_blob, config);
+        available.append(&connections[i].node);
+    }
+
     return .{
         .allocator = allocator,
         .config = config,
         .ca_blob = ca_blob,
         .robot_store = RobotStore.init(allocator),
+        .connections = connections,
+        .available = available,
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
     };
@@ -103,6 +119,11 @@ pub fn deinit(self: *Runtime) void {
         const data: [*]u8 = @ptrCast(ca_blob.data);
         self.allocator.free(data[0..ca_blob.len]);
     }
+
+    for (self.connections) |*conn| {
+        conn.deinit();
+    }
+    self.allocator.free(self.connections);
 
     self.robot_store.deinit();
 
@@ -190,6 +211,19 @@ pub fn run(self: *Runtime) void {
 pub fn stop(self: *Runtime) void {
     self.shutdown.store(true, .release);
     _ = posix.write(self.wakeup_pipe[1], &.{1}) catch {};
+}
+
+pub fn getConnection(self: *Runtime) ?*net_http.Connection {
+    self.conn_mutex.lock();
+    defer self.conn_mutex.unlock();
+    const node = self.available.popFirst() orelse return null;
+    return @fieldParentPtr("node", node);
+}
+
+pub fn releaseConnection(self: *Runtime, conn: *net_http.Connection) void {
+    self.conn_mutex.lock();
+    defer self.conn_mutex.unlock();
+    self.available.append(&conn.node);
 }
 
 pub fn newConnection(self: *Runtime) !net_http.Connection {
