@@ -18,9 +18,11 @@
 
 const std = @import("std");
 
-const Page = @import("../Page.zig");
-const Blob = @import("Blob.zig");
 const js = @import("../js/js.zig");
+const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
+
+const Blob = @import("Blob.zig");
 
 const File = @This();
 
@@ -29,7 +31,13 @@ _proto: *Blob,
 
 // TODO: Implement File API.
 pub fn init(page: *Page) !*File {
-    return page._factory.blob(File{ ._proto = undefined });
+    const arena = try page.getArena(.{ .debug = "File" });
+    errdefer page.releaseArena(arena);
+    return page._factory.blob(arena, File{ ._proto = undefined });
+}
+
+pub fn deinit(self: *File, shutdown: bool, session: *Session) void {
+    self._proto.deinit(shutdown, session);
 }
 
 pub const JsApi = struct {
@@ -39,6 +47,8 @@ pub const JsApi = struct {
         pub const name = "File";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(File.deinit);
     };
 
     pub const constructor = bridge.constructor(File.init, .{});
