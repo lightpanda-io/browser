@@ -3,11 +3,11 @@ $root = "C:\Users\adyba\src\lightpanda-browser\tmp-browser-smoke\inline-flow"
 $repo = "C:\Users\adyba\src\lightpanda-browser"
 $port = 8153
 $browserExe = Join-Path $repo "zig-out\bin\lightpanda.exe"
-$outPng = Join-Path $root "checkbox-radio-pair-two-input-two-link-submit.png"
-$browserOut = Join-Path $root "checkbox-radio-pair-two-input-two-link-submit.browser.stdout.txt"
-$browserErr = Join-Path $root "checkbox-radio-pair-two-input-two-link-submit.browser.stderr.txt"
-$serverOut = Join-Path $root "checkbox-radio-pair-two-input-two-link-submit.server.stdout.txt"
-$serverErr = Join-Path $root "checkbox-radio-pair-two-input-two-link-submit.server.stderr.txt"
+$outPng = Join-Path $root "checkbox-radio-pair-two-input-link-two.png"
+$browserOut = Join-Path $root "checkbox-radio-pair-two-input-link-two.browser.stdout.txt"
+$browserErr = Join-Path $root "checkbox-radio-pair-two-input-link-two.browser.stderr.txt"
+$serverOut = Join-Path $root "checkbox-radio-pair-two-input-link-two.server.stdout.txt"
+$serverErr = Join-Path $root "checkbox-radio-pair-two-input-link-two.server.stderr.txt"
 Remove-Item $outPng,$browserOut,$browserErr,$serverOut,$serverErr -Force -ErrorAction SilentlyContinue
 
 Add-Type -AssemblyName System.Drawing
@@ -52,15 +52,15 @@ $titleAfterRadioOne = $null
 $titleAfterRadioTwo = $null
 $titleAfterInputOne = $null
 $titleAfterInputTwo = $null
-$titleAfterSubmit = $null
+$titleAfterLink = $null
 $checkboxOneWorked = $false
 $checkboxTwoWorked = $false
 $radioOneWorked = $false
 $radioTwoWorked = $false
 $inputOneWorked = $false
 $inputTwoWorked = $false
-$submitWorked = $false
-$serverSawSubmit = $false
+$linkWorked = $false
+$serverSawNext = $false
 $failure = $null
 $checkboxOneClickPoint = $null
 
@@ -73,9 +73,9 @@ try {
       if ($resp.StatusCode -eq 200) { $ready = $true; break }
     } catch {}
   }
-  if (-not $ready) { throw "inline checkbox radio pair two input two-link submit probe server did not become ready" }
+  if (-not $ready) { throw "inline checkbox radio pair two input second-link probe server did not become ready" }
 
-  $profileRoot = Join-Path $root "profile-inline-checkbox-radio-pair-two-input-two-link-submit"
+  $profileRoot = Join-Path $root "profile-inline-checkbox-radio-pair-two-input-link-two"
   $appDataRoot = Join-Path $profileRoot "lightpanda"
   cmd /c "rmdir /s /q `"$profileRoot`"" | Out-Null
   New-Item -ItemType Directory -Force -Path $appDataRoot | Out-Null
@@ -94,7 +94,7 @@ homepage_url
     Start-Sleep -Milliseconds 250
     if ((Test-Path $outPng) -and ((Get-Item $outPng).Length -gt 0)) { $pngReady = $true; break }
   }
-  if (-not $pngReady) { throw "inline checkbox radio pair two input two-link submit screenshot did not become ready" }
+  if (-not $pngReady) { throw "inline checkbox radio pair two input second-link screenshot did not become ready" }
 
   for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Milliseconds 250
@@ -104,7 +104,7 @@ homepage_url
       break
     }
   }
-  if ($hwnd -eq [IntPtr]::Zero) { throw "inline checkbox radio pair two input two-link submit window handle not found" }
+  if ($hwnd -eq [IntPtr]::Zero) { throw "inline checkbox radio pair two input second-link window handle not found" }
 
   $bmp = [System.Drawing.Bitmap]::new($outPng)
   try {
@@ -121,7 +121,7 @@ homepage_url
     $bmp.Dispose()
   }
 
-  if ($null -eq $checkboxOne.min_y) { throw "inline checkbox radio pair two input two-link submit probe did not isolate the first checkbox control" }
+  if ($null -eq $checkboxOne.min_y) { throw "inline checkbox radio pair two input second-link probe did not isolate the first checkbox control" }
 
   Show-SmokeWindow $hwnd
   Start-Sleep -Milliseconds 250
@@ -134,9 +134,12 @@ homepage_url
   for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Milliseconds 150
     $titleAfterCheckboxOne = Get-SmokeWindowTitle $hwnd
-    if ($titleAfterCheckboxOne -like "Dense Two Link checkbox one true*") { $checkboxOneWorked = $true; break }
+    if ($titleAfterCheckboxOne -like "Dense Two Link checkbox one true*") {
+      $checkboxOneWorked = $true
+      break
+    }
   }
-  if (-not $checkboxOneWorked) { throw "inline checkbox radio pair two input two-link submit probe first checkbox did not toggle on click" }
+  if (-not $checkboxOneWorked) { throw "inline checkbox radio pair two input second-link probe first checkbox did not toggle on click" }
 
   Send-SmokeTab; Start-Sleep -Milliseconds 120; Send-SmokeSpace
   $titleAfterCheckboxTwo = $titleAfterCheckboxOne
@@ -145,7 +148,7 @@ homepage_url
     $titleAfterCheckboxTwo = Get-SmokeWindowTitle $hwnd
     if ($titleAfterCheckboxTwo -like "Dense Two Link checkbox two true*") { $checkboxTwoWorked = $true; break }
   }
-  if (-not $checkboxTwoWorked) { throw "inline checkbox radio pair two input two-link submit probe second checkbox did not toggle on space after tab" }
+  if (-not $checkboxTwoWorked) { throw "inline checkbox radio pair two input second-link probe second checkbox did not toggle on space after tab" }
 
   Send-SmokeTab; Start-Sleep -Milliseconds 120; Send-SmokeSpace
   $titleAfterRadioOne = $titleAfterCheckboxTwo
@@ -154,7 +157,7 @@ homepage_url
     $titleAfterRadioOne = Get-SmokeWindowTitle $hwnd
     if ($titleAfterRadioOne -like "Dense Two Link radio one true*") { $radioOneWorked = $true; break }
   }
-  if (-not $radioOneWorked) { throw "inline checkbox radio pair two input two-link submit probe first radio did not select on space after tab" }
+  if (-not $radioOneWorked) { throw "inline checkbox radio pair two input second-link probe first radio did not select on space after tab" }
 
   Send-SmokeTab; Start-Sleep -Milliseconds 120; Send-SmokeSpace
   $titleAfterRadioTwo = $titleAfterRadioOne
@@ -163,7 +166,7 @@ homepage_url
     $titleAfterRadioTwo = Get-SmokeWindowTitle $hwnd
     if ($titleAfterRadioTwo -like "Dense Two Link radio two true*") { $radioTwoWorked = $true; break }
   }
-  if (-not $radioTwoWorked) { throw "inline checkbox radio pair two input two-link submit probe second radio did not select on space after tab" }
+  if (-not $radioTwoWorked) { throw "inline checkbox radio pair two input second-link probe second radio did not select on space after tab" }
 
   Send-SmokeTab; Start-Sleep -Milliseconds 120; Send-SmokeText "QZ"
   $titleAfterInputOne = $titleAfterRadioTwo
@@ -172,7 +175,7 @@ homepage_url
     $titleAfterInputOne = Get-SmokeWindowTitle $hwnd
     if ($titleAfterInputOne -like "Dense Two Link entry one QZ*") { $inputOneWorked = $true; break }
   }
-  if (-not $inputOneWorked) { throw "inline checkbox radio pair two input two-link submit probe first input did not update after typing" }
+  if (-not $inputOneWorked) { throw "inline checkbox radio pair two input second-link probe first input did not update after typing" }
 
   Send-SmokeTab; Start-Sleep -Milliseconds 120; Send-SmokeText "LM"
   $titleAfterInputTwo = $titleAfterInputOne
@@ -181,27 +184,24 @@ homepage_url
     $titleAfterInputTwo = Get-SmokeWindowTitle $hwnd
     if ($titleAfterInputTwo -like "Dense Two Link entry two LM*") { $inputTwoWorked = $true; break }
   }
-  if (-not $inputTwoWorked) { throw "inline checkbox radio pair two input two-link submit probe second input did not update after typing" }
+  if (-not $inputTwoWorked) { throw "inline checkbox radio pair two input second-link probe second input did not update after typing" }
 
   Send-SmokeTab
   Start-Sleep -Milliseconds 120
   Send-SmokeTab
   Start-Sleep -Milliseconds 120
-  Send-SmokeTab
-  Start-Sleep -Milliseconds 120
-  Send-SmokeSpace
-  $titleAfterSubmit = $titleAfterInputTwo
+  Send-SmokeEnter
+  $titleAfterLink = $titleAfterInputTwo
   for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Milliseconds 200
-    $titleAfterSubmit = Get-SmokeWindowTitle $hwnd
-    if ($titleAfterSubmit -like "Inline Checkbox Radio Pair Two Input Two Link Submitted*") { $submitWorked = $true; break }
+    $titleAfterLink = Get-SmokeWindowTitle $hwnd
+    if ($titleAfterLink -like "Inline Flow Target Two*") { $linkWorked = $true; break }
   }
-  if (-not $submitWorked -and (Test-Path $serverErr)) {
+  if (-not $linkWorked -and (Test-Path $serverErr)) {
     $serverLog = Get-Content $serverErr -Raw
-    $serverSawSubmit = $serverLog -match 'GET /submitted-checkbox-radio-pair-two-input-two-link\.html(\?| )'
-    if ($serverSawSubmit) { $submitWorked = $true }
+    $serverSawNext = $serverLog -match 'GET /next-two\.html(\?| )'
+    if ($serverSawNext) { $linkWorked = $true }
   }
-  if (-not $submitWorked) { throw "inline checkbox radio pair two input two-link submit probe did not reach the submitted page" }
 }
 catch {
   $failure = $_.Exception.Message
@@ -228,7 +228,7 @@ finally {
     title_after_radio_two = $titleAfterRadioTwo
     title_after_input_one = $titleAfterInputOne
     title_after_input_two = $titleAfterInputTwo
-    title_after_submit = $titleAfterSubmit
+    title_after_link = $titleAfterLink
     checkbox_one_click_screen = $checkboxOneClickPoint
     checkbox_one_worked = $checkboxOneWorked
     checkbox_two_worked = $checkboxTwoWorked
@@ -236,8 +236,8 @@ finally {
     radio_two_worked = $radioTwoWorked
     input_one_worked = $inputOneWorked
     input_two_worked = $inputTwoWorked
-    submit_worked = $submitWorked
-    server_saw_submit = $serverSawSubmit
+    link_worked = $linkWorked
+    server_saw_next = $serverSawNext
     error = $failure
     browser_gone = $browserGone
     server_gone = $serverGone

@@ -424,6 +424,11 @@ Current state inside Gate 1:
   wrapped paragraph can either reach a later-row link and navigate or continue
   past that link to a later-row submit control and complete a real headed form
   submission
+- that same later-row mixed-inline form coverage now also includes two distinct
+  later-row link targets before a later-row submit control, with bounded
+  probes proving the same dense wrapped paragraph can independently reach the
+  first link, reach the second link, or continue past both links to the later-
+  row submit control and complete a real headed form submission
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
