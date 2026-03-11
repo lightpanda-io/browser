@@ -8307,6 +8307,20 @@ test "win32 preparePrivateFontBytesForRegistration unpacks woff2 bytes into sfnt
     try std.testing.expect(!std.mem.startsWith(u8, prepared, "wOF2"));
 }
 
+test "win32 preparePrivateFontBytesForRegistration unpacks woff bytes into sfnt" {
+    const allocator = std.testing.allocator;
+    const woff_bytes = @embedFile("../browser/tests/css/font_face_test.woff");
+    const prepared = try preparePrivateFontBytesForRegistration(allocator, .{
+        .family = @constCast("Azeret Mono"),
+        .format = .woff,
+        .bytes = @constCast(woff_bytes),
+    });
+    defer allocator.free(prepared);
+
+    try std.testing.expect(prepared.len > 0);
+    try std.testing.expect(!std.mem.startsWith(u8, prepared, "wOFF"));
+}
+
 test "win32 wheel zoom command maps sign to zoom action" {
     try std.testing.expectEqual(BrowserCommand.zoom_in, zoomCommandForWheelDelta(120).?);
     try std.testing.expectEqual(BrowserCommand.zoom_out, zoomCommandForWheelDelta(-120).?);

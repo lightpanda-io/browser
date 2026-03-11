@@ -1970,3 +1970,18 @@ test "paintDocument carries loaded woff2 private font faces for headed rendering
     try std.testing.expectEqual(FontFaceFormat.woff2, display_list.font_faces.items[0].format);
     try std.testing.expect(display_list.font_faces.items[0].bytes.len > 0);
 }
+
+test "paintDocument carries loaded woff private font faces for headed rendering" {
+    var page = try testing.pageTest("page/font_private_woff_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.font_faces.items.len);
+    try std.testing.expectEqualStrings("Azeret Mono", display_list.font_faces.items[0].family);
+    try std.testing.expectEqual(FontFaceFormat.woff, display_list.font_faces.items[0].format);
+    try std.testing.expect(display_list.font_faces.items[0].bytes.len > 0);
+}
