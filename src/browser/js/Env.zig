@@ -342,7 +342,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     return context;
 }
 
-pub fn destroyContext(self: *Env, context: *Context, is_root: bool) void {
+pub fn destroyContext(self: *Env, context: *Context) void {
     for (self.contexts[0..self.context_count], 0..) |ctx, i| {
         if (ctx == context) {
             // Swap with last element and decrement count
@@ -365,14 +365,6 @@ pub fn destroyContext(self: *Env, context: *Context, is_root: bool) void {
     }
 
     context.deinit();
-
-    if (is_root) {
-        // When the root is destroyed, all of our contexts should be gone.
-        // Origin cleanup happens in Session.resetPageResources.
-        if (comptime IS_DEBUG) {
-            std.debug.assert(self.context_count == 0);
-        }
-    }
 }
 
 pub fn runMicrotasks(self: *Env) void {

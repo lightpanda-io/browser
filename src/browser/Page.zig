@@ -332,12 +332,11 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         session.releaseArena(qn.arena);
     }
 
-    const is_root = self.parent == null;
-    session.browser.env.destroyContext(self.js, is_root);
+    session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
 
-    if (is_root) {
+    if (self.parent == null) {
         session.browser.http_client.abort();
     } else if (abort_http) {
         // a small optimization, it's faster to abort _everything_ on the root

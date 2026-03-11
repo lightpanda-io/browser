@@ -276,7 +276,7 @@ pub fn replacePage(self: *Session) !*Page {
 
     var current = self.page.?;
     const frame_id = current._frame_id;
-    current.deinit(false);
+    current.deinit(true);
 
     self.resetPageResources();
     self.browser.env.memoryPressureNotification(.moderate);
