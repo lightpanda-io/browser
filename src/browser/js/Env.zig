@@ -26,6 +26,7 @@ const App = @import("../../App.zig");
 const log = @import("../../log.zig");
 
 const bridge = @import("bridge.zig");
+const Origin = @import("Origin.zig");
 const Context = @import("Context.zig");
 const Isolate = @import("Isolate.zig");
 const Platform = @import("Platform.zig");
@@ -57,6 +58,8 @@ const Env = @This();
 
 app: *App,
 
+allocator: Allocator,
+
 platform: *const Platform,
 
 // the global isolate
@@ -69,6 +72,11 @@ context_count: usize,
 isolate_params: *v8.CreateParams,
 
 context_id: usize,
+
+// Maps origin -> shared Origin contains, for v8 values shared across
+// same-origin Contexts. There's a mismatch here between our JS model and our
+// Browser model. Origins only live as long as the root page of a session exists.
+// It would be wrong/dangerous to re-use an Origin across root page navigations.
 
 // Global handles that need to be freed on deinit
 eternal_function_templates: []v8.Eternal,
@@ -206,6 +214,7 @@ pub fn init(app: *App, opts: InitOpts) !Env {
     return .{
         .app = app,
         .context_id = 0,
+        .allocator = allocator,
         .contexts = undefined,
         .context_count = 0,
         .isolate = isolate,
@@ -228,7 +237,9 @@ pub fn deinit(self: *Env) void {
         ctx.deinit();
     }
 
-    const allocator = self.app.allocator;
+    const app = self.app;
+    const allocator = app.allocator;
+
     if (self.inspector) |i| {
         i.deinit(allocator);
     }
@@ -272,6 +283,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
 
     // get the global object for the context, this maps to our Window
     const global_obj = v8.v8__Context__Global(v8_context).?;
+
     {
         // Store our TAO inside the internal field of the global object. This
         // maps the v8::Object -> Zig instance. Almost all objects have this, and
@@ -287,6 +299,7 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         };
         v8.v8__Object__SetAlignedPointerInInternalField(global_obj, 0, tao);
     }
+
     // our window wrapped in a v8::Global
     var global_global: v8.Global = undefined;
     v8.v8__Global__New(isolate.handle, global_obj, &global_global);
@@ -294,10 +307,15 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     const context_id = self.context_id;
     self.context_id = context_id + 1;
 
+    const origin = try page._session.getOrCreateOrigin(null);
+    errdefer page._session.releaseOrigin(origin);
+
     const context = try context_arena.create(Context);
     context.* = .{
         .env = self,
         .page = page,
+        .session = page._session,
+        .origin = origin,
         .id = context_id,
         .isolate = isolate,
         .arena = context_arena,
@@ -307,9 +325,8 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         .microtask_queue = microtask_queue,
         .script_manager = &page._script_manager,
         .scheduler = .init(context_arena),
-        .finalizer_callback_pool = std.heap.MemoryPool(Context.FinalizerCallback).init(self.app.allocator),
     };
-    try context.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
+    try context.origin.identity_map.putNoClobber(context_arena, @intFromPtr(page.window), global_global);
 
     // Store a pointer to our context inside the v8 context so that, given
     // a v8 context, we can get our context out

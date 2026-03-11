@@ -19,6 +19,7 @@
 const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 const FontFace = @import("FontFace.zig");
 
 const Allocator = std.mem.Allocator;
@@ -38,8 +39,8 @@ pub fn init(page: *Page) !*FontFaceSet {
     return self;
 }
 
-pub fn deinit(self: *FontFaceSet, _: bool, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *FontFaceSet, _: bool, session: *Session) void {
+    session.releaseArena(self._arena);
 }
 
 // FontFaceSet.ready - returns an already-resolved Promise.

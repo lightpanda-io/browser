@@ -20,6 +20,7 @@ const std = @import("std");
 const log = @import("../../../log.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -61,8 +62,8 @@ pub fn init(page: *Page) !*Animation {
     return self;
 }
 
-pub fn deinit(self: *Animation, _: bool, page: *Page) void {
-    page.releaseArena(self._arena);
+pub fn deinit(self: *Animation, _: bool, session: *Session) void {
+    session.releaseArena(self._arena);
 }
 
 pub fn play(self: *Animation, page: *Page) !void {

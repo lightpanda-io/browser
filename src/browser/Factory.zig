@@ -48,13 +48,11 @@ const Factory = @This();
 _arena: Allocator,
 _slab: SlabAllocator,
 
-pub fn init(arena: Allocator) !*Factory {
-    const self = try arena.create(Factory);
-    self.* = .{
+pub fn init(arena: Allocator) Factory {
+    return .{
         ._arena = arena,
         ._slab = SlabAllocator.init(arena, 128),
     };
-    return self;
 }
 
 // this is a root object
@@ -249,16 +247,15 @@ fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
     };
 }
 
-pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
+pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child) {
     // Special case: Blob has slice and mime fields, so we need manual setup
     const chain = try PrototypeChain(
         &.{ Blob, @TypeOf(child) },
-    ).allocate(allocator);
+    ).allocate(arena);
 
     const blob_ptr = chain.get(0);
     blob_ptr.* = .{
+        ._arena = arena,
         ._type = unionInit(Blob.Type, chain.get(1)),
         ._slice = "",
         ._mime = "",
@@ -273,14 +270,16 @@ pub fn abstractRange(self: *Factory, child: anytype, page: *Page) !*@TypeOf(chil
     const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(allocator);
 
     const doc = page.document.asNode();
-    chain.set(0, AbstractRange{
+    const abstract_range = chain.get(0);
+    abstract_range.* = AbstractRange{
         ._type = unionInit(AbstractRange.Type, chain.get(1)),
         ._end_offset = 0,
         ._start_offset = 0,
         ._end_container = doc,
         ._start_container = doc,
-    });
+    };
     chain.setLeaf(1, child);
+    page._live_ranges.append(&abstract_range._range_link);
     return chain.get(1);
 }
 

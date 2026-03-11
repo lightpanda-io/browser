@@ -24,6 +24,7 @@ const string = @import("../../string.zig");
 pub const Env = @import("Env.zig");
 pub const bridge = @import("bridge.zig");
 pub const Caller = @import("Caller.zig");
+pub const Origin = @import("Origin.zig");
 pub const Context = @import("Context.zig");
 pub const Local = @import("Local.zig");
 pub const Inspector = @import("Inspector.zig");
@@ -161,7 +162,7 @@ pub fn ArrayBufferRef(comptime kind: ArrayType) type {
             var ctx = self.local.ctx;
             var global: v8.Global = undefined;
             v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-            try ctx.global_values.append(ctx.arena, global);
+            try ctx.trackGlobal(global);
 
             return .{ .handle = global };
         }

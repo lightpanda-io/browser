@@ -24,6 +24,7 @@ const IS_DEBUG = @import("builtin").mode == .Debug;
 const Allocator = std.mem.Allocator;
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const Element = @import("Element.zig");
 const DOMRect = @import("DOMRect.zig");
 
@@ -91,13 +92,13 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
     return self;
 }
 
-pub fn deinit(self: *IntersectionObserver, shutdown: bool, page: *Page) void {
-    page.js.release(self._callback);
+pub fn deinit(self: *IntersectionObserver, shutdown: bool, session: *Session) void {
+    self._callback.release();
     if ((comptime IS_DEBUG) and !shutdown) {
         std.debug.assert(self._observing.items.len == 0);
     }
 
-    page.releaseArena(self._arena);
+    session.releaseArena(self._arena);
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void {
@@ -137,7 +138,7 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
             while (j < self._pending_entries.items.len) {
                 if (self._pending_entries.items[j]._target == target) {
                     const entry = self._pending_entries.swapRemove(j);
-                    entry.deinit(false, page);
+                    entry.deinit(false, page._session);
                 } else {
                     j += 1;
                 }
@@ -157,7 +158,7 @@ pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
     self._previous_states.clearRetainingCapacity();
 
     for (self._pending_entries.items) |entry| {
-        entry.deinit(false, page);
+        entry.deinit(false, page._session);
     }
     self._pending_entries.clearRetainingCapacity();
     page.js.safeWeakRef(self);
@@ -302,8 +303,8 @@ pub const IntersectionObserverEntry = struct {
     _intersection_ratio: f64,
     _is_intersecting: bool,
 
-    pub fn deinit(self: *const IntersectionObserverEntry, _: bool, page: *Page) void {
-        page.releaseArena(self._arena);
+    pub fn deinit(self: *IntersectionObserverEntry, _: bool, session: *Session) void {
+        session.releaseArena(self._arena);
     }
 
     pub fn getTarget(self: *const IntersectionObserverEntry) *Element {

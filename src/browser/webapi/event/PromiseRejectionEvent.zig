@@ -20,6 +20,7 @@ const String = @import("../../../string.zig").String;
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const Session = @import("../../Session.zig");
 const Event = @import("../Event.zig");
 const Allocator = std.mem.Allocator;
 
@@ -56,14 +57,14 @@ pub fn init(typ: []const u8, opts_: ?Options, page: *Page) !*PromiseRejectionEve
     return event;
 }
 
-pub fn deinit(self: *PromiseRejectionEvent, shutdown: bool, page: *Page) void {
+pub fn deinit(self: *PromiseRejectionEvent, shutdown: bool, session: *Session) void {
     if (self._reason) |r| {
-        page.js.release(r);
+        r.release();
     }
     if (self._promise) |p| {
-        page.js.release(p);
+        p.release();
     }
-    self._proto.deinit(shutdown, page);
+    self._proto.deinit(shutdown, session);
 }
 
 pub fn asEvent(self: *PromiseRejectionEvent) *Event {

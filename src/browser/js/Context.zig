@@ -23,9 +23,11 @@ const log = @import("../../log.zig");
 const js = @import("js.zig");
 const Env = @import("Env.zig");
 const bridge = @import("bridge.zig");
+const Origin = @import("Origin.zig");
 const Scheduler = @import("Scheduler.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const ScriptManager = @import("../ScriptManager.zig");
 
 const v8 = js.v8;
@@ -41,6 +43,7 @@ const Context = @This();
 id: usize,
 env: *Env,
 page: *Page,
+session: *Session,
 isolate: js.Isolate,
 
 // Per-context microtask queue for isolation between contexts
@@ -74,39 +77,11 @@ call_depth: usize = 0,
 // context.localScope
 local: ?*const js.Local = null,
 
-// Serves two purposes. Like `global_objects`, this is used to free
-// every Global(Object) we've created during the lifetime of the context.
-// More importantly, it serves as an identity map - for a given Zig
-// instance, we map it to the same Global(Object).
-// The key is the @intFromPtr of the Zig value
-identity_map: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
+origin: *Origin,
 
-// Any type that is stored in the identity_map which has a finalizer declared
-// will have its finalizer stored here. This is only used when shutting down
-// if v8 hasn't called the finalizer directly itself.
-finalizer_callbacks: std.AutoHashMapUnmanaged(usize, *FinalizerCallback) = .empty,
-finalizer_callback_pool: std.heap.MemoryPool(FinalizerCallback),
-
-// Some web APIs have to manage opaque values. Ideally, they use an
-// js.Object, but the js.Object has no lifetime guarantee beyond the
-// current call. They can call .persist() on their js.Object to get
-// a `Global(Object)`. We need to track these to free them.
-// This used to be a map and acted like identity_map; the key was
-// the @intFromPtr(js_obj.handle). But v8 can re-use address. Without
-// a reliable way to know if an object has already been persisted,
-// we now simply persist every time persist() is called.
-global_values: std.ArrayList(v8.Global) = .empty,
-global_objects: std.ArrayList(v8.Global) = .empty,
+// Unlike other v8 types, like functions or objects, modules are not shared
+// across origins.
 global_modules: std.ArrayList(v8.Global) = .empty,
-global_promises: std.ArrayList(v8.Global) = .empty,
-global_functions: std.ArrayList(v8.Global) = .empty,
-global_promise_resolvers: std.ArrayList(v8.Global) = .empty,
-
-// Temp variants stored in HashMaps for O(1) early cleanup.
-// Key is global.data_ptr.
-global_values_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
-global_promises_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
-global_functions_temp: std.AutoHashMapUnmanaged(usize, v8.Global) = .empty,
 
 // Our module cache: normalized module specifier => module.
 module_cache: std.StringHashMapUnmanaged(ModuleEntry) = .empty,
@@ -174,64 +149,11 @@ pub fn deinit(self: *Context) void {
     // this can release objects
     self.scheduler.deinit();
 
-    {
-        var it = self.identity_map.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
-    {
-        var it = self.finalizer_callbacks.valueIterator();
-        while (it.next()) |finalizer| {
-            finalizer.*.deinit();
-        }
-        self.finalizer_callback_pool.deinit();
-    }
-
-    for (self.global_values.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    for (self.global_objects.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
     for (self.global_modules.items) |*global| {
         v8.v8__Global__Reset(global);
     }
 
-    for (self.global_functions.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    for (self.global_promises.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    for (self.global_promise_resolvers.items) |*global| {
-        v8.v8__Global__Reset(global);
-    }
-
-    {
-        var it = self.global_values_temp.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
-
-    {
-        var it = self.global_promises_temp.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
-
-    {
-        var it = self.global_functions_temp.valueIterator();
-        while (it.next()) |global| {
-            v8.v8__Global__Reset(global);
-        }
-    }
+    self.session.releaseOrigin(self.origin);
 
     v8.v8__Global__Reset(&self.handle);
     env.isolate.notifyContextDisposed();
@@ -241,8 +163,40 @@ pub fn deinit(self: *Context) void {
     v8.v8__MicrotaskQueue__DELETE(self.microtask_queue);
 }
 
+pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
+    const env = self.env;
+    const isolate = env.isolate;
+
+    const origin = try self.session.getOrCreateOrigin(key);
+    errdefer self.session.releaseOrigin(origin);
+
+    try self.origin.transferTo(origin);
+    self.origin.deinit(env.app);
+
+    self.origin = origin;
+
+    {
+        var ls: js.Local.Scope = undefined;
+        self.localScope(&ls);
+        defer ls.deinit();
+
+        // Set the V8::Context SecurityToken, which is a big part of what allows
+        // one context to access another.
+        const token_local = v8.v8__Global__Get(&origin.security_token, isolate.handle);
+        v8.v8__Context__SetSecurityToken(ls.local.handle, token_local);
+    }
+}
+
+pub fn trackGlobal(self: *Context, global: v8.Global) !void {
+    return self.origin.trackGlobal(global);
+}
+
+pub fn trackTemp(self: *Context, global: v8.Global) !void {
+    return self.origin.trackTemp(global);
+}
+
 pub fn weakRef(self: *Context, obj: anytype) void {
-    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -253,7 +207,7 @@ pub fn weakRef(self: *Context, obj: anytype) void {
 }
 
 pub fn safeWeakRef(self: *Context, obj: anytype) void {
-    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -265,7 +219,7 @@ pub fn safeWeakRef(self: *Context, obj: anytype) void {
 }
 
 pub fn strongRef(self: *Context, obj: anytype) void {
-    const fc = self.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -273,45 +227,6 @@ pub fn strongRef(self: *Context, obj: anytype) void {
         return;
     };
     v8.v8__Global__ClearWeak(&fc.global);
-}
-
-pub fn release(self: *Context, item: anytype) void {
-    if (@TypeOf(item) == *anyopaque) {
-        // Existing *anyopaque path for identity_map. Called internally from
-        // finalizers
-        var global = self.identity_map.fetchRemove(@intFromPtr(item)) orelse {
-            if (comptime IS_DEBUG) {
-                // should not be possible
-                std.debug.assert(false);
-            }
-            return;
-        };
-        v8.v8__Global__Reset(&global.value);
-
-        // The item has been fianalized, remove it for the finalizer callback so that
-        // we don't try to call it again on shutdown.
-        const fc = self.finalizer_callbacks.fetchRemove(@intFromPtr(item)) orelse {
-            if (comptime IS_DEBUG) {
-                // should not be possible
-                std.debug.assert(false);
-            }
-            return;
-        };
-        self.finalizer_callback_pool.destroy(fc.value);
-        return;
-    }
-
-    var map = switch (@TypeOf(item)) {
-        js.Value.Temp => &self.global_values_temp,
-        js.Promise.Temp => &self.global_promises_temp,
-        js.Function.Temp => &self.global_functions_temp,
-        else => |T| @compileError("Context.release cannot be called with a " ++ @typeName(T)),
-    };
-
-    if (map.fetchRemove(item.handle.data_ptr)) |kv| {
-        var global = kv.value;
-        v8.v8__Global__Reset(&global);
-    }
 }
 
 // Any operation on the context have to be made from a local.
@@ -336,28 +251,18 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
     return l.toLocal(global);
 }
 
-// This isn't expected to be called often. It's for converting attributes into
-// function calls, e.g. <body onload="doSomething"> will turn that "doSomething"
-// string into a js.Function which looks like: function(e) { doSomething(e) }
-// There might be more efficient ways to do this, but doing it this way means
-// our code only has to worry about js.Funtion, not some union of a js.Function
-// or a string.
-pub fn stringToPersistedFunction(self: *Context, str: []const u8) !js.Function.Global {
+pub fn stringToPersistedFunction(
+    self: *Context,
+    function_body: []const u8,
+    comptime parameter_names: []const []const u8,
+    extensions: []const v8.Object,
+) !js.Function.Global {
     var ls: js.Local.Scope = undefined;
     self.localScope(&ls);
     defer ls.deinit();
 
-    var extra: []const u8 = "";
-    const normalized = std.mem.trim(u8, str, &std.ascii.whitespace);
-    if (normalized.len > 0 and normalized[normalized.len - 1] != ')') {
-        extra = "(e)";
-    }
-    const full = try std.fmt.allocPrintSentinel(self.call_arena, "(function(e) {{ {s}{s} }})", .{ normalized, extra }, 0);
-    const js_val = try ls.local.compileAndRun(full, null);
-    if (!js_val.isFunction()) {
-        return error.StringFunctionError;
-    }
-    return try (js.Function{ .local = &ls.local, .handle = @ptrCast(js_val.handle) }).persist();
+    const js_function = try ls.local.compileFunction(function_body, parameter_names, extensions);
+    return js_function.persist();
 }
 
 pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local, src: []const u8, url: []const u8, cacheable: bool) !(if (want_result) ModuleEntry else void) {
@@ -1038,34 +943,6 @@ pub fn queueMicrotaskFunc(self: *Context, cb: js.Function) void {
     // Use context-specific microtask queue instead of isolate queue
     v8.v8__MicrotaskQueue__EnqueueMicrotaskFunc(self.microtask_queue, self.isolate.handle, cb.handle);
 }
-
-pub fn createFinalizerCallback(self: *Context, global: v8.Global, ptr: *anyopaque, finalizerFn: *const fn (ptr: *anyopaque, page: *Page) void) !*FinalizerCallback {
-    const fc = try self.finalizer_callback_pool.create();
-    fc.* = .{
-        .ctx = self,
-        .ptr = ptr,
-        .global = global,
-        .finalizerFn = finalizerFn,
-    };
-    return fc;
-}
-
-// == Misc ==
-// A type that has a finalizer can have its finalizer called one of two ways.
-// The first is from V8 via the WeakCallback we give to weakRef. But that isn't
-// guaranteed to fire, so we track this in ctx._finalizers and call them on
-// context shutdown.
-pub const FinalizerCallback = struct {
-    ctx: *Context,
-    ptr: *anyopaque,
-    global: v8.Global,
-    finalizerFn: *const fn (ptr: *anyopaque, page: *Page) void,
-
-    pub fn deinit(self: *FinalizerCallback) void {
-        self.finalizerFn(self.ptr, self.ctx.page);
-        self.ctx.finalizer_callback_pool.destroy(self);
-    }
-};
 
 // == Profiler ==
 pub fn startCpuProfiler(self: *Context) void {

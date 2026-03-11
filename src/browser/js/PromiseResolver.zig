@@ -79,7 +79,7 @@ pub fn persist(self: PromiseResolver) !Global {
     var ctx = self.local.ctx;
     var global: v8.Global = undefined;
     v8.v8__Global__New(ctx.isolate.handle, self.handle, &global);
-    try ctx.global_promise_resolvers.append(ctx.arena, global);
+    try ctx.trackGlobal(global);
     return .{ .handle = global };
 }
 

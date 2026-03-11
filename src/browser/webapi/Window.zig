@@ -646,9 +646,9 @@ const ScheduleCallback = struct {
     }
 
     fn deinit(self: *ScheduleCallback) void {
-        self.page.js.release(self.cb);
+        self.cb.release();
         for (self.params) |param| {
-            self.page.js.release(param);
+            param.release();
         }
         self.page.releaseArena(self.arena);
     }

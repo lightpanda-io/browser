@@ -93,18 +93,14 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
                 return args.printUsageAndExit(false);
             };
 
-            // _server is global to handle graceful shutdown.
-            var server = try lp.Server.init(app, address);
-            defer server.deinit();
-
-            try sighandler.on(lp.Server.stop, .{&server});
-
-            // max timeout of 1 week.
-            const timeout = if (opts.timeout > 604_800) 604_800_000 else @as(u32, opts.timeout) * 1000;
-            server.run(address, timeout) catch |err| {
+            var server = lp.Server.init(app, address) catch |err| {
                 log.fatal(.app, "server run error", .{ .err = err });
                 return err;
             };
+            defer server.deinit();
+
+            try sighandler.on(lp.Network.stop, .{&app.network});
+            app.network.run();
         },
         .fetch => |opts| {
             const url = opts.url;

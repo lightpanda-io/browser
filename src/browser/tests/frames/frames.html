@@ -64,11 +64,12 @@
     // child frame's top.parent is itself (root has no parent)
     testing.expectEqual(window, window[0].top.parent);
 
-    // Todo: Context security tokens
-    // testing.expectEqual(true, window.sub1_loaded);
-    // testing.expectEqual(true, window.sub2_loaded);
-    // testing.expectEqual(1, window.sub1_count);
-    // testing.expectEqual(2, window.sub2_count);
+    // Cross-frame property access
+    testing.expectEqual(true, window.sub1_loaded);
+    testing.expectEqual(true, window.sub2_loaded);
+    testing.expectEqual(1, window.sub1_count);
+    // depends on how far the initial load got before it was cancelled.
+    testing.expectEqual(true, window.sub2_count == 1 || window.sub2_count == 2);
   });
 </script>
 

@@ -130,6 +130,12 @@ pub fn contextCreated(
 
 pub fn contextDestroyed(self: *Inspector, context: *const v8.Context) void {
     v8.v8_inspector__Inspector__ContextDestroyed(self.handle, context);
+
+    if (self.default_context) |*dc| {
+        if (v8.v8__Global__IsEqual(dc, context)) {
+            self.default_context = null;
+        }
+    }
 }
 
 pub fn resetContextGroup(self: *const Inspector) void {

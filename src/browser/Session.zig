@@ -21,6 +21,7 @@ const lp = @import("lightpanda");
 const builtin = @import("builtin");
 
 const log = @import("../log.zig");
+const App = @import("../App.zig");
 
 const js = @import("js/js.zig");
 const storage = @import("webapi/storage/storage.zig");
@@ -29,20 +30,53 @@ const History = @import("webapi/History.zig");
 
 const Page = @import("Page.zig");
 const Browser = @import("Browser.zig");
+const Factory = @import("Factory.zig");
 const Notification = @import("../Notification.zig");
 const QueuedNavigation = Page.QueuedNavigation;
 
 const Allocator = std.mem.Allocator;
+const ArenaPool = App.ArenaPool;
 const IS_DEBUG = builtin.mode == .Debug;
 
-// Session is like a browser's tab.
-// It owns the js env and the loader for all the pages of the session.
 // You can create successively multiple pages for a session, but you must
-// deinit a page before running another one.
+// deinit a page before running another one. It manages two distinct lifetimes.
+//
+// The first is the lifetime of the Session itself, where pages are created and
+// removed, but share the same cookie jar and navigation history (etc...)
+//
+// The second is as a container the data needed by the full page hierarchy, i.e. \
+// the root page and all of its frames (and all of their frames.)
 const Session = @This();
 
+// These are the fields that remain intact for the duration of the Session
 browser: *Browser,
+arena: Allocator,
+history: History,
+navigation: Navigation,
+storage_shed: storage.Shed,
 notification: *Notification,
+cookie_jar: storage.Cookie.Jar,
+
+// These are the fields that get reset whenever the Session's page (the root) is reset.
+factory: Factory,
+
+page_arena: Allocator,
+
+// Origin map for same-origin context sharing. Scoped to the root page lifetime.
+origins: std.StringHashMapUnmanaged(*js.Origin) = .empty,
+
+// Shared resources for all pages in this session.
+// These live for the duration of the page tree (root + frames).
+arena_pool: *ArenaPool,
+
+// In Debug, we use this to see if anything fails to release an arena back to
+// the pool.
+_arena_pool_leak_track: if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, struct {
+    owner: []const u8,
+    count: usize,
+}) else void = if (IS_DEBUG) .empty else {},
+
+page: ?Page,
 
 queued_navigation: std.ArrayList(*Page),
 // Temporary buffer for about:blank navigations during processing.
@@ -50,27 +84,24 @@ queued_navigation: std.ArrayList(*Page),
 // about:blank navigations (which may add to queued_navigation).
 queued_queued_navigation: std.ArrayList(*Page),
 
-// Used to create our Inspector and in the BrowserContext.
-arena: Allocator,
-
-cookie_jar: storage.Cookie.Jar,
-storage_shed: storage.Shed,
-
-history: History,
-navigation: Navigation,
-
-page: ?Page,
-
 frame_id_gen: u32,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
     const allocator = browser.app.allocator;
-    const arena = try browser.arena_pool.acquire();
-    errdefer browser.arena_pool.release(arena);
+    const arena_pool = browser.arena_pool;
+
+    const arena = try arena_pool.acquire();
+    errdefer arena_pool.release(arena);
+
+    const page_arena = try arena_pool.acquire();
+    errdefer arena_pool.release(page_arena);
 
     self.* = .{
         .page = null,
         .arena = arena,
+        .arena_pool = arena_pool,
+        .page_arena = page_arena,
+        .factory = Factory.init(page_arena),
         .history = .{},
         .frame_id_gen = 0,
         // The prototype (EventTarget) for Navigation is created when a Page is created.
@@ -90,9 +121,9 @@ pub fn deinit(self: *Session) void {
     }
     self.cookie_jar.deinit();
 
-    const browser = self.browser;
-    self.storage_shed.deinit(browser.app.allocator);
-    browser.arena_pool.release(self.arena);
+    self.storage_shed.deinit(self.browser.app.allocator);
+    self.arena_pool.release(self.page_arena);
+    self.arena_pool.release(self.arena);
 }
 
 // NOTE: the caller is not the owner of the returned value,
@@ -126,10 +157,113 @@ pub fn removePage(self: *Session) void {
     self.page = null;
 
     self.navigation.onRemovePage();
+    self.resetPageResources();
 
     if (comptime IS_DEBUG) {
         log.debug(.browser, "remove page", .{});
     }
+}
+
+pub const GetArenaOpts = struct {
+    debug: []const u8,
+};
+
+pub fn getArena(self: *Session, opts: GetArenaOpts) !Allocator {
+    const allocator = try self.arena_pool.acquire();
+    if (comptime IS_DEBUG) {
+        // Use session's arena (not page_arena) since page_arena gets reset between pages
+        const gop = try self._arena_pool_leak_track.getOrPut(self.arena, @intFromPtr(allocator.ptr));
+        if (gop.found_existing and gop.value_ptr.count != 0) {
+            log.err(.bug, "ArenaPool Double Use", .{ .owner = gop.value_ptr.*.owner });
+            @panic("ArenaPool Double Use");
+        }
+        gop.value_ptr.* = .{ .owner = opts.debug, .count = 1 };
+    }
+    return allocator;
+}
+
+pub fn releaseArena(self: *Session, allocator: Allocator) void {
+    if (comptime IS_DEBUG) {
+        const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
+        if (found.count != 1) {
+            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count });
+            if (comptime builtin.is_test) {
+                @panic("ArenaPool Double Free");
+            }
+            return;
+        }
+        found.count = 0;
+    }
+    return self.arena_pool.release(allocator);
+}
+
+pub fn getOrCreateOrigin(self: *Session, key_: ?[]const u8) !*js.Origin {
+    const key = key_ orelse {
+        var opaque_origin: [36]u8 = undefined;
+        @import("../id.zig").uuidv4(&opaque_origin);
+        // Origin.init will dupe opaque_origin. It's fine that this doesn't
+        // get added to self.origins. In fact, it further isolates it. When the
+        // context is freed, it'll call session.releaseOrigin which will free it.
+        return js.Origin.init(self.browser.app, self.browser.env.isolate, &opaque_origin);
+    };
+
+    const gop = try self.origins.getOrPut(self.arena, key);
+    if (gop.found_existing) {
+        const origin = gop.value_ptr.*;
+        origin.rc += 1;
+        return origin;
+    }
+
+    errdefer _ = self.origins.remove(key);
+
+    const origin = try js.Origin.init(self.browser.app, self.browser.env.isolate, key);
+    gop.key_ptr.* = origin.key;
+    gop.value_ptr.* = origin;
+    return origin;
+}
+
+pub fn releaseOrigin(self: *Session, origin: *js.Origin) void {
+    const rc = origin.rc;
+    if (rc == 1) {
+        _ = self.origins.remove(origin.key);
+        origin.deinit(self.browser.app);
+    } else {
+        origin.rc = rc - 1;
+    }
+}
+
+/// Reset page_arena and factory for a clean slate.
+/// Called when root page is removed.
+fn resetPageResources(self: *Session) void {
+    // Check for arena leaks before releasing
+    if (comptime IS_DEBUG) {
+        var it = self._arena_pool_leak_track.valueIterator();
+        while (it.next()) |value_ptr| {
+            if (value_ptr.count > 0) {
+                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner });
+            }
+        }
+        self._arena_pool_leak_track.clearRetainingCapacity();
+    }
+
+    // All origins should have been released when contexts were destroyed
+    if (comptime IS_DEBUG) {
+        std.debug.assert(self.origins.count() == 0);
+    }
+    // Defensive cleanup in case origins leaked
+    {
+        const app = self.browser.app;
+        var it = self.origins.valueIterator();
+        while (it.next()) |value| {
+            value.*.deinit(app);
+        }
+        self.origins.clearRetainingCapacity();
+    }
+
+    // Release old page_arena and acquire fresh one
+    self.frame_id_gen = 0;
+    self.arena_pool.reset(self.page_arena, 64 * 1024);
+    self.factory = Factory.init(self.page_arena);
 }
 
 pub fn replacePage(self: *Session) !*Page {
@@ -138,17 +272,18 @@ pub fn replacePage(self: *Session) !*Page {
     }
 
     lp.assert(self.page != null, "Session.replacePage null page", .{});
+    lp.assert(self.page.?.parent == null, "Session.replacePage with parent", .{});
 
     var current = self.page.?;
     const frame_id = current._frame_id;
-    const parent = current.parent;
-    current.deinit(false);
+    current.deinit(true);
 
+    self.resetPageResources();
     self.browser.env.memoryPressureNotification(.moderate);
 
     self.page = @as(Page, undefined);
     const page = &self.page.?;
-    try Page.init(page, frame_id, self, parent);
+    try Page.init(page, frame_id, self, null);
     return page;
 }
 
@@ -428,12 +563,11 @@ fn processQueuedNavigation(self: *Session) !void {
 fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !void {
     lp.assert(page.parent != null, "root queued navigation", .{});
 
-    const browser = self.browser;
     const iframe = page.iframe.?;
     const parent = page.parent.?;
 
     page._queued_navigation = null;
-    defer browser.arena_pool.release(qn.arena);
+    defer self.releaseArena(qn.arena);
 
     errdefer iframe._window = null;
 
@@ -465,9 +599,21 @@ fn processRootQueuedNavigation(self: *Session) !void {
     // create a copy before the page is cleared
     const qn = current_page._queued_navigation.?;
     current_page._queued_navigation = null;
-    defer self.browser.arena_pool.release(qn.arena);
+
+    defer self.arena_pool.release(qn.arena);
+
+    // HACK
+    // Mark as released in tracking BEFORE removePage clears the map.
+    // We can't call releaseArena() because that would also return the arena
+    // to the pool, making the memory invalid before we use qn.url/qn.opts.
+    if (comptime IS_DEBUG) {
+        if (self._arena_pool_leak_track.getPtr(@intFromPtr(qn.arena.ptr))) |found| {
+            found.count = 0;
+        }
+    }
 
     self.removePage();
+
     self.page = @as(Page, undefined);
     const new_page = &self.page.?;
     try Page.init(new_page, frame_id, self, null);

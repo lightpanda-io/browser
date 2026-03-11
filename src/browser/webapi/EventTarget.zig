@@ -59,7 +59,7 @@ pub fn dispatchEvent(self: *EventTarget, event: *Event, page: *Page) !bool {
     event._is_trusted = false;
 
     event.acquireRef();
-    defer event.deinit(false, page);
+    defer event.deinit(false, page._session);
     try page._event_manager.dispatch(self, event);
     return !event._cancelable or !event._prevent_default;
 }

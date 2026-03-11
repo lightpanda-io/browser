@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script id=insertData_adjusts_range_offsets>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 5);
+  // range covers "cde"
+
+  // Insert "XX" at offset 1 (before range start)
+  text.insertData(1, 'XX');
+  // "aXXbcdef" — range should shift right by 2
+  testing.expectEqual(4, range.startOffset);
+  testing.expectEqual(7, range.endOffset);
+  testing.expectEqual(text, range.startContainer);
+}
+</script>
+
+<script id=insertData_at_range_start>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 5);
+
+  // Insert at exactly the start offset — should not shift start
+  text.insertData(2, 'YY');
+  // "abYYcdef" — start stays at 2, end shifts by 2
+  testing.expectEqual(2, range.startOffset);
+  testing.expectEqual(7, range.endOffset);
+}
+</script>
+
+<script id=insertData_inside_range>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 5);
+
+  // Insert inside the range
+  text.insertData(3, 'Z');
+  // "abcZdef" — start unchanged, end shifts by 1
+  testing.expectEqual(2, range.startOffset);
+  testing.expectEqual(6, range.endOffset);
+}
+</script>
+
+<script id=insertData_after_range>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 5);
+
+  // Insert after range end — no change
+  text.insertData(5, 'ZZ');
+  testing.expectEqual(2, range.startOffset);
+  testing.expectEqual(5, range.endOffset);
+}
+</script>
+
+<script id=deleteData_before_range>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 3);
+  range.setEnd(text, 5);
+  // range covers "de"
+
+  // Delete "ab" (offset 0, count 2) — before range
+  text.deleteData(0, 2);
+  // "cdef" — range shifts left by 2
+  testing.expectEqual(1, range.startOffset);
+  testing.expectEqual(3, range.endOffset);
+}
+</script>
+
+<script id=deleteData_overlapping_range_start>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 5);
+
+  // Delete from offset 1, count 2 — overlaps range start
+  text.deleteData(1, 2);
+  // "adef" — start clamped to offset(1), end adjusted
+  testing.expectEqual(1, range.startOffset);
+  testing.expectEqual(3, range.endOffset);
+}
+</script>
+
+<script id=deleteData_inside_range>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 1);
+  range.setEnd(text, 5);
+
+  // Delete inside range: offset 2, count 2
+  text.deleteData(2, 2);
+  // "abef" — start unchanged, end shifts by -2
+  testing.expectEqual(1, range.startOffset);
+  testing.expectEqual(3, range.endOffset);
+}
+</script>
+
+<script id=replaceData_adjusts_range>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 5);
+
+  // Replace "cd" (offset 2, count 2) with "XXXX" (4 chars)
+  text.replaceData(2, 2, 'XXXX');
+  // "abXXXXef" — start clamped to 2, end adjusted by (4-2)=+2
+  testing.expectEqual(2, range.startOffset);
+  testing.expectEqual(7, range.endOffset);
+}
+</script>
+
+<script id=splitText_moves_range_to_new_node>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 4);
+  range.setEnd(text, 6);
+  // range covers "ef"
+
+  const newText = text.splitText(3);
+  // text = "abc", newText = "def"
+  // Range was at (text, 4)-(text, 6), with offset > 3:
+  // start moves to (newText, 4-3=1), end moves to (newText, 6-3=3)
+  testing.expectEqual(newText, range.startContainer);
+  testing.expectEqual(1, range.startOffset);
+  testing.expectEqual(newText, range.endContainer);
+  testing.expectEqual(3, range.endOffset);
+}
+</script>
+
+<script id=splitText_range_at_split_point>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 0);
+  range.setEnd(text, 3);
+  // range covers "abc"
+
+  const newText = text.splitText(3);
+  // text = "abc", newText = "def"
+  // Range end is at exactly the split offset — should stay on original node
+  testing.expectEqual(text, range.startContainer);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(text, range.endContainer);
+  testing.expectEqual(3, range.endOffset);
+}
+</script>
+
+<script id=appendChild_does_not_affect_range>
+{
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  div.appendChild(p1);
+  div.appendChild(p2);
+
+  const range = document.createRange();
+  range.setStart(div, 0);
+  range.setEnd(div, 2);
+
+  // Appending should not affect range offsets (spec: no update for append)
+  const p3 = document.createElement('p');
+  div.appendChild(p3);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(2, range.endOffset);
+}
+</script>
+
+<script id=insertBefore_shifts_range_offsets>
+{
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  div.appendChild(p1);
+  div.appendChild(p2);
+
+  const range = document.createRange();
+  range.setStart(div, 1);
+  range.setEnd(div, 2);
+
+  // Insert before p1 (index 0) — range offsets > 0 should increment
+  const span = document.createElement('span');
+  div.insertBefore(span, p1);
+  testing.expectEqual(2, range.startOffset);
+  testing.expectEqual(3, range.endOffset);
+}
+</script>
+
+<script id=removeChild_shifts_range_offsets>
+{
+  const div = document.createElement('div');
+  const p1 = document.createElement('p');
+  const p2 = document.createElement('p');
+  const p3 = document.createElement('p');
+  div.appendChild(p1);
+  div.appendChild(p2);
+  div.appendChild(p3);
+
+  const range = document.createRange();
+  range.setStart(div, 1);
+  range.setEnd(div, 3);
+
+  // Remove p1 (index 0) — offsets > 0 should decrement
+  div.removeChild(p1);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(2, range.endOffset);
+}
+</script>
+
+<script id=removeChild_moves_range_from_descendant>
+{
+  const div = document.createElement('div');
+  const p = document.createElement('p');
+  const text = document.createTextNode('hello');
+  p.appendChild(text);
+  div.appendChild(p);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 4);
+
+  // Remove p (which contains text) — range should move to (div, index_of_p)
+  div.removeChild(p);
+  testing.expectEqual(div, range.startContainer);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(div, range.endContainer);
+  testing.expectEqual(0, range.endOffset);
+}
+</script>
+
+<script id=multiple_ranges_updated>
+{
+  const text = document.createTextNode('abcdefgh');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range1 = document.createRange();
+  range1.setStart(text, 1);
+  range1.setEnd(text, 3);
+
+  const range2 = document.createRange();
+  range2.setStart(text, 5);
+  range2.setEnd(text, 7);
+
+  // Insert at offset 0 — both ranges should shift
+  text.insertData(0, 'XX');
+  testing.expectEqual(3, range1.startOffset);
+  testing.expectEqual(5, range1.endOffset);
+  testing.expectEqual(7, range2.startOffset);
+  testing.expectEqual(9, range2.endOffset);
+}
+</script>
+
+<script id=data_setter_updates_ranges>
+{
+  const text = document.createTextNode('abcdef');
+  const div = document.createElement('div');
+  div.appendChild(text);
+
+  const range = document.createRange();
+  range.setStart(text, 2);
+  range.setEnd(text, 5);
+
+  // Setting data replaces all content — range collapses to offset 0
+  text.data = 'new content';
+  testing.expectEqual(text, range.startContainer);
+  testing.expectEqual(0, range.startOffset);
+  testing.expectEqual(text, range.endContainer);
+  testing.expectEqual(0, range.endOffset);
+}
+</script>

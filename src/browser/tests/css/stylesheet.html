@@ -293,6 +293,28 @@
     div.style.top = '0';
     testing.expectEqual('0px', div.style.top);
 
+    // Scroll properties
+    div.style.scrollMarginTop = '0';
+    testing.expectEqual('0px', div.style.scrollMarginTop);
+
+    div.style.scrollPaddingBottom = '0';
+    testing.expectEqual('0px', div.style.scrollPaddingBottom);
+
+    // Multi-column
+    div.style.columnWidth = '0';
+    testing.expectEqual('0px', div.style.columnWidth);
+
+    div.style.columnRuleWidth = '0';
+    testing.expectEqual('0px', div.style.columnRuleWidth);
+
+    // Outline shorthand
+    div.style.outline = '0';
+    testing.expectEqual('0px', div.style.outline);
+
+    // Shapes
+    div.style.shapeMargin = '0';
+    testing.expectEqual('0px', div.style.shapeMargin);
+
     // Non-length properties should not be affected
     div.style.opacity = '0';
     testing.expectEqual('0', div.style.opacity);
@@ -312,6 +334,12 @@
 
     div.style.alignContent = 'first baseline';
     testing.expectEqual('baseline', div.style.alignContent);
+
+    div.style.alignSelf = 'first baseline';
+    testing.expectEqual('baseline', div.style.alignSelf);
+
+    div.style.justifySelf = 'first baseline';
+    testing.expectEqual('baseline', div.style.justifySelf);
 
     // "last baseline" should remain unchanged
     div.style.alignItems = 'last baseline';
@@ -339,6 +367,16 @@
 
     div.style.gap = '10px 20px';
     testing.expectEqual('10px 20px', div.style.gap);
+
+    // New shorthands
+    div.style.overflow = 'hidden hidden';
+    testing.expectEqual('hidden', div.style.overflow);
+
+    div.style.scrollSnapAlign = 'start start';
+    testing.expectEqual('start', div.style.scrollSnapAlign);
+
+    div.style.overscrollBehavior = 'auto auto';
+    testing.expectEqual('auto', div.style.overscrollBehavior);
 }
 </script>
 

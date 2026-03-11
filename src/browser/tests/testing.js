@@ -118,7 +118,7 @@
     BASE_URL: 'http://127.0.0.1:9582/src/browser/tests/',
   };
 
-  if (!IS_TEST_RUNNER) {
+  if (window.navigator.userAgent.startsWith("Lightpanda/") == false) {
     // The page is running in a different browser. Probably a developer making sure
     // a test is correct. There are a few tweaks we need to do to make this a
     // seemless, namely around adapting paths/urls.

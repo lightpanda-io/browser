@@ -292,6 +292,10 @@ pub fn pageNavigate(bc: anytype, event: *const Notification.PageNavigate) !void 
 }
 
 pub fn pageRemove(bc: anytype) !void {
+    // Clear all remote object mappings to prevent stale objectIds from being used
+    // after the context is destroy
+    bc.inspector_session.inspector.resetContextGroup();
+
     // The main page is going to be removed, we need to remove contexts from other worlds first.
     for (bc.isolated_worlds.items) |isolated_world| {
         try isolated_world.removeContext();
@@ -410,7 +414,7 @@ pub fn pageNavigated(arena: Allocator, bc: anytype, event: *const Notification.P
         bc.inspector_session.inspector.contextCreated(
             &ls.local,
             "",
-            try page.getOrigin(arena) orelse "",
+            page.origin orelse "",
             aux_data,
             true,
         );

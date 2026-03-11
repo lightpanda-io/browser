@@ -54,6 +54,7 @@ const Performance = @import("webapi/Performance.zig");
 const Screen = @import("webapi/Screen.zig");
 const VisualViewport = @import("webapi/VisualViewport.zig");
 const PerformanceObserver = @import("webapi/PerformanceObserver.zig");
+const AbstractRange = @import("webapi/AbstractRange.zig");
 const MutationObserver = @import("webapi/MutationObserver.zig");
 const IntersectionObserver = @import("webapi/IntersectionObserver.zig");
 const CustomElementDefinition = @import("webapi/CustomElementDefinition.zig");
@@ -62,8 +63,7 @@ const PageTransitionEvent = @import("webapi/event/PageTransitionEvent.zig");
 const NavigationKind = @import("webapi/navigation/root.zig").NavigationKind;
 const KeyboardEvent = @import("webapi/event/KeyboardEvent.zig");
 
-const Http = App.Http;
-const Net = @import("../Net.zig");
+const HttpClient = @import("HttpClient.zig");
 const ArenaPool = App.ArenaPool;
 
 const timestamp = @import("../datetime.zig").timestamp;
@@ -143,6 +143,9 @@ _to_load: std.ArrayList(*Element.Html) = .{},
 
 _script_manager: ScriptManager,
 
+// List of active live ranges (for mutation updates per DOM spec)
+_live_ranges: std.DoublyLinkedList = .{},
+
 // List of active MutationObservers
 _mutation_observers: std.DoublyLinkedList = .{},
 _mutation_delivery_scheduled: bool = false,
@@ -191,6 +194,8 @@ _queued_navigation: ?*QueuedNavigation = null,
 // The URL of the current page
 url: [:0]const u8 = "about:blank",
 
+origin: ?[]const u8 = null,
+
 // The base url specifies the base URL used to resolve the relative urls.
 // It is set by a <base> tag.
 // If null the url must be used.
@@ -212,14 +217,6 @@ arena: Allocator,
 // An arena with a lifetime guaranteed to be for 1 invoking of a Zig function
 // from JS. Best arena to use, when possible.
 call_arena: Allocator,
-
-arena_pool: *ArenaPool,
-// In Debug, we use this to see if anything fails to release an arena back to
-// the pool.
-_arena_pool_leak_track: (if (IS_DEBUG) std.AutoHashMapUnmanaged(usize, struct {
-    owner: []const u8,
-    count: usize,
-}) else void) = if (IS_DEBUG) .empty else {},
 
 parent: ?*Page,
 window: *Window,
@@ -247,17 +244,11 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     if (comptime IS_DEBUG) {
         log.debug(.page, "page.init", .{});
     }
-    const browser = session.browser;
-    const arena_pool = browser.arena_pool;
 
-    const page_arena = if (parent) |p| p.arena else try arena_pool.acquire();
-    errdefer if (parent == null) arena_pool.release(page_arena);
+    const call_arena = try session.getArena(.{ .debug = "call_arena" });
+    errdefer session.releaseArena(call_arena);
 
-    var factory = if (parent) |p| p._factory else try Factory.init(page_arena);
-
-    const call_arena = try arena_pool.acquire();
-    errdefer arena_pool.release(call_arena);
-
+    const factory = &session.factory;
     const document = (try factory.document(Node.Document.HTMLDocument{
         ._proto = undefined,
     })).asDocument();
@@ -265,10 +256,9 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     self.* = .{
         .js = undefined,
         .parent = parent,
-        .arena = page_arena,
+        .arena = session.page_arena,
         .document = document,
         .window = undefined,
-        .arena_pool = arena_pool,
         .call_arena = call_arena,
         ._frame_id = frame_id,
         ._session = session,
@@ -276,7 +266,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._pending_loads = 1, // always 1 for the ScriptManager
         ._type = if (parent == null) .root else .frame,
         ._script_manager = undefined,
-        ._event_manager = EventManager.init(page_arena, self),
+        ._event_manager = EventManager.init(session.page_arena, self),
     };
 
     var screen: *Screen = undefined;
@@ -304,6 +294,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._visual_viewport = visual_viewport,
     });
 
+    const browser = session.browser;
     self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
     errdefer self._script_manager.deinit();
 
@@ -339,11 +330,12 @@ pub fn deinit(self: *Page, abort_http: bool) void {
         // stats.print(&stream) catch unreachable;
     }
 
+    const session = self._session;
+
     if (self._queued_navigation) |qn| {
-        self.arena_pool.release(qn.arena);
+        session.releaseArena(qn.arena);
     }
 
-    const session = self._session;
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;
@@ -359,23 +351,7 @@ pub fn deinit(self: *Page, abort_http: bool) void {
 
     self._script_manager.deinit();
 
-    if (comptime IS_DEBUG) {
-        var it = self._arena_pool_leak_track.valueIterator();
-        while (it.next()) |value_ptr| {
-            if (value_ptr.count > 0) {
-                log.err(.bug, "ArenaPool Leak", .{ .owner = value_ptr.owner, .type = self._type, .url = self.url });
-                if (comptime builtin.is_test) {
-                    @panic("ArenaPool Leak");
-                }
-            }
-        }
-    }
-
-    self.arena_pool.release(self.call_arena);
-
-    if (self.parent == null) {
-        self.arena_pool.release(self.arena);
-    }
+    session.releaseArena(self.call_arena);
 }
 
 pub fn base(self: *const Page) [:0]const u8 {
@@ -389,14 +365,10 @@ pub fn getTitle(self: *Page) !?[]const u8 {
     return null;
 }
 
-pub fn getOrigin(self: *Page, allocator: Allocator) !?[]const u8 {
-    return try URL.getOrigin(allocator, self.url);
-}
-
 // Add comon headers for a request:
 // * cookies
 // * referer
-pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *Http.Headers) !void {
+pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, headers: *HttpClient.Headers) !void {
     try self.requestCookie(.{}).headersForRequest(temp, url, headers);
 
     // Build the referer
@@ -419,38 +391,16 @@ pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, header
     }
 }
 
-const GetArenaOpts = struct {
-    debug: []const u8,
-};
-pub fn getArena(self: *Page, comptime opts: GetArenaOpts) !Allocator {
-    const allocator = try self.arena_pool.acquire();
-    if (comptime IS_DEBUG) {
-        const gop = try self._arena_pool_leak_track.getOrPut(self.arena, @intFromPtr(allocator.ptr));
-        if (gop.found_existing) {
-            std.debug.assert(gop.value_ptr.count == 0);
-        }
-        gop.value_ptr.* = .{ .owner = opts.debug, .count = 1 };
-    }
-    return allocator;
+pub fn getArena(self: *Page, comptime opts: Session.GetArenaOpts) !Allocator {
+    return self._session.getArena(opts);
 }
 
 pub fn releaseArena(self: *Page, allocator: Allocator) void {
-    if (comptime IS_DEBUG) {
-        const found = self._arena_pool_leak_track.getPtr(@intFromPtr(allocator.ptr)).?;
-        if (found.count != 1) {
-            log.err(.bug, "ArenaPool Double Free", .{ .owner = found.owner, .count = found.count, .type = self._type, .url = self.url });
-            if (comptime builtin.is_test) {
-                @panic("ArenaPool Double Free");
-            }
-            return;
-        }
-        found.count = 0;
-    }
-    return self.arena_pool.release(allocator);
+    return self._session.releaseArena(allocator);
 }
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
-    const current_origin = (try URL.getOrigin(self.call_arena, self.url)) orelse return false;
+    const current_origin = self.origin orelse return false;
     return std.mem.startsWith(u8, url, current_origin);
 }
 
@@ -473,6 +423,14 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     // page and dispatch the events.
     if (std.mem.eql(u8, "about:blank", request_url)) {
         self.url = "about:blank";
+
+        if (self.parent) |parent| {
+            self.origin = parent.origin;
+        } else {
+            self.origin = null;
+        }
+        try self.js.setOrigin(self.origin);
+
         // Assume we parsed the document.
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
@@ -519,6 +477,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
     var http_client = session.browser.http_client;
 
     self.url = try self.arena.dupeZ(u8, request_url);
+    self.origin = try URL.getOrigin(self.arena, self.url);
 
     self._req_id = req_id;
     self._navigated_options = .{
@@ -579,8 +538,8 @@ pub fn scheduleNavigation(self: *Page, request_url: []const u8, opts: NavigateOp
     if (self.canScheduleNavigation(std.meta.activeTag(nt)) == false) {
         return;
     }
-    const arena = try self.arena_pool.acquire();
-    errdefer self.arena_pool.release(arena);
+    const arena = try self._session.getArena(.{ .debug = "scheduleNavigation" });
+    errdefer self._session.releaseArena(arena);
     return self.scheduleNavigationWithArena(arena, request_url, opts, nt);
 }
 
@@ -619,9 +578,8 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
-        // doin't defer this, the caller, the caller is responsible for freeing
-        // it on error
-        target.arena_pool.release(arena);
+        // don't defer this, the caller is responsible for freeing it on error
+        session.releaseArena(arena);
         return;
     }
 
@@ -653,7 +611,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
     };
 
     if (target._queued_navigation) |existing| {
-        target.arena_pool.release(existing.arena);
+        session.releaseArena(existing.arena);
     }
 
     target._queued_navigation = qn;
@@ -823,12 +781,18 @@ fn notifyParentLoadComplete(self: *Page) void {
     parent.iframeCompletedLoading(self.iframe.?);
 }
 
-fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
+fn pageHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
-    // would be different than self.url in the case of a redirect
     const header = &transfer.response_header.?;
-    self.url = try self.arena.dupeZ(u8, std.mem.span(header.url));
+
+    const response_url = std.mem.span(header.url);
+    if (std.mem.eql(u8, response_url, self.url) == false) {
+        // would be different than self.url in the case of a redirect
+        self.url = try self.arena.dupeZ(u8, response_url);
+        self.origin = try URL.getOrigin(self.arena, self.url);
+    }
+    try self.js.setOrigin(self.origin);
 
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
@@ -845,7 +809,7 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
     return true;
 }
 
-fn pageDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     var self: *Page = @ptrCast(@alignCast(transfer.ctx));
 
     if (self._parse_state == .pre) {
@@ -2434,6 +2398,12 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
     const previous_sibling = child.previousSibling();
     const next_sibling = child.nextSibling();
 
+    // Capture child's index before removal for live range updates (DOM spec remove steps 4-7)
+    const child_index_for_ranges: ?u32 = if (self._live_ranges.first != null)
+        parent.getChildIndex(child)
+    else
+        null;
+
     const children = parent._children.?;
     switch (children.*) {
         .one => |n| {
@@ -2461,6 +2431,11 @@ pub fn removeNode(self: *Page, parent: *Node, child: *Node, opts: RemoveNodeOpts
 
     child._parent = null;
     child._child_link = .{};
+
+    // Update live ranges for removal (DOM spec remove steps 4-7)
+    if (child_index_for_ranges) |idx| {
+        self.updateRangesForNodeRemoval(parent, child, idx);
+    }
 
     // Handle slot assignment removal before mutation observers
     if (child.is(Element)) |el| {
@@ -2608,6 +2583,21 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         },
     }
     child._parent = parent;
+
+    // Update live ranges for insertion (DOM spec insert step 6).
+    // For .before/.after the child was inserted at a specific position;
+    // ranges on parent with offsets past that position must be incremented.
+    // For .append no range update is needed (spec: "if child is non-null").
+    if (self._live_ranges.first != null) {
+        switch (relative) {
+            .append => {},
+            .before, .after => {
+                if (parent.getChildIndex(child)) |idx| {
+                    self.updateRangesForNodeInsertion(parent, idx);
+                }
+            },
+        }
+    }
 
     // Tri-state behavior for mutations:
     // 1. from_parser=true, parse_mode=document -> no mutations (initial document parse)
@@ -2867,6 +2857,54 @@ pub fn childListChange(
     }
 }
 
+// --- Live range update methods (DOM spec §4.2.3, §4.2.4, §4.7, §4.8) ---
+
+/// Update all live ranges after a replaceData mutation on a CharacterData node.
+/// Per DOM spec: insertData = replaceData(offset, 0, data),
+///               deleteData = replaceData(offset, count, "").
+/// All parameters are in UTF-16 code unit offsets.
+pub fn updateRangesForCharacterDataReplace(self: *Page, target: *Node, offset: u32, count: u32, data_len: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+        ar.updateForCharacterDataReplace(target, offset, count, data_len);
+    }
+}
+
+/// Update all live ranges after a splitText operation.
+/// Steps 7b-7e of the DOM spec splitText algorithm.
+/// Steps 7d-7e complement (not overlap) updateRangesForNodeInsertion:
+/// the insert update handles offsets > child_index, while 7d/7e handle
+/// offsets == node_index+1 (these are equal values but with > vs == checks).
+pub fn updateRangesForSplitText(self: *Page, target: *Node, new_node: *Node, offset: u32, parent: *Node, node_index: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+        ar.updateForSplitText(target, new_node, offset, parent, node_index);
+    }
+}
+
+/// Update all live ranges after a node insertion.
+/// Per DOM spec insert algorithm step 6: only applies when inserting before a
+/// non-null reference node.
+pub fn updateRangesForNodeInsertion(self: *Page, parent: *Node, child_index: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+        ar.updateForNodeInsertion(parent, child_index);
+    }
+}
+
+/// Update all live ranges after a node removal.
+/// Per DOM spec remove algorithm steps 4-7.
+pub fn updateRangesForNodeRemoval(self: *Page, parent: *Node, child: *Node, child_index: u32) void {
+    var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
+    while (it) |link| : (it = link.next) {
+        const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
+        ar.updateForNodeRemoval(parent, child, child_index);
+    }
+}
+
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')
 pub fn parseHtmlAsChildren(self: *Page, node: *Node, html: []const u8) !void {
     const previous_parse_mode = self._parse_mode;
@@ -3047,7 +3085,7 @@ pub const NavigateReason = enum {
 pub const NavigateOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: Http.Method = .GET,
+    method: HttpClient.Method = .GET,
     body: ?[]const u8 = null,
     header: ?[:0]const u8 = null,
     force: bool = false,
@@ -3057,7 +3095,7 @@ pub const NavigateOpts = struct {
 pub const NavigatedOpts = struct {
     cdp_id: ?i64 = null,
     reason: NavigateReason = .address_bar,
-    method: Http.Method = .GET,
+    method: HttpClient.Method = .GET,
 };
 
 const NavigationType = enum {
@@ -3164,7 +3202,7 @@ pub fn handleClick(self: *Page, target: *Node) !void {
 pub fn triggerKeyboard(self: *Page, keyboard_event: *KeyboardEvent) !void {
     const event = keyboard_event.asEvent();
     const element = self.window._document._active_element orelse {
-        keyboard_event.deinit(false, self);
+        keyboard_event.deinit(false, self._session);
         return;
     };
 
@@ -3240,7 +3278,7 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
         // so submit_event is still valid when we check _prevent_default
         submit_event.acquireRef();
-        defer submit_event.deinit(false, self);
+        defer submit_event.deinit(false, self._session);
 
         try self._event_manager.dispatch(form_element.asEventTarget(), submit_event);
         // If the submit event was prevented, don't submit the form
@@ -3254,8 +3292,8 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     // I don't think this is technically correct, but FormData handles it ok
     const form_data = try FormData.init(form, submitter_, self);
 
-    const arena = try self.arena_pool.acquire();
-    errdefer self.arena_pool.release(arena);
+    const arena = try self._session.getArena(.{ .debug = "submitForm" });
+    errdefer self._session.releaseArena(arena);
 
     const encoding = form_element.getAttributeSafe(comptime .wrap("enctype"));
 
@@ -3302,7 +3340,7 @@ const RequestCookieOpts = struct {
     is_http: bool = true,
     is_navigation: bool = false,
 };
-pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
+pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) HttpClient.RequestCookie {
     return .{
         .jar = &self._session.cookie_jar,
         .origin = self.url,

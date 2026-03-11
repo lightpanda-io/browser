@@ -20,6 +20,7 @@ const std = @import("std");
 const js = @import("../js/js.zig");
 
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const EventTarget = @import("EventTarget.zig");
 const ProgressEvent = @import("event/ProgressEvent.zig");
 const Blob = @import("Blob.zig");
@@ -69,17 +70,15 @@ pub fn init(page: *Page) !*FileReader {
     });
 }
 
-pub fn deinit(self: *FileReader, _: bool, page: *Page) void {
-    const js_ctx = page.js;
+pub fn deinit(self: *FileReader, _: bool, session: *Session) void {
+    if (self._on_abort) |func| func.release();
+    if (self._on_error) |func| func.release();
+    if (self._on_load) |func| func.release();
+    if (self._on_load_end) |func| func.release();
+    if (self._on_load_start) |func| func.release();
+    if (self._on_progress) |func| func.release();
 
-    if (self._on_abort) |func| js_ctx.release(func);
-    if (self._on_error) |func| js_ctx.release(func);
-    if (self._on_load) |func| js_ctx.release(func);
-    if (self._on_load_end) |func| js_ctx.release(func);
-    if (self._on_load_start) |func| js_ctx.release(func);
-    if (self._on_progress) |func| js_ctx.release(func);
-
-    page.releaseArena(self._arena);
+    session.releaseArena(self._arena);
 }
 
 fn asEventTarget(self: *FileReader) *EventTarget {

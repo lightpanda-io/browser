@@ -39,7 +39,7 @@ pub fn reset() void {
 const App = @import("App.zig");
 const js = @import("browser/js/js.zig");
 const Config = @import("Config.zig");
-const Client = @import("http/Client.zig");
+const HttpClient = @import("browser/HttpClient.zig");
 const Page = @import("browser/Page.zig");
 const Browser = @import("browser/Browser.zig");
 const Session = @import("browser/Session.zig");
@@ -335,7 +335,7 @@ fn isJsonValue(a: std.json.Value, b: std.json.Value) bool {
 }
 
 pub var test_app: *App = undefined;
-pub var test_http: *Client = undefined;
+pub var test_http: *HttpClient = undefined;
 pub var test_browser: Browser = undefined;
 pub var test_notification: *Notification = undefined;
 pub var test_session: *Session = undefined;
@@ -414,15 +414,6 @@ fn runWebApiTest(test_file: [:0]const u8) !void {
     try_catch.init(&ls.local);
     defer try_catch.deinit();
 
-    // by default, on load, testing.js will call testing.assertOk(). This makes our
-    // tests work well in a browser. But, for our test runner, we disable that
-    // and call it explicitly. This gives us better error messages.
-    ls.local.eval("window._lightpanda_skip_auto_assert = true;", "auto_assert") catch |err| {
-        const caught = try_catch.caughtOrError(arena_allocator, err);
-        std.debug.print("disable auto assert failure\nError: {f}\n", .{caught});
-        return err;
-    };
-
     try page.navigate(url, .{});
     _ = test_session.wait(2000);
 
@@ -460,7 +451,7 @@ const log = @import("log.zig");
 const TestHTTPServer = @import("TestHTTPServer.zig");
 
 const Server = @import("Server.zig");
-var test_cdp_server: ?Server = null;
+var test_cdp_server: ?*Server = null;
 var test_cdp_server_thread: ?std.Thread = null;
 var test_http_server: ?TestHTTPServer = null;
 var test_http_server_thread: ?std.Thread = null;
@@ -483,7 +474,7 @@ test "tests:beforeAll" {
     test_app = try App.init(test_allocator, &test_config);
     errdefer test_app.deinit();
 
-    test_http = try test_app.http.createClient(test_allocator);
+    test_http = try HttpClient.init(test_allocator, &test_app.network);
     errdefer test_http.deinit();
 
     test_browser = try Browser.init(test_app, .{ .http_client = test_http });
@@ -509,13 +500,11 @@ test "tests:beforeAll" {
 }
 
 test "tests:afterAll" {
-    if (test_cdp_server) |*server| {
-        server.stop();
-    }
+    test_app.network.stop();
     if (test_cdp_server_thread) |thread| {
         thread.join();
     }
-    if (test_cdp_server) |*server| {
+    if (test_cdp_server) |server| {
         server.deinit();
     }
 
@@ -540,14 +529,14 @@ test "tests:afterAll" {
 
 fn serveCDP(wg: *std.Thread.WaitGroup) !void {
     const address = try std.net.Address.parseIp("127.0.0.1", 9583);
-    test_cdp_server = try Server.init(test_app, address);
 
-    wg.finish();
-
-    test_cdp_server.?.run(address, 5) catch |err| {
+    test_cdp_server = Server.init(test_app, address) catch |err| {
         std.debug.print("CDP server error: {}", .{err});
         return err;
     };
+    wg.finish();
+
+    test_app.network.run();
 }
 
 fn testHTTPHandler(req: *std.http.Server.Request) !void {

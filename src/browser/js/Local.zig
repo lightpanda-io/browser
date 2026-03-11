@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 const log = @import("../../log.zig");
 const string = @import("../../string.zig");
 
@@ -115,6 +116,49 @@ pub fn exec(self: *const Local, src: []const u8, name: ?[]const u8) !js.Value {
     return self.compileAndRun(src, name);
 }
 
+/// Compiles a function body as function.
+///
+/// https://v8.github.io/api/head/classv8_1_1ScriptCompiler.html#a3a15bb5a7dfc3f998e6ac789e6b4646a
+pub fn compileFunction(
+    self: *const Local,
+    function_body: []const u8,
+    /// We tend to know how many params we'll pass; can remove the comptime if necessary.
+    comptime parameter_names: []const []const u8,
+    extensions: []const v8.Object,
+) !js.Function {
+    // TODO: Make configurable.
+    const script_name = self.isolate.initStringHandle("anonymous");
+    const script_source = self.isolate.initStringHandle(function_body);
+
+    var parameter_list: [parameter_names.len]*const v8.String = undefined;
+    inline for (0..parameter_names.len) |i| {
+        parameter_list[i] = self.isolate.initStringHandle(parameter_names[i]);
+    }
+
+    // Create `ScriptOrigin`.
+    var origin: v8.ScriptOrigin = undefined;
+    v8.v8__ScriptOrigin__CONSTRUCT(&origin, script_name);
+
+    // Create `ScriptCompilerSource`.
+    var script_compiler_source: v8.ScriptCompilerSource = undefined;
+    v8.v8__ScriptCompiler__Source__CONSTRUCT2(script_source, &origin, null, &script_compiler_source);
+    defer v8.v8__ScriptCompiler__Source__DESTRUCT(&script_compiler_source);
+
+    // Compile the function.
+    const result = v8.v8__ScriptCompiler__CompileFunction(
+        self.handle,
+        &script_compiler_source,
+        parameter_list.len,
+        &parameter_list,
+        extensions.len,
+        @ptrCast(&extensions),
+        v8.kNoCompileOptions,
+        v8.kNoCacheNoReason,
+    ) orelse return error.CompilationError;
+
+    return .{ .local = self, .handle = result };
+}
+
 pub fn compileAndRun(self: *const Local, src: []const u8, name: ?[]const u8) !js.Value {
     const script_name = self.isolate.initStringHandle(name orelse "anonymous");
     const script_source = self.isolate.initStringHandle(src);
@@ -171,7 +215,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
         .pointer => |ptr| {
             const resolved = resolveValue(value);
 
-            const gop = try ctx.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
+            const gop = try ctx.origin.identity_map.getOrPut(arena, @intFromPtr(resolved.ptr));
             if (gop.found_existing) {
                 // we've seen this instance before, return the same object
                 return (js.Object.Global{ .handle = gop.value_ptr.* }).local(self);
@@ -225,16 +269,17 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // can't figure out how to make that work, since it depends on
                 // the [runtime] `value`.
                 // We need the resolved finalizer, which we have in resolved.
+                //
                 // The above if statement would be more clear as:
                 //    if (resolved.finalizer_from_v8) |finalizer| {
                 // But that's a runtime check.
                 // Instead, we check if the base has finalizer. The assumption
                 // here is that if a resolve type has a finalizer, then the base
                 // should have a finalizer too.
-                const fc = try ctx.createFinalizerCallback(gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
+                const fc = try ctx.origin.createFinalizerCallback(ctx.session, gop.value_ptr.*, resolved.ptr, resolved.finalizer_from_zig.?);
                 {
                     errdefer fc.deinit();
-                    try ctx.finalizer_callbacks.put(ctx.arena, @intFromPtr(resolved.ptr), fc);
+                    try ctx.origin.finalizer_callbacks.put(ctx.origin.arena, @intFromPtr(resolved.ptr), fc);
                 }
 
                 conditionallyReference(value);
@@ -1083,7 +1128,7 @@ const Resolved = struct {
     class_id: u16,
     prototype_chain: []const @import("TaggedOpaque.zig").PrototypeChainEntry,
     finalizer_from_v8: ?*const fn (handle: ?*const v8.WeakCallbackInfo) callconv(.c) void = null,
-    finalizer_from_zig: ?*const fn (ptr: *anyopaque, page: *Page) void = null,
+    finalizer_from_zig: ?*const fn (ptr: *anyopaque, session: *Session) void = null,
 };
 pub fn resolveValue(value: anytype) Resolved {
     const T = bridge.Struct(@TypeOf(value));

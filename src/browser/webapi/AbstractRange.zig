@@ -33,6 +33,9 @@ _start_offset: u32,
 _end_container: *Node,
 _start_container: *Node,
 
+// Intrusive linked list node for tracking live ranges on the Page.
+_range_link: std.DoublyLinkedList.Node = .{},
+
 pub const Type = union(enum) {
     range: *Range,
     // TODO: static_range: *StaticRange,
@@ -213,6 +216,91 @@ fn isInclusiveAncestorOf(potential_ancestor: *Node, node: *Node) bool {
         return true;
     }
     return isAncestorOf(potential_ancestor, node);
+}
+
+/// Update this range's boundaries after a replaceData mutation on target.
+/// All parameters are in UTF-16 code unit offsets.
+pub fn updateForCharacterDataReplace(self: *AbstractRange, target: *Node, offset: u32, count: u32, data_len: u32) void {
+    if (self._start_container == target) {
+        if (self._start_offset > offset and self._start_offset <= offset + count) {
+            self._start_offset = offset;
+        } else if (self._start_offset > offset + count) {
+            // Use i64 intermediate to avoid u32 underflow when count > data_len
+            self._start_offset = @intCast(@as(i64, self._start_offset) + @as(i64, data_len) - @as(i64, count));
+        }
+    }
+
+    if (self._end_container == target) {
+        if (self._end_offset > offset and self._end_offset <= offset + count) {
+            self._end_offset = offset;
+        } else if (self._end_offset > offset + count) {
+            self._end_offset = @intCast(@as(i64, self._end_offset) + @as(i64, data_len) - @as(i64, count));
+        }
+    }
+}
+
+/// Update this range's boundaries after a splitText operation.
+/// Steps 7b-7e of the DOM spec splitText algorithm.
+pub fn updateForSplitText(self: *AbstractRange, target: *Node, new_node: *Node, offset: u32, parent: *Node, node_index: u32) void {
+    // Step 7b: ranges on the original node with start > offset move to new node
+    if (self._start_container == target and self._start_offset > offset) {
+        self._start_container = new_node;
+        self._start_offset = self._start_offset - offset;
+    }
+    // Step 7c: ranges on the original node with end > offset move to new node
+    if (self._end_container == target and self._end_offset > offset) {
+        self._end_container = new_node;
+        self._end_offset = self._end_offset - offset;
+    }
+    // Step 7d: ranges on parent with start == node_index + 1 increment
+    if (self._start_container == parent and self._start_offset == node_index + 1) {
+        self._start_offset += 1;
+    }
+    // Step 7e: ranges on parent with end == node_index + 1 increment
+    if (self._end_container == parent and self._end_offset == node_index + 1) {
+        self._end_offset += 1;
+    }
+}
+
+/// Update this range's boundaries after a node insertion.
+pub fn updateForNodeInsertion(self: *AbstractRange, parent: *Node, child_index: u32) void {
+    if (self._start_container == parent and self._start_offset > child_index) {
+        self._start_offset += 1;
+    }
+    if (self._end_container == parent and self._end_offset > child_index) {
+        self._end_offset += 1;
+    }
+}
+
+/// Update this range's boundaries after a node removal.
+pub fn updateForNodeRemoval(self: *AbstractRange, parent: *Node, child: *Node, child_index: u32) void {
+    // Steps 4-5: ranges whose start/end is an inclusive descendant of child
+    // get moved to (parent, child_index).
+    if (isInclusiveDescendantOf(self._start_container, child)) {
+        self._start_container = parent;
+        self._start_offset = child_index;
+    }
+    if (isInclusiveDescendantOf(self._end_container, child)) {
+        self._end_container = parent;
+        self._end_offset = child_index;
+    }
+
+    // Steps 6-7: ranges on parent at offsets > child_index get decremented.
+    if (self._start_container == parent and self._start_offset > child_index) {
+        self._start_offset -= 1;
+    }
+    if (self._end_container == parent and self._end_offset > child_index) {
+        self._end_offset -= 1;
+    }
+}
+
+fn isInclusiveDescendantOf(node: *Node, potential_ancestor: *Node) bool {
+    var current: ?*Node = node;
+    while (current) |n| {
+        if (n == potential_ancestor) return true;
+        current = n.parentNode();
+    }
+    return false;
 }
 
 pub const JsApi = struct {

@@ -28,7 +28,7 @@ const js = @import("../browser/js/js.zig");
 const App = @import("../App.zig");
 const Browser = @import("../browser/Browser.zig");
 const Session = @import("../browser/Session.zig");
-const HttpClient = @import("../http/Client.zig");
+const HttpClient = @import("../browser/HttpClient.zig");
 const Page = @import("../browser/Page.zig");
 const Incrementing = @import("id.zig").Incrementing;
 const Notification = @import("../Notification.zig");
@@ -459,6 +459,12 @@ pub fn BrowserContext(comptime CDP_T: type) type {
             }
             self.isolated_worlds.clearRetainingCapacity();
 
+            // do this before closeSession, since we don't want to process any
+            // new notification (Or maybe, instead of the deinit above, we just
+            // rely on those notifications to do our normal cleanup?)
+
+            self.notification.unregisterAll(self);
+
             // If the session has a page, we need to clear it first. The page
             // context is always nested inside of the isolated world context,
             // so we need to shutdown the page one first.
@@ -466,7 +472,6 @@ pub fn BrowserContext(comptime CDP_T: type) type {
 
             self.node_registry.deinit();
             self.node_search_list.deinit();
-            self.notification.unregisterAll(self);
             self.notification.deinit();
 
             if (self.http_proxy_changed) {
