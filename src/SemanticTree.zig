@@ -146,7 +146,21 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
     try appendXPathSegment(node, xpath_buffer.writer(self.arena), index);
     const xpath = xpath_buffer.items;
 
-    const name = try axn.getName(self.page, self.arena);
+    var name = try axn.getName(self.page, self.arena);
+
+    const has_explicit_label = if (node.is(Element)) |el|
+        el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
+    else
+        false;
+
+    const structural = isStructuralRole(role);
+
+    // Filter out computed concatenated names for generic containers without explicit labels.
+    // This prevents token bloat and ensures their StaticText children aren't incorrectly pruned.
+    // We ignore interactivity because a generic wrapper with an event listener still shouldn't hoist all text.
+    if (name != null and structural and !has_explicit_label) {
+        name = null;
+    }
 
     var data = NodeData{
         .id = cdp_node.id,
@@ -162,12 +176,6 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
 
     var should_visit = true;
     if (self.prune) {
-        const structural = isStructuralRole(role);
-        const has_explicit_label = if (node.is(Element)) |el|
-            el.getAttributeSafe(.wrap("aria-label")) != null or el.getAttributeSafe(.wrap("title")) != null
-        else
-            false;
-
         if (structural and !is_interactive and !has_explicit_label) {
             should_visit = false;
         }
@@ -368,6 +376,10 @@ fn isStructuralRole(role: []const u8) bool {
         std.mem.eql(u8, role, "main") or
         std.mem.eql(u8, role, "list") or
         std.mem.eql(u8, role, "listitem") or
+        std.mem.eql(u8, role, "table") or
+        std.mem.eql(u8, role, "rowgroup") or
+        std.mem.eql(u8, role, "row") or
+        std.mem.eql(u8, role, "cell") or
         std.mem.eql(u8, role, "region");
     // zig fmt: on
 }
