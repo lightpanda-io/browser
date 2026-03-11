@@ -347,6 +347,10 @@ Current state inside Gate 1:
   proving one wrapped paragraph can hand off focus from a later-row button to
   a later-row input and then to a later-row link through `Tab` progression
   while each target still performs its real headed action
+- that same mixed-inline later-row interaction coverage now also includes
+  checkbox/link coexistence, with a bounded probe proving a wrapped later-row
+  checkbox can be toggled by click and `Space`, and that `Tab` then `Enter`
+  still reaches and activates a later-row link in the same paragraph
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
