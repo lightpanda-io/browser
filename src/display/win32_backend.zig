@@ -115,6 +115,21 @@ const CachedImage = struct {
     }
 };
 
+const RegisteredPrivateFont = struct {
+    family: []u8,
+    bytes: []u8,
+    handle: c.HANDLE,
+
+    fn deinit(self: *RegisteredPrivateFont, allocator: std.mem.Allocator) void {
+        if (self.handle != null) {
+            _ = c.RemoveFontMemResourceEx(self.handle);
+        }
+        allocator.free(self.family);
+        allocator.free(self.bytes);
+        self.* = undefined;
+    }
+};
+
 pub const Win32Backend = struct {
     allocator: std.mem.Allocator,
     app_data_path: ?[]u8 = null,
@@ -184,6 +199,8 @@ pub const Win32Backend = struct {
     pending_presentation_command: ?BrowserCommand = null,
     image_cache_lock: std.Thread.Mutex = .{},
     image_cache: std.StringHashMapUnmanaged(CachedImage) = .{},
+    private_font_cache_lock: std.Thread.Mutex = .{},
+    private_font_cache: std.AutoHashMapUnmanaged(u64, RegisteredPrivateFont) = .{},
     gdiplus_token: c.ULONG_PTR = 0,
     gdiplus_started: bool = false,
 
@@ -694,6 +711,13 @@ pub const Win32Backend = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.image_cache.deinit(self.allocator);
+        self.private_font_cache_lock.lock();
+        defer self.private_font_cache_lock.unlock();
+        var font_it = self.private_font_cache.iterator();
+        while (font_it.next()) |entry| {
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.private_font_cache.deinit(self.allocator);
         if (self.gdiplus_started) {
             GdiplusShutdown(self.gdiplus_token);
             self.gdiplus_started = false;
@@ -776,6 +800,9 @@ pub const Win32Backend = struct {
             var owned_list = list;
             owned_list.deinit(self.allocator);
         };
+        if (next_display_list) |*list| {
+            try ensureDisplayListPrivateFontsRegistered(self, list);
+        }
 
         self.presentation_lock.lock();
         defer self.presentation_lock.unlock();
@@ -3800,6 +3827,60 @@ fn resolvePresentationFontSpec(font_family_value: []const u8) PresentationFontSp
         .face_name = "Segoe UI",
         .pitch_family = @as(c.DWORD, c.DEFAULT_PITCH | c.FF_SWISS),
     };
+}
+
+fn ensureDisplayListPrivateFontsRegistered(backend: *Win32Backend, display_list: *const DisplayList) !void {
+    for (display_list.font_faces.items) |font_face| {
+        if (!font_face.format.supportsWin32PrivateRegistration()) {
+            continue;
+        }
+        try ensurePrivateFontRegistered(backend, font_face);
+    }
+}
+
+fn ensurePrivateFontRegistered(backend: *Win32Backend, font_face: DisplayList.FontFaceResource) !void {
+    const key = hashPrivateFontFace(font_face);
+
+    backend.private_font_cache_lock.lock();
+    defer backend.private_font_cache_lock.unlock();
+
+    if (backend.private_font_cache.contains(key)) {
+        return;
+    }
+
+    const owned_family = try backend.allocator.dupe(u8, font_face.family);
+    errdefer backend.allocator.free(owned_family);
+    const owned_bytes = try backend.allocator.dupe(u8, font_face.bytes);
+    errdefer backend.allocator.free(owned_bytes);
+
+    var font_count: c.DWORD = 0;
+    const handle = c.AddFontMemResourceEx(
+        @ptrCast(@constCast(owned_bytes.ptr)),
+        @as(c.DWORD, @intCast(owned_bytes.len)),
+        null,
+        &font_count,
+    );
+    if (handle == null or font_count == 0) {
+        log.warn(.app, "win private font reg fail", .{
+            .family = font_face.family,
+            .bytes = owned_bytes.len,
+        });
+        return error.PrivateFontRegistrationFailed;
+    }
+
+    try backend.private_font_cache.put(backend.allocator, key, .{
+        .family = owned_family,
+        .bytes = owned_bytes,
+        .handle = handle,
+    });
+}
+
+fn hashPrivateFontFace(font_face: DisplayList.FontFaceResource) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    hasher.update(font_face.family);
+    hasher.update(std.mem.asBytes(&font_face.format));
+    hasher.update(font_face.bytes);
+    return hasher.final();
 }
 
 fn trimPresentationFontFamily(raw_family: []const u8) []const u8 {
@@ -7623,6 +7704,27 @@ test "win32 imageRequestCacheKey includes request policy" {
     try std.testing.expect(std.mem.indexOf(u8, one, "session=one") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "https://img.test/page") != null);
     try std.testing.expect(std.mem.indexOf(u8, one, "Basic dXNlcjpwYXNz") != null);
+}
+
+test "win32 hashPrivateFontFace varies by family and bytes" {
+    const one = hashPrivateFontFace(.{
+        .family = @constCast("ABeeZee"),
+        .format = .truetype,
+        .bytes = @constCast("font-one"),
+    });
+    const two = hashPrivateFontFace(.{
+        .family = @constCast("ABeeZee"),
+        .format = .truetype,
+        .bytes = @constCast("font-two"),
+    });
+    const three = hashPrivateFontFace(.{
+        .family = @constCast("Other Family"),
+        .format = .truetype,
+        .bytes = @constCast("font-one"),
+    });
+
+    try std.testing.expect(one != two);
+    try std.testing.expect(one != three);
 }
 
 test "win32 image accept header advertises image subresource types" {

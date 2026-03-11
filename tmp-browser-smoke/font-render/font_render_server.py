@@ -4,12 +4,24 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parent
+REPO_FONT = ROOT.parent.parent / "src" / "browser" / "tests" / "css" / "private_font_test.ttf"
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8163
 
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def do_GET(self):
+        if self.path == "/private_font_test.ttf":
+            data = REPO_FONT.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "font/ttf")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        super().do_GET()
 
 
 if __name__ == "__main__":

@@ -32,8 +32,18 @@ const ParsedRule = struct {
 };
 
 pub const FontFaceEntry = struct {
+    pub const Format = enum(u8) {
+        unknown,
+        truetype,
+        opentype,
+        woff,
+        woff2,
+    };
+
     family: []const u8,
     source_url: ?[]const u8 = null,
+    format: Format = .unknown,
+    font_bytes: []const u8 = &.{},
     loaded: bool = false,
     rule: *CSSRule,
 };
@@ -346,12 +356,19 @@ fn appendFontFaceRule(
     const src_value = parseDeclarationValue(declarations_text, "src");
     var source_url: ?[]const u8 = null;
     var loaded = true;
+    var format: FontFaceEntry.Format = .unknown;
+    var font_bytes: []const u8 = &.{};
     if (src_value) |raw_src| {
         if (parseFirstUrlFromSrcDeclaration(raw_src)) |src_specifier| {
             if (base_url) |current_base| {
                 const resolved_url = try URL.resolve(temp, current_base, src_specifier, .{ .encode = true, .always_dupe = true });
                 source_url = try page.dupeString(resolved_url);
-                loaded = fetchFontFaceSource(page, temp, resolved_url, referer_url, include_credentials) catch false;
+                const fetch_result = fetchFontFaceSource(page, temp, resolved_url, referer_url, include_credentials) catch FontFetchResult{};
+                loaded = fetch_result.loaded;
+                format = fetch_result.format;
+                if (fetch_result.font_bytes.len > 0) {
+                    font_bytes = try page.arena.dupe(u8, fetch_result.font_bytes);
+                }
             }
         }
     }
@@ -359,15 +376,25 @@ fn appendFontFaceRule(
     try font_faces.append(page.arena, .{
         .family = try page.dupeString(family),
         .source_url = source_url,
+        .format = format,
+        .font_bytes = font_bytes,
         .loaded = loaded,
         .rule = rule,
     });
 }
 
 const FontFetchContext = struct {
+    allocator: std.mem.Allocator,
+    buffer: std.ArrayList(u8),
     finished: bool = false,
     failed: ?anyerror = null,
     status: u16 = 0,
+};
+
+const FontFetchResult = struct {
+    loaded: bool = false,
+    format: FontFaceEntry.Format = .unknown,
+    font_bytes: []const u8 = &.{},
 };
 
 fn fetchFontFaceSource(
@@ -376,7 +403,8 @@ fn fetchFontFaceSource(
     url: [:0]const u8,
     referer_url: ?[:0]const u8,
     include_credentials: bool,
-) !bool {
+) !FontFetchResult {
+    const format = detectFontFaceFormat(url);
     const request_url = try stylesheetRequestUrlForFetch(temp, url, include_credentials);
     const font_client = try page._session.browser.app.http.createClient(temp);
     defer font_client.deinit();
@@ -388,7 +416,11 @@ fn fetchFontFaceSource(
         .referer_override_url = referer_url,
     });
 
-    var ctx = FontFetchContext{};
+    var ctx = FontFetchContext{
+        .allocator = temp,
+        .buffer = .{},
+    };
+    defer ctx.buffer.deinit(temp);
     try font_client.request(.{
         .url = request_url,
         .ctx = &ctx,
@@ -408,9 +440,20 @@ fn fetchFontFaceSource(
         _ = try font_client.tick(50);
     }
     if (ctx.failed != null) {
-        return false;
+        return .{
+            .loaded = false,
+            .format = format,
+        };
     }
-    return ctx.status > 0 and ctx.status < 400;
+    const loaded = ctx.status > 0 and ctx.status < 400;
+    return .{
+        .loaded = loaded,
+        .format = format,
+        .font_bytes = if (loaded and formatSupportsEmbeddedBytes(format))
+            try temp.dupe(u8, ctx.buffer.items)
+        else
+            &.{},
+    };
 }
 
 fn fontFetchHeaderCallback(transfer: *Http.Transfer) !bool {
@@ -423,7 +466,10 @@ fn fontFetchHeaderCallback(transfer: *Http.Transfer) !bool {
     return true;
 }
 
-fn fontFetchDataCallback(_: *Http.Transfer, _: []const u8) !void {}
+fn fontFetchDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+    const ctx: *FontFetchContext = @ptrCast(@alignCast(transfer.ctx));
+    try ctx.buffer.appendSlice(ctx.allocator, data);
+}
 
 fn fontFetchDoneCallback(ctx_ptr: *anyopaque) !void {
     const ctx: *FontFetchContext = @ptrCast(@alignCast(ctx_ptr));
@@ -528,6 +574,34 @@ fn parseFirstUrlFromSrcDeclaration(src: []const u8) ?[]const u8 {
     return if (inner.len == 0) null else inner;
 }
 
+fn detectFontFaceFormat(url: [:0]const u8) FontFaceEntry.Format {
+    const pathname = RawURL.getPathname(url);
+    const ext = std.fs.path.extension(pathname);
+    if (ext.len == 0) {
+        return .unknown;
+    }
+    if (std.ascii.eqlIgnoreCase(ext, ".ttf")) {
+        return .truetype;
+    }
+    if (std.ascii.eqlIgnoreCase(ext, ".otf")) {
+        return .opentype;
+    }
+    if (std.ascii.eqlIgnoreCase(ext, ".woff")) {
+        return .woff;
+    }
+    if (std.ascii.eqlIgnoreCase(ext, ".woff2")) {
+        return .woff2;
+    }
+    return .unknown;
+}
+
+fn formatSupportsEmbeddedBytes(format: FontFaceEntry.Format) bool {
+    return switch (format) {
+        .truetype, .opentype => true,
+        else => false,
+    };
+}
+
 fn stylesheetRequestUrlForFetch(
     allocator: std.mem.Allocator,
     url: [:0]const u8,
@@ -625,6 +699,22 @@ test "parseFirstUrlFromSrcDeclaration extracts first font source" {
         "font_face_test.woff2",
         parseFirstUrlFromSrcDeclaration("url('font_face_test.woff2')").?,
     );
+}
+
+test "detectFontFaceFormat recognizes supported font extensions" {
+    try std.testing.expectEqual(FontFaceEntry.Format.truetype, detectFontFaceFormat("https://font.test/private_font_test.ttf"));
+    try std.testing.expectEqual(FontFaceEntry.Format.opentype, detectFontFaceFormat("https://font.test/private_font_test.otf?x=1"));
+    try std.testing.expectEqual(FontFaceEntry.Format.woff, detectFontFaceFormat("https://font.test/font.woff#frag"));
+    try std.testing.expectEqual(FontFaceEntry.Format.woff2, detectFontFaceFormat("https://font.test/font.woff2"));
+    try std.testing.expectEqual(FontFaceEntry.Format.unknown, detectFontFaceFormat("https://font.test/font.bin"));
+}
+
+test "formatSupportsEmbeddedBytes only retains ttf and otf bytes" {
+    try std.testing.expect(formatSupportsEmbeddedBytes(.truetype));
+    try std.testing.expect(formatSupportsEmbeddedBytes(.opentype));
+    try std.testing.expect(!formatSupportsEmbeddedBytes(.woff));
+    try std.testing.expect(!formatSupportsEmbeddedBytes(.woff2));
+    try std.testing.expect(!formatSupportsEmbeddedBytes(.unknown));
 }
 
 const testing = @import("../../../testing.zig");

@@ -11,6 +11,9 @@ const Color = @import("DisplayList.zig").Color;
 const LinkRegion = @import("DisplayList.zig").LinkRegion;
 const ControlRegion = @import("DisplayList.zig").ControlRegion;
 const ImageCommand = @import("DisplayList.zig").ImageCommand;
+const FontFaceResource = @import("DisplayList.zig").FontFaceResource;
+const FontFaceFormat = @import("DisplayList.zig").FontFaceFormat;
+const CSSStyleSheet = @import("../browser/webapi/css/CSSStyleSheet.zig");
 
 pub const PaintOpts = struct {
     viewport_width: i32,
@@ -45,6 +48,7 @@ pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts)
         @max(@as(i32, 160), opts.viewport_width - (opts.page_margin * 2)),
     );
     try painter.paintNode(root, &cursor);
+    try appendLoadedFontFacesToDisplayList(allocator, page, &list);
     return list;
 }
 
@@ -1350,6 +1354,57 @@ fn parseCssFontItalic(value: []const u8) bool {
     return containsAsciiToken(value, "italic") or containsAsciiToken(value, "oblique");
 }
 
+fn appendLoadedFontFacesToDisplayList(
+    allocator: std.mem.Allocator,
+    page: *Page,
+    list: *DisplayList,
+) !void {
+    const sheets = try page.window._document.getStyleSheets(page);
+    for (sheets.items()) |sheet| {
+        for (sheet.getFontFaces()) |entry| {
+            if (!entry.loaded or entry.font_bytes.len == 0) {
+                continue;
+            }
+            const format = mapFontFaceFormat(entry.format);
+            if (!format.supportsWin32PrivateRegistration()) {
+                continue;
+            }
+            if (displayListHasFontFace(list, entry.family, format, entry.font_bytes)) {
+                continue;
+            }
+            try list.addFontFace(allocator, .{
+                .family = @constCast(entry.family),
+                .format = format,
+                .bytes = @constCast(entry.font_bytes),
+            });
+        }
+    }
+}
+
+fn mapFontFaceFormat(format: CSSStyleSheet.FontFaceEntry.Format) FontFaceFormat {
+    return switch (format) {
+        .truetype => .truetype,
+        .opentype => .opentype,
+        else => .unknown,
+    };
+}
+
+fn displayListHasFontFace(
+    list: *const DisplayList,
+    family: []const u8,
+    format: FontFaceFormat,
+    bytes: []const u8,
+) bool {
+    for (list.font_faces.items) |entry| {
+        if (entry.format != format) continue;
+        if (!std.ascii.eqlIgnoreCase(entry.family, family)) continue;
+        if (std.mem.eql(u8, entry.bytes, bytes)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 fn parseCssLengthPx(value: []const u8) ?i32 {
     const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
     if (trimmed.len == 0) {
@@ -1867,4 +1922,34 @@ test "paintDocument carries authored font family style and weight on text comman
 
     try std.testing.expect(found_mono);
     try std.testing.expect(found_serif);
+}
+
+test "paintDocument carries loaded private font faces for headed rendering" {
+    var page = try testing.pageTest("page/font_private_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.font_faces.items.len);
+    try std.testing.expectEqualStrings("ABeeZee", display_list.font_faces.items[0].family);
+    try std.testing.expectEqual(FontFaceFormat.truetype, display_list.font_faces.items[0].format);
+    try std.testing.expect(display_list.font_faces.items[0].bytes.len > 0);
+
+    var found_private_run = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "PrivateFontWidthProof")) {
+                    try std.testing.expect(std.mem.indexOf(u8, text.font_family, "ABeeZee") != null);
+                    found_private_run = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found_private_run);
 }

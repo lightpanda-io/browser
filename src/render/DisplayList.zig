@@ -61,6 +61,25 @@ pub const ImageCommand = struct {
     request_authorization_value: []u8 = &.{},
 };
 
+pub const FontFaceFormat = enum(u8) {
+    unknown,
+    truetype,
+    opentype,
+
+    pub fn supportsWin32PrivateRegistration(self: FontFaceFormat) bool {
+        return switch (self) {
+            .truetype, .opentype => true,
+            else => false,
+        };
+    }
+};
+
+pub const FontFaceResource = struct {
+    family: []u8,
+    format: FontFaceFormat = .unknown,
+    bytes: []u8,
+};
+
 pub const Command = union(enum) {
     fill_rect: RectCommand,
     stroke_rect: RectCommand,
@@ -121,6 +140,7 @@ pub const DisplayList = @This();
 commands: std.ArrayListUnmanaged(Command) = .{},
 link_regions: std.ArrayListUnmanaged(LinkRegion) = .{},
 control_regions: std.ArrayListUnmanaged(ControlRegion) = .{},
+font_faces: std.ArrayListUnmanaged(FontFaceResource) = .{},
 content_height: i32 = 0,
 layout_scale: i32 = 100,
 page_margin: i32 = 0,
@@ -141,6 +161,11 @@ pub fn deinit(self: *DisplayList, allocator: std.mem.Allocator) void {
         allocator.free(region.dom_path);
     }
     self.control_regions.deinit(allocator);
+    for (self.font_faces.items) |font_face| {
+        allocator.free(font_face.family);
+        allocator.free(font_face.bytes);
+    }
+    self.font_faces.deinit(allocator);
     self.* = .{};
 }
 
@@ -178,6 +203,14 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .width = region.width,
             .height = region.height,
             .dom_path = try allocator.dupe(u16, region.dom_path),
+        });
+    }
+    try copy.font_faces.ensureTotalCapacity(allocator, self.font_faces.items.len);
+    for (self.font_faces.items) |font_face| {
+        try copy.font_faces.append(allocator, .{
+            .family = try allocator.dupe(u8, font_face.family),
+            .format = font_face.format,
+            .bytes = try allocator.dupe(u8, font_face.bytes),
         });
     }
     return copy;
@@ -251,6 +284,14 @@ pub fn addControlRegion(self: *DisplayList, allocator: std.mem.Allocator, region
     self.content_height = @max(self.content_height, region.y + region.height);
 }
 
+pub fn addFontFace(self: *DisplayList, allocator: std.mem.Allocator, font_face: FontFaceResource) !void {
+    try self.font_faces.append(allocator, .{
+        .family = try allocator.dupe(u8, font_face.family),
+        .format = font_face.format,
+        .bytes = try allocator.dupe(u8, font_face.bytes),
+    });
+}
+
 pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
     hasher.update(std.mem.asBytes(&self.content_height));
     hasher.update(std.mem.asBytes(&self.layout_scale));
@@ -322,5 +363,11 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(std.mem.asBytes(&region.width));
         hasher.update(std.mem.asBytes(&region.height));
         hasher.update(std.mem.sliceAsBytes(region.dom_path));
+    }
+    for (self.font_faces.items) |font_face| {
+        hasher.update("font_face");
+        hasher.update(font_face.family);
+        hasher.update(std.mem.asBytes(&font_face.format));
+        hasher.update(font_face.bytes);
     }
 }
