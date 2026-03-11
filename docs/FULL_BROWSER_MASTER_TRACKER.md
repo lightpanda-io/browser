@@ -419,6 +419,11 @@ Current state inside Gate 1:
   the second checkbox, first radio, and second radio, then typed input through
   both later-row text fields before real headed form submission through the
   later-row submit control
+- that same later-row mixed-inline form coverage now also includes submit/link
+  coexistence after those dense controls, with bounded probes proving the same
+  wrapped paragraph can either reach a later-row link and navigate or continue
+  past that link to a later-row submit control and complete a real headed form
+  submission
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
