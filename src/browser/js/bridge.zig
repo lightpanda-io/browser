@@ -885,6 +885,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/IdleDeadline.zig"),
     @import("../webapi/Blob.zig"),
     @import("../webapi/File.zig"),
+    @import("../webapi/FileList.zig"),
     @import("../webapi/FileReader.zig"),
     @import("../webapi/Screen.zig"),
     @import("../webapi/VisualViewport.zig"),
