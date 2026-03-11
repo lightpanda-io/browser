@@ -58,6 +58,7 @@ pub const BrowserCommand = union(enum) {
     history_filter_set: []const u8,
     history_filter_clear,
     bookmark_add_current,
+    bookmark_open_visible_new_tabs,
     bookmark_sort_set: BookmarkSortMode,
     bookmark_filter_set: []const u8,
     bookmark_filter_clear,

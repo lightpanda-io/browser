@@ -1214,6 +1214,9 @@ fn handleBrowseCommand(
             }
             shell.tabs.items[source_tab_index].internal_filters.bookmarks_sort = mode;
         },
+        .bookmark_open_visible_new_tabs => {
+            _ = try openVisibleBookmarksInNewTabs(app, shell, source_tab_index, settings, downloads);
+        },
         .bookmark_filter_clear => {
             if (source_tab_index >= shell.tabs.items.len) {
                 return;
@@ -1535,6 +1538,9 @@ fn handleActiveBrowseCommand(
         },
         .bookmark_sort_set => |mode| {
             tab.internal_filters.bookmarks_sort = mode;
+        },
+        .bookmark_open_visible_new_tabs => {
+            _ = try openVisibleBookmarksInNewTabs(app, shell, tab_index, settings, downloads);
         },
         .bookmark_open => |index| {
             const bookmark_url = loadPersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index) orelse return;
@@ -3407,6 +3413,8 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .page = .history },
         .bookmarks => if (std.ascii.eqlIgnoreCase(action, "add-current"))
             .{ .command = .bookmark_add_current }
+        else if (std.ascii.eqlIgnoreCase(action, "open-visible-new-tabs"))
+            .{ .command = .bookmark_open_visible_new_tabs }
         else if (parseInternalBrowseFilterAction(action, "filter/")) |filter|
             .{ .command = .{ .bookmark_filter_set = filter } }
         else if (parseInternalBrowseBookmarkSortAction(action)) |mode|
@@ -3555,6 +3563,7 @@ fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
         .history_filter_set,
         .history_filter_clear,
         .bookmark_add_current,
+        .bookmark_open_visible_new_tabs,
         .bookmark_sort_set,
         .bookmark_open_new_tab,
         .bookmark_filter_set,
@@ -3599,6 +3608,7 @@ fn internalBrowseCommandUsesBrowseLoopHandler(command: BrowserCommand) bool {
         .history_filter_set,
         .history_filter_clear,
         .bookmark_open_new_tab,
+        .bookmark_open_visible_new_tabs,
         .bookmark_sort_set,
         .bookmark_filter_set,
         .bookmark_filter_clear,
@@ -3626,6 +3636,7 @@ fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
         .history_filter_clear,
         => .history,
         .bookmark_add_current,
+        .bookmark_open_visible_new_tabs,
         .bookmark_open_new_tab,
         .bookmark_sort_set,
         .bookmark_filter_set,
@@ -4999,6 +5010,8 @@ fn writeInternalBookmarksPage(
     try writeInternalQuickFilterLinks(writer, "browser://bookmarks", bookmark_tokens[0..bookmark_token_count]);
     try writer.writeAll("<p>");
     try writeInternalActionLink(writer, "browser://bookmarks/add-current", "Add current page");
+    try writer.writeAll(" | ");
+    try writeInternalActionLink(writer, "browser://bookmarks/open-visible-new-tabs", "Open visible in new tabs");
     try writer.writeAll("</p>");
     if (bookmarks.items.len == 0) {
         try writer.writeAll("<p>No bookmarks saved yet. Press Ctrl+D on a page first.</p>");
@@ -5323,6 +5336,55 @@ fn loadPersistedBookmarkAtIndex(
     }
 
     return allocator.dupe(u8, bookmarks.items[index]) catch null;
+}
+
+fn openVisibleBookmarksInNewTabs(
+    app: *App,
+    shell: *BrowseShell,
+    source_tab_index: usize,
+    settings: *const BrowseSettings,
+    downloads: *BrowseDownloads,
+) !usize {
+    if (source_tab_index >= shell.tabs.items.len) {
+        return 0;
+    }
+
+    const source_tab = shell.tabs.items[source_tab_index];
+    var bookmarks = loadPersistedBookmarks(app.allocator, app.app_dir_path);
+    defer deinitOwnedStrings(app.allocator, &bookmarks);
+
+    if (bookmarks.items.len == 0) {
+        return 0;
+    }
+
+    const order = try makeBookmarksDisplayOrder(app.allocator, bookmarks.items, source_tab.internal_filters.bookmarks_sort);
+    defer app.allocator.free(order);
+
+    var opened: usize = 0;
+    for (order) |index| {
+        const bookmark_url = bookmarks.items[index];
+        if (!bookmarkEntryMatchesFilter(source_tab.internal_filters.bookmarks, bookmark_url)) {
+            continue;
+        }
+        try openOrReuseTargetedBrowseTab(
+            app,
+            shell.tabs,
+            shell.active_tab_index,
+            settings.allow_script_popups,
+            downloads,
+            source_tab.zoom_percent,
+            bookmark_url,
+            .{
+                .reason = .address_bar,
+                .kind = .{ .push = null },
+            },
+            "",
+            false,
+            .none,
+        );
+        opened += 1;
+    }
+    return opened;
 }
 
 fn movePersistedBookmarkUpAtIndex(
@@ -5932,6 +5994,10 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://bookmarks/add-current").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .bookmark_open_visible_new_tabs },
+        parseInternalBrowseRoute("browser://bookmarks/open-visible-new-tabs").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .{ .bookmark_sort_set = .alphabetical } },
         parseInternalBrowseRoute("browser://bookmarks/sort/alphabetical").?,
     );
@@ -6467,6 +6533,7 @@ test "writeInternalBookmarksPage applies filter state and renders quick links" {
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/filter-clear") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/sort/alphabetical") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/filter/127.0.0.1%3A8190") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/open-visible-new-tabs") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/open-new-tab/1") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://bookmarks/move-up/1") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "http://127.0.0.1:8190/page-two.html") != null);
@@ -7004,6 +7071,7 @@ test "internalBrowseCommandHostPage maps stateful internal actions" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.{ .history_filter_set = "one" }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .history), internalBrowseCommandHostPage(.history_filter_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.bookmark_add_current));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.bookmark_open_visible_new_tabs));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.{ .bookmark_open_new_tab = 0 }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.{ .bookmark_move_up = 0 }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .bookmarks), internalBrowseCommandHostPage(.{ .bookmark_move_down = 0 }));
@@ -7031,6 +7099,7 @@ test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reo
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_sort_set = .newest_first }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .history_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.history_filter_clear));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.bookmark_open_visible_new_tabs));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .bookmark_open_new_tab = 0 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .bookmark_move_up = 0 }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .bookmark_move_down = 0 }));
@@ -7051,6 +7120,7 @@ test "internalBrowseCommandKeepsCurrentPage includes internal open in new tab ac
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_remove_before = 1 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_remove_after = 1 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .history_sort_set = .newest_first }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.bookmark_open_visible_new_tabs));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_open_new_tab = 0 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_move_up = 0 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .bookmark_move_down = 0 }));

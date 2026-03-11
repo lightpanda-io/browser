@@ -211,6 +211,10 @@ Current state inside Gate 1:
 - `browser://bookmarks` now supports persisted in-page reorder actions in saved
   order mode, and `browser://downloads` now supports in-place retry of failed
   and interrupted entries with bounded headed document-action coverage
+- `browser://bookmarks` now also supports opening all currently visible
+  bookmark rows in new background tabs based on the page's active filter and
+  sort state, with a bounded headed probe proving the filtered bookmarks page
+  stays active while the visible bookmark targets open in saved-order
 - root `Content-Disposition: attachment` navigations now promote into the
   headed download manager instead of degrading into navigation errors:
   address-bar navigations, in-page link activations, and direct startup URLs
@@ -459,6 +463,12 @@ Current state inside Gate 1:
   reach the first, second, third, fourth, fifth, sixth, or seventh link, or
   continue past all seven links to the later-row submit control and complete a
   real headed form submission
+- that same later-row mixed-inline form coverage now also includes eight
+  distinct later-row link targets before a later-row submit control, with
+  bounded probes proving the same dense wrapped paragraph can independently
+  reach the first, second, third, fourth, fifth, sixth, seventh, or eighth
+  link, or continue past all eight links to the later-row submit control and
+  complete a real headed form submission
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
