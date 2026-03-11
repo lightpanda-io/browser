@@ -99,8 +99,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         if (el.is(Element.Html)) |html_el| {
             if (html_el.getHidden()) return;
         }
-    } else if (node.is(CData.Text) != null) {
-        const text_node = node.as(CData.Text);
+    } else if (node.is(CData.Text)) |text_node| {
         const text = text_node.getWholeText();
         if (isAllWhitespace(text)) {
             return;
@@ -266,7 +265,7 @@ fn appendXPathSegment(node: *Node, writer: anytype, index: usize) !void {
     if (node.is(Element)) |el| {
         const tag = el.getTagNameLower();
         try std.fmt.format(writer, "/{s}[{d}]", .{ tag, index });
-    } else if (node.is(CData.Text) != null) {
+    } else if (node.is(CData.Text)) |_| {
         try std.fmt.format(writer, "/text()[{d}]", .{index});
     }
 }
@@ -338,8 +337,7 @@ const JsonVisitor = struct {
                 }
                 try self.jw.endArray();
             }
-        } else if (node.is(CData.Text) != null) {
-            const text_node = node.is(CData.Text).?;
+        } else if (node.is(CData.Text)) |text_node| {
             try self.jw.objectField("nodeType");
             try self.jw.write(3);
             try self.jw.objectField("nodeValue");
@@ -401,8 +399,7 @@ const TextVisitor = struct {
             if (n.len > 0) {
                 try self.writer.writeAll(n);
             }
-        } else if (node.is(CData.Text) != null) {
-            const text_node = node.is(CData.Text).?;
+        } else if (node.is(CData.Text)) |text_node| {
             const trimmed = std.mem.trim(u8, text_node.getWholeText(), " \t\r\n");
             if (trimmed.len > 0) {
                 try self.writer.writeAll(trimmed);
