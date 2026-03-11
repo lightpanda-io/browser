@@ -115,6 +115,30 @@
   }
 </script>
 
+<script id=structuredClone>
+  // Basic types
+  testing.expectEqual(42, structuredClone(42));
+  testing.expectEqual('hello', structuredClone('hello'));
+  testing.expectEqual(true, structuredClone(true));
+  testing.expectEqual(null, structuredClone(null));
+
+  // Object deep clone
+  const obj = { a: 1, b: { c: 2 } };
+  const cloned = structuredClone(obj);
+  testing.expectEqual(1, cloned.a);
+  testing.expectEqual(2, cloned.b.c);
+  cloned.b.c = 99;
+  testing.expectEqual(2, obj.b.c); // original unchanged
+
+  // Array deep clone
+  const arr = [1, [2, 3]];
+  const clonedArr = structuredClone(arr);
+  testing.expectEqual(1, clonedArr[0]);
+  testing.expectEqual(2, clonedArr[1][0]);
+  clonedArr[1][0] = 99;
+  testing.expectEqual(2, arr[1][0]); // original unchanged
+</script>
+
 <script id=screen>
   testing.expectEqual(1920, screen.width);
   testing.expectEqual(1080, screen.height);
