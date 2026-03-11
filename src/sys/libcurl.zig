@@ -41,6 +41,20 @@ pub const CurlHeaderFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
 pub const CurlWriteFunction = fn ([*]const u8, usize, usize, *anyopaque) usize;
 pub const curl_writefunc_error: usize = c.CURL_WRITEFUNC_ERROR;
 
+pub const FreeCallback = fn (ptr: ?*anyopaque) void;
+pub const StrdupCallback = fn (str: [*:0]const u8) ?[*:0]u8;
+pub const MallocCallback = fn (size: usize) ?*anyopaque;
+pub const CallocCallback = fn (nmemb: usize, size: usize) ?*anyopaque;
+pub const ReallocCallback = fn (ptr: ?*anyopaque, size: usize) ?*anyopaque;
+
+pub const CurlAllocator = struct {
+    free: FreeCallback,
+    strdup: StrdupCallback,
+    malloc: MallocCallback,
+    calloc: CallocCallback,
+    realloc: ReallocCallback,
+};
+
 pub const CurlGlobalFlags = packed struct(u8) {
     ssl: bool = false,
     _reserved: u7 = 0,
@@ -449,8 +463,41 @@ pub const CurlMsg = struct {
     data: CurlMsgData,
 };
 
-pub fn curl_global_init(flags: CurlGlobalFlags) Error!void {
-    try errorCheck(c.curl_global_init(flags.to_c()));
+pub fn curl_global_init(flags: CurlGlobalFlags, comptime curl_allocator: ?CurlAllocator) Error!void {
+    const alloc = curl_allocator orelse {
+        return errorCheck(c.curl_global_init(flags.to_c()));
+    };
+
+    // The purpose of these wrappers is to hide callconv
+    // and provide an easy place to add logging when debugging.
+    const free = struct {
+        fn cb(ptr: ?*anyopaque) callconv(.c) void {
+            alloc.free(ptr);
+        }
+    }.cb;
+    const strdup = struct {
+        fn cb(str: [*c]const u8) callconv(.c) [*c]u8 {
+            const s: [*:0]const u8 = @ptrCast(str orelse return null);
+            return @ptrCast(alloc.strdup(s));
+        }
+    }.cb;
+    const malloc = struct {
+        fn cb(size: usize) callconv(.c) ?*anyopaque {
+            return alloc.malloc(size);
+        }
+    }.cb;
+    const calloc = struct {
+        fn cb(nmemb: usize, size: usize) callconv(.c) ?*anyopaque {
+            return alloc.calloc(nmemb, size);
+        }
+    }.cb;
+    const realloc = struct {
+        fn cb(ptr: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
+            return alloc.realloc(ptr, size);
+        }
+    }.cb;
+
+    try errorCheck(c.curl_global_init_mem(flags.to_c(), malloc, free, realloc, strdup, calloc));
 }
 
 pub fn curl_global_cleanup() void {
