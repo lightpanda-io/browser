@@ -247,16 +247,15 @@ fn eventInit(arena: Allocator, typ: String, value: anytype) !Event {
     };
 }
 
-pub fn blob(self: *Factory, child: anytype) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-
+pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child) {
     // Special case: Blob has slice and mime fields, so we need manual setup
     const chain = try PrototypeChain(
         &.{ Blob, @TypeOf(child) },
-    ).allocate(allocator);
+    ).allocate(arena);
 
     const blob_ptr = chain.get(0);
     blob_ptr.* = .{
+        ._arena = arena,
         ._type = unionInit(Blob.Type, chain.get(1)),
         ._slice = "",
         ._mime = "",
