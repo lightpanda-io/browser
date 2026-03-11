@@ -435,6 +435,12 @@ Current state inside Gate 1:
   reach the first link, second link, or third link, or continue past all three
   links to the later-row submit control and complete a real headed form
   submission
+- that same later-row mixed-inline form coverage now also includes four
+  distinct later-row link targets before a later-row submit control, with
+  bounded probes proving the same dense wrapped paragraph can independently
+  reach the first, second, third, or fourth link, or continue past all four
+  links to the later-row submit control and complete a real headed form
+  submission
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
