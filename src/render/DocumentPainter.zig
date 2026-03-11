@@ -2543,6 +2543,30 @@ test "paintDocument keeps wrapped inline button and later link regions distinct"
     try std.testing.expect(latest_link_y.? > control_region.y + 12);
 }
 
+test "paintDocument keeps dense mixed inline focus targets in DOM order across later rows" {
+    var page = try testing.pageTest("page/mixed_inline_dense_focus_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), display_list.control_regions.items.len);
+    try std.testing.expect(display_list.link_regions.items.len >= 1);
+
+    const first_control = display_list.control_regions.items[0];
+    const second_control = display_list.control_regions.items[1];
+    var latest_link_y: ?i32 = null;
+    for (display_list.link_regions.items) |region| {
+        latest_link_y = if (latest_link_y) |current| @max(current, region.y) else region.y;
+    }
+
+    try std.testing.expect(latest_link_y != null);
+    try std.testing.expect(second_control.y >= first_control.y + 8);
+    try std.testing.expect(latest_link_y.? > second_control.y + 8);
+}
+
 test "paintDocument carries loaded private font faces for headed rendering" {
     var page = try testing.pageTest("page/font_private_render.html");
     defer page._session.removePage();

@@ -343,6 +343,10 @@ Current state inside Gate 1:
   proving a wrapped later-row button and a lower later-row link remain
   independently usable in the same paragraph by both direct click and
   button-focus `Tab` then `Enter` traversal
+- dense mixed-inline traversal is now covered as well, with a bounded probe
+  proving one wrapped paragraph can hand off focus from a later-row button to
+  a later-row input and then to a later-row link through `Tab` progression
+  while each target still performs its real headed action
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
