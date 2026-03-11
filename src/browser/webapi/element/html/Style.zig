@@ -92,11 +92,17 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     }
 
     if (self._sheet) |sheet| {
+        sheet._request_base_url = try page.arena.dupeZ(u8, page.base());
+        sheet._request_referer_url = try page.arena.dupeZ(u8, page.url);
+        sheet._request_include_credentials = true;
         const text = try self.asNode().getTextContentAlloc(page.call_arena);
         try sheet.replaceSync(text, page);
         return sheet;
     }
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
+    sheet._request_base_url = try page.arena.dupeZ(u8, page.base());
+    sheet._request_referer_url = try page.arena.dupeZ(u8, page.url);
+    sheet._request_include_credentials = true;
     const text = try self.asNode().getTextContentAlloc(page.call_arena);
     try sheet.replaceSync(text, page);
     self._sheet = sheet;

@@ -2,11 +2,15 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
+const Http = @import("../../../http/Http.zig");
+const URL = @import("../URL.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
 const CSSRule = @import("CSSRule.zig");
 const CSSStyleDeclaration = @import("CSSStyleDeclaration.zig");
+const RawURL = @import("../../URL.zig");
 
 const CSSStyleSheet = @This();
+const STYLESHEET_ACCEPT_HEADER: [:0]const u8 = "Accept: text/css,*/*;q=0.1";
 
 _href: ?[]const u8 = null,
 _title: []const u8 = "",
@@ -15,6 +19,9 @@ _css_rules: ?*CSSRuleList = null,
 _owner_rule: ?*CSSRule = null,
 _owner_node: ?*Element = null,
 _rules: []ParsedRule = &.{},
+_request_base_url: ?[:0]const u8 = null,
+_request_referer_url: ?[:0]const u8 = null,
+_request_include_credentials: bool = true,
 
 const ParsedRule = struct {
     selector_text: []const u8,
@@ -84,31 +91,21 @@ pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise 
 pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
     var parsed: std.ArrayList(ParsedRule) = .{};
     defer parsed.deinit(page.arena);
+    var scratch = std.heap.ArenaAllocator.init(page.arena);
+    defer scratch.deinit();
+    var visited: std.StringHashMapUnmanaged(void) = .empty;
+    defer visited.deinit(scratch.allocator());
 
-    var cursor: usize = 0;
-    while (cursor < text.len) {
-        const selector_start = skipWhitespaceAndComments(text, cursor);
-        if (selector_start >= text.len) break;
-
-        const open_index = std.mem.indexOfScalarPos(u8, text, selector_start, '{') orelse break;
-        const close_index = findMatchingBrace(text, open_index) orelse break;
-        cursor = close_index + 1;
-
-        const selector_text = std.mem.trim(u8, text[selector_start..open_index], &std.ascii.whitespace);
-        const declarations_text = std.mem.trim(u8, text[open_index + 1 .. close_index], &std.ascii.whitespace);
-        if (selector_text.len == 0 or declarations_text.len == 0) continue;
-        if (selector_text[0] == '@') continue;
-
-        const rule_text = std.mem.trim(u8, text[selector_start .. close_index + 1], &std.ascii.whitespace);
-        const rule = try CSSRule.init(.style, page);
-        try rule.setCssText(rule_text, page);
-
-        try parsed.append(page.arena, .{
-            .selector_text = try page.dupeString(selector_text),
-            .declarations_text = try page.dupeString(declarations_text),
-            .rule = rule,
-        });
-    }
+    try self.appendParsedRulesFromText(
+        &parsed,
+        text,
+        page,
+        scratch.allocator(),
+        &visited,
+        self._request_base_url,
+        self._request_referer_url,
+        self._request_include_credentials,
+    );
 
     self._rules = try page.arena.dupe(ParsedRule, parsed.items);
     try self.refreshRuleList(page);
@@ -133,6 +130,236 @@ fn refreshRuleList(self: *CSSStyleSheet, page: *Page) !void {
         try out.append(page.arena, entry.rule);
     }
     try rules.setRules(page, out.items);
+}
+
+const StylesheetFetchContext = struct {
+    allocator: std.mem.Allocator,
+    buffer: std.ArrayList(u8),
+    finished: bool = false,
+    failed: ?anyerror = null,
+    status: u16 = 0,
+};
+
+fn appendParsedRulesFromText(
+    self: *CSSStyleSheet,
+    parsed: *std.ArrayList(ParsedRule),
+    text: []const u8,
+    page: *Page,
+    temp: std.mem.Allocator,
+    visited: *std.StringHashMapUnmanaged(void),
+    base_url: ?[:0]const u8,
+    referer_url: ?[:0]const u8,
+    include_credentials: bool,
+) anyerror!void {
+    var cursor: usize = 0;
+    while (cursor < text.len) {
+        const selector_start = skipWhitespaceAndComments(text, cursor);
+        if (selector_start >= text.len) break;
+
+        if (std.mem.startsWith(u8, text[selector_start..], "@import")) {
+            const semicolon_index = std.mem.indexOfScalarPos(u8, text, selector_start, ';') orelse break;
+            const import_text = std.mem.trim(u8, text[selector_start .. semicolon_index + 1], &std.ascii.whitespace);
+            cursor = semicolon_index + 1;
+
+            const import_specifier = parseImportSpecifier(import_text) orelse continue;
+            try self.appendImportedRules(
+                parsed,
+                import_specifier,
+                page,
+                temp,
+                visited,
+                base_url,
+                referer_url,
+                include_credentials,
+            );
+            continue;
+        }
+
+        if (text[selector_start] == '@') {
+            const semicolon_index = std.mem.indexOfScalarPos(u8, text, selector_start, ';');
+            const open_index = std.mem.indexOfScalarPos(u8, text, selector_start, '{');
+            if (semicolon_index != null and (open_index == null or semicolon_index.? < open_index.?)) {
+                cursor = semicolon_index.? + 1;
+                continue;
+            }
+        }
+
+        const open_index = std.mem.indexOfScalarPos(u8, text, selector_start, '{') orelse break;
+        const close_index = findMatchingBrace(text, open_index) orelse break;
+        cursor = close_index + 1;
+
+        const selector_text = std.mem.trim(u8, text[selector_start..open_index], &std.ascii.whitespace);
+        const declarations_text = std.mem.trim(u8, text[open_index + 1 .. close_index], &std.ascii.whitespace);
+        if (selector_text.len == 0 or declarations_text.len == 0) continue;
+        if (selector_text[0] == '@') continue;
+
+        const rule_text = std.mem.trim(u8, text[selector_start .. close_index + 1], &std.ascii.whitespace);
+        const rule = try CSSRule.init(.style, page);
+        try rule.setCssText(rule_text, page);
+
+        try parsed.append(page.arena, .{
+            .selector_text = try page.dupeString(selector_text),
+            .declarations_text = try page.dupeString(declarations_text),
+            .rule = rule,
+        });
+    }
+}
+
+fn appendImportedRules(
+    self: *CSSStyleSheet,
+    parsed: *std.ArrayList(ParsedRule),
+    import_specifier: []const u8,
+    page: *Page,
+    temp: std.mem.Allocator,
+    visited: *std.StringHashMapUnmanaged(void),
+    base_url: ?[:0]const u8,
+    referer_url: ?[:0]const u8,
+    include_credentials: bool,
+) anyerror!void {
+    const current_base = base_url orelse return;
+    const resolved_url = try URL.resolve(temp, current_base, import_specifier, .{ .encode = true, .always_dupe = true });
+    const gop = try visited.getOrPut(temp, resolved_url);
+    if (gop.found_existing) {
+        return;
+    }
+    gop.key_ptr.* = resolved_url;
+
+    const import_css = try fetchStylesheetText(page, temp, resolved_url, referer_url, include_credentials);
+    try self.appendParsedRulesFromText(
+        parsed,
+        import_css,
+        page,
+        temp,
+        visited,
+        resolved_url,
+        resolved_url,
+        include_credentials,
+    );
+}
+
+fn fetchStylesheetText(
+    page: *Page,
+    temp: std.mem.Allocator,
+    url: [:0]const u8,
+    referer_url: ?[:0]const u8,
+    include_credentials: bool,
+) ![]const u8 {
+    const request_url = try stylesheetRequestUrlForFetch(temp, url, include_credentials);
+    const import_client = try page._session.browser.app.http.createClient(temp);
+    defer import_client.deinit();
+
+    var headers = try import_client.newHeaders();
+    try headers.add(STYLESHEET_ACCEPT_HEADER);
+    try page.headersForRequestWithPolicy(page.arena, request_url, &headers, .{
+        .include_credentials = include_credentials,
+        .referer_override_url = referer_url,
+    });
+
+    var ctx = StylesheetFetchContext{
+        .allocator = temp,
+        .buffer = .{},
+    };
+    defer ctx.buffer.deinit(temp);
+
+    try import_client.request(.{
+        .url = request_url,
+        .ctx = &ctx,
+        .method = .GET,
+        .frame_id = page._frame_id,
+        .headers = headers,
+        .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
+        .resource_type = .stylesheet,
+        .notification = page._session.notification,
+        .header_callback = importedStylesheetHeaderCallback,
+        .data_callback = importedStylesheetDataCallback,
+        .done_callback = importedStylesheetDoneCallback,
+        .error_callback = importedStylesheetErrorCallback,
+    });
+
+    while (!ctx.finished and ctx.failed == null) {
+        _ = try import_client.tick(50);
+    }
+    if (ctx.failed) |err| return err;
+    return try temp.dupe(u8, ctx.buffer.items);
+}
+
+fn importedStylesheetHeaderCallback(transfer: *Http.Transfer) !bool {
+    const ctx: *StylesheetFetchContext = @ptrCast(@alignCast(transfer.ctx));
+    const response_header = transfer.response_header orelse return true;
+    ctx.status = response_header.status;
+    if (response_header.status >= 400) {
+        ctx.failed = error.BadStatusCode;
+    }
+    return true;
+}
+
+fn importedStylesheetDataCallback(transfer: *Http.Transfer, data: []const u8) !void {
+    const ctx: *StylesheetFetchContext = @ptrCast(@alignCast(transfer.ctx));
+    try ctx.buffer.appendSlice(ctx.allocator, data);
+}
+
+fn importedStylesheetDoneCallback(ctx_ptr: *anyopaque) !void {
+    const ctx: *StylesheetFetchContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.finished = true;
+}
+
+fn importedStylesheetErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
+    const ctx: *StylesheetFetchContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.failed = err;
+}
+
+fn parseImportSpecifier(import_text: []const u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, import_text, "@import")) {
+        return null;
+    }
+
+    var tail = std.mem.trim(u8, import_text["@import".len..], &std.ascii.whitespace);
+    if (tail.len == 0) return null;
+    if (tail[tail.len - 1] == ';') {
+        tail = std.mem.trimRight(u8, tail[0 .. tail.len - 1], &std.ascii.whitespace);
+    }
+    if (tail.len == 0) return null;
+
+    if (std.mem.startsWith(u8, tail, "url(")) {
+        const close_index = std.mem.indexOfScalar(u8, tail, ')') orelse return null;
+        var inner = std.mem.trim(u8, tail["url(".len..close_index], &std.ascii.whitespace);
+        if (inner.len >= 2 and ((inner[0] == '"' and inner[inner.len - 1] == '"') or (inner[0] == '\'' and inner[inner.len - 1] == '\''))) {
+            inner = inner[1 .. inner.len - 1];
+        }
+        return if (inner.len == 0) null else inner;
+    }
+
+    if (tail[0] == '"' or tail[0] == '\'') {
+        const quote = tail[0];
+        const end_index = std.mem.indexOfScalarPos(u8, tail, 1, quote) orelse return null;
+        const inner = tail[1..end_index];
+        return if (inner.len == 0) null else inner;
+    }
+
+    return null;
+}
+
+fn stylesheetRequestUrlForFetch(
+    allocator: std.mem.Allocator,
+    url: [:0]const u8,
+    include_credentials: bool,
+) ![:0]const u8 {
+    if (include_credentials) {
+        return try allocator.dupeZ(u8, url);
+    }
+
+    if (RawURL.getUsername(url).len == 0) {
+        return try allocator.dupeZ(u8, url);
+    }
+
+    return try RawURL.buildUrl(
+        allocator,
+        RawURL.getProtocol(url),
+        RawURL.getHost(url),
+        RawURL.getPathname(url),
+        RawURL.getSearch(url),
+        RawURL.getHash(url),
+    );
 }
 
 fn skipWhitespaceAndComments(text: []const u8, start: usize) usize {

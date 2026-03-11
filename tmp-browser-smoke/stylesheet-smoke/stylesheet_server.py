@@ -84,6 +84,76 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/auth-stylesheet-import-page.html":
+            body = b"""<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Stylesheet Import Pending</title></head>
+<body>
+<script>
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = '/private-import-root.css';
+  link.onload = () => {
+    const ok = (link.sheet instanceof CSSStyleSheet) ? 1 : 0;
+    const count = document.styleSheets.length;
+    const bg = getComputedStyle(document.body).backgroundColor;
+    const applied = bg === 'rgb(55, 155, 45)' ? 1 : 0;
+    document.title = applied ? 'Stylesheet Import Applied' : 'Stylesheet Import Loaded';
+    const beacon = new Image();
+    beacon.alt = 'stylesheet-import-loaded';
+    beacon.src = '/loaded-import?sheet=' + ok + '&count=' + count + '&applied=' + applied + '&bg=' + encodeURIComponent(bg);
+    document.body.appendChild(beacon);
+  };
+  document.head.appendChild(link);
+</script>
+</body>
+</html>
+"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpcssimport=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/auth-stylesheet-import-anonymous-page.html":
+            body = """<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Stylesheet Import Anonymous Pending</title></head>
+<body>
+<script>
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.crossOrigin = 'anonymous';
+  link.href = '__ANON_IMPORT_ROOT__';
+  link.onload = () => {
+    const ok = (link.sheet instanceof CSSStyleSheet) ? 1 : 0;
+    const count = document.styleSheets.length;
+    const bg = getComputedStyle(document.body).backgroundColor;
+    const applied = bg === 'rgb(25, 115, 205)' ? 1 : 0;
+    document.title = applied ? 'Stylesheet Import Anonymous Applied' : 'Stylesheet Import Anonymous Loaded';
+    const beacon = new Image();
+    beacon.alt = 'stylesheet-import-anonymous-loaded';
+    beacon.src = '/loaded-import-anon?sheet=' + ok + '&count=' + count + '&applied=' + applied + '&bg=' + encodeURIComponent(bg);
+    document.body.appendChild(beacon);
+  };
+  document.head.appendChild(link);
+</script>
+</body>
+</html>
+""".replace(
+                "__ANON_IMPORT_ROOT__",
+                f"http://css%20user:p%40ss@127.0.0.1:{PORT}/private-import-anonymous-root.css",
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Set-Cookie", "lpcssimportanon=ok; Path=/")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if self.path == "/private.css":
             ua = self.headers.get("User-Agent", "")
             cookie = self.headers.get("Cookie", "")
@@ -157,6 +227,172 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             body = b"body { background-color: rgb(20, 122, 214); color: white; }"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/private-import-root.css":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-stylesheet-import-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpcssimport=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic Y3NzIHVzZXI6cEBzcw=="
+                and "text/css" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"body{background:#ff0000;}"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/css; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (
+                f'@import "http://css%20user:p%40ss@127.0.0.1:{PORT}/private-import-child.css"; '
+                'body { color: white; }'
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/private-import-child.css":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/private-import-root.css"
+            allowed = (
+                "Lightpanda/" in ua
+                and "lpcssimport=ok" in cookie
+                and referer == expected_referer
+                and authorization == "Basic Y3NzIHVzZXI6cEBzcw=="
+                and "text/css" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"body{background:#ff0000;}"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/css; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"body { background-color: rgb(55, 155, 45); }"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/private-import-anonymous-root.css":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/auth-stylesheet-import-anonymous-page.html"
+            allowed = (
+                "Lightpanda/" in ua
+                and cookie == ""
+                and referer == expected_referer
+                and authorization == ""
+                and "text/css" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"body{background:#ff0000;}"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/css; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = (
+                f'@import "http://css%20user:p%40ss@127.0.0.1:{PORT}/private-import-anonymous-child.css"; '
+                'body { color: white; }'
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/private-import-anonymous-child.css":
+            ua = self.headers.get("User-Agent", "")
+            cookie = self.headers.get("Cookie", "")
+            referer = self.headers.get("Referer", "")
+            authorization = self.headers.get("Authorization", "")
+            accept = self.headers.get("Accept", "")
+            expected_referer = f"http://127.0.0.1:{PORT}/private-import-anonymous-root.css"
+            allowed = (
+                "Lightpanda/" in ua
+                and cookie == ""
+                and referer == expected_referer
+                and authorization == ""
+                and "text/css" in accept
+            )
+            append_log({
+                "path": self.path,
+                "user_agent": ua,
+                "cookie": cookie,
+                "referer": referer,
+                "authorization": authorization,
+                "accept": accept,
+                "allowed": allowed,
+            })
+            if not allowed:
+                body = b"body{background:#ff0000;}"
+                self.send_response(403)
+                self.send_header("Content-Type", "text/css; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            body = b"body { background-color: rgb(25, 115, 205); }"
             self.send_response(200)
             self.send_header("Content-Type", "text/css; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))

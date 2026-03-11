@@ -284,6 +284,10 @@ Current state inside Gate 1:
   simple authored rules, with bounded tests and a headed localhost probe
   proving a protected external stylesheet changes the computed page background
   instead of only firing `load`
+- those same connected external stylesheet `@import` graphs now carry the
+  correct protected vs anonymous request policy on both the root stylesheet
+  request and the imported child stylesheet request, with bounded headed
+  localhost probes proving imported styles apply successfully in both modes
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -322,10 +326,11 @@ Current known gap entering Gate 2:
 - connected `link rel=stylesheet` requests now ride the same shared `Http`
   runtime path with `link.sheet` / `document.styleSheets` coverage and bounded
   protected-load auth/cookie/referer/`Accept` verification plus anonymous
-  credential suppression, but stylesheet body application now exists for the
-  current simple authored-rule path while broader CSS fidelity,
-  script/font/resource parity, and one unified subresource ownership path are
-  still open
+  credential suppression, stylesheet body application now exists for the
+  current simple authored-rule path, and imported child stylesheets now keep
+  the same protected vs anonymous policy as the root request, while broader
+  CSS fidelity, script/font/resource parity, and one unified subresource
+  ownership path are still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

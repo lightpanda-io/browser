@@ -116,8 +116,12 @@ pub fn getSheet(self: *Link, page: *Page) !?*CSSStyleSheet {
         self._sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
     }
 
+    const include_credentials = stylesheetRequestIncludesCredentials(self);
     self._sheet.?._href = try page.arena.dupe(u8, href);
     self._sheet.?._title = self.asElement().getAttributeSafe(comptime .wrap("title")) orelse "";
+    self._sheet.?._request_base_url = try page.arena.dupeZ(u8, href);
+    self._sheet.?._request_referer_url = try page.arena.dupeZ(u8, href);
+    self._sheet.?._request_include_credentials = include_credentials;
     return self._sheet.?;
 }
 
@@ -240,6 +244,7 @@ fn fetchStylesheet(self: *Link, page: *Page) !void {
     if (ctx.failed) |err| {
         return err;
     }
+
 }
 
 fn stylesheetRequestIncludesCredentials(self: *const Link) bool {

@@ -51,6 +51,25 @@
 }
 </script>
 
+<script id="document_styleSheets_applies_imported_style_to_computed_style">
+{
+    const style = document.createElement('style');
+    style.textContent = '@import "stylesheet_imported.css"; .sheet-import-target { color: rgb(4, 5, 6); }';
+    document.head.appendChild(style);
+
+    const div = document.createElement('div');
+    div.className = 'sheet-import-target';
+    document.body.appendChild(div);
+
+    testing.eventually(() => {
+        const computed = getComputedStyle(div);
+        const bodyComputed = getComputedStyle(document.body);
+        testing.expectEqual('rgb(4, 5, 6)', computed.color);
+        testing.expectEqual('rgb(10, 110, 210)', bodyComputed.backgroundColor);
+    });
+}
+</script>
+
 <script id="CSSStyleDeclaration_setCssText_basic">
 {
     const div = document.createElement('div');

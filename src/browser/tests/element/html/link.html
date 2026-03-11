@@ -108,3 +108,32 @@
   });
 }
 </script>
+
+<script id="link-sheet-import">
+{
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'link_import_root.css';
+
+  testing.async(async (restore) => {
+    await new Promise(resolve => {
+      link.addEventListener('load', () => resolve(true));
+      document.head.appendChild(link);
+    });
+
+    restore();
+    const body = document.body || document.createElement('body');
+    if (!document.body) {
+      document.documentElement.appendChild(body);
+    }
+    const div = document.createElement('div');
+    div.className = 'link-import-target';
+    body.appendChild(div);
+
+    const computed = getComputedStyle(div);
+    testing.expectEqual('rgb(14, 144, 214)', computed.backgroundColor);
+    testing.expectEqual('rgb(9, 19, 29)', computed.color);
+    testing.expectTrue(link.sheet.cssRules.length >= 2);
+  });
+}
+</script>
