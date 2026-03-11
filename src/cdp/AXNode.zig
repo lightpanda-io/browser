@@ -765,11 +765,6 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
         // Mock JSON Stringifier lifecycle methods
         pub fn beginWriteRaw(_: @This()) !void {}
         pub fn endWriteRaw(_: @This()) void {}
-        pub fn objectField(_: @This(), _: []const u8) !void {}
-        pub fn beginObject(_: @This()) !void {}
-        pub fn endObject(_: @This()) !void {}
-        pub fn beginArray(_: @This()) !void {}
-        pub fn endArray(_: @This()) !void {}
     };
 
     const w = TextCaptureWriter{ .aw = &aw, .writer = &aw.writer };
