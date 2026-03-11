@@ -351,6 +351,10 @@ Current state inside Gate 1:
   checkbox/link coexistence, with a bounded probe proving a wrapped later-row
   checkbox can be toggled by click and `Space`, and that `Tab` then `Enter`
   still reaches and activates a later-row link in the same paragraph
+- that same mixed-inline later-row control coverage now also includes dense
+  checkbox/button/link coexistence, with a bounded probe proving one wrapped
+  paragraph can handle later-row checkbox click activation, later-row button
+  click activation, and then `Tab`/`Enter` traversal into a later-row link
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
