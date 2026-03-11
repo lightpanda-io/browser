@@ -294,6 +294,11 @@ Current state inside Gate 1:
   localhost probes proving protected and anonymous font requests carry the
   correct cookie, sanitized referer, auth suppression or inheritance, explicit
   font `Accept`, and loaded page state on the headed surface
+- headed Win32 text rendering now carries authored `font-family`,
+  `font-weight`, and `font-style` through the display list into real GDI font
+  selection for installed fonts, with a bounded screenshot probe proving the
+  headed surface produces materially different glyph widths for authored font
+  runs instead of always falling back to one generic face
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -336,8 +341,11 @@ Current known gap entering Gate 2:
   current simple authored-rule path, and imported child stylesheets now keep
   the same protected vs anonymous policy as the root request; stylesheet-
   backed `@font-face` fetches and `document.fonts` now ride that same path,
-  while broader CSS fidelity, real font rendering/text shaping, script/font/
-  resource parity, and one unified subresource ownership path are still open
+  and headed Win32 text rendering now honors authored installed-font
+  family/style/weight on the surface, but private stylesheet-backed
+  `@font-face` rendering, broader CSS fidelity, real text shaping,
+  script/font/resource parity, and one unified subresource ownership path are
+  still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

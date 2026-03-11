@@ -3761,6 +3761,116 @@ fn drawPresentationText(hdc: c.HDC, rect: *c.RECT, text: []const u8, flags: c.UI
     _ = c.DrawTextW(hdc, utf16.ptr, @intCast(utf16.len), rect, flags);
 }
 
+const PresentationFontSpec = struct {
+    face_name: []const u8,
+    pitch_family: c.DWORD,
+};
+
+fn resolvePresentationFontSpec(font_family_value: []const u8) PresentationFontSpec {
+    var preferred_specific: []const u8 = "";
+    var generic_spec: ?PresentationFontSpec = null;
+
+    var families = std.mem.splitScalar(u8, font_family_value, ',');
+    while (families.next()) |raw_family| {
+        const family = trimPresentationFontFamily(raw_family);
+        if (family.len == 0) {
+            continue;
+        }
+        if (presentationGenericFontSpec(family)) |spec| {
+            if (generic_spec == null) {
+                generic_spec = spec;
+            }
+            continue;
+        }
+        if (preferred_specific.len == 0) {
+            preferred_specific = family;
+        }
+    }
+
+    if (preferred_specific.len > 0) {
+        return .{
+            .face_name = preferred_specific,
+            .pitch_family = if (generic_spec) |spec| spec.pitch_family else @as(c.DWORD, c.DEFAULT_PITCH | c.FF_DONTCARE),
+        };
+    }
+    if (generic_spec) |spec| {
+        return spec;
+    }
+    return .{
+        .face_name = "Segoe UI",
+        .pitch_family = @as(c.DWORD, c.DEFAULT_PITCH | c.FF_SWISS),
+    };
+}
+
+fn trimPresentationFontFamily(raw_family: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, raw_family, &std.ascii.whitespace);
+    if (trimmed.len >= 2) {
+        const quote = trimmed[0];
+        if ((quote == '"' or quote == '\'') and trimmed[trimmed.len - 1] == quote) {
+            return std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], &std.ascii.whitespace);
+        }
+    }
+    return trimmed;
+}
+
+fn presentationGenericFontSpec(family: []const u8) ?PresentationFontSpec {
+    if (std.ascii.eqlIgnoreCase(family, "sans-serif") or
+        std.ascii.eqlIgnoreCase(family, "system-ui") or
+        std.ascii.eqlIgnoreCase(family, "ui-sans-serif") or
+        std.ascii.eqlIgnoreCase(family, "ui-rounded"))
+    {
+        return .{
+            .face_name = "Segoe UI",
+            .pitch_family = @as(c.DWORD, c.DEFAULT_PITCH | c.FF_SWISS),
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "serif") or
+        std.ascii.eqlIgnoreCase(family, "ui-serif"))
+    {
+        return .{
+            .face_name = "Times New Roman",
+            .pitch_family = @as(c.DWORD, c.VARIABLE_PITCH | c.FF_ROMAN),
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "monospace") or
+        std.ascii.eqlIgnoreCase(family, "ui-monospace"))
+    {
+        return .{
+            .face_name = "Consolas",
+            .pitch_family = @as(c.DWORD, c.FIXED_PITCH | c.FF_MODERN),
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "cursive")) {
+        return .{
+            .face_name = "Segoe Script",
+            .pitch_family = @as(c.DWORD, c.VARIABLE_PITCH | c.FF_SCRIPT),
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "fantasy")) {
+        return .{
+            .face_name = "Impact",
+            .pitch_family = @as(c.DWORD, c.VARIABLE_PITCH | c.FF_DECORATIVE),
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "emoji")) {
+        return .{
+            .face_name = "Segoe UI Emoji",
+            .pitch_family = @as(c.DWORD, c.DEFAULT_PITCH | c.FF_DONTCARE),
+        };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "math")) {
+        return .{
+            .face_name = "Cambria Math",
+            .pitch_family = @as(c.DWORD, c.DEFAULT_PITCH | c.FF_ROMAN),
+        };
+    }
+    return null;
+}
+
+fn presentationFontWeight(css_weight: i32) c_int {
+    return @as(c_int, @intCast(std.math.clamp(css_weight, 100, 900)));
+}
+
 fn colorRef(color: DisplayColor) c.COLORREF {
     return @as(c.COLORREF, color.r) |
         (@as(c.COLORREF, color.g) << 8) |
@@ -4415,21 +4525,24 @@ fn renderPresentationDisplayList(
                 }
                 const previous = c.SetTextColor(hdc, colorRef(text_cmd.color));
                 const font_height: c_int = -@as(c_int, @intCast(font_size));
+                const font_spec = resolvePresentationFontSpec(text_cmd.font_family);
+                const wide_face = std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, font_spec.face_name) catch null;
+                defer if (wide_face) |face| std.heap.c_allocator.free(face);
                 const font = c.CreateFontW(
                     font_height,
                     0,
                     0,
                     0,
-                    c.FW_NORMAL,
-                    0,
+                    presentationFontWeight(text_cmd.font_weight),
+                    @intFromBool(text_cmd.italic),
                     @as(c.DWORD, @intFromBool(text_cmd.underline)),
                     0,
                     c.DEFAULT_CHARSET,
                     c.OUT_DEFAULT_PRECIS,
                     c.CLIP_DEFAULT_PRECIS,
                     c.CLEARTYPE_QUALITY,
-                    c.DEFAULT_PITCH | c.FF_SWISS,
-                    null,
+                    font_spec.pitch_family,
+                    if (wide_face) |face| face.ptr else null,
                 );
                 const previous_font = if (font != null) c.SelectObject(hdc, font) else null;
                 defer if (font != null) {
@@ -7901,6 +8014,26 @@ test "win32 download overlay delete enqueues remove command" {
 test "win32 presentation scaling helpers round-trip coordinates" {
     try std.testing.expectEqual(@as(i32, 150), scalePresentationValue(100, 150));
     try std.testing.expectApproxEqAbs(@as(f64, 100.0), unscalePresentationValue(150.0, 150), 0.001);
+}
+
+test "win32 resolvePresentationFontSpec maps generic families and keeps specific family" {
+    const sans = resolvePresentationFontSpec("system-ui, sans-serif");
+    try std.testing.expectEqualStrings("Segoe UI", sans.face_name);
+    try std.testing.expectEqual(@as(c.DWORD, c.DEFAULT_PITCH | c.FF_SWISS), sans.pitch_family);
+
+    const mono = resolvePresentationFontSpec("\"Consolas\", monospace");
+    try std.testing.expectEqualStrings("Consolas", mono.face_name);
+    try std.testing.expectEqual(@as(c.DWORD, c.FIXED_PITCH | c.FF_MODERN), mono.pitch_family);
+
+    const custom = resolvePresentationFontSpec("'Probe Font', serif");
+    try std.testing.expectEqualStrings("Probe Font", custom.face_name);
+    try std.testing.expectEqual(@as(c.DWORD, c.VARIABLE_PITCH | c.FF_ROMAN), custom.pitch_family);
+}
+
+test "win32 presentationFontWeight clamps css weight into GDI range" {
+    try std.testing.expectEqual(@as(c_int, 100), presentationFontWeight(1));
+    try std.testing.expectEqual(@as(c_int, 400), presentationFontWeight(400));
+    try std.testing.expectEqual(@as(c_int, 900), presentationFontWeight(1200));
 }
 
 test "win32 wheel zoom command maps sign to zoom action" {

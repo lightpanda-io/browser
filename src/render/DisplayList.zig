@@ -20,6 +20,9 @@ pub const TextCommand = struct {
     y: i32,
     width: i32,
     font_size: i32 = 16,
+    font_family: []u8 = &.{},
+    font_weight: i32 = 400,
+    italic: bool = false,
     color: Color,
     underline: bool = false,
     text: []u8,
@@ -73,6 +76,9 @@ pub const Command = union(enum) {
                 .y = text.y,
                 .width = text.width,
                 .font_size = text.font_size,
+                .font_family = try allocator.dupe(u8, text.font_family),
+                .font_weight = text.font_weight,
+                .italic = text.italic,
                 .color = text.color,
                 .underline = text.underline,
                 .text = try allocator.dupe(u8, text.text),
@@ -94,7 +100,10 @@ pub const Command = union(enum) {
 
     fn deinit(self: *Command, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .text => |text| allocator.free(text.text),
+            .text => |text| {
+                allocator.free(text.font_family);
+                allocator.free(text.text);
+            },
             .image => |image| {
                 allocator.free(image.url);
                 allocator.free(image.alt);
@@ -190,6 +199,9 @@ pub fn addText(self: *DisplayList, allocator: std.mem.Allocator, text: TextComma
         .y = text.y,
         .width = text.width,
         .font_size = text.font_size,
+        .font_family = try allocator.dupe(u8, text.font_family),
+        .font_weight = text.font_weight,
+        .italic = text.italic,
         .color = text.color,
         .underline = text.underline,
         .text = try allocator.dupe(u8, text.text),
@@ -268,6 +280,9 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&text.y));
                 hasher.update(std.mem.asBytes(&text.width));
                 hasher.update(std.mem.asBytes(&text.font_size));
+                hasher.update(text.font_family);
+                hasher.update(std.mem.asBytes(&text.font_weight));
+                hasher.update(std.mem.asBytes(&text.italic));
                 hasher.update(std.mem.asBytes(&text.color));
                 hasher.update(std.mem.asBytes(&text.underline));
                 hasher.update(text.text);

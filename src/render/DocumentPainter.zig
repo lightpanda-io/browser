@@ -174,6 +174,9 @@ const Painter = struct {
 
         const parent_tag = parent.getTag();
         const font_size = parseFontSizePx(parent_decl.getPropertyValue("font-size", self.page)) orelse defaultFontSize(parent_tag);
+        const font_family = resolveCssPropertyValue(parent_decl, self.page, parent, "font-family");
+        const font_weight = parseCssFontWeight(resolveCssPropertyValue(parent_decl, self.page, parent, "font-weight"));
+        const italic = parseCssFontItalic(resolveCssPropertyValue(parent_decl, self.page, parent, "font-style"));
         const width = std.math.clamp(
             estimateTextWidth(normalized, font_size) + 8,
             8,
@@ -187,6 +190,9 @@ const Painter = struct {
             .y = pos.y,
             .width = width,
             .font_size = font_size,
+            .font_family = @constCast(font_family),
+            .font_weight = font_weight,
+            .italic = italic,
             .color = resolveTextColor(parent_decl, self.page, parent, parent_tag),
             .underline = shouldUnderlineText(parent, parent_decl, self.page, parent_tag),
             .text = normalized,
@@ -221,6 +227,9 @@ const Painter = struct {
         const margins = resolveEdgeSizes(decl, self.page, "margin");
         const padding = resolveEdgeSizes(decl, self.page, "padding");
         const font_size = parseFontSizePx(decl.getPropertyValue("font-size", self.page)) orelse defaultFontSize(tag);
+        const font_family = resolveCssPropertyValue(decl, self.page, element, "font-family");
+        const font_weight = parseCssFontWeight(resolveCssPropertyValue(decl, self.page, element, "font-weight"));
+        const italic = parseCssFontItalic(resolveCssPropertyValue(decl, self.page, element, "font-style"));
 
         const label = try self.elementLabel(element);
         defer self.allocator.free(label);
@@ -353,6 +362,9 @@ const Painter = struct {
                 .y = rect.y + padding.top + 4,
                 .width = @max(@as(i32, 40), rect.width - padding.horizontal() - 12),
                 .font_size = font_size,
+                .font_family = @constCast(font_family),
+                .font_weight = font_weight,
+                .italic = italic,
                 .color = fg,
                 .underline = shouldUnderlineText(element, decl, self.page, tag),
                 .text = label,
@@ -1320,6 +1332,24 @@ fn parseFontSizePx(value: []const u8) ?i32 {
     return null;
 }
 
+fn parseCssFontWeight(value: []const u8) i32 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) {
+        return 400;
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "normal")) return 400;
+    if (std.ascii.eqlIgnoreCase(trimmed, "bold")) return 700;
+    if (std.ascii.eqlIgnoreCase(trimmed, "bolder")) return 700;
+    if (std.ascii.eqlIgnoreCase(trimmed, "lighter")) return 300;
+
+    const parsed = std.fmt.parseInt(i32, trimmed, 10) catch return 400;
+    return std.math.clamp(parsed, 100, 900);
+}
+
+fn parseCssFontItalic(value: []const u8) bool {
+    return containsAsciiToken(value, "italic") or containsAsciiToken(value, "oblique");
+}
+
 fn parseCssLengthPx(value: []const u8) ?i32 {
     const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
     if (trimmed.len == 0) {
@@ -1573,6 +1603,24 @@ test "inlineStyleDeclarationValue is case-insensitive and trims values" {
     try std.testing.expectEqualStrings("#1a55d6", inlineStyleDeclarationValue(style, "background-color").?);
 }
 
+test "parseCssFontWeight handles keywords and numeric values" {
+    try std.testing.expectEqual(@as(i32, 400), parseCssFontWeight(""));
+    try std.testing.expectEqual(@as(i32, 400), parseCssFontWeight("normal"));
+    try std.testing.expectEqual(@as(i32, 700), parseCssFontWeight("bold"));
+    try std.testing.expectEqual(@as(i32, 700), parseCssFontWeight("bolder"));
+    try std.testing.expectEqual(@as(i32, 300), parseCssFontWeight("lighter"));
+    try std.testing.expectEqual(@as(i32, 500), parseCssFontWeight("500"));
+    try std.testing.expectEqual(@as(i32, 900), parseCssFontWeight("1200"));
+}
+
+test "parseCssFontItalic handles italic and oblique values" {
+    try std.testing.expect(!parseCssFontItalic(""));
+    try std.testing.expect(!parseCssFontItalic("normal"));
+    try std.testing.expect(parseCssFontItalic("italic"));
+    try std.testing.expect(parseCssFontItalic("oblique"));
+    try std.testing.expect(parseCssFontItalic("oblique 10deg"));
+}
+
 test "isInlineDisplay matches inline variants" {
     try std.testing.expect(isInlineDisplay("inline"));
     try std.testing.expect(isInlineDisplay("inline-block"));
@@ -1785,4 +1833,38 @@ test "paintDocument renders button controls without crashing" {
     }
 
     try std.testing.expect(found_control);
+}
+
+test "paintDocument carries authored font family style and weight on text commands" {
+    var page = try testing.pageTest("page/font_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found_mono = false;
+    var found_serif = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "MMMMMMMMMMMM")) {
+                    try std.testing.expect(std.mem.indexOf(u8, text.font_family, "Consolas") != null);
+                    try std.testing.expectEqual(@as(i32, 700), text.font_weight);
+                    try std.testing.expect(text.italic);
+                    found_mono = true;
+                } else if (std.mem.eql(u8, text.text, "NNNNNNNNNNNN")) {
+                    try std.testing.expect(std.mem.indexOf(u8, text.font_family, "Times New Roman") != null);
+                    try std.testing.expectEqual(@as(i32, 400), text.font_weight);
+                    try std.testing.expect(!text.italic);
+                    found_serif = true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found_mono);
+    try std.testing.expect(found_serif);
 }
