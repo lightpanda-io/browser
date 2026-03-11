@@ -373,6 +373,11 @@ Current state inside Gate 1:
   bounded probe proving click activation on the first radio, `Tab`+`Space`
   selection of the second radio in the same group, then `Tab`+`Space` button
   activation and `Tab`+`Enter` link navigation in DOM order
+- that same dense later-row mixed-inline control coverage now also includes a
+  wrapped same-family checkbox pair plus later-row button and link, with a
+  bounded probe proving click activation on the first checkbox, `Tab`+`Space`
+  activation on the second checkbox, then `Tab`+`Space` button activation and
+  `Tab`+`Enter` link navigation in DOM order
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
