@@ -331,7 +331,8 @@ fn getAccessibleName(el: *Element, arena: Allocator) !?[]const u8 {
 fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
     var tw: TreeWalker.FullExcludeSelf = .init(node, .{});
 
-    var chunks: std.ArrayList([]const u8) = .empty;
+    var arr: std.ArrayList(u8) = .empty;
+    var single_chunk: ?[]const u8 = null;
 
     while (tw.next()) |child| {
         // Skip text inside script/style elements.
@@ -348,16 +349,27 @@ fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
             if (cdata.is(Node.CData.Text)) |text| {
                 const content = std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace);
                 if (content.len > 0) {
-                    try chunks.append(arena, content);
+                    if (single_chunk == null and arr.items.len == 0) {
+                        single_chunk = content;
+                    } else {
+                        if (single_chunk) |sc| {
+                            try arr.appendSlice(arena, sc);
+                            try arr.append(arena, ' ');
+                            single_chunk = null;
+                        }
+                        try arr.appendSlice(arena, content);
+                        try arr.append(arena, ' ');
+                    }
                 }
             }
         }
     }
 
-    if (chunks.items.len == 0) return null;
-    if (chunks.items.len == 1) return chunks.items[0];
+    if (single_chunk) |sc| return sc;
+    if (arr.items.len == 0) return null;
 
-    return try std.mem.join(arena, " ", chunks.items);
+    // strip out trailing space
+    return arr.items[0 .. arr.items.len - 1];
 }
 fn isDisabled(el: *Element) bool {
     if (el.getAttributeSafe(comptime .wrap("disabled")) != null) return true;
