@@ -2907,23 +2907,7 @@ pub fn updateRangesForCharacterDataReplace(self: *Page, target: *Node, offset: u
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
-
-        if (ar._start_container == target) {
-            if (ar._start_offset > offset and ar._start_offset <= offset + count) {
-                ar._start_offset = offset;
-            } else if (ar._start_offset > offset + count) {
-                // Use i64 intermediate to avoid u32 underflow when count > data_len
-                ar._start_offset = @intCast(@as(i64, ar._start_offset) + @as(i64, data_len) - @as(i64, count));
-            }
-        }
-
-        if (ar._end_container == target) {
-            if (ar._end_offset > offset and ar._end_offset <= offset + count) {
-                ar._end_offset = offset;
-            } else if (ar._end_offset > offset + count) {
-                ar._end_offset = @intCast(@as(i64, ar._end_offset) + @as(i64, data_len) - @as(i64, count));
-            }
-        }
+        ar.updateForCharacterDataReplace(target, offset, count, data_len);
     }
 }
 
@@ -2936,25 +2920,7 @@ pub fn updateRangesForSplitText(self: *Page, target: *Node, new_node: *Node, off
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
-
-        // Step 7b: ranges on the original node with start > offset move to new node
-        if (ar._start_container == target and ar._start_offset > offset) {
-            ar._start_container = new_node;
-            ar._start_offset = ar._start_offset - offset;
-        }
-        // Step 7c: ranges on the original node with end > offset move to new node
-        if (ar._end_container == target and ar._end_offset > offset) {
-            ar._end_container = new_node;
-            ar._end_offset = ar._end_offset - offset;
-        }
-        // Step 7d: ranges on parent with start == node_index + 1 increment
-        if (ar._start_container == parent and ar._start_offset == node_index + 1) {
-            ar._start_offset += 1;
-        }
-        // Step 7e: ranges on parent with end == node_index + 1 increment
-        if (ar._end_container == parent and ar._end_offset == node_index + 1) {
-            ar._end_offset += 1;
-        }
+        ar.updateForSplitText(target, new_node, offset, parent, node_index);
     }
 }
 
@@ -2965,13 +2931,7 @@ pub fn updateRangesForNodeInsertion(self: *Page, parent: *Node, child_index: u32
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
-
-        if (ar._start_container == parent and ar._start_offset > child_index) {
-            ar._start_offset += 1;
-        }
-        if (ar._end_container == parent and ar._end_offset > child_index) {
-            ar._end_offset += 1;
-        }
+        ar.updateForNodeInsertion(parent, child_index);
     }
 }
 
@@ -2981,35 +2941,8 @@ pub fn updateRangesForNodeRemoval(self: *Page, parent: *Node, child: *Node, chil
     var it: ?*std.DoublyLinkedList.Node = self._live_ranges.first;
     while (it) |link| : (it = link.next) {
         const ar: *AbstractRange = @fieldParentPtr("_range_link", link);
-
-        // Steps 4-5: ranges whose start/end is an inclusive descendant of child
-        // get moved to (parent, child_index).
-        if (isInclusiveDescendantOf(ar._start_container, child)) {
-            ar._start_container = parent;
-            ar._start_offset = child_index;
-        }
-        if (isInclusiveDescendantOf(ar._end_container, child)) {
-            ar._end_container = parent;
-            ar._end_offset = child_index;
-        }
-
-        // Steps 6-7: ranges on parent at offsets > child_index get decremented.
-        if (ar._start_container == parent and ar._start_offset > child_index) {
-            ar._start_offset -= 1;
-        }
-        if (ar._end_container == parent and ar._end_offset > child_index) {
-            ar._end_offset -= 1;
-        }
+        ar.updateForNodeRemoval(parent, child, child_index);
     }
-}
-
-fn isInclusiveDescendantOf(node: *Node, potential_ancestor: *Node) bool {
-    var current: ?*Node = node;
-    while (current) |n| {
-        if (n == potential_ancestor) return true;
-        current = n.parentNode();
-    }
-    return false;
 }
 
 // TODO: optimize and cleanup, this is called a lot (e.g., innerHTML = '')

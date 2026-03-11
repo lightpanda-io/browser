@@ -358,7 +358,7 @@ pub fn insertNode(self: *Range, node: *Node, page: *Page) !void {
 
     // Per spec step 11: if range was collapsed, extend end to include inserted node.
     // Non-collapsed ranges are already handled by the live range update in the insert path.
-    if (was_collapsed and self._proto._start_container == self._proto._end_container) {
+    if (was_collapsed) {
         self._proto._end_offset = self._proto._start_offset + 1;
     }
 }
