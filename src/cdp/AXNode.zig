@@ -777,7 +777,8 @@ pub fn getName(self: AXNode, page: *Page, allocator: std.mem.Allocator) !?[]cons
     const source = try self.writeName(w, page);
     if (source != null) {
         // Remove literal quotes inserted by writeString.
-        const raw_text = std.mem.trim(u8, aw.written(), "\"");
+        var raw_text = std.mem.trim(u8, aw.written(), "\"");
+        raw_text = std.mem.trim(u8, raw_text, &std.ascii.whitespace);
         return try allocator.dupe(u8, raw_text);
     }
 
@@ -908,7 +909,13 @@ fn writeAccessibleNameFallback(node: *DOMNode, writer: *std.Io.Writer, page: *Pa
     while (it.next()) |child| {
         switch (child._type) {
             .cdata => |cd| switch (cd._type) {
-                .text => |*text| try writer.writeAll(text.getWholeText()),
+                .text => |*text| {
+                    const content = std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace);
+                    if (content.len > 0) {
+                        try writer.writeAll(content);
+                        try writer.writeByte(' ');
+                    }
+                },
                 else => {},
             },
             .element => |el| {
