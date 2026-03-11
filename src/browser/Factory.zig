@@ -270,14 +270,16 @@ pub fn abstractRange(self: *Factory, child: anytype, page: *Page) !*@TypeOf(chil
     const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(allocator);
 
     const doc = page.document.asNode();
-    chain.set(0, AbstractRange{
+    const abstract_range = chain.get(0);
+    abstract_range.* = AbstractRange{
         ._type = unionInit(AbstractRange.Type, chain.get(1)),
         ._end_offset = 0,
         ._start_offset = 0,
         ._end_container = doc,
         ._start_container = doc,
-    });
+    };
     chain.setLeaf(1, child);
+    page._live_ranges.append(&abstract_range._range_link);
     return chain.get(1);
 }
 

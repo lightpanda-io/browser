@@ -43,15 +43,25 @@ pub fn splitText(self: *Text, offset: usize, page: *Page) !*Text {
     const new_node = try page.createTextNode(new_data);
     const new_text = new_node.as(Text);
 
-    const old_data = data[0..byte_offset];
-    try self._proto.setData(old_data, page);
-
-    // If this node has a parent, insert the new node right after this one
     const node = self._proto.asNode();
+
+    // Per DOM spec splitText: insert first (step 7a), then update ranges (7b-7e),
+    // then truncate original node (step 8).
     if (node.parentNode()) |parent| {
         const next_sibling = node.nextSibling();
         _ = try parent.insertBefore(new_node, next_sibling, page);
+
+        // splitText-specific range updates (steps 7b-7e)
+        if (parent.getChildIndex(node)) |node_index| {
+            page.updateRangesForSplitText(node, new_node, @intCast(offset), parent, node_index);
+        }
     }
+
+    // Step 8: truncate original node via replaceData(offset, count, "").
+    // Use replaceData instead of setData so live range updates fire
+    // (matters for detached text nodes where steps 7b-7e were skipped).
+    const length = self._proto.getLength();
+    try self._proto.replaceData(offset, length - offset, "", page);
 
     return new_text;
 }

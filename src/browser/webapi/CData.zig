@@ -37,7 +37,7 @@ _data: String = .empty,
 /// Count UTF-16 code units in a UTF-8 string.
 /// 4-byte UTF-8 sequences (codepoints >= U+10000) produce 2 UTF-16 code units (surrogate pair),
 /// everything else produces 1.
-fn utf16Len(data: []const u8) usize {
+pub fn utf16Len(data: []const u8) usize {
     var count: usize = 0;
     var i: usize = 0;
     while (i < data.len) {
@@ -232,14 +232,13 @@ pub fn setData(self: *CData, value: ?[]const u8, page: *Page) !void {
 }
 
 /// JS bridge wrapper for `data` setter.
-/// Handles [LegacyNullToEmptyString]: null → setData(null) → "".
-/// Passes everything else (including undefined) through V8 toString,
-/// so `undefined` becomes the string "undefined" per spec.
+/// Per spec, setting .data runs replaceData(0, this.length, value),
+/// which includes live range updates.
+/// Handles [LegacyNullToEmptyString]: null → "" per spec.
 pub fn _setData(self: *CData, value: js.Value, page: *Page) !void {
-    if (value.isNull()) {
-        return self.setData(null, page);
-    }
-    return self.setData(try value.toZig([]const u8), page);
+    const new_value: []const u8 = if (value.isNull()) "" else try value.toZig([]const u8);
+    const length = self.getLength();
+    try self.replaceData(0, length, new_value, page);
 }
 
 pub fn format(self: *const CData, writer: *std.io.Writer) !void {
@@ -272,14 +271,19 @@ pub fn isEqualNode(self: *const CData, other: *const CData) bool {
 }
 
 pub fn appendData(self: *CData, data: []const u8, page: *Page) !void {
-    const old_value = self._data;
-    self._data = try String.concat(page.arena, &.{ self._data.str(), data });
-    page.characterDataChange(self.asNode(), old_value);
+    // Per DOM spec, appendData(data) is replaceData(length, 0, data).
+    const length = self.getLength();
+    try self.replaceData(length, 0, data, page);
 }
 
 pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
     const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
+
+    // Update live ranges per DOM spec replaceData steps (deleteData = replaceData with data="")
+    const length = self.getLength();
+    const effective_count: u32 = @intCast(@min(count, length - offset));
+    page.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), effective_count, 0);
 
     const old_data = self._data;
     const old_value = old_data.str();
@@ -299,6 +303,10 @@ pub fn deleteData(self: *CData, offset: usize, count: usize, page: *Page) !void 
 
 pub fn insertData(self: *CData, offset: usize, data: []const u8, page: *Page) !void {
     const byte_offset = try utf16OffsetToUtf8(self._data.str(), offset);
+
+    // Update live ranges per DOM spec replaceData steps (insertData = replaceData with count=0)
+    page.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), 0, @intCast(utf16Len(data)));
+
     const old_value = self._data;
     const existing = old_value.str();
     self._data = try String.concat(page.arena, &.{
@@ -312,6 +320,12 @@ pub fn insertData(self: *CData, offset: usize, data: []const u8, page: *Page) !v
 pub fn replaceData(self: *CData, offset: usize, count: usize, data: []const u8, page: *Page) !void {
     const end_utf16 = std.math.add(usize, offset, count) catch std.math.maxInt(usize);
     const range = try utf16RangeToUtf8(self._data.str(), offset, end_utf16);
+
+    // Update live ranges per DOM spec replaceData steps
+    const length = self.getLength();
+    const effective_count: u32 = @intCast(@min(count, length - offset));
+    page.updateRangesForCharacterDataReplace(self.asNode(), @intCast(offset), effective_count, @intCast(utf16Len(data)));
+
     const old_value = self._data;
     const existing = old_value.str();
     self._data = try String.concat(page.arena, &.{

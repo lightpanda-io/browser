@@ -293,7 +293,8 @@ pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
             }
             return el.replaceChildren(&.{.{ .text = data }}, page);
         },
-        .cdata => |c| c._data = try page.dupeSSO(data),
+        // Per spec, setting textContent on CharacterData runs replaceData(0, length, value)
+        .cdata => |c| try c.replaceData(0, c.getLength(), data, page),
         .document => {},
         .document_type => {},
         .document_fragment => |frag| {
@@ -612,7 +613,11 @@ pub fn getNodeValue(self: *const Node) ?String {
 
 pub fn setNodeValue(self: *const Node, value: ?String, page: *Page) !void {
     switch (self._type) {
-        .cdata => |c| try c.setData(if (value) |v| v.str() else null, page),
+        // Per spec, setting nodeValue on CharacterData runs replaceData(0, length, value)
+        .cdata => |c| {
+            const new_value: []const u8 = if (value) |v| v.str() else "";
+            try c.replaceData(0, c.getLength(), new_value, page);
+        },
         .attribute => |attr| try attr.setValue(value, page),
         .element => {},
         .document => {},
