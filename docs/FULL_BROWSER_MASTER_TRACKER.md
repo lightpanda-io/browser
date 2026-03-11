@@ -339,6 +339,10 @@ Current state inside Gate 1:
   behavior after focus, with bounded probes proving a wrapped inline button
   can be re-activated with `Space` and a `<br>`-split inline text input can
   submit its form on `Enter` from the headed surface
+- mixed control/link coexistence is now covered too, with bounded probes
+  proving a wrapped later-row button and a lower later-row link remain
+  independently usable in the same paragraph by both direct click and
+  button-focus `Tab` then `Enter` traversal
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces

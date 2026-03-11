@@ -2521,6 +2521,28 @@ test "paintDocument keeps br-split inline input controls on the later row" {
     try std.testing.expect(below_y.? > input_region.?.y + input_region.?.height + 8);
 }
 
+test "paintDocument keeps wrapped inline button and later link regions distinct" {
+    var page = try testing.pageTest("page/mixed_inline_control_link_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.control_regions.items.len);
+    try std.testing.expect(display_list.link_regions.items.len >= 1);
+
+    const control_region = display_list.control_regions.items[0];
+    var latest_link_y: ?i32 = null;
+    for (display_list.link_regions.items) |region| {
+        latest_link_y = if (latest_link_y) |current| @max(current, region.y) else region.y;
+    }
+
+    try std.testing.expect(latest_link_y != null);
+    try std.testing.expect(latest_link_y.? > control_region.y + 12);
+}
+
 test "paintDocument carries loaded private font faces for headed rendering" {
     var page = try testing.pageTest("page/font_private_render.html");
     defer page._session.removePage();
