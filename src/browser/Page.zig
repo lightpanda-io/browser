@@ -1460,6 +1460,8 @@ pub fn adoptNodeTree(self: *Page, node: *Node, new_owner: *Document) !void {
 }
 
 pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const u8, attribute_iterator: anytype) !*Node {
+    const from_parser = @TypeOf(attribute_iterator) == Parser.AttributeIterator;
+
     switch (namespace) {
         .html => {
             switch (name.len) {
@@ -2129,6 +2131,15 @@ pub fn createElementNS(self: *Page, namespace: Element.Namespace, name: []const 
                 var ls: JS.Local.Scope = undefined;
                 self.js.localScope(&ls);
                 defer ls.deinit();
+
+                if (from_parser) {
+                    // There are some things custom elements aren't allowed to do
+                    // when we're parsing.
+                    self.document._throw_on_dynamic_markup_insertion_counter += 1;
+                }
+                defer if (from_parser) {
+                    self.document._throw_on_dynamic_markup_insertion_counter -= 1;
+                };
 
                 var caught: JS.TryCatch.Caught = undefined;
                 _ = ls.toLocal(def.constructor).newInstance(&caught) catch |err| {

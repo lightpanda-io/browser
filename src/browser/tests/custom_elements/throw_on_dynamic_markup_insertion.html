@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<head>
+<script src="../testing.js"></script>
+<script>
+// Test that document.open/write/close throw InvalidStateError during custom element
+// reactions when the element is parsed from HTML
+
+window.constructorOpenException = null;
+window.constructorWriteException = null;
+window.constructorCloseException = null;
+window.constructorCalled = false;
+
+class ThrowTestElement extends HTMLElement {
+    constructor() {
+        super();
+        window.constructorCalled = true;
+
+        // Try document.open on the same document during constructor - should throw
+        try {
+            document.open();
+        } catch (e) {
+            window.constructorOpenException = e;
+        }
+
+        // Try document.write on the same document during constructor - should throw
+        try {
+            document.write('<b>test</b>');
+        } catch (e) {
+            window.constructorWriteException = e;
+        }
+
+        // Try document.close on the same document during constructor - should throw
+        try {
+            document.close();
+        } catch (e) {
+            window.constructorCloseException = e;
+        }
+    }
+}
+
+customElements.define('throw-test-element', ThrowTestElement);
+</script>
+</head>
+<body>
+<!-- This element will be parsed from HTML, triggering the constructor -->
+<throw-test-element id="test-element"></throw-test-element>
+
+<script id="verify_throws">
+{
+    // Verify the constructor was called
+    testing.expectEqual(true, window.constructorCalled);
+
+    // Verify document.open threw InvalidStateError
+    testing.expectEqual(true, window.constructorOpenException !== null);
+    testing.expectEqual('InvalidStateError', window.constructorOpenException.name);
+
+    // Verify document.write threw InvalidStateError
+    testing.expectEqual(true, window.constructorWriteException !== null);
+    testing.expectEqual('InvalidStateError', window.constructorWriteException.name);
+
+    // Verify document.close threw InvalidStateError
+    testing.expectEqual(true, window.constructorCloseException !== null);
+    testing.expectEqual('InvalidStateError', window.constructorCloseException.name);
+}
+</script>
+</body>
