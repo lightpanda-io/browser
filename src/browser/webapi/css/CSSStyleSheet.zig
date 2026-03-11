@@ -49,6 +49,11 @@ pub const FontFaceEntry = struct {
 };
 const ParsedFontFace = FontFaceEntry;
 
+const ParsedFontSource = struct {
+    url_specifier: []const u8,
+    format_hint: FontFaceEntry.Format = .unknown,
+};
+
 pub fn init(page: *Page) !*CSSStyleSheet {
     return page._factory.create(CSSStyleSheet{});
 }
@@ -359,11 +364,13 @@ fn appendFontFaceRule(
     var format: FontFaceEntry.Format = .unknown;
     var font_bytes: []const u8 = &.{};
     if (src_value) |raw_src| {
-        if (parseFirstUrlFromSrcDeclaration(raw_src)) |src_specifier| {
-            if (base_url) |current_base| {
-                const resolved_url = try URL.resolve(temp, current_base, src_specifier, .{ .encode = true, .always_dupe = true });
+        if (base_url) |current_base| {
+            const sources = try parseFontFaceSources(temp, raw_src);
+            const selected_source = choosePreferredFontFaceSource(sources);
+            if (selected_source) |source| {
+                const resolved_url = try URL.resolve(temp, current_base, source.url_specifier, .{ .encode = true, .always_dupe = true });
                 source_url = try page.dupeString(resolved_url);
-                const fetch_result = fetchFontFaceSource(page, temp, resolved_url, referer_url, include_credentials) catch FontFetchResult{};
+                const fetch_result = fetchFontFaceSource(page, temp, resolved_url, source.format_hint, referer_url, include_credentials) catch FontFetchResult{};
                 loaded = fetch_result.loaded;
                 format = fetch_result.format;
                 if (fetch_result.font_bytes.len > 0) {
@@ -401,10 +408,12 @@ fn fetchFontFaceSource(
     page: *Page,
     temp: std.mem.Allocator,
     url: [:0]const u8,
+    format_hint: FontFaceEntry.Format,
     referer_url: ?[:0]const u8,
     include_credentials: bool,
 ) !FontFetchResult {
-    const format = detectFontFaceFormat(url);
+    const detected_format = detectFontFaceFormat(url);
+    const format = if (format_hint != .unknown) format_hint else detected_format;
     const request_url = try stylesheetRequestUrlForFetch(temp, url, include_credentials);
     const font_client = try page._session.browser.app.http.createClient(temp);
     defer font_client.deinit();
@@ -561,17 +570,71 @@ fn parseCssStringLikeValue(value: []const u8) ?[]const u8 {
     return null;
 }
 
-fn parseFirstUrlFromSrcDeclaration(src: []const u8) ?[]const u8 {
-    const url_index = std.mem.indexOf(u8, src, "url(") orelse return null;
-    const tail = src[url_index + 4 ..];
-    const close_index = std.mem.indexOfScalar(u8, tail, ')') orelse return null;
+fn parseFontFaceSources(allocator: std.mem.Allocator, src: []const u8) ![]ParsedFontSource {
+    var out: std.ArrayList(ParsedFontSource) = .{};
+    defer out.deinit(allocator);
+
+    var cursor: usize = 0;
+    while (cursor < src.len) {
+        const url_index = std.mem.indexOfPos(u8, src, cursor, "url(") orelse break;
+        const tail = src[url_index + 4 ..];
+        const close_index = std.mem.indexOfScalar(u8, tail, ')') orelse break;
+        var inner = std.mem.trim(u8, tail[0..close_index], &std.ascii.whitespace);
+        if (inner.len >= 2 and ((inner[0] == '"' and inner[inner.len - 1] == '"') or
+            (inner[0] == '\'' and inner[inner.len - 1] == '\'')))
+        {
+            inner = inner[1 .. inner.len - 1];
+        }
+        if (inner.len == 0) {
+            cursor = url_index + 4 + close_index + 1;
+            continue;
+        }
+
+        const after_url_index = url_index + 4 + close_index + 1;
+        const next_url_index = std.mem.indexOfPos(u8, src, after_url_index, "url(") orelse src.len;
+        const format_hint = parseFirstFontFaceFormatHint(src[after_url_index..next_url_index]);
+        try out.append(allocator, .{
+            .url_specifier = try allocator.dupe(u8, inner),
+            .format_hint = format_hint,
+        });
+        cursor = next_url_index;
+    }
+
+    return try allocator.dupe(ParsedFontSource, out.items);
+}
+
+fn choosePreferredFontFaceSource(sources: []const ParsedFontSource) ?ParsedFontSource {
+    for (sources) |source| {
+        if (formatSupportsEmbeddedBytes(source.format_hint)) {
+            return source;
+        }
+    }
+    return if (sources.len > 0) sources[0] else null;
+}
+
+fn parseFirstFontFaceFormatHint(fragment: []const u8) FontFaceEntry.Format {
+    const format_index = std.mem.indexOf(u8, fragment, "format(") orelse return .unknown;
+    const tail = fragment[format_index + "format(".len ..];
+    const close_index = std.mem.indexOfScalar(u8, tail, ')') orelse return .unknown;
     var inner = std.mem.trim(u8, tail[0..close_index], &std.ascii.whitespace);
     if (inner.len >= 2 and ((inner[0] == '"' and inner[inner.len - 1] == '"') or
         (inner[0] == '\'' and inner[inner.len - 1] == '\'')))
     {
         inner = inner[1 .. inner.len - 1];
     }
-    return if (inner.len == 0) null else inner;
+    if (std.ascii.eqlIgnoreCase(inner, "truetype") or std.ascii.eqlIgnoreCase(inner, "ttf")) {
+        return .truetype;
+    }
+    if (std.ascii.eqlIgnoreCase(inner, "opentype") or std.ascii.eqlIgnoreCase(inner, "otf")) {
+        return .opentype;
+    }
+    if (std.ascii.eqlIgnoreCase(inner, "woff")) {
+        return .woff;
+    }
+    if (std.ascii.eqlIgnoreCase(inner, "woff2")) {
+        return .woff2;
+    }
+    return .unknown;
 }
 
 fn detectFontFaceFormat(url: [:0]const u8) FontFaceEntry.Format {
@@ -690,15 +753,52 @@ test "parseDeclarationValue extracts font-face declarations" {
     try std.testing.expectEqualStrings("url(\"font_face_test.woff2\") format(\"woff2\")", parseDeclarationValue(declarations, "src").?);
 }
 
-test "parseFirstUrlFromSrcDeclaration extracts first font source" {
-    try std.testing.expectEqualStrings(
-        "font_face_test.woff2",
-        parseFirstUrlFromSrcDeclaration("local(\"Runner\"), url(\"font_face_test.woff2\") format(\"woff2\")").?,
+test "parseFontFaceSources extracts multiple font sources and format hints" {
+    const allocator = std.testing.allocator;
+    const sources = try parseFontFaceSources(
+        allocator,
+        "local(\"Runner\"), url(\"font_face_test.woff2\") format(\"woff2\"), url('private_font_test.ttf') format('truetype')",
     );
-    try std.testing.expectEqualStrings(
-        "font_face_test.woff2",
-        parseFirstUrlFromSrcDeclaration("url('font_face_test.woff2')").?,
-    );
+    defer {
+        for (sources) |source| {
+            allocator.free(source.url_specifier);
+        }
+        allocator.free(sources);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), sources.len);
+    try std.testing.expectEqualStrings("font_face_test.woff2", sources[0].url_specifier);
+    try std.testing.expectEqual(FontFaceEntry.Format.woff2, sources[0].format_hint);
+    try std.testing.expectEqualStrings("private_font_test.ttf", sources[1].url_specifier);
+    try std.testing.expectEqual(FontFaceEntry.Format.truetype, sources[1].format_hint);
+}
+
+test "choosePreferredFontFaceSource prefers renderable ttf or otf fallback" {
+    const sources = [_]ParsedFontSource{
+        .{ .url_specifier = "font_face_test.woff2", .format_hint = .woff2 },
+        .{ .url_specifier = "private_font_test.ttf", .format_hint = .truetype },
+    };
+    const selected = choosePreferredFontFaceSource(sources[0..]).?;
+    try std.testing.expectEqualStrings("private_font_test.ttf", selected.url_specifier);
+    try std.testing.expectEqual(FontFaceEntry.Format.truetype, selected.format_hint);
+}
+
+test "choosePreferredFontFaceSource falls back to first source when only non-renderable formats exist" {
+    const sources = [_]ParsedFontSource{
+        .{ .url_specifier = "font_face_test.woff2", .format_hint = .woff2 },
+        .{ .url_specifier = "font_face_test.woff", .format_hint = .woff },
+    };
+    const selected = choosePreferredFontFaceSource(sources[0..]).?;
+    try std.testing.expectEqualStrings("font_face_test.woff2", selected.url_specifier);
+    try std.testing.expectEqual(FontFaceEntry.Format.woff2, selected.format_hint);
+}
+
+test "parseFirstFontFaceFormatHint recognizes common hints" {
+    try std.testing.expectEqual(FontFaceEntry.Format.truetype, parseFirstFontFaceFormatHint(" format('truetype'), local('Runner')"));
+    try std.testing.expectEqual(FontFaceEntry.Format.opentype, parseFirstFontFaceFormatHint(" format(\"opentype\") "));
+    try std.testing.expectEqual(FontFaceEntry.Format.woff, parseFirstFontFaceFormatHint(" format('woff') "));
+    try std.testing.expectEqual(FontFaceEntry.Format.woff2, parseFirstFontFaceFormatHint(" format('woff2') "));
+    try std.testing.expectEqual(FontFaceEntry.Format.unknown, parseFirstFontFaceFormatHint(" local('Runner') "));
 }
 
 test "detectFontFaceFormat recognizes supported font extensions" {

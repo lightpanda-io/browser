@@ -305,6 +305,11 @@ Current state inside Gate 1:
   two-page localhost screenshot probe proving the same authored family renders
   with materially different glyph widths when the private font is present vs
   when the font URL is missing
+- those same private stylesheet-backed font flows now parse multi-source
+  `src:` lists with format hints and prefer a later renderable TTF/OTF
+  fallback over an earlier unsupported WOFF/WOFF2 source when present, with a
+  bounded headed screenshot probe proving a later truetype fallback still
+  affects the surface after an earlier missing `woff2` source
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -349,7 +354,8 @@ Current known gap entering Gate 2:
   backed `@font-face` fetches and `document.fonts` now ride that same path,
   and headed Win32 text rendering now honors both authored installed-font
   family/style/weight and private TTF/OTF stylesheet-backed `@font-face`
-  rendering on the surface, but broader CSS fidelity, real text shaping,
+  rendering on the surface, including later renderable TTF/OTF fallbacks in
+  multi-source `src:` lists, but broader CSS fidelity, real text shaping,
   WOFF/WOFF2 private font use, script/font/resource parity, and one unified
   subresource ownership path are still open
 - native file chooser, multi-select file inputs, and multipart upload flows
