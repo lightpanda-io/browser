@@ -180,7 +180,13 @@ pub fn run(self: *Runtime) void {
     }
 
     if (self.listener) |listener| {
-        posix.shutdown(listener.socket, .both) catch |err| {
+        posix.shutdown(listener.socket, .both) catch |err| blk: {
+            if (err == error.SocketNotConnected and builtin.os.tag != .linux) {
+                // This error is normal/expected on BSD/MacOS. We probably
+                // shouldn't bother calling shutdown at all, but I guess this
+                // is safer.
+                break :blk;
+            }
             lp.log.warn(.app, "listener shutdown", .{ .err = err });
         };
         posix.close(listener.socket);
