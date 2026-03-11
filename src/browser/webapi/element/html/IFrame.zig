@@ -65,6 +65,14 @@ pub fn setSrc(self: *IFrame, src: []const u8, page: *Page) !void {
     }
 }
 
+pub fn getName(self: *IFrame) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+}
+
+pub fn setName(self: *IFrame, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("name"), .wrap(value), page);
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(IFrame);
 
@@ -75,6 +83,7 @@ pub const JsApi = struct {
     };
 
     pub const src = bridge.accessor(IFrame.getSrc, IFrame.setSrc, .{});
+    pub const name = bridge.accessor(IFrame.getName, IFrame.setName, .{});
     pub const contentWindow = bridge.accessor(IFrame.getContentWindow, null, .{});
     pub const contentDocument = bridge.accessor(IFrame.getContentDocument, null, .{});
 };

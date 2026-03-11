@@ -562,12 +562,9 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
     };
 
     const target = switch (nt) {
+        .form, .anchor => |p| p,
         .script => |p| p orelse originator,
         .iframe => |iframe| iframe._window.?._page, // only an frame with existing content (i.e. a window) can be navigated
-        .anchor, .form => |node| blk: {
-            const doc = node.ownerDocument(originator) orelse break :blk originator;
-            break :blk doc._page orelse originator;
-        },
     };
 
     const session = target._session;
@@ -761,6 +758,10 @@ fn _documentIsComplete(self: *Page) !void {
     if (self._event_manager.hasDirectListeners(window_target, "pageshow", self.window._on_pageshow)) {
         const pageshow_event = (try PageTransitionEvent.initTrusted(comptime .wrap("pageshow"), .{}, self)).asEvent();
         try self._event_manager.dispatchDirect(window_target, pageshow_event, self.window._on_pageshow, .{ .context = "page show" });
+    }
+
+    if (comptime IS_DEBUG) {
+        log.debug(.page, "load", .{ .url = self.url, .type = self._type });
     }
 
     self.notifyParentLoadComplete();
@@ -3106,9 +3107,9 @@ const NavigationType = enum {
 };
 
 const Navigation = union(NavigationType) {
-    form: *Node,
+    form: *Page,
     script: ?*Page,
-    anchor: *Node,
+    anchor: *Page,
     iframe: *IFrame,
 };
 
@@ -3119,6 +3120,69 @@ pub const QueuedNavigation = struct {
     is_about_blank: bool,
     navigation_type: NavigationType,
 };
+
+/// Resolves a target attribute value (e.g., "_self", "_parent", "_top", or frame name)
+/// to the appropriate Page to navigate.
+/// Returns null if the target is "_blank" (which would open a new window/tab).
+/// Note: Callers should handle empty target separately (for owner document resolution).
+pub fn resolveTargetPage(self: *Page, target_name: []const u8) ?*Page {
+    if (std.ascii.eqlIgnoreCase(target_name, "_self")) {
+        return self;
+    }
+
+    if (std.ascii.eqlIgnoreCase(target_name, "_blank")) {
+        return null;
+    }
+
+    if (std.ascii.eqlIgnoreCase(target_name, "_parent")) {
+        return self.parent orelse self;
+    }
+
+    if (std.ascii.eqlIgnoreCase(target_name, "_top")) {
+        var page = self;
+        while (page.parent) |p| {
+            page = p;
+        }
+        return page;
+    }
+
+    // Named frame lookup: search current page's descendants first, then from root
+    // This follows the HTML spec's "implementation-defined" search order.
+    if (findFrameByName(self, target_name)) |frame_page| {
+        return frame_page;
+    }
+
+    // If not found in descendants, search from root (catches siblings and ancestors' descendants)
+    var root = self;
+    while (root.parent) |p| {
+        root = p;
+    }
+    if (root != self) {
+        if (findFrameByName(root, target_name)) |frame_page| {
+            return frame_page;
+        }
+    }
+
+    // If no frame found with that name, navigate in current page
+    // (this matches browser behavior - unknown targets act like _self)
+    return self;
+}
+
+fn findFrameByName(page: *Page, name: []const u8) ?*Page {
+    for (page.frames.items) |frame| {
+        if (frame.iframe) |iframe| {
+            const frame_name = iframe.asElement().getAttributeSafe(comptime .wrap("name")) orelse "";
+            if (std.mem.eql(u8, frame_name, name)) {
+                return frame;
+            }
+        }
+        // Recursively search child frames
+        if (findFrameByName(frame, name)) |found| {
+            return found;
+        }
+    }
+    return null;
+}
 
 pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
     const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return;
@@ -3158,29 +3222,27 @@ pub fn handleClick(self: *Page, target: *Node) !void {
                 return;
             }
 
-            // Check target attribute - don't navigate if opening in new window/tab
-            const target_val = anchor.getTarget();
-            if (target_val.len > 0 and !std.mem.eql(u8, target_val, "_self")) {
-                log.warn(.not_implemented, "a.target", .{ .type = self._type, .url = self.url });
-                return;
-            }
-
             if (try element.hasAttribute(comptime .wrap("download"), self)) {
                 log.warn(.browser, "a.download", .{ .type = self._type, .url = self.url });
                 return;
             }
 
-            // TODO: We need to support targets properly, but this is the most
-            // common case: a click on an anchor navigates the page/frame that
-            // anchor is in.
+            const target_page = blk: {
+                const target_name = anchor.getTarget();
+                if (target_name.len == 0) {
+                    break :blk target.ownerPage(self);
+                }
+                break :blk self.resolveTargetPage(target_name) orelse {
+                    log.warn(.not_implemented, "target", .{ .type = self._type, .url = self.url, .target = target_name });
+                    return;
+                };
+            };
 
-            // ownerDocument only returns null when `target` is a document, which
-            // it is NOT in this case. Even for a detched node, it'll return self.document
             try element.focus(self);
             try self.scheduleNavigation(href, .{
                 .reason = .script,
                 .kind = .{ .push = null },
-            }, .{ .anchor = target });
+            }, .{ .anchor = target_page });
         },
         .input => |input| {
             try element.focus(self);
@@ -3273,6 +3335,25 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
 
     const form_element = form.asElement();
 
+    const target_name_: ?[]const u8 = blk: {
+        if (submitter_) |submitter| {
+            if (submitter.getAttributeSafe(comptime .wrap("formtarget"))) |ft| {
+                break :blk ft;
+            }
+        }
+        break :blk form_element.getAttributeSafe(comptime .wrap("target"));
+    };
+
+    const target_page = blk: {
+        const target_name = target_name_ orelse {
+            break :blk form_element.asNode().ownerPage(self);
+        };
+        break :blk self.resolveTargetPage(target_name) orelse {
+            log.warn(.not_implemented, "target", .{ .type = self._type, .url = self.url, .target = target_name });
+            return;
+        };
+    };
+
     if (submit_opts.fire_event) {
         const submit_event = try Event.initTrusted(comptime .wrap("submit"), .{ .bubbles = true, .cancelable = true }, self);
 
@@ -3315,7 +3396,8 @@ pub fn submitForm(self: *Page, submitter_: ?*Element, form_: ?*Element.Html.Form
     } else {
         action = try URL.concatQueryString(arena, action, buf.written());
     }
-    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = form_element.asNode() });
+
+    return self.scheduleNavigationWithArena(arena, action, opts, .{ .form = target_page });
 }
 
 // insertText is a shortcut to insert text into the active element.

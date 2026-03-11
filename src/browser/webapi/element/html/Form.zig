@@ -100,6 +100,14 @@ pub fn setAction(self: *Form, value: []const u8, page: *Page) !void {
     try self.asElement().setAttributeSafe(comptime .wrap("action"), .wrap(value), page);
 }
 
+pub fn getTarget(self: *Form) []const u8 {
+    return self.asElement().getAttributeSafe(comptime .wrap("target")) orelse "";
+}
+
+pub fn setTarget(self: *Form, value: []const u8, page: *Page) !void {
+    try self.asElement().setAttributeSafe(comptime .wrap("target"), .wrap(value), page);
+}
+
 pub fn getLength(self: *Form, page: *Page) !u32 {
     const elements = try self.getElements(page);
     return elements.length(page);
@@ -120,6 +128,7 @@ pub const JsApi = struct {
     pub const name = bridge.accessor(Form.getName, Form.setName, .{});
     pub const method = bridge.accessor(Form.getMethod, Form.setMethod, .{});
     pub const action = bridge.accessor(Form.getAction, Form.setAction, .{});
+    pub const target = bridge.accessor(Form.getTarget, Form.setTarget, .{});
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
