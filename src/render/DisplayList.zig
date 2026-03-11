@@ -19,6 +19,7 @@ pub const TextCommand = struct {
     x: i32,
     y: i32,
     width: i32,
+    height: i32 = 0,
     font_size: i32 = 16,
     font_family: []u8 = &.{},
     font_weight: i32 = 400,
@@ -96,6 +97,7 @@ pub const Command = union(enum) {
                 .x = text.x,
                 .y = text.y,
                 .width = text.width,
+                .height = text.height,
                 .font_size = text.font_size,
                 .font_family = try allocator.dupe(u8, text.font_family),
                 .font_weight = text.font_weight,
@@ -233,6 +235,7 @@ pub fn addText(self: *DisplayList, allocator: std.mem.Allocator, text: TextComma
         .x = text.x,
         .y = text.y,
         .width = text.width,
+        .height = text.height,
         .font_size = text.font_size,
         .font_family = try allocator.dupe(u8, text.font_family),
         .font_weight = text.font_weight,
@@ -241,7 +244,7 @@ pub fn addText(self: *DisplayList, allocator: std.mem.Allocator, text: TextComma
         .underline = text.underline,
         .text = try allocator.dupe(u8, text.text),
     } });
-    self.content_height = @max(self.content_height, text.y + text.font_size + 8);
+    self.content_height = @max(self.content_height, text.y + @max(text.height, text.font_size + 8));
 }
 
 pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCommand) !void {
@@ -322,6 +325,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&text.x));
                 hasher.update(std.mem.asBytes(&text.y));
                 hasher.update(std.mem.asBytes(&text.width));
+                hasher.update(std.mem.asBytes(&text.height));
                 hasher.update(std.mem.asBytes(&text.font_size));
                 hasher.update(text.font_family);
                 hasher.update(std.mem.asBytes(&text.font_weight));

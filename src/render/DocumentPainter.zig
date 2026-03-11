@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Page = @import("../browser/Page.zig");
 const URL = @import("../browser/URL.zig");
 const Node = @import("../browser/webapi/Node.zig");
@@ -14,6 +15,12 @@ const ImageCommand = @import("DisplayList.zig").ImageCommand;
 const FontFaceResource = @import("DisplayList.zig").FontFaceResource;
 const FontFaceFormat = @import("DisplayList.zig").FontFaceFormat;
 const CSSStyleSheet = @import("../browser/webapi/css/CSSStyleSheet.zig");
+const win = if (builtin.os.tag == .windows) @cImport({
+    @cDefine("WIN32_LEAN_AND_MEAN", "1");
+    @cInclude("windows.h");
+    @cInclude("wingdi.h");
+    @cInclude("winuser.h");
+}) else struct {};
 
 pub const PaintOpts = struct {
     viewport_width: i32,
@@ -182,17 +189,18 @@ const Painter = struct {
         const font_weight = parseCssFontWeight(resolveCssPropertyValue(parent_decl, self.page, parent, "font-weight"));
         const italic = parseCssFontItalic(resolveCssPropertyValue(parent_decl, self.page, parent, "font-style"));
         const width = std.math.clamp(
-            estimateTextWidth(normalized, font_size) + 8,
+            estimateTextWidth(normalized, font_size, font_family, font_weight, italic) + 8,
             8,
             @max(@as(i32, 16), cursor.width),
         );
-        const height = @max(font_size + 8, estimateTextHeight(normalized, width, font_size));
+        const height = @max(font_size + 8, estimateTextHeight(normalized, width, font_size, font_family, font_weight, italic) + 8);
         const pos = cursor.beginInlineLeaf(width, .{});
 
         try self.list.addText(self.allocator, .{
             .x = pos.x,
             .y = pos.y,
             .width = width,
+            .height = height,
             .font_size = font_size,
             .font_family = @constCast(font_family),
             .font_weight = font_weight,
@@ -261,7 +269,7 @@ const Painter = struct {
         }
 
         const available_width = @max(@as(i32, 80), cursor.width - margins.horizontal());
-        const width = resolveLayoutWidth(self, element, decl, self.page, tag, block_like, available_width, label, font_size);
+        const width = resolveLayoutWidth(self, element, decl, self.page, tag, block_like, available_width, label, font_size, font_family, font_weight, italic);
         if (width <= 0) {
             return;
         }
@@ -280,6 +288,9 @@ const Painter = struct {
             width - padding.horizontal(),
             label,
             font_size,
+            font_family,
+            font_weight,
+            italic,
         );
 
         const child_gap: i32 = if (has_child_elements and own_content_height > 0) 8 else 0;
@@ -365,6 +376,17 @@ const Painter = struct {
                 .x = rect.x + padding.left + 6,
                 .y = rect.y + padding.top + 4,
                 .width = @max(@as(i32, 40), rect.width - padding.horizontal() - 12),
+                .height = @max(
+                    font_size + 8,
+                    estimateTextHeight(
+                        label,
+                        @max(@as(i32, 40), rect.width - padding.horizontal() - 12),
+                        font_size,
+                        font_family,
+                        font_weight,
+                        italic,
+                    ) + 8,
+                ),
                 .font_size = font_size,
                 .font_family = @constCast(font_family),
                 .font_weight = font_weight,
@@ -810,7 +832,7 @@ fn commandBounds(command: Command) ?CommandBounds {
             .x = text.x,
             .y = text.y,
             .width = text.width,
-            .height = estimateTextHeight(text.text, @max(@as(i32, 40), text.width), text.font_size),
+            .height = @max(@as(i32, 1), text.height),
         } else null,
     };
 }
@@ -1101,6 +1123,9 @@ fn resolveLayoutWidth(
     available_width: i32,
     label: []const u8,
     font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
 ) i32 {
     const explicit_width = resolveExplicitWidth(element, decl, page, tag);
     if (block_like) {
@@ -1116,8 +1141,8 @@ fn resolveLayoutWidth(
         preferred = switch (tag) {
             .img => 180,
             .textarea => 240,
-            .input, .button, .select => 180,
-            else => @max(self.opts.inline_min_width, estimateTextWidth(label, font_size) + 16),
+            .input, .select => 180,
+            else => @max(self.opts.inline_min_width, estimateTextWidth(label, font_size, font_family, font_weight, italic) + 16),
         };
     }
     return std.math.clamp(preferred, 60, available_width);
@@ -1131,6 +1156,9 @@ fn resolveOwnContentHeight(
     content_width: i32,
     label: []const u8,
     font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
 ) i32 {
     const explicit_height = resolveExplicitHeight(element, decl, self.page, tag);
     var height = explicit_height;
@@ -1142,7 +1170,7 @@ fn resolveOwnContentHeight(
     } else if (tag == .input or tag == .button or tag == .select) {
         height = @max(height, 30);
     } else if (label.len > 0 and shouldPaintText(tag)) {
-        height = @max(height, estimateTextHeight(label, @max(40, content_width - 12), font_size));
+        height = @max(height, estimateTextHeight(label, @max(40, content_width - 12), font_size, font_family, font_weight, italic) + 8);
     }
 
     return height;
@@ -1222,7 +1250,22 @@ fn shouldPaintText(tag: Element.Tag) bool {
     };
 }
 
-fn estimateTextHeight(text: []const u8, width: i32, font_size: i32) i32 {
+fn estimateTextHeight(
+    text: []const u8,
+    width: i32,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+) i32 {
+    if (builtin.os.tag == .windows) {
+        return measureTextHeightWin32(text, width, font_size, font_family, font_weight, italic) catch
+            estimateTextHeightFallback(text, width, font_size);
+    }
+    return estimateTextHeightFallback(text, width, font_size);
+}
+
+fn estimateTextHeightFallback(text: []const u8, width: i32, font_size: i32) i32 {
     if (text.len == 0) {
         return font_size + 8;
     }
@@ -1234,12 +1277,195 @@ fn estimateTextHeight(text: []const u8, width: i32, font_size: i32) i32 {
     return @as(i32, @intCast(lines)) * (font_size + 4) + 8;
 }
 
-fn estimateTextWidth(text: []const u8, font_size: i32) i32 {
+fn estimateTextWidth(
+    text: []const u8,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+) i32 {
+    if (builtin.os.tag == .windows) {
+        return measureTextWidthWin32(text, font_size, font_family, font_weight, italic) catch
+            estimateTextWidthFallback(text, font_size);
+    }
+    return estimateTextWidthFallback(text, font_size);
+}
+
+fn estimateTextWidthFallback(text: []const u8, font_size: i32) i32 {
     if (text.len == 0) {
         return 0;
     }
     const char_width = @max(@as(i32, 7), @divTrunc(font_size, 2));
     return @as(i32, @intCast(text.len)) * char_width;
+}
+
+fn measureTextWidthWin32(
+    text: []const u8,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+) !i32 {
+    if (text.len == 0) return 0;
+
+    const metrics = try measureTextMetricsWin32(text, null, font_size, font_family, font_weight, italic);
+    return metrics.width;
+}
+
+fn measureTextHeightWin32(
+    text: []const u8,
+    width: i32,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+) !i32 {
+    const metrics = try measureTextMetricsWin32(text, width, font_size, font_family, font_weight, italic);
+    return metrics.height;
+}
+
+const MeasuredTextMetrics = struct {
+    width: i32,
+    height: i32,
+};
+
+fn measureTextMetricsWin32(
+    text: []const u8,
+    wrap_width: ?i32,
+    font_size: i32,
+    font_family: []const u8,
+    font_weight: i32,
+    italic: bool,
+) !MeasuredTextMetrics {
+    if (text.len == 0) {
+        return .{ .width = 0, .height = font_size + 8 };
+    }
+
+    const hdc = win.CreateCompatibleDC(null) orelse return error.TextMeasureDcFailed;
+    defer _ = win.DeleteDC(hdc);
+
+    const font_spec = resolveMeasuredFontSpec(font_family);
+    const wide_face = try std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, font_spec.face_name);
+    defer std.heap.c_allocator.free(wide_face);
+    const font = win.CreateFontW(
+        -@as(i32, @intCast(@max(@as(i32, 1), font_size))),
+        0,
+        0,
+        0,
+        measuredFontWeight(font_weight),
+        @intFromBool(italic),
+        0,
+        0,
+        win.DEFAULT_CHARSET,
+        win.OUT_DEFAULT_PRECIS,
+        win.CLIP_DEFAULT_PRECIS,
+        win.CLEARTYPE_QUALITY,
+        @as(win.DWORD, @intCast(font_spec.pitch_family)),
+        wide_face.ptr,
+    );
+    if (font == null) return error.TextMeasureFontFailed;
+    const previous_font = win.SelectObject(hdc, font);
+    defer {
+        _ = win.SelectObject(hdc, previous_font);
+        _ = win.DeleteObject(font);
+    }
+
+    const wide_text = try std.unicode.utf8ToUtf16LeAllocZ(std.heap.c_allocator, text);
+    defer std.heap.c_allocator.free(wide_text);
+
+    var rect = win.RECT{
+        .left = 0,
+        .top = 0,
+        .right = if (wrap_width) |w| @max(@as(i32, 1), w) else 0,
+        .bottom = 0,
+    };
+    const flags: win.UINT = if (wrap_width != null)
+        win.DT_LEFT | win.DT_TOP | win.DT_NOPREFIX | win.DT_CALCRECT | win.DT_WORDBREAK
+    else
+        win.DT_LEFT | win.DT_TOP | win.DT_NOPREFIX | win.DT_CALCRECT | win.DT_SINGLELINE;
+    _ = win.DrawTextW(hdc, wide_text.ptr, @intCast(wide_text.len), &rect, flags);
+
+    return .{
+        .width = @max(@as(i32, 0), rect.right - rect.left),
+        .height = @max(@as(i32, 0), rect.bottom - rect.top),
+    };
+}
+
+const MeasuredFontSpec = struct {
+    face_name: []const u8,
+    pitch_family: u32,
+};
+
+fn resolveMeasuredFontSpec(font_family_value: []const u8) MeasuredFontSpec {
+    var preferred_specific: []const u8 = "";
+    var generic_spec: ?MeasuredFontSpec = null;
+
+    var families = std.mem.splitScalar(u8, font_family_value, ',');
+    while (families.next()) |raw_family| {
+        const family = trimMeasuredFontFamily(raw_family);
+        if (family.len == 0) continue;
+        if (measuredGenericFontSpec(family)) |spec| {
+            if (generic_spec == null) generic_spec = spec;
+            continue;
+        }
+        if (preferred_specific.len == 0) preferred_specific = family;
+    }
+
+    if (preferred_specific.len > 0) {
+        return .{
+            .face_name = preferred_specific,
+            .pitch_family = if (generic_spec) |spec| spec.pitch_family else @as(u32, win.DEFAULT_PITCH | win.FF_DONTCARE),
+        };
+    }
+    if (generic_spec) |spec| return spec;
+    return .{
+        .face_name = "Segoe UI",
+        .pitch_family = @as(u32, win.DEFAULT_PITCH | win.FF_SWISS),
+    };
+}
+
+fn trimMeasuredFontFamily(raw_family: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, raw_family, &std.ascii.whitespace);
+    if (trimmed.len >= 2) {
+        const quote = trimmed[0];
+        if ((quote == '"' or quote == '\'') and trimmed[trimmed.len - 1] == quote) {
+            return std.mem.trim(u8, trimmed[1 .. trimmed.len - 1], &std.ascii.whitespace);
+        }
+    }
+    return trimmed;
+}
+
+fn measuredGenericFontSpec(family: []const u8) ?MeasuredFontSpec {
+    if (std.ascii.eqlIgnoreCase(family, "sans-serif") or
+        std.ascii.eqlIgnoreCase(family, "system-ui") or
+        std.ascii.eqlIgnoreCase(family, "ui-sans-serif") or
+        std.ascii.eqlIgnoreCase(family, "ui-rounded"))
+    {
+        return .{ .face_name = "Segoe UI", .pitch_family = @as(u32, win.DEFAULT_PITCH | win.FF_SWISS) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "serif") or std.ascii.eqlIgnoreCase(family, "ui-serif")) {
+        return .{ .face_name = "Times New Roman", .pitch_family = @as(u32, win.VARIABLE_PITCH | win.FF_ROMAN) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "monospace") or std.ascii.eqlIgnoreCase(family, "ui-monospace")) {
+        return .{ .face_name = "Consolas", .pitch_family = @as(u32, win.FIXED_PITCH | win.FF_MODERN) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "cursive")) {
+        return .{ .face_name = "Segoe Script", .pitch_family = @as(u32, win.VARIABLE_PITCH | win.FF_SCRIPT) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "fantasy")) {
+        return .{ .face_name = "Impact", .pitch_family = @as(u32, win.VARIABLE_PITCH | win.FF_DECORATIVE) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "emoji")) {
+        return .{ .face_name = "Segoe UI Emoji", .pitch_family = @as(u32, win.DEFAULT_PITCH | win.FF_DONTCARE) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "math")) {
+        return .{ .face_name = "Cambria Math", .pitch_family = @as(u32, win.DEFAULT_PITCH | win.FF_ROMAN) };
+    }
+    return null;
+}
+
+fn measuredFontWeight(css_weight: i32) i32 {
+    return @as(i32, @intCast(std.math.clamp(css_weight, 100, 900)));
 }
 
 fn collectDirectText(allocator: std.mem.Allocator, element: *Element) ![]u8 {
@@ -1924,6 +2150,22 @@ test "paintDocument carries authored font family style and weight on text comman
 
     try std.testing.expect(found_mono);
     try std.testing.expect(found_serif);
+}
+
+test "paintDocument measures button widths from authored font families" {
+    var page = try testing.pageTest("page/font_button_measure.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), display_list.control_regions.items.len);
+
+    const first = display_list.control_regions.items[0];
+    const second = display_list.control_regions.items[1];
+    try std.testing.expect(first.width != second.width);
 }
 
 test "paintDocument carries loaded private font faces for headed rendering" {

@@ -4714,12 +4714,13 @@ fn renderPresentationDisplayList(
                 const left = scalePresentationValue(text_cmd.x, display_list.layout_scale);
                 const top = scalePresentationValue(text_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(text_cmd.width, display_list.layout_scale));
+                const height = @max(1, scalePresentationValue(@max(text_cmd.height, text_cmd.font_size + 8), display_list.layout_scale));
                 const font_size = @max(1, scalePresentationValue(text_cmd.font_size, display_list.layout_scale));
                 var rect = c.RECT{
                     .left = client.left + PRESENTATION_MARGIN + left,
                     .top = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px,
                     .right = client.left + PRESENTATION_MARGIN + left + width,
-                    .bottom = client.bottom + scalePresentationValue(snapshot.display_list.?.content_height, display_list.layout_scale),
+                    .bottom = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px + height,
                 };
                 if (current_find_match) |find_index| {
                     const match = find_matches[find_index];

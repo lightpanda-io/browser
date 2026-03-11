@@ -357,7 +357,10 @@ Current known gap entering Gate 2:
   `@font-face` rendering on the surface, including later renderable
   fallbacks in multi-source `src:` lists, but broader CSS fidelity, real
   text shaping, wider font-format parity beyond WOFF/WOFF2, script/font/
-  resource parity, and one unified subresource ownership path are still open
+  resource parity, and one unified subresource ownership path are still open;
+  the current headed painter now also uses measured Win32 text extents
+  instead of pure character-count heuristics for text runs and inline/button
+  width decisions
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other
