@@ -120,7 +120,7 @@ pub fn fetch(app: *App, url: [:0]const u8, opts: FetchOpts) !void {
                     .registry = &registry,
                     .page = page,
                     .arena = page.call_arena,
-                    .prune = false,
+                    .prune = (mode == .semantic_tree_text),
                 };
 
                 if (mode == .semantic_tree) {
