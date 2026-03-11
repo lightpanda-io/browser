@@ -35,7 +35,6 @@ _start_container: *Node,
 
 // Intrusive linked list node for tracking live ranges on the Page.
 _range_link: std.DoublyLinkedList.Node = .{},
-_live_ranges: *std.DoublyLinkedList = undefined,
 
 pub const Type = union(enum) {
     range: *Range,

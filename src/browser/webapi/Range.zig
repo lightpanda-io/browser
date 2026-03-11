@@ -680,8 +680,8 @@ fn getContainerElement(self: *const Range) ?*Node.Element {
     return parent.is(Node.Element);
 }
 
-pub fn deinit(self: *Range, _: bool, _: *Page) void {
-    self._proto._live_ranges.remove(&self._proto._range_link);
+pub fn deinit(self: *Range, _: bool, page: *Page) void {
+    page._live_ranges.remove(&self._proto._range_link);
 }
 
 pub const JsApi = struct {
