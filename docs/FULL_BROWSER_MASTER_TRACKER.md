@@ -331,6 +331,10 @@ Current state inside Gate 1:
   inline links and longer wrapped anchors with multiple later fragments, with
   bounded headed probes proving navigation still works from those later visual
   fragments instead of only from the first row
+- that same mixed-inline headed interaction path now also covers later-row
+  controls, with bounded probes proving a wrapped inline button still
+  activates from its lower row and a `<br>`-split inline text input still
+  focuses and accepts typed text from the later row on the headed surface
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces

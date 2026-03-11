@@ -2444,6 +2444,83 @@ test "paintDocument wraps mixed inline anchor text across multiple rows" {
     try std.testing.expect(max_y.? > min_y.? + 24);
 }
 
+test "paintDocument keeps wrapped inline button controls in the shared flow" {
+    var page = try testing.pageTest("page/mixed_inline_button_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var lead_y: ?i32 = null;
+    var below_y: ?i32 = null;
+    var button_region: ?ControlRegion = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Lead ")) {
+                    lead_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "Below ")) {
+                    below_y = text.y;
+                }
+            },
+            else => {},
+        }
+    }
+    for (display_list.control_regions.items) |region| {
+        button_region = region;
+        break;
+    }
+
+    try std.testing.expect(lead_y != null);
+    try std.testing.expect(button_region != null);
+    try std.testing.expect(below_y != null);
+    try std.testing.expect(button_region.?.y > lead_y.? + 8);
+    try std.testing.expect(below_y.? > button_region.?.y + button_region.?.height + 8);
+}
+
+test "paintDocument keeps br-split inline input controls on the later row" {
+    var page = try testing.pageTest("page/mixed_inline_input_break_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 680,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var prefix_y: ?i32 = null;
+    var after_break_y: ?i32 = null;
+    var below_y: ?i32 = null;
+    var input_region: ?ControlRegion = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.eql(u8, text.text, "Prefix ")) {
+                    prefix_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "After ")) {
+                    after_break_y = text.y;
+                } else if (std.mem.eql(u8, text.text, "Below ")) {
+                    below_y = text.y;
+                }
+            },
+            else => {},
+        }
+    }
+    for (display_list.control_regions.items) |region| {
+        input_region = region;
+        break;
+    }
+
+    try std.testing.expect(prefix_y != null);
+    try std.testing.expect(after_break_y != null);
+    try std.testing.expect(input_region != null);
+    try std.testing.expect(below_y != null);
+    try std.testing.expect(after_break_y.? > prefix_y.? + 12);
+    try std.testing.expect(input_region.?.y >= after_break_y.? - 4);
+    try std.testing.expect(below_y.? > input_region.?.y + input_region.?.height + 8);
+}
+
 test "paintDocument carries loaded private font faces for headed rendering" {
     var page = try testing.pageTest("page/font_private_render.html");
     defer page._session.removePage();

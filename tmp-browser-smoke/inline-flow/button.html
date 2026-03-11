@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Wrapped Inline Button</title>
+</head>
+<body style="margin:0;background:white;color:black;font:18px sans-serif;">
+  <main style="display:block;padding:24px;width:320px;">
+    <p style="display:block;margin:0 0 24px 0;width:220px;">
+      Lead text before the inline control
+      <button
+        id="target"
+        type="button"
+        style="display:inline;color:white;background-color:#c13db5;padding:6px 12px;border:0;"
+        onclick="document.title='Inline Button Activated';"
+      >
+        BUTTON
+      </button>
+      trailing text after it
+    </p>
+    <p style="display:block;margin:0;">Below paragraph stays below the wrapped inline control.</p>
+  </main>
+</body>
+</html>

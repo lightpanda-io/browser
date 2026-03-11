@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Mixed Inline Input Break Flow</title>
+</head>
+<body style="margin:0;background:white;color:black;font:18px sans-serif;">
+  <main style="display:block;padding:24px;width:420px;">
+    <p style="display:block;margin:0 0 24px 0;">
+      Prefix text before the explicit break
+      <br>
+      After break
+      <input type="text" value="" placeholder="TYPE HERE" style="display:inline;color:white;background-color:#1db6d2;padding:6px 10px;width:170px;border:0;">
+      tail text after input
+    </p>
+    <p style="display:block;margin:0;">Below paragraph stays below the break and inline input.</p>
+  </main>
+</body>
+</html>
