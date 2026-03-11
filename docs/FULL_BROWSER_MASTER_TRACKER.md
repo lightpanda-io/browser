@@ -363,6 +363,11 @@ Current state inside Gate 1:
   radio/button/link coexistence, with a bounded probe proving one wrapped
   paragraph can handle later-row radio click selection, later-row button click
   activation, and then `Tab`/`Enter` traversal into a later-row link
+- that same dense later-row mixed-inline control coverage now also includes one
+  wrapped paragraph containing later-row checkbox, radio, button, and link
+  targets together, with a bounded probe proving click activation on the
+  checkbox, `Tab`+`Space` activation on the later-row radio and button, and
+  `Tab`+`Enter` traversal into the later-row link in DOM order
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
