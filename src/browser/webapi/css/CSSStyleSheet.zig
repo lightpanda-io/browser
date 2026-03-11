@@ -11,6 +11,7 @@ const RawURL = @import("../../URL.zig");
 
 const CSSStyleSheet = @This();
 const STYLESHEET_ACCEPT_HEADER: [:0]const u8 = "Accept: text/css,*/*;q=0.1";
+const FONT_ACCEPT_HEADER: [:0]const u8 = "Accept: font/woff2,font/woff,font/ttf,font/otf,*/*;q=0.1";
 
 _href: ?[]const u8 = null,
 _title: []const u8 = "",
@@ -19,6 +20,7 @@ _css_rules: ?*CSSRuleList = null,
 _owner_rule: ?*CSSRule = null,
 _owner_node: ?*Element = null,
 _rules: []ParsedRule = &.{},
+_font_faces: []ParsedFontFace = &.{},
 _request_base_url: ?[:0]const u8 = null,
 _request_referer_url: ?[:0]const u8 = null,
 _request_include_credentials: bool = true,
@@ -28,6 +30,14 @@ const ParsedRule = struct {
     declarations_text: []const u8,
     rule: *CSSRule,
 };
+
+pub const FontFaceEntry = struct {
+    family: []const u8,
+    source_url: ?[]const u8 = null,
+    loaded: bool = false,
+    rule: *CSSRule,
+};
+const ParsedFontFace = FontFaceEntry;
 
 pub fn init(page: *Page) !*CSSStyleSheet {
     return page._factory.create(CSSStyleSheet{});
@@ -69,6 +79,10 @@ pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
     return self._owner_rule;
 }
 
+pub fn getFontFaces(self: *const CSSStyleSheet) []const FontFaceEntry {
+    return self._font_faces;
+}
+
 pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, index: u32, page: *Page) !u32 {
     _ = self;
     _ = rule;
@@ -91,6 +105,8 @@ pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise 
 pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
     var parsed: std.ArrayList(ParsedRule) = .{};
     defer parsed.deinit(page.arena);
+    var font_faces: std.ArrayList(ParsedFontFace) = .{};
+    defer font_faces.deinit(page.arena);
     var scratch = std.heap.ArenaAllocator.init(page.arena);
     defer scratch.deinit();
     var visited: std.StringHashMapUnmanaged(void) = .empty;
@@ -98,6 +114,7 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
 
     try self.appendParsedRulesFromText(
         &parsed,
+        &font_faces,
         text,
         page,
         scratch.allocator(),
@@ -108,6 +125,7 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
     );
 
     self._rules = try page.arena.dupe(ParsedRule, parsed.items);
+    self._font_faces = try page.arena.dupe(ParsedFontFace, font_faces.items);
     try self.refreshRuleList(page);
 }
 
@@ -129,6 +147,9 @@ fn refreshRuleList(self: *CSSStyleSheet, page: *Page) !void {
     for (self._rules) |entry| {
         try out.append(page.arena, entry.rule);
     }
+    for (self._font_faces) |entry| {
+        try out.append(page.arena, entry.rule);
+    }
     try rules.setRules(page, out.items);
 }
 
@@ -143,6 +164,7 @@ const StylesheetFetchContext = struct {
 fn appendParsedRulesFromText(
     self: *CSSStyleSheet,
     parsed: *std.ArrayList(ParsedRule),
+    font_faces: *std.ArrayList(ParsedFontFace),
     text: []const u8,
     page: *Page,
     temp: std.mem.Allocator,
@@ -164,6 +186,7 @@ fn appendParsedRulesFromText(
             const import_specifier = parseImportSpecifier(import_text) orelse continue;
             try self.appendImportedRules(
                 parsed,
+                font_faces,
                 import_specifier,
                 page,
                 temp,
@@ -191,9 +214,23 @@ fn appendParsedRulesFromText(
         const selector_text = std.mem.trim(u8, text[selector_start..open_index], &std.ascii.whitespace);
         const declarations_text = std.mem.trim(u8, text[open_index + 1 .. close_index], &std.ascii.whitespace);
         if (selector_text.len == 0 or declarations_text.len == 0) continue;
-        if (selector_text[0] == '@') continue;
 
         const rule_text = std.mem.trim(u8, text[selector_start .. close_index + 1], &std.ascii.whitespace);
+        if (std.ascii.eqlIgnoreCase(selector_text, "@font-face")) {
+            try self.appendFontFaceRule(
+                font_faces,
+                rule_text,
+                declarations_text,
+                page,
+                temp,
+                base_url,
+                referer_url,
+                include_credentials,
+            );
+            continue;
+        }
+        if (selector_text[0] == '@') continue;
+
         const rule = try CSSRule.init(.style, page);
         try rule.setCssText(rule_text, page);
 
@@ -208,6 +245,7 @@ fn appendParsedRulesFromText(
 fn appendImportedRules(
     self: *CSSStyleSheet,
     parsed: *std.ArrayList(ParsedRule),
+    font_faces: *std.ArrayList(ParsedFontFace),
     import_specifier: []const u8,
     page: *Page,
     temp: std.mem.Allocator,
@@ -227,6 +265,7 @@ fn appendImportedRules(
     const import_css = try fetchStylesheetText(page, temp, resolved_url, referer_url, include_credentials);
     try self.appendParsedRulesFromText(
         parsed,
+        font_faces,
         import_css,
         page,
         temp,
@@ -283,6 +322,119 @@ fn fetchStylesheetText(
     return try temp.dupe(u8, ctx.buffer.items);
 }
 
+fn appendFontFaceRule(
+    self: *CSSStyleSheet,
+    font_faces: *std.ArrayList(ParsedFontFace),
+    rule_text: []const u8,
+    declarations_text: []const u8,
+    page: *Page,
+    temp: std.mem.Allocator,
+    base_url: ?[:0]const u8,
+    referer_url: ?[:0]const u8,
+    include_credentials: bool,
+) !void {
+    _ = self;
+    const family_value = parseDeclarationValue(declarations_text, "font-family") orelse return;
+    const family = parseCssStringLikeValue(family_value) orelse std.mem.trim(u8, family_value, &std.ascii.whitespace);
+    if (family.len == 0) {
+        return;
+    }
+
+    const rule = try CSSRule.init(.font_face, page);
+    try rule.setCssText(rule_text, page);
+
+    const src_value = parseDeclarationValue(declarations_text, "src");
+    var source_url: ?[]const u8 = null;
+    var loaded = true;
+    if (src_value) |raw_src| {
+        if (parseFirstUrlFromSrcDeclaration(raw_src)) |src_specifier| {
+            if (base_url) |current_base| {
+                const resolved_url = try URL.resolve(temp, current_base, src_specifier, .{ .encode = true, .always_dupe = true });
+                source_url = try page.dupeString(resolved_url);
+                loaded = fetchFontFaceSource(page, temp, resolved_url, referer_url, include_credentials) catch false;
+            }
+        }
+    }
+
+    try font_faces.append(page.arena, .{
+        .family = try page.dupeString(family),
+        .source_url = source_url,
+        .loaded = loaded,
+        .rule = rule,
+    });
+}
+
+const FontFetchContext = struct {
+    finished: bool = false,
+    failed: ?anyerror = null,
+    status: u16 = 0,
+};
+
+fn fetchFontFaceSource(
+    page: *Page,
+    temp: std.mem.Allocator,
+    url: [:0]const u8,
+    referer_url: ?[:0]const u8,
+    include_credentials: bool,
+) !bool {
+    const request_url = try stylesheetRequestUrlForFetch(temp, url, include_credentials);
+    const font_client = try page._session.browser.app.http.createClient(temp);
+    defer font_client.deinit();
+
+    var headers = try font_client.newHeaders();
+    try headers.add(FONT_ACCEPT_HEADER);
+    try page.headersForRequestWithPolicy(page.arena, request_url, &headers, .{
+        .include_credentials = include_credentials,
+        .referer_override_url = referer_url,
+    });
+
+    var ctx = FontFetchContext{};
+    try font_client.request(.{
+        .url = request_url,
+        .ctx = &ctx,
+        .method = .GET,
+        .frame_id = page._frame_id,
+        .headers = headers,
+        .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
+        .resource_type = .font,
+        .notification = page._session.notification,
+        .header_callback = fontFetchHeaderCallback,
+        .data_callback = fontFetchDataCallback,
+        .done_callback = fontFetchDoneCallback,
+        .error_callback = fontFetchErrorCallback,
+    });
+
+    while (!ctx.finished and ctx.failed == null) {
+        _ = try font_client.tick(50);
+    }
+    if (ctx.failed != null) {
+        return false;
+    }
+    return ctx.status > 0 and ctx.status < 400;
+}
+
+fn fontFetchHeaderCallback(transfer: *Http.Transfer) !bool {
+    const ctx: *FontFetchContext = @ptrCast(@alignCast(transfer.ctx));
+    const response_header = transfer.response_header orelse return true;
+    ctx.status = response_header.status;
+    if (response_header.status >= 400) {
+        ctx.failed = error.BadStatusCode;
+    }
+    return true;
+}
+
+fn fontFetchDataCallback(_: *Http.Transfer, _: []const u8) !void {}
+
+fn fontFetchDoneCallback(ctx_ptr: *anyopaque) !void {
+    const ctx: *FontFetchContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.finished = true;
+}
+
+fn fontFetchErrorCallback(ctx_ptr: *anyopaque, err: anyerror) void {
+    const ctx: *FontFetchContext = @ptrCast(@alignCast(ctx_ptr));
+    ctx.failed = err;
+}
+
 fn importedStylesheetHeaderCallback(transfer: *Http.Transfer) !bool {
     const ctx: *StylesheetFetchContext = @ptrCast(@alignCast(transfer.ctx));
     const response_header = transfer.response_header orelse return true;
@@ -337,6 +489,43 @@ fn parseImportSpecifier(import_text: []const u8) ?[]const u8 {
     }
 
     return null;
+}
+
+fn parseDeclarationValue(declarations_text: []const u8, property_name: []const u8) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, declarations_text, ';');
+    while (it.next()) |entry| {
+        const trimmed = std.mem.trim(u8, entry, &std.ascii.whitespace);
+        if (trimmed.len == 0) continue;
+        const colon_index = std.mem.indexOfScalar(u8, trimmed, ':') orelse continue;
+        const name = std.mem.trim(u8, trimmed[0..colon_index], &std.ascii.whitespace);
+        if (!std.ascii.eqlIgnoreCase(name, property_name)) continue;
+        return std.mem.trim(u8, trimmed[colon_index + 1 ..], &std.ascii.whitespace);
+    }
+    return null;
+}
+
+fn parseCssStringLikeValue(value: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len < 2) return null;
+    if ((trimmed[0] == '"' and trimmed[trimmed.len - 1] == '"') or
+        (trimmed[0] == '\'' and trimmed[trimmed.len - 1] == '\''))
+    {
+        return trimmed[1 .. trimmed.len - 1];
+    }
+    return null;
+}
+
+fn parseFirstUrlFromSrcDeclaration(src: []const u8) ?[]const u8 {
+    const url_index = std.mem.indexOf(u8, src, "url(") orelse return null;
+    const tail = src[url_index + 4 ..];
+    const close_index = std.mem.indexOfScalar(u8, tail, ')') orelse return null;
+    var inner = std.mem.trim(u8, tail[0..close_index], &std.ascii.whitespace);
+    if (inner.len >= 2 and ((inner[0] == '"' and inner[inner.len - 1] == '"') or
+        (inner[0] == '\'' and inner[inner.len - 1] == '\'')))
+    {
+        inner = inner[1 .. inner.len - 1];
+    }
+    return if (inner.len == 0) null else inner;
 }
 
 fn stylesheetRequestUrlForFetch(
@@ -417,6 +606,26 @@ pub const JsApi = struct {
     pub const replace = bridge.function(CSSStyleSheet.replace, .{});
     pub const replaceSync = bridge.function(CSSStyleSheet.replaceSync, .{});
 };
+
+test "parseDeclarationValue extracts font-face declarations" {
+    const declarations =
+        \\font-family: "Runner Font";
+        \\src: url("font_face_test.woff2") format("woff2");
+    ;
+    try std.testing.expectEqualStrings("\"Runner Font\"", parseDeclarationValue(declarations, "font-family").?);
+    try std.testing.expectEqualStrings("url(\"font_face_test.woff2\") format(\"woff2\")", parseDeclarationValue(declarations, "src").?);
+}
+
+test "parseFirstUrlFromSrcDeclaration extracts first font source" {
+    try std.testing.expectEqualStrings(
+        "font_face_test.woff2",
+        parseFirstUrlFromSrcDeclaration("local(\"Runner\"), url(\"font_face_test.woff2\") format(\"woff2\")").?,
+    );
+    try std.testing.expectEqualStrings(
+        "font_face_test.woff2",
+        parseFirstUrlFromSrcDeclaration("url('font_face_test.woff2')").?,
+    );
+}
 
 const testing = @import("../../../testing.zig");
 test "WebApi: CSSStyleSheet" {

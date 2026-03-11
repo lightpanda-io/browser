@@ -1,0 +1,8 @@
+@font-face {
+  font-family: "Runner Font";
+  src: url("font_face_test.woff2");
+}
+
+.font-face-target {
+  font-family: "Runner Font", sans-serif;
+}

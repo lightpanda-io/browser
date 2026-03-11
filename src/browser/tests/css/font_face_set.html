@@ -56,3 +56,40 @@
     testing.expectEqual('FontFaceSet', document.fonts.constructor.name);
 }
 </script>
+
+<script id="document_fonts_tracks_loaded_font_faces">
+{
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'font_face_loading.css';
+
+    testing.async(async () => {
+        await new Promise(resolve => {
+            link.addEventListener('load', () => resolve(true));
+            document.head.appendChild(link);
+        });
+
+        const target = document.createElement('div');
+        target.className = 'font-face-target';
+        target.textContent = 'font face target';
+        document.body.appendChild(target);
+
+        testing.expectEqual(1, document.fonts.size);
+        testing.expectEqual('loaded', document.fonts.status);
+        testing.expectTrue(document.fonts.check('16px "Runner Font"'));
+
+        const loaded = await document.fonts.load('16px "Runner Font"');
+        testing.expectEqual(1, loaded.length);
+        testing.expectEqual('Runner Font', loaded[0]);
+
+        testing.expectEqual(2, link.sheet.cssRules.length);
+        testing.expectEqual(CSSRule.FONT_FACE_RULE, link.sheet.cssRules[0].type);
+        testing.expectEqual(CSSRule.STYLE_RULE, link.sheet.cssRules[1].type);
+
+        const computed = getComputedStyle(target);
+        testing.expectTrue(computed.getPropertyValue('font-family').includes('Runner Font'));
+    });
+
+    testing.expectEqual(true, true);
+}
+</script>

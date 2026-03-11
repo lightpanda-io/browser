@@ -198,6 +198,7 @@ pub fn requestIntercept(bc: anytype, intercept: *const Notification.RequestInter
         .resourceType = switch (transfer.req.resource_type) {
             .stylesheet => "Stylesheet",
             .image => "Image",
+            .font => "Font",
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",
@@ -404,6 +405,7 @@ pub fn requestAuthRequired(bc: anytype, intercept: *const Notification.RequestAu
         .resourceType = switch (transfer.req.resource_type) {
             .stylesheet => "Stylesheet",
             .image => "Image",
+            .font => "Font",
             .script => "Script",
             .xhr => "XHR",
             .document => "Document",

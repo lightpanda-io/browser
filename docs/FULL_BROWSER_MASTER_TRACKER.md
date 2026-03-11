@@ -288,6 +288,12 @@ Current state inside Gate 1:
   correct protected vs anonymous request policy on both the root stylesheet
   request and the imported child stylesheet request, with bounded headed
   localhost probes proving imported styles apply successfully in both modes
+- simple `@font-face` parsing and shared-runtime font fetches now ride that
+  same stylesheet-driven path, with `document.fonts` exposing loaded faces by
+  `size`, `status`, `check(...)`, and `load(...)`, and bounded headed
+  localhost probes proving protected and anonymous font requests carry the
+  correct cookie, sanitized referer, auth suppression or inheritance, explicit
+  font `Accept`, and loaded page state on the headed surface
 - next blocker: keep turning internal pages into richer live shell surfaces so
   fewer browser-shell flows still depend on address-bar routes or secondary
   overlay surfaces
@@ -328,9 +334,10 @@ Current known gap entering Gate 2:
   protected-load auth/cookie/referer/`Accept` verification plus anonymous
   credential suppression, stylesheet body application now exists for the
   current simple authored-rule path, and imported child stylesheets now keep
-  the same protected vs anonymous policy as the root request, while broader
-  CSS fidelity, script/font/resource parity, and one unified subresource
-  ownership path are still open
+  the same protected vs anonymous policy as the root request; stylesheet-
+  backed `@font-face` fetches and `document.fonts` now ride that same path,
+  while broader CSS fidelity, real font rendering/text shaping, script/font/
+  resource parity, and one unified subresource ownership path are still open
 - native file chooser, multi-select file inputs, and multipart upload flows
   now work end to end in headed Windows `browse`, but upload transport still
   needs to converge with the same broader shared runtime/policy path as other

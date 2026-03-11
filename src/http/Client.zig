@@ -938,6 +938,7 @@ pub const Request = struct {
         document,
         stylesheet,
         image,
+        font,
         xhr,
         script,
         fetch,
@@ -951,6 +952,7 @@ pub const Request = struct {
                 .document => "Document",
                 .stylesheet => "Stylesheet",
                 .image => "Image",
+                .font => "Font",
                 .xhr => "XHR",
                 .script => "Script",
                 .fetch => "Fetch",
@@ -965,6 +967,10 @@ test "Request.ResourceType.image string is Image" {
 
 test "Request.ResourceType.stylesheet string is Stylesheet" {
     try std.testing.expectEqualStrings("Stylesheet", Request.ResourceType.stylesheet.string());
+}
+
+test "Request.ResourceType.font string is Font" {
+    try std.testing.expectEqualStrings("Font", Request.ResourceType.font.string());
 }
 
 const AuthChallenge = Net.AuthChallenge;

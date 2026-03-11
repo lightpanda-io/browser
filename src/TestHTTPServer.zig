@@ -133,6 +133,22 @@ fn getContentType(file_path: []const u8) []const u8 {
         return "text/css";
     }
 
+    if (std.mem.endsWith(u8, file_path, ".woff2")) {
+        return "font/woff2";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".woff")) {
+        return "font/woff";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".ttf")) {
+        return "font/ttf";
+    }
+
+    if (std.mem.endsWith(u8, file_path, ".otf")) {
+        return "font/otf";
+    }
+
     if (std.mem.endsWith(u8, file_path, ".html")) {
         return "text/html";
     }

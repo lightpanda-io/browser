@@ -112,6 +112,7 @@ fn isKnownCSSProperty(dash_case: []const u8) bool {
         .{ "color", {} },
         .{ "background-color", {} },
         .{ "font-size", {} },
+        .{ "font-family", {} },
         .{ "margin-top", {} },
         .{ "margin-bottom", {} },
         .{ "margin-left", {} },
