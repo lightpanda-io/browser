@@ -2608,6 +2608,47 @@ test "paintDocument keeps wrapped inline checkbox and later link regions distinc
     try std.testing.expect(below_y.? > latest_link_y.? + 8);
 }
 
+test "paintDocument keeps wrapped inline radio and later link regions distinct" {
+    var page = try testing.pageTest("page/mixed_inline_radio_link_flow.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var lead_y: ?i32 = null;
+    var below_y: ?i32 = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (std.mem.startsWith(u8, text.text, "Lead ")) {
+                    lead_y = text.y;
+                } else if (std.mem.startsWith(u8, text.text, "Below ")) {
+                    below_y = text.y;
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.control_regions.items.len);
+    try std.testing.expect(display_list.link_regions.items.len >= 1);
+    try std.testing.expect(lead_y != null);
+    try std.testing.expect(below_y != null);
+
+    const control_region = display_list.control_regions.items[0];
+    var latest_link_y: ?i32 = null;
+    for (display_list.link_regions.items) |region| {
+        latest_link_y = if (latest_link_y) |current| @max(current, region.y) else region.y;
+    }
+
+    try std.testing.expect(latest_link_y != null);
+    try std.testing.expect(control_region.y > lead_y.? + 8);
+    try std.testing.expect(latest_link_y.? > control_region.y + 8);
+    try std.testing.expect(below_y.? > latest_link_y.? + 8);
+}
+
 test "paintDocument keeps wrapped inline checkbox button and later link in DOM order" {
     var page = try testing.pageTest("page/mixed_inline_checkbox_button_link_flow.html");
     defer page._session.removePage();
