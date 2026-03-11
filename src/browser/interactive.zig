@@ -157,7 +157,7 @@ pub fn collectInteractiveElements(
             .node = node,
             .tag_name = el.getTagNameLower(),
             .role = getRole(el),
-            .name = getAccessibleName(el),
+            .name = try getAccessibleName(el, arena),
             .interactivity_type = itype,
             .listener_types = listener_types,
             .disabled = isDisabled(el),
@@ -296,7 +296,7 @@ fn getRole(el: *Element) ?[]const u8 {
     };
 }
 
-fn getAccessibleName(el: *Element) ?[]const u8 {
+fn getAccessibleName(el: *Element, arena: Allocator) !?[]const u8 {
     // aria-label
     if (el.getAttributeSafe(comptime .wrap("aria-label"))) |v| {
         if (v.len > 0) return v;
@@ -325,11 +325,14 @@ fn getAccessibleName(el: *Element) ?[]const u8 {
     }
 
     // Text content (first non-empty text node, trimmed)
-    return getTextContent(el.asNode());
+    return try getTextContent(el.asNode(), arena);
 }
 
-fn getTextContent(node: *Node) ?[]const u8 {
-    var tw = TreeWalker.FullExcludeSelf.init(node, .{});
+fn getTextContent(node: *Node, arena: Allocator) !?[]const u8 {
+    var tw: TreeWalker.FullExcludeSelf = .init(node, .{});
+
+    var chunks: std.ArrayList([]const u8) = .empty;
+
     while (tw.next()) |child| {
         // Skip text inside script/style elements.
         if (child.is(Element)) |el| {
@@ -344,13 +347,18 @@ fn getTextContent(node: *Node) ?[]const u8 {
         if (child.is(Node.CData)) |cdata| {
             if (cdata.is(Node.CData.Text)) |text| {
                 const content = std.mem.trim(u8, text.getWholeText(), &std.ascii.whitespace);
-                if (content.len > 0) return content;
+                if (content.len > 0) {
+                    try chunks.append(arena, content);
+                }
             }
         }
     }
-    return null;
-}
 
+    if (chunks.items.len == 0) return null;
+    if (chunks.items.len == 1) return chunks.items[0];
+
+    return try std.mem.join(arena, " ", chunks.items);
+}
 fn isDisabled(el: *Element) bool {
     if (el.getAttributeSafe(comptime .wrap("disabled")) != null) return true;
     return isDisabledByFieldset(el);
