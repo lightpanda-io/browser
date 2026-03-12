@@ -24,11 +24,15 @@ const Element = @import("../../Element.zig");
 const HtmlElement = @import("../Html.zig");
 
 const CanvasRenderingContext2D = @import("../../canvas/CanvasRenderingContext2D.zig");
+const CanvasSurface = @import("../../canvas/CanvasSurface.zig");
 const WebGLRenderingContext = @import("../../canvas/WebGLRenderingContext.zig");
 const OffscreenCanvas = @import("../../canvas/OffscreenCanvas.zig");
 
 const Canvas = @This();
 _proto: *HtmlElement,
+_surface: ?*CanvasSurface = null,
+_context_2d: ?*CanvasRenderingContext2D = null,
+_webgl_context: ?*WebGLRenderingContext = null,
 
 pub fn asElement(self: *Canvas) *Element {
     return self._proto._proto;
@@ -48,6 +52,9 @@ pub fn getWidth(self: *const Canvas) u32 {
 pub fn setWidth(self: *Canvas, value: u32, page: *Page) !void {
     const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
     try self.asElement().setAttributeSafe(comptime .wrap("width"), .wrap(str), page);
+    if (self._surface) |surface| {
+        try surface.resize(page.arena, self.getWidth(), self.getHeight());
+    }
 }
 
 pub fn getHeight(self: *const Canvas) u32 {
@@ -58,6 +65,9 @@ pub fn getHeight(self: *const Canvas) u32 {
 pub fn setHeight(self: *Canvas, value: u32, page: *Page) !void {
     const str = try std.fmt.allocPrint(page.call_arena, "{d}", .{value});
     try self.asElement().setAttributeSafe(comptime .wrap("height"), .wrap(str), page);
+    if (self._surface) |surface| {
+        try surface.resize(page.arena, self.getWidth(), self.getHeight());
+    }
 }
 
 /// Since there's no base class rendering contextes inherit from,
@@ -67,14 +77,37 @@ const DrawingContext = union(enum) {
     webgl: *WebGLRenderingContext,
 };
 
-pub fn getContext(_: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
+fn ensureSurface(self: *Canvas, page: *Page) !*CanvasSurface {
+    if (self._surface) |surface| return surface;
+    const surface = try CanvasSurface.init(page.arena, self.getWidth(), self.getHeight());
+    self._surface = surface;
+    return surface;
+}
+
+pub fn getSurface(self: *const Canvas) ?*const CanvasSurface {
+    return self._surface;
+}
+
+pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
     if (std.mem.eql(u8, context_type, "2d")) {
-        const ctx = try page._factory.create(CanvasRenderingContext2D{});
+        if (self._webgl_context != null) return null;
+        if (self._context_2d) |ctx| {
+            return .{ .@"2d" = ctx };
+        }
+        const ctx = try page._factory.create(CanvasRenderingContext2D{
+            ._surface = try self.ensureSurface(page),
+        });
+        self._context_2d = ctx;
         return .{ .@"2d" = ctx };
     }
 
     if (std.mem.eql(u8, context_type, "webgl") or std.mem.eql(u8, context_type, "experimental-webgl")) {
+        if (self._context_2d != null) return null;
+        if (self._webgl_context) |ctx| {
+            return .{ .webgl = ctx };
+        }
         const ctx = try page._factory.create(WebGLRenderingContext{});
+        self._webgl_context = ctx;
         return .{ .webgl = ctx };
     }
 
@@ -86,7 +119,29 @@ pub fn getContext(_: *Canvas, context_type: []const u8, page: *Page) !?DrawingCo
 pub fn transferControlToOffscreen(self: *Canvas, page: *Page) !*OffscreenCanvas {
     const width = self.getWidth();
     const height = self.getHeight();
-    return OffscreenCanvas.constructor(width, height, page);
+    const offscreen = try OffscreenCanvas.constructor(width, height, page);
+    if (self._surface) |surface| {
+        offscreen._surface = try surface.clone(page.arena);
+    }
+    return offscreen;
+}
+
+pub fn attributeChange(element: *Element, name: @import("../../../../string.zig").String, _: @import("../../../../string.zig").String, page: *Page) !void {
+    const canvas = element.as(Element.Html.Canvas);
+    if (name.eql(comptime .wrap("width")) or name.eql(comptime .wrap("height"))) {
+        if (canvas._surface) |surface| {
+            try surface.resize(page.arena, canvas.getWidth(), canvas.getHeight());
+        }
+    }
+}
+
+pub fn attributeRemove(element: *Element, name: @import("../../../../string.zig").String, page: *Page) !void {
+    const canvas = element.as(Element.Html.Canvas);
+    if (name.eql(comptime .wrap("width")) or name.eql(comptime .wrap("height"))) {
+        if (canvas._surface) |surface| {
+            try surface.resize(page.arena, canvas.getWidth(), canvas.getHeight());
+        }
+    }
 }
 
 pub const JsApi = struct {

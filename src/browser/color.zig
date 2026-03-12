@@ -214,15 +214,21 @@ pub const RGBA = packed struct(u32) {
     }
 
     /// Parses the given color.
-    /// Currently we only parse hex colors and named colors; other variants
-    /// require CSS evaluation.
     pub fn parse(input: []const u8) !RGBA {
-        if (!isHexColor(input)) {
-            // Try named colors.
-            return find(input) orelse return error.Invalid;
+        const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
+        if (parseFunctional(trimmed)) |rgba| {
+            return rgba;
+        } else |err| switch (err) {
+            error.NotFunctionalColor => {},
+            else => return err,
         }
 
-        const slice = input[1..];
+        if (!isHexColor(trimmed)) {
+            // Try named colors.
+            return find(trimmed) orelse return error.Invalid;
+        }
+
+        const slice = trimmed[1..];
         switch (slice.len) {
             // This means the digit for a color is repeated.
             // Given HEX is #f0c, its interpreted the same as #FF00CC.
@@ -255,6 +261,53 @@ pub const RGBA = packed struct(u32) {
             },
             else => return error.Invalid,
         }
+    }
+
+    fn parseFunctional(input: []const u8) !RGBA {
+        if (std.ascii.startsWithIgnoreCase(input, "rgb(") and std.mem.endsWith(u8, input, ")")) {
+            const inner = input[4 .. input.len - 1];
+            var parts = std.mem.splitScalar(u8, inner, ',');
+            const r = try parseRgbComponent(parts.next() orelse return error.Invalid);
+            const g = try parseRgbComponent(parts.next() orelse return error.Invalid);
+            const b = try parseRgbComponent(parts.next() orelse return error.Invalid);
+            if (parts.next() != null) return error.Invalid;
+            return .{ .r = r, .g = g, .b = b, .a = 255 };
+        }
+
+        if (std.ascii.startsWithIgnoreCase(input, "rgba(") and std.mem.endsWith(u8, input, ")")) {
+            const inner = input[5 .. input.len - 1];
+            var parts = std.mem.splitScalar(u8, inner, ',');
+            const r = try parseRgbComponent(parts.next() orelse return error.Invalid);
+            const g = try parseRgbComponent(parts.next() orelse return error.Invalid);
+            const b = try parseRgbComponent(parts.next() orelse return error.Invalid);
+            const alpha = try parseAlphaComponent(parts.next() orelse return error.Invalid);
+            if (parts.next() != null) return error.Invalid;
+            return RGBA.init(r, g, b, alpha);
+        }
+
+        return error.NotFunctionalColor;
+    }
+
+    fn parseRgbComponent(input: []const u8) !u8 {
+        const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
+        if (trimmed.len == 0) return error.Invalid;
+        if (trimmed[trimmed.len - 1] == '%') {
+            const value = try std.fmt.parseFloat(f32, trimmed[0 .. trimmed.len - 1]);
+            const clamped = std.math.clamp(value, 0, 100);
+            return @intFromFloat((clamped * 255) / 100);
+        }
+        const value = try std.fmt.parseFloat(f32, trimmed);
+        return std.math.lossyCast(u8, std.math.clamp(value, 0, 255));
+    }
+
+    fn parseAlphaComponent(input: []const u8) !f32 {
+        const trimmed = std.mem.trim(u8, input, &std.ascii.whitespace);
+        if (trimmed.len == 0) return error.Invalid;
+        if (trimmed[trimmed.len - 1] == '%') {
+            const value = try std.fmt.parseFloat(f32, trimmed[0 .. trimmed.len - 1]);
+            return std.math.clamp(value / 100, 0, 1);
+        }
+        return std.math.clamp(try std.fmt.parseFloat(f32, trimmed), 0, 1);
     }
 
     /// By default, browsers prefer lowercase formatting.
@@ -296,3 +349,19 @@ pub const RGBA = packed struct(u32) {
         return @as(f32, @floatFromInt(self.a)) / 255;
     }
 };
+
+test "RGBA.parse handles rgba functional notation" {
+    const rgba = try RGBA.parse("rgba(255, 0, 0, 0.5)");
+    try std.testing.expectEqual(@as(u8, 255), rgba.r);
+    try std.testing.expectEqual(@as(u8, 0), rgba.g);
+    try std.testing.expectEqual(@as(u8, 0), rgba.b);
+    try std.testing.expectEqual(@as(u8, 127), rgba.a);
+}
+
+test "RGBA.parse handles rgb functional notation" {
+    const rgba = try RGBA.parse("rgb(0, 255, 0)");
+    try std.testing.expectEqual(@as(u8, 0), rgba.r);
+    try std.testing.expectEqual(@as(u8, 255), rgba.g);
+    try std.testing.expectEqual(@as(u8, 0), rgba.b);
+    try std.testing.expectEqual(@as(u8, 255), rgba.a);
+}

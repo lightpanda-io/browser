@@ -23,6 +23,7 @@ const color = @import("../../color.zig");
 const Page = @import("../../Page.zig");
 
 const ImageData = @import("../ImageData.zig");
+const CanvasSurface = @import("CanvasSurface.zig");
 
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `OffscreenCanvas#getContext`.
@@ -31,6 +32,8 @@ const OffscreenCanvasRenderingContext2D = @This();
 /// Fill color.
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
+_stroke_style: color.RGBA = color.RGBA.Named.black,
+_surface: *CanvasSurface,
 
 pub fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, page: *Page) ![]const u8 {
     var w = std.Io.Writer.Allocating.init(page.call_arena);
@@ -44,6 +47,16 @@ pub fn setFillStyle(
 ) !void {
     // Prefer the same fill_style if fails.
     self._fill_style = color.RGBA.parse(value) catch self._fill_style;
+}
+
+pub fn getStrokeStyle(self: *const OffscreenCanvasRenderingContext2D, page: *Page) ![]const u8 {
+    var w = std.Io.Writer.Allocating.init(page.call_arena);
+    try self._stroke_style.format(&w.writer);
+    return w.written();
+}
+
+pub fn setStrokeStyle(self: *OffscreenCanvasRenderingContext2D, value: []const u8) void {
+    self._stroke_style = color.RGBA.parse(value) catch self._stroke_style;
 }
 
 const WidthOrImageData = union(enum) {
@@ -71,7 +84,30 @@ pub fn createImageData(
     }
 }
 
-pub fn putImageData(_: *const OffscreenCanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+pub fn getImageData(
+    self: *const OffscreenCanvasRenderingContext2D,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    page: *Page,
+) !*ImageData {
+    return self._surface.getImageData(sx, sy, sw, sh, page);
+}
+
+pub fn putImageData(
+    self: *const OffscreenCanvasRenderingContext2D,
+    image_data: *ImageData,
+    dx: f64,
+    dy: f64,
+    dirty_x: ?f64,
+    dirty_y: ?f64,
+    dirty_width: ?f64,
+    dirty_height: ?f64,
+    page: *Page,
+) !void {
+    try self._surface.putImageData(image_data, dx, dy, dirty_x, dirty_y, dirty_width, dirty_height, page);
+}
 pub fn save(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn restore(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn scale(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -80,10 +116,15 @@ pub fn translate(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
 pub fn transform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn setTransform(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn resetTransform(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn setStrokeStyle(_: *OffscreenCanvasRenderingContext2D, _: []const u8) void {}
-pub fn clearRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fillRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn strokeRect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
+pub fn clearRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._surface.clearRect(x, y, width, height);
+}
+pub fn fillRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._surface.fillRect(self._fill_style, x, y, width, height);
+}
+pub fn strokeRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._surface.strokeRect(self._stroke_style, x, y, width, height);
+}
 pub fn beginPath(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn closePath(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn moveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -112,7 +153,7 @@ pub const JsApi = struct {
     pub const font = bridge.property("10px sans-serif", .{ .template = false, .readonly = false });
     pub const globalAlpha = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const globalCompositeOperation = bridge.property("source-over", .{ .template = false, .readonly = false });
-    pub const strokeStyle = bridge.property("#000000", .{ .template = false, .readonly = false });
+    pub const strokeStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getStrokeStyle, OffscreenCanvasRenderingContext2D.setStrokeStyle, .{});
     pub const lineWidth = bridge.property(1.0, .{ .template = false, .readonly = false });
     pub const lineCap = bridge.property("butt", .{ .template = false, .readonly = false });
     pub const lineJoin = bridge.property("miter", .{ .template = false, .readonly = false });
@@ -123,7 +164,8 @@ pub const JsApi = struct {
     pub const fillStyle = bridge.accessor(OffscreenCanvasRenderingContext2D.getFillStyle, OffscreenCanvasRenderingContext2D.setFillStyle, .{});
     pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
-    pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .noop = true });
+    pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
+    pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .dom_exception = true });
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
     pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{ .noop = true });
@@ -132,9 +174,9 @@ pub const JsApi = struct {
     pub const transform = bridge.function(OffscreenCanvasRenderingContext2D.transform, .{ .noop = true });
     pub const setTransform = bridge.function(OffscreenCanvasRenderingContext2D.setTransform, .{ .noop = true });
     pub const resetTransform = bridge.function(OffscreenCanvasRenderingContext2D.resetTransform, .{ .noop = true });
-    pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{ .noop = true });
-    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{ .noop = true });
-    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{ .noop = true });
+    pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{});
+    pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{});
+    pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{});
     pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{ .noop = true });
     pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{ .noop = true });
     pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{ .noop = true });

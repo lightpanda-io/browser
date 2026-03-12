@@ -97,6 +97,15 @@ pub fn getData(self: *const ImageData) js.ArrayBufferRef(.uint8_clamped).Global 
     return self._data;
 }
 
+pub fn bytes(self: *const ImageData, page: *Page) ![]u8 {
+    const local = page.js.local.?;
+    const typed = self._data.local(local);
+    return local.jsValueToZig([]u8, .{
+        .local = local,
+        .handle = typed.handle,
+    });
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(ImageData);
 

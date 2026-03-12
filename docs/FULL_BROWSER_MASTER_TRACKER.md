@@ -326,6 +326,11 @@ Current state inside Gate 1:
   fallback over an earlier unsupported WOFF/WOFF2 source when present, with a
   bounded headed screenshot probe proving a later truetype fallback still
   affects the surface after an earlier missing `woff2` source
+- on-screen and offscreen canvas 2D contexts now keep real RGBA backing
+  stores for `fillRect`, `clearRect`, `strokeRect`, `getImageData`, and
+  `putImageData`, and headed Win32 `browse` now renders those canvas pixels on
+  the shared display-list path with a bounded screenshot probe proving the
+  rendered border, composited fill, and cleared interior
 - the current headed painter now also keeps simple block paragraphs with mixed
   direct text plus inline child elements on one shared inline row instead of
   splitting the direct text into a separate label band above the inline chips,

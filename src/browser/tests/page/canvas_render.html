@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#0a8f46">
+  <canvas id="main" width="120" height="80"></canvas>
+  <script>
+    const canvas = document.getElementById("main");
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#0000ff";
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ff0000";
+    ctx.fillRect(10, 10, 40, 24);
+    const red = ctx.getImageData(12, 12, 1, 1).data;
+    const clear = ctx.getImageData(90, 60, 1, 1).data;
+    document.title = (red[0] === 255 && red[3] === 255 && clear[3] === 0)
+      ? "Canvas Render Ready"
+      : "Canvas Render Failed";
+  </script>
+</body>
+</html>

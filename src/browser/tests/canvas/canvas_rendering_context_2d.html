@@ -5,8 +5,10 @@
 {
   const element = document.createElement("canvas");
   const ctx = element.getContext("2d");
+  const ctx2 = element.getContext("2d");
   testing.expectEqual(true, ctx instanceof CanvasRenderingContext2D);
-  // We can't really test this but let's try to call it at least.
+  testing.expectEqual(true, ctx === ctx2);
+  testing.expectEqual(null, element.getContext("webgl"));
   ctx.fillRect(0, 0, 0, 0);
 }
 </script>
@@ -86,6 +88,112 @@
   ctx.putImageData(imageData, 10, 20);
   // With dirty rect parameters.
   ctx.putImageData(imageData, 0, 0, 0, 0, 5, 5);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#fillRect and getImageData">
+{
+  const element = document.createElement("canvas");
+  element.width = 8;
+  element.height = 8;
+  const ctx = element.getContext("2d");
+
+  ctx.fillStyle = "rgba(255, 0, 0, 0.5)";
+  ctx.fillRect(2, 1, 3, 2);
+
+  const imageData = ctx.getImageData(2, 1, 1, 1);
+  testing.expectEqual(255, imageData.data[0]);
+  testing.expectEqual(0, imageData.data[1]);
+  testing.expectEqual(0, imageData.data[2]);
+  testing.expectEqual(127, imageData.data[3]);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#clearRect">
+{
+  const element = document.createElement("canvas");
+  element.width = 8;
+  element.height = 8;
+  const ctx = element.getContext("2d");
+
+  ctx.fillStyle = "#00ff00";
+  ctx.fillRect(0, 0, 8, 8);
+  ctx.clearRect(2, 2, 2, 2);
+
+  const cleared = ctx.getImageData(2, 2, 1, 1);
+  const filled = ctx.getImageData(1, 1, 1, 1);
+  testing.expectEqual(cleared.data[0], 0);
+  testing.expectEqual(cleared.data[1], 0);
+  testing.expectEqual(cleared.data[2], 0);
+  testing.expectEqual(cleared.data[3], 0);
+  testing.expectEqual(filled.data[0], 0);
+  testing.expectEqual(filled.data[1], 255);
+  testing.expectEqual(filled.data[2], 0);
+  testing.expectEqual(filled.data[3], 255);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#strokeRect">
+{
+  const element = document.createElement("canvas");
+  element.width = 8;
+  element.height = 8;
+  const ctx = element.getContext("2d");
+
+  ctx.strokeStyle = "#0000ff";
+  ctx.strokeRect(1, 1, 4, 4);
+
+  const border = ctx.getImageData(1, 1, 1, 1);
+  const inner = ctx.getImageData(2, 2, 1, 1);
+  testing.expectEqual(border.data[0], 0);
+  testing.expectEqual(border.data[1], 0);
+  testing.expectEqual(border.data[2], 255);
+  testing.expectEqual(border.data[3], 255);
+  testing.expectEqual(inner.data[3], 0);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#putImageData writes pixels">
+{
+  const element = document.createElement("canvas");
+  element.width = 8;
+  element.height = 8;
+  const ctx = element.getContext("2d");
+
+  const imageData = ctx.createImageData(2, 1);
+  imageData.data[0] = 10;
+  imageData.data[1] = 20;
+  imageData.data[2] = 30;
+  imageData.data[3] = 255;
+  imageData.data[4] = 40;
+  imageData.data[5] = 50;
+  imageData.data[6] = 60;
+  imageData.data[7] = 255;
+  ctx.putImageData(imageData, 3, 4);
+
+  const sample = ctx.getImageData(3, 4, 2, 1);
+  testing.expectEqual(sample.data[0], 10);
+  testing.expectEqual(sample.data[1], 20);
+  testing.expectEqual(sample.data[2], 30);
+  testing.expectEqual(sample.data[4], 40);
+  testing.expectEqual(sample.data[5], 50);
+  testing.expectEqual(sample.data[6], 60);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#width reset clears bitmap and keeps context identity">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(0, 0, 4, 4);
+  element.width = 64;
+
+  const same = element.getContext("2d");
+  const sample = same.getImageData(0, 0, 1, 1);
+  testing.expectEqual(true, ctx === same);
+  testing.expectEqual(0, sample.data[3]);
 }
 </script>
 

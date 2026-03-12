@@ -59,6 +59,7 @@ pub fn build(b: *Build) !void {
         if (target.result.os.tag == .windows) {
             mod.linkSystemLibrary("user32", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("gdi32", .{ .use_pkg_config = .no });
+            mod.linkSystemLibrary("msimg32", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("imm32", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("comdlg32", .{ .use_pkg_config = .no });
             mod.linkSystemLibrary("dwrite", .{ .use_pkg_config = .no });

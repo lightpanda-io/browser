@@ -62,6 +62,16 @@ pub const ImageCommand = struct {
     request_authorization_value: []u8 = &.{},
 };
 
+pub const CanvasCommand = struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    pixel_width: u32,
+    pixel_height: u32,
+    pixels: []u8,
+};
+
 pub const FontFaceFormat = enum(u8) {
     unknown,
     truetype,
@@ -88,6 +98,7 @@ pub const Command = union(enum) {
     stroke_rect: RectCommand,
     text: TextCommand,
     image: ImageCommand,
+    canvas: CanvasCommand,
 
     fn cloneOwned(self: Command, allocator: std.mem.Allocator) !Command {
         return switch (self) {
@@ -118,6 +129,15 @@ pub const Command = union(enum) {
                 .request_referer_value = try allocator.dupe(u8, image.request_referer_value),
                 .request_authorization_value = try allocator.dupe(u8, image.request_authorization_value),
             } },
+            .canvas => |canvas| .{ .canvas = .{
+                .x = canvas.x,
+                .y = canvas.y,
+                .width = canvas.width,
+                .height = canvas.height,
+                .pixel_width = canvas.pixel_width,
+                .pixel_height = canvas.pixel_height,
+                .pixels = try allocator.dupe(u8, canvas.pixels),
+            } },
         };
     }
 
@@ -134,6 +154,7 @@ pub const Command = union(enum) {
                 allocator.free(image.request_referer_value);
                 allocator.free(image.request_authorization_value);
             },
+            .canvas => |canvas| allocator.free(canvas.pixels),
             else => {},
         }
     }
@@ -263,6 +284,11 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
     self.content_height = @max(self.content_height, image.y + image.height);
 }
 
+pub fn addCanvas(self: *DisplayList, allocator: std.mem.Allocator, canvas: CanvasCommand) !void {
+    try self.commands.append(allocator, .{ .canvas = canvas });
+    self.content_height = @max(self.content_height, canvas.y + canvas.height);
+}
+
 pub fn addLinkRegion(self: *DisplayList, allocator: std.mem.Allocator, region: LinkRegion) !void {
     try self.link_regions.append(allocator, .{
         .x = region.x,
@@ -346,6 +372,16 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(image.request_cookie_value);
                 hasher.update(image.request_referer_value);
                 hasher.update(image.request_authorization_value);
+            },
+            .canvas => |canvas| {
+                hasher.update("canvas");
+                hasher.update(std.mem.asBytes(&canvas.x));
+                hasher.update(std.mem.asBytes(&canvas.y));
+                hasher.update(std.mem.asBytes(&canvas.width));
+                hasher.update(std.mem.asBytes(&canvas.height));
+                hasher.update(std.mem.asBytes(&canvas.pixel_width));
+                hasher.update(std.mem.asBytes(&canvas.pixel_height));
+                hasher.update(canvas.pixels);
             },
         }
     }

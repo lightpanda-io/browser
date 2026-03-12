@@ -4656,6 +4656,85 @@ fn drawPresentationImage(
     }
 }
 
+fn drawPresentationCanvas(
+    backend: *Win32Backend,
+    hdc: c.HDC,
+    rect: c.RECT,
+    canvas_cmd: @import("../render/DisplayList.zig").CanvasCommand,
+) void {
+    _ = backend;
+    if (canvas_cmd.pixel_width == 0 or canvas_cmd.pixel_height == 0 or canvas_cmd.pixels.len == 0) {
+        return;
+    }
+
+    const target_width = rect.right - rect.left;
+    const target_height = rect.bottom - rect.top;
+    if (target_width <= 0 or target_height <= 0) {
+        return;
+    }
+
+    const mem_dc = c.CreateCompatibleDC(hdc);
+    if (mem_dc == null) {
+        return;
+    }
+    defer _ = c.DeleteDC(mem_dc);
+
+    var bmi: c.BITMAPINFO = std.mem.zeroes(c.BITMAPINFO);
+    bmi.bmiHeader.biSize = @sizeOf(c.BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = clampU32ToCInt(canvas_cmd.pixel_width);
+    bmi.bmiHeader.biHeight = -clampU32ToCInt(canvas_cmd.pixel_height);
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = c.BI_RGB;
+
+    var bits: ?*anyopaque = null;
+    const hbitmap = c.CreateDIBSection(mem_dc, &bmi, c.DIB_RGB_COLORS, &bits, null, 0);
+    if (hbitmap == null or bits == null) {
+        return;
+    }
+    defer _ = c.DeleteObject(hbitmap);
+
+    const previous_bitmap = c.SelectObject(mem_dc, hbitmap);
+    defer _ = c.SelectObject(mem_dc, previous_bitmap);
+
+    const dst_pixels: [*]u8 = @ptrCast(bits.?);
+    var src_index: usize = 0;
+    var dst_index: usize = 0;
+    while (src_index + 3 < canvas_cmd.pixels.len) : ({
+        src_index += 4;
+        dst_index += 4;
+    }) {
+        const r = canvas_cmd.pixels[src_index + 0];
+        const g = canvas_cmd.pixels[src_index + 1];
+        const b = canvas_cmd.pixels[src_index + 2];
+        const a = canvas_cmd.pixels[src_index + 3];
+        dst_pixels[dst_index + 0] = @intCast((@as(u16, b) * a + 127) / 255);
+        dst_pixels[dst_index + 1] = @intCast((@as(u16, g) * a + 127) / 255);
+        dst_pixels[dst_index + 2] = @intCast((@as(u16, r) * a + 127) / 255);
+        dst_pixels[dst_index + 3] = a;
+    }
+
+    const blend = c.BLENDFUNCTION{
+        .BlendOp = c.AC_SRC_OVER,
+        .BlendFlags = 0,
+        .SourceConstantAlpha = 255,
+        .AlphaFormat = c.AC_SRC_ALPHA,
+    };
+    _ = c.AlphaBlend(
+        hdc,
+        rect.left,
+        rect.top,
+        target_width,
+        target_height,
+        mem_dc,
+        0,
+        0,
+        clampU32ToCInt(canvas_cmd.pixel_width),
+        clampU32ToCInt(canvas_cmd.pixel_height),
+        blend,
+    );
+}
+
 fn imageRequestCacheKey(allocator: std.mem.Allocator, image: ImageCommand) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}\nINCLUDE_CREDENTIALS:{s}\nCOOKIE:{s}\nREFERER:{s}\nAUTH:{s}", .{
         image.url,
@@ -4793,6 +4872,19 @@ fn renderPresentationDisplayList(
                     .bottom = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px + height,
                 };
                 drawPresentationImage(backend, hdc, rect, image_cmd, snapshot.url, snapshot.image_request_cookie_jar);
+            },
+            .canvas => |canvas_cmd| {
+                const left = scalePresentationValue(canvas_cmd.x, display_list.layout_scale);
+                const top = scalePresentationValue(canvas_cmd.y, display_list.layout_scale);
+                const width = @max(1, scalePresentationValue(canvas_cmd.width, display_list.layout_scale));
+                const height = @max(1, scalePresentationValue(canvas_cmd.height, display_list.layout_scale));
+                const rect = c.RECT{
+                    .left = client.left + PRESENTATION_MARGIN + left,
+                    .top = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px,
+                    .right = client.left + PRESENTATION_MARGIN + left + width,
+                    .bottom = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px + height,
+                };
+                drawPresentationCanvas(backend, hdc, rect, canvas_cmd);
             },
         }
     }

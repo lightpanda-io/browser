@@ -32,9 +32,62 @@
 {
   const canvas = new OffscreenCanvas(64, 64);
   const ctx = canvas.getContext("2d");
+  const ctx2 = canvas.getContext("2d");
   testing.expectEqual(true, ctx instanceof OffscreenCanvasRenderingContext2D);
-  // We can't really test rendering but let's try to call it at least.
+  testing.expectEqual(true, ctx === ctx2);
   ctx.fillRect(0, 0, 10, 10);
+}
+</script>
+
+<script id=OffscreenCanvasRenderingContext2D#fillRect>
+{
+  const canvas = new OffscreenCanvas(16, 16);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#00ff00";
+  ctx.fillRect(1, 2, 3, 4);
+  const sample = ctx.getImageData(1, 2, 1, 1);
+  testing.expectEqual(sample.data[0], 0);
+  testing.expectEqual(sample.data[1], 255);
+  testing.expectEqual(sample.data[2], 0);
+  testing.expectEqual(sample.data[3], 255);
+}
+</script>
+
+<script id=OffscreenCanvasRenderingContext2D#putImageData>
+{
+  const canvas = new OffscreenCanvas(16, 16);
+  const ctx = canvas.getContext("2d");
+  const imageData = ctx.createImageData(2, 1);
+  imageData.data[0] = 20;
+  imageData.data[1] = 30;
+  imageData.data[2] = 40;
+  imageData.data[3] = 255;
+  imageData.data[4] = 50;
+  imageData.data[5] = 60;
+  imageData.data[6] = 70;
+  imageData.data[7] = 255;
+  ctx.putImageData(imageData, 4, 5);
+  const sample = ctx.getImageData(4, 5, 2, 1);
+  testing.expectEqual(sample.data[0], 20);
+  testing.expectEqual(sample.data[1], 30);
+  testing.expectEqual(sample.data[2], 40);
+  testing.expectEqual(sample.data[4], 50);
+  testing.expectEqual(sample.data[5], 60);
+  testing.expectEqual(sample.data[6], 70);
+}
+</script>
+
+<script id=OffscreenCanvas#resize clears bitmap>
+{
+  const canvas = new OffscreenCanvas(16, 16);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(0, 0, 4, 4);
+  canvas.width = 32;
+  const same = canvas.getContext("2d");
+  const sample = same.getImageData(0, 0, 1, 1);
+  testing.expectEqual(true, ctx === same);
+  testing.expectEqual(sample.data[3], 0);
 }
 </script>
 

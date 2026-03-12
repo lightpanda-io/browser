@@ -12,6 +12,7 @@ const Color = @import("DisplayList.zig").Color;
 const LinkRegion = @import("DisplayList.zig").LinkRegion;
 const ControlRegion = @import("DisplayList.zig").ControlRegion;
 const ImageCommand = @import("DisplayList.zig").ImageCommand;
+const CanvasCommand = @import("DisplayList.zig").CanvasCommand;
 const FontFaceResource = @import("DisplayList.zig").FontFaceResource;
 const FontFaceFormat = @import("DisplayList.zig").FontFaceFormat;
 const CSSStyleSheet = @import("../browser/webapi/css/CSSStyleSheet.zig");
@@ -286,7 +287,9 @@ const Painter = struct {
         }
 
         const display = decl.getPropertyValue("display", self.page);
-        const has_child_elements = hasRenderableChildElements(element);
+        const raw_has_child_elements = hasRenderableChildElements(element);
+        const canvas_surface_present = tag == .canvas and canvasSurfaceForElement(element) != null;
+        const has_child_elements = raw_has_child_elements and !canvas_surface_present;
         const block_like = isFlowBlockLike(tag, display, has_child_elements);
         const inline_leaf = !block_like and !has_child_elements;
         const margins = resolveEdgeSizes(decl, self.page, "margin");
@@ -296,7 +299,10 @@ const Painter = struct {
         const italic = parseCssFontItalic(resolveCssPropertyValue(decl, self.page, element, "font-style"));
         const inline_content_flow = block_like and try usesInlineContentFlowContainer(element, decl, self.page, display);
 
-        const label = try self.elementLabel(element);
+        const label = if (canvas_surface_present)
+            try self.allocator.dupe(u8, "")
+        else
+            try self.elementLabel(element);
         defer self.allocator.free(label);
         const inline_passthrough = try self.shouldPassThroughInlineContainer(
             element,
@@ -312,9 +318,11 @@ const Painter = struct {
         if (inline_passthrough) {
             const command_start = self.list.commands.items.len;
 
-            var child_it = element.asNode().childrenIterator();
-            while (child_it.next()) |child| {
-                try self.paintNode(child, cursor);
+            if (!canvas_surface_present) {
+                var child_it = element.asNode().childrenIterator();
+                while (child_it.next()) |child| {
+                    try self.paintNode(child, cursor);
+                }
             }
 
             try self.appendInlineLinkRegionsForCommandRange(element, command_start);
@@ -335,9 +343,11 @@ const Painter = struct {
         const y = pos.y;
         if (inline_content_flow) {
             var child_cursor = FlowCursor.init(x + padding.left, y + padding.top, @max(@as(i32, 40), width - padding.left - padding.right));
-            var child_it = element.asNode().childrenIterator();
-            while (child_it.next()) |child| {
-                try self.paintNode(child, &child_cursor);
+            if (!canvas_surface_present) {
+                var child_it = element.asNode().childrenIterator();
+                while (child_it.next()) |child| {
+                    try self.paintNode(child, &child_cursor);
+                }
             }
 
             const child_height = child_cursor.consumedHeightSince(y + padding.top);
@@ -385,9 +395,11 @@ const Painter = struct {
         const child_width = @max(@as(i32, 40), width - padding.left - padding.right - child_indent);
         var child_cursor = FlowCursor.init(child_left, child_top, child_width);
 
-        var it = element.asNode().childrenIterator();
-        while (it.next()) |child| {
-            try self.paintNode(child, &child_cursor);
+        if (!canvas_surface_present) {
+            var it = element.asNode().childrenIterator();
+            while (it.next()) |child| {
+                try self.paintNode(child, &child_cursor);
+            }
         }
 
         const child_height: i32 = if (has_child_elements)
@@ -452,11 +464,18 @@ const Painter = struct {
             try resolvedImageCommand(element, self.page, rect.x, rect.y, rect.width, rect.height)
         else
             null;
+        const canvas_command = if (tag == .canvas)
+            try resolvedCanvasCommand(self.allocator, element, rect.x, rect.y, rect.width, rect.height)
+        else
+            null;
         if (image_command) |command| {
             try self.list.addImage(self.allocator, command);
         }
+        if (canvas_command) |command| {
+            try self.list.addCanvas(self.allocator, command);
+        }
 
-        if (label.len > 0 and shouldPaintText(tag) and image_command == null) {
+        if (label.len > 0 and shouldPaintText(tag) and image_command == null and canvas_command == null) {
             try self.list.addText(self.allocator, .{
                 .x = rect.x + padding.left + 6,
                 .y = rect.y + padding.top + 4,
@@ -693,9 +712,14 @@ fn shouldPaintBox(tag: Element.Tag) bool {
 
 fn shouldStrokeBox(tag: Element.Tag) bool {
     return switch (tag) {
-        .img, .input, .textarea, .button, .select, .iframe, .canvas => true,
+        .img, .input, .textarea, .button, .select, .iframe => true,
         else => false,
     };
+}
+
+fn canvasSurfaceForElement(element: *Element) ?*const @import("../browser/webapi/canvas/CanvasSurface.zig") {
+    const canvas = element.is(Element.Html.Canvas) orelse return null;
+    return canvas.getSurface();
 }
 
 fn resolveTextColor(decl: anytype, page: *Page, element: *Element, tag: Element.Tag) Color {
@@ -913,6 +937,12 @@ fn commandBounds(command: Command) ?CommandBounds {
             .width = image.width,
             .height = image.height,
         } else null,
+        .canvas => |canvas| if (canvas.width > 0 and canvas.height > 0) .{
+            .x = canvas.x,
+            .y = canvas.y,
+            .width = canvas.width,
+            .height = canvas.height,
+        } else null,
         .text => |text| if (text.width > 0) .{
             .x = text.x,
             .y = text.y,
@@ -991,6 +1021,27 @@ fn resolvedImageCommand(
         .request_cookie_value = if (include_credentials) request_context.cookie_value else &.{},
         .request_referer_value = request_context.referer_value,
         .request_authorization_value = if (include_credentials) request_context.authorization_value else &.{},
+    };
+}
+
+fn resolvedCanvasCommand(
+    allocator: std.mem.Allocator,
+    element: *Element,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) !?CanvasCommand {
+    const canvas = element.is(Element.Html.Canvas) orelse return null;
+    const surface = canvas.getSurface() orelse return null;
+    return .{
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .pixel_width = surface.width,
+        .pixel_height = surface.height,
+        .pixels = try surface.copyPixels(allocator),
     };
 }
 
@@ -1311,6 +1362,11 @@ fn resolveExplicitWidth(element: *Element, decl: anytype, page: *Page, tag: Elem
     if (parseCssLengthPx(decl.getPropertyValue("width", page))) |width| {
         return width;
     }
+    if (tag == .canvas) {
+        if (element.is(Element.Html.Canvas)) |canvas| {
+            return @intCast(canvas.getWidth());
+        }
+    }
     if (tag == .img or tag == .iframe or tag == .canvas or tag == .input) {
         if (element.getAttributeSafe(comptime .wrap("width"))) |raw| {
             return parseCssLengthPx(raw) orelse 0;
@@ -1322,6 +1378,11 @@ fn resolveExplicitWidth(element: *Element, decl: anytype, page: *Page, tag: Elem
 fn resolveExplicitHeight(element: *Element, decl: anytype, page: *Page, tag: Element.Tag) i32 {
     if (parseCssLengthPx(decl.getPropertyValue("height", page))) |height| {
         return height;
+    }
+    if (tag == .canvas) {
+        if (element.is(Element.Html.Canvas)) |canvas| {
+            return @intCast(canvas.getHeight());
+        }
     }
     if (tag == .img or tag == .iframe or tag == .canvas or tag == .textarea) {
         if (element.getAttributeSafe(comptime .wrap("height"))) |raw| {
@@ -2124,6 +2185,40 @@ test "paintDocument emits control region for file input" {
         }
         found = true;
         break;
+    }
+
+    try std.testing.expect(found);
+}
+
+test "paintDocument emits canvas pixels for headed rendering" {
+    var page = try testing.pageTest("page/canvas_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .canvas => |canvas| {
+                try std.testing.expectEqual(@as(u32, 120), canvas.pixel_width);
+                try std.testing.expectEqual(@as(u32, 80), canvas.pixel_height);
+                try std.testing.expect(canvas.pixels.len >= 4);
+
+                const red_index = (@as(usize, 12) * canvas.pixel_width + 12) * 4;
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[red_index + 0]);
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[red_index + 1]);
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[red_index + 2]);
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[red_index + 3]);
+
+                const clear_index = (@as(usize, 60) * canvas.pixel_width + 90) * 4;
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[clear_index + 3]);
+                found = true;
+            },
+            else => {},
+        }
     }
 
     try std.testing.expect(found);
