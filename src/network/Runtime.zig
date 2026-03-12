@@ -64,7 +64,7 @@ fn globalDeinit() void {
     libcurl.curl_global_cleanup();
 }
 
-pub fn init(allocator: Allocator, config: *const Config) !Runtime {
+pub fn init(allocator: Allocator, config: *const Config, cache: Cache) !Runtime {
     globalInit();
     errdefer globalDeinit();
 
@@ -87,7 +87,7 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
         .config = config,
         .ca_blob = ca_blob,
         .robot_store = RobotStore.init(allocator),
-        .cache = 
+        .cache = cache,
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
     };

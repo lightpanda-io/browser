@@ -29,12 +29,14 @@ dir: std.fs.Dir,
 const MAX_CACHE_SIZE_BYTES = 1024 * 1024 * 1024;
 
 pub fn init(allocator: std.mem.Allocator, path: []const u8) !FsCache {
-    std.fs.makeDirAbsolute(path) catch |err| switch (err) {
+    const cwd = std.fs.cwd();
+
+    cwd.makeDir(path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
 
-    const dir = try std.fs.openDirAbsolute(path, .{ .iterate = true });
+    const dir = try cwd.openDir(path, .{ .iterate = true });
     return .{
         .allocator = allocator,
         .dir = dir,
@@ -53,11 +55,11 @@ fn hashKey(key: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(key, &digest, .{});
     var hex: [64]u8 = undefined;
-    _ = std.fmt.bufPrint(&hex, "{}", .{std.fmt.bytesToHex(&digest, .lower)}) catch unreachable;
+    _ = std.fmt.bufPrint(&hex, "{s}", .{std.fmt.bytesToHex(&digest, .lower)}) catch unreachable;
     return hex;
 }
 
-fn serializeMeta(writer: anytype, meta: *const CachedMetadata) !void {
+fn serializeMeta(writer: *std.Io.Writer, meta: *const CachedMetadata) !void {
     try writer.print("{d}\n{d}\n{d}\n{d}\n", .{
         meta.status,
         meta.stored_at,
@@ -110,15 +112,15 @@ fn deserializeMeta(allocator: std.mem.Allocator, bytes: []const u8) !CachedMetad
         10,
     ) catch return error.Malformed;
 
-    const etag = try deserializeMetaOptionalString(
+    const etag = deserializeMetaOptionalString(
         iter.next() orelse return error.Malformed,
     );
 
-    const last_modified = try deserializeMetaOptionalString(
+    const last_modified = deserializeMetaOptionalString(
         iter.next() orelse return error.Malformed,
     );
 
-    const vary = try deserializeMetaOptionalString(
+    const vary = deserializeMetaOptionalString(
         iter.next() orelse return error.Malformed,
     );
 
@@ -156,7 +158,11 @@ pub fn get(ptr: *anyopaque, key: []const u8) ?Cache.CachedResponse {
     var body_path: [64 + 5]u8 = undefined;
     _ = std.fmt.bufPrint(&body_path, "{s}.body", .{hashed_key}) catch @panic("FsCache.get body path overflowed");
 
-    const meta_bytes = self.dir.readFileAlloc(self.allocator, meta_path, MAX_CACHE_SIZE_BYTES) catch return null;
+    const meta_bytes = self.dir.readFileAlloc(
+        self.allocator,
+        &meta_path,
+        MAX_CACHE_SIZE_BYTES,
+    ) catch return null;
 
     const meta = deserializeMeta(self.allocator, meta_bytes) catch return null;
 
@@ -169,9 +175,13 @@ pub fn get(ptr: *anyopaque, key: []const u8) ?Cache.CachedResponse {
         return null;
     }
 
-    const body = self.dir.readFileAlloc(self.allocator, &body_path, MAX_CACHE_SIZE_BYTES) catch return null;
+    const body = self.dir.readFileAlloc(
+        self.allocator,
+        &body_path,
+        MAX_CACHE_SIZE_BYTES,
+    ) catch return null;
 
-    return .{ .meta = meta, .body = .{ .file = body } };
+    return .{ .metadata = meta, .data = .{ .file = body } };
 }
 
 pub fn put(ptr: *anyopaque, key: []const u8, response: CachedResponse) !void {
@@ -193,7 +203,10 @@ pub fn put(ptr: *anyopaque, key: []const u8, response: CachedResponse) !void {
             meta_file.close();
             self.dir.deleteFile(&meta_tmp_path) catch {};
         }
-        try serializeMeta(meta_file.writer(), &response.meta);
+
+        var buf: [512]u8 = undefined;
+        var meta_file_writer = meta_file.writer(&buf);
+        try serializeMeta(&meta_file_writer.interface, &response.metadata);
         meta_file.close();
     }
     errdefer self.dir.deleteFile(&meta_tmp_path) catch {};
@@ -214,7 +227,7 @@ pub fn put(ptr: *anyopaque, key: []const u8, response: CachedResponse) !void {
             body_file.close();
             self.dir.deleteFile(&body_tmp_path) catch {};
         }
-        try body_file.writeAll(response.body);
+        try body_file.writeAll(response.data.file);
         body_file.close();
     }
     errdefer self.dir.deleteFile(&body_tmp_path) catch {};
