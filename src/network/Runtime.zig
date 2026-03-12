@@ -216,13 +216,19 @@ pub fn stop(self: *Runtime) void {
 pub fn getConnection(self: *Runtime) ?*net_http.Connection {
     self.conn_mutex.lock();
     defer self.conn_mutex.unlock();
+
     const node = self.available.popFirst() orelse return null;
     return @fieldParentPtr("node", node);
 }
 
 pub fn releaseConnection(self: *Runtime, conn: *net_http.Connection) void {
+    conn.reset() catch |err| {
+        lp.assert(false, "couldn't reset curl easy", .{ .err = err });
+    };
+
     self.conn_mutex.lock();
     defer self.conn_mutex.unlock();
+
     self.available.append(&conn.node);
 }
 

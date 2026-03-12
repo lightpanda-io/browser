@@ -648,12 +648,6 @@ fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: 
 // can be changed at any point in the easy's lifecycle.
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
-
-    var it = self.in_use.first;
-    while (it) |node| : (it = node.next) {
-        const conn: *Net.Connection = @fieldParentPtr("node", node);
-        try conn.setProxy(proxy);
-    }
     self.http_proxy = proxy;
     self.use_proxy = true;
 }
@@ -664,38 +658,20 @@ pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
     self.http_proxy = self.network.config.httpProxy();
-    var it = self.in_use.first;
-    while (it) |node| : (it = node.next) {
-        const conn: *Net.Connection = @fieldParentPtr("node", node);
-        try conn.setProxy(self.http_proxy);
-    }
     self.use_proxy = self.http_proxy != null;
 }
 
 // Enable TLS verification on all connections.
-pub fn enableTlsVerify(self: *Client) !void {
+pub fn setTlsVerify(self: *Client, verify: bool) !void {
     // Remove inflight connections check on enable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
     var it = self.in_use.first;
     while (it) |node| : (it = node.next) {
         const conn: *Net.Connection = @fieldParentPtr("node", node);
-        try conn.setTlsVerify(true, self.use_proxy);
+        try conn.setTlsVerify(verify, self.use_proxy);
     }
-    self.tls_verify = true;
-}
-
-// Disable TLS verification on all connections.
-pub fn disableTlsVerify(self: *Client) !void {
-    // Remove inflight connections check on disable TLS b/c chromiumoxide calls
-    // the command during navigate and Curl seems to accept it...
-
-    var it = self.in_use.first;
-    while (it) |node| : (it = node.next) {
-        const conn: *Net.Connection = @fieldParentPtr("node", node);
-        try conn.setTlsVerify(false, self.use_proxy);
-    }
-    self.tls_verify = false;
+    self.tls_verify = verify;
 }
 
 fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerror!void {
@@ -774,9 +750,12 @@ pub const PerformStatus = enum {
 };
 
 fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
-    self.performing = true;
-    const running = try self.handles.perform();
-    self.performing = false;
+    const running = blk: {
+        self.performing = true;
+        defer self.performing = false;
+
+        break :blk try self.handles.perform();
+    };
 
     // Process dirty connections — return them to Runtime pool.
     while (self.dirty.popFirst()) |node| {
@@ -922,7 +901,6 @@ fn removeConn(self: *Client, conn: *Net.Connection) void {
 }
 
 fn releaseConn(self: *Client, conn: *Net.Connection) void {
-    conn.reset() catch {};
     self.network.releaseConnection(conn);
 }
 

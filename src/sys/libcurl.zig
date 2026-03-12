@@ -706,15 +706,6 @@ pub fn curl_multi_poll(
     try errorMCheck(c.curl_multi_poll(multi, raw_fds, @intCast(extra_fds.len), timeout_ms, numfds));
 }
 
-pub fn curl_multi_waitfds(multi: *CurlM, ufds: []CurlWaitFd, fd_count: *c_uint) ErrorMulti!void {
-    const raw_fds: [*c]c.curl_waitfd = if (ufds.len == 0) null else @ptrCast(ufds.ptr);
-    try errorMCheck(c.curl_multi_waitfds(multi, raw_fds, @intCast(ufds.len), fd_count));
-}
-
-pub fn curl_multi_timeout(multi: *CurlM, timeout_ms: *c_long) ErrorMulti!void {
-    try errorMCheck(c.curl_multi_timeout(multi, timeout_ms));
-}
-
 pub fn curl_multi_info_read(multi: *CurlM, msgs_in_queue: *c_int) ?CurlMsg {
     const ptr = c.curl_multi_info_read(multi, msgs_in_queue);
     if (ptr == null) return null;
