@@ -21,6 +21,8 @@ const log = @import("../../log.zig");
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
+
 const Range = @import("Range.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const Node = @import("Node.zig");
@@ -37,13 +39,22 @@ _direction: SelectionDirection = .none,
 
 pub const init: Selection = .{};
 
+pub fn deinit(self: *Selection, shutdown: bool, session: *Session) void {
+    if (self._range) |r| {
+        r.deinit(shutdown, session);
+        self._range = null;
+    }
+}
+
 fn dispatchSelectionChangeEvent(page: *Page) !void {
     const event = try Event.init("selectionchange", .{}, page);
     try page._event_manager.dispatch(page.document.asEventTarget(), event);
 }
 
 fn isInTree(self: *const Selection) bool {
-    if (self._range == null) return false;
+    if (self._range == null) {
+        return false;
+    }
     const anchor_node = self.getAnchorNode() orelse return false;
     const focus_node = self.getFocusNode() orelse return false;
     return anchor_node.isConnected() and focus_node.isConnected();
@@ -104,21 +115,33 @@ pub fn getIsCollapsed(self: *const Selection) bool {
 }
 
 pub fn getRangeCount(self: *const Selection) u32 {
-    if (self._range == null) return 0;
-    if (!self.isInTree()) return 0;
+    if (self._range == null) {
+        return 0;
+    }
+    if (!self.isInTree()) {
+        return 0;
+    }
 
     return 1;
 }
 
 pub fn getType(self: *const Selection) []const u8 {
-    if (self._range == null) return "None";
-    if (!self.isInTree()) return "None";
-    if (self.getIsCollapsed()) return "Caret";
+    if (self._range == null) {
+        return "None";
+    }
+    if (!self.isInTree()) {
+        return "None";
+    }
+    if (self.getIsCollapsed()) {
+        return "Caret";
+    }
     return "Range";
 }
 
 pub fn addRange(self: *Selection, range: *Range, page: *Page) !void {
-    if (self._range != null) return;
+    if (self._range != null) {
+        return;
+    }
 
     // Only add the range if its root node is in the document associated with this selection
     const start_node = range.asAbstractRange().getStartContainer();
@@ -126,22 +149,25 @@ pub fn addRange(self: *Selection, range: *Range, page: *Page) !void {
         return;
     }
 
-    self._range = range;
+    self.setRange(range, page);
     try dispatchSelectionChangeEvent(page);
 }
 
 pub fn removeRange(self: *Selection, range: *Range, page: *Page) !void {
-    if (self._range == range) {
-        self._range = null;
-        try dispatchSelectionChangeEvent(page);
-        return;
-    } else {
+    const existing_range = self._range orelse return error.NotFound;
+    if (existing_range != range) {
         return error.NotFound;
     }
+    self.setRange(null, page);
+    try dispatchSelectionChangeEvent(page);
 }
 
 pub fn removeAllRanges(self: *Selection, page: *Page) !void {
-    self._range = null;
+    if (self._range == null) {
+        return;
+    }
+
+    self.setRange(null, page);
     self._direction = .none;
     try dispatchSelectionChangeEvent(page);
 }
@@ -157,7 +183,7 @@ pub fn collapseToEnd(self: *Selection, page: *Page) !void {
     try new_range.setStart(last_node, last_offset);
     try new_range.setEnd(last_node, last_offset);
 
-    self._range = new_range;
+    self.setRange(new_range, page);
     self._direction = .none;
     try dispatchSelectionChangeEvent(page);
 }
@@ -173,7 +199,7 @@ pub fn collapseToStart(self: *Selection, page: *Page) !void {
     try new_range.setStart(first_node, first_offset);
     try new_range.setEnd(first_node, first_offset);
 
-    self._range = new_range;
+    self.setRange(new_range, page);
     self._direction = .none;
     try dispatchSelectionChangeEvent(page);
 }
@@ -255,7 +281,7 @@ pub fn extend(self: *Selection, node: *Node, _offset: ?u32, page: *Page) !void {
         },
     }
 
-    self._range = new_range;
+    self.setRange(new_range, page);
     try dispatchSelectionChangeEvent(page);
 }
 
@@ -560,7 +586,8 @@ fn applyModify(self: *Selection, alter: ModifyAlter, new_node: *Node, new_offset
             const new_range = try Range.init(page);
             try new_range.setStart(new_node, new_offset);
             try new_range.setEnd(new_node, new_offset);
-            self._range = new_range;
+
+            self.setRange(new_range, page);
             self._direction = .none;
             try dispatchSelectionChangeEvent(page);
         },
@@ -582,7 +609,7 @@ pub fn selectAllChildren(self: *Selection, parent: *Node, page: *Page) !void {
     const child_count = parent.getChildrenCount();
     try range.setEnd(parent, @intCast(child_count));
 
-    self._range = range;
+    self.setRange(range, page);
     self._direction = .forward;
     try dispatchSelectionChangeEvent(page);
 }
@@ -630,7 +657,7 @@ pub fn setBaseAndExtent(
         },
     }
 
-    self._range = range;
+    self.setRange(range, page);
     try dispatchSelectionChangeEvent(page);
 }
 
@@ -656,7 +683,7 @@ pub fn collapse(self: *Selection, _node: ?*Node, _offset: ?u32, page: *Page) !vo
     try range.setStart(node, offset);
     try range.setEnd(node, offset);
 
-    self._range = range;
+    self.setRange(range, page);
     self._direction = .none;
     try dispatchSelectionChangeEvent(page);
 }
@@ -666,6 +693,16 @@ pub fn toString(self: *const Selection, page: *Page) ![]const u8 {
     return try range.toString(page);
 }
 
+fn setRange(self: *Selection, new_range: ?*Range, page: *Page) void {
+    if (self._range) |existing| {
+        existing.deinit(false, page._session);
+    }
+    if (new_range) |nr| {
+        nr.asAbstractRange().acquireRef();
+    }
+    self._range = new_range;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Selection);
 
@@ -673,6 +710,7 @@ pub const JsApi = struct {
         pub const name = "Selection";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const finalizer = bridge.finalizer(Selection.deinit);
     };
 
     pub const anchorNode = bridge.accessor(Selection.getAnchorNode, null, .{});

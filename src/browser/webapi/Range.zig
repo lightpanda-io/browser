@@ -21,22 +21,31 @@ const String = @import("../../string.zig").String;
 
 const js = @import("../js/js.zig");
 const Page = @import("../Page.zig");
+const Session = @import("../Session.zig");
 
 const Node = @import("Node.zig");
 const DocumentFragment = @import("DocumentFragment.zig");
 const AbstractRange = @import("AbstractRange.zig");
 const DOMRect = @import("DOMRect.zig");
 
+const Allocator = std.mem.Allocator;
+
 const Range = @This();
 
 _proto: *AbstractRange,
 
-pub fn asAbstractRange(self: *Range) *AbstractRange {
-    return self._proto;
+pub fn init(page: *Page) !*Range {
+    const arena = try page.getArena(.{ .debug = "Range" });
+    errdefer page.releaseArena(arena);
+    return page._factory.abstractRange(arena, Range{ ._proto = undefined }, page);
 }
 
-pub fn init(page: *Page) !*Range {
-    return page._factory.abstractRange(Range{ ._proto = undefined }, page);
+pub fn deinit(self: *Range, shutdown: bool, session: *Session) void {
+    self._proto.deinit(shutdown, session);
+}
+
+pub fn asAbstractRange(self: *Range) *AbstractRange {
+    return self._proto;
 }
 
 pub fn setStart(self: *Range, node: *Node, offset: u32) !void {
@@ -309,7 +318,10 @@ pub fn intersectsNode(self: *const Range, node: *Node) bool {
 }
 
 pub fn cloneRange(self: *const Range, page: *Page) !*Range {
-    const clone = try page._factory.abstractRange(Range{ ._proto = undefined }, page);
+    const arena = try page.getArena(.{ .debug = "Range.clone" });
+    errdefer page.releaseArena(arena);
+
+    const clone = try page._factory.abstractRange(arena, Range{ ._proto = undefined }, page);
     clone._proto._end_offset = self._proto._end_offset;
     clone._proto._start_offset = self._proto._start_offset;
     clone._proto._end_container = self._proto._end_container;
@@ -687,6 +699,8 @@ pub const JsApi = struct {
         pub const name = "Range";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(Range.deinit);
     };
 
     // Constants for compareBoundaryPoints

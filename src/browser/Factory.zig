@@ -265,13 +265,15 @@ pub fn blob(_: *const Factory, arena: Allocator, child: anytype) !*@TypeOf(child
     return chain.get(1);
 }
 
-pub fn abstractRange(self: *Factory, child: anytype, page: *Page) !*@TypeOf(child) {
-    const allocator = self._slab.allocator();
-    const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(allocator);
+pub fn abstractRange(_: *const Factory, arena: Allocator, child: anytype, page: *Page) !*@TypeOf(child) {
+    const chain = try PrototypeChain(&.{ AbstractRange, @TypeOf(child) }).allocate(arena);
 
     const doc = page.document.asNode();
     const abstract_range = chain.get(0);
     abstract_range.* = AbstractRange{
+        ._rc = 0,
+        ._arena = arena,
+        ._page_id = page.id,
         ._type = unionInit(AbstractRange.Type, chain.get(1)),
         ._end_offset = 0,
         ._start_offset = 0,
