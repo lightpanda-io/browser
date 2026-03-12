@@ -228,7 +228,7 @@ fn fetchStylesheet(self: *Link, page: *Page) !void {
         .method = .GET,
         .frame_id = page._frame_id,
         .headers = headers,
-        .cookie_jar = if (include_credentials) &page._session.cookie_jar else null,
+        .cookie_jar = if (include_credentials) page._session.cookie_jar else null,
         .resource_type = .stylesheet,
         .notification = page._session.notification,
         .header_callback = stylesheetHeaderCallback,

@@ -106,7 +106,8 @@ root_attachment_download_handler: ?RootAttachmentDownloadHandler = null,
 // Used to create our Inspector and in the BrowserContext.
 arena: Allocator,
 
-cookie_jar: storage.Cookie.Jar,
+cookie_jar: *storage.Cookie.Jar,
+owned_cookie_jar: ?storage.Cookie.Jar,
 storage_shed: storage.Shed,
 
 history: History,
@@ -141,9 +142,16 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .pending_attachment_promotions = 0,
         .root_attachment_download_handler = null,
         .notification = notification,
-        .cookie_jar = storage.Cookie.Jar.init(allocator),
+        .cookie_jar = undefined,
+        .owned_cookie_jar = null,
         .allow_script_popups = browser.allow_script_popups,
     };
+    if (browser.shared_cookie_jar) |shared_cookie_jar| {
+        self.cookie_jar = shared_cookie_jar;
+    } else {
+        self.owned_cookie_jar = storage.Cookie.Jar.init(allocator);
+        self.cookie_jar = &self.owned_cookie_jar.?;
+    }
 }
 
 pub fn deinit(self: *Session) void {
@@ -153,7 +161,10 @@ pub fn deinit(self: *Session) void {
         destroyPage(self, page, false);
         self.suspended_page = null;
     }
-    self.cookie_jar.deinit();
+    if (self.owned_cookie_jar) |*owned_cookie_jar| {
+        owned_cookie_jar.deinit();
+        self.owned_cookie_jar = null;
+    }
     while (self.pending_browser_navigations.items.len > 0) {
         var pending_browser_navigation = self.pending_browser_navigations.items[self.pending_browser_navigations.items.len - 1];
         self.pending_browser_navigations.items.len -= 1;

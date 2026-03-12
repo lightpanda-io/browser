@@ -26,6 +26,8 @@ pub const Browser = @import("browser/Browser.zig");
 pub const Session = @import("browser/Session.zig");
 pub const Notification = @import("Notification.zig");
 const PopupSource = @import("browser/PopupSource.zig").PopupSource;
+const CookieStore = @import("browser/webapi/storage/Cookie.zig");
+const CookieJar = CookieStore.Jar;
 
 pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
@@ -281,6 +283,7 @@ const BrowseSettings = struct {
 
 const BROWSE_SESSION_FILE = "browse-session-v1.txt";
 const BROWSE_SETTINGS_FILE = "browse-settings-v1.txt";
+const BROWSE_COOKIES_FILE = "cookies-v1.txt";
 const BROWSE_DOWNLOADS_FILE = "downloads-v1.txt";
 const BROWSE_BOOKMARKS_FILE = "bookmarks.txt";
 const BROWSE_DOWNLOADS_DIR = "downloads";
@@ -825,7 +828,7 @@ const ActiveBrowseDownload = struct {
             .url = url_z,
             .method = .GET,
             .headers = headers,
-            .cookie_jar = &page._session.cookie_jar,
+            .cookie_jar = page._session.cookie_jar,
             .resource_type = .fetch,
             .notification = self.source_tab.notification,
             .header_callback = browseDownloadHeaderCallback,
@@ -961,13 +964,16 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     defer deinitClosedBrowseTabs(app.allocator, &closed_tabs);
     var settings = loadBrowseSettings(app.allocator, app.app_dir_path);
     defer settings.deinit(app.allocator);
+    var cookie_jar = loadBrowseCookies(app.allocator, app.app_dir_path);
+    defer cookie_jar.deinit();
     var downloads = BrowseDownloads.init(app.allocator, app.app_dir_path);
     defer downloads.deinit(app.app_dir_path);
 
-    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url, &settings, &downloads);
+    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url, &settings, &cookie_jar, &downloads);
     var displayed_tab_index: ?usize = null;
     var last_saved_session_hash: u64 = 0;
     var last_saved_settings_hash: u64 = 0;
+    var last_saved_cookie_hash: u64 = hashBrowseCookies(&cookie_jar);
     var shell: BrowseShell = .{
         .tabs = &tabs,
         .closed_tabs = &closed_tabs,
@@ -981,6 +987,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
     persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, settings.restore_previous_session, &last_saved_session_hash);
     persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
+    persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
 
     browse_loop: while (!app.shutdown and !app.display.userClosed()) {
         var handled_command = false;
@@ -1042,14 +1049,17 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
             try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
             persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, settings.restore_previous_session, &last_saved_session_hash);
             persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
+            persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
             downloads.persistIfChanged(app.app_dir_path);
             continue;
         }
         try updateActiveBrowseDisplay(app, tabs.items, &settings, &downloads, active_tab_index, &displayed_tab_index);
         persistBrowseSessionIfChanged(app, tabs.items, active_tab_index, settings.restore_previous_session, &last_saved_session_hash);
         persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
+        persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
         downloads.persistIfChanged(app.app_dir_path);
     }
+    persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
 }
 
 fn handleBrowseCommand(
@@ -1061,16 +1071,17 @@ fn handleBrowseCommand(
     command: BrowserCommand,
 ) anyerror!void {
     defer applyBrowsePopupPolicyToTabs(shell.tabs.items, settings.allow_script_popups);
+    const shared_cookie_jar = browseSharedCookieJar(shell.tabs.items, source_tab_index);
     switch (command) {
         .tab_new => {
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads);
+            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
         },
         .tab_duplicate => {
             const source_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
             const source_tab = shell.tabs.items[source_index];
             const source_url = browseTabPersistentUrl(source_tab);
-            const tab = try createBrowseTab(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads);
+            const tab = try createBrowseTabWithCookieJar(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar);
             tab.zoom_percent = source_tab.zoom_percent;
             try tab.internal_filters.copyFrom(app.allocator, &source_tab.internal_filters);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
@@ -1085,7 +1096,7 @@ fn handleBrowseCommand(
             }
             const source_tab = shell.tabs.items[index];
             const source_url = browseTabPersistentUrl(source_tab);
-            const tab = try createBrowseTab(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads);
+            const tab = try createBrowseTabWithCookieJar(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar);
             tab.zoom_percent = source_tab.zoom_percent;
             try tab.internal_filters.copyFrom(app.allocator, &source_tab.internal_filters);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
@@ -1149,7 +1160,7 @@ fn handleBrowseCommand(
         .tab_reopen_closed => {
             var closed = popClosedBrowseTab(shell.closed_tabs) orelse return;
             defer closed.deinit(app.allocator);
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads);
+            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar);
             tab.zoom_percent = closed.zoom_percent;
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
@@ -1160,7 +1171,7 @@ fn handleBrowseCommand(
         .tab_reopen_closed_index => |index| {
             var closed = popClosedBrowseTabAtUiIndex(shell.closed_tabs, index) orelse return;
             defer closed.deinit(app.allocator);
-            const tab = try createBrowseTab(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads);
+            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar);
             tab.zoom_percent = closed.zoom_percent;
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
@@ -1663,6 +1674,9 @@ fn handleActiveBrowseCommand(
             tab.browser.allow_script_popups = settings.allow_script_popups;
             tab.session.allow_script_popups = settings.allow_script_popups;
         },
+        .settings_clear_cookies => {
+            tab.session.cookie_jar.clearRetainingCapacity();
+        },
         .settings_default_zoom_in, .settings_default_zoom_out, .settings_default_zoom_reset => {
             settings.default_zoom_percent = applyDefaultZoomCommand(settings.default_zoom_percent, command);
         },
@@ -1790,6 +1804,14 @@ fn normalizeTopLevelTargetName(target_name: []const u8) []const u8 {
     return std.mem.trim(u8, target_name, &std.ascii.whitespace);
 }
 
+fn browseSharedCookieJar(tabs: []const *BrowseTab, preferred_index: usize) ?*CookieJar {
+    if (tabs.len == 0) {
+        return null;
+    }
+    const index = normalizeActiveTabIndex(preferred_index, tabs.len);
+    return tabs[index].session.cookie_jar;
+}
+
 fn freeOwnedBrowseTabTargetName(allocator: std.mem.Allocator, target_name: []u8) void {
     if (target_name.len > 0) {
         allocator.free(target_name);
@@ -1859,7 +1881,7 @@ fn openOrReuseTargetedBrowseTab(
         return;
     }
 
-    const tab = try createBrowseTab(app, null, zoom_percent, allow_script_popups, downloads);
+    const tab = try createBrowseTabWithCookieJar(app, null, zoom_percent, allow_script_popups, downloads, browseSharedCookieJar(tabs.items, active_tab_index.*));
     errdefer tab.deinit(app.allocator);
     tab.zoom_percent = zoom_percent;
     try setBrowseTabTargetName(app.allocator, tab, target_name);
@@ -2213,10 +2235,11 @@ fn initializeBrowseTabs(
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
     startup_url: [:0]const u8,
     settings: *const BrowseSettings,
+    shared_cookie_jar: *CookieJar,
     downloads: *BrowseDownloads,
 ) !usize {
     if (!settings.restore_previous_session) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads));
+        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar));
         return 0;
     }
 
@@ -2224,7 +2247,7 @@ fn initializeBrowseTabs(
     defer saved.deinit(app.allocator);
 
     if (saved.tabs.items.len == 0) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads));
+        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar));
         return 0;
     }
 
@@ -2237,14 +2260,14 @@ fn initializeBrowseTabs(
             restored_url_z = try app.allocator.dupeZ(u8, saved_tab.url);
             break :blk restored_url_z.?;
         };
-        const tab = try createBrowseTab(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups, downloads);
+        const tab = try createBrowseTabWithCookieJar(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar);
         tab.zoom_percent = saved_tab.zoom_percent;
         try tabs.append(app.allocator, tab);
     }
 
     var active_index = normalizeActiveTabIndex(saved.active_index, tabs.items.len);
     if (shouldAppendStartupUrl(saved.tabs.items, startup_url)) {
-        try tabs.append(app.allocator, try createBrowseTab(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads));
+        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar));
         active_index = tabs.items.len - 1;
     }
 
@@ -2337,6 +2360,222 @@ fn loadBrowseSettings(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) B
     const data = file.readToEndAlloc(allocator, 1024 * 16) catch return .{};
     defer allocator.free(data);
     return parseBrowseSettings(allocator, data) catch .{};
+}
+
+fn parsePersistedBool(raw: []const u8) bool {
+    return std.mem.eql(u8, raw, "1") or std.ascii.eqlIgnoreCase(raw, "true");
+}
+
+fn cookieSameSiteLabel(same_site: CookieStore.SameSite) []const u8 {
+    return switch (same_site) {
+        .strict => "strict",
+        .lax => "lax",
+        .none => "none",
+    };
+}
+
+fn parseCookieSameSiteLabel(raw: []const u8) ?CookieStore.SameSite {
+    if (std.ascii.eqlIgnoreCase(raw, "strict")) {
+        return .strict;
+    }
+    if (std.ascii.eqlIgnoreCase(raw, "lax")) {
+        return .lax;
+    }
+    if (std.ascii.eqlIgnoreCase(raw, "none")) {
+        return .none;
+    }
+    return null;
+}
+
+fn initOwnedBrowseCookie(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    value: []const u8,
+    domain: []const u8,
+    path: []const u8,
+    expires: ?f64,
+    secure: bool,
+    http_only: bool,
+    same_site: CookieStore.SameSite,
+) !CookieStore {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const aa = arena.allocator();
+    return .{
+        .arena = arena,
+        .name = try aa.dupe(u8, name),
+        .value = try aa.dupe(u8, value),
+        .domain = try aa.dupe(u8, domain),
+        .path = try aa.dupe(u8, path),
+        .expires = expires,
+        .secure = secure,
+        .http_only = http_only,
+        .same_site = same_site,
+    };
+}
+
+fn loadBrowseCookies(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) CookieJar {
+    var cookie_jar = CookieJar.init(allocator);
+
+    const dir_path = app_dir_path orelse return cookie_jar;
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return cookie_jar;
+    defer dir.close();
+
+    const file = dir.openFile(BROWSE_COOKIES_FILE, .{}) catch |err| switch (err) {
+        error.FileNotFound => return cookie_jar,
+        else => return cookie_jar,
+    };
+    defer file.close();
+
+    const data = file.readToEndAlloc(allocator, 1024 * 128) catch return cookie_jar;
+    defer allocator.free(data);
+
+    var it = std.mem.splitScalar(u8, data, '\n');
+    while (it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r\n\t ");
+        if (line.len == 0 or std.mem.eql(u8, line, "lightpanda-browse-cookies-v1")) {
+            continue;
+        }
+        if (!std.mem.startsWith(u8, line, "cookie\t")) {
+            continue;
+        }
+
+        var fields = std.mem.splitScalar(u8, line["cookie\t".len..], '\t');
+        const name = fields.next() orelse continue;
+        const value = fields.next() orelse continue;
+        const domain = fields.next() orelse continue;
+        const path = fields.next() orelse continue;
+        const expires_raw = fields.next() orelse continue;
+        const secure_raw = fields.next() orelse continue;
+        const http_only_raw = fields.next() orelse continue;
+        const same_site_raw = fields.next() orelse continue;
+        if (domain.len == 0 or path.len == 0) {
+            continue;
+        }
+
+        const same_site = parseCookieSameSiteLabel(same_site_raw) orelse continue;
+        const expires = if (expires_raw.len == 0)
+            null
+        else
+            @as(f64, @floatFromInt(std.fmt.parseInt(i64, expires_raw, 10) catch continue));
+
+        const cookie = initOwnedBrowseCookie(
+            allocator,
+            name,
+            value,
+            domain,
+            path,
+            expires,
+            parsePersistedBool(secure_raw),
+            parsePersistedBool(http_only_raw),
+            same_site,
+        ) catch continue;
+
+        cookie_jar.add(cookie, std.time.timestamp()) catch |err| {
+            log.warn(.app, "browse cookie load failed", .{ .err = err });
+            cookie.deinit();
+        };
+    }
+
+    cookie_jar.removeExpired(null);
+    return cookie_jar;
+}
+
+fn hashBrowseCookies(cookie_jar: *CookieJar) u64 {
+    cookie_jar.removeExpired(null);
+    var hasher = std.hash.Wyhash.init(0);
+    const count = cookie_jar.cookies.items.len;
+    hasher.update(std.mem.asBytes(&count));
+    for (cookie_jar.cookies.items) |cookie| {
+        hasher.update(cookie.name);
+        hasher.update(&.{0});
+        hasher.update(cookie.value);
+        hasher.update(&.{0});
+        hasher.update(cookie.domain);
+        hasher.update(&.{0});
+        hasher.update(cookie.path);
+        hasher.update(&.{0});
+        hasher.update(std.mem.asBytes(&cookie.secure));
+        hasher.update(std.mem.asBytes(&cookie.http_only));
+        hasher.update(&.{@intFromEnum(cookie.same_site)});
+        if (cookie.expires) |expires| {
+            const expires_i64: i64 = @intFromFloat(expires);
+            const has_expiry: u8 = 1;
+            hasher.update(&.{has_expiry});
+            hasher.update(std.mem.asBytes(&expires_i64));
+        } else {
+            const has_expiry: u8 = 0;
+            hasher.update(&.{has_expiry});
+        }
+    }
+    return hasher.final();
+}
+
+fn saveBrowseCookiesForPath(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    cookie_jar: *CookieJar,
+) !void {
+    const dir_path = app_dir_path orelse return;
+    cookie_jar.removeExpired(null);
+
+    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    defer dir.close();
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+
+    try buf.writer.writeAll("lightpanda-browse-cookies-v1\n");
+    for (cookie_jar.cookies.items) |cookie| {
+        if (cookie.expires) |expires| {
+            try buf.writer.print(
+                "cookie\t{s}\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\t{s}\n",
+                .{
+                    cookie.name,
+                    cookie.value,
+                    cookie.domain,
+                    cookie.path,
+                    @as(i64, @intFromFloat(expires)),
+                    if (cookie.secure) @as(u8, 1) else @as(u8, 0),
+                    if (cookie.http_only) @as(u8, 1) else @as(u8, 0),
+                    cookieSameSiteLabel(cookie.same_site),
+                },
+            );
+        } else {
+            try buf.writer.print(
+                "cookie\t{s}\t{s}\t{s}\t{s}\t\t{d}\t{d}\t{s}\n",
+                .{
+                    cookie.name,
+                    cookie.value,
+                    cookie.domain,
+                    cookie.path,
+                    if (cookie.secure) @as(u8, 1) else @as(u8, 0),
+                    if (cookie.http_only) @as(u8, 1) else @as(u8, 0),
+                    cookieSameSiteLabel(cookie.same_site),
+                },
+            );
+        }
+    }
+
+    try dir.writeFile(.{
+        .sub_path = BROWSE_COOKIES_FILE,
+        .data = buf.written(),
+    });
+}
+
+fn saveBrowseCookies(app: *App, cookie_jar: *CookieJar) !void {
+    return saveBrowseCookiesForPath(app.allocator, app.app_dir_path, cookie_jar);
+}
+
+fn persistBrowseCookiesIfChanged(app: *App, cookie_jar: *CookieJar, last_saved_hash: *u64) void {
+    const next_hash = hashBrowseCookies(cookie_jar);
+    if (next_hash == last_saved_hash.*) {
+        return;
+    }
+    last_saved_hash.* = next_hash;
+    saveBrowseCookies(app, cookie_jar) catch |err| {
+        log.warn(.app, "browse cookies save failed", .{ .err = err });
+    };
 }
 
 fn parseBrowseSettings(allocator: std.mem.Allocator, data: []const u8) !BrowseSettings {
@@ -2890,6 +3129,17 @@ fn createBrowseTab(
     allow_script_popups: bool,
     downloads: ?*BrowseDownloads,
 ) !*BrowseTab {
+    return createBrowseTabWithCookieJar(app, initial_url, default_zoom_percent, allow_script_popups, downloads, null);
+}
+
+fn createBrowseTabWithCookieJar(
+    app: *App,
+    initial_url: ?[:0]const u8,
+    default_zoom_percent: i32,
+    allow_script_popups: bool,
+    downloads: ?*BrowseDownloads,
+    shared_cookie_jar: ?*CookieJar,
+) !*BrowseTab {
     const tab = try app.allocator.create(BrowseTab);
     errdefer app.allocator.destroy(tab);
 
@@ -2899,7 +3149,10 @@ fn createBrowseTab(
     tab.notification = try Notification.init(app.allocator);
     errdefer tab.notification.deinit();
 
-    tab.browser = try Browser.init(app, .{ .http_client = tab.http_client });
+    tab.browser = try Browser.init(app, .{
+        .http_client = tab.http_client,
+        .shared_cookie_jar = shared_cookie_jar,
+    });
     errdefer tab.browser.deinit();
     tab.browser.allow_script_popups = allow_script_popups;
 
@@ -3616,6 +3869,8 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .command = .settings_toggle_restore_session }
         else if (std.ascii.eqlIgnoreCase(action, "toggle-script-popups"))
             .{ .command = .settings_toggle_script_popups }
+        else if (std.ascii.eqlIgnoreCase(action, "clear-cookies"))
+            .{ .command = .settings_clear_cookies }
         else if (std.ascii.eqlIgnoreCase(action, "default-zoom/in"))
             .{ .command = .settings_default_zoom_in }
         else if (std.ascii.eqlIgnoreCase(action, "default-zoom/out"))
@@ -3744,6 +3999,7 @@ fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
         .download_remove,
         .settings_toggle_restore_session,
         .settings_toggle_script_popups,
+        .settings_clear_cookies,
         .settings_default_zoom_in,
         .settings_default_zoom_out,
         .settings_default_zoom_reset,
@@ -3827,6 +4083,7 @@ fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
         => .downloads,
         .settings_toggle_restore_session,
         .settings_toggle_script_popups,
+        .settings_clear_cookies,
         .settings_default_zoom_in,
         .settings_default_zoom_out,
         .settings_default_zoom_reset,
@@ -3946,7 +4203,14 @@ fn hashInternalBrowsePageState(
             hasher.update(&.{@intFromEnum(tab.internal_filters.downloads_sort)});
             break :blk hasher.final();
         },
-        .settings => hashBrowseSettings(settings),
+        .settings => blk: {
+            var hasher = std.hash.Wyhash.init(0);
+            const settings_hash = hashBrowseSettings(settings);
+            hasher.update(std.mem.asBytes(&settings_hash));
+            const cookie_hash = hashBrowseCookies(tab.session.cookie_jar);
+            hasher.update(std.mem.asBytes(&cookie_hash));
+            break :blk hasher.final();
+        },
     };
 }
 
@@ -5351,6 +5615,7 @@ fn writeInternalDownloadsPage(
 }
 
 fn writeInternalSettingsPage(writer: anytype, tab: *BrowseTab, settings: *const BrowseSettings) !void {
+    const cookie_count = tab.session.cookie_jar.cookies.items.len;
     try writeInternalPageStart(
         writer,
         "Browser Settings",
@@ -5366,6 +5631,9 @@ fn writeInternalSettingsPage(writer: anytype, tab: *BrowseTab, settings: *const 
     try writer.writeAll(if (settings.allow_script_popups) "On" else "Off");
     try writer.writeAll("</strong> ");
     try writeInternalActionLink(writer, "browser://settings/toggle-script-popups", "Toggle");
+    try writer.writeAll("</li><li>Cookies: <strong>");
+    try writer.print("{d}</strong> ", .{cookie_count});
+    try writeInternalActionLink(writer, "browser://settings/clear-cookies", "Clear");
     try writer.writeAll("</li><li>Default zoom: <strong>");
     try writer.print("{d}%</strong> ", .{settings.default_zoom_percent});
     try writeInternalActionLink(writer, "browser://settings/default-zoom/out", "-");
@@ -5666,7 +5934,7 @@ fn presentPage(
     }
 
     if (page._queued_navigation != null or page._parse_state != .complete) {
-        app.display.setImageRequestCookieJar(&page._session.cookie_jar);
+        app.display.setImageRequestCookieJar(page._session.cookie_jar);
         const title = title_override orelse
             trimmedOrNull(committed_surface.title) orelse
             trimmedOrNull(page.url) orelse
@@ -5698,7 +5966,7 @@ fn presentPage(
     const title = title_override orelse ((try page.getTitle()) orelse "");
     const url = page.url;
     const text = body.written();
-    app.display.setImageRequestCookieJar(&page._session.cookie_jar);
+    app.display.setImageRequestCookieJar(page._session.cookie_jar);
 
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(title);
@@ -6275,6 +6543,10 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://settings/toggle-script-popups").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .settings_clear_cookies },
+        parseInternalBrowseRoute("browser://settings/clear-cookies").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .settings_set_homepage_to_current },
         parseInternalBrowseRoute("browser://settings/homepage/set-current").?,
     );
@@ -6584,6 +6856,194 @@ test "writeInternalStartPage includes preview sections and quick actions" {
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/homepage/clear") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "Current Tab Status") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "CouldntConnect") != null);
+}
+
+test "writeInternalSettingsPage renders cookie count and clear action" {
+    var cookie_jar = CookieJar.init(std.testing.allocator);
+    defer cookie_jar.deinit();
+    try cookie_jar.add(
+        try initOwnedBrowseCookie(
+            std.testing.allocator,
+            "lpone",
+            "one",
+            "127.0.0.1",
+            "/",
+            null,
+            false,
+            false,
+            .lax,
+        ),
+        std.time.timestamp(),
+    );
+    try cookie_jar.add(
+        try initOwnedBrowseCookie(
+            std.testing.allocator,
+            "lptwo",
+            "two",
+            "127.0.0.1",
+            "/",
+            @floatFromInt(std.time.timestamp() + 3600),
+            true,
+            false,
+            .none,
+        ),
+        std.time.timestamp(),
+    );
+
+    var session: Session = undefined;
+    session.page = null;
+    session.navigation = .{ ._proto = undefined };
+    session.cookie_jar = &cookie_jar;
+    session.owned_cookie_jar = null;
+
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.committed_surface = .{};
+    tab.error_state = .{};
+    tab.internal_filters = .{};
+    defer tab.internal_filters.deinit(std.testing.allocator);
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+    tab.zoom_percent = 100;
+
+    var settings = BrowseSettings{};
+    defer settings.deinit(std.testing.allocator);
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+    try writeInternalSettingsPage(&buf.writer, &tab, &settings);
+    const html = buf.written();
+    try std.testing.expect(std.mem.indexOf(u8, html, "Cookies: <strong>2</strong>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/clear-cookies") != null);
+}
+
+test "saveBrowseCookiesForPath round trips persisted cookie jar" {
+    const rel_dir = ".zig-cache/tmp/internal-cookie-roundtrip-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+
+    var source = CookieJar.init(std.testing.allocator);
+    defer source.deinit();
+    try source.add(
+        try initOwnedBrowseCookie(
+            std.testing.allocator,
+            "lppersist",
+            "ok",
+            "127.0.0.1",
+            "/",
+            @floatFromInt(std.time.timestamp() + 7200),
+            false,
+            false,
+            .lax,
+        ),
+        std.time.timestamp(),
+    );
+    try source.add(
+        try initOwnedBrowseCookie(
+            std.testing.allocator,
+            "lpsession",
+            "ok",
+            "127.0.0.1",
+            "/",
+            null,
+            true,
+            true,
+            .none,
+        ),
+        std.time.timestamp(),
+    );
+
+    try saveBrowseCookiesForPath(std.testing.allocator, abs_dir, &source);
+
+    var loaded = loadBrowseCookies(std.testing.allocator, abs_dir);
+    defer loaded.deinit();
+    try std.testing.expectEqual(@as(usize, 2), loaded.cookies.items.len);
+    try std.testing.expectEqualStrings("lppersist", loaded.cookies.items[0].name);
+    try std.testing.expectEqualStrings("ok", loaded.cookies.items[0].value);
+    try std.testing.expectEqual(CookieStore.SameSite.lax, loaded.cookies.items[0].same_site);
+    try std.testing.expectEqualStrings("lpsession", loaded.cookies.items[1].name);
+    try std.testing.expectEqual(true, loaded.cookies.items[1].secure);
+    try std.testing.expectEqual(true, loaded.cookies.items[1].http_only);
+    try std.testing.expectEqual(CookieStore.SameSite.none, loaded.cookies.items[1].same_site);
+}
+
+test "hashInternalBrowsePageState settings changes after cookie mutation" {
+    var cookie_jar = CookieJar.init(std.testing.allocator);
+    defer cookie_jar.deinit();
+
+    var session: Session = undefined;
+    session.page = null;
+    session.navigation = .{ ._proto = undefined };
+    session.cookie_jar = &cookie_jar;
+    session.owned_cookie_jar = null;
+
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.committed_surface = .{};
+    tab.error_state = .{};
+    tab.internal_filters = .{};
+    defer tab.internal_filters.deinit(std.testing.allocator);
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+    tab.zoom_percent = 100;
+
+    var tab_items = [_]*BrowseTab{&tab};
+    var tabs = std.ArrayListUnmanaged(*BrowseTab){
+        .items = tab_items[0..],
+        .capacity = tab_items.len,
+    };
+    var closed_tabs = std.ArrayListUnmanaged(ClosedBrowseTab){};
+    defer closed_tabs.deinit(std.testing.allocator);
+    var active_index: usize = 0;
+    const shell: BrowseShell = .{
+        .tabs = &tabs,
+        .closed_tabs = &closed_tabs,
+        .active_tab_index = &active_index,
+    };
+    var settings = BrowseSettings{};
+    defer settings.deinit(std.testing.allocator);
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+
+    const before_hash = hashInternalBrowsePageState(
+        std.testing.allocator,
+        null,
+        &shell,
+        0,
+        &settings,
+        &downloads,
+        .settings,
+    );
+
+    try cookie_jar.add(
+        try initOwnedBrowseCookie(
+            std.testing.allocator,
+            "lpsettings",
+            "ok",
+            "127.0.0.1",
+            "/",
+            null,
+            false,
+            false,
+            .lax,
+        ),
+        std.time.timestamp(),
+    );
+
+    const after_hash = hashInternalBrowsePageState(
+        std.testing.allocator,
+        null,
+        &shell,
+        0,
+        &settings,
+        &downloads,
+        .settings,
+    );
+    try std.testing.expect(before_hash != after_hash);
 }
 
 test "writeInternalHistoryPage applies filter state and renders quick links" {
@@ -7410,6 +7870,7 @@ test "internalBrowseCommandHostPage maps stateful internal actions" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.{ .download_filter_set = "one" }));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_filter_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_set_homepage_to_current));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_clear_cookies));
     try std.testing.expectEqual(@as(?InternalBrowsePage, null), internalBrowseCommandHostPage(.reload));
 }
 
@@ -7439,6 +7900,7 @@ test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reo
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_sort_set = .newest_first }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.download_filter_clear));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.settings_clear_cookies));
     try std.testing.expect(!internalBrowseCommandUsesBrowseLoopHandler(.download_clear));
 }
 
@@ -7459,6 +7921,7 @@ test "internalBrowseCommandKeepsCurrentPage includes internal open in new tab ac
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.download_open_folder));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_retry = 0 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_sort_set = .newest_first }));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.settings_clear_cookies));
     try std.testing.expect(!internalBrowseCommandKeepsCurrentPage(.{ .download_source = 0 }));
 }
 

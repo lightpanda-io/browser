@@ -83,7 +83,7 @@ fn setCookies(cmd: anytype) !void {
     }
 
     for (params.cookies) |param| {
-        try setCdpCookie(&bc.session.cookie_jar, param);
+        try setCdpCookie(bc.session.cookie_jar, param);
     }
 
     try cmd.sendResult(null, .{});

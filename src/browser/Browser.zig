@@ -27,6 +27,7 @@ const App = @import("../App.zig");
 const HttpClient = @import("../http/Client.zig");
 
 const ArenaPool = App.ArenaPool;
+const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -45,10 +46,12 @@ allocator: Allocator,
 arena_pool: *ArenaPool,
 http_client: *HttpClient,
 allow_script_popups: bool = true,
+shared_cookie_jar: ?*CookieJar = null,
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
     http_client: *HttpClient,
+    shared_cookie_jar: ?*CookieJar = null,
 };
 
 pub fn init(app: *App, opts: InitOpts) !Browser {
@@ -65,6 +68,7 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
         .arena_pool = &app.arena_pool,
         .http_client = opts.http_client,
         .allow_script_popups = true,
+        .shared_cookie_jar = opts.shared_cookie_jar,
     };
 }
 

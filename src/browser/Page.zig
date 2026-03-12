@@ -667,7 +667,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .method = opts.method,
         .headers = headers,
         .body = opts.body,
-        .cookie_jar = &session.cookie_jar,
+        .cookie_jar = session.cookie_jar,
         .resource_type = .document,
         .notification = self._session.notification,
         .header_callback = pageHeaderDoneCallback,
@@ -4641,7 +4641,7 @@ const RequestCookieOpts = struct {
 };
 pub fn requestCookie(self: *const Page, opts: RequestCookieOpts) Http.Client.RequestCookie {
     return .{
-        .jar = &self._session.cookie_jar,
+        .jar = self._session.cookie_jar,
         .origin = self.url,
         .is_http = opts.is_http,
         .is_navigation = opts.is_navigation,
@@ -5241,6 +5241,34 @@ test "Page headersForRequestWithPolicy suppresses credentials when disabled" {
     try std.testing.expect(!found_cookie);
     try std.testing.expect(!found_authorization);
     try std.testing.expect(found_referer);
+}
+
+test "Page requestCookie sends localhost cookie on top-level navigation" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+    page.url = "http://127.0.0.1:8195/seed.html";
+    page.referer_header = null;
+    try page._session.cookie_jar.populateFromResponse(page.url, "lppersist=ok; Path=/");
+
+    var headers = try Http.Headers.init(page._session.browser.app.config.http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try page.requestCookie(.{ .is_navigation = true }).headersForRequest(
+        page.arena,
+        "http://127.0.0.1:8195/echo.html",
+        &headers,
+    );
+
+    var found_cookie = false;
+    var iterator = headers.iterator();
+    while (iterator.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Cookie")) {
+            try std.testing.expectEqualStrings("lppersist=ok", header.value);
+            found_cookie = true;
+        }
+    }
+
+    try std.testing.expect(found_cookie);
 }
 
 test "WebApi: Frames" {

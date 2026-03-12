@@ -41,7 +41,7 @@ secure: bool = false,
 http_only: bool = false,
 same_site: SameSite = .none,
 
-const SameSite = enum {
+pub const SameSite = enum {
     strict,
     lax,
     none,
@@ -851,6 +851,30 @@ test "Jar: forRequest" {
 
     // If you add more cases after this point, note that the above test removes
     // the 'global2' cookie
+}
+
+test "Jar: forRequest sends host-only ip cookie on same-site navigation" {
+    var jar = Jar.init(testing.allocator);
+    defer jar.deinit();
+
+    const seed_url = "http://127.0.0.1:8192/seed.html";
+    const echo_url = "http://127.0.0.1:8192/echo.html";
+
+    try jar.add(
+        try Cookie.parse(testing.allocator, seed_url, "lppersist=ok; Path=/"),
+        std.time.timestamp(),
+    );
+
+    var arr: std.ArrayList(u8) = .empty;
+    defer arr.deinit(testing.allocator);
+
+    try jar.forRequest(echo_url, arr.writer(testing.allocator), .{
+        .origin_url = echo_url,
+        .is_navigation = true,
+        .is_http = true,
+    });
+
+    try std.testing.expectEqualStrings("lppersist=ok", arr.items);
 }
 
 test "Cookie: parse key=value" {

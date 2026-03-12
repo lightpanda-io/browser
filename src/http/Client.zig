@@ -891,7 +891,7 @@ pub const RequestCookie = struct {
     origin: [:0]const u8,
 
     pub fn headersForRequest(self: *const RequestCookie, temp: Allocator, url: [:0]const u8, headers: *Net.Headers) !void {
-        var arr: std.ArrayList(u8) = .{};
+        var arr: std.ArrayList(u8) = .empty;
         try self.jar.forRequest(url, arr.writer(temp), .{
             .is_http = self.is_http,
             .is_navigation = self.is_navigation,
@@ -899,8 +899,8 @@ pub const RequestCookie = struct {
         });
 
         if (arr.items.len > 0) {
-            try arr.append(temp, 0); //null terminate
-            headers.cookies = @ptrCast(arr.items.ptr);
+            const header = try std.fmt.allocPrintSentinel(temp, "Cookie: {s}", .{arr.items}, 0);
+            try headers.add(header);
         }
     }
 };
