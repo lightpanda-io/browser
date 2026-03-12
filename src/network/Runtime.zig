@@ -43,7 +43,6 @@ allocator: Allocator,
 config: *const Config,
 ca_blob: ?net_http.Blob,
 robot_store: RobotStore,
-
 cache: Cache,
 
 pollfds: []posix.pollfd,

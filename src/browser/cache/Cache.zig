@@ -72,6 +72,12 @@ pub const CachedMetadata = struct {
 
     // If non-null, must be incorporated into cache key.
     vary: ?[]const u8,
+
+    pub fn isAgeStale(self: *const CachedMetadata) bool {
+        const now = std.time.timestamp();
+        const age = now - self.stored_at + @as(i64, @intCast(self.age_at_store));
+        return age < @as(i64, @intCast(self.max_age));
+    }
 };
 
 pub const CachedResponse = struct {

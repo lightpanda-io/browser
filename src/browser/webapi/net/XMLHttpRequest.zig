@@ -21,7 +21,7 @@ const js = @import("../../js/js.zig");
 
 const log = @import("../../../log.zig");
 const HttpClient = @import("../../HttpClient.zig");
-const net_http = @import("../../../network/http.zig");
+const http = @import("../../../network/http.zig");
 
 const URL = @import("../../URL.zig");
 const Mime = @import("../../Mime.zig");
@@ -41,14 +41,14 @@ const XMLHttpRequest = @This();
 _page: *Page,
 _proto: *XMLHttpRequestEventTarget,
 _arena: Allocator,
-_transfer: ?*HttpClient.Transfer = null,
+_response: ?HttpClient.Response = null,
 
 _url: [:0]const u8 = "",
-_method: net_http.Method = .GET,
+_method: http.Method = .GET,
 _request_headers: *Headers,
 _request_body: ?[]const u8 = null,
 
-_response: ?Response = null,
+_xml_response: ?Response = null,
 _response_data: std.ArrayList(u8) = .empty,
 _response_status: u16 = 0,
 _response_len: ?usize = 0,
@@ -96,13 +96,13 @@ pub fn init(page: *Page) !*XMLHttpRequest {
 }
 
 pub fn deinit(self: *XMLHttpRequest, shutdown: bool, session: *Session) void {
-    if (self._transfer) |transfer| {
+    if (self._response) |response| {
         if (shutdown) {
-            transfer.terminate();
+            response.terminate();
         } else {
-            transfer.abort(error.Abort);
+            response.abort(error.Abort);
         }
-        self._transfer = null;
+        self._response = null;
     }
 
     if (self._on_ready_state_change) |func| {
@@ -168,13 +168,13 @@ pub fn setWithCredentials(self: *XMLHttpRequest, value: bool) !void {
 // TODO: url should be a union, as it can be multiple things
 pub fn open(self: *XMLHttpRequest, method_: []const u8, url: [:0]const u8) !void {
     // Abort any in-progress request
-    if (self._transfer) |transfer| {
-        transfer.abort(error.Abort);
-        self._transfer = null;
+    if (self._response) |response| {
+        response.abort(error.Abort);
+        self._response = null;
     }
 
     // Reset internal state
-    self._response = null;
+    self._xml_response = null;
     self._response_data.clearRetainingCapacity();
     self._response_status = 0;
     self._response_len = 0;
@@ -311,7 +311,7 @@ pub fn getResponse(self: *XMLHttpRequest, page: *Page) !?Response {
         return null;
     }
 
-    if (self._response) |res| {
+    if (self._xml_response) |res| {
         // was already loaded
         return res;
     }
@@ -331,7 +331,7 @@ pub fn getResponse(self: *XMLHttpRequest, page: *Page) !?Response {
         .arraybuffer => .{ .arraybuffer = .{ .values = data } },
     };
 
-    self._response = res;
+    self._xml_response = res;
     return res;
 }
 
@@ -343,35 +343,34 @@ pub fn getResponseXML(self: *XMLHttpRequest, page: *Page) !?*Node.Document {
     };
 }
 
-fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
+fn httpStartCallback(response: HttpClient.Response) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
     if (comptime IS_DEBUG) {
         log.debug(.http, "request start", .{ .method = self._method, .url = self._url, .source = "xhr" });
     }
-    self._transfer = transfer;
+    self._response = response;
 }
 
-fn httpHeaderCallback(transfer: *HttpClient.Transfer, header: net_http.Header) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
+fn httpHeaderCallback(response: HttpClient.Response, header: http.Header) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ header.name, header.value });
     try self._response_headers.append(self._arena, joined);
 }
 
-fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
-
-    const header = &transfer.response_header.?;
+fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "request header", .{
             .source = "xhr",
             .url = self._url,
-            .status = header.status,
+            .status = response.status(),
         });
     }
 
-    if (header.contentType()) |ct| {
-        self._response_mime = Mime.parse(ct) catch |e| {
+    if (response.contentType()) |ct| {
+        // TODO: Check this again.
+        self._response_mime = Mime.parse(@constCast(ct)) catch |e| {
             log.info(.http, "invalid content type", .{
                 .content_Type = ct,
                 .err = e,
@@ -381,18 +380,19 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
         };
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
-        const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
-        try self._response_headers.append(self._arena, joined);
-    }
+    // TODO: Fix Header Iterator.
+    // var it = transfer.responseHeaderIterator();
+    // while (it.next()) |hdr| {
+    //     const joined = try std.fmt.allocPrint(self._arena, "{s}: {s}", .{ hdr.name, hdr.value });
+    //     try self._response_headers.append(self._arena, joined);
+    // }
 
-    self._response_status = header.status;
-    if (transfer.getContentLength()) |cl| {
+    self._response_status = response.status().?;
+    if (response.contentLength()) |cl| {
         self._response_len = cl;
         try self._response_data.ensureTotalCapacity(self._arena, cl);
     }
-    self._response_url = try self._arena.dupeZ(u8, std.mem.span(header.url));
+    self._response_url = try self._arena.dupeZ(u8, response.url());
 
     const page = self._page;
 
@@ -407,8 +407,8 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
     return true;
 }
 
-fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-    const self: *XMLHttpRequest = @ptrCast(@alignCast(transfer.ctx));
+fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
+    const self: *XMLHttpRequest = @ptrCast(@alignCast(response.ctx));
     try self._response_data.appendSlice(self._arena, data);
 
     const page = self._page;
@@ -431,7 +431,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 
     // Not that the request is done, the http/client will free the transfer
     // object. It isn't safe to keep it around.
-    self._transfer = null;
+    self._response = null;
 
     const page = self._page;
 
@@ -453,21 +453,21 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
 fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
     // http client will close it after an error, it isn't safe to keep around
-    self._transfer = null;
+    self._response = null;
     self.handleError(err);
     self._page.js.weakRef(self);
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *XMLHttpRequest = @ptrCast(@alignCast(ctx));
-    self._transfer = null;
+    self._response = null;
 }
 
 pub fn abort(self: *XMLHttpRequest) void {
     self.handleError(error.Abort);
-    if (self._transfer) |transfer| {
-        transfer.abort(error.Abort);
-        self._transfer = null;
+    if (self._response) |response| {
+        response.abort(error.Abort);
+        self._response = null;
     }
     self._page.js.weakRef(self);
 }
@@ -517,7 +517,7 @@ fn stateChanged(self: *XMLHttpRequest, state: ReadyState, page: *Page) !void {
     }
 }
 
-fn parseMethod(method: []const u8) !net_http.Method {
+fn parseMethod(method: []const u8) !http.Method {
     if (std.ascii.eqlIgnoreCase(method, "get")) {
         return .GET;
     }

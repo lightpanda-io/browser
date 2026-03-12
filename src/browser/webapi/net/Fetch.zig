@@ -90,37 +90,36 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     return resolver.promise();
 }
 
-fn httpStartCallback(transfer: *HttpClient.Transfer) !void {
-    const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
+fn httpStartCallback(response: HttpClient.Response) !void {
+    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
     if (comptime IS_DEBUG) {
         log.debug(.http, "request start", .{ .url = self._url, .source = "fetch" });
     }
-    self._response._transfer = transfer;
+    self._response._response = response;
 }
 
-fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
-    const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
+fn httpHeaderDoneCallback(response: HttpClient.Response) !bool {
+    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
 
     const arena = self._response._arena;
-    if (transfer.getContentLength()) |cl| {
+    if (response.contentLength()) |cl| {
         try self._buf.ensureTotalCapacity(arena, cl);
     }
 
     const res = self._response;
-    const header = transfer.response_header.?;
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "request header", .{
             .source = "fetch",
             .url = self._url,
-            .status = header.status,
+            .status = response.status(),
         });
     }
 
-    res._status = header.status;
-    res._status_text = std.http.Status.phrase(@enumFromInt(header.status)) orelse "";
-    res._url = try arena.dupeZ(u8, std.mem.span(header.url));
-    res._is_redirected = header.redirect_count > 0;
+    res._status = response.status().?;
+    res._status_text = std.http.Status.phrase(@enumFromInt(response.status().?)) orelse "";
+    res._url = try arena.dupeZ(u8, response.url());
+    res._is_redirected = response.redirectCount().? > 0;
 
     // Determine response type based on origin comparison
     const page_origin = URL.getOrigin(arena, self._page.url) catch null;
@@ -140,23 +139,24 @@ fn httpHeaderDoneCallback(transfer: *HttpClient.Transfer) !bool {
         res._type = .basic;
     }
 
-    var it = transfer.responseHeaderIterator();
-    while (it.next()) |hdr| {
-        try res._headers.append(hdr.name, hdr.value, self._page);
-    }
+    // TODO: Fix Header Iterator.
+    // var it = transfer.responseHeaderIterator();
+    // while (it.next()) |hdr| {
+    //     try res._headers.append(hdr.name, hdr.value, self._page);
+    // }
 
     return true;
 }
 
-fn httpDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
-    const self: *Fetch = @ptrCast(@alignCast(transfer.ctx));
+fn httpDataCallback(response: HttpClient.Response, data: []const u8) !void {
+    const self: *Fetch = @ptrCast(@alignCast(response.ctx));
     try self._buf.appendSlice(self._response._arena, data);
 }
 
 fn httpDoneCallback(ctx: *anyopaque) !void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
     var response = self._response;
-    response._transfer = null;
+    response._response = null;
     response._body = self._buf.items;
 
     log.info(.http, "request complete", .{
@@ -179,7 +179,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
 
     var response = self._response;
-    response._transfer = null;
+    response._response = null;
     // the response is only passed on v8 on success, if we're here, it's safe to
     // clear this. (defer since `self is in the response's arena).
 
@@ -204,7 +204,7 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 
     if (self._owns_response) {
         var response = self._response;
-        response._transfer = null;
+        response._response = null;
         response.deinit(true, self._page._session);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
