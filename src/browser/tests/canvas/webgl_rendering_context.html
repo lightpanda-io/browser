@@ -85,3 +85,15 @@
   loseContext.restoreContext();
 }
 </script>
+
+<script id=WebGLRenderingContext#clearColor_clear>
+{
+  const element = document.createElement("canvas");
+  element.width = 4;
+  element.height = 3;
+  const ctx = element.getContext("webgl");
+  testing.expectEqual(0x00004000, ctx.COLOR_BUFFER_BIT);
+  ctx.clearColor(1, 0, 0, 1);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+}
+</script>

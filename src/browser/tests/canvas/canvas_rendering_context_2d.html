@@ -260,6 +260,70 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#drawImage(HTMLImageElement)">
+{
+  const img = new Image();
+  img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR42mP4z8AAQv8BD/kD/Zh51wAAAAAASUVORK5CYII=';
+
+  const target = document.createElement("canvas");
+  target.width = 8;
+  target.height = 8;
+  const ctx = target.getContext("2d");
+  ctx.drawImage(img, 1, 2);
+  ctx.drawImage(img, 1, 0, 1, 1, 4, 1, 2, 2);
+
+  testing.expectEqual(2, img.naturalWidth);
+  testing.expectEqual(1, img.naturalHeight);
+
+  const left = ctx.getImageData(1, 2, 1, 1).data;
+  const right = ctx.getImageData(2, 2, 1, 1).data;
+  const cropped = ctx.getImageData(4, 1, 1, 1).data;
+  testing.expectEqual(255, left[0]);
+  testing.expectEqual(0, left[2]);
+  testing.expectEqual(0, right[0]);
+  testing.expectEqual(255, right[2]);
+  testing.expectEqual(0, cropped[0]);
+  testing.expectEqual(255, cropped[2]);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#path fill and stroke">
+{
+  const element = document.createElement("canvas");
+  element.width = 10;
+  element.height = 10;
+  const ctx = element.getContext("2d");
+
+  ctx.beginPath();
+  ctx.moveTo(1, 1);
+  ctx.lineTo(7, 1);
+  ctx.lineTo(4, 6);
+  ctx.closePath();
+  ctx.fillStyle = "#00ff00";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(1, 8);
+  ctx.lineTo(8, 8);
+  ctx.lineTo(8, 3);
+  ctx.strokeStyle = "#0000ff";
+  ctx.stroke();
+
+  const filled = ctx.getImageData(4, 3, 1, 1).data;
+  const horizontal = ctx.getImageData(3, 8, 1, 1).data;
+  const vertical = ctx.getImageData(8, 5, 1, 1).data;
+  testing.expectEqual(0, filled[0]);
+  testing.expectEqual(255, filled[1]);
+  testing.expectEqual(0, filled[2]);
+  testing.expectEqual(0, horizontal[0]);
+  testing.expectEqual(0, horizontal[1]);
+  testing.expectEqual(255, horizontal[2]);
+  testing.expectEqual(0, vertical[0]);
+  testing.expectEqual(0, vertical[1]);
+  testing.expectEqual(255, vertical[2]);
+}
+</script>
+
 <script id="CanvasRenderingContext2D#drawImage(HTMLCanvasElement, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)">
 {
   const source = document.createElement("canvas");

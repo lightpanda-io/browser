@@ -337,6 +337,19 @@ Current state inside Gate 1:
   source-rect cropping, with focused DOM tests plus a bounded headed Win32
   screenshot probe proving copied red, blue, and green source pixels reach the
   real destination canvas surface
+- those same on-screen and offscreen canvas 2D contexts now also support
+  `drawImage(HTMLImageElement, ...)`, with focused DOM tests plus a bounded
+  headed Win32 screenshot probe proving decoded red and cropped blue image
+  pixels reach the real destination canvas surface
+- those same canvas 2D contexts now also support a first real path slice for
+  `beginPath`, `moveTo`, `lineTo`, `rect`, `fill`, and `stroke`, with focused
+  DOM tests plus a bounded headed Win32 screenshot probe proving filled green
+  regions and blue stroke segments reach the real destination canvas surface
+- the headed Win32 canvas path now also includes a first real `webgl`
+  rendering-context slice for `clearColor(...)` plus `clear(COLOR_BUFFER_BIT)`,
+  with focused DOM tests plus a bounded headed Win32 screenshot probe proving a
+  full `120x80` clear-colored canvas region reaches the real destination
+  surface
 - the current headed painter now also keeps simple block paragraphs with mixed
   direct text plus inline child elements on one shared inline row instead of
   splitting the direct text into a separate label band above the inline chips,

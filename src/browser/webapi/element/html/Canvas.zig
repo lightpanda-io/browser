@@ -99,6 +99,7 @@ pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?Drawin
             return .{ .@"2d" = ctx };
         }
         const ctx = try page._factory.create(CanvasRenderingContext2D{
+            ._allocator = page.arena,
             ._surface = try self.ensureSurface(page),
         });
         self._context_2d = ctx;
@@ -110,7 +111,9 @@ pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?Drawin
         if (self._webgl_context) |ctx| {
             return .{ .webgl = ctx };
         }
-        const ctx = try page._factory.create(WebGLRenderingContext{});
+        const ctx = try page._factory.create(WebGLRenderingContext{
+            ._surface = try self.ensureSurface(page),
+        });
         self._webgl_context = ctx;
         return .{ .webgl = ctx };
     }

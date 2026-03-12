@@ -90,6 +90,7 @@ pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, page: *Page)
             return .{ .@"2d" = ctx };
         }
         const ctx = try page._factory.create(OffscreenCanvasRenderingContext2D{
+            ._allocator = page.arena,
             ._surface = try self.ensureSurface(page),
         });
         self._context_2d = ctx;

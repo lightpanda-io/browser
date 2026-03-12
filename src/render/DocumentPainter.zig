@@ -2261,6 +2261,92 @@ test "paintDocument emits drawImage canvas pixels for headed rendering" {
     try std.testing.expect(found);
 }
 
+test "paintDocument emits HTMLImageElement drawImage canvas pixels for headed rendering" {
+    var page = try testing.pageTest("page/canvas_draw_image_image_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .canvas => |canvas| {
+                const red_index = (@as(usize, 12) * canvas.pixel_width + 12) * 4;
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[red_index + 0]);
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[red_index + 2]);
+
+                const blue_index = (@as(usize, 25) * canvas.pixel_width + 75) * 4;
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[blue_index + 0]);
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[blue_index + 2]);
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
+test "paintDocument emits canvas path pixels for headed rendering" {
+    var page = try testing.pageTest("page/canvas_path_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .canvas => |canvas| {
+                const fill_index = (@as(usize, 20) * canvas.pixel_width + 35) * 4;
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[fill_index + 1]);
+
+                const horizontal_index = (@as(usize, 70) * canvas.pixel_width + 60) * 4;
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[horizontal_index + 2]);
+
+                const vertical_index = (@as(usize, 50) * canvas.pixel_width + 100) * 4;
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[vertical_index + 2]);
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
+test "paintDocument emits webgl clear canvas pixels for headed rendering" {
+    var page = try testing.pageTest("page/canvas_webgl_clear_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .canvas => |canvas| {
+                const sample_index = (@as(usize, 30) * canvas.pixel_width + 40) * 4;
+                try std.testing.expectEqual(@as(u8, 64), canvas.pixels[sample_index + 0]);
+                try std.testing.expectEqual(@as(u8, 128), canvas.pixels[sample_index + 1]);
+                try std.testing.expectEqual(@as(u8, 191), canvas.pixels[sample_index + 2]);
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[sample_index + 3]);
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
 test "paintDocument emits image request authorization from url userinfo" {
     var page = try testing.pageTest("page/auth_image.html");
     defer page._session.removePage();

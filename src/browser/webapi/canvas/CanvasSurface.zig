@@ -100,6 +100,43 @@ pub fn strokeRect(self: *CanvasSurface, stroke: color.RGBA, x: f64, y: f64, widt
     }
 }
 
+pub fn drawLine(self: *CanvasSurface, stroke: color.RGBA, x0: f64, y0: f64, x1: f64, y1: f64) void {
+    const start_x = coordinateFromFloat(x0) orelse return;
+    const start_y = coordinateFromFloat(y0) orelse return;
+    const end_x = coordinateFromFloat(x1) orelse return;
+    const end_y = coordinateFromFloat(y1) orelse return;
+
+    var x: i32 = start_x;
+    var y: i32 = start_y;
+    const delta_x: i32 = if (end_x >= start_x) end_x - start_x else start_x - end_x;
+    const delta_y: i32 = -if (end_y >= start_y) end_y - start_y else start_y - end_y;
+    const step_x: i32 = if (start_x < end_x) 1 else -1;
+    const step_y: i32 = if (start_y < end_y) 1 else -1;
+    var err = delta_x + delta_y;
+
+    while (true) {
+        if (x >= 0 and y >= 0) {
+            self.writePixel(@intCast(x), @intCast(y), stroke);
+        }
+        if (x == end_x and y == end_y) {
+            break;
+        }
+        const doubled_err = err * 2;
+        if (doubled_err >= delta_y) {
+            err += delta_y;
+            x += step_x;
+        }
+        if (doubled_err <= delta_x) {
+            err += delta_x;
+            y += step_y;
+        }
+    }
+}
+
+pub fn setPixel(self: *CanvasSurface, x: u32, y: u32, rgba: color.RGBA) void {
+    self.writePixel(x, y, rgba);
+}
+
 pub fn getImageData(
     self: *const CanvasSurface,
     sx: f64,

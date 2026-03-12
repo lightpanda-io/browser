@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#ffffff">
+  <canvas id="main" width="120" height="80"></canvas>
+  <script>
+    const canvas = document.getElementById('main');
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#ff00ff';
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+    ctx.beginPath();
+    ctx.moveTo(10, 10);
+    ctx.lineTo(60, 10);
+    ctx.lineTo(35, 45);
+    ctx.closePath();
+    ctx.fillStyle = '#00ff00';
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(10, 70);
+    ctx.lineTo(100, 70);
+    ctx.lineTo(100, 30);
+    ctx.strokeStyle = '#0000ff';
+    ctx.stroke();
+
+    document.title = 'Canvas Path Ready';
+  </script>
+</body>
+</html>

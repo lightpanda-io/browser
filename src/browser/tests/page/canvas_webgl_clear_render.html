@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#ffffff">
+  <canvas id="main" width="120" height="80"></canvas>
+  <script>
+    const canvas = document.getElementById("main");
+    const gl = canvas.getContext("webgl");
+    gl.clearColor(0.25, 0.5, 0.75, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    document.title = "Canvas WebGL Clear Ready";
+  </script>
+</body>
+</html>

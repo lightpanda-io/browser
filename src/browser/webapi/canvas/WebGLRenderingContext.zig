@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
+const CanvasSurface = @import("CanvasSurface.zig");
 
 pub fn registerTypes() []const type {
     return &.{
@@ -32,6 +33,8 @@ pub fn registerTypes() []const type {
 }
 
 const WebGLRenderingContext = @This();
+_surface: *CanvasSurface,
+_clear_color: [4]f64 = .{ 0, 0, 0, 0 },
 
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
@@ -167,6 +170,28 @@ pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
     return "";
 }
 
+pub const COLOR_BUFFER_BIT: u32 = 0x00004000;
+
+pub fn clearColor(self: *WebGLRenderingContext, red: f64, green: f64, blue: f64, alpha: f64) void {
+    self._clear_color = .{
+        std.math.clamp(red, 0, 1),
+        std.math.clamp(green, 0, 1),
+        std.math.clamp(blue, 0, 1),
+        std.math.clamp(alpha, 0, 1),
+    };
+}
+
+pub fn clear(self: *WebGLRenderingContext, mask: u32) void {
+    if ((mask & COLOR_BUFFER_BIT) == 0) return;
+
+    self._surface.fillRect(.{
+        .r = @intFromFloat(@round(self._clear_color[0] * 255.0)),
+        .g = @intFromFloat(@round(self._clear_color[1] * 255.0)),
+        .b = @intFromFloat(@round(self._clear_color[2] * 255.0)),
+        .a = @intFromFloat(@round(self._clear_color[3] * 255.0)),
+    }, 0, 0, @floatFromInt(self._surface.width), @floatFromInt(self._surface.height));
+}
+
 /// Enables a WebGL extension.
 pub fn getExtension(_: *const WebGLRenderingContext, name: []const u8, page: *Page) !?Extension {
     const tag = Extension.find(name) orelse return null;
@@ -202,6 +227,9 @@ pub const JsApi = struct {
     pub const getParameter = bridge.function(WebGLRenderingContext.getParameter, .{});
     pub const getExtension = bridge.function(WebGLRenderingContext.getExtension, .{});
     pub const getSupportedExtensions = bridge.function(WebGLRenderingContext.getSupportedExtensions, .{});
+    pub const clearColor = bridge.function(WebGLRenderingContext.clearColor, .{});
+    pub const clear = bridge.function(WebGLRenderingContext.clear, .{});
+    pub const COLOR_BUFFER_BIT = bridge.property(WebGLRenderingContext.COLOR_BUFFER_BIT, .{ .template = false, .readonly = true });
 };
 
 const testing = @import("../../../testing.zig");

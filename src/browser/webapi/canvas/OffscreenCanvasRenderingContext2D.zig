@@ -24,8 +24,10 @@ const Page = @import("../../Page.zig");
 
 const ImageData = @import("../ImageData.zig");
 const CanvasSurface = @import("CanvasSurface.zig");
+const CanvasPath = @import("CanvasPath.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const OffscreenCanvas = @import("OffscreenCanvas.zig");
+const Image = @import("../element/html/Image.zig");
 
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `OffscreenCanvas#getContext`.
@@ -35,6 +37,8 @@ const OffscreenCanvasRenderingContext2D = @This();
 /// TODO: Add support for `CanvasGradient` and `CanvasPattern`.
 _fill_style: color.RGBA = color.RGBA.Named.black,
 _stroke_style: color.RGBA = color.RGBA.Named.black,
+_allocator: std.mem.Allocator,
+_path: CanvasPath = .{},
 _surface: *CanvasSurface,
 
 pub fn getFillStyle(self: *const OffscreenCanvasRenderingContext2D, page: *Page) ![]const u8 {
@@ -69,6 +73,7 @@ const WidthOrImageData = union(enum) {
 const DrawImageSource = union(enum) {
     canvas: *Canvas,
     offscreen_canvas: *OffscreenCanvas,
+    image: *Image,
 };
 
 pub fn createImageData(
@@ -129,7 +134,7 @@ pub fn drawImage(
     arg8: ?f64,
     page: *Page,
 ) !void {
-    const resolved_source = sourceSurface(source) orelse return;
+    const resolved_source = (try sourceSurface(source, page)) orelse return;
 
     var sx: f64 = 0;
     var sy: f64 = 0;
@@ -175,17 +180,31 @@ pub fn fillRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width:
 pub fn strokeRect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
     self._surface.strokeRect(self._stroke_style, x, y, width, height);
 }
-pub fn beginPath(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn closePath(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn moveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
-pub fn lineTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
+pub fn beginPath(self: *OffscreenCanvasRenderingContext2D) void {
+    self._path.beginPath();
+}
+pub fn closePath(self: *OffscreenCanvasRenderingContext2D) void {
+    self._path.closePath();
+}
+pub fn moveTo(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64) void {
+    self._path.moveTo(self._allocator, x, y) catch {};
+}
+pub fn lineTo(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64) void {
+    self._path.lineTo(self._allocator, x, y) catch {};
+}
 pub fn quadraticCurveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn bezierCurveTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
 pub fn arc(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64, _: ?bool) void {}
 pub fn arcTo(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn rect(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64, _: f64, _: f64) void {}
-pub fn fill(_: *OffscreenCanvasRenderingContext2D) void {}
-pub fn stroke(_: *OffscreenCanvasRenderingContext2D) void {}
+pub fn rect(self: *OffscreenCanvasRenderingContext2D, x: f64, y: f64, width: f64, height: f64) void {
+    self._path.rect(self._allocator, x, y, width, height) catch {};
+}
+pub fn fill(self: *OffscreenCanvasRenderingContext2D) void {
+    self._path.fill(self._allocator, self._surface, self._fill_style) catch {};
+}
+pub fn stroke(self: *OffscreenCanvasRenderingContext2D) void {
+    self._path.stroke(self._surface, self._stroke_style);
+}
 pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn fillText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
@@ -196,7 +215,7 @@ const SourceSurface = struct {
     height: u32,
 };
 
-fn sourceSurface(source: DrawImageSource) ?SourceSurface {
+fn sourceSurface(source: DrawImageSource, page: *Page) !?SourceSurface {
     return switch (source) {
         .canvas => |canvas| blk: {
             const surface = canvas.getSurface() orelse break :blk null;
@@ -212,6 +231,14 @@ fn sourceSurface(source: DrawImageSource) ?SourceSurface {
                 .surface = surface,
                 .width = canvas.getWidth(),
                 .height = canvas.getHeight(),
+            };
+        },
+        .image => |image| blk: {
+            const surface = image.getCanvasSurface(page) orelse break :blk null;
+            break :blk .{
+                .surface = surface,
+                .width = image.getNaturalWidth(page),
+                .height = image.getNaturalHeight(page),
             };
         },
     };
@@ -255,17 +282,17 @@ pub const JsApi = struct {
     pub const clearRect = bridge.function(OffscreenCanvasRenderingContext2D.clearRect, .{});
     pub const fillRect = bridge.function(OffscreenCanvasRenderingContext2D.fillRect, .{});
     pub const strokeRect = bridge.function(OffscreenCanvasRenderingContext2D.strokeRect, .{});
-    pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{ .noop = true });
-    pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{ .noop = true });
-    pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{ .noop = true });
-    pub const lineTo = bridge.function(OffscreenCanvasRenderingContext2D.lineTo, .{ .noop = true });
+    pub const beginPath = bridge.function(OffscreenCanvasRenderingContext2D.beginPath, .{});
+    pub const closePath = bridge.function(OffscreenCanvasRenderingContext2D.closePath, .{});
+    pub const moveTo = bridge.function(OffscreenCanvasRenderingContext2D.moveTo, .{});
+    pub const lineTo = bridge.function(OffscreenCanvasRenderingContext2D.lineTo, .{});
     pub const quadraticCurveTo = bridge.function(OffscreenCanvasRenderingContext2D.quadraticCurveTo, .{ .noop = true });
     pub const bezierCurveTo = bridge.function(OffscreenCanvasRenderingContext2D.bezierCurveTo, .{ .noop = true });
     pub const arc = bridge.function(OffscreenCanvasRenderingContext2D.arc, .{ .noop = true });
     pub const arcTo = bridge.function(OffscreenCanvasRenderingContext2D.arcTo, .{ .noop = true });
-    pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{ .noop = true });
-    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{ .noop = true });
-    pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{ .noop = true });
+    pub const rect = bridge.function(OffscreenCanvasRenderingContext2D.rect, .{});
+    pub const fill = bridge.function(OffscreenCanvasRenderingContext2D.fill, .{});
+    pub const stroke = bridge.function(OffscreenCanvasRenderingContext2D.stroke, .{});
     pub const clip = bridge.function(OffscreenCanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(OffscreenCanvasRenderingContext2D.fillText, .{ .noop = true });
     pub const strokeText = bridge.function(OffscreenCanvasRenderingContext2D.strokeText, .{ .noop = true });

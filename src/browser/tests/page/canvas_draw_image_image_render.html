@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#ffffff">
+  <canvas id="main" width="120" height="80"></canvas>
+  <script>
+    const canvas = document.getElementById("main");
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#0000ff";
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+    const img = new Image();
+    img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR42mP4z8AAQv8BD/kD/Zh51wAAAAAASUVORK5CYII=";
+    ctx.drawImage(img, 10, 10, 40, 20);
+    ctx.drawImage(img, 1, 0, 1, 1, 70, 20, 20, 20);
+
+    const red = ctx.getImageData(12, 12, 1, 1).data;
+    const blue = ctx.getImageData(75, 25, 1, 1).data;
+    document.title =
+      (img.naturalWidth === 2 && img.naturalHeight === 1 &&
+       red[0] === 255 && red[2] === 0 &&
+       blue[0] === 0 && blue[2] === 255)
+      ? "Canvas Image Draw Ready"
+      : "Canvas Image Draw Failed";
+  </script>
+</body>
+</html>

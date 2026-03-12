@@ -114,6 +114,15 @@
 }
 </script>
 
+<script id="natural_size_data_url">
+{
+  const img = document.createElement('img');
+  img.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR42mP4z8AAQv8BD/kD/Zh51wAAAAAASUVORK5CYII=';
+  testing.expectEqual(2, img.naturalWidth);
+  testing.expectEqual(1, img.naturalHeight);
+}
+</script>
+
 <body></body>
 
 <script id="img-load-event">
