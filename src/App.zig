@@ -29,6 +29,8 @@ const Telemetry = @import("telemetry/telemetry.zig").Telemetry;
 const Network = @import("network/Runtime.zig");
 pub const ArenaPool = @import("ArenaPool.zig");
 
+const FsCache = @import("browser/cache/FsCache.zig");
+
 const App = @This();
 
 network: Network,
@@ -40,6 +42,8 @@ allocator: Allocator,
 arena_pool: ArenaPool,
 app_dir_path: ?[]const u8,
 
+fs_cache: FsCache,
+
 pub fn init(allocator: Allocator, config: *const Config) !*App {
     const app = try allocator.create(App);
     errdefer allocator.destroy(app);
@@ -47,6 +51,7 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
     app.* = .{
         .config = config,
         .allocator = allocator,
+        .fs_cache = undefined,
         .network = undefined,
         .platform = undefined,
         .snapshot = undefined,
@@ -55,7 +60,9 @@ pub fn init(allocator: Allocator, config: *const Config) !*App {
         .arena_pool = undefined,
     };
 
-    app.network = try Network.init(allocator, config);
+    app.fs_cache = try FsCache.init(allocator, config.cacheDir());
+
+    app.network = try Network.init(allocator, config, app.fs_cache.cache());
     errdefer app.network.deinit();
 
     app.platform = try Platform.init();
@@ -86,6 +93,7 @@ pub fn deinit(self: *App) void {
         self.app_dir_path = null;
     }
     self.telemetry.deinit();
+    self.fs_cache.deinit();
     self.network.deinit();
     self.snapshot.deinit();
     self.platform.deinit();
