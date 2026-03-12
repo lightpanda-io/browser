@@ -124,5 +124,7 @@ pub const JsApi = struct {
 
 const testing = @import("../../../testing.zig");
 test "WebApi: CSSStyleSheet" {
+    const filter: testing.LogFilter = .init(.js);
+    defer filter.deinit();
     try testing.htmlRunner("css/stylesheet.html", .{});
 }

@@ -1081,6 +1081,7 @@ pub fn checkVisibility(self: *Element, page: *Page) bool {
 
         current = el.parentElement();
     }
+
     return true;
 }
 
