@@ -19,8 +19,12 @@ jobs:
   wpt-build-release:
     name: zig build release
 
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    env:
+      ARCH: aarch64
+      OS: linux
+
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
@@ -30,9 +34,15 @@ jobs:
           submodules: recursive
 
       - uses: ./.github/actions/install
+        with:
+          os: ${{env.OS}}
+          arch: ${{env.ARCH}}
+
+      - name: v8 snapshot
+        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast snapshot_creator -- src/snapshot.bin
 
       - name: zig build release
-        run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
+        run: zig build -Dsnapshot_path=../../snapshot.bin -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=generic -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: upload artifact
         uses: actions/upload-artifact@v4
@@ -45,7 +55,7 @@ jobs:
   wpt-build-runner:
     name: build wpt runner
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
 
     steps:
@@ -73,7 +83,7 @@ jobs:
       - wpt-build-runner
 
     # use a self host runner.
-    runs-on: lpd-bench-hetzner
+    runs-on: lpd-wpt-aws
     timeout-minutes: 180
 
     steps:
