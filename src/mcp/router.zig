@@ -133,9 +133,8 @@ test "MCP.router - handleMessage - synchronous unit tests" {
 
     // 4. Parse error
     {
-        const old_filter = log.opts.filter_scopes;
-        log.opts.filter_scopes = &.{.mcp};
-        defer log.opts.filter_scopes = old_filter;
+        const filter: testing.LogFilter = .init(.mcp);
+        defer filter.deinit();
 
         try handleMessage(server, aa, "invalid json");
         try testing.expectJson("{\"id\": null, \"error\": {\"code\": -32700}}", out_alloc.writer.buffered());

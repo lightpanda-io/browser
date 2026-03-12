@@ -610,3 +610,23 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
 
     unreachable;
 }
+
+/// LogFilter provides a scoped way to suppress specific log categories during tests.
+/// This is useful for tests that trigger expected errors or warnings.
+pub const LogFilter = struct {
+    old_filter: []const log.Scope,
+
+    /// Sets the log filter to only include the specified scope.
+    /// Returns a LogFilter that should be deinitialized to restore previous filters.
+    pub fn init(comptime scope: log.Scope) LogFilter {
+        const old_filter = log.opts.filter_scopes;
+        const new_filter = comptime &[_]log.Scope{scope};
+        log.opts.filter_scopes = new_filter;
+        return .{ .old_filter = old_filter };
+    }
+
+    /// Restores the log filters to their previous state.
+    pub fn deinit(self: LogFilter) void {
+        log.opts.filter_scopes = self.old_filter;
+    }
+};

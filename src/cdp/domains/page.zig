@@ -662,6 +662,10 @@ test "cdp.page: getFrameTree" {
 }
 
 test "cdp.page: captureScreenshot" {
+    const LogFilter = @import("../../testing.zig").LogFilter;
+    const filter: LogFilter = .init(.not_implemented);
+    defer filter.deinit();
+
     var ctx = testing.context();
     defer ctx.deinit();
     {
