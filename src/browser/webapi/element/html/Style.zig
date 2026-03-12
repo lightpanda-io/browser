@@ -78,7 +78,6 @@ pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
 pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
-    @import("../../../../log.zig").info(.dom, "css.style.get_sheet", .{});
     // Per spec, sheet is null for disconnected elements or non-CSS types.
     // Valid types: absent (defaults to "text/css"), empty string, or
     // case-insensitive match for "text/css".

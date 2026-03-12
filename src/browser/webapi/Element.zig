@@ -1058,7 +1058,6 @@ pub fn checkVisibility(self: *Element, page: *Page) bool {
         const doc_sheets = page.document.getStyleSheets(page) catch null;
         if (doc_sheets) |sheets| {
             var i: usize = 0;
-            if (sheets.length() > 0) log.info(.dom, "css.visibility.check", .{});
             while (i < sheets.length()) : (i += 1) {
                 const sheet = sheets.item(i) orelse continue;
                 const rules = sheet.getCssRules(page) catch continue;
@@ -1067,15 +1066,10 @@ pub fn checkVisibility(self: *Element, page: *Page) bool {
                     const rule = rules.item(j) orelse continue;
                     if (rule.is(CSSStyleRule)) |style_rule| {
                         const selector = style_rule.getSelectorText();
-                        // log.info(.dom, "check_visibility.eval {s}", .{selector});
-                        const does_match = el.matches(selector, page) catch |err| blk: {
-                            log.info(.dom, "check_visibility.err", .{ .err = err });
-                            break :blk false;
-                        };
+                        const does_match = el.matches(selector, page) catch false;
                         if (does_match) {
                             const style = (style_rule.getStyle(page) catch continue).asCSSStyleDeclaration();
                             const display = style.getPropertyValue("display", page);
-                            log.info(.dom, "check_visibility.hit", .{});
                             if (std.mem.eql(u8, display, "none")) {
                                 return false;
                             }

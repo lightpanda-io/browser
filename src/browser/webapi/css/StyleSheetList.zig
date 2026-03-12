@@ -21,7 +21,6 @@ pub fn item(self: *const StyleSheetList, index: usize) ?*CSSStyleSheet {
 }
 
 pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, page: *Page) !void {
-    @import("../../../log.zig").info(.dom, "css.sheet.add", .{});
     try self._sheets.append(page.arena, sheet);
 }
 
