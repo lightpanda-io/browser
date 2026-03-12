@@ -63,15 +63,30 @@ pub fn createImageData(
     switch (width_or_image_data) {
         .width => |width| {
             const height = maybe_height orelse return error.TypeError;
-            return ImageData.constructor(width, height, maybe_settings, page);
+            return ImageData.init(width, height, maybe_settings, page);
         },
         .image_data => |image_data| {
-            return ImageData.constructor(image_data._width, image_data._height, null, page);
+            return ImageData.init(image_data._width, image_data._height, null, page);
         },
     }
 }
 
 pub fn putImageData(_: *const OffscreenCanvasRenderingContext2D, _: *ImageData, _: f64, _: f64, _: ?f64, _: ?f64, _: ?f64, _: ?f64) void {}
+
+pub fn getImageData(
+    _: *const OffscreenCanvasRenderingContext2D,
+    _: i32, // sx
+    _: i32, // sy
+    sw: i32,
+    sh: i32,
+    page: *Page,
+) !*ImageData {
+    if (sw <= 0 or sh <= 0) {
+        return error.IndexSizeError;
+    }
+    return ImageData.init(@intCast(sw), @intCast(sh), null, page);
+}
+
 pub fn save(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn restore(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn scale(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -124,6 +139,7 @@ pub const JsApi = struct {
     pub const createImageData = bridge.function(OffscreenCanvasRenderingContext2D.createImageData, .{ .dom_exception = true });
 
     pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .noop = true });
+    pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
     pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{ .noop = true });
