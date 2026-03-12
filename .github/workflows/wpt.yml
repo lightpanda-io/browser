@@ -10,7 +10,7 @@ env:
 
 on:
   schedule:
-    - cron: "23 2 * * *"
+    - cron: "21 2 * * *"
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
