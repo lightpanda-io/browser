@@ -62,7 +62,8 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, index: u32, page: *Pag
     const style_rule = try CSSStyleRule.init(page);
     try style_rule.setSelectorText(parsed_rule.selector, page);
 
-    const style = try style_rule.getStyle(page);
+    const style_props = try style_rule.getStyle(page);
+    const style = style_props.asCSSStyleDeclaration();
     try style.setCssText(parsed_rule.block, page);
 
     const rules = try self.getCssRules(page);
@@ -90,7 +91,8 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
         const style_rule = try CSSStyleRule.init(page);
         try style_rule.setSelectorText(parsed_rule.selector, page);
 
-        const style = try style_rule.getStyle(page);
+        const style_props = try style_rule.getStyle(page);
+        const style = style_props.asCSSStyleDeclaration();
         try style.setCssText(parsed_rule.block, page);
 
         try rules.insert(index, style_rule._proto, page);

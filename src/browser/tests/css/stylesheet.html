@@ -419,3 +419,57 @@
     testing.expectEqual('anchor-size(--foo width, anchor-size(--bar height))', div.style.width);
 }
 </script>
+
+<script id="CSSStyleSheet_insertRule_deleteRule">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    sheet.insertRule('.test { color: green; }', 0);
+    testing.expectEqual(1, sheet.cssRules.length);
+    console.warn("constructor:", sheet.cssRules[0].constructor.name);
+    testing.expectEqual('.test', sheet.cssRules[0].selectorText);
+    testing.expectEqual('green', sheet.cssRules[0].style.color);
+
+    sheet.deleteRule(0);
+    testing.expectEqual(0, sheet.cssRules.length);
+}
+</script>
+
+<script id="CSSStyleSheet_replaceSync">
+{
+    const sheet = new CSSStyleSheet();
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    sheet.replaceSync('.test { color: blue; }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.test', sheet.cssRules[0].selectorText);
+    testing.expectEqual('blue', sheet.cssRules[0].style.color);
+
+    let replacedAsync = false;
+    testing.async(async () => {
+        await sheet.replace('.async-test { margin: 10px; }');
+        testing.expectEqual(1, sheet.cssRules.length);
+        testing.expectEqual('.async-test', sheet.cssRules[0].selectorText);
+        replacedAsync = true;
+    });
+    testing.eventually(() => testing.expectTrue(replacedAsync));
+}
+</script>
+
+<script id="CSSStyleRule_cssText">
+{
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('.test { color: red; margin: 10px; }');
+
+    // Check serialization format
+    const cssText = sheet.cssRules[0].cssText;
+    testing.expectTrue(cssText.includes('.test { '));
+    testing.expectTrue(cssText.includes('color: red;'));
+    testing.expectTrue(cssText.includes('margin: 10px;'));
+    testing.expectTrue(cssText.includes('}'));
+}
+</script>

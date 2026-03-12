@@ -2,28 +2,41 @@ const std = @import("std");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 
+const CSSStyleRule = @import("CSSStyleRule.zig");
+
 const CSSRule = @This();
 
-pub const Type = enum(u16) {
-    style = 1,
-    charset = 2,
-    import = 3,
-    media = 4,
-    font_face = 5,
-    page = 6,
-    keyframes = 7,
-    keyframe = 8,
-    margin = 9,
-    namespace = 10,
-    counter_style = 11,
-    supports = 12,
-    document = 13,
-    font_feature_values = 14,
-    viewport = 15,
-    region_style = 16,
+pub const Type = union(enum) {
+    style: *CSSStyleRule,
+    charset: void,
+    import: void,
+    media: void,
+    font_face: void,
+    page: void,
+    keyframes: void,
+    keyframe: void,
+    margin: void,
+    namespace: void,
+    counter_style: void,
+    supports: void,
+    document: void,
+    font_feature_values: void,
+    viewport: void,
+    region_style: void,
 };
 
 _type: Type,
+
+pub fn as(self: *CSSRule, comptime T: type) *T {
+    return self.is(T).?;
+}
+
+pub fn is(self: *CSSRule, comptime T: type) ?*T {
+    switch (self._type) {
+        .style => |r| return if (T == CSSStyleRule) r else null,
+        else => return null,
+    }
+}
 
 pub fn init(rule_type: Type, page: *Page) !*CSSRule {
     return page._factory.create(CSSRule{
@@ -32,7 +45,7 @@ pub fn init(rule_type: Type, page: *Page) !*CSSRule {
 }
 
 pub fn getType(self: *const CSSRule) u16 {
-    return @intFromEnum(self._type);
+    return @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1;
 }
 
 pub fn getCssText(self: *const CSSRule, page: *Page) []const u8 {
