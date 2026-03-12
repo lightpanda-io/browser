@@ -1286,6 +1286,16 @@ pub const Transfer = struct {
 
         if (buf_len < 3) {
             // could be \r\n or \n.
+            // We get the last header line.
+            if (transfer._redirecting) {
+                // parse and set cookies for the redirection.
+                redirectionCookies(transfer, &conn) catch |err| {
+                    if (comptime IS_DEBUG) {
+                        log.debug(.http, "redirection cookies", .{ .err = err });
+                    }
+                    return 0;
+                };
+            }
             return buf_len;
         }
 
@@ -1352,38 +1362,22 @@ pub const Transfer = struct {
             transfer.bytes_received += buf_len;
         }
 
-        if (buf_len > 2) {
-            if (transfer._auth_challenge != null) {
-                // try to parse auth challenge.
-                if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
-                    std.ascii.startsWithIgnoreCase(header, "Proxy-Authenticate"))
-                {
-                    const ac = AuthChallenge.parse(
-                        transfer._auth_challenge.?.status,
-                        header,
-                    ) catch |err| {
-                        // We can't parse the auth challenge
-                        log.err(.http, "parse auth challenge", .{ .err = err, .header = header });
-                        // Should we cancel the request? I don't think so.
-                        return buf_len;
-                    };
-                    transfer._auth_challenge = ac;
-                }
+        if (transfer._auth_challenge != null) {
+            // try to parse auth challenge.
+            if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
+                std.ascii.startsWithIgnoreCase(header, "Proxy-Authenticate"))
+            {
+                const ac = AuthChallenge.parse(
+                    transfer._auth_challenge.?.status,
+                    header,
+                ) catch |err| {
+                    // We can't parse the auth challenge
+                    log.err(.http, "parse auth challenge", .{ .err = err, .header = header });
+                    // Should we cancel the request? I don't think so.
+                    return buf_len;
+                };
+                transfer._auth_challenge = ac;
             }
-            return buf_len;
-        }
-
-        // Starting here, we get the last header line.
-
-        if (transfer._redirecting) {
-            // parse and set cookies for the redirection.
-            redirectionCookies(transfer, &conn) catch |err| {
-                if (comptime IS_DEBUG) {
-                    log.debug(.http, "redirection cookies", .{ .err = err });
-                }
-                return 0;
-            };
-            return buf_len;
         }
 
         return buf_len;
