@@ -5,7 +5,7 @@ const CSSRule = @import("CSSRule.zig");
 
 const CSSRuleList = @This();
 
-_rules: std.ArrayListUnmanaged(*CSSRule) = .{},
+_rules: std.ArrayList(*CSSRule) = .empty,
 
 pub fn init(page: *Page) !*CSSRuleList {
     return page._factory.create(CSSRuleList{});

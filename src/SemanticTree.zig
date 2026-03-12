@@ -225,7 +225,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
 }
 
 fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]OptionData {
-    var options = std.ArrayListUnmanaged(OptionData){};
+    var options: std.ArrayList(OptionData) = .empty;
     var it = node.childrenIterator();
     while (it.next()) |child| {
         if (child.is(Element)) |el| {

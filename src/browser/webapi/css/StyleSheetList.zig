@@ -5,7 +5,7 @@ const CSSStyleSheet = @import("CSSStyleSheet.zig");
 
 const StyleSheetList = @This();
 
-_sheets: std.ArrayListUnmanaged(*CSSStyleSheet) = .{},
+_sheets: std.ArrayList(*CSSStyleSheet) = .empty,
 
 pub fn init(page: *Page) !*StyleSheetList {
     return page._factory.create(StyleSheetList{});
