@@ -436,6 +436,15 @@
 
     sheet.deleteRule(0);
     testing.expectEqual(0, sheet.cssRules.length);
+
+    let caught = false;
+    try {
+        sheet.deleteRule(5);
+    } catch (e) {
+        caught = true;
+        testing.expectEqual('IndexSizeError', e.name);
+    }
+    testing.expectTrue(caught);
 }
 </script>
 

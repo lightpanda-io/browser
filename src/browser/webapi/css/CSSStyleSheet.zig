@@ -73,7 +73,7 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, index: u32, page: *Pag
 
 pub fn deleteRule(self: *CSSStyleSheet, index: u32, page: *Page) !void {
     const rules = try self.getCssRules(page);
-    rules.remove(index);
+    try rules.remove(index);
 }
 
 pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise {
@@ -116,8 +116,8 @@ pub const JsApi = struct {
     pub const disabled = bridge.accessor(CSSStyleSheet.getDisabled, CSSStyleSheet.setDisabled, .{});
     pub const cssRules = bridge.accessor(CSSStyleSheet.getCssRules, null, .{});
     pub const ownerRule = bridge.accessor(CSSStyleSheet.getOwnerRule, null, .{});
-    pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{});
-    pub const deleteRule = bridge.function(CSSStyleSheet.deleteRule, .{});
+    pub const insertRule = bridge.function(CSSStyleSheet.insertRule, .{ .dom_exception = true });
+    pub const deleteRule = bridge.function(CSSStyleSheet.deleteRule, .{ .dom_exception = true });
     pub const replace = bridge.function(CSSStyleSheet.replace, .{});
     pub const replaceSync = bridge.function(CSSStyleSheet.replaceSync, .{});
 };

@@ -24,14 +24,14 @@ pub fn item(self: *const CSSRuleList, index: usize) ?*CSSRule {
 
 pub fn insert(self: *CSSRuleList, index: u32, rule: *CSSRule, page: *Page) !void {
     if (index > self._rules.items.len) {
-        return error.IndexSizeError; // Or standard DOMException mapped error
+        return error.IndexSizeError;
     }
     try self._rules.insert(page.arena, index, rule);
 }
 
-pub fn remove(self: *CSSRuleList, index: u32) void {
+pub fn remove(self: *CSSRuleList, index: u32) !void {
     if (index >= self._rules.items.len) {
-        return; // Ignore or throw? Standard says IndexSizeError DOMException, but we might just no-op or return an error depending on the caller.
+        return error.IndexSizeError;
     }
     _ = self._rules.orderedRemove(index);
 }

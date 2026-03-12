@@ -193,7 +193,6 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !vo
     while (it.next()) |declaration| {
         try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
     }
-
     try self.syncStyleAttribute(page);
 }
 
