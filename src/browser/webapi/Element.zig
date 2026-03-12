@@ -1044,6 +1044,7 @@ pub fn parentElement(self: *Element) ?*Element {
 const CSSStyleRule = @import("css/CSSStyleRule.zig");
 
 pub fn checkVisibility(self: *Element, page: *Page) bool {
+    const doc_sheets = page.document.getStyleSheets(page) catch null;
     var current: ?*Element = self;
 
     while (current) |el| {
@@ -1055,14 +1056,11 @@ pub fn checkVisibility(self: *Element, page: *Page) bool {
         }
 
         // Also check if any global stylesheet hides this element
-        const doc_sheets = page.document.getStyleSheets(page) catch null;
         if (doc_sheets) |sheets| {
-            var i: usize = 0;
-            while (i < sheets.length()) : (i += 1) {
+            for (0..sheets.length()) |i| {
                 const sheet = sheets.item(i) orelse continue;
                 const rules = sheet.getCssRules(page) catch continue;
-                var j: usize = 0;
-                while (j < rules.length()) : (j += 1) {
+                for (0..rules.length()) |j| {
                     const rule = rules.item(j) orelse continue;
                     if (rule.is(CSSStyleRule)) |style_rule| {
                         const selector = style_rule.getSelectorText();
