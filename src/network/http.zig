@@ -237,7 +237,7 @@ pub const ResponseHead = struct {
 
 pub const Connection = struct {
     easy: *libcurl.Curl,
-    node: Handles.HandleList.Node = .{},
+    node: std.DoublyLinkedList.Node = .{},
 
     pub fn init(
         ca_blob_: ?libcurl.CurlBlob,
@@ -385,8 +385,16 @@ pub const Connection = struct {
         try libcurl.curl_easy_setopt(self.easy, .write_function, data_cb);
     }
 
-    pub fn setProxy(self: *const Connection, proxy: ?[*:0]const u8) !void {
-        try libcurl.curl_easy_setopt(self.easy, .proxy, proxy);
+    pub fn reset(self: *const Connection) !void {
+        try libcurl.curl_easy_setopt(self.easy, .header_data, null);
+        try libcurl.curl_easy_setopt(self.easy, .header_function, null);
+        try libcurl.curl_easy_setopt(self.easy, .write_data, null);
+        try libcurl.curl_easy_setopt(self.easy, .write_function, null);
+        try libcurl.curl_easy_setopt(self.easy, .proxy, null);
+    }
+
+    pub fn setProxy(self: *const Connection, proxy: ?[:0]const u8) !void {
+        try libcurl.curl_easy_setopt(self.easy, .proxy, if (proxy) |p| p.ptr else null);
     }
 
     pub fn setTlsVerify(self: *const Connection, verify: bool, use_proxy: bool) !void {
@@ -467,111 +475,32 @@ pub const Connection = struct {
 };
 
 pub const Handles = struct {
-    connections: []Connection,
-    dirty: HandleList,
-    in_use: HandleList,
-    available: HandleList,
     multi: *libcurl.CurlM,
-    performing: bool = false,
 
-    pub const HandleList = std.DoublyLinkedList;
-
-    pub fn init(
-        allocator: Allocator,
-        ca_blob: ?libcurl.CurlBlob,
-        config: *const Config,
-    ) !Handles {
-        const count: usize = config.httpMaxConcurrent();
-        if (count == 0) return error.InvalidMaxConcurrent;
-
+    pub fn init(config: *const Config) !Handles {
         const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
         errdefer libcurl.curl_multi_cleanup(multi) catch {};
 
         try libcurl.curl_multi_setopt(multi, .max_host_connections, config.httpMaxHostOpen());
 
-        const connections = try allocator.alloc(Connection, count);
-        errdefer allocator.free(connections);
-
-        var available: HandleList = .{};
-        for (0..count) |i| {
-            connections[i] = try Connection.init(ca_blob, config);
-            available.append(&connections[i].node);
-        }
-
-        return .{
-            .dirty = .{},
-            .in_use = .{},
-            .connections = connections,
-            .available = available,
-            .multi = multi,
-        };
+        return .{ .multi = multi };
     }
 
-    pub fn deinit(self: *Handles, allocator: Allocator) void {
-        for (self.connections) |*conn| {
-            conn.deinit();
-        }
-        allocator.free(self.connections);
+    pub fn deinit(self: *Handles) void {
         libcurl.curl_multi_cleanup(self.multi) catch {};
-    }
-
-    pub fn hasAvailable(self: *const Handles) bool {
-        return self.available.first != null;
-    }
-
-    pub fn get(self: *Handles) ?*Connection {
-        if (self.available.popFirst()) |node| {
-            self.in_use.append(node);
-            return @as(*Connection, @fieldParentPtr("node", node));
-        }
-        return null;
     }
 
     pub fn add(self: *Handles, conn: *const Connection) !void {
         try libcurl.curl_multi_add_handle(self.multi, conn.easy);
     }
 
-    pub fn remove(self: *Handles, conn: *Connection) void {
-        if (libcurl.curl_multi_remove_handle(self.multi, conn.easy)) {
-            self.isAvailable(conn);
-        } else |err| {
-            // can happen if we're in a perform() call, so we'll queue this
-            // for cleanup later.
-            const node = &conn.node;
-            self.in_use.remove(node);
-            self.dirty.append(node);
-            log.warn(.http, "multi remove handle", .{ .err = err });
-        }
-    }
-
-    pub fn isAvailable(self: *Handles, conn: *Connection) void {
-        const node = &conn.node;
-        self.in_use.remove(node);
-        self.available.append(node);
+    pub fn remove(self: *Handles, conn: *const Connection) !void {
+        try libcurl.curl_multi_remove_handle(self.multi, conn.easy);
     }
 
     pub fn perform(self: *Handles) !c_int {
-        self.performing = true;
-        defer self.performing = false;
-
-        const multi = self.multi;
         var running: c_int = undefined;
         try libcurl.curl_multi_perform(self.multi, &running);
-
-        {
-            const list = &self.dirty;
-            while (list.first) |node| {
-                list.remove(node);
-                const conn: *Connection = @fieldParentPtr("node", node);
-                if (libcurl.curl_multi_remove_handle(multi, conn.easy)) {
-                    self.available.append(node);
-                } else |err| {
-                    log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
-                    @panic("multi_remove_handle");
-                }
-            }
-        }
-
         return running;
     }
 
