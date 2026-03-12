@@ -312,6 +312,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
         ._screen = screen,
         ._visual_viewport = visual_viewport,
     });
+    try self.window.syncStorageBucket();
 
     self._script_manager = ScriptManager.init(browser.allocator, browser.http_client, self);
     errdefer self._script_manager.deinit();
@@ -742,6 +743,7 @@ fn scheduleNavigationWithArena(originator: *Page, arena: Allocator, request_url:
         target.url = try target.arena.dupeZ(u8, resolved_url);
         target.window._location = try Location.init(target.url, target);
         target.document._location = target.window._location;
+        try target.window.syncStorageBucket();
         if (target.parent == null) {
             try session.navigation.updateEntries(target.url, opts.kind, target, true);
         }
@@ -991,6 +993,7 @@ fn pageHeaderDoneCallback(transfer: *Http.Transfer) !bool {
 
     self.window._location = try Location.init(self.url, self);
     self.document._location = self.window._location;
+    try self.window.syncStorageBucket();
 
     if (comptime IS_DEBUG) {
         log.debug(.page, "navigate header", .{

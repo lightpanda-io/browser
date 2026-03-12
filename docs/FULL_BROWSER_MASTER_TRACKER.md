@@ -223,6 +223,10 @@ Current state inside Gate 1:
   cookie state session-local per tab, and that cookie jar now survives browser
   restart and can be cleared from `browser://settings`, with bounded same-tab,
   cross-tab, restart, and clear-cookies headed probes
+- headed `browse` tabs now also share one persistent origin-scoped
+  `localStorage` shed across tabs and browser restart, and that storage can be
+  cleared from `browser://settings`, with bounded cross-tab, restart, and
+  clear-local-storage headed probes
 - root `Content-Disposition: attachment` navigations now promote into the
   headed download manager instead of degrading into navigation errors:
   address-bar navigations, in-page link activations, and direct startup URLs
@@ -525,10 +529,10 @@ Current known gap entering Gate 2:
 - explicit download requests, adopted root-attachment transfers, and other
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
-- headed `browse` now has one shared persistent cookie jar across tabs and
-  restart with a settings clear-cookies path, but broader persisted profile
-  state is still thin: cache policy, stronger storage persistence, and an
-  IndexedDB-class store are still open
+- headed `browse` now has one shared persistent cookie jar and origin-scoped
+  `localStorage` store across tabs and restart, with settings clear paths for
+  both, but broader persisted profile state is still thin: cache policy,
+  stronger storage persistence, and an IndexedDB-class store are still open
 - headed network images now ride the shared `Http` runtime path and inherit
   page/session cookies, sanitized referer, redirect-set cookies, URL-userinfo
   Basic Authorization, same-origin page-URL Basic auth inheritance, anonymous

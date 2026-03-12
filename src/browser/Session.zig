@@ -108,7 +108,8 @@ arena: Allocator,
 
 cookie_jar: *storage.Cookie.Jar,
 owned_cookie_jar: ?storage.Cookie.Jar,
-storage_shed: storage.Shed,
+storage_shed: *storage.Shed,
+owned_storage_shed: ?storage.Shed,
 
 history: History,
 navigation: Navigation,
@@ -132,7 +133,8 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .frame_id_gen = 0,
         // The prototype (EventTarget) for Navigation is created when a Page is created.
         .navigation = .{ ._proto = undefined },
-        .storage_shed = .{},
+        .storage_shed = undefined,
+        .owned_storage_shed = null,
         .browser = browser,
         .queued_navigation = .{},
         .queued_queued_navigation = .{},
@@ -151,6 +153,13 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     } else {
         self.owned_cookie_jar = storage.Cookie.Jar.init(allocator);
         self.cookie_jar = &self.owned_cookie_jar.?;
+    }
+    if (browser.shared_storage_shed) |shared_storage_shed| {
+        self.storage_shed = shared_storage_shed;
+        self.owned_storage_shed = null;
+    } else {
+        self.owned_storage_shed = .{};
+        self.storage_shed = &self.owned_storage_shed.?;
     }
 }
 
@@ -185,7 +194,10 @@ pub fn deinit(self: *Session) void {
     self.pending_tab_opens.deinit(self.browser.app.allocator);
 
     const browser = self.browser;
-    self.storage_shed.deinit(browser.app.allocator);
+    if (self.owned_storage_shed) |*owned_storage_shed| {
+        owned_storage_shed.deinit(browser.app.allocator);
+        self.owned_storage_shed = null;
+    }
     browser.arena_pool.release(self.arena);
 }
 

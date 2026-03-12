@@ -63,7 +63,9 @@ _navigator: Navigator = .init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
-_storage_bucket: storage.Bucket = .{},
+_session_storage: storage.Lookup = .{},
+_opaque_local_storage: storage.Lookup = .{},
+_local_storage: *storage.Lookup = undefined,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
@@ -159,11 +161,21 @@ pub fn getPerformance(self: *Window) *Performance {
 }
 
 pub fn getLocalStorage(self: *Window) *storage.Lookup {
-    return &self._storage_bucket.local;
+    return self._local_storage;
 }
 
 pub fn getSessionStorage(self: *Window) *storage.Lookup {
-    return &self._storage_bucket.session;
+    return &self._session_storage;
+}
+
+pub fn syncStorageBucket(self: *Window) !void {
+    const origin = try self._page.getOrigin(self._page.arena);
+    if (origin) |value| {
+        const bucket = try self._page._session.storage_shed.getOrPut(self._page._session.browser.app.allocator, value);
+        self._local_storage = &bucket.local;
+        return;
+    }
+    self._local_storage = &self._opaque_local_storage;
 }
 
 pub fn getLocation(self: *const Window) *Location {

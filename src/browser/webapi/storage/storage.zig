@@ -35,6 +35,7 @@ pub const Shed = struct {
         var it = self._origins.iterator();
         while (it.next()) |kv| {
             allocator.free(kv.key_ptr.*);
+            kv.value_ptr.*.deinit();
             allocator.destroy(kv.value_ptr.*);
         }
         self._origins.deinit(allocator);
@@ -47,20 +48,57 @@ pub const Shed = struct {
         }
 
         const bucket = try allocator.create(Bucket);
-        errdefer allocator.free(bucket);
+        errdefer allocator.destroy(bucket);
         bucket.* = .{};
+        bucket.local.setPersistentAllocator(allocator);
 
         gop.key_ptr.* = try allocator.dupe(u8, origin);
         gop.value_ptr.* = bucket;
         return bucket;
     }
+
+    pub fn clearLocal(self: *Shed) void {
+        var it = self._origins.valueIterator();
+        while (it.next()) |bucket| {
+            bucket.*.local.clear();
+        }
+    }
+
+    pub fn localOriginCount(self: *const Shed) usize {
+        var count: usize = 0;
+        var it = self._origins.valueIterator();
+        while (it.next()) |bucket| {
+            if (bucket.*.local.getLength() > 0) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    pub fn localItemCount(self: *const Shed) usize {
+        var count: usize = 0;
+        var it = self._origins.valueIterator();
+        while (it.next()) |bucket| {
+            count += bucket.*.local.getLength();
+        }
+        return count;
+    }
 };
 
-pub const Bucket = struct { local: Lookup = .{}, session: Lookup = .{} };
+pub const Bucket = struct {
+    local: Lookup = .{},
+    session: Lookup = .{},
+
+    pub fn deinit(self: *Bucket) void {
+        self.local.deinit();
+        self.session.deinit();
+    }
+};
 
 pub const Lookup = struct {
     _data: std.StringHashMapUnmanaged([]const u8) = .empty,
     _size: usize = 0,
+    _persistent_allocator: ?Allocator = null,
 
     const max_size = 5 * 1024 * 1024;
 
@@ -69,30 +107,85 @@ pub const Lookup = struct {
         return self._data.get(k);
     }
 
-    pub fn setItem(self: *Lookup, key_: ?[]const u8, value: []const u8, page: *Page) !void {
+    pub fn setPersistentAllocator(self: *Lookup, allocator: Allocator) void {
+        self._persistent_allocator = allocator;
+    }
+
+    pub fn deinit(self: *Lookup) void {
+        const allocator = self._persistent_allocator orelse {
+            self.* = .{};
+            return;
+        };
+
+        var it = self._data.iterator();
+        while (it.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+            allocator.free(kv.value_ptr.*);
+        }
+        self._data.deinit(allocator);
+        self.* = .{};
+    }
+
+    fn storageAllocator(self: *Lookup, page: *Page) Allocator {
+        return self._persistent_allocator orelse page.arena;
+    }
+
+    fn setItemWithAllocator(self: *Lookup, allocator: Allocator, key_: ?[]const u8, value: []const u8) !void {
         const k = key_ orelse return;
 
-        if (self._size + value.len > max_size) {
+        const old_value_len = if (self._data.get(k)) |existing| existing.len else 0;
+        if (self._size - old_value_len + value.len > max_size) {
             return error.QuotaExceeded;
         }
-        defer self._size += value.len;
 
-        const key_owned = try page.dupeString(k);
-        const value_owned = try page.dupeString(value);
+        const key_owned = try allocator.dupe(u8, k);
+        errdefer allocator.free(key_owned);
+        const value_owned = try allocator.dupe(u8, value);
+        errdefer allocator.free(value_owned);
 
-        const gop = try self._data.getOrPut(page.arena, key_owned);
+        const gop = try self._data.getOrPut(allocator, key_owned);
+        if (gop.found_existing) {
+            if (self._persistent_allocator != null) {
+                allocator.free(key_owned);
+                allocator.free(gop.value_ptr.*);
+            }
+            self._size -= gop.value_ptr.*.len;
+        }
+
         gop.value_ptr.* = value_owned;
+        self._size += value.len;
+    }
+
+    pub fn setItem(self: *Lookup, key_: ?[]const u8, value: []const u8, page: *Page) !void {
+        return self.setItemWithAllocator(self.storageAllocator(page), key_, value);
+    }
+
+    pub fn setOwnedItem(self: *Lookup, allocator: Allocator, key_: ?[]const u8, value: []const u8) !void {
+        return self.setItemWithAllocator(self._persistent_allocator orelse allocator, key_, value);
     }
 
     pub fn removeItem(self: *Lookup, key_: ?[]const u8) void {
         const k = key_ orelse return;
-        if (self._data.get(k)) |value| {
+        if (self._persistent_allocator) |allocator| {
+            if (self._data.fetchRemove(k)) |removed| {
+                self._size -= removed.value.len;
+                allocator.free(removed.key);
+                allocator.free(removed.value);
+            }
+        } else if (self._data.get(k)) |value| {
             self._size -= value.len;
             _ = self._data.remove(k);
         }
     }
 
     pub fn clear(self: *Lookup) void {
+        if (self._persistent_allocator) |allocator| {
+            var it = self._data.iterator();
+            while (it.next()) |kv| {
+                allocator.free(kv.key_ptr.*);
+                allocator.free(kv.value_ptr.*);
+            }
+        }
         self._data.clearRetainingCapacity();
         self._size = 0;
     }

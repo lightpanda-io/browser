@@ -25,6 +25,7 @@ const js = @import("js/js.zig");
 const log = @import("../log.zig");
 const App = @import("../App.zig");
 const HttpClient = @import("../http/Client.zig");
+const storage = @import("webapi/storage/storage.zig");
 
 const ArenaPool = App.ArenaPool;
 const CookieJar = @import("webapi/storage/Cookie.zig").Jar;
@@ -47,11 +48,13 @@ arena_pool: *ArenaPool,
 http_client: *HttpClient,
 allow_script_popups: bool = true,
 shared_cookie_jar: ?*CookieJar = null,
+shared_storage_shed: ?*storage.Shed = null,
 
 const InitOpts = struct {
     env: js.Env.InitOpts = .{},
     http_client: *HttpClient,
     shared_cookie_jar: ?*CookieJar = null,
+    shared_storage_shed: ?*storage.Shed = null,
 };
 
 pub fn init(app: *App, opts: InitOpts) !Browser {
@@ -69,6 +72,7 @@ pub fn init(app: *App, opts: InitOpts) !Browser {
         .http_client = opts.http_client,
         .allow_script_popups = true,
         .shared_cookie_jar = opts.shared_cookie_jar,
+        .shared_storage_shed = opts.shared_storage_shed,
     };
 }
 
