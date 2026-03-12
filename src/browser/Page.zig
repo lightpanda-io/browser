@@ -404,6 +404,18 @@ pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     return std.mem.startsWith(u8, url, current_origin);
 }
 
+/// Look up a blob URL in this page's registry, walking up the parent chain.
+pub fn lookupBlobUrl(self: *Page, url: []const u8) ?*Blob {
+    var current: ?*Page = self;
+    while (current) |page| {
+        if (page._blob_urls.get(url)) |blob| {
+            return blob;
+        }
+        current = page.parent;
+    }
+    return null;
+}
+
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
     lp.assert(self._load_state == .waiting, "page.renavigate", .{});
     const session = self._session;
@@ -419,12 +431,17 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         .type = self._type,
     });
 
-    // if the url is about:blank, we load an empty HTML document in the
-    // page and dispatch the events.
-    if (std.mem.eql(u8, "about:blank", request_url)) {
-        self.url = "about:blank";
+    // Handle synthetic navigations: about:blank and blob: URLs
+    const is_about_blank = std.mem.eql(u8, "about:blank", request_url);
+    const is_blob = !is_about_blank and std.mem.startsWith(u8, request_url, "blob:");
 
-        if (self.parent) |parent| {
+    if (is_about_blank or is_blob) {
+        self.url = if (is_about_blank) "about:blank" else try self.arena.dupeZ(u8, request_url);
+
+        if (is_blob) {
+            // strip out blob:
+            self.origin = try URL.getOrigin(self.arena, request_url[5.. :0]);
+        } else if (self.parent) |parent| {
             self.origin = parent.origin;
         } else {
             self.origin = null;
@@ -435,10 +452,22 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         // It's important to force a reset during the following navigation.
         self._parse_state = .complete;
 
-        self.document.injectBlank(self) catch |err| {
-            log.err(.browser, "inject blank", .{ .err = err });
-            return error.InjectBlankFailed;
-        };
+        // Content injection
+        if (is_blob) {
+            const blob = self.lookupBlobUrl(request_url) orelse {
+                log.warn(.js, "invalid blob", .{ .url = request_url });
+                return error.BlobNotFound;
+            };
+            const parse_arena = try self.getArena(.{ .debug = "Page.parseBlob" });
+            defer self.releaseArena(parse_arena);
+            var parser = Parser.init(parse_arena, self.document.asNode(), self);
+            parser.parse(blob._slice);
+        } else {
+            self.document.injectBlank(self) catch |err| {
+                log.err(.browser, "inject blank", .{ .err = err });
+                return error.InjectBlankFailed;
+            };
+        }
         self.documentIsComplete();
 
         session.notification.dispatch(.page_navigate, &.{
@@ -452,7 +481,7 @@ pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !voi
         // Record telemetry for navigation
         session.browser.app.telemetry.record(.{
             .navigate = .{
-                .tls = false, // about:blank is not TLS
+                .tls = false, // about:blank and blob: are not TLS
                 .proxy = session.browser.app.config.httpProxy() != null,
             },
         });

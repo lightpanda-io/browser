@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<body></body>
+<script src="../testing.js"></script>
+
+<script id="basic_blob_navigation">
+  {
+    const html = '<html><head></head><body><div id="test">Hello Blob</div></body></html>';
+    const blob = new Blob([html], { type: 'text/html' });
+    const blob_url = URL.createObjectURL(blob);
+
+    const iframe = document.createElement('iframe');
+    document.body.appendChild(iframe);
+    iframe.src = blob_url;
+
+    testing.eventually(() => {
+      testing.expectEqual('Hello Blob', iframe.contentDocument.getElementById('test').textContent);
+    });
+  }
+</script>
+
+<script id="multiple_blobs">
+  {
+    const blob1 = new Blob(['<html><body>First</body></html>'], { type: 'text/html' });
+    const blob2 = new Blob(['<html><body>Second</body></html>'], { type: 'text/html' });
+    const url1 = URL.createObjectURL(blob1);
+    const url2 = URL.createObjectURL(blob2);
+
+    const iframe1 = document.createElement('iframe');
+    document.body.appendChild(iframe1);
+    iframe1.src = url1;
+
+    const iframe2 = document.createElement('iframe');
+    document.body.appendChild(iframe2);
+    iframe2.src = url2;
+
+    testing.eventually(() => {
+      testing.expectEqual('First', iframe1.contentDocument.body.textContent);
+      testing.expectEqual('Second', iframe2.contentDocument.body.textContent);
+    });
+  }
+</script>
