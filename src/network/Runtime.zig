@@ -58,8 +58,8 @@ wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
 
 shutdown: std.atomic.Value(bool) = .init(false),
 
-// Async HTTP requests (e.g. telemetry)
-multi: *libcurl.CurlM,
+// Async HTTP requests (e.g. telemetry). Created on demand.
+multi: ?*libcurl.CurlM = null,
 submission_mutex: std.Thread.Mutex = .{},
 submission_queue: std.DoublyLinkedList = .{},
 
@@ -191,9 +191,6 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
 
     const pipe = try posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
 
-    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
-    errdefer libcurl.curl_multi_cleanup(multi) catch {};
-
     // 0 is wakeup, 1 is listener, rest for curl fds
     const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + config.httpMaxConcurrent());
     errdefer allocator.free(pollfds);
@@ -223,14 +220,15 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
         .robot_store = RobotStore.init(allocator),
         .connections = connections,
         .available = available,
-        .multi = multi,
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
     };
 }
 
 pub fn deinit(self: *Runtime) void {
-    libcurl.curl_multi_cleanup(self.multi) catch {};
+    if (self.multi) |multi| {
+        libcurl.curl_multi_cleanup(multi) catch {};
+    }
 
     for (&self.wakeup_pipe) |*fd| {
         if (fd.* >= 0) {
@@ -295,15 +293,17 @@ pub fn run(self: *Runtime) void {
     while (true) {
         self.drainQueue();
 
-        // Kickstart newly added handles (DNS/connect) so that
-        // curl registers its sockets before we poll.
-        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
-            lp.log.err(.app, "curl perform", .{ .err = err });
-        };
+        if (self.multi) |multi| {
+            // Kickstart newly added handles (DNS/connect) so that
+            // curl registers its sockets before we poll.
+            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
+                lp.log.err(.app, "curl perform", .{ .err = err });
+            };
 
-        self.preparePollFds();
+            self.preparePollFds(multi);
+        }
 
-        const timeout = self.getCurlTimeout();
+        const timeout = if (self.multi != null) self.getCurlTimeout() else @as(i32, -1);
 
         _ = posix.poll(self.pollfds, timeout) catch |err| {
             lp.log.err(.app, "poll", .{ .err = err });
@@ -323,11 +323,13 @@ pub fn run(self: *Runtime) void {
             self.acceptConnections();
         }
 
-        // Drive transfers and process completions.
-        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
-            lp.log.err(.app, "curl perform", .{ .err = err });
-        };
-        self.processCompletions();
+        if (self.multi) |multi| {
+            // Drive transfers and process completions.
+            libcurl.curl_multi_perform(multi, &running_handles) catch |err| {
+                lp.log.err(.app, "curl perform", .{ .err = err });
+            };
+            self.processCompletions(multi);
+        }
 
         if (self.shutdown.load(.acquire) and running_handles == 0)
             break;
@@ -362,6 +364,17 @@ fn drainQueue(self: *Runtime) void {
     self.submission_mutex.lock();
     defer self.submission_mutex.unlock();
 
+    if (self.submission_queue.first == null) return;
+
+    const multi = self.multi orelse blk: {
+        const m = libcurl.curl_multi_init() orelse {
+            lp.assert(false, "curl multi init failed", .{});
+            unreachable;
+        };
+        self.multi = m;
+        break :blk m;
+    };
+
     while (self.submission_queue.popFirst()) |node| {
         const conn: *net_http.Connection = @fieldParentPtr("node", node);
         conn.setPrivate(conn) catch |err| {
@@ -369,7 +382,7 @@ fn drainQueue(self: *Runtime) void {
             self.releaseConnection(conn);
             continue;
         };
-        libcurl.curl_multi_add_handle(self.multi, conn.easy) catch |err| {
+        libcurl.curl_multi_add_handle(multi, conn.easy) catch |err| {
             lp.log.err(.app, "curl multi add", .{ .err = err });
             self.releaseConnection(conn);
         };
@@ -407,26 +420,27 @@ fn acceptConnections(self: *Runtime) void {
     }
 }
 
-fn preparePollFds(self: *Runtime) void {
+fn preparePollFds(self: *Runtime, multi: *libcurl.CurlM) void {
     const curl_fds = self.pollfds[PSEUDO_POLLFDS..];
     @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
 
     var fd_count: c_uint = 0;
     const wait_fds: []libcurl.CurlWaitFd = @ptrCast(curl_fds);
-    libcurl.curl_multi_waitfds(self.multi, wait_fds, &fd_count) catch |err| {
+    libcurl.curl_multi_waitfds(multi, wait_fds, &fd_count) catch |err| {
         lp.log.err(.app, "curl waitfds", .{ .err = err });
     };
 }
 
 fn getCurlTimeout(self: *Runtime) i32 {
+    const multi = self.multi orelse return -1;
     var timeout_ms: c_long = -1;
-    libcurl.curl_multi_timeout(self.multi, &timeout_ms) catch return -1;
+    libcurl.curl_multi_timeout(multi, &timeout_ms) catch return -1;
     return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
 }
 
-fn processCompletions(self: *Runtime) void {
+fn processCompletions(self: *Runtime, multi: *libcurl.CurlM) void {
     var msgs_in_queue: c_int = 0;
-    while (libcurl.curl_multi_info_read(self.multi, &msgs_in_queue)) |msg| {
+    while (libcurl.curl_multi_info_read(multi, &msgs_in_queue)) |msg| {
         switch (msg.data) {
             .done => |maybe_err| {
                 if (maybe_err) |err| {
@@ -442,7 +456,7 @@ fn processCompletions(self: *Runtime) void {
             lp.assert(false, "curl getinfo private", .{});
         const conn: *net_http.Connection = @ptrCast(@alignCast(ptr));
 
-        libcurl.curl_multi_remove_handle(self.multi, easy) catch {};
+        libcurl.curl_multi_remove_handle(multi, easy) catch {};
         self.releaseConnection(conn);
     }
 }
