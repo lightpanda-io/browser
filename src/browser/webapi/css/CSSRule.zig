@@ -48,20 +48,11 @@ pub fn getType(self: *const CSSRule) u16 {
     return @as(u16, @intFromEnum(std.meta.activeTag(self._type))) + 1;
 }
 
-pub fn getCssText(self: *const CSSRule, page: *Page) []const u8 {
-    _ = self;
-    _ = page;
+pub fn getCssText(_: *const CSSRule, _: *Page) []const u8 {
     return "";
 }
 
-pub fn setCssText(self: *CSSRule, text: []const u8, page: *Page) !void {
-    _ = self;
-    _ = text;
-    _ = page;
-}
-
-pub fn getParentRule(self: *const CSSRule) ?*CSSRule {
-    _ = self;
+pub fn getParentRule(_: *const CSSRule) ?*CSSRule {
     return null;
 }
 
@@ -75,8 +66,8 @@ pub const JsApi = struct {
 
     pub const Meta = struct {
         pub const name = "CSSRule";
-        pub var class_id: bridge.ClassId = undefined;
         pub const prototype_chain = bridge.prototypeChain();
+        pub var class_id: bridge.ClassId = undefined;
     };
 
     pub const STYLE_RULE = 1;
@@ -97,7 +88,7 @@ pub const JsApi = struct {
     pub const REGION_STYLE_RULE = 16;
 
     pub const @"type" = bridge.accessor(CSSRule.getType, null, .{});
-    pub const cssText = bridge.accessor(CSSRule.getCssText, CSSRule.setCssText, .{});
+    pub const cssText = bridge.accessor(CSSRule.getCssText, null, .{});
     pub const parentRule = bridge.accessor(CSSRule.getParentRule, null, .{});
     pub const parentStyleSheet = bridge.accessor(CSSRule.getParentStyleSheet, null, .{});
 };

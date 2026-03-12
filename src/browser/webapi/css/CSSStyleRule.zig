@@ -45,12 +45,6 @@ pub fn getCssText(self: *CSSStyleRule, page: *Page) ![]const u8 {
     return buf.written();
 }
 
-pub fn setCssText(self: *CSSStyleRule, text: []const u8, page: *Page) !void {
-    _ = self;
-    _ = text;
-    _ = page;
-}
-
 pub const JsApi = struct {
     pub const bridge = js.Bridge(CSSStyleRule);
 
@@ -62,5 +56,5 @@ pub const JsApi = struct {
 
     pub const selectorText = bridge.accessor(CSSStyleRule.getSelectorText, CSSStyleRule.setSelectorText, .{});
     pub const style = bridge.accessor(CSSStyleRule.getStyle, null, .{});
-    pub const cssText = bridge.accessor(CSSStyleRule.getCssText, CSSStyleRule.setCssText, .{});
+    pub const cssText = bridge.accessor(CSSStyleRule.getCssText, null, .{});
 };
