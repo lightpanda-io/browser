@@ -38,6 +38,9 @@ const Listener = struct {
     onAccept: *const fn (ctx: *anyopaque, socket: posix.socket_t) void,
 };
 
+// Number of fixed pollfds entries (wakeup pipe + listener).
+const PSEUDO_POLLFDS = 2;
+
 allocator: Allocator,
 
 config: *const Config,
@@ -56,6 +59,11 @@ listener: ?Listener = null,
 wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
 
 shutdown: std.atomic.Value(bool) = .init(false),
+
+// Async HTTP requests (e.g. telemetry)
+multi: *libcurl.CurlM,
+submission_mutex: std.Thread.Mutex = .{},
+submission_queue: std.DoublyLinkedList = .{},
 
 const ZigToCurlAllocator = struct {
     // C11 requires malloc to return memory aligned to max_align_t (16 bytes on x86_64).
@@ -185,8 +193,11 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
 
     const pipe = try posix.pipe2(.{ .NONBLOCK = true, .CLOEXEC = true });
 
-    // 0 is wakeup, 1 is listener
-    const pollfds = try allocator.alloc(posix.pollfd, 2);
+    const multi = libcurl.curl_multi_init() orelse return error.FailedToInitializeMulti;
+    errdefer libcurl.curl_multi_cleanup(multi) catch {};
+
+    // 0 is wakeup, 1 is listener, rest for curl fds
+    const pollfds = try allocator.alloc(posix.pollfd, PSEUDO_POLLFDS + config.httpMaxConcurrent());
     errdefer allocator.free(pollfds);
 
     @memset(pollfds, .{ .fd = -1, .events = 0, .revents = 0 });
@@ -216,16 +227,22 @@ pub fn init(allocator: Allocator, config: *const Config) !Runtime {
         .allocator = allocator,
         .config = config,
         .ca_blob = ca_blob,
-        .robot_store = RobotStore.init(allocator),
-        .connections = connections,
-        .available = available,
-        .web_bot_auth = web_bot_auth,
+
+        .multi = multi,
         .pollfds = pollfds,
         .wakeup_pipe = pipe,
+
+        .available = available,
+        .connections = connections,
+
+        .robot_store = RobotStore.init(allocator),
+        .web_bot_auth = web_bot_auth,
     };
 }
 
 pub fn deinit(self: *Runtime) void {
+    libcurl.curl_multi_cleanup(self.multi) catch {};
+
     for (&self.wakeup_pipe) |*fd| {
         if (fd.* >= 0) {
             posix.close(fd.*);
@@ -286,44 +303,48 @@ pub fn bind(
 }
 
 pub fn run(self: *Runtime) void {
-    while (!self.shutdown.load(.acquire)) {
-        const listener = self.listener orelse return;
+    var drain_buf: [64]u8 = undefined;
+    var running_handles: c_int = 0;
 
-        _ = posix.poll(self.pollfds, -1) catch |err| {
+    while (true) {
+        self.drainQueue();
+
+        // Kickstart newly added handles (DNS/connect) so that
+        // curl registers its sockets before we poll.
+        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
+            lp.log.err(.app, "curl perform", .{ .err = err });
+        };
+
+        self.preparePollFds();
+
+        const timeout = self.getCurlTimeout();
+
+        _ = posix.poll(self.pollfds, timeout) catch |err| {
             lp.log.err(.app, "poll", .{ .err = err });
             continue;
         };
 
-        // check wakeup socket
+        // check wakeup pipe
         if (self.pollfds[0].revents != 0) {
             self.pollfds[0].revents = 0;
-
-            // If we were woken up, perhaps everything was cancelled and the iteration can be completed.
-            if (self.shutdown.load(.acquire)) break;
+            while (true)
+                _ = posix.read(self.wakeup_pipe[0], &drain_buf) catch break;
         }
 
-        // check new connections;
-        if (self.pollfds[1].revents == 0) continue;
-        self.pollfds[1].revents = 0;
+        // accept new connections
+        if (self.pollfds[1].revents != 0) {
+            self.pollfds[1].revents = 0;
+            self.acceptConnections();
+        }
 
-        const socket = posix.accept(listener.socket, null, null, posix.SOCK.NONBLOCK) catch |err| {
-            switch (err) {
-                error.SocketNotListening => {
-                    self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
-                    self.listener = null;
-                },
-                error.ConnectionAborted => {
-                    lp.log.warn(.app, "accept connection aborted", .{});
-                },
-                error.WouldBlock => {},
-                else => {
-                    lp.log.err(.app, "accept", .{ .err = err });
-                },
-            }
-            continue;
+        // Drive transfers and process completions.
+        libcurl.curl_multi_perform(self.multi, &running_handles) catch |err| {
+            lp.log.err(.app, "curl perform", .{ .err = err });
         };
+        self.processCompletions();
 
-        listener.onAccept(listener.ctx, socket);
+        if (self.shutdown.load(.acquire) and running_handles == 0)
+            break;
     }
 
     if (self.listener) |listener| {
@@ -340,9 +361,120 @@ pub fn run(self: *Runtime) void {
     }
 }
 
+pub fn submitRequest(self: *Runtime, conn: *net_http.Connection) void {
+    self.submission_mutex.lock();
+    self.submission_queue.append(&conn.node);
+    self.submission_mutex.unlock();
+    self.wakeupPoll();
+}
+
+fn wakeupPoll(self: *Runtime) void {
+    _ = posix.write(self.wakeup_pipe[1], &.{1}) catch {};
+}
+
+fn drainQueue(self: *Runtime) void {
+    self.submission_mutex.lock();
+    defer self.submission_mutex.unlock();
+
+    while (self.submission_queue.popFirst()) |node| {
+        const conn: *net_http.Connection = @fieldParentPtr("node", node);
+        conn.setPrivate(conn) catch |err| {
+            lp.log.err(.app, "curl set private", .{ .err = err });
+            self.releaseConnection(conn);
+            continue;
+        };
+        libcurl.curl_multi_add_handle(self.multi, conn.easy) catch |err| {
+            lp.log.err(.app, "curl multi add", .{ .err = err });
+            self.releaseConnection(conn);
+        };
+    }
+}
+
 pub fn stop(self: *Runtime) void {
     self.shutdown.store(true, .release);
-    _ = posix.write(self.wakeup_pipe[1], &.{1}) catch {};
+    self.wakeupPoll();
+}
+
+fn acceptConnections(self: *Runtime) void {
+    if (self.shutdown.load(.acquire)) {
+        return;
+    }
+    const listener = self.listener orelse return;
+
+    while (true) {
+        const socket = posix.accept(listener.socket, null, null, posix.SOCK.NONBLOCK) catch |err| {
+            switch (err) {
+                error.WouldBlock => break,
+                error.SocketNotListening => {
+                    self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
+                    self.listener = null;
+                    return;
+                },
+                error.ConnectionAborted => {
+                    lp.log.warn(.app, "accept connection aborted", .{});
+                    continue;
+            },
+                else => {
+                    lp.log.err(.app, "accept error", .{ .err = err });
+                    continue;
+                },
+            }
+        };
+
+        listener.onAccept(listener.ctx, socket);
+    }
+}
+
+fn preparePollFds(self: *Runtime) void {
+    const curl_fds = self.pollfds[PSEUDO_POLLFDS..];
+    @memset(curl_fds, .{ .fd = -1, .events = 0, .revents = 0 });
+
+    var fd_count: c_uint = 0;
+    const wait_fds: []libcurl.CurlWaitFd = @ptrCast(curl_fds);
+    libcurl.curl_multi_waitfds(self.multi, wait_fds, &fd_count) catch |err| {
+        lp.log.err(.app, "curl waitfds", .{ .err = err });
+    };
+}
+
+fn getCurlTimeout(self: *Runtime) i32 {
+    var timeout_ms: c_long = -1;
+    libcurl.curl_multi_timeout(self.multi, &timeout_ms) catch return -1;
+    return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
+}
+
+fn processCompletions(self: *Runtime) void {
+    var msgs_in_queue: c_int = 0;
+    while (libcurl.curl_multi_info_read(self.multi, &msgs_in_queue)) |msg| {
+        switch (msg.data) {
+            .done => |maybe_err| {
+                if (maybe_err) |err| {
+                    lp.log.warn(.app, "curl transfer error", .{ .err = err });
+                }
+            },
+            else => continue,
+        }
+
+        const easy: *libcurl.Curl = msg.easy_handle;
+        var ptr: *anyopaque = undefined;
+        libcurl.curl_easy_getinfo(easy, .private, &ptr) catch
+            lp.assert(false, "curl getinfo private", .{});
+        const conn: *net_http.Connection = @ptrCast(@alignCast(ptr));
+
+        libcurl.curl_multi_remove_handle(self.multi, easy) catch {};
+        self.releaseConnection(conn);
+    }
+}
+
+comptime {
+    if (@sizeOf(posix.pollfd) != @sizeOf(libcurl.CurlWaitFd)) {
+        @compileError("pollfd and CurlWaitFd size mismatch");
+    }
+    if (@offsetOf(posix.pollfd, "fd") != @offsetOf(libcurl.CurlWaitFd, "fd") or
+        @offsetOf(posix.pollfd, "events") != @offsetOf(libcurl.CurlWaitFd, "events") or
+        @offsetOf(posix.pollfd, "revents") != @offsetOf(libcurl.CurlWaitFd, "revents"))
+    {
+        @compileError("pollfd and CurlWaitFd layout mismatch");
+    }
 }
 
 pub fn getConnection(self: *Runtime) ?*net_http.Connection {

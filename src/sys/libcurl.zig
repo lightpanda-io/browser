@@ -629,10 +629,13 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .write_function => blk: {
             const cb: c.curl_write_callback = switch (@typeInfo(@TypeOf(value))) {
                 .null => null,
-                .@"fn" => struct {
+                .@"fn" => |info| struct {
                     fn cb(buffer: [*c]u8, count: usize, len: usize, user: ?*anyopaque) callconv(.c) usize {
-                        const u = user orelse unreachable;
-                        return value(@ptrCast(buffer), count, len, u);
+                        const user_arg = if (@typeInfo(info.params[3].type.?) == .optional)
+                            user
+                        else
+                            user orelse unreachable;
+                        return value(@ptrCast(buffer), count, len, user_arg);
                     }
                 }.cb,
                 else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
@@ -751,6 +754,15 @@ pub fn curl_multi_poll(
 ) ErrorMulti!void {
     const raw_fds: [*c]c.curl_waitfd = if (extra_fds.len == 0) null else @ptrCast(extra_fds.ptr);
     try errorMCheck(c.curl_multi_poll(multi, raw_fds, @intCast(extra_fds.len), timeout_ms, numfds));
+}
+
+pub fn curl_multi_waitfds(multi: *CurlM, ufds: []CurlWaitFd, fd_count: *c_uint) ErrorMulti!void {
+    const raw_fds: [*c]c.curl_waitfd = if (ufds.len == 0) null else @ptrCast(ufds.ptr);
+    try errorMCheck(c.curl_multi_waitfds(multi, raw_fds, @intCast(ufds.len), fd_count));
+}
+
+pub fn curl_multi_timeout(multi: *CurlM, timeout_ms: *c_long) ErrorMulti!void {
+    try errorMCheck(c.curl_multi_timeout(multi, timeout_ms));
 }
 
 pub fn curl_multi_info_read(multi: *CurlM, msgs_in_queue: *c_int) ?CurlMsg {

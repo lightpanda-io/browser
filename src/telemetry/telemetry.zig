@@ -16,7 +16,7 @@ pub fn isDisabled() bool {
 
 pub const Telemetry = TelemetryT(blk: {
     if (builtin.mode == .Debug or builtin.is_test) break :blk NoopProvider;
-    break :blk @import("lightpanda.zig").LightPanda;
+    break :blk @import("lightpanda.zig");
 });
 
 fn TelemetryT(comptime P: type) type {
@@ -48,6 +48,10 @@ fn TelemetryT(comptime P: type) type {
                 .provider = provider,
                 .iid = if (disabled) null else getOrCreateId(app.app_dir_path),
             };
+        }
+
+        pub fn flush(self: *Self) void {
+            self.provider.flush();
         }
 
         pub fn deinit(self: *Self) void {
@@ -118,6 +122,7 @@ const NoopProvider = struct {
     fn init(_: *App) !NoopProvider {
         return .{};
     }
+    fn flush(_: NoopProvider) void {}
     fn deinit(_: NoopProvider) void {}
     pub fn send(_: NoopProvider, _: ?[]const u8, _: Config.RunMode, _: Event) !void {}
 };
@@ -192,6 +197,7 @@ const MockProvider = struct {
             .allocator = app.allocator,
         };
     }
+    fn flush(_: *MockProvider) void {}
     fn deinit(self: *MockProvider) void {
         self.events.deinit(self.allocator);
     }
