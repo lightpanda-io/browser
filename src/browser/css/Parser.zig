@@ -327,7 +327,7 @@ pub const RulesIterator = struct {
         while (true) {
             const peeked = self.stream.peek() orelse return null;
 
-            if (isCurlyBlockStart(peeked.token)) {
+            if (peeked.token == .curly_bracket_block) {
                 if (selector_start == null) {
                     self.skipBlock();
                     continue;
@@ -343,9 +343,9 @@ pub const RulesIterator = struct {
                         block_end = self.input.len;
                         break;
                     };
-                    if (isCurlyBlockStart(span.token)) {
+                    if (span.token == .curly_bracket_block) {
                         depth += 1;
-                    } else if (isCurlyBlockEnd(span.token)) {
+                    } else if (span.token == .close_curly_bracket) {
                         depth -= 1;
                         if (depth == 0) {
                             block_end = span.start;
@@ -380,14 +380,14 @@ pub const RulesIterator = struct {
 
     fn skipBlock(self: *RulesIterator) void {
         const span = self.stream.next() orelse return;
-        if (!isCurlyBlockStart(span.token)) return;
+        if (span.token != .curly_bracket_block) return;
 
         var depth: usize = 1;
         while (true) {
             const next_span = self.stream.next() orelse return;
-            if (isCurlyBlockStart(next_span.token)) {
+            if (next_span.token == .curly_bracket_block) {
                 depth += 1;
-            } else if (isCurlyBlockEnd(next_span.token)) {
+            } else if (next_span.token == .close_curly_bracket) {
                 depth -= 1;
                 if (depth == 0) return;
             }
@@ -409,27 +409,13 @@ pub const RulesIterator = struct {
             const span = self.stream.next() orelse return;
             if (isWhitespaceOrComment(span.token)) continue;
 
-            if (isCurlyBlockStart(span.token)) {
+            if (span.token == .curly_bracket_block) {
                 depth += 1;
                 saw_block = true;
-            } else if (isCurlyBlockEnd(span.token)) {
+            } else if (span.token == .close_curly_bracket) {
                 if (depth > 0) depth -= 1;
                 if (saw_block and depth == 0) return;
             }
         }
     }
 };
-
-fn isCurlyBlockStart(token: Tokenizer.Token) bool {
-    return switch (token) {
-        .curly_bracket_block => true,
-        else => false,
-    };
-}
-
-fn isCurlyBlockEnd(token: Tokenizer.Token) bool {
-    return switch (token) {
-        .close_curly_bracket => true,
-        else => false,
-    };
-}
