@@ -78,6 +78,7 @@ pub fn setDisabled(self: *Style, disabled: bool, page: *Page) !void {
 
 const CSSStyleSheet = @import("../../css/CSSStyleSheet.zig");
 pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
+    @import("../../../../log.zig").info(.dom, "css.style.get_sheet", .{});
     // Per spec, sheet is null for disconnected elements or non-CSS types.
     // Valid types: absent (defaults to "text/css"), empty string, or
     // case-insensitive match for "text/css".
@@ -98,10 +99,16 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     const text = try self.asNode().getTextContentAlloc(page.call_arena);
     try sheet.replaceSync(text, page);
 
+    const sheets = try page.document.getStyleSheets(page);
+    try sheets.add(sheet, page);
+
     return sheet;
 }
 
 pub fn styleAddedCallback(self: *Style, page: *Page) !void {
+    // Force stylesheet initialization so rules are parsed immediately
+    _ = self.getSheet(page) catch null;
+
     // if we're planning on navigating to another page, don't trigger load event.
     if (page.isGoingAway()) {
         return;

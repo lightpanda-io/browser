@@ -5,19 +5,24 @@ const CSSStyleSheet = @import("CSSStyleSheet.zig");
 
 const StyleSheetList = @This();
 
-_sheets: []*CSSStyleSheet = &.{},
+_sheets: std.ArrayListUnmanaged(*CSSStyleSheet) = .{},
 
 pub fn init(page: *Page) !*StyleSheetList {
     return page._factory.create(StyleSheetList{});
 }
 
 pub fn length(self: *const StyleSheetList) u32 {
-    return @intCast(self._sheets.len);
+    return @intCast(self._sheets.items.len);
 }
 
 pub fn item(self: *const StyleSheetList, index: usize) ?*CSSStyleSheet {
-    if (index >= self._sheets.len) return null;
-    return self._sheets[index];
+    if (index >= self._sheets.items.len) return null;
+    return self._sheets.items[index];
+}
+
+pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, page: *Page) !void {
+    @import("../../../log.zig").info(.dom, "css.sheet.add", .{});
+    try self._sheets.append(page.arena, sheet);
 }
 
 pub const JsApi = struct {
