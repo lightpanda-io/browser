@@ -197,6 +197,100 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#drawImage(HTMLCanvasElement, dx, dy)">
+{
+  const source = document.createElement("canvas");
+  source.width = 2;
+  source.height = 1;
+  const sourceCtx = source.getContext("2d");
+  const image = sourceCtx.createImageData(2, 1);
+  image.data[0] = 255;
+  image.data[3] = 255;
+  image.data[4] = 0;
+  image.data[5] = 0;
+  image.data[6] = 255;
+  image.data[7] = 255;
+  sourceCtx.putImageData(image, 0, 0);
+
+  const target = document.createElement("canvas");
+  target.width = 8;
+  target.height = 8;
+  const ctx = target.getContext("2d");
+  ctx.drawImage(source, 3, 4);
+
+  const sample = ctx.getImageData(3, 4, 2, 1);
+  testing.expectEqual(255, sample.data[0]);
+  testing.expectEqual(0, sample.data[1]);
+  testing.expectEqual(0, sample.data[2]);
+  testing.expectEqual(255, sample.data[3]);
+  testing.expectEqual(0, sample.data[4]);
+  testing.expectEqual(0, sample.data[5]);
+  testing.expectEqual(255, sample.data[6]);
+  testing.expectEqual(255, sample.data[7]);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#drawImage(HTMLCanvasElement, dx, dy, dWidth, dHeight)">
+{
+  const source = document.createElement("canvas");
+  source.width = 2;
+  source.height = 1;
+  const sourceCtx = source.getContext("2d");
+  const image = sourceCtx.createImageData(2, 1);
+  image.data[0] = 255;
+  image.data[3] = 255;
+  image.data[4] = 0;
+  image.data[5] = 0;
+  image.data[6] = 255;
+  image.data[7] = 255;
+  sourceCtx.putImageData(image, 0, 0);
+
+  const target = document.createElement("canvas");
+  target.width = 8;
+  target.height = 8;
+  const ctx = target.getContext("2d");
+  ctx.drawImage(source, 1, 2, 4, 2);
+
+  const left = ctx.getImageData(1, 2, 1, 1).data;
+  const right = ctx.getImageData(4, 2, 1, 1).data;
+  testing.expectEqual(255, left[0]);
+  testing.expectEqual(0, left[2]);
+  testing.expectEqual(0, right[0]);
+  testing.expectEqual(255, right[2]);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#drawImage(HTMLCanvasElement, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)">
+{
+  const source = document.createElement("canvas");
+  source.width = 3;
+  source.height = 1;
+  const sourceCtx = source.getContext("2d");
+  const image = sourceCtx.createImageData(3, 1);
+  image.data[0] = 255;
+  image.data[3] = 255;
+  image.data[4] = 0;
+  image.data[5] = 255;
+  image.data[7] = 255;
+  image.data[8] = 0;
+  image.data[10] = 255;
+  image.data[11] = 255;
+  sourceCtx.putImageData(image, 0, 0);
+
+  const target = document.createElement("canvas");
+  target.width = 8;
+  target.height = 8;
+  const ctx = target.getContext("2d");
+  ctx.drawImage(source, 1, 0, 1, 1, 0, 0, 2, 2);
+
+  const sample = ctx.getImageData(1, 1, 1, 1).data;
+  testing.expectEqual(0, sample[0]);
+  testing.expectEqual(255, sample[1]);
+  testing.expectEqual(0, sample[2]);
+  testing.expectEqual(255, sample[3]);
+}
+</script>
+
 
 <script id="getter">
 {

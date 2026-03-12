@@ -2224,6 +2224,43 @@ test "paintDocument emits canvas pixels for headed rendering" {
     try std.testing.expect(found);
 }
 
+test "paintDocument emits drawImage canvas pixels for headed rendering" {
+    var page = try testing.pageTest("page/canvas_draw_image_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .canvas => |canvas| {
+                try std.testing.expectEqual(@as(u32, 120), canvas.pixel_width);
+                try std.testing.expectEqual(@as(u32, 80), canvas.pixel_height);
+
+                const red_index = (@as(usize, 12) * canvas.pixel_width + 12) * 4;
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[red_index + 0]);
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[red_index + 2]);
+
+                const blue_index = (@as(usize, 15) * canvas.pixel_width + 45) * 4;
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[blue_index + 0]);
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[blue_index + 2]);
+
+                const green_index = (@as(usize, 25) * canvas.pixel_width + 75) * 4;
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[green_index + 0]);
+                try std.testing.expectEqual(@as(u8, 255), canvas.pixels[green_index + 1]);
+                try std.testing.expectEqual(@as(u8, 0), canvas.pixels[green_index + 2]);
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
 test "paintDocument emits image request authorization from url userinfo" {
     var page = try testing.pageTest("page/auth_image.html");
     defer page._session.removePage();

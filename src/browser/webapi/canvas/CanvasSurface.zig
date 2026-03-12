@@ -189,6 +189,53 @@ pub fn putImageData(
     }
 }
 
+pub fn drawSurface(
+    self: *CanvasSurface,
+    allocator: std.mem.Allocator,
+    source: *const CanvasSurface,
+    sx: f64,
+    sy: f64,
+    sw: f64,
+    sh: f64,
+    dx: f64,
+    dy: f64,
+    dw: f64,
+    dh: f64,
+) !void {
+    const src_rect = normalizedDrawRect(sx, sy, sw, sh) orelse return;
+    const dst_rect = normalizedDrawRect(dx, dy, dw, dh) orelse return;
+    if (src_rect.width <= 0 or src_rect.height <= 0 or dst_rect.width <= 0 or dst_rect.height <= 0) return;
+
+    var source_pixels = source.pixels;
+    const needs_copy = self == source or (self.pixels.ptr == source.pixels.ptr and self.pixels.len == source.pixels.len);
+    if (needs_copy) {
+        source_pixels = try allocator.dupe(u8, source.pixels);
+        defer allocator.free(source_pixels);
+    }
+
+    var row: i32 = 0;
+    while (row < dst_rect.height) : (row += 1) {
+        const target_row = dst_rect.y + row;
+        if (target_row < 0 or target_row >= @as(i32, @intCast(self.height))) continue;
+
+        const source_row = src_rect.y + @divTrunc(row * src_rect.height, dst_rect.height);
+        if (source_row < 0 or source_row >= @as(i32, @intCast(source.height))) continue;
+
+        var col: i32 = 0;
+        while (col < dst_rect.width) : (col += 1) {
+            const target_col = dst_rect.x + col;
+            if (target_col < 0 or target_col >= @as(i32, @intCast(self.width))) continue;
+
+            const source_col = src_rect.x + @divTrunc(col * src_rect.width, dst_rect.width);
+            if (source_col < 0 or source_col >= @as(i32, @intCast(source.width))) continue;
+
+            const source_index = (@as(usize, @intCast(source_row)) * source.width + @as(u32, @intCast(source_col))) * 4;
+            const target_index = self.pixelIndex(@intCast(target_col), @intCast(target_row));
+            @memcpy(self.pixels[target_index .. target_index + 4], source_pixels[source_index .. source_index + 4]);
+        }
+    }
+}
+
 fn pixelLen(width: u32, height: u32) !usize {
     var size, const overflow_a = @mulWithOverflow(width, height);
     if (overflow_a == 1) return error.Overflow;
@@ -216,11 +263,45 @@ const Rect = struct {
     height: i32,
 };
 
+const DrawRect = struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+};
+
 fn normalizedRect(x: f64, y: f64, width: f64, height: f64) ?Rect {
     const origin_x = coordinateFromFloat(x) orelse return null;
     const origin_y = coordinateFromFloat(y) orelse return null;
     var rect_width = coordinateFromFloat(width) orelse return null;
     var rect_height = coordinateFromFloat(height) orelse return null;
+
+    var rect_x = origin_x;
+    var rect_y = origin_y;
+    if (rect_width < 0) {
+        rect_x += rect_width;
+        rect_width = -rect_width;
+    }
+    if (rect_height < 0) {
+        rect_y += rect_height;
+        rect_height = -rect_height;
+    }
+
+    return .{
+        .x = rect_x,
+        .y = rect_y,
+        .width = rect_width,
+        .height = rect_height,
+    };
+}
+
+fn normalizedDrawRect(x: f64, y: f64, width: f64, height: f64) ?DrawRect {
+    const origin_x = coordinateFromFloat(x) orelse return null;
+    const origin_y = coordinateFromFloat(y) orelse return null;
+    var rect_width = coordinateFromFloat(width) orelse return null;
+    var rect_height = coordinateFromFloat(height) orelse return null;
+
+    if (rect_width == 0 or rect_height == 0) return null;
 
     var rect_x = origin_x;
     var rect_y = origin_y;

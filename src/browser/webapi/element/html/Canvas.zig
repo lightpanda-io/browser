@@ -88,6 +88,10 @@ pub fn getSurface(self: *const Canvas) ?*const CanvasSurface {
     return self._surface;
 }
 
+pub fn getMutableSurface(self: *Canvas) ?*CanvasSurface {
+    return self._surface;
+}
+
 pub fn getContext(self: *Canvas, context_type: []const u8, page: *Page) !?DrawingContext {
     if (std.mem.eql(u8, context_type, "2d")) {
         if (self._webgl_context != null) return null;

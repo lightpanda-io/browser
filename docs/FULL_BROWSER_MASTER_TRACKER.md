@@ -331,6 +331,12 @@ Current state inside Gate 1:
   `putImageData`, and headed Win32 `browse` now renders those canvas pixels on
   the shared display-list path with a bounded screenshot probe proving the
   rendered border, composited fill, and cleared interior
+- those same on-screen and offscreen canvas 2D contexts now also support a
+  first real `drawImage(...)` slice for `HTMLCanvasElement` and
+  `OffscreenCanvas` sources, including direct copy, simple scaling, and
+  source-rect cropping, with focused DOM tests plus a bounded headed Win32
+  screenshot probe proving copied red, blue, and green source pixels reach the
+  real destination canvas surface
 - the current headed painter now also keeps simple block paragraphs with mixed
   direct text plus inline child elements on one shared inline row instead of
   splitting the direct text into a separate label band above the inline chips,

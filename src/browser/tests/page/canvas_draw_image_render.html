@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#ffffff">
+  <canvas id="main" width="120" height="80"></canvas>
+  <script>
+    const canvas = document.getElementById("main");
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "#0000ff";
+    ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+    const offscreen = new OffscreenCanvas(2, 1);
+    const offscreenCtx = offscreen.getContext("2d");
+    const offscreenImage = offscreenCtx.createImageData(2, 1);
+    offscreenImage.data[0] = 255;
+    offscreenImage.data[3] = 255;
+    offscreenImage.data[4] = 0;
+    offscreenImage.data[5] = 0;
+    offscreenImage.data[6] = 255;
+    offscreenImage.data[7] = 255;
+    offscreenCtx.putImageData(offscreenImage, 0, 0);
+    ctx.drawImage(offscreen, 10, 10, 40, 20);
+
+    const source = document.createElement("canvas");
+    source.width = 3;
+    source.height = 1;
+    const sourceCtx = source.getContext("2d");
+    const sourceImage = sourceCtx.createImageData(3, 1);
+    sourceImage.data[0] = 255;
+    sourceImage.data[3] = 255;
+    sourceImage.data[4] = 0;
+    sourceImage.data[5] = 255;
+    sourceImage.data[7] = 255;
+    sourceImage.data[8] = 0;
+    sourceImage.data[10] = 255;
+    sourceImage.data[11] = 255;
+    sourceCtx.putImageData(sourceImage, 0, 0);
+    ctx.drawImage(source, 1, 0, 1, 1, 70, 20, 20, 20);
+
+    const red = ctx.getImageData(12, 12, 1, 1).data;
+    const blue = ctx.getImageData(45, 15, 1, 1).data;
+    const green = ctx.getImageData(75, 25, 1, 1).data;
+    document.title =
+      (red[0] === 255 && red[2] === 0 &&
+       blue[0] === 0 && blue[2] === 255 &&
+       green[0] === 0 && green[1] === 255 && green[2] === 0)
+      ? "Canvas DrawImage Ready"
+      : "Canvas DrawImage Failed";
+  </script>
+</body>
+</html>

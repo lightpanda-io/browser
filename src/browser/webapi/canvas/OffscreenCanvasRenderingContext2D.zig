@@ -24,6 +24,8 @@ const Page = @import("../../Page.zig");
 
 const ImageData = @import("../ImageData.zig");
 const CanvasSurface = @import("CanvasSurface.zig");
+const Canvas = @import("../element/html/Canvas.zig");
+const OffscreenCanvas = @import("OffscreenCanvas.zig");
 
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `OffscreenCanvas#getContext`.
@@ -62,6 +64,11 @@ pub fn setStrokeStyle(self: *OffscreenCanvasRenderingContext2D, value: []const u
 const WidthOrImageData = union(enum) {
     width: u32,
     image_data: *ImageData,
+};
+
+const DrawImageSource = union(enum) {
+    canvas: *Canvas,
+    offscreen_canvas: *OffscreenCanvas,
 };
 
 pub fn createImageData(
@@ -108,6 +115,49 @@ pub fn putImageData(
 ) !void {
     try self._surface.putImageData(image_data, dx, dy, dirty_x, dirty_y, dirty_width, dirty_height, page);
 }
+
+pub fn drawImage(
+    self: *OffscreenCanvasRenderingContext2D,
+    source: DrawImageSource,
+    dx: f64,
+    dy: f64,
+    arg3: ?f64,
+    arg4: ?f64,
+    arg5: ?f64,
+    arg6: ?f64,
+    arg7: ?f64,
+    arg8: ?f64,
+    page: *Page,
+) !void {
+    const resolved_source = sourceSurface(source) orelse return;
+
+    var sx: f64 = 0;
+    var sy: f64 = 0;
+    var sw: f64 = @floatFromInt(resolved_source.width);
+    var sh: f64 = @floatFromInt(resolved_source.height);
+    var dw: f64 = sw;
+    var dh: f64 = sh;
+
+    if (arg3 == null and arg4 == null and arg5 == null and arg6 == null and arg7 == null and arg8 == null) {
+        // drawImage(image, dx, dy)
+    } else if (arg3 != null and arg4 != null and arg5 == null and arg6 == null and arg7 == null and arg8 == null) {
+        dw = arg3.?;
+        dh = arg4.?;
+    } else if (arg3 != null and arg4 != null and arg5 != null and arg6 != null and arg7 != null and arg8 != null) {
+        sx = dx;
+        sy = dy;
+        sw = arg3.?;
+        sh = arg4.?;
+        dw = arg7.?;
+        dh = arg8.?;
+        try self._surface.drawSurface(page.arena, resolved_source.surface, sx, sy, sw, sh, arg5.?, arg6.?, dw, dh);
+        return;
+    } else {
+        return error.TypeError;
+    }
+
+    try self._surface.drawSurface(page.arena, resolved_source.surface, sx, sy, sw, sh, dx, dy, dw, dh);
+}
 pub fn save(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn restore(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn scale(_: *OffscreenCanvasRenderingContext2D, _: f64, _: f64) void {}
@@ -140,6 +190,33 @@ pub fn clip(_: *OffscreenCanvasRenderingContext2D) void {}
 pub fn fillText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 pub fn strokeText(_: *OffscreenCanvasRenderingContext2D, _: []const u8, _: f64, _: f64, _: ?f64) void {}
 
+const SourceSurface = struct {
+    surface: *const CanvasSurface,
+    width: u32,
+    height: u32,
+};
+
+fn sourceSurface(source: DrawImageSource) ?SourceSurface {
+    return switch (source) {
+        .canvas => |canvas| blk: {
+            const surface = canvas.getSurface() orelse break :blk null;
+            break :blk .{
+                .surface = surface,
+                .width = canvas.getWidth(),
+                .height = canvas.getHeight(),
+            };
+        },
+        .offscreen_canvas => |canvas| blk: {
+            const surface = canvas.getSurface() orelse break :blk null;
+            break :blk .{
+                .surface = surface,
+                .width = canvas.getWidth(),
+                .height = canvas.getHeight(),
+            };
+        },
+    };
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(OffscreenCanvasRenderingContext2D);
 
@@ -166,6 +243,7 @@ pub const JsApi = struct {
 
     pub const getImageData = bridge.function(OffscreenCanvasRenderingContext2D.getImageData, .{ .dom_exception = true });
     pub const putImageData = bridge.function(OffscreenCanvasRenderingContext2D.putImageData, .{ .dom_exception = true });
+    pub const drawImage = bridge.function(OffscreenCanvasRenderingContext2D.drawImage, .{});
     pub const save = bridge.function(OffscreenCanvasRenderingContext2D.save, .{ .noop = true });
     pub const restore = bridge.function(OffscreenCanvasRenderingContext2D.restore, .{ .noop = true });
     pub const scale = bridge.function(OffscreenCanvasRenderingContext2D.scale, .{ .noop = true });

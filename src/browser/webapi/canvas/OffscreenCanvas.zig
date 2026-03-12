@@ -76,6 +76,14 @@ fn ensureSurface(self: *OffscreenCanvas, page: *Page) !*CanvasSurface {
     return surface;
 }
 
+pub fn getSurface(self: *const OffscreenCanvas) ?*const CanvasSurface {
+    return self._surface;
+}
+
+pub fn getMutableSurface(self: *OffscreenCanvas) ?*CanvasSurface {
+    return self._surface;
+}
+
 pub fn getContext(self: *OffscreenCanvas, context_type: []const u8, page: *Page) !?DrawingContext {
     if (std.mem.eql(u8, context_type, "2d")) {
         if (self._context_2d) |ctx| {
