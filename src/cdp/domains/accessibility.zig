@@ -53,8 +53,8 @@ fn getFullAXTree(cmd: anytype) !void {
         const frame_id = params.frameId orelse {
             break :blk session.currentPage() orelse return error.PageNotLoaded;
         };
-        const page_id = try id.toPageId(.frame_id, frame_id);
-        break :blk session.findPage(page_id) orelse {
+        const page_frame_id = try id.toPageId(.frame_id, frame_id);
+        break :blk session.findPageByFrameId(page_frame_id) orelse {
             return cmd.sendError(-32000, "Frame with the given id does not belong to the target.", .{});
         };
     };

@@ -80,6 +80,8 @@ pub const BUF_SIZE = 1024;
 
 const Page = @This();
 
+id: u32,
+
 // This is the "id" of the frame. It can be re-used from page-to-page, e.g.
 // when navigating.
 _frame_id: u32,
@@ -254,6 +256,7 @@ pub fn init(self: *Page, frame_id: u32, session: *Session, parent: ?*Page) !void
     })).asDocument();
 
     self.* = .{
+        .id = session.nextPageId(),
         .js = undefined,
         .parent = parent,
         .arena = session.page_arena,

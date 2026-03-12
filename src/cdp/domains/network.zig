@@ -238,7 +238,7 @@ pub fn httpRequestStart(bc: anytype, msg: *const Notification.RequestStart) !voi
     const transfer = msg.transfer;
     const req = &transfer.req;
     const frame_id = req.frame_id;
-    const page = bc.session.findPage(frame_id) orelse return;
+    const page = bc.session.findPageByFrameId(frame_id) orelse return;
 
     // Modify request with extra CDP headers
     for (bc.extra_headers.items) |extra| {

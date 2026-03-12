@@ -19,15 +19,22 @@
 const std = @import("std");
 const js = @import("../js/js.zig");
 
+const Session = @import("../Session.zig");
+
 const Node = @import("Node.zig");
 const Range = @import("Range.zig");
+
+const Allocator = std.mem.Allocator;
+const IS_DEBUG = @import("builtin").mode == .Debug;
 
 const AbstractRange = @This();
 
 pub const _prototype_root = true;
 
+_rc: u8,
 _type: Type,
-
+_page_id: u32,
+_arena: Allocator,
 _end_offset: u32,
 _start_offset: u32,
 _end_container: *Node,
@@ -35,6 +42,27 @@ _start_container: *Node,
 
 // Intrusive linked list node for tracking live ranges on the Page.
 _range_link: std.DoublyLinkedList.Node = .{},
+
+pub fn acquireRef(self: *AbstractRange) void {
+    self._rc += 1;
+}
+
+pub fn deinit(self: *AbstractRange, shutdown: bool, session: *Session) void {
+    _ = shutdown;
+    const rc = self._rc;
+    if (comptime IS_DEBUG) {
+        std.debug.assert(rc != 0);
+    }
+
+    if (rc == 1) {
+        if (session.findPageById(self._page_id)) |page| {
+            page._live_ranges.remove(&self._range_link);
+        }
+        session.releaseArena(self._arena);
+        return;
+    }
+    self._rc = rc - 1;
+}
 
 pub const Type = union(enum) {
     range: *Range,
@@ -310,6 +338,8 @@ pub const JsApi = struct {
         pub const name = "AbstractRange";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
+        pub const weak = true;
+        pub const finalizer = bridge.finalizer(AbstractRange.deinit);
     };
 
     pub const startContainer = bridge.accessor(AbstractRange.getStartContainer, null, .{});
