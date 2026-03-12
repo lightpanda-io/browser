@@ -5,21 +5,39 @@ const CSSRule = @import("CSSRule.zig");
 
 const CSSRuleList = @This();
 
-_rules: []*CSSRule = &.{},
+_rules: std.ArrayListUnmanaged(*CSSRule) = .{},
 
 pub fn init(page: *Page) !*CSSRuleList {
     return page._factory.create(CSSRuleList{});
 }
 
 pub fn length(self: *const CSSRuleList) u32 {
-    return @intCast(self._rules.len);
+    return @intCast(self._rules.items.len);
 }
 
 pub fn item(self: *const CSSRuleList, index: usize) ?*CSSRule {
-    if (index >= self._rules.len) {
+    if (index >= self._rules.items.len) {
         return null;
     }
-    return self._rules[index];
+    return self._rules.items[index];
+}
+
+pub fn insert(self: *CSSRuleList, index: u32, rule: *CSSRule, page: *Page) !void {
+    if (index > self._rules.items.len) {
+        return error.IndexSizeError; // Or standard DOMException mapped error
+    }
+    try self._rules.insert(page.arena, index, rule);
+}
+
+pub fn remove(self: *CSSRuleList, index: u32) void {
+    if (index >= self._rules.items.len) {
+        return; // Ignore or throw? Standard says IndexSizeError DOMException, but we might just no-op or return an error depending on the caller.
+    }
+    _ = self._rules.orderedRemove(index);
+}
+
+pub fn clear(self: *CSSRuleList) void {
+    self._rules.clearRetainingCapacity();
 }
 
 pub const JsApi = struct {

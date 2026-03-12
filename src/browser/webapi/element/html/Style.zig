@@ -94,6 +94,10 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     if (self._sheet) |sheet| return sheet;
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
     self._sheet = sheet;
+
+    const text = try self.asNode().getTextContentAlloc(page.call_arena);
+    try sheet.replaceSync(text, page);
+
     return sheet;
 }
 

@@ -4,6 +4,8 @@ const Page = @import("../../Page.zig");
 const Element = @import("../Element.zig");
 const CSSRuleList = @import("CSSRuleList.zig");
 const CSSRule = @import("CSSRule.zig");
+const CSSStyleRule = @import("CSSStyleRule.zig");
+const Parser = @import("../../css/Parser.zig");
 
 const CSSStyleSheet = @This();
 
@@ -54,30 +56,46 @@ pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
 }
 
 pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, index: u32, page: *Page) !u32 {
-    _ = self;
-    _ = rule;
-    _ = index;
-    _ = page;
-    return 0;
+    var it = Parser.parseStylesheet(rule);
+    const parsed_rule = it.next() orelse return error.SyntaxError;
+
+    const style_rule = try CSSStyleRule.init(page);
+    try style_rule.setSelectorText(parsed_rule.selector, page);
+
+    const style = try style_rule.getStyle(page);
+    try style.setCssText(parsed_rule.block, page);
+
+    const rules = try self.getCssRules(page);
+    try rules.insert(index, style_rule._proto, page);
+    return index;
 }
 
 pub fn deleteRule(self: *CSSStyleSheet, index: u32, page: *Page) !void {
-    _ = self;
-    _ = index;
-    _ = page;
+    const rules = try self.getCssRules(page);
+    rules.remove(index);
 }
 
 pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise {
-    _ = self;
-    _ = text;
-    // TODO: clear self.css_rules
+    try self.replaceSync(text, page);
     return page.js.local.?.resolvePromise({});
 }
 
-pub fn replaceSync(self: *CSSStyleSheet, text: []const u8) !void {
-    _ = self;
-    _ = text;
-    // TODO: clear self.css_rules
+pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
+    const rules = try self.getCssRules(page);
+    rules.clear();
+
+    var it = Parser.parseStylesheet(text);
+    var index: u32 = 0;
+    while (it.next()) |parsed_rule| {
+        const style_rule = try CSSStyleRule.init(page);
+        try style_rule.setSelectorText(parsed_rule.selector, page);
+
+        const style = try style_rule.getStyle(page);
+        try style.setCssText(parsed_rule.block, page);
+
+        try rules.insert(index, style_rule._proto, page);
+        index += 1;
+    }
 }
 
 pub const JsApi = struct {
