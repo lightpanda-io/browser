@@ -3457,6 +3457,9 @@ fn asUint(comptime string: anytype) std.meta.Int(
 
 const testing = @import("../testing.zig");
 test "WebApi: Page" {
+    const filter: testing.LogFilter = .init(.http);
+    defer filter.deinit();
+
     try testing.htmlRunner("page", .{});
 }
 
