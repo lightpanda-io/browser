@@ -207,7 +207,7 @@ jobs:
         run: |
           node webbotauth/validator.js &
           VALIDATOR_PID=$!
-          sleep 1
+          sleep 2
 
           ./lightpanda fetch http://127.0.0.1:8989/ \
             --web_bot_auth_key_file private_key.pem \
