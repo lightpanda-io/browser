@@ -159,7 +159,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
         // <script> has already been processed.
         return;
     }
-    script_element._executed = true;
 
     const element = script_element.asElement();
     if (element.getAttributeSafe(comptime .wrap("nomodule")) != null) {
@@ -204,9 +203,21 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             source = .{ .remote = .{} };
         }
     } else {
-        const inline_source = try element.asNode().getTextContentAlloc(page.arena);
+        var buf = std.Io.Writer.Allocating.init(page.arena);
+        try element.asNode().getChildTextContent(&buf.writer);
+        try buf.writer.writeByte(0);
+        const data = buf.written();
+        const inline_source: [:0]const u8 = data[0 .. data.len - 1 :0];
+        if (inline_source.len == 0) {
+            // we haven't set script_element._executed = true yet, which is good.
+            // If content is appended to the script, we will execute it then.
+            return;
+        }
         source = .{ .@"inline" = inline_source };
     }
+
+    // Only set _executed (already-started) when we actually have content to execute
+    script_element._executed = true;
 
     const script = try self.script_pool.create();
     errdefer self.script_pool.destroy(script);
