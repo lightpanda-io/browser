@@ -60,7 +60,9 @@ wakeup_pipe: [2]posix.fd_t = .{ -1, -1 },
 
 shutdown: std.atomic.Value(bool) = .init(false),
 
-// Async HTTP requests (e.g. telemetry). Created on demand.
+// Multi is a heavy structure that can consume up to 2MB of RAM.
+// Currently, Runtime is used sparingly, and we only create it on demand.
+// When Runtime becomes truly shared, it should become a regular field.
 multi: ?*libcurl.CurlM = null,
 submission_mutex: std.Thread.Mutex = .{},
 submission_queue: std.DoublyLinkedList = .{},
@@ -304,6 +306,13 @@ pub fn run(self: *Runtime) void {
     var drain_buf: [64]u8 = undefined;
     var running_handles: c_int = 0;
 
+    const poll_fd = &self.pollfds[0];
+    const listen_fd = &self.pollfds[1];
+
+    // Please note that receiving a shutdown command does not terminate all connections.
+    // When gracefully shutting down a server, we at least want to send the remaining
+    // telemetry, but we stop accepting new connections. It is the responsibility
+    // of external code to terminate its requests upon shutdown.
     while (true) {
         self.drainQueue();
 
@@ -325,15 +334,15 @@ pub fn run(self: *Runtime) void {
         };
 
         // check wakeup pipe
-        if (self.pollfds[0].revents != 0) {
-            self.pollfds[0].revents = 0;
+        if (poll_fd.revents != 0) {
+            poll_fd.revents = 0;
             while (true)
                 _ = posix.read(self.wakeup_pipe[0], &drain_buf) catch break;
         }
 
         // accept new connections
-        if (self.pollfds[1].revents != 0) {
-            self.pollfds[1].revents = 0;
+        if (listen_fd.revents != 0) {
+            listen_fd.revents = 0;
             self.acceptConnections();
         }
 
