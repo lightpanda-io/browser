@@ -137,3 +137,14 @@
     testing.expectEqual('PROPFIND', req.method);
   }
 </script>
+
+<script id=signal>
+{
+  const controller = new AbortController();
+  const req = new Request('https://example.com/api', { signal: controller.signal });
+  testing.expectEqual(controller.signal, req.signal);
+
+  const req2 = new Request(req);
+  testing.expectEqual(controller.signal, req2.signal);
+}
+</script>

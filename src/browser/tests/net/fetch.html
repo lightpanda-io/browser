@@ -203,3 +203,23 @@
     testing.expectEqual(true, response.body !== null);
   });
 </script>
+
+<script id=fetch_abort_signal_immediate>
+  testing.async(async (restore) => {
+    const controller = new AbortController();
+    controller.abort();
+
+    let rejected = false;
+    let name = '';
+    try {
+      await fetch('http://127.0.0.1:9582/xhr', { signal: controller.signal });
+    } catch (err) {
+      rejected = true;
+      name = err.name;
+    }
+    restore();
+
+    testing.expectEqual(true, rejected);
+    testing.expectEqual('AbortError', name);
+  });
+</script>

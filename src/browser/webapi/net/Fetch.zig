@@ -24,6 +24,8 @@ const Http = @import("../../../http/Http.zig");
 const js = @import("../../js/js.zig");
 const Page = @import("../../Page.zig");
 const URL = @import("../../URL.zig");
+const DOMException = @import("../DOMException.zig");
+const AbortSignal = @import("../AbortSignal.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
@@ -39,12 +41,21 @@ _buf: std.ArrayList(u8),
 _response: *Response,
 _resolver: js.PromiseResolver.Global,
 _owns_response: bool,
+_signal: ?*AbortSignal,
+_signal_listener_id: ?u32,
+_abort_requested: bool,
 
 pub const Input = Request.Input;
 pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
+    if (request._signal) |signal| {
+        if (signal.getAborted()) {
+            return page.js.local.?.rejectPromise(DOMException.fromError(error.AbortError) orelse unreachable);
+        }
+    }
+
     const request_url = try fetchRequestUrlForFetch(page.arena, request._url);
     const response = try Response.init(null, .{ .status = 0 }, page);
     errdefer response.deinit(true, page);
@@ -59,7 +70,13 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         ._resolver = try resolver.persist(),
         ._response = response,
         ._owns_response = true,
+        ._signal = request._signal,
+        ._signal_listener_id = null,
+        ._abort_requested = false,
     };
+    if (request._signal) |signal| {
+        fetch._signal_listener_id = try signal.registerNativeAbortListener(page, fetch, nativeAbortCallback);
+    }
 
     const http_client = page._session.browser.http_client;
     var headers = try http_client.newHeaders();
@@ -128,6 +145,9 @@ fn httpStartCallback(transfer: *Http.Transfer) !void {
         log.debug(.http, "request start", .{ .url = self._url, .source = "fetch" });
     }
     self._response._transfer = transfer;
+    if (self._abort_requested) {
+        transfer.abort(error.Abort);
+    }
 }
 
 fn httpHeaderDoneCallback(transfer: *Http.Transfer) !bool {
@@ -190,6 +210,7 @@ fn httpDoneCallback(ctx: *anyopaque) !void {
     var response = self._response;
     response._transfer = null;
     response._body = self._buf.items;
+    self.unregisterAbortSignal();
 
     log.info(.http, "request complete", .{
         .source = "fetch",
@@ -212,6 +233,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
 
     var response = self._response;
     response._transfer = null;
+    self.unregisterAbortSignal();
     // the response is only passed on v8 on success, if we're here, it's safe to
     // clear this. (defer since `self is in the response's arena).
 
@@ -224,11 +246,20 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._page.js.localScope(&ls);
     defer ls.deinit();
 
+    if (err == error.Abort) {
+        ls.toLocal(self._resolver).reject(
+            "fetch error",
+            DOMException.fromError(error.AbortError) orelse unreachable,
+        );
+        return;
+    }
+
     ls.toLocal(self._resolver).reject("fetch error", @errorName(err));
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
     const self: *Fetch = @ptrCast(@alignCast(ctx));
+    self.unregisterAbortSignal();
     if (comptime IS_DEBUG) {
         // should always be true
         std.debug.assert(self._owns_response);
@@ -240,6 +271,21 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
         response.deinit(true, self._page);
         // Do not access `self` after this point: the Fetch struct was
         // allocated from response._arena which has been released.
+    }
+}
+
+fn unregisterAbortSignal(self: *Fetch) void {
+    const signal = self._signal orelse return;
+    const listener_id = self._signal_listener_id orelse return;
+    signal.unregisterNativeAbortListener(listener_id);
+    self._signal_listener_id = null;
+}
+
+fn nativeAbortCallback(ctx: *anyopaque, _: *Page) void {
+    const self: *Fetch = @ptrCast(@alignCast(ctx));
+    self._abort_requested = true;
+    if (self._response._transfer) |transfer| {
+        transfer.abort(error.Abort);
     }
 }
 

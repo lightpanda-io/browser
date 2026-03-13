@@ -20,6 +20,7 @@ const std = @import("std");
 
 const js = @import("../../js/js.zig");
 const Http = @import("../../../http/Http.zig");
+const AbortSignal = @import("../AbortSignal.zig");
 
 const URL = @import("../URL.zig");
 const Page = @import("../../Page.zig");
@@ -35,6 +36,7 @@ _body: ?[]const u8,
 _arena: Allocator,
 _cache: Cache,
 _credentials: Credentials,
+_signal: ?*AbortSignal,
 
 pub const Input = union(enum) {
     request: *Request,
@@ -47,6 +49,7 @@ pub const InitOpts = struct {
     body: ?[]const u8 = null,
     cache: Cache = .default,
     credentials: Credentials = .@"same-origin",
+    signal: ?*AbortSignal = null,
 };
 
 const Credentials = enum {
@@ -96,6 +99,13 @@ pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
         .request => |r| r._body,
     };
 
+    const signal = if (opts.signal) |signal|
+        signal
+    else switch (input) {
+        .url => null,
+        .request => |r| r._signal,
+    };
+
     return page._factory.create(Request{
         ._url = url,
         ._arena = arena,
@@ -103,6 +113,7 @@ pub fn init(input: Input, opts_: ?InitOpts, page: *Page) !*Request {
         ._headers = headers,
         ._cache = opts.cache,
         ._credentials = opts.credentials,
+        ._signal = signal,
         ._body = body,
     });
 }
@@ -143,6 +154,10 @@ pub fn getCredentials(self: *const Request) []const u8 {
     return @tagName(self._credentials);
 }
 
+pub fn getSignal(self: *const Request) ?*AbortSignal {
+    return self._signal;
+}
+
 pub fn getHeaders(self: *Request, page: *Page) !*Headers {
     if (self._headers) |headers| {
         return headers;
@@ -168,6 +183,7 @@ pub const JsApi = struct {
     pub const headers = bridge.accessor(Request.getHeaders, null, .{});
     pub const cache = bridge.accessor(Request.getCache, null, .{});
     pub const credentials = bridge.accessor(Request.getCredentials, null, .{});
+    pub const signal = bridge.accessor(Request.getSignal, null, .{});
 };
 
 const testing = @import("../../../testing.zig");

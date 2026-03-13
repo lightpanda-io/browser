@@ -240,6 +240,10 @@ Current state inside Gate 1:
   - `credentials: 'omit'` suppresses both cookie and auth
   - cross-origin `same-origin` suppresses credentials
   - cross-origin `include` sends cookies but not inherited auth
+- headed `Request` and `fetch(...)` now also honor `AbortSignal`, with focused
+  DOM tests proving `Request.signal` cloning plus immediate-abort rejection,
+  and a bounded headed probe proving an in-flight slow fetch aborts at runtime
+  with `AbortError` while the server observes the connection being cut
 - root `Content-Disposition: attachment` navigations now promote into the
   headed download manager instead of degrading into navigation errors:
   address-bar navigations, in-page link activations, and direct startup URLs

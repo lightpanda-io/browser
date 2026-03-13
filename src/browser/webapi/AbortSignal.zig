@@ -30,6 +30,8 @@ _proto: *EventTarget,
 _aborted: bool = false,
 _reason: Reason = .undefined,
 _on_abort: ?js.Function.Global = null,
+_native_listeners: std.ArrayListUnmanaged(NativeAbortListener) = .{},
+_next_native_listener_id: u32 = 1,
 
 pub fn init(page: *Page) !*AbortSignal {
     return page._factory.eventTarget(AbortSignal{
@@ -57,6 +59,31 @@ pub fn asEventTarget(self: *AbortSignal) *EventTarget {
     return self._proto;
 }
 
+pub fn registerNativeAbortListener(
+    self: *AbortSignal,
+    page: *Page,
+    ctx: *anyopaque,
+    callback: *const fn (*anyopaque, *Page) void,
+) !u32 {
+    const id = self._next_native_listener_id;
+    self._next_native_listener_id += 1;
+    try self._native_listeners.append(page.arena, .{
+        .id = id,
+        .ctx = ctx,
+        .callback = callback,
+    });
+    return id;
+}
+
+pub fn unregisterNativeAbortListener(self: *AbortSignal, id: u32) void {
+    for (self._native_listeners.items, 0..) |listener, i| {
+        if (listener.id == id) {
+            _ = self._native_listeners.swapRemove(i);
+            return;
+        }
+    }
+}
+
 pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
     if (self._aborted) {
         return;
@@ -73,6 +100,13 @@ pub fn abort(self: *AbortSignal, reason_: ?Reason, page: *Page) !void {
         }
     } else {
         self._reason = .{ .string = "AbortError" };
+    }
+
+    var i: usize = 0;
+    const native_len = self._native_listeners.items.len;
+    while (i < native_len and i < self._native_listeners.items.len) : (i += 1) {
+        const listener = self._native_listeners.items[i];
+        listener.callback(listener.ctx, page);
     }
 
     // Dispatch abort event
@@ -128,6 +162,12 @@ const Reason = union(enum) {
     js_val: js.Value.Global,
     string: []const u8,
     undefined: void,
+};
+
+const NativeAbortListener = struct {
+    id: u32,
+    ctx: *anyopaque,
+    callback: *const fn (*anyopaque, *Page) void,
 };
 
 const TimeoutCallback = struct {
