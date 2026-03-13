@@ -196,7 +196,7 @@ pub fn CDPT(comptime TypeProvider: type) type {
                 return command.sendResult(.{
                     .frameTree = .{
                         .frame = .{
-                            .id = "TID-STARTUP-B",
+                            .id = "TID-STARTUP",
                             .loaderId = "LOADERID24DD2FD56CF1EF33C965C79C",
                             .securityOrigin = URL_BASE,
                             .url = "about:blank",

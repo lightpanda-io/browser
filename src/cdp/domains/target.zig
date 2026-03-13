@@ -340,7 +340,7 @@ fn getTargetInfo(cmd: anytype) !void {
 
     return cmd.sendResult(.{
         .targetInfo = TargetInfo{
-            .targetId = "TID-STARTUP-B",
+            .targetId = "TID-STARTUP",
             .type = "browser",
             .title = "",
             .url = "about:blank",
@@ -424,14 +424,13 @@ fn setAutoAttach(cmd: anytype) !void {
     // set a flag to send Target.attachedToTarget events
     cmd.cdp.target_auto_attach = params.autoAttach;
 
-    try cmd.sendResult(null, .{});
-
     if (cmd.cdp.target_auto_attach == false) {
         // detach from all currently attached targets.
         if (cmd.browser_context) |bc| {
             bc.session_id = null;
             // TODO should we send a Target.detachedFromTarget event?
         }
+        try cmd.sendResult(null, .{});
         return;
     }
 
@@ -444,7 +443,7 @@ fn setAutoAttach(cmd: anytype) !void {
                 try doAttachtoTarget(cmd, &bc.target_id.?);
             }
         }
-        // should we send something here?
+        try cmd.sendResult(null, .{});
         return;
     }
 
@@ -460,12 +459,14 @@ fn setAutoAttach(cmd: anytype) !void {
         .sessionId = "STARTUP",
         .targetInfo = TargetInfo{
             .type = "page",
-            .targetId = "TID-STARTUP-P",
+            .targetId = "TID-STARTUP",
             .title = "",
             .url = "about:blank",
             .browserContextId = "BID-STARTUP",
         },
     }, .{});
+
+    try cmd.sendResult(null, .{});
 }
 
 fn doAttachtoTarget(cmd: anytype, target_id: []const u8) !void {
