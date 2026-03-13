@@ -933,7 +933,7 @@ pub const RequestCookie = struct {
 
         if (arr.items.len > 0) {
             try arr.append(temp, 0); //null terminate
-            headers.cookies = @ptrCast(arr.items.ptr);
+            headers.cookies = @as([*c]const u8, @ptrCast(arr.items.ptr));
         }
     }
 };
