@@ -133,6 +133,8 @@ pub fn collectInteractiveElements(
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(page, arena);
 
+    var css_cache: Element.CssCache = .empty;
+
     var results: std.ArrayList(InteractiveElement) = .empty;
 
     var tw = TreeWalker.Full.init(root, .{});
@@ -146,7 +148,7 @@ pub fn collectInteractiveElements(
             else => {},
         }
 
-        const itype = classifyInteractivity(page, el, html_el, listener_targets) orelse continue;
+        const itype = classifyInteractivity(page, el, html_el, listener_targets, &css_cache) orelse continue;
 
         const listener_types = getListenerTypes(
             el.asEventTarget(),
@@ -214,8 +216,9 @@ pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
+    cache: ?*Element.CssCache,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNone(page)) return null;
+    if (el.hasPointerEventsNoneCached(page, cache)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {
