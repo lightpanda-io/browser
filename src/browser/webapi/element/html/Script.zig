@@ -31,6 +31,8 @@ const Script = @This();
 _proto: *HtmlElement,
 _src: []const u8 = "",
 _executed: bool = false,
+// dynamic scripts are forced to be async by default
+_force_async: bool = true,
 
 pub fn asElement(self: *Script) *Element {
     return self._proto._proto;
@@ -83,10 +85,11 @@ pub fn setCharset(self: *Script, value: []const u8, page: *Page) !void {
 }
 
 pub fn getAsync(self: *const Script) bool {
-    return self.asConstElement().getAttributeSafe(comptime .wrap("async")) != null;
+    return self._force_async or self.asConstElement().getAttributeSafe(comptime .wrap("async")) != null;
 }
 
 pub fn setAsync(self: *Script, value: bool, page: *Page) !void {
+    self._force_async = false;
     if (value) {
         try self.asElement().setAttributeSafe(comptime .wrap("async"), .wrap(""), page);
     } else {
@@ -136,7 +139,12 @@ pub const JsApi = struct {
         try self.asNode().getTextContent(&buf.writer);
         return buf.written();
     }
-    pub const text = bridge.accessor(_innerText, Script.setInnerText, .{});
+    pub const text = bridge.accessor(_text, Script.setInnerText, .{});
+    fn _text(self: *Script, page: *const Page) ![]const u8 {
+        var buf = std.Io.Writer.Allocating.init(page.call_arena);
+        try self.asNode().getChildTextContent(&buf.writer);
+        return buf.written();
+    }
 };
 
 pub const Build = struct {

@@ -285,6 +285,19 @@ pub fn getTextContentAlloc(self: *Node, allocator: Allocator) error{WriteFailed}
     return data[0 .. data.len - 1 :0];
 }
 
+/// Returns the "child text content" which is the concatenation of the data
+/// of all the Text node children of the node, in tree order.
+/// This differs from textContent which includes all descendant text.
+/// See: https://dom.spec.whatwg.org/#concept-child-text-content
+pub fn getChildTextContent(self: *Node, writer: *std.Io.Writer) error{WriteFailed}!void {
+    var it = self.childrenIterator();
+    while (it.next()) |child| {
+        if (child.is(CData.Text)) |text| {
+            try writer.writeAll(text._proto._data.str());
+        }
+    }
+}
+
 pub fn setTextContent(self: *Node, data: []const u8, page: *Page) !void {
     switch (self._type) {
         .element => |el| {
