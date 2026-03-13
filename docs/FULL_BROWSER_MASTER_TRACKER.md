@@ -356,6 +356,10 @@ Current state inside Gate 1:
   text state plus Win32-backed `fillText(...)` and `strokeText(...)`, with
   focused DOM tests and a bounded headed screenshot probe proving red filled
   and blue stroked glyph pixels reach the real destination canvas surface
+- those same canvas text paths now also expose real `measureText(...)`
+  `TextMetrics` objects backed by the same Win32 measurement path, with
+  focused DOM tests plus a bounded headed screenshot probe proving JS-sized
+  red and blue bars differ on the real surface when authored fonts differ
 - those same on-screen and offscreen canvas 2D contexts now also support a
   first real `drawImage(...)` slice for `HTMLCanvasElement` and
   `OffscreenCanvas` sources, including direct copy, simple scaling, and

@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#ffffff">
+  <canvas id="main" width="320" height="120"></canvas>
+  <script>
+    const canvas = document.getElementById("main");
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = '36px Consolas';
+    const redWidth = Math.ceil(ctx.measureText("MMMMMM").width);
+    ctx.fillStyle = "#ff0000";
+    ctx.fillRect(16, 18, redWidth, 18);
+
+    ctx.font = '36px "Times New Roman"';
+    const blueWidth = Math.ceil(ctx.measureText("MMMMMM").width);
+    ctx.fillStyle = "#0000ff";
+    ctx.fillRect(16, 74, blueWidth, 18);
+
+    document.title = Math.abs(redWidth - blueWidth) > 20
+      ? "Canvas MeasureText Ready"
+      : "Canvas MeasureText Failed";
+  </script>
+</body>
+</html>

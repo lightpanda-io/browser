@@ -36,6 +36,12 @@ pub const TextStyle = struct {
     baseline: TextBaseline = .alphabetic,
 };
 
+pub const TextMetricsData = struct {
+    width: f64,
+    actual_bounding_box_ascent: f64,
+    actual_bounding_box_descent: f64,
+};
+
 width: u32,
 height: u32,
 pixels: []u8,
@@ -330,6 +336,27 @@ pub fn strokeText(
     self.drawTextWin32(allocator, text, x, y, max_width, style, stroke, true);
 }
 
+pub fn measureText(
+    self: *const CanvasSurface,
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    style: TextStyle,
+) TextMetricsData {
+    _ = self;
+    if (builtin.os.tag == .windows) {
+        if (measureTextWin32(allocator, text, style)) |metrics| {
+            return metrics;
+        }
+    }
+
+    const fallback_size = @as(f64, @floatFromInt(@max(@as(i32, 1), style.font_size_px)));
+    return .{
+        .width = @as(f64, @floatFromInt(text.len)) * (fallback_size * 0.5),
+        .actual_bounding_box_ascent = fallback_size * 0.8,
+        .actual_bounding_box_descent = fallback_size * 0.2,
+    };
+}
+
 fn pixelLen(width: u32, height: u32) !usize {
     var size, const overflow_a = @mulWithOverflow(width, height);
     if (overflow_a == 1) return error.Overflow;
@@ -446,6 +473,71 @@ fn writePixel(self: *CanvasSurface, x: u32, y: u32, rgba: color.RGBA) void {
     self.pixels[index + 1] = rgba.g;
     self.pixels[index + 2] = rgba.b;
     self.pixels[index + 3] = rgba.a;
+}
+
+fn measureTextWin32(
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    style: TextStyle,
+) ?TextMetricsData {
+    if (text.len == 0) {
+        const fallback_size = @as(f64, @floatFromInt(@max(@as(i32, 1), style.font_size_px)));
+        return .{
+            .width = 0,
+            .actual_bounding_box_ascent = fallback_size * 0.8,
+            .actual_bounding_box_descent = fallback_size * 0.2,
+        };
+    }
+
+    const wide_text = std.unicode.utf8ToUtf16LeAllocZ(allocator, text) catch return null;
+    defer allocator.free(wide_text);
+    if (wide_text.len == 0) return null;
+
+    const hdc = win.CreateCompatibleDC(null);
+    if (hdc == null) return null;
+    defer _ = win.DeleteDC(hdc);
+
+    const font_spec = resolveCanvasFontSpec(style.font_family);
+    const wide_face = std.unicode.utf8ToUtf16LeAllocZ(allocator, font_spec.face_name) catch return null;
+    defer allocator.free(wide_face);
+
+    const font = win.CreateFontW(
+        -@as(i32, @intCast(@max(@as(i32, 1), style.font_size_px))),
+        0,
+        0,
+        0,
+        measuredFontWeight(style.font_weight),
+        @intFromBool(style.italic),
+        0,
+        0,
+        win.DEFAULT_CHARSET,
+        win.OUT_DEFAULT_PRECIS,
+        win.CLIP_DEFAULT_PRECIS,
+        win.CLEARTYPE_QUALITY,
+        font_spec.pitch_family,
+        wide_face.ptr,
+    );
+    if (font == null) return null;
+    defer _ = win.DeleteObject(font);
+
+    const old_font = win.SelectObject(hdc, font);
+    defer _ = win.SelectObject(hdc, old_font);
+
+    var text_size: win.SIZE = undefined;
+    if (win.GetTextExtentPoint32W(hdc, wide_text.ptr, @intCast(wide_text.len), &text_size) == 0) {
+        return null;
+    }
+
+    var metrics: win.TEXTMETRICW = undefined;
+    if (win.GetTextMetricsW(hdc, &metrics) == 0) {
+        return null;
+    }
+
+    return .{
+        .width = @floatFromInt(text_size.cx),
+        .actual_bounding_box_ascent = @floatFromInt(metrics.tmAscent),
+        .actual_bounding_box_descent = @floatFromInt(metrics.tmDescent),
+    };
 }
 
 fn drawTextWin32(

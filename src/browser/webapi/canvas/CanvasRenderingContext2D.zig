@@ -29,6 +29,7 @@ const CanvasPath = @import("CanvasPath.zig");
 const Canvas = @import("../element/html/Canvas.zig");
 const OffscreenCanvas = @import("OffscreenCanvas.zig");
 const Image = @import("../element/html/Image.zig");
+const TextMetrics = @import("TextMetrics.zig");
 
 /// This class doesn't implement a `constructor`.
 /// It can be obtained with a call to `HTMLCanvasElement#getContext`.
@@ -252,6 +253,15 @@ pub fn fillText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f6
 pub fn strokeText(self: *CanvasRenderingContext2D, text: []const u8, x: f64, y: f64, max_width: ?f64) void {
     self._surface.strokeText(self._allocator, text, x, y, max_width, self._text_style, self._stroke_style);
 }
+pub fn measureText(self: *CanvasRenderingContext2D, text: []const u8, page: *Page) !*TextMetrics {
+    const metrics = self._surface.measureText(self._allocator, text, self._text_style);
+    return TextMetrics.init(
+        metrics.width,
+        metrics.actual_bounding_box_ascent,
+        metrics.actual_bounding_box_descent,
+        page,
+    );
+}
 
 const SourceSurface = struct {
     surface: *const CanvasSurface,
@@ -340,6 +350,7 @@ pub const JsApi = struct {
     pub const clip = bridge.function(CanvasRenderingContext2D.clip, .{ .noop = true });
     pub const fillText = bridge.function(CanvasRenderingContext2D.fillText, .{});
     pub const strokeText = bridge.function(CanvasRenderingContext2D.strokeText, .{});
+    pub const measureText = bridge.function(CanvasRenderingContext2D.measureText, .{});
 };
 
 const ParsedCanvasFont = struct {

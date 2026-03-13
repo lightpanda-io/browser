@@ -387,6 +387,23 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#measureText returns font-sensitive metrics">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  ctx.font = '32px Consolas';
+  const wide = ctx.measureText("MMMM");
+  ctx.font = '32px "Times New Roman"';
+  const narrow = ctx.measureText("MMMM");
+
+  testing.expectEqual(true, wide.width > 0);
+  testing.expectEqual(true, wide.actualBoundingBoxAscent > 0);
+  testing.expectEqual(true, wide.actualBoundingBoxDescent >= 0);
+  testing.expectEqual(true, Math.abs(wide.width - narrow.width) > 15);
+}
+</script>
+
 <script id="CanvasRenderingContext2D#drawImage(HTMLCanvasElement, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)">
 {
   const source = document.createElement("canvas");

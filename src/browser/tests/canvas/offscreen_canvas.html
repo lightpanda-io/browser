@@ -166,6 +166,18 @@
 }
 </script>
 
+<script id="OffscreenCanvasRenderingContext2D#measureText returns metrics">
+{
+  const canvas = new OffscreenCanvas(160, 80);
+  const ctx = canvas.getContext("2d");
+  ctx.font = "28px Arial";
+  const metrics = ctx.measureText("GO");
+  testing.expectEqual(true, metrics.width > 0);
+  testing.expectEqual(true, metrics.actualBoundingBoxAscent > 0);
+  testing.expectEqual(true, metrics.actualBoundingBoxDescent >= 0);
+}
+</script>
+
 <script id=OffscreenCanvas#convertToBlob>
 {
   const canvas = new OffscreenCanvas(64, 64);
