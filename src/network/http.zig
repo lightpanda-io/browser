@@ -386,11 +386,18 @@ pub const Connection = struct {
     }
 
     pub fn reset(self: *const Connection) !void {
+        try libcurl.curl_easy_setopt(self.easy, .proxy, null);
+        try libcurl.curl_easy_setopt(self.easy, .http_header, null);
+
         try libcurl.curl_easy_setopt(self.easy, .header_data, null);
         try libcurl.curl_easy_setopt(self.easy, .header_function, null);
+
         try libcurl.curl_easy_setopt(self.easy, .write_data, null);
-        try libcurl.curl_easy_setopt(self.easy, .write_function, null);
-        try libcurl.curl_easy_setopt(self.easy, .proxy, null);
+        try libcurl.curl_easy_setopt(self.easy, .write_function, discardBody);
+    }
+
+    fn discardBody(_: [*]const u8, count: usize, len: usize, _: ?*anyopaque) usize {
+        return count * len;
     }
 
     pub fn setProxy(self: *const Connection, proxy: ?[:0]const u8) !void {
