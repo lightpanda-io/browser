@@ -82,7 +82,7 @@ jobs:
 
     # use a self host runner.
     runs-on: lpd-wpt-aws
-    timeout-minutes: 240
+    timeout-minutes: 600
 
     steps:
       - uses: actions/checkout@v6
@@ -115,7 +115,7 @@ jobs:
       - name: run test with json output
         run: |
           ./wpt serve 2> /dev/null & echo $! > WPT.pid
-          sleep 10s
+          sleep 20s
           ./wptrunner -lpd-path ./lightpanda -json -concurrency 6 -pool 2 > wpt.json
           kill `cat WPT.pid`
 
