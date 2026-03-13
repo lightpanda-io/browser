@@ -1042,40 +1042,56 @@ pub fn parentElement(self: *Element) ?*Element {
 }
 
 const CSSStyleRule = @import("css/CSSStyleRule.zig");
+const StyleSheetList = @import("css/StyleSheetList.zig");
+
+pub fn hasPointerEventsNone(self: *Element, page: *Page) bool {
+    const doc_sheets = page.document.getStyleSheets(page) catch null;
+    var current: ?*Element = self;
+    while (current) |el| {
+        if (checkCssProperty(el, page, doc_sheets, "pointer-events", &[_][]const u8{"none"})) return true;
+        current = el.parentElement();
+    }
+    return false;
+}
+
+fn checkCssProperty(el: *Element, page: *Page, doc_sheets: ?*StyleSheetList, property_name: []const u8, target_values: []const []const u8) bool {
+    if (el.getOrCreateStyle(page) catch null) |style| {
+        const val = style.asCSSStyleDeclaration().getPropertyValue(property_name, page);
+        for (target_values) |target| {
+            if (std.mem.eql(u8, val, target)) return true;
+        }
+    }
+
+    if (doc_sheets) |sheets| {
+        for (0..sheets.length()) |i| {
+            const sheet = sheets.item(i) orelse continue;
+            const rules = sheet.getCssRules(page) catch continue;
+            for (0..rules.length()) |j| {
+                const rule = rules.item(j) orelse continue;
+                if (rule.is(CSSStyleRule)) |style_rule| {
+                    const selector = style_rule.getSelectorText();
+                    if (el.matches(selector, page) catch false) {
+                        const style = (style_rule.getStyle(page) catch continue).asCSSStyleDeclaration();
+                        const val = style.getPropertyValue(property_name, page);
+                        for (target_values) |target| {
+                            if (std.mem.eql(u8, val, target)) return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
 
 pub fn checkVisibility(self: *Element, page: *Page) bool {
     const doc_sheets = page.document.getStyleSheets(page) catch null;
     var current: ?*Element = self;
 
     while (current) |el| {
-        if (el.getStyle(page)) |style| {
-            const display = style.asCSSStyleDeclaration().getPropertyValue("display", page);
-            if (std.mem.eql(u8, display, "none")) {
-                return false;
-            }
-        }
-
-        // Also check if any global stylesheet hides this element
-        if (doc_sheets) |sheets| {
-            for (0..sheets.length()) |i| {
-                const sheet = sheets.item(i) orelse continue;
-                const rules = sheet.getCssRules(page) catch continue;
-                for (0..rules.length()) |j| {
-                    const rule = rules.item(j) orelse continue;
-                    if (rule.is(CSSStyleRule)) |style_rule| {
-                        const selector = style_rule.getSelectorText();
-                        const does_match = el.matches(selector, page) catch false;
-                        if (does_match) {
-                            const style = (style_rule.getStyle(page) catch continue).asCSSStyleDeclaration();
-                            const display = style.getPropertyValue("display", page);
-                            if (std.mem.eql(u8, display, "none")) {
-                                return false;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        if (checkCssProperty(el, page, doc_sheets, "display", &[_][]const u8{"none"})) return false;
+        if (checkCssProperty(el, page, doc_sheets, "visibility", &[_][]const u8{ "hidden", "collapse" })) return false;
+        if (checkCssProperty(el, page, doc_sheets, "opacity", &[_][]const u8{"0"})) return false;
 
         current = el.parentElement();
     }

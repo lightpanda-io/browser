@@ -133,7 +133,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (interactive.classifyInteractivity(el, html_el, listener_targets) != null) {
+            if (interactive.classifyInteractivity(self.page, el, html_el, listener_targets) != null) {
                 is_interactive = true;
             }
         }
