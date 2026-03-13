@@ -89,6 +89,41 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#getImageData">
+{
+  const element = document.createElement("canvas");
+  element.width = 100;
+  element.height = 50;
+  const ctx = element.getContext("2d");
+
+  const imageData = ctx.getImageData(0, 0, 10, 20);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  testing.expectEqual(imageData.width, 10);
+  testing.expectEqual(imageData.height, 20);
+  testing.expectEqual(imageData.data.length, 10 * 20 * 4);
+  testing.expectEqual(true, imageData.data instanceof Uint8ClampedArray);
+
+  // Undrawn canvas should return transparent black pixels.
+  testing.expectEqual(imageData.data[0], 0);
+  testing.expectEqual(imageData.data[1], 0);
+  testing.expectEqual(imageData.data[2], 0);
+  testing.expectEqual(imageData.data[3], 0);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#getImageData invalid">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+
+  // Zero or negative width/height should throw IndexSizeError.
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, 0));
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, -5, 10));
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, -5));
+}
+</script>
+
 
 <script id="getter">
 {

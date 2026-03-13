@@ -66,8 +66,17 @@ active: usize,
 // 'networkAlmostIdle' Page.lifecycleEvent in CDP).
 intercepted: usize,
 
-// Our easy handles, managed by a curl multi.
+// Our curl multi handle.
 handles: Net.Handles,
+
+// Connections currently in this client's curl_multi.
+in_use: std.DoublyLinkedList = .{},
+
+// Connections that failed to be removed from curl_multi during perform.
+dirty: std.DoublyLinkedList = .{},
+
+// Whether we're currently inside a curl_multi_perform call.
+performing: bool = false,
 
 // Use to generate the next request ID
 next_request_id: u32 = 0,
@@ -88,14 +97,17 @@ pending_robots_queue: std.StringHashMapUnmanaged(std.ArrayList(Request)) = .empt
 // request. These wil come and go with each request.
 transfer_pool: std.heap.MemoryPool(Transfer),
 
-// only needed for CDP which can change the proxy and then restore it. When
-// restoring, this originally-configured value is what it goes to.
+// The current proxy. CDP can change it, restoreOriginalProxy restores
+// from config.
 http_proxy: ?[:0]const u8 = null,
 
 // track if the client use a proxy for connections.
 // We can't use http_proxy because we want also to track proxy configured via
 // CDP.
 use_proxy: bool,
+
+// Current TLS verification state, applied per-connection in makeRequest.
+tls_verify: bool = true,
 
 cdp_client: ?CDPClient = null,
 
@@ -126,13 +138,8 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
     const client = try allocator.create(Client);
     errdefer allocator.destroy(client);
 
-    var handles = try Net.Handles.init(allocator, network.ca_blob, network.config);
-    errdefer handles.deinit(allocator);
-
-    // Set transfer callbacks on each connection.
-    for (handles.connections) |*conn| {
-        try conn.setCallbacks(Transfer.headerCallback, Transfer.dataCallback);
-    }
+    var handles = try Net.Handles.init(network.config);
+    errdefer handles.deinit();
 
     const http_proxy = network.config.httpProxy();
 
@@ -145,6 +152,7 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .network = network,
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
+        .tls_verify = network.config.tlsVerifyHost(),
         .transfer_pool = transfer_pool,
     };
 
@@ -153,7 +161,7 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
 
 pub fn deinit(self: *Client) void {
     self.abort();
-    self.handles.deinit(self.allocator);
+    self.handles.deinit();
 
     self.transfer_pool.deinit();
 
@@ -182,14 +190,14 @@ pub fn abortFrame(self: *Client, frame_id: u32) void {
 // but abort can avoid the frame_id check at comptime.
 fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
     {
-        var q = &self.handles.in_use;
+        var q = &self.in_use;
         var n = q.first;
         while (n) |node| {
             n = node.next;
             const conn: *Net.Connection = @fieldParentPtr("node", node);
             var transfer = Transfer.fromConnection(conn) catch |err| {
                 // Let's cleanup what we can
-                self.handles.remove(conn);
+                self.removeConn(conn);
                 log.err(.http, "get private info", .{ .err = err, .source = "abort" });
                 continue;
             };
@@ -226,8 +234,7 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
     }
 
     if (comptime IS_DEBUG and abort_all) {
-        std.debug.assert(self.handles.in_use.first == null);
-        std.debug.assert(self.handles.available.len() == self.handles.connections.len);
+        std.debug.assert(self.in_use.first == null);
 
         const running = self.handles.perform() catch |err| {
             lp.assert(false, "multi perform in abort", .{ .err = err });
@@ -237,15 +244,12 @@ fn _abort(self: *Client, comptime abort_all: bool, frame_id: u32) void {
 }
 
 pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
-    while (true) {
-        if (self.handles.hasAvailable() == false) {
+    while (self.queue.popFirst()) |queue_node| {
+        const conn = self.network.getConnection() orelse {
+            self.queue.prepend(queue_node);
             break;
-        }
-        const queue_node = self.queue.popFirst() orelse break;
+        };
         const transfer: *Transfer = @fieldParentPtr("_node", queue_node);
-
-        // we know this exists, because we checked hasAvailable() above
-        const conn = self.handles.get().?;
         try self.makeRequest(conn, transfer);
     }
     return self.perform(@intCast(timeout_ms));
@@ -529,8 +533,8 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 fn process(self: *Client, transfer: *Transfer) !void {
     // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
     // then we _have_ to queue this.
-    if (self.handles.performing == false) {
-        if (self.handles.get()) |conn| {
+    if (self.performing == false) {
+        if (self.network.getConnection()) |conn| {
             return self.makeRequest(conn, transfer);
         }
     }
@@ -644,10 +648,7 @@ fn requestFailed(transfer: *Transfer, err: anyerror, comptime execute_callback: 
 // can be changed at any point in the easy's lifecycle.
 pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
     try self.ensureNoActiveConnection();
-
-    for (self.handles.connections) |*conn| {
-        try conn.setProxy(proxy.ptr);
-    }
+    self.http_proxy = proxy;
     self.use_proxy = true;
 }
 
@@ -656,31 +657,21 @@ pub fn changeProxy(self: *Client, proxy: [:0]const u8) !void {
 pub fn restoreOriginalProxy(self: *Client) !void {
     try self.ensureNoActiveConnection();
 
-    const proxy = if (self.http_proxy) |p| p.ptr else null;
-    for (self.handles.connections) |*conn| {
-        try conn.setProxy(proxy);
-    }
-    self.use_proxy = proxy != null;
+    self.http_proxy = self.network.config.httpProxy();
+    self.use_proxy = self.http_proxy != null;
 }
 
 // Enable TLS verification on all connections.
-pub fn enableTlsVerify(self: *Client) !void {
+pub fn setTlsVerify(self: *Client, verify: bool) !void {
     // Remove inflight connections check on enable TLS b/c chromiumoxide calls
     // the command during navigate and Curl seems to accept it...
 
-    for (self.handles.connections) |*conn| {
-        try conn.setTlsVerify(true, self.use_proxy);
+    var it = self.in_use.first;
+    while (it) |node| : (it = node.next) {
+        const conn: *Net.Connection = @fieldParentPtr("node", node);
+        try conn.setTlsVerify(verify, self.use_proxy);
     }
-}
-
-// Disable TLS verification on all connections.
-pub fn disableTlsVerify(self: *Client) !void {
-    // Remove inflight connections check on disable TLS b/c chromiumoxide calls
-    // the command during navigate and Curl seems to accept it...
-
-    for (self.handles.connections) |*conn| {
-        try conn.setTlsVerify(false, self.use_proxy);
-    }
+    self.tls_verify = verify;
 }
 
 fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerror!void {
@@ -691,8 +682,13 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         errdefer {
             transfer._conn = null;
             transfer.deinit();
-            self.handles.isAvailable(conn);
+            self.releaseConn(conn);
         }
+
+        // Set callbacks and per-client settings on the pooled connection.
+        try conn.setCallbacks(Transfer.headerCallback, Transfer.dataCallback);
+        try conn.setProxy(self.http_proxy);
+        try conn.setTlsVerify(self.tls_verify, self.use_proxy);
 
         try conn.setURL(req.url);
         try conn.setMethod(req.method);
@@ -728,10 +724,12 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
     // fails BEFORE `curl_multi_add_handle` succeeds, the we still need to do
     // cleanup. But if things fail after `curl_multi_add_handle`, we expect
     // perfom to pickup the failure and cleanup.
+    self.in_use.append(&conn.node);
     self.handles.add(conn) catch |err| {
         transfer._conn = null;
         transfer.deinit();
-        self.handles.isAvailable(conn);
+        self.in_use.remove(&conn.node);
+        self.releaseConn(conn);
         return err;
     };
 
@@ -752,7 +750,22 @@ pub const PerformStatus = enum {
 };
 
 fn perform(self: *Client, timeout_ms: c_int) !PerformStatus {
-    const running = try self.handles.perform();
+    const running = blk: {
+        self.performing = true;
+        defer self.performing = false;
+
+        break :blk try self.handles.perform();
+    };
+
+    // Process dirty connections — return them to Runtime pool.
+    while (self.dirty.popFirst()) |node| {
+        const conn: *Net.Connection = @fieldParentPtr("node", node);
+        self.handles.remove(conn) catch |err| {
+            log.fatal(.http, "multi remove handle", .{ .err = err, .src = "perform" });
+            @panic("multi_remove_handle");
+        };
+        self.releaseConn(conn);
+    }
 
     // We're potentially going to block for a while until we get data. Process
     // whatever messages we have waiting ahead of time.
@@ -871,9 +884,24 @@ fn processMessages(self: *Client) !bool {
 
 fn endTransfer(self: *Client, transfer: *Transfer) void {
     const conn = transfer._conn.?;
-    self.handles.remove(conn);
+    self.removeConn(conn);
     transfer._conn = null;
     self.active -= 1;
+}
+
+fn removeConn(self: *Client, conn: *Net.Connection) void {
+    self.in_use.remove(&conn.node);
+    if (self.handles.remove(conn)) {
+        self.releaseConn(conn);
+    } else |_| {
+        // Can happen if we're in a perform() call, so we'll queue this
+        // for cleanup later.
+        self.dirty.append(&conn.node);
+    }
+}
+
+fn releaseConn(self: *Client, conn: *Net.Connection) void {
+    self.network.releaseConnection(conn);
 }
 
 fn ensureNoActiveConnection(self: *const Client) !void {
@@ -1023,7 +1051,7 @@ pub const Transfer = struct {
     fn deinit(self: *Transfer) void {
         self.req.headers.deinit();
         if (self._conn) |conn| {
-            self.client.handles.remove(conn);
+            self.client.removeConn(conn);
         }
         self.arena.deinit();
         self.client.transfer_pool.destroy(self);
@@ -1093,7 +1121,7 @@ pub const Transfer = struct {
         requestFailed(self, err, true);
 
         const client = self.client;
-        if (self._performing or client.handles.performing) {
+        if (self._performing or client.performing) {
             // We're currently in a curl_multi_perform. We cannot call endTransfer
             // as that calls curl_multi_remove_handle, and you can't do that
             // from a curl callback. Instead, we flag this transfer and all of
@@ -1258,6 +1286,16 @@ pub const Transfer = struct {
 
         if (buf_len < 3) {
             // could be \r\n or \n.
+            // We get the last header line.
+            if (transfer._redirecting) {
+                // parse and set cookies for the redirection.
+                redirectionCookies(transfer, &conn) catch |err| {
+                    if (comptime IS_DEBUG) {
+                        log.debug(.http, "redirection cookies", .{ .err = err });
+                    }
+                    return 0;
+                };
+            }
             return buf_len;
         }
 
@@ -1324,38 +1362,22 @@ pub const Transfer = struct {
             transfer.bytes_received += buf_len;
         }
 
-        if (buf_len > 2) {
-            if (transfer._auth_challenge != null) {
-                // try to parse auth challenge.
-                if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
-                    std.ascii.startsWithIgnoreCase(header, "Proxy-Authenticate"))
-                {
-                    const ac = AuthChallenge.parse(
-                        transfer._auth_challenge.?.status,
-                        header,
-                    ) catch |err| {
-                        // We can't parse the auth challenge
-                        log.err(.http, "parse auth challenge", .{ .err = err, .header = header });
-                        // Should we cancel the request? I don't think so.
-                        return buf_len;
-                    };
-                    transfer._auth_challenge = ac;
-                }
+        if (transfer._auth_challenge != null) {
+            // try to parse auth challenge.
+            if (std.ascii.startsWithIgnoreCase(header, "WWW-Authenticate") or
+                std.ascii.startsWithIgnoreCase(header, "Proxy-Authenticate"))
+            {
+                const ac = AuthChallenge.parse(
+                    transfer._auth_challenge.?.status,
+                    header,
+                ) catch |err| {
+                    // We can't parse the auth challenge
+                    log.err(.http, "parse auth challenge", .{ .err = err, .header = header });
+                    // Should we cancel the request? I don't think so.
+                    return buf_len;
+                };
+                transfer._auth_challenge = ac;
             }
-            return buf_len;
-        }
-
-        // Starting here, we get the last header line.
-
-        if (transfer._redirecting) {
-            // parse and set cookies for the redirection.
-            redirectionCookies(transfer, &conn) catch |err| {
-                if (comptime IS_DEBUG) {
-                    log.debug(.http, "redirection cookies", .{ .err = err });
-                }
-                return 0;
-            };
-            return buf_len;
         }
 
         return buf_len;

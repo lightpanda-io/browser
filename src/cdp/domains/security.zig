@@ -35,12 +35,7 @@ fn setIgnoreCertificateErrors(cmd: anytype) !void {
         ignore: bool,
     })) orelse return error.InvalidParams;
 
-    if (params.ignore) {
-        try cmd.cdp.browser.http_client.disableTlsVerify();
-    } else {
-        try cmd.cdp.browser.http_client.enableTlsVerify();
-    }
-
+    try cmd.cdp.browser.http_client.setTlsVerify(!params.ignore);
     return cmd.sendResult(null, .{});
 }
 

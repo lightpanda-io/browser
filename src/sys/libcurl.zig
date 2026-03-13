@@ -590,7 +590,10 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .header_data,
         .write_data,
         => blk: {
-            const ptr: *anyopaque = @ptrCast(value);
+            const ptr: ?*anyopaque = switch (@typeInfo(@TypeOf(value))) {
+                .null => null,
+                else => @ptrCast(value),
+            };
             break :blk c.curl_easy_setopt(easy, opt, ptr);
         },
 

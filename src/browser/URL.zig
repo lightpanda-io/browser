@@ -277,6 +277,11 @@ pub fn isCompleteHTTPUrl(url: []const u8) bool {
         return false;
     }
 
+    // blob: and data: URLs are complete but don't follow scheme:// pattern
+    if (std.mem.startsWith(u8, url, "blob:") or std.mem.startsWith(u8, url, "data:")) {
+        return true;
+    }
+
     // Check if there's a scheme (protocol) ending with ://
     const colon_pos = std.mem.indexOfScalar(u8, url, ':') orelse return false;
 

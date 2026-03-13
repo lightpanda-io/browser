@@ -84,6 +84,7 @@ queued_navigation: std.ArrayList(*Page),
 // about:blank navigations (which may add to queued_navigation).
 queued_queued_navigation: std.ArrayList(*Page),
 
+page_id_gen: u32,
 frame_id_gen: u32,
 
 pub fn init(self: *Session, browser: *Browser, notification: *Notification) !void {
@@ -103,6 +104,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .page_arena = page_arena,
         .factory = Factory.init(page_arena),
         .history = .{},
+        .page_id_gen = 0,
         .frame_id_gen = 0,
         // The prototype (EventTarget) for Navigation is created when a Page is created.
         .navigation = .{ ._proto = undefined },
@@ -297,9 +299,24 @@ pub const WaitResult = enum {
     cdp_socket,
 };
 
-pub fn findPage(self: *Session, frame_id: u32) ?*Page {
+pub fn findPageByFrameId(self: *Session, frame_id: u32) ?*Page {
     const page = self.currentPage() orelse return null;
-    return if (page._frame_id == frame_id) page else null;
+    return findPageBy(page, "_frame_id", frame_id);
+}
+
+pub fn findPageById(self: *Session, id: u32) ?*Page {
+    const page = self.currentPage() orelse return null;
+    return findPageBy(page, "id", id);
+}
+
+fn findPageBy(page: *Page, comptime field: []const u8, id: u32) ?*Page {
+    if (@field(page, field) == id) return page;
+    for (page.frames.items) |f| {
+        if (findPageBy(f, field, id)) |found| {
+            return found;
+        }
+    }
+    return null;
 }
 
 pub fn wait(self: *Session, wait_ms: u32) WaitResult {
@@ -634,5 +651,11 @@ fn processRootQueuedNavigation(self: *Session) !void {
 pub fn nextFrameId(self: *Session) u32 {
     const id = self.frame_id_gen +% 1;
     self.frame_id_gen = id;
+    return id;
+}
+
+pub fn nextPageId(self: *Session) u32 {
+    const id = self.page_id_gen +% 1;
+    self.page_id_gen = id;
     return id;
 }

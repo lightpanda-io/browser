@@ -62,3 +62,26 @@
   testing.expectEqual(offscreen.height, 96);
 }
 </script>
+
+<script id=OffscreenCanvasRenderingContext2D#getImageData>
+{
+  const canvas = new OffscreenCanvas(100, 50);
+  const ctx = canvas.getContext("2d");
+
+  const imageData = ctx.getImageData(0, 0, 10, 20);
+  testing.expectEqual(true, imageData instanceof ImageData);
+  testing.expectEqual(imageData.width, 10);
+  testing.expectEqual(imageData.height, 20);
+  testing.expectEqual(imageData.data.length, 10 * 20 * 4);
+
+  // Undrawn canvas should return transparent black pixels.
+  testing.expectEqual(imageData.data[0], 0);
+  testing.expectEqual(imageData.data[1], 0);
+  testing.expectEqual(imageData.data[2], 0);
+  testing.expectEqual(imageData.data[3], 0);
+
+  // Zero or negative dimensions should throw.
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 0, 10));
+  testing.expectError('Index or size', () => ctx.getImageData(0, 0, 10, -5));
+}
+</script>
