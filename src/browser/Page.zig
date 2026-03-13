@@ -354,6 +354,7 @@ pub fn deinit(self: *Page, abort_http: bool) void {
     }
 
     const session = self._session;
+    self.window.unregisterStorageBucket();
     session.browser.env.destroyContext(self.js);
 
     self._script_manager.shutdown = true;

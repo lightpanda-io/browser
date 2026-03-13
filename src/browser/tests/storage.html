@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <script src="testing.js"></script>
 <script id=local_storage>
+  localStorage.clear();
   testing.expectEqual(localStorage, window.localStorage);
   testing.expectEqual('object', typeof localStorage);
 
@@ -148,4 +149,22 @@
   testing.expectEqual(null, sessionStorage.getItem('beta'));
   testing.expectEqual(null, sessionStorage.getItem('gamma'));
   testing.expectEqual(local_storage_length_before, localStorage.length);
+</script>
+
+<script id="local_storage_storage_event_cross_window">
+  {
+    const event = new StorageEvent('storage', {
+      key: 'lp-storage-event',
+      oldValue: null,
+      newValue: 'value1',
+      url: location.href,
+      storageArea: localStorage,
+    });
+    testing.expectEqual(true, event instanceof StorageEvent);
+    testing.expectEqual('lp-storage-event', event.key);
+    testing.expectEqual(null, event.oldValue);
+    testing.expectEqual('value1', event.newValue);
+    testing.expectEqual(location.href, event.url);
+    testing.expectEqual(true, event.storageArea === localStorage);
+  }
 </script>

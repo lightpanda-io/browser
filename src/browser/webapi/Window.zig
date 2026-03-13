@@ -38,6 +38,7 @@ const Event = @import("Event.zig");
 const EventTarget = @import("EventTarget.zig");
 const ErrorEvent = @import("event/ErrorEvent.zig");
 const MessageEvent = @import("event/MessageEvent.zig");
+const StorageEvent = @import("event/StorageEvent.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
 const Element = @import("Element.zig");
@@ -72,6 +73,8 @@ _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
+_on_storage: ?js.Function.Global = null,
+_local_storage_listener_id: ?u32 = null,
 _location: *Location,
 _timer_id: u30 = 0,
 _timers: std.AutoHashMapUnmanaged(u32, *ScheduleCallback) = .{},
@@ -169,7 +172,16 @@ pub fn getSessionStorage(self: *Window) *storage.Lookup {
     return self._session_storage;
 }
 
+pub fn unregisterStorageBucket(self: *Window) void {
+    if (self._local_storage_listener_id) |listener_id| {
+        self._local_storage.unregisterMutationListener(listener_id);
+        self._local_storage_listener_id = null;
+    }
+}
+
 pub fn syncStorageBucket(self: *Window) !void {
+    self.unregisterStorageBucket();
+
     const origin = try self._page.getOrigin(self._page.arena);
     if (origin) |value| {
         const allocator = self._page._session.browser.app.allocator;
@@ -177,10 +189,16 @@ pub fn syncStorageBucket(self: *Window) !void {
         self._local_storage = &local_bucket.local;
         const session_bucket = try self._page._session.session_storage_shed.getOrPut(allocator, value);
         self._session_storage = &session_bucket.session;
-        return;
+    } else {
+        self._local_storage = &self._opaque_local_storage;
+        self._session_storage = &self._opaque_session_storage;
     }
-    self._local_storage = &self._opaque_local_storage;
-    self._session_storage = &self._opaque_session_storage;
+
+    self._local_storage_listener_id = try self._local_storage.registerMutationListener(
+        self._page,
+        @ptrCast(self),
+        handleLocalStorageMutation,
+    );
 }
 
 pub fn getLocation(self: *const Window) *Location {
@@ -282,6 +300,48 @@ pub fn getOnUnhandledRejection(self: *const Window) ?js.Function.Global {
 
 pub fn setOnUnhandledRejection(self: *Window, setter: ?FunctionSetter) void {
     self._on_unhandled_rejection = getFunctionFromSetter(setter);
+}
+
+pub fn getOnStorage(self: *const Window) ?js.Function.Global {
+    return self._on_storage;
+}
+
+pub fn setOnStorage(self: *Window, setter: ?FunctionSetter) void {
+    self._on_storage = getFunctionFromSetter(setter);
+}
+
+fn handleLocalStorageMutation(ctx: *anyopaque, mutation: storage.Lookup.Mutation) void {
+    const self: *Window = @ptrCast(@alignCast(ctx));
+    if (mutation.source_ctx) |source_ctx| {
+        if (@intFromPtr(source_ctx) == @intFromPtr(self)) {
+            return;
+        }
+    }
+    self.dispatchStorageEvent(mutation) catch |err| {
+        log.warn(.js, "window.storage", .{ .err = err });
+    };
+}
+
+fn dispatchStorageEvent(self: *Window, mutation: storage.Lookup.Mutation) !void {
+    const page = self._page;
+    const arena = try page.getArena(.{ .debug = "StorageEvent.schedule" });
+    errdefer page.releaseArena(arena);
+
+    const callback = try arena.create(StorageEventCallback);
+    callback.* = .{
+        .page = page,
+        .arena = arena,
+        .window = self,
+        .key = if (mutation.key) |value| try arena.dupe(u8, value) else null,
+        .old_value = if (mutation.old_value) |value| try arena.dupe(u8, value) else null,
+        .new_value = if (mutation.new_value) |value| try arena.dupe(u8, value) else null,
+        .url = try arena.dupe(u8, mutation.url),
+    };
+    try page.js.scheduler.add(callback, StorageEventCallback.run, 0, .{
+        .name = "storage",
+        .low_priority = false,
+        .finalizer = StorageEventCallback.cancelled,
+    });
 }
 
 pub fn fetch(_: *const Window, input: Fetch.Input, options: ?Fetch.InitOpts, page: *Page) !js.Promise {
@@ -860,6 +920,49 @@ const PostMessageCallback = struct {
     }
 };
 
+const StorageEventCallback = struct {
+    page: *Page,
+    arena: Allocator,
+    window: *Window,
+    key: ?[]const u8,
+    old_value: ?[]const u8,
+    new_value: ?[]const u8,
+    url: []const u8,
+
+    fn deinit(self: *StorageEventCallback) void {
+        self.page.releaseArena(self.arena);
+    }
+
+    fn cancelled(ctx: *anyopaque) void {
+        const self: *StorageEventCallback = @ptrCast(@alignCast(ctx));
+        self.page.releaseArena(self.arena);
+    }
+
+    fn run(ctx: *anyopaque) !?u32 {
+        const self: *StorageEventCallback = @ptrCast(@alignCast(ctx));
+        defer self.deinit();
+
+        const page = self.page;
+        const window = self.window;
+        const event = (try StorageEvent.initTrusted(comptime .wrap("storage"), .{
+            .key = self.key,
+            .oldValue = self.old_value,
+            .newValue = self.new_value,
+            .url = self.url,
+            .storageArea = window._local_storage,
+            .bubbles = false,
+            .cancelable = false,
+        }, page)).asEvent();
+        try page._event_manager.dispatchDirect(
+            window.asEventTarget(),
+            event,
+            window._on_storage,
+            .{ .inject_target = true, .context = "window.storage" },
+        );
+        return null;
+    }
+};
+
 const FunctionSetter = union(enum) {
     func: js.Function.Global,
     anything: js.Value,
@@ -909,6 +1012,7 @@ pub const JsApi = struct {
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
+    pub const onstorage = bridge.accessor(Window.getOnStorage, Window.setOnStorage, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const open = bridge.function(Window.open, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});

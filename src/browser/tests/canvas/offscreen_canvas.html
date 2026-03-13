@@ -146,6 +146,26 @@
 }
 </script>
 
+<script id="OffscreenCanvasRenderingContext2D#fillText draws pixels">
+{
+  const canvas = new OffscreenCanvas(160, 80);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#00aa00";
+  ctx.font = "30px Arial";
+  ctx.textBaseline = "top";
+  ctx.fillText("GO", 8, 8);
+
+  const image = ctx.getImageData(0, 0, 160, 80).data;
+  let greenPixels = 0;
+  for (let i = 0; i < image.length; i += 4) {
+    if (image[i] < 80 && image[i + 1] > 120 && image[i + 2] < 80 && image[i + 3] > 0) {
+      greenPixels++;
+    }
+  }
+  testing.expectEqual(true, greenPixels > 40);
+}
+</script>
+
 <script id=OffscreenCanvas#convertToBlob>
 {
   const canvas = new OffscreenCanvas(64, 64);

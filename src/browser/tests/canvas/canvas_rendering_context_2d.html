@@ -324,6 +324,69 @@
 }
 </script>
 
+<script id="CanvasRenderingContext2D#font and text state">
+{
+  const element = document.createElement("canvas");
+  const ctx = element.getContext("2d");
+  testing.expectEqual("10px sans-serif", ctx.font);
+  testing.expectEqual("start", ctx.textAlign);
+  testing.expectEqual("alphabetic", ctx.textBaseline);
+
+  ctx.font = 'italic 700 24px "Times New Roman"';
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  testing.expectEqual('italic 700 24px "Times New Roman"', ctx.font);
+  testing.expectEqual("center", ctx.textAlign);
+  testing.expectEqual("top", ctx.textBaseline);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#fillText draws pixels">
+{
+  const element = document.createElement("canvas");
+  element.width = 160;
+  element.height = 80;
+  const ctx = element.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, 160, 80);
+  ctx.fillStyle = "#ff0000";
+  ctx.font = "32px Arial";
+  ctx.textBaseline = "top";
+  ctx.fillText("HI", 10, 10);
+
+  const image = ctx.getImageData(0, 0, 160, 80).data;
+  let redPixels = 0;
+  for (let i = 0; i < image.length; i += 4) {
+    if (image[i] > 160 && image[i + 1] < 80 && image[i + 2] < 80 && image[i + 3] > 0) {
+      redPixels++;
+    }
+  }
+  testing.expectEqual(true, redPixels > 40);
+}
+</script>
+
+<script id="CanvasRenderingContext2D#strokeText draws pixels">
+{
+  const element = document.createElement("canvas");
+  element.width = 160;
+  element.height = 80;
+  const ctx = element.getContext("2d");
+  ctx.strokeStyle = "#0000ff";
+  ctx.font = "28px Arial";
+  ctx.textBaseline = "top";
+  ctx.strokeText("OK", 10, 10);
+
+  const image = ctx.getImageData(0, 0, 160, 80).data;
+  let bluePixels = 0;
+  for (let i = 0; i < image.length; i += 4) {
+    if (image[i] < 100 && image[i + 1] < 100 && image[i + 2] > 120 && image[i + 3] > 0) {
+      bluePixels++;
+    }
+  }
+  testing.expectEqual(true, bluePixels > 40);
+}
+</script>
+
 <script id="CanvasRenderingContext2D#drawImage(HTMLCanvasElement, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight)">
 {
   const source = document.createElement("canvas");

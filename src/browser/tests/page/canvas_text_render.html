@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#ffffff">
+  <canvas id="main" width="180" height="90"></canvas>
+  <script>
+    const canvas = document.getElementById("main");
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#ff0000";
+    ctx.font = "32px Arial";
+    ctx.textBaseline = "top";
+    ctx.fillText("HI", 10, 10);
+
+    ctx.strokeStyle = "#0000ff";
+    ctx.font = "28px Arial";
+    ctx.textBaseline = "top";
+    ctx.strokeText("OK", 95, 26);
+
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let redPixels = 0;
+    let bluePixels = 0;
+    for (let i = 0; i < image.length; i += 4) {
+      if (image[i] > 160 && image[i + 1] < 80 && image[i + 2] < 80 && image[i + 3] > 0) {
+        redPixels++;
+      }
+      if (image[i] < 80 && image[i + 1] < 80 && image[i + 2] > 120 && image[i + 3] > 0) {
+        bluePixels++;
+      }
+    }
+
+    document.title = (redPixels > 40 && bluePixels > 40)
+      ? "Canvas Text Ready"
+      : "Canvas Text Failed";
+  </script>
+</body>
+</html>

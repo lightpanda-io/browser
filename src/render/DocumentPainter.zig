@@ -2320,6 +2320,42 @@ test "paintDocument emits canvas path pixels for headed rendering" {
     try std.testing.expect(found);
 }
 
+test "paintDocument emits canvas text pixels for headed rendering" {
+    var page = try testing.pageTest("page/canvas_text_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .canvas => |canvas| {
+                var red_pixels: usize = 0;
+                var blue_pixels: usize = 0;
+                var i: usize = 0;
+                while (i + 3 < canvas.pixels.len) : (i += 4) {
+                    const r = canvas.pixels[i + 0];
+                    const g = canvas.pixels[i + 1];
+                    const b = canvas.pixels[i + 2];
+                    const a = canvas.pixels[i + 3];
+                    if (a == 0) continue;
+                    if (r > 160 and g < 80 and b < 80) red_pixels += 1;
+                    if (r < 80 and g < 80 and b > 120) blue_pixels += 1;
+                }
+                try std.testing.expect(red_pixels > 40);
+                try std.testing.expect(blue_pixels > 40);
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
 test "paintDocument emits webgl clear canvas pixels for headed rendering" {
     var page = try testing.pageTest("page/canvas_webgl_clear_render.html");
     defer page._session.removePage();

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const color = @import("../../color.zig");
 const Page = @import("../../Page.zig");
@@ -6,6 +7,34 @@ const Page = @import("../../Page.zig");
 const ImageData = @import("../ImageData.zig");
 
 const CanvasSurface = @This();
+
+const win = if (builtin.os.tag == .windows) @cImport({
+    @cDefine("WIN32_LEAN_AND_MEAN", "1");
+    @cInclude("windows.h");
+    @cInclude("wingdi.h");
+}) else struct {};
+
+pub const TextAlign = enum {
+    left,
+    center,
+    right,
+};
+
+pub const TextBaseline = enum {
+    top,
+    middle,
+    alphabetic,
+    bottom,
+};
+
+pub const TextStyle = struct {
+    font_size_px: i32 = 10,
+    font_family: []const u8 = "sans-serif",
+    font_weight: i32 = 400,
+    italic: bool = false,
+    @"align": TextAlign = .left,
+    baseline: TextBaseline = .alphabetic,
+};
 
 width: u32,
 height: u32,
@@ -273,6 +302,34 @@ pub fn drawSurface(
     }
 }
 
+pub fn fillText(
+    self: *CanvasSurface,
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    x: f64,
+    y: f64,
+    max_width: ?f64,
+    style: TextStyle,
+    fill: color.RGBA,
+) void {
+    if (builtin.os.tag != .windows) return;
+    self.drawTextWin32(allocator, text, x, y, max_width, style, fill, false);
+}
+
+pub fn strokeText(
+    self: *CanvasSurface,
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    x: f64,
+    y: f64,
+    max_width: ?f64,
+    style: TextStyle,
+    stroke: color.RGBA,
+) void {
+    if (builtin.os.tag != .windows) return;
+    self.drawTextWin32(allocator, text, x, y, max_width, style, stroke, true);
+}
+
 fn pixelLen(width: u32, height: u32) !usize {
     var size, const overflow_a = @mulWithOverflow(width, height);
     if (overflow_a == 1) return error.Overflow;
@@ -389,4 +446,222 @@ fn writePixel(self: *CanvasSurface, x: u32, y: u32, rgba: color.RGBA) void {
     self.pixels[index + 1] = rgba.g;
     self.pixels[index + 2] = rgba.b;
     self.pixels[index + 3] = rgba.a;
+}
+
+fn drawTextWin32(
+    self: *CanvasSurface,
+    allocator: std.mem.Allocator,
+    text: []const u8,
+    x: f64,
+    y: f64,
+    max_width: ?f64,
+    style: TextStyle,
+    rgba: color.RGBA,
+    is_stroke: bool,
+) void {
+    _ = max_width;
+    if (text.len == 0 or self.width == 0 or self.height == 0) return;
+
+    const wide_text = std.unicode.utf8ToUtf16LeAllocZ(allocator, text) catch return;
+    defer allocator.free(wide_text);
+    if (wide_text.len == 0) return;
+
+    const hdc = win.CreateCompatibleDC(null);
+    if (hdc == null) return;
+    defer _ = win.DeleteDC(hdc);
+
+    var bmi: win.BITMAPINFO = std.mem.zeroes(win.BITMAPINFO);
+    bmi.bmiHeader.biSize = @sizeOf(win.BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = @as(i32, @intCast(self.width));
+    bmi.bmiHeader.biHeight = -@as(i32, @intCast(self.height));
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = win.BI_RGB;
+
+    var bits: ?*anyopaque = null;
+    const dib = win.CreateDIBSection(hdc, &bmi, win.DIB_RGB_COLORS, &bits, null, 0);
+    if (dib == null or bits == null) return;
+    defer _ = win.DeleteObject(dib);
+
+    const old_bitmap = win.SelectObject(hdc, dib);
+    defer _ = win.SelectObject(hdc, old_bitmap);
+
+    const dib_pixels = @as([*]u8, @ptrCast(bits.?))[0 .. @as(usize, self.width) * self.height * 4];
+    @memset(dib_pixels, 0);
+
+    const font_spec = resolveCanvasFontSpec(style.font_family);
+    const wide_face = std.unicode.utf8ToUtf16LeAllocZ(allocator, font_spec.face_name) catch return;
+    defer allocator.free(wide_face);
+
+    const font = win.CreateFontW(
+        -@as(i32, @intCast(@max(@as(i32, 1), style.font_size_px))),
+        0,
+        0,
+        0,
+        measuredFontWeight(style.font_weight),
+        @intFromBool(style.italic),
+        0,
+        0,
+        win.DEFAULT_CHARSET,
+        win.OUT_DEFAULT_PRECIS,
+        win.CLIP_DEFAULT_PRECIS,
+        win.CLEARTYPE_QUALITY,
+        font_spec.pitch_family,
+        wide_face.ptr,
+    );
+    if (font == null) return;
+    defer _ = win.DeleteObject(font);
+
+    const old_font = win.SelectObject(hdc, font);
+    defer _ = win.SelectObject(hdc, old_font);
+
+    _ = win.SetBkMode(hdc, win.TRANSPARENT);
+    _ = win.SetTextColor(hdc, win.RGB(255, 255, 255));
+
+    var text_size: win.SIZE = undefined;
+    if (win.GetTextExtentPoint32W(hdc, wide_text.ptr, @intCast(wide_text.len), &text_size) == 0) {
+        return;
+    }
+
+    var metrics: win.TEXTMETRICW = undefined;
+    if (win.GetTextMetricsW(hdc, &metrics) == 0) {
+        return;
+    }
+
+    const draw_x = resolveAlignedTextX(coordinateFromFloat(x) orelse 0, text_size.cx, style.@"align");
+    const draw_y = resolveBaselineTextY(coordinateFromFloat(y) orelse 0, text_size.cy, metrics.tmAscent, style.baseline);
+
+    if (is_stroke) {
+        const offsets = [_][2]i32{
+            .{ -1, 0 },  .{ 1, 0 },  .{ 0, -1 }, .{ 0, 1 },
+            .{ -1, -1 }, .{ 1, -1 }, .{ -1, 1 }, .{ 1, 1 },
+        };
+        for (offsets) |offset| {
+            _ = win.TextOutW(hdc, draw_x + offset[0], draw_y + offset[1], wide_text.ptr, @intCast(wide_text.len));
+        }
+    } else {
+        _ = win.TextOutW(hdc, draw_x, draw_y, wide_text.ptr, @intCast(wide_text.len));
+    }
+
+    const bounds_left = std.math.clamp(draw_x - 2, 0, @as(i32, @intCast(self.width)));
+    const bounds_top = std.math.clamp(draw_y - 2, 0, @as(i32, @intCast(self.height)));
+    const bounds_right = std.math.clamp(draw_x + text_size.cx + 2, 0, @as(i32, @intCast(self.width)));
+    const bounds_bottom = std.math.clamp(draw_y + text_size.cy + 2, 0, @as(i32, @intCast(self.height)));
+
+    var row: i32 = bounds_top;
+    while (row < bounds_bottom) : (row += 1) {
+        var col: i32 = bounds_left;
+        while (col < bounds_right) : (col += 1) {
+            const dib_index = (@as(usize, @intCast(row)) * self.width + @as(u32, @intCast(col))) * 4;
+            const coverage = @max(dib_pixels[dib_index + 0], @max(dib_pixels[dib_index + 1], dib_pixels[dib_index + 2]));
+            if (coverage == 0) continue;
+            const alpha = @as(u8, @intCast((@as(u16, coverage) * @as(u16, rgba.a) + 127) / 255));
+            self.blendPixel(@intCast(col), @intCast(row), .{
+                .r = rgba.r,
+                .g = rgba.g,
+                .b = rgba.b,
+                .a = alpha,
+            });
+        }
+    }
+}
+
+fn blendPixel(self: *CanvasSurface, x: u32, y: u32, rgba: color.RGBA) void {
+    if (x >= self.width or y >= self.height) return;
+    const index = self.pixelIndex(x, y);
+    const dst_r = self.pixels[index + 0];
+    const dst_g = self.pixels[index + 1];
+    const dst_b = self.pixels[index + 2];
+    const dst_a = self.pixels[index + 3];
+
+    const src_a: u16 = rgba.a;
+    const inv_src_a: u16 = 255 - src_a;
+    const out_a_u16 = src_a + ((@as(u16, dst_a) * inv_src_a + 127) / 255);
+    const out_a: u8 = @intCast(std.math.clamp(out_a_u16, 0, 255));
+
+    self.pixels[index + 0] = @intCast((@as(u16, rgba.r) * src_a + @as(u16, dst_r) * inv_src_a + 127) / 255);
+    self.pixels[index + 1] = @intCast((@as(u16, rgba.g) * src_a + @as(u16, dst_g) * inv_src_a + 127) / 255);
+    self.pixels[index + 2] = @intCast((@as(u16, rgba.b) * src_a + @as(u16, dst_b) * inv_src_a + 127) / 255);
+    self.pixels[index + 3] = out_a;
+}
+
+const CanvasFontSpec = struct {
+    face_name: []const u8,
+    pitch_family: win.DWORD,
+};
+
+fn resolveCanvasFontSpec(font_family_value: []const u8) CanvasFontSpec {
+    var preferred_specific: []const u8 = "";
+    var generic_spec: ?CanvasFontSpec = null;
+
+    var families = std.mem.splitScalar(u8, font_family_value, ',');
+    while (families.next()) |raw_family| {
+        const family = trimCanvasFontFamily(raw_family);
+        if (family.len == 0) continue;
+        if (genericCanvasFontSpec(family)) |spec| {
+            if (generic_spec == null) generic_spec = spec;
+            continue;
+        }
+        if (preferred_specific.len == 0) preferred_specific = family;
+    }
+
+    if (preferred_specific.len > 0) {
+        return .{
+            .face_name = preferred_specific,
+            .pitch_family = if (generic_spec) |spec| spec.pitch_family else @as(win.DWORD, win.DEFAULT_PITCH | win.FF_DONTCARE),
+        };
+    }
+    if (generic_spec) |spec| return spec;
+    return .{
+        .face_name = "Segoe UI",
+        .pitch_family = @as(win.DWORD, win.DEFAULT_PITCH | win.FF_SWISS),
+    };
+}
+
+fn trimCanvasFontFamily(raw_family: []const u8) []const u8 {
+    var family = std.mem.trim(u8, raw_family, &std.ascii.whitespace);
+    if (family.len >= 2 and ((family[0] == '"' and family[family.len - 1] == '"') or (family[0] == '\'' and family[family.len - 1] == '\''))) {
+        family = family[1 .. family.len - 1];
+    }
+    return std.mem.trim(u8, family, &std.ascii.whitespace);
+}
+
+fn genericCanvasFontSpec(family: []const u8) ?CanvasFontSpec {
+    if (std.ascii.eqlIgnoreCase(family, "serif")) {
+        return .{ .face_name = "Times New Roman", .pitch_family = @as(win.DWORD, win.VARIABLE_PITCH | win.FF_ROMAN) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "sans-serif")) {
+        return .{ .face_name = "Segoe UI", .pitch_family = @as(win.DWORD, win.VARIABLE_PITCH | win.FF_SWISS) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "monospace")) {
+        return .{ .face_name = "Consolas", .pitch_family = @as(win.DWORD, win.FIXED_PITCH | win.FF_MODERN) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "cursive")) {
+        return .{ .face_name = "Comic Sans MS", .pitch_family = @as(win.DWORD, win.VARIABLE_PITCH | win.FF_SCRIPT) };
+    }
+    if (std.ascii.eqlIgnoreCase(family, "fantasy")) {
+        return .{ .face_name = "Impact", .pitch_family = @as(win.DWORD, win.VARIABLE_PITCH | win.FF_DECORATIVE) };
+    }
+    return null;
+}
+
+fn measuredFontWeight(font_weight: i32) i32 {
+    return std.math.clamp(font_weight, 100, 900);
+}
+
+fn resolveAlignedTextX(x: i32, width: i32, text_align: TextAlign) i32 {
+    return switch (text_align) {
+        .left => x,
+        .center => x - @divTrunc(width, 2),
+        .right => x - width,
+    };
+}
+
+fn resolveBaselineTextY(y: i32, text_height: i32, ascent: i32, baseline: TextBaseline) i32 {
+    return switch (baseline) {
+        .top => y,
+        .middle => y - @divTrunc(text_height, 2),
+        .alphabetic => y - ascent,
+        .bottom => y - text_height,
+    };
 }

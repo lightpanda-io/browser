@@ -152,6 +152,7 @@ pub const Handler = enum(u7) {
     onselectstart,
     onslotchange,
     onstalled,
+    onstorage,
     onsubmit,
     onsuspend,
     ontimeupdate,
@@ -182,6 +183,7 @@ const testing = @import("../../testing.zig");
 test "GlobalEventHandlers: fromEventType" {
     try testing.expectEqual(.onabort, fromEventType("abort"));
     try testing.expectEqual(.onselect, fromEventType("select"));
+    try testing.expectEqual(.onstorage, fromEventType("storage"));
     try testing.expectEqual(null, fromEventType(""));
     try testing.expectEqual(null, fromEventType("unknown"));
 }

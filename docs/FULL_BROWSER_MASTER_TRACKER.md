@@ -227,6 +227,10 @@ Current state inside Gate 1:
   `localStorage` shed across tabs and browser restart, and that storage can be
   cleared from `browser://settings`, with bounded cross-tab, restart, and
   clear-local-storage headed probes
+- that same headed `localStorage` path now also dispatches real cross-tab
+  `storage` events through `window.onstorage` and `StorageEvent`, with a
+  bounded headed probe proving a listener tab receives the event after a
+  sibling tab mutates `localStorage` and both tabs remain alive afterward
 - headed `browse` tabs now also keep real per-tab `sessionStorage` state that
   survives same-tab navigation but does not leak across tabs or browser
   restart, with bounded same-tab, cross-tab, and restart headed probes
@@ -344,6 +348,10 @@ Current state inside Gate 1:
   `putImageData`, and headed Win32 `browse` now renders those canvas pixels on
   the shared display-list path with a bounded screenshot probe proving the
   rendered border, composited fill, and cleared interior
+- those same on-screen and offscreen canvas 2D contexts now also keep real
+  text state plus Win32-backed `fillText(...)` and `strokeText(...)`, with
+  focused DOM tests and a bounded headed screenshot probe proving red filled
+  and blue stroked glyph pixels reach the real destination canvas surface
 - those same on-screen and offscreen canvas 2D contexts now also support a
   first real `drawImage(...)` slice for `HTMLCanvasElement` and
   `OffscreenCanvas` sources, including direct copy, simple scaling, and
