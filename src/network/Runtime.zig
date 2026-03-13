@@ -28,8 +28,18 @@ const libcurl = @import("../sys/libcurl.zig");
 
 const net_http = @import("http.zig");
 const RobotStore = @import("Robots.zig").RobotStore;
+const milliTimestamp = @import("../datetime.zig").milliTimestamp;
 
 const Runtime = @This();
+
+const MAX_INTERVALS = 16;
+
+const Interval = struct {
+    period_ms: u64,
+    last_fire: u64,
+    callback: *const fn (*anyopaque) void,
+    ctx: *anyopaque,
+};
 
 const Listener = struct {
     socket: posix.socket_t,
@@ -64,6 +74,10 @@ shutdown: std.atomic.Value(bool) = .init(false),
 multi: ?*libcurl.CurlM = null,
 submission_mutex: std.Thread.Mutex = .{},
 submission_queue: std.DoublyLinkedList = .{},
+
+intervals: [MAX_INTERVALS]Interval = undefined,
+intervals_len: usize = 0,
+intervals_mutex: std.Thread.Mutex = .{},
 
 const ZigToCurlAllocator = struct {
     // C11 requires malloc to return memory aligned to max_align_t (16 bytes on x86_64).
@@ -312,7 +326,13 @@ pub fn run(self: *Runtime) void {
             self.preparePollFds(multi);
         }
 
-        const timeout = if (self.multi != null) self.getCurlTimeout() else @as(i32, -1);
+        const timeout: i32 = blk: {
+            const curl_timeout = if (self.multi != null) self.getCurlTimeout() else @as(i32, -1);
+            const interval_timeout = self.getIntervalTimeout();
+            if (curl_timeout < 0) break :blk interval_timeout;
+            if (interval_timeout < 0) break :blk curl_timeout;
+            break :blk @min(curl_timeout, interval_timeout);
+        };
 
         _ = posix.poll(self.pollfds, timeout) catch |err| {
             lp.log.err(.app, "poll", .{ .err = err });
@@ -340,6 +360,8 @@ pub fn run(self: *Runtime) void {
             self.processCompletions(multi);
         }
 
+        self.fireIntervals();
+
         if (self.shutdown.load(.acquire) and running_handles == 0)
             break;
     }
@@ -356,6 +378,22 @@ pub fn run(self: *Runtime) void {
         };
         posix.close(listener.socket);
     }
+}
+
+pub fn setInterval(self: *Runtime, interval_ms: u64, ctx: *anyopaque, callback: *const fn (*anyopaque) void) void {
+    self.intervals_mutex.lock();
+    defer self.intervals_mutex.unlock();
+
+    lp.assert(self.intervals_len < MAX_INTERVALS, "too many intervals", .{});
+    const now = milliTimestamp(.monotonic);
+    self.intervals[self.intervals_len] = .{
+        .period_ms = interval_ms,
+        .last_fire = now,
+        .callback = callback,
+        .ctx = ctx,
+    };
+    self.intervals_len += 1;
+    self.wakeupPoll();
 }
 
 pub fn submitRequest(self: *Runtime, conn: *net_http.Connection) void {
@@ -445,6 +483,35 @@ fn getCurlTimeout(self: *Runtime) i32 {
     var timeout_ms: c_long = -1;
     libcurl.curl_multi_timeout(multi, &timeout_ms) catch return -1;
     return @intCast(@min(timeout_ms, std.math.maxInt(i32)));
+}
+
+fn getIntervalTimeout(self: *Runtime) i32 {
+    self.intervals_mutex.lock();
+    defer self.intervals_mutex.unlock();
+
+    if (self.intervals_len == 0) return -1;
+    const now = milliTimestamp(.monotonic);
+    var min_ms: u64 = std.math.maxInt(u64);
+    for (self.intervals[0..self.intervals_len]) |interval| {
+        const elapsed = now - interval.last_fire;
+        const remaining = interval.period_ms -| elapsed;
+        if (remaining < min_ms) min_ms = remaining;
+    }
+    return @intCast(@min(min_ms, std.math.maxInt(i32)));
+}
+
+fn fireIntervals(self: *Runtime) void {
+    self.intervals_mutex.lock();
+    defer self.intervals_mutex.unlock();
+
+    const now = milliTimestamp(.monotonic);
+    for (self.intervals[0..self.intervals_len]) |*interval| {
+        const elapsed = now - interval.last_fire;
+        if (elapsed >= interval.period_ms) {
+            interval.last_fire = now;
+            interval.callback(interval.ctx);
+        }
+    }
 }
 
 fn processCompletions(self: *Runtime, multi: *libcurl.CurlM) void {

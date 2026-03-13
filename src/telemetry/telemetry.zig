@@ -25,7 +25,7 @@ fn TelemetryT(comptime P: type) type {
         // null on IO error
         iid: ?[36]u8,
 
-        provider: P,
+        provider: *P,
 
         disabled: bool,
 
@@ -39,8 +39,10 @@ fn TelemetryT(comptime P: type) type {
                 log.info(.telemetry, "telemetry status", .{ .disabled = disabled });
             }
 
-            const provider = try P.init(app);
-            errdefer provider.deinit();
+            const provider = try app.allocator.create(P);
+            errdefer app.allocator.destroy(provider);
+
+            try P.init(provider, app);
 
             return .{
                 .disabled = disabled,
@@ -54,8 +56,9 @@ fn TelemetryT(comptime P: type) type {
             self.provider.flush();
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self, allocator: Allocator) void {
             self.provider.deinit();
+            allocator.destroy(self.provider);
         }
 
         pub fn record(self: *Self, event: Event) void {
@@ -119,12 +122,10 @@ pub const Event = union(enum) {
 };
 
 const NoopProvider = struct {
-    fn init(_: *App) !NoopProvider {
-        return .{};
-    }
-    fn flush(_: NoopProvider) void {}
-    fn deinit(_: NoopProvider) void {}
-    pub fn send(_: NoopProvider, _: ?[]const u8, _: Config.RunMode, _: Event) !void {}
+    fn init(_: *NoopProvider, _: *App) !void {}
+    fn flush(_: *NoopProvider) void {}
+    fn deinit(_: *NoopProvider) void {}
+    pub fn send(_: *NoopProvider, _: ?[]const u8, _: Config.RunMode, _: Event) !void {}
 };
 
 extern fn setenv(name: [*:0]u8, value: [*:0]u8, override: c_int) c_int;
@@ -136,17 +137,15 @@ test "telemetry: disabled by environment" {
     defer _ = unsetenv(@constCast("LIGHTPANDA_DISABLE_TELEMETRY"));
 
     const FailingProvider = struct {
-        fn init(_: *App) !@This() {
-            return .{};
-        }
-        fn deinit(_: @This()) void {}
-        pub fn send(_: @This(), _: ?[]const u8, _: Config.RunMode, _: Event) !void {
+        fn init(_: *@This(), _: *App) !void {}
+        fn deinit(_: *@This()) void {}
+        pub fn send(_: *@This(), _: ?[]const u8, _: Config.RunMode, _: Event) !void {
             unreachable;
         }
     };
 
-    var telemetry = try TelemetryT(FailingProvider).init(undefined, .serve);
-    defer telemetry.deinit();
+    var telemetry = try TelemetryT(FailingProvider).init(testing.test_app, .serve);
+    defer telemetry.deinit(testing.test_app.allocator);
     telemetry.record(.{ .run = {} });
 }
 
@@ -170,8 +169,8 @@ test "telemetry: getOrCreateId" {
 
 test "telemetry: sends event to provider" {
     var telemetry = try TelemetryT(MockProvider).init(testing.test_app, .serve);
-    defer telemetry.deinit();
-    const mock = &telemetry.provider;
+    defer telemetry.deinit(testing.test_app.allocator);
+    const mock = telemetry.provider;
 
     telemetry.record(.{ .flag = "1" });
     telemetry.record(.{ .flag = "2" });
@@ -189,8 +188,8 @@ const MockProvider = struct {
     allocator: Allocator,
     events: std.ArrayList(Event),
 
-    fn init(app: *App) !@This() {
-        return .{
+    fn init(self: *MockProvider, app: *App) !void {
+        self.* = .{
             .iid = null,
             .run_mode = null,
             .events = .{},

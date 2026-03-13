@@ -12,8 +12,10 @@ const Runtime = @import("../network/Runtime.zig");
 const Connection = @import("../network/http.zig").Connection;
 
 const URL = "https://telemetry.lightpanda.io";
+
 const BATCH_SIZE = 20;
 const BUFFER_SIZE = BATCH_SIZE * 2;
+const FLUSH_INTERVAL = 5 * 1000; // 5s
 
 const LightPanda = @This();
 
@@ -24,11 +26,17 @@ mutex: std.Thread.Mutex = .{},
 pcount: usize = 0,
 pending: [BUFFER_SIZE]LightPandaEvent = undefined,
 
-pub fn init(app: *App) !LightPanda {
-    return .{
+pub fn init(self: *LightPanda, app: *App) !void {
+    self.* = .{
         .allocator = app.allocator,
         .runtime = &app.network,
     };
+    self.runtime.setInterval(FLUSH_INTERVAL, @ptrCast(self), flushCallback);
+}
+
+fn flushCallback(ctx: *anyopaque) void {
+    const self: *LightPanda = @ptrCast(@alignCast(ctx));
+    self.flush();
 }
 
 pub fn deinit(self: *LightPanda) void {
@@ -36,28 +44,20 @@ pub fn deinit(self: *LightPanda) void {
 }
 
 pub fn send(self: *LightPanda, iid: ?[]const u8, run_mode: Config.RunMode, raw_event: telemetry.Event) !void {
-    const pending_count = blk: {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    self.mutex.lock();
+    defer self.mutex.unlock();
 
-        if (self.pcount == BUFFER_SIZE) {
-            log.err(.telemetry, "telemetry buffer exhausted", .{});
-            return;
-        }
-
-        self.pending[self.pcount] = .{
-            .iid = iid,
-            .mode = run_mode,
-            .event = raw_event,
-        };
-        self.pcount += 1;
-
-        break :blk self.pcount;
-    };
-
-    if (pending_count >= BATCH_SIZE) {
-        self.flush();
+    if (self.pcount == BUFFER_SIZE) {
+        log.err(.telemetry, "telemetry buffer exhausted", .{});
+        return;
     }
+
+    self.pending[self.pcount] = .{
+        .iid = iid,
+        .mode = run_mode,
+        .event = raw_event,
+    };
+    self.pcount += 1;
 }
 
 pub fn flush(self: *LightPanda) void {
