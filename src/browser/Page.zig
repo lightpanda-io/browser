@@ -425,6 +425,7 @@ pub fn headersForRequest(self: *Page, temp: Allocator, url: [:0]const u8, header
 pub const RequestHeaderPolicy = struct {
     include_credentials: bool = true,
     referer_override_url: ?[]const u8 = null,
+    authorization_source_url: ?[:0]const u8 = null,
 };
 
 pub fn headersForRequestWithPolicy(
@@ -436,7 +437,8 @@ pub fn headersForRequestWithPolicy(
 ) !void {
     if (policy.include_credentials) {
         try self.requestCookie(.{}).headersForRequest(temp, url, headers);
-        if (try authorizationHeaderValueForRequest(temp, self.url, url)) |authorization_value| {
+        const authorization_url = policy.authorization_source_url orelse url;
+        if (try authorizationHeaderValueForRequest(temp, self.url, authorization_url)) |authorization_value| {
             const authorization_header = try std.fmt.allocPrintSentinel(temp, "Authorization: {s}", .{authorization_value}, 0);
             try headers.add(authorization_header);
         }
@@ -561,7 +563,8 @@ pub fn releaseArena(self: *Page, allocator: Allocator) void {
 
 pub fn isSameOrigin(self: *const Page, url: [:0]const u8) !bool {
     const current_origin = (try URL.getOrigin(self.call_arena, self.url)) orelse return false;
-    return std.mem.startsWith(u8, url, current_origin);
+    const target_origin = (try URL.getOrigin(self.call_arena, url)) orelse return false;
+    return std.mem.eql(u8, current_origin, target_origin);
 }
 
 pub fn navigate(self: *Page, request_url: [:0]const u8, opts: NavigateOpts) !void {
@@ -5244,6 +5247,60 @@ test "Page headersForRequestWithPolicy suppresses credentials when disabled" {
     try std.testing.expect(!found_cookie);
     try std.testing.expect(!found_authorization);
     try std.testing.expect(found_referer);
+}
+
+test "Page headersForRequestWithPolicy keeps cookie and auth when request url is sanitized" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+    page.url = "http://fetch%20user:p%40ss@127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html";
+    page.referer_header = null;
+    try page._session.cookie_jar.populateFromResponse(page.url, "lpfetch=ok; Path=/");
+
+    var headers = try Http.Headers.init(page._session.browser.app.config.http_headers.user_agent_header);
+    defer headers.deinit();
+
+    try page.headersForRequestWithPolicy(page.arena, "http://127.0.0.1:9582/private.css", &headers, .{
+        .include_credentials = true,
+        .authorization_source_url = "http://fetch%20user:p%40ss@127.0.0.1:9582/private.css",
+    });
+
+    var found_cookie = false;
+    var found_authorization = false;
+    var found_referer = false;
+    var iterator = headers.iterator();
+    while (iterator.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "Cookie")) {
+            try std.testing.expectEqualStrings("lpfetch=ok", header.value);
+            found_cookie = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Authorization")) {
+            try std.testing.expectEqualStrings("Basic ZmV0Y2ggdXNlcjpwQHNz", header.value);
+            found_authorization = true;
+            continue;
+        }
+        if (std.ascii.eqlIgnoreCase(header.name, "Referer")) {
+            try std.testing.expectEqualStrings(
+                "http://127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html",
+                header.value,
+            );
+            found_referer = true;
+        }
+    }
+
+    try std.testing.expect(found_cookie);
+    try std.testing.expect(found_authorization);
+    try std.testing.expect(found_referer);
+}
+
+test "Page isSameOrigin ignores request userinfo" {
+    var page = try testing.pageTest("page/rendered_link_activation.html");
+    defer page._session.removePage();
+    page.url = "http://fetch%20user:p%40ss@127.0.0.1:9582/src/browser/tests/page/rendered_link_activation.html";
+
+    try std.testing.expect(try page.isSameOrigin("http://127.0.0.1:9582/private.css"));
+    try std.testing.expect(try page.isSameOrigin("http://other%20user:pw@127.0.0.1:9582/private.css"));
+    try std.testing.expect(!(try page.isSameOrigin("http://127.0.0.1:9583/private.css")));
 }
 
 test "Page requestCookie sends localhost cookie on top-level navigation" {

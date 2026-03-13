@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#ffffff">
+  <canvas id="main" width="40" height="30"></canvas>
+  <script>
+    const canvas = document.getElementById('main');
+    const gl = canvas.getContext('webgl');
+    const firstOk = gl.drawingBufferWidth === 40 && gl.drawingBufferHeight === 30;
+    canvas.width = 60;
+    canvas.height = 50;
+    const secondOk = gl.drawingBufferWidth === 60 && gl.drawingBufferHeight === 50;
+    gl.clearColor(0.0, 0.5, 1.0, 1.0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    document.title = firstOk && secondOk ? 'Canvas WebGL Dimensions Ready' : 'Canvas WebGL Dimensions Failed';
+  </script>
+</body>
+</html>

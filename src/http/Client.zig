@@ -899,8 +899,8 @@ pub const RequestCookie = struct {
         });
 
         if (arr.items.len > 0) {
-            const header = try std.fmt.allocPrintSentinel(temp, "Cookie: {s}", .{arr.items}, 0);
-            try headers.add(header);
+            const cookie_value = try temp.dupeZ(u8, arr.items);
+            headers.cookies = cookie_value.ptr;
         }
     }
 };

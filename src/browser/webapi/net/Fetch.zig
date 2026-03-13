@@ -27,6 +27,7 @@ const URL = @import("../../URL.zig");
 
 const Request = @import("Request.zig");
 const Response = @import("Response.zig");
+const Allocator = std.mem.Allocator;
 
 const IS_DEBUG = @import("builtin").mode == .Debug;
 
@@ -44,6 +45,7 @@ pub const InitOpts = Request.InitOpts;
 
 pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     const request = try Request.init(input, options, page);
+    const request_url = try fetchRequestUrlForFetch(page.arena, request._url);
     const response = try Response.init(null, .{ .status = 0 }, page);
     errdefer response.deinit(true, page);
 
@@ -53,7 +55,7 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     fetch.* = .{
         ._page = page,
         ._buf = .empty,
-        ._url = try response._arena.dupe(u8, request._url),
+        ._url = try response._arena.dupe(u8, request_url),
         ._resolver = try resolver.persist(),
         ._response = response,
         ._owns_response = true,
@@ -64,7 +66,11 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
     if (request._headers) |h| {
         try h.populateHttpHeader(page.call_arena, &headers);
     }
-    try page.headersForRequest(page.arena, request._url, &headers);
+    const include_credentials = try fetchIncludesCredentials(request, page);
+    try page.headersForRequestWithPolicy(page.arena, request_url, &headers, .{
+        .include_credentials = include_credentials,
+        .authorization_source_url = request._url,
+    });
 
     if (comptime IS_DEBUG) {
         log.debug(.http, "fetch", .{ .url = request._url });
@@ -72,13 +78,13 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
 
     try http_client.request(.{
         .ctx = fetch,
-        .url = request._url,
+        .url = request_url,
         .method = request._method,
         .frame_id = page._frame_id,
         .body = request._body,
         .headers = headers,
         .resource_type = .fetch,
-        .cookie_jar = page._session.cookie_jar,
+        .cookie_jar = if (include_credentials) page._session.cookie_jar else null,
         .notification = page._session.notification,
         .start_callback = httpStartCallback,
         .header_callback = httpHeaderDoneCallback,
@@ -88,6 +94,32 @@ pub fn init(input: Input, options: ?InitOpts, page: *Page) !js.Promise {
         .shutdown_callback = httpShutdownCallback,
     });
     return resolver.promise();
+}
+
+fn fetchIncludesCredentials(request: *const Request, page: *Page) !bool {
+    return switch (request._credentials) {
+        .omit => false,
+        .include => true,
+        .@"same-origin" => try page.isSameOrigin(request._url),
+    };
+}
+
+fn fetchRequestUrlForFetch(
+    allocator: Allocator,
+    url: [:0]const u8,
+) ![:0]const u8 {
+    if (URL.getUsername(url).len == 0) {
+        return try allocator.dupeZ(u8, url);
+    }
+
+    return try URL.buildUrl(
+        allocator,
+        URL.getProtocol(url),
+        URL.getHost(url),
+        URL.getPathname(url),
+        URL.getSearch(url),
+        URL.getHash(url),
+    );
 }
 
 fn httpStartCallback(transfer: *Http.Transfer) !void {
@@ -214,4 +246,47 @@ fn httpShutdownCallback(ctx: *anyopaque) void {
 const testing = @import("../../../testing.zig");
 test "WebApi: fetch" {
     try testing.htmlRunner("net/fetch.html", .{});
+}
+
+test "fetchIncludesCredentials respects request credentials policy" {
+    var page = try testing.pageTest("page/auth_image_inherited.html");
+    defer page._session.removePage();
+
+    const omit_request = try Request.init(.{ .url = "http://127.0.0.1:9582/private.png" }, .{
+        .credentials = .omit,
+    }, page);
+    try std.testing.expect(!(try fetchIncludesCredentials(omit_request, page)));
+
+    const include_request = try Request.init(.{ .url = "http://127.0.0.1:9583/private.png" }, .{
+        .credentials = .include,
+    }, page);
+    try std.testing.expect(try fetchIncludesCredentials(include_request, page));
+
+    const same_origin_request = try Request.init(.{ .url = "http://127.0.0.1:9582/private.png" }, .{
+        .credentials = .@"same-origin",
+    }, page);
+    try std.testing.expect(try fetchIncludesCredentials(same_origin_request, page));
+
+    const cross_origin_request = try Request.init(.{ .url = "http://127.0.0.1:9583/private.png" }, .{
+        .credentials = .@"same-origin",
+    }, page);
+    try std.testing.expect(!(try fetchIncludesCredentials(cross_origin_request, page)));
+}
+
+test "fetchRequestUrlForFetch strips userinfo from request url" {
+    const allocator = std.testing.allocator;
+
+    const stripped = try fetchRequestUrlForFetch(
+        allocator,
+        "http://fetch%20user:p%40ss@127.0.0.1:9582/private.png?x=1#frag",
+    );
+    defer allocator.free(stripped);
+    try std.testing.expectEqualStrings("http://127.0.0.1:9582/private.png?x=1#frag", stripped);
+
+    const kept = try fetchRequestUrlForFetch(
+        allocator,
+        "http://127.0.0.1:9582/private.png?x=1#frag",
+    );
+    defer allocator.free(kept);
+    try std.testing.expectEqualStrings("http://127.0.0.1:9582/private.png?x=1#frag", kept);
 }

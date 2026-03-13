@@ -97,3 +97,23 @@
   ctx.clear(ctx.COLOR_BUFFER_BIT);
 }
 </script>
+
+<script id=WebGLRenderingContext#drawingBuffer_dimensions_resize>
+{
+  const element = document.createElement("canvas");
+  element.width = 7;
+  element.height = 5;
+  const ctx = element.getContext("webgl");
+
+  testing.expectEqual(7, ctx.drawingBufferWidth);
+  testing.expectEqual(5, ctx.drawingBufferHeight);
+
+  element.width = 11;
+  element.height = 9;
+  testing.expectEqual(11, ctx.drawingBufferWidth);
+  testing.expectEqual(9, ctx.drawingBufferHeight);
+
+  ctx.clearColor(0, 0.5, 1, 1);
+  ctx.clear(ctx.COLOR_BUFFER_BIT);
+}
+</script>

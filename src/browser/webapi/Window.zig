@@ -63,9 +63,10 @@ _navigator: Navigator = .init,
 _screen: *Screen,
 _visual_viewport: *VisualViewport,
 _performance: Performance,
-_session_storage: storage.Lookup = .{},
 _opaque_local_storage: storage.Lookup = .{},
+_opaque_session_storage: storage.Lookup = .{},
 _local_storage: *storage.Lookup = undefined,
+_session_storage: *storage.Lookup = undefined,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
@@ -165,17 +166,21 @@ pub fn getLocalStorage(self: *Window) *storage.Lookup {
 }
 
 pub fn getSessionStorage(self: *Window) *storage.Lookup {
-    return &self._session_storage;
+    return self._session_storage;
 }
 
 pub fn syncStorageBucket(self: *Window) !void {
     const origin = try self._page.getOrigin(self._page.arena);
     if (origin) |value| {
-        const bucket = try self._page._session.storage_shed.getOrPut(self._page._session.browser.app.allocator, value);
-        self._local_storage = &bucket.local;
+        const allocator = self._page._session.browser.app.allocator;
+        const local_bucket = try self._page._session.storage_shed.getOrPut(allocator, value);
+        self._local_storage = &local_bucket.local;
+        const session_bucket = try self._page._session.session_storage_shed.getOrPut(allocator, value);
+        self._session_storage = &session_bucket.session;
         return;
     }
     self._local_storage = &self._opaque_local_storage;
+    self._session_storage = &self._opaque_session_storage;
 }
 
 pub fn getLocation(self: *const Window) *Location {

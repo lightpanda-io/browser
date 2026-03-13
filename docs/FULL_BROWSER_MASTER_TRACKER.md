@@ -227,6 +227,15 @@ Current state inside Gate 1:
   `localStorage` shed across tabs and browser restart, and that storage can be
   cleared from `browser://settings`, with bounded cross-tab, restart, and
   clear-local-storage headed probes
+- headed `browse` tabs now also keep real per-tab `sessionStorage` state that
+  survives same-tab navigation but does not leak across tabs or browser
+  restart, with bounded same-tab, cross-tab, and restart headed probes
+- headed `fetch(...)` now honors credentials policy correctly on authenticated
+  pages, with bounded localhost probes proving:
+  - default same-origin fetch keeps cookie plus inherited auth
+  - `credentials: 'omit'` suppresses both cookie and auth
+  - cross-origin `same-origin` suppresses credentials
+  - cross-origin `include` sends cookies but not inherited auth
 - root `Content-Disposition: attachment` navigations now promote into the
   headed download manager instead of degrading into navigation errors:
   address-bar navigations, in-page link activations, and direct startup URLs
@@ -354,6 +363,10 @@ Current state inside Gate 1:
   with focused DOM tests plus a bounded headed Win32 screenshot probe proving a
   full `120x80` clear-colored canvas region reaches the real destination
   surface
+- that same headed Win32 `webgl` slice now also has a bounded runtime quality
+  gate for `drawingBufferWidth` / `drawingBufferHeight`, proving resized WebGL
+  buffer dimensions remain visible to page JS while a clear-colored surface
+  still reaches the headed screenshot path
 - the current headed painter now also keeps simple block paragraphs with mixed
   direct text plus inline child elements on one shared inline row instead of
   splitting the direct text into a separate label band above the inline chips,

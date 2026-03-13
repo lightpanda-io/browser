@@ -110,6 +110,7 @@ cookie_jar: *storage.Cookie.Jar,
 owned_cookie_jar: ?storage.Cookie.Jar,
 storage_shed: *storage.Shed,
 owned_storage_shed: ?storage.Shed,
+session_storage_shed: storage.Shed,
 
 history: History,
 navigation: Navigation,
@@ -146,6 +147,7 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .notification = notification,
         .cookie_jar = undefined,
         .owned_cookie_jar = null,
+        .session_storage_shed = .{},
         .allow_script_popups = browser.allow_script_popups,
     };
     if (browser.shared_cookie_jar) |shared_cookie_jar| {
@@ -194,6 +196,7 @@ pub fn deinit(self: *Session) void {
     self.pending_tab_opens.deinit(self.browser.app.allocator);
 
     const browser = self.browser;
+    self.session_storage_shed.deinit(browser.app.allocator);
     if (self.owned_storage_shed) |*owned_storage_shed| {
         owned_storage_shed.deinit(browser.app.allocator);
         self.owned_storage_shed = null;

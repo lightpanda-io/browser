@@ -36,6 +36,14 @@ const WebGLRenderingContext = @This();
 _surface: *CanvasSurface,
 _clear_color: [4]f64 = .{ 0, 0, 0, 0 },
 
+pub fn getDrawingBufferWidth(self: *const WebGLRenderingContext) u32 {
+    return self._surface.width;
+}
+
+pub fn getDrawingBufferHeight(self: *const WebGLRenderingContext) u32 {
+    return self._surface.height;
+}
+
 /// On Chrome and Safari, a call to `getSupportedExtensions` returns total of 39.
 /// The reference for it lists lesser number of extensions:
 /// https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Using_Extensions#extension_list
@@ -229,6 +237,8 @@ pub const JsApi = struct {
     pub const getSupportedExtensions = bridge.function(WebGLRenderingContext.getSupportedExtensions, .{});
     pub const clearColor = bridge.function(WebGLRenderingContext.clearColor, .{});
     pub const clear = bridge.function(WebGLRenderingContext.clear, .{});
+    pub const drawingBufferWidth = bridge.accessor(WebGLRenderingContext.getDrawingBufferWidth, null, .{});
+    pub const drawingBufferHeight = bridge.accessor(WebGLRenderingContext.getDrawingBufferHeight, null, .{});
     pub const COLOR_BUFFER_BIT = bridge.property(WebGLRenderingContext.COLOR_BUFFER_BIT, .{ .template = false, .readonly = true });
 };
 

@@ -93,7 +93,59 @@
   localStorage.clear();
   for (i = 0; i < 5; i++) {
     const v =  "v".repeat(1024 * 1024);
-    localStorage.setItem(v, v);
+    localStorage.setItem(`k${i}`, v);
   }
   testing.expectError("QuotaExceededError", () => localStorage.setItem("last", "v"));
+</script>
+
+<script id="session_storage">
+  testing.expectEqual(sessionStorage, window.sessionStorage);
+  testing.expectEqual('object', typeof sessionStorage);
+
+  sessionStorage.clear();
+  testing.expectEqual(0, sessionStorage.length);
+  testing.expectEqual(null, sessionStorage.getItem('foo'));
+  testing.expectEqual(null, sessionStorage.key(0));
+
+  sessionStorage.setItem('foo', 'bar');
+  testing.expectEqual('bar', sessionStorage.getItem('foo'));
+  testing.expectEqual(1, sessionStorage.length);
+
+  sessionStorage.setItem('alpha', 'one');
+  sessionStorage.setItem('beta', 'two');
+  testing.expectEqual(3, sessionStorage.length);
+  testing.expectEqual('one', sessionStorage.getItem('alpha'));
+  testing.expectEqual('two', sessionStorage.getItem('beta'));
+
+  sessionStorage.setItem('foo', 'updated');
+  testing.expectEqual('updated', sessionStorage.getItem('foo'));
+  testing.expectEqual(3, sessionStorage.length);
+
+  const session_keys = [];
+  for (let i = 0; i < sessionStorage.length; i++) {
+    session_keys.push(sessionStorage.key(i));
+  }
+  testing.expectEqual(true, session_keys.includes('foo'));
+  testing.expectEqual(true, session_keys.includes('alpha'));
+  testing.expectEqual(true, session_keys.includes('beta'));
+
+  sessionStorage.removeItem('alpha');
+  testing.expectEqual(null, sessionStorage.getItem('alpha'));
+  testing.expectEqual(2, sessionStorage.length);
+
+  sessionStorage['gamma'] = 'three';
+  testing.expectEqual('three', sessionStorage['gamma']);
+  testing.expectEqual(3, sessionStorage.length);
+
+  testing.expectEqual(null, sessionStorage.getItem('missing'));
+  testing.expectEqual(null, sessionStorage.key(99));
+  const local_storage_length_before = localStorage.length;
+  testing.expectEqual(null, localStorage.getItem('foo'));
+
+  sessionStorage.clear();
+  testing.expectEqual(0, sessionStorage.length);
+  testing.expectEqual(null, sessionStorage.getItem('foo'));
+  testing.expectEqual(null, sessionStorage.getItem('beta'));
+  testing.expectEqual(null, sessionStorage.getItem('gamma'));
+  testing.expectEqual(local_storage_length_before, localStorage.length);
 </script>

@@ -51,6 +51,7 @@ pub const Shed = struct {
         errdefer allocator.destroy(bucket);
         bucket.* = .{};
         bucket.local.setPersistentAllocator(allocator);
+        bucket.session.setPersistentAllocator(allocator);
 
         gop.key_ptr.* = try allocator.dupe(u8, origin);
         gop.value_ptr.* = bucket;
