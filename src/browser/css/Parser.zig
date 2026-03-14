@@ -318,12 +318,6 @@ pub const RulesIterator = struct {
         var selector_start: ?usize = null;
         var selector_end: ?usize = null;
 
-        // Skip leading trivia
-        while (self.stream.peek()) |peeked| {
-            if (!isWhitespaceOrComment(peeked.token)) break;
-            _ = self.stream.next();
-        }
-
         while (true) {
             const peeked = self.stream.peek() orelse return null;
 
@@ -367,6 +361,11 @@ pub const RulesIterator = struct {
                 self.skipAtRule();
                 selector_start = null;
                 selector_end = null;
+                continue;
+            }
+
+            if (selector_start == null and (isWhitespaceOrComment(peeked.token) or isSemicolon(peeked.token))) {
+                _ = self.stream.next();
                 continue;
             }
 
@@ -468,5 +467,15 @@ test "RulesIterator: comments and whitespace" {
     const rule = it.next() orelse return error.MissingRule;
     try testing.expectEqualStrings(".test", rule.selector);
     try testing.expectEqualStrings(" /* comment */ color: red; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: top-level semicolons" {
+    var it = RulesIterator.init("*{}; ; p{}");
+    var rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("*", rule.selector);
+
+    rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("p", rule.selector);
     try testing.expectEqual(@as(?Rule, null), it.next());
 }

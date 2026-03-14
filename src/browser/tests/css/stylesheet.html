@@ -468,6 +468,18 @@
 }
 </script>
 
+<script id="CSSStyleSheet_insertRule_semicolon">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    // Should not throw even with trailing semicolon
+    sheet.insertRule('*{};');
+    testing.expectEqual(1, sheet.cssRules.length);
+}
+</script>
+
 <script id="CSSStyleSheet_replaceSync">
 {
     const sheet = new CSSStyleSheet();
