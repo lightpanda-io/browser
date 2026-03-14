@@ -114,7 +114,7 @@
     eventually: eventually,
     IS_TEST_RUNNER: IS_TEST_RUNNER,
     HOST: '127.0.0.1',
-    ORIGIN: 'http://127.0.0.1:9582/',
+    ORIGIN: 'http://127.0.0.1:9582',
     BASE_URL: 'http://127.0.0.1:9582/src/browser/tests/',
   };
 
@@ -124,7 +124,7 @@
     // seemless, namely around adapting paths/urls.
     console.warn(`The page is not being executed in the test runner, certain behavior has been adjusted`);
     window.testing.HOST = location.hostname;
-    window.testing.ORIGIN = location.origin + '/';
+    window.testing.ORIGIN = location.origin;
     window.testing.BASE_URL = location.origin + '/src/browser/tests/';
     window.addEventListener('load', testing.assertOk);
   }
