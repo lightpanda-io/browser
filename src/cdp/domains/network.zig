@@ -19,6 +19,7 @@
 const std = @import("std");
 const lp = @import("lightpanda");
 const Allocator = std.mem.Allocator;
+const log = @import("../../log.zig");
 
 const CdpStorage = @import("storage.zig");
 

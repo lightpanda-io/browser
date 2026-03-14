@@ -132,7 +132,6 @@ pub fn setCdpCookie(cookie_jar: *CookieJar, param: CdpCookie) !void {
     // This allows Puppeteer's page.setCookie() to work, which may send cookies with
     // partitionKey as part of its cookie-setting workflow.
     if (param.partitionKey != null) {
-        const log = @import("../../log.zig");
         log.debug(.storage, "partitionKey ignored in setCdpCookie", .{});
     }
     // Still reject unsupported features
