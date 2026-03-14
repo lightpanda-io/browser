@@ -3,6 +3,7 @@ import hashlib
 import os
 import socketserver
 import sys
+import urllib.parse
 
 
 ROOT = os.path.dirname(__file__)
@@ -108,7 +109,8 @@ class Handler(socketserver.BaseRequestHandler):
             return
 
         method = parts[0]
-        path = parts[1]
+        raw_path = parts[1]
+        path = urllib.parse.urlsplit(raw_path).path
         headers = {}
         for line in lines[1:]:
             if ":" not in line:
@@ -178,7 +180,14 @@ class Handler(socketserver.BaseRequestHandler):
                 send_frame(self.request, 0xA, payload)
                 continue
             if opcode == 0x1:
+                if payload == b"close-me":
+                    close_payload = (4001).to_bytes(2, "big") + b"server-close"
+                    send_frame(self.request, 0x8, close_payload)
+                    return
                 send_frame(self.request, 0x1, b"echo:" + payload)
+                continue
+            if opcode == 0x2:
+                send_frame(self.request, 0x2, payload)
 
 
 class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):

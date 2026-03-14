@@ -135,6 +135,70 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/cursor-seed.html":
+            body = html(
+                "IndexedDB Loading - Lightpanda Browser",
+                "<script>"
+                "const req=indexedDB.open('lp-cursor-persist',1);"
+                "req.onupgradeneeded=()=>{"
+                "const store=req.result.createObjectStore('users');"
+                "store.createIndex('by_email','email');"
+                "};"
+                "req.onerror=()=>{document.title='IndexedDB Cursor Seed Error - Lightpanda Browser';};"
+                "req.onsuccess=()=>{"
+                "const db=req.result;"
+                "const tx=db.transaction('users');"
+                "const store=tx.objectStore('users');"
+                "Promise.all(["
+                "new Promise((resolve,reject)=>{const r=store.put({name:'Grace',email:'grace@example.com'},'user-2'); r.onsuccess=()=>resolve(); r.onerror=()=>reject();}),"
+                "new Promise((resolve,reject)=>{const r=store.put({name:'Ada',email:'ada@example.com'},'user-1'); r.onsuccess=()=>resolve(); r.onerror=()=>reject();}),"
+                "new Promise((resolve,reject)=>{const r=store.put({name:'Linus',email:'linus@example.com'},'user-3'); r.onsuccess=()=>resolve(); r.onerror=()=>reject();})"
+                "]).then(()=>{document.title='IndexedDB Cursor Seeded - Lightpanda Browser';}).catch(()=>{document.title='IndexedDB Cursor Seed Error - Lightpanda Browser';});"
+                "};"
+                "</script><h1>cursor-seed</h1>",
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/cursor-echo.html":
+            body = html(
+                "IndexedDB Loading - Lightpanda Browser",
+                "<script>"
+                "function iterateCursor(request, step){return new Promise((resolve,reject)=>{const rows=[]; request.onerror=()=>reject(); request.onsuccess=()=>{const cursor=request.result; if(!cursor){resolve(rows); return;} rows.push(step(cursor)); cursor.continue();};});}"
+                "const req=indexedDB.open('lp-cursor-persist',1);"
+                "req.onupgradeneeded=()=>{document.title='IndexedDB Cursor Echo missing - Lightpanda Browser';};"
+                "req.onerror=()=>{document.title='IndexedDB Cursor Echo missing - Lightpanda Browser';};"
+                "req.onsuccess=()=>{"
+                "try{"
+                "const db=req.result;"
+                "const tx=db.transaction('users');"
+                "const store=tx.objectStore('users');"
+                "Promise.all(["
+                "iterateCursor(store.openCursor(), (cursor)=>`${cursor.primaryKey}:${cursor.value.name}`),"
+                "iterateCursor(store.index('by_email').openCursor(), (cursor)=>`${cursor.key}:${cursor.primaryKey}:${cursor.value.name}`)"
+                "]).then((rows)=>{"
+                "const storeRows=rows[0].join('|');"
+                "const indexRows=rows[1].join('|');"
+                "const ok=storeRows==='user-1:Ada|user-2:Grace|user-3:Linus'&&indexRows==='ada@example.com:user-1:Ada|grace@example.com:user-2:Grace|linus@example.com:user-3:Linus';"
+                "document.title=(ok?'IndexedDB Cursor Echo ok - Lightpanda Browser':'IndexedDB Cursor Echo missing - Lightpanda Browser');"
+                "}).catch(()=>{document.title='IndexedDB Cursor Echo missing - Lightpanda Browser';});"
+                "}catch(_err){document.title='IndexedDB Cursor Echo missing - Lightpanda Browser';}"
+                "};"
+                "</script><h1>cursor-echo</h1>",
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         body = html("Not Found - Lightpanda Browser", "<h1>Not Found</h1>")
         self.send_response(404)
         self.send_header("Content-Type", "text/html; charset=utf-8")

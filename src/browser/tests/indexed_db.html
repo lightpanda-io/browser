@@ -25,6 +25,22 @@
       request.onsuccess = () => resolve(request.result);
     });
   }
+
+  function iterateCursor(request, step) {
+    return new Promise((resolve, reject) => {
+      const values = [];
+      request.onerror = () => reject(new Error(request.error || 'cursor failed'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve(values);
+          return;
+        }
+        values.push(step(cursor));
+        cursor.continue();
+      };
+    });
+  }
 </script>
 
 <script id="indexed_db_open_upgrade">
@@ -127,5 +143,36 @@
     await requestResult(store2.delete('user-1'));
     testing.expectEqual(null, await requestResult(index2.get('ada@new.example.com')));
     db2.close();
+  });
+</script>
+
+<script id="indexed_db_cursor_iteration">
+  testing.async(async () => {
+    const db = await openDb('lp-cursor', 1, (upgradeDb) => {
+      const store = upgradeDb.createObjectStore('users');
+      store.createIndex('by_email', 'email');
+    });
+
+    const tx = db.transaction('users');
+    const store = tx.objectStore('users');
+    await requestResult(store.put({ name: 'Grace', email: 'grace@example.com' }, 'user-2'));
+    await requestResult(store.put({ name: 'Ada', email: 'ada@example.com' }, 'user-1'));
+    await requestResult(store.put({ name: 'Linus', email: 'linus@example.com' }, 'user-3'));
+
+    const storeRows = await iterateCursor(store.openCursor(), (cursor) => {
+      return `${cursor.primaryKey}:${cursor.value.name}`;
+    });
+    testing.expectEqual(['user-1:Ada', 'user-2:Grace', 'user-3:Linus'], storeRows);
+
+    const emailRows = await iterateCursor(store.index('by_email').openCursor(), (cursor) => {
+      return `${cursor.key}:${cursor.primaryKey}:${cursor.value.name}`;
+    });
+    testing.expectEqual([
+      'ada@example.com:user-1:Ada',
+      'grace@example.com:user-2:Grace',
+      'linus@example.com:user-3:Linus',
+    ], emailRows);
+
+    db.close();
   });
 </script>

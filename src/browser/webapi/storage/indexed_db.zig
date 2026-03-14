@@ -9,7 +9,21 @@ const String = @import("../../../string.zig").String;
 const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
-    return &.{ IDBFactory, IDBRequest, IDBOpenDBRequest, IDBDatabase, IDBTransaction, IDBObjectStore, IDBIndex };
+    return &.{ IDBFactory, IDBRequest, IDBOpenDBRequest, IDBDatabase, IDBTransaction, IDBObjectStore, IDBIndex, IDBCursor };
+}
+
+const CursorEntry = struct {
+    key_text: []const u8,
+    primary_key_text: []const u8,
+    value_json: []const u8,
+};
+
+fn cursorEntryLessThan(_: void, lhs: CursorEntry, rhs: CursorEntry) bool {
+    return switch (std.mem.order(u8, lhs.key_text, rhs.key_text)) {
+        .lt => true,
+        .gt => false,
+        .eq => std.mem.order(u8, lhs.primary_key_text, rhs.primary_key_text) == .lt,
+    };
 }
 
 pub const Shed = struct {
@@ -683,6 +697,30 @@ pub const IDBObjectStore = struct {
         return request;
     }
 
+    pub fn openCursor(self: *IDBObjectStore, page: *Page) !*IDBRequest {
+        const request = try page._factory.eventTarget(IDBRequest{
+            ._proto = undefined,
+            ._page = page,
+            ._source = self,
+            ._transaction = self._transaction,
+        });
+
+        const entries = try buildObjectStoreCursorEntries(self._data, page);
+        if (entries.len == 0) {
+            request._result_json = "null";
+        } else {
+            const cursor = try page._factory.create(IDBCursor{
+                ._page = page,
+                ._request = request,
+                ._entries = entries,
+            });
+            request._result_cursor = cursor;
+        }
+
+        try scheduleRequestSuccess(page, request, "IDBObjectStore.openCursor");
+        return request;
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(IDBObjectStore);
 
@@ -699,6 +737,7 @@ pub const IDBObjectStore = struct {
         pub const get = bridge.function(IDBObjectStore.get, .{ .dom_exception = true });
         pub const delete = bridge.function(IDBObjectStore.delete, .{ .dom_exception = true });
         pub const clear = bridge.function(IDBObjectStore.clear, .{ .dom_exception = true });
+        pub const openCursor = bridge.function(IDBObjectStore.openCursor, .{ .dom_exception = true });
     };
 };
 
@@ -739,6 +778,30 @@ pub const IDBIndex = struct {
         return request;
     }
 
+    pub fn openCursor(self: *IDBIndex, page: *Page) !*IDBRequest {
+        const request = try page._factory.eventTarget(IDBRequest{
+            ._proto = undefined,
+            ._page = page,
+            ._source = self._store,
+            ._transaction = self._store._transaction,
+        });
+
+        const entries = try buildIndexCursorEntries(self, page);
+        if (entries.len == 0) {
+            request._result_json = "null";
+        } else {
+            const cursor = try page._factory.create(IDBCursor{
+                ._page = page,
+                ._request = request,
+                ._entries = entries,
+            });
+            request._result_cursor = cursor;
+        }
+
+        try scheduleRequestSuccess(page, request, "IDBIndex.openCursor");
+        return request;
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(IDBIndex);
 
@@ -751,6 +814,58 @@ pub const IDBIndex = struct {
         pub const name = bridge.accessor(IDBIndex.getName, null, .{});
         pub const keyPath = bridge.accessor(IDBIndex.getKeyPath, null, .{});
         pub const get = bridge.function(IDBIndex.get, .{ .dom_exception = true });
+        pub const openCursor = bridge.function(IDBIndex.openCursor, .{ .dom_exception = true });
+    };
+};
+
+pub const IDBCursor = struct {
+    _page: *Page,
+    _request: *IDBRequest,
+    _entries: []const CursorEntry,
+    _position: usize = 0,
+
+    fn currentEntry(self: *const IDBCursor) CursorEntry {
+        return self._entries[self._position];
+    }
+
+    pub fn getKey(self: *const IDBCursor) []const u8 {
+        return self.currentEntry().key_text;
+    }
+
+    pub fn getPrimaryKey(self: *const IDBCursor) []const u8 {
+        return self.currentEntry().primary_key_text;
+    }
+
+    pub fn getValue(self: *const IDBCursor, page: *Page) !js.Value {
+        return try page.js.local.?.parseJSON(self.currentEntry().value_json);
+    }
+
+    pub fn @"continue"(self: *IDBCursor, page: *Page) !void {
+        const next = self._position + 1;
+        if (next < self._entries.len) {
+            self._position = next;
+            self._request._result_cursor = self;
+            self._request._result_json = null;
+        } else {
+            self._request._result_cursor = null;
+            self._request._result_json = "null";
+        }
+        try scheduleRequestSuccess(page, self._request, "IDBCursor.continue");
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(IDBCursor);
+
+        pub const Meta = struct {
+            pub const name = "IDBCursor";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const key = bridge.accessor(IDBCursor.getKey, null, .{});
+        pub const primaryKey = bridge.accessor(IDBCursor.getPrimaryKey, null, .{});
+        pub const value = bridge.accessor(IDBCursor.getValue, null, .{});
+        pub const @"continue" = bridge.function(IDBCursor.@"continue", .{ .dom_exception = true });
     };
 };
 
@@ -758,6 +873,7 @@ pub const IDBRequest = struct {
     _proto: *EventTarget,
     _page: *Page,
     _result_json: ?[]const u8 = null,
+    _result_cursor: ?*IDBCursor = null,
     _error: ?[]const u8 = null,
     _source: ?*IDBObjectStore = null,
     _transaction: ?*IDBTransaction = null,
@@ -770,6 +886,9 @@ pub const IDBRequest = struct {
 
     pub fn getResult(self: *const IDBRequest, page: *Page) !js.Value {
         const local = page.js.local.?;
+        if (self._result_cursor) |cursor| {
+            return try local.zigValueToJs(cursor, .{});
+        }
         if (self._result_json) |json| {
             return try local.parseJSON(json);
         }
@@ -970,6 +1089,57 @@ fn scheduleRequestSuccess(page: *Page, request: *IDBRequest, name: []const u8) !
         .name = name,
         .low_priority = false,
     });
+}
+
+fn buildObjectStoreCursorEntries(store: *ObjectStoreData, page: *Page) ![]const CursorEntry {
+    const count = store._items.count();
+    if (count == 0) return &.{};
+
+    const entries = try page.arena.alloc(CursorEntry, count);
+    var i: usize = 0;
+    var it = store._items.iterator();
+    while (it.next()) |kv| {
+        entries[i] = .{
+            .key_text = kv.key_ptr.*,
+            .primary_key_text = kv.key_ptr.*,
+            .value_json = kv.value_ptr.*,
+        };
+        i += 1;
+    }
+    std.mem.sort(CursorEntry, entries, {}, cursorEntryLessThan);
+    return entries;
+}
+
+fn buildIndexCursorEntries(index: *IDBIndex, page: *Page) ![]const CursorEntry {
+    const count = index._data._entries.count();
+    if (count == 0) return &.{};
+
+    const entries_buf = try page.arena.alloc(CursorEntry, count);
+    var len: usize = 0;
+    var it = index._data._entries.iterator();
+    while (it.next()) |kv| {
+        const primary_key = kv.value_ptr.*;
+        const value_json = index._store._data.getJson(primary_key) orelse continue;
+        entries_buf[len] = .{
+            .key_text = try jsonStringValue(page.arena, kv.key_ptr.*),
+            .primary_key_text = primary_key,
+            .value_json = value_json,
+        };
+        len += 1;
+    }
+    const entries = entries_buf[0..len];
+    std.mem.sort(CursorEntry, entries, {}, cursorEntryLessThan);
+    return entries;
+}
+
+fn jsonStringValue(allocator: Allocator, json: []const u8) ![]const u8 {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+
+    return switch (parsed.value) {
+        .string => |value| try allocator.dupe(u8, value),
+        else => try allocator.dupe(u8, json),
+    };
 }
 
 const testing = @import("../../../testing.zig");

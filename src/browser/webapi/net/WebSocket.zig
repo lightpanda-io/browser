@@ -28,6 +28,8 @@ const URL = @import("../../URL.zig");
 const Page = @import("../../Page.zig");
 const Event = @import("../Event.zig");
 const EventTarget = @import("../EventTarget.zig");
+const Blob = @import("../Blob.zig");
+const CloseEvent = @import("../event/CloseEvent.zig");
 const MessageEvent = @import("../event/MessageEvent.zig");
 
 const Allocator = std.mem.Allocator;
@@ -50,10 +52,12 @@ _stop_requested: bool = false,
 _retained: bool = false,
 _protocol: []const u8 = "",
 _extensions: []const u8 = "",
+_binary_type: BinaryType = .blob,
 _on_open: ?js.Function.Temp = null,
 _on_message: ?js.Function.Temp = null,
 _on_error: ?js.Function.Temp = null,
 _on_close: ?js.Function.Temp = null,
+_close_sent: bool = false,
 
 const ReadyState = enum(u8) {
     connecting = 0,
@@ -64,17 +68,29 @@ const ReadyState = enum(u8) {
 
 const QueuedEvent = union(enum) {
     open,
-    message: []u8,
+    message: MessagePayload,
     err,
     close: CloseInfo,
 };
 
+const MessagePayload = union(enum) {
+    text: []u8,
+    binary: []u8,
+};
+
 const CloseInfo = struct {
     code: u16 = 1000,
+    reason: []u8 = &.{},
     was_clean: bool = true,
 };
 
+const BinaryType = enum {
+    blob,
+    arraybuffer,
+};
+
 const CLIENT_TEXT_OPCODE: u8 = 0x1;
+const CLIENT_BINARY_OPCODE: u8 = 0x2;
 const CLIENT_CLOSE_OPCODE: u8 = 0x8;
 const CLIENT_PONG_OPCODE: u8 = 0xA;
 
@@ -117,6 +133,7 @@ pub fn init(raw_url: [:0]const u8, page: *Page) !*WebSocket {
         try self.queueEvent(.err);
         try self.queueClose(.{
             .code = 1006,
+            .reason = try dupCloseReason(""),
             .was_clean = false,
         });
     };
@@ -168,6 +185,21 @@ pub fn getExtensions(self: *const WebSocket) []const u8 {
     return self._extensions;
 }
 
+pub fn getBinaryType(self: *const WebSocket) []const u8 {
+    return switch (self._binary_type) {
+        .blob => "blob",
+        .arraybuffer => "arraybuffer",
+    };
+}
+
+pub fn setBinaryType(self: *WebSocket, value: []const u8) !void {
+    if (std.mem.eql(u8, value, "blob")) {
+        self._binary_type = .blob;
+    } else if (std.mem.eql(u8, value, "arraybuffer")) {
+        self._binary_type = .arraybuffer;
+    }
+}
+
 pub fn getOnOpen(self: *const WebSocket) ?js.Function.Temp {
     return self._on_open;
 }
@@ -200,7 +232,7 @@ pub fn setOnClose(self: *WebSocket, cb: ?js.Function.Temp) !void {
     self._on_close = cb;
 }
 
-pub fn send(self: *WebSocket, data: []const u8) !void {
+pub fn send(self: *WebSocket, data: js.Value.Temp, page: *Page) !void {
     {
         self._lock.lock();
         defer self._lock.unlock();
@@ -209,12 +241,32 @@ pub fn send(self: *WebSocket, data: []const u8) !void {
         }
     }
 
-    try self.sendFrame(CLIENT_TEXT_OPCODE, data);
+    const value = data.local(page.js.local.?);
+    if (value.isString()) |_| {
+        try self.sendFrame(CLIENT_TEXT_OPCODE, try value.toZig([]const u8));
+        return;
+    }
+
+    if (value.isArrayBuffer() or value.isArrayBufferView() or value.isTypedArray()) {
+        const typed = try value.toZig(js.TypedArray(u8));
+        try self.sendFrame(CLIENT_BINARY_OPCODE, typed.values);
+        return;
+    }
+
+    return error.InvalidArgument;
 }
 
 pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     const code = code_ orelse 1000;
     const reason = reason_ orelse "";
+
+    if (reason.len > 123 or !std.unicode.utf8ValidateSlice(reason)) {
+        return error.SyntaxError;
+    }
+
+    if (code_ != null and code != 1000 and (code < 3000 or code > 4999)) {
+        return error.InvalidAccessError;
+    }
 
     {
         self._lock.lock();
@@ -223,6 +275,7 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
             .closing, .closed => return,
             else => self._state = .closing,
         }
+        self._close_sent = true;
     }
 
     var close_payload = try std.ArrayList(u8).initCapacity(self._arena, 2 + reason.len);
@@ -233,13 +286,13 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
 
     self.sendFrame(CLIENT_CLOSE_OPCODE, close_payload.items) catch |err| {
         log.warn(.http, "websocket.close", .{ .url = self._url, .err = err });
+        try self.queueClose(.{
+            .code = 1006,
+            .reason = try page_allocator.dupe(u8, ""),
+            .was_clean = false,
+        });
+        return;
     };
-
-    self.stopAndCloseStream();
-    try self.queueClose(.{
-        .code = code,
-        .was_clean = true,
-    });
 }
 
 fn connect(self: *WebSocket) !void {
@@ -448,13 +501,30 @@ fn dispatchQueuedEvent(self: *WebSocket, event_: QueuedEvent) void {
             };
         },
         .message => |payload| {
-            defer page_allocator.free(payload);
+            defer switch (payload) {
+                .text => |text| page_allocator.free(text),
+                .binary => |bytes| page_allocator.free(bytes),
+            };
 
             var ls: js.Local.Scope = undefined;
             page.js.localScope(&ls);
             defer ls.deinit();
 
-            const message_value = ls.local.zigValueToJs(payload, .{}) catch |err| {
+            const message_value = switch (payload) {
+                .text => |text| ls.local.zigValueToJs(text, .{}),
+                .binary => |bytes| blk: {
+                    switch (self._binary_type) {
+                        .arraybuffer => break :blk ls.local.zigValueToJs(js.ArrayBuffer{ .values = bytes }, .{}),
+                        .blob => {
+                            const blob = Blob.init(&.{bytes}, null, page) catch |err| {
+                                log.err(.dom, "WebSocket.message.blob", .{ .err = err });
+                                return;
+                            };
+                            break :blk ls.local.zigValueToJs(blob, .{});
+                        },
+                    }
+                },
+            } catch |err| {
                 log.err(.dom, "WebSocket.message.value", .{ .err = err });
                 return;
             };
@@ -501,14 +571,19 @@ fn dispatchQueuedEvent(self: *WebSocket, event_: QueuedEvent) void {
             self._state = .closed;
             self._lock.unlock();
 
-            _ = info;
-            const event = Event.initTrusted(comptime .wrap("close"), null, page) catch |err| {
+            defer page_allocator.free(info.reason);
+
+            const event = CloseEvent.initTrusted(comptime .wrap("close"), .{
+                .code = info.code,
+                .reason = info.reason,
+                .wasClean = info.was_clean,
+            }, page) catch |err| {
                 log.err(.dom, "WebSocket.close", .{ .err = err });
                 return;
             };
             page._event_manager.dispatchDirect(
                 self.asEventTarget(),
-                event,
+                event.asEvent(),
                 self._on_close,
                 .{ .context = "WebSocket.close" },
             ) catch |err| {
@@ -527,16 +602,27 @@ fn queueEvent(self: *WebSocket, event_: QueuedEvent) !void {
 fn queueClose(self: *WebSocket, info: CloseInfo) !void {
     self._lock.lock();
     defer self._lock.unlock();
-    if (self._close_queued) return;
+    if (self._close_queued) {
+        page_allocator.free(info.reason);
+        return;
+    }
     self._close_queued = true;
     self._state = .closed;
     try self._events.append(page_allocator, .{ .close = info });
 }
 
+fn dupCloseReason(reason: []const u8) ![]u8 {
+    return try page_allocator.dupe(u8, reason);
+}
+
 fn clearQueuedEvents(self: *WebSocket) void {
     for (self._events.items) |event_| {
         switch (event_) {
-            .message => |payload| page_allocator.free(payload),
+            .message => |payload| switch (payload) {
+                .text => |text| page_allocator.free(text),
+                .binary => |bytes| page_allocator.free(bytes),
+            },
+            .close => |info| page_allocator.free(info.reason),
             else => {},
         }
     }
@@ -607,7 +693,7 @@ fn stopAndCloseStream(self: *WebSocket) void {
 fn readerMain(self: *WebSocket) void {
     var reader = Net.Reader(false).init(page_allocator) catch |err| {
         self.queueEvent(.err) catch {};
-        self.queueClose(.{ .code = 1006, .was_clean = false }) catch {};
+        self.queueClose(.{ .code = 1006, .reason = dupCloseReason("") catch unreachable, .was_clean = false }) catch {};
         log.err(.http, "websocket.reader.init", .{ .url = self._url, .err = err });
         return;
     };
@@ -624,7 +710,7 @@ fn readerMain(self: *WebSocket) void {
         const n = socketRead(&stream, reader.readBuf()) catch |err| {
             if (!self.isStopRequested()) {
                 self.queueEvent(.err) catch {};
-                self.queueClose(.{ .code = 1006, .was_clean = false }) catch {};
+                self.queueClose(.{ .code = 1006, .reason = dupCloseReason("") catch unreachable, .was_clean = false }) catch {};
                 log.warn(.http, "websocket.read", .{ .url = self._url, .err = err });
             }
             break;
@@ -632,7 +718,7 @@ fn readerMain(self: *WebSocket) void {
 
         if (n == 0) {
             if (!self.isStopRequested()) {
-                self.queueClose(.{ .code = 1000, .was_clean = true }) catch {};
+                self.queueClose(.{ .code = 1006, .reason = dupCloseReason("") catch unreachable, .was_clean = false }) catch {};
             }
             break;
         }
@@ -641,7 +727,7 @@ fn readerMain(self: *WebSocket) void {
         while (true) {
             const message = reader.next() catch |err| {
                 self.queueEvent(.err) catch {};
-                self.queueClose(.{ .code = 1006, .was_clean = false }) catch {};
+                self.queueClose(.{ .code = 1006, .reason = dupCloseReason("") catch unreachable, .was_clean = false }) catch {};
                 log.warn(.http, "websocket.frame", .{ .url = self._url, .err = err });
                 return;
             };
@@ -651,10 +737,10 @@ fn readerMain(self: *WebSocket) void {
                 .text => {
                     const payload = page_allocator.dupe(u8, msg.data) catch {
                         self.queueEvent(.err) catch {};
-                        self.queueClose(.{ .code = 1006, .was_clean = false }) catch {};
+                        self.queueClose(.{ .code = 1006, .reason = dupCloseReason("") catch unreachable, .was_clean = false }) catch {};
                         return;
                     };
-                    self.queueEvent(.{ .message = payload }) catch {
+                    self.queueEvent(.{ .message = .{ .text = payload } }) catch {
                         page_allocator.free(payload);
                         return;
                     };
@@ -666,11 +752,30 @@ fn readerMain(self: *WebSocket) void {
                 },
                 .pong => {},
                 .close => {
-                    const close_info = parseCloseInfo(msg.data);
+                    const close_info = parseCloseInfo(msg.data) catch {
+                        self.queueEvent(.err) catch {};
+                        self.queueClose(.{ .code = 1006, .reason = dupCloseReason("") catch unreachable, .was_clean = false }) catch {};
+                        return;
+                    };
+                    if (!self._close_sent) {
+                        self.sendFrame(CLIENT_CLOSE_OPCODE, msg.data) catch |err| {
+                            log.warn(.http, "websocket.close_ack", .{ .url = self._url, .err = err });
+                        };
+                    }
                     self.queueClose(close_info) catch {};
                     return;
                 },
-                .binary => {},
+                .binary => {
+                    const payload = page_allocator.dupe(u8, msg.data) catch {
+                        self.queueEvent(.err) catch {};
+                        self.queueClose(.{ .code = 1006, .reason = dupCloseReason("") catch unreachable, .was_clean = false }) catch {};
+                        return;
+                    };
+                    self.queueEvent(.{ .message = .{ .binary = payload } }) catch {
+                        page_allocator.free(payload);
+                        return;
+                    };
+                },
             }
             if (msg.cleanup_fragment) {
                 reader.cleanup();
@@ -680,12 +785,18 @@ fn readerMain(self: *WebSocket) void {
     }
 }
 
-fn parseCloseInfo(data: []const u8) CloseInfo {
+fn parseCloseInfo(data: []const u8) !CloseInfo {
     if (data.len < 2) {
-        return .{};
+        return .{
+            .code = 1000,
+            .reason = try dupCloseReason(""),
+            .was_clean = true,
+        };
     }
+    const code = (@as(u16, data[0]) << 8) | data[1];
     return .{
-        .code = (@as(u16, data[0]) << 8) | data[1],
+        .code = code,
+        .reason = try dupCloseReason(data[2..]),
         .was_clean = true,
     };
 }
@@ -805,6 +916,7 @@ pub const JsApi = struct {
     pub const bufferedAmount = bridge.accessor(WebSocket.getBufferedAmount, null, .{});
     pub const protocol = bridge.accessor(WebSocket.getProtocol, null, .{});
     pub const extensions = bridge.accessor(WebSocket.getExtensions, null, .{});
+    pub const binaryType = bridge.accessor(WebSocket.getBinaryType, WebSocket.setBinaryType, .{});
     pub const send = bridge.function(WebSocket.send, .{ .dom_exception = true });
     pub const close = bridge.function(WebSocket.close, .{ .dom_exception = true });
     pub const onopen = bridge.accessor(WebSocket.getOnOpen, WebSocket.setOnOpen, .{});
@@ -890,6 +1002,14 @@ fn testWebSocketServerMain(server: *TestWsServer) !void {
             const msg = maybe_msg orelse break;
             switch (msg.type) {
                 .text => {
+                    if (std.mem.eql(u8, msg.data, "close-me")) {
+                        const payload = &[_]u8{ 0x0f, 0xa1 } ++ "server-close";
+                        const frame = try serverFrame(CLIENT_CLOSE_OPCODE, payload);
+                        defer std.testing.allocator.free(frame);
+                        try socketWriteAll(&conn.stream, frame);
+                        return;
+                    }
+
                     const payload = try std.mem.concat(std.testing.allocator, u8, &.{ "echo:", msg.data });
                     defer std.testing.allocator.free(payload);
                     const frame = try serverFrame(CLIENT_TEXT_OPCODE, payload);
@@ -907,7 +1027,12 @@ fn testWebSocketServerMain(server: *TestWsServer) !void {
                     defer std.testing.allocator.free(frame);
                     try socketWriteAll(&conn.stream, frame);
                 },
-                .pong, .binary => {},
+                .binary => {
+                    const frame = try serverFrame(CLIENT_BINARY_OPCODE, msg.data);
+                    defer std.testing.allocator.free(frame);
+                    try socketWriteAll(&conn.stream, frame);
+                },
+                .pong => {},
             }
             if (msg.cleanup_fragment) reader.cleanup();
         }

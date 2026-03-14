@@ -242,6 +242,10 @@ Current state inside Gate 1:
   definitions and indexed lookups persistent across tabs and browser restart,
   with focused DOM tests plus a bounded headed probe proving indexed entries
   survive restart and can still be read back by index name and key
+- that same headed IndexedDB path now also supports object-store and index
+  cursor iteration, with focused DOM tests plus a bounded headed cross-tab
+  probe proving seeded cursor rows can be read back in sorted order from a
+  sibling tab through both `objectStore.openCursor()` and `index.openCursor()`
 - headed `fetch(...)` now honors credentials policy correctly on authenticated
   pages, with bounded localhost probes proving:
   - default same-origin fetch keeps cookie plus inherited auth
@@ -398,11 +402,21 @@ Current state inside Gate 1:
   `drawArrays(TRIANGLES, ...)`, with focused DOM tests plus a bounded headed
   screenshot probe proving a red triangle reaches the real destination canvas
   surface
+- that same headed Win32 `webgl` path now also supports a first indexed-draw
+  and uniform-color slice for `getUniformLocation`, `uniform4f`,
+  `ELEMENT_ARRAY_BUFFER`, and `drawElements(TRIANGLES, ..., UNSIGNED_SHORT, ...)`,
+  with bounded headed screenshot coverage proving a uniform-colored indexed
+  triangle reaches the real destination canvas surface
 - the headed browser runtime now also exposes a first real `WebSocket`
   browser-API slice with `CONNECTING` -> `OPEN` -> `CLOSED` state transitions,
   `send`, `close`, `onopen`, `onmessage`, `onerror`, and `onclose`, with a
   focused localhost DOM test plus a bounded headed echo probe proving text
   frames round-trip on the live headed surface path
+- that same headed `WebSocket` runtime now also covers binary echo plus richer
+  close semantics through `binaryType`, binary `message` payloads, and
+  `CloseEvent` `code` / `reason` / `wasClean`, with a bounded headed localhost
+  probe proving binary frames round-trip and server-initiated close details
+  reach page JS on the live headed surface path
 - the current headed painter now also keeps simple block paragraphs with mixed
   direct text plus inline child elements on one shared inline row instead of
   splitting the direct text into a separate label band above the inline chips,

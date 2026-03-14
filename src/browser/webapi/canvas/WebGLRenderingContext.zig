@@ -20,6 +20,7 @@ const std = @import("std");
 
 const color = @import("../../color.zig");
 const js = @import("../../js/js.zig");
+const TaggedOpaque = @import("../../js/TaggedOpaque.zig");
 const Page = @import("../../Page.zig");
 const CanvasSurface = @import("CanvasSurface.zig");
 
@@ -29,6 +30,7 @@ pub fn registerTypes() []const type {
         WebGLShader,
         WebGLProgram,
         WebGLBuffer,
+        WebGLUniformLocation,
         // Extension types should be runtime generated. We might want
         // to revisit this.
         Extension.Type.WEBGL_debug_renderer_info,
@@ -68,6 +70,7 @@ _viewport_width: i32 = 0,
 _viewport_height: i32 = 0,
 _current_program: ?*WebGLProgram = null,
 _bound_array_buffer: ?*WebGLBuffer = null,
+_bound_element_array_buffer: ?*WebGLBuffer = null,
 _attrib0: VertexAttribState = .{},
 
 pub const WebGLShader = struct {
@@ -75,6 +78,7 @@ pub const WebGLShader = struct {
     _source: []const u8 = &.{},
     _compiled: bool = false,
     _attribute_name: []const u8 = &.{},
+    _uniform_name: []const u8 = &.{},
     _fragment_color: color.RGBA = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
 
     pub const JsApi = struct {
@@ -93,7 +97,9 @@ pub const WebGLProgram = struct {
     _fragment_shader: ?*WebGLShader = null,
     _linked: bool = false,
     _position_attribute_name: []const u8 = "a_position",
+    _fragment_uniform_name: []const u8 = &.{},
     _fragment_color: color.RGBA = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+    _uniform_color: ?color.RGBA = null,
 
     pub const JsApi = struct {
         pub const bridge = js.Bridge(WebGLProgram);
@@ -114,6 +120,21 @@ pub const WebGLBuffer = struct {
 
         pub const Meta = struct {
             pub const name = "WebGLBuffer";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+    };
+};
+
+pub const WebGLUniformLocation = struct {
+    _program: *WebGLProgram,
+    _name: []const u8,
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(WebGLUniformLocation);
+
+        pub const Meta = struct {
+            pub const name = "WebGLUniformLocation";
             pub const prototype_chain = bridge.prototypeChain();
             pub var class_id: bridge.ClassId = undefined;
         };
@@ -264,7 +285,9 @@ pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
 
 pub const COLOR_BUFFER_BIT: u32 = 0x00004000;
 pub const FLOAT: u32 = 0x1406;
+pub const UNSIGNED_SHORT: u32 = 0x1403;
 pub const ARRAY_BUFFER: u32 = 0x8892;
+pub const ELEMENT_ARRAY_BUFFER: u32 = 0x8893;
 pub const STATIC_DRAW: u32 = 0x88E4;
 pub const TRIANGLES: u32 = 0x0004;
 pub const VERTEX_SHADER: u32 = 0x8B31;
@@ -311,8 +334,11 @@ pub fn compileShader(_: *WebGLRenderingContext, shader: *WebGLShader) void {
 
     if (shader._type == VERTEX_SHADER) {
         shader._attribute_name = parseFirstAttributeName(shader._source) orelse "a_position";
-    } else if (parseFirstVec4Color(shader._source)) |rgba| {
-        shader._fragment_color = rgba;
+    } else {
+        shader._uniform_name = parseFirstUniformName(shader._source) orelse &.{};
+        if (parseFirstVec4Color(shader._source)) |rgba| {
+            shader._fragment_color = rgba;
+        }
     }
     shader._compiled = true;
 }
@@ -336,7 +362,7 @@ pub fn attachShader(_: *WebGLRenderingContext, program: *WebGLProgram, shader: *
     }
 }
 
-pub fn linkProgram(_: *WebGLRenderingContext, program: *WebGLProgram) void {
+pub fn linkProgram(self: *WebGLRenderingContext, program: *WebGLProgram) void {
     program._linked = false;
     const vertex_shader = program._vertex_shader orelse return;
     const fragment_shader = program._fragment_shader orelse return;
@@ -346,8 +372,11 @@ pub fn linkProgram(_: *WebGLRenderingContext, program: *WebGLProgram) void {
         vertex_shader._attribute_name
     else
         "a_position";
+    program._fragment_uniform_name = fragment_shader._uniform_name;
     program._fragment_color = fragment_shader._fragment_color;
+    program._uniform_color = null;
     program._linked = true;
+    self._current_program = program;
 }
 
 pub fn getProgramParameter(_: *WebGLRenderingContext, program: *WebGLProgram, pname: u32) bool {
@@ -357,8 +386,9 @@ pub fn getProgramParameter(_: *WebGLRenderingContext, program: *WebGLProgram, pn
     return false;
 }
 
-pub fn useProgram(self: *WebGLRenderingContext, program: ?*WebGLProgram) void {
-    self._current_program = program;
+pub fn useProgram(self: *WebGLRenderingContext, program: js.Object) void {
+    const actual_program = TaggedOpaque.fromJS(*WebGLProgram, program.handle) catch return;
+    self._current_program = if (actual_program._linked) actual_program else null;
 }
 
 pub fn createBuffer(_: *WebGLRenderingContext, page: *Page) !*WebGLBuffer {
@@ -366,15 +396,22 @@ pub fn createBuffer(_: *WebGLRenderingContext, page: *Page) !*WebGLBuffer {
 }
 
 pub fn bindBuffer(self: *WebGLRenderingContext, target: u32, buffer: ?*WebGLBuffer) void {
-    if (target != ARRAY_BUFFER) return;
-    self._bound_array_buffer = buffer;
+    switch (target) {
+        ARRAY_BUFFER => self._bound_array_buffer = buffer,
+        ELEMENT_ARRAY_BUFFER => self._bound_element_array_buffer = buffer,
+        else => {},
+    }
 }
 
-pub fn bufferData(self: *WebGLRenderingContext, target: u32, data: js.TypedArray(f32), usage: u32, page: *Page) !void {
+pub fn bufferData(self: *WebGLRenderingContext, target: u32, data: js.Value.Temp, usage: u32, page: *Page) !void {
     _ = usage;
-    if (target != ARRAY_BUFFER) return;
-    const buffer = self._bound_array_buffer orelse return;
-    buffer._bytes = try page.arena.dupe(u8, std.mem.sliceAsBytes(data.values));
+    const bytes = try typedArrayBytes(data.local(page.js.local.?));
+    const buffer = switch (target) {
+        ARRAY_BUFFER => self._bound_array_buffer orelse return,
+        ELEMENT_ARRAY_BUFFER => self._bound_element_array_buffer orelse return,
+        else => return,
+    };
+    buffer._bytes = try page.arena.dupe(u8, bytes);
 }
 
 pub fn getAttribLocation(_: *WebGLRenderingContext, program: *WebGLProgram, name: []const u8) i32 {
@@ -383,6 +420,32 @@ pub fn getAttribLocation(_: *WebGLRenderingContext, program: *WebGLProgram, name
         return 0;
     }
     return -1;
+}
+
+pub fn getUniformLocation(_: *WebGLRenderingContext, program: *WebGLProgram, name: []const u8, page: *Page) !?*WebGLUniformLocation {
+    if (!program._linked) return null;
+    if (program._fragment_uniform_name.len == 0) return null;
+    if (!std.mem.eql(u8, name, program._fragment_uniform_name)) return null;
+    return try page._factory.create(WebGLUniformLocation{
+        ._program = program,
+        ._name = try page.arena.dupe(u8, name),
+    });
+}
+
+pub fn uniform4f(self: *WebGLRenderingContext, location: js.Object, x: f32, y: f32, z: f32, w: f32) void {
+    const program = blk: {
+        const actual_location = TaggedOpaque.fromJS(*WebGLUniformLocation, location.handle) catch break :blk self._current_program orelse return;
+        break :blk actual_location._program;
+    };
+    if (!program._linked) {
+        return;
+    }
+    program._uniform_color = .{
+        .r = @intFromFloat(@round(std.math.clamp(@as(f64, x), 0, 1) * 255.0)),
+        .g = @intFromFloat(@round(std.math.clamp(@as(f64, y), 0, 1) * 255.0)),
+        .b = @intFromFloat(@round(std.math.clamp(@as(f64, z), 0, 1) * 255.0)),
+        .a = @intFromFloat(@round(std.math.clamp(@as(f64, w), 0, 1) * 255.0)),
+    };
 }
 
 pub fn vertexAttribPointer(
@@ -429,6 +492,7 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
     if (stride_bytes <= 0) return;
 
     const viewport_rect = self.currentViewport();
+    const fill_color = programFillColor(program);
     var vertex_index: i32 = first;
     while (vertex_index + 2 < first + count) : (vertex_index += 3) {
         const a = readVertex(buffer._bytes, self._attrib0, stride_bytes, vertex_index) orelse break;
@@ -438,7 +502,41 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
         const ax, const ay = clipToViewport(a, viewport_rect);
         const bx, const by = clipToViewport(b, viewport_rect);
         const cx, const cy = clipToViewport(c, viewport_rect);
-        self._surface.fillTriangle(program._fragment_color, ax, ay, bx, by, cx, cy);
+        self._surface.fillTriangle(fill_color, ax, ay, bx, by, cx, cy);
+    }
+}
+
+pub fn drawElements(self: *WebGLRenderingContext, mode: u32, count: i32, kind: u32, offset: i32) void {
+    if (mode != TRIANGLES or count < 3 or offset < 0 or kind != UNSIGNED_SHORT) return;
+    const program = self._current_program orelse return;
+    if (!program._linked) return;
+    if (!self._attrib0.enabled) return;
+    if (self._attrib0.kind != FLOAT or self._attrib0.size < 2 or self._attrib0.offset < 0) return;
+
+    const vertex_buffer = self._attrib0.buffer orelse return;
+    if (vertex_buffer._bytes.len == 0) return;
+    const element_buffer = self._bound_element_array_buffer orelse return;
+    if (element_buffer._bytes.len == 0) return;
+
+    const stride_bytes = if (self._attrib0.stride > 0) self._attrib0.stride else self._attrib0.size * @as(i32, @sizeOf(f32));
+    if (stride_bytes <= 0) return;
+
+    const viewport_rect = self.currentViewport();
+    const fill_color = programFillColor(program);
+    var element_index: i32 = 0;
+    while (element_index + 2 < count) : (element_index += 3) {
+        const ia = readElementIndex(element_buffer._bytes, offset, element_index) orelse break;
+        const ib = readElementIndex(element_buffer._bytes, offset, element_index + 1) orelse break;
+        const ic = readElementIndex(element_buffer._bytes, offset, element_index + 2) orelse break;
+
+        const a = readVertex(vertex_buffer._bytes, self._attrib0, stride_bytes, ia) orelse break;
+        const b = readVertex(vertex_buffer._bytes, self._attrib0, stride_bytes, ib) orelse break;
+        const c = readVertex(vertex_buffer._bytes, self._attrib0, stride_bytes, ic) orelse break;
+
+        const ax, const ay = clipToViewport(a, viewport_rect);
+        const bx, const by = clipToViewport(b, viewport_rect);
+        const cx, const cy = clipToViewport(c, viewport_rect);
+        self._surface.fillTriangle(fill_color, ax, ay, bx, by, cx, cy);
     }
 }
 
@@ -502,6 +600,29 @@ fn parseFirstAttributeName(source: []const u8) ?[]const u8 {
     return null;
 }
 
+fn parseFirstUniformName(source: []const u8) ?[]const u8 {
+    var cursor: usize = 0;
+    while (std.mem.indexOfPos(u8, source, cursor, "uniform")) |start| {
+        var pos = start + "uniform".len;
+        pos = skipWhitespace(source, pos);
+        const type_start = pos;
+        pos = consumeIdentifier(source, pos);
+        if (pos == type_start) {
+            cursor = start + 1;
+            continue;
+        }
+
+        pos = skipWhitespace(source, pos);
+        const name_start = pos;
+        pos = consumeIdentifier(source, pos);
+        if (pos > name_start) {
+            return source[name_start..pos];
+        }
+        cursor = start + 1;
+    }
+    return null;
+}
+
 fn parseFirstVec4Color(source: []const u8) ?color.RGBA {
     const start = std.mem.indexOf(u8, source, "vec4(") orelse return null;
     const args_start = start + "vec4(".len;
@@ -525,6 +646,10 @@ fn parseFirstVec4Color(source: []const u8) ?color.RGBA {
         .b = floatChannelToByte(values[2]),
         .a = floatChannelToByte(values[3]),
     };
+}
+
+fn programFillColor(program: *const WebGLProgram) color.RGBA {
+    return program._uniform_color orelse program._fragment_color;
 }
 
 fn floatChannelToByte(value: f64) u8 {
@@ -560,6 +685,50 @@ fn readVertex(bytes: []const u8, attrib: VertexAttribState, stride_bytes: i32, v
         .x = readF32(bytes, x_offset),
         .y = readF32(bytes, y_offset),
     };
+}
+
+fn typedArrayBytes(value: js.Value) ![]const u8 {
+    if (value.isUint8Array() or value.isUint8ClampedArray() or value.isArrayBuffer() or value.isArrayBufferView()) {
+        if (value.toZig(js.TypedArray(u8))) |typed| {
+            return typed.values;
+        } else |_| {}
+    }
+    if (value.isFloat32Array()) {
+        const typed = try value.toZig(js.TypedArray(f32));
+        return std.mem.sliceAsBytes(typed.values);
+    }
+    if (value.isFloat64Array()) {
+        const typed = try value.toZig(js.TypedArray(f64));
+        return std.mem.sliceAsBytes(typed.values);
+    }
+    if (value.isUint16Array()) {
+        const typed = try value.toZig(js.TypedArray(u16));
+        return std.mem.sliceAsBytes(typed.values);
+    }
+    if (value.isInt16Array()) {
+        const typed = try value.toZig(js.TypedArray(i16));
+        return std.mem.sliceAsBytes(typed.values);
+    }
+    if (value.isUint32Array()) {
+        const typed = try value.toZig(js.TypedArray(u32));
+        return std.mem.sliceAsBytes(typed.values);
+    }
+    if (value.isInt32Array()) {
+        const typed = try value.toZig(js.TypedArray(i32));
+        return std.mem.sliceAsBytes(typed.values);
+    }
+    if (value.isInt8Array()) {
+        const typed = try value.toZig(js.TypedArray(i8));
+        return std.mem.sliceAsBytes(typed.values);
+    }
+    return error.InvalidArgument;
+}
+
+fn readElementIndex(bytes: []const u8, offset: i32, element_index: i32) ?i32 {
+    const base = @as(usize, @intCast(offset)) + (@as(usize, @intCast(element_index)) * @sizeOf(u16));
+    if (base + 2 > bytes.len) return null;
+    const index = std.mem.readInt(u16, bytes[base .. base + 2][0..2], .little);
+    return @as(i32, @intCast(index));
 }
 
 fn readF32(bytes: []const u8, offset: usize) f32 {
@@ -605,15 +774,20 @@ pub const JsApi = struct {
     pub const bindBuffer = bridge.function(WebGLRenderingContext.bindBuffer, .{});
     pub const bufferData = bridge.function(WebGLRenderingContext.bufferData, .{});
     pub const getAttribLocation = bridge.function(WebGLRenderingContext.getAttribLocation, .{});
+    pub const getUniformLocation = bridge.function(WebGLRenderingContext.getUniformLocation, .{});
+    pub const uniform4f = bridge.function(WebGLRenderingContext.uniform4f, .{});
     pub const vertexAttribPointer = bridge.function(WebGLRenderingContext.vertexAttribPointer, .{});
     pub const enableVertexAttribArray = bridge.function(WebGLRenderingContext.enableVertexAttribArray, .{});
     pub const viewport = bridge.function(WebGLRenderingContext.viewport, .{});
     pub const drawArrays = bridge.function(WebGLRenderingContext.drawArrays, .{});
+    pub const drawElements = bridge.function(WebGLRenderingContext.drawElements, .{});
     pub const drawingBufferWidth = bridge.accessor(WebGLRenderingContext.getDrawingBufferWidth, null, .{});
     pub const drawingBufferHeight = bridge.accessor(WebGLRenderingContext.getDrawingBufferHeight, null, .{});
     pub const COLOR_BUFFER_BIT = bridge.property(WebGLRenderingContext.COLOR_BUFFER_BIT, .{ .template = false, .readonly = true });
     pub const FLOAT = bridge.property(WebGLRenderingContext.FLOAT, .{ .template = false, .readonly = true });
+    pub const UNSIGNED_SHORT = bridge.property(WebGLRenderingContext.UNSIGNED_SHORT, .{ .template = false, .readonly = true });
     pub const ARRAY_BUFFER = bridge.property(WebGLRenderingContext.ARRAY_BUFFER, .{ .template = false, .readonly = true });
+    pub const ELEMENT_ARRAY_BUFFER = bridge.property(WebGLRenderingContext.ELEMENT_ARRAY_BUFFER, .{ .template = false, .readonly = true });
     pub const STATIC_DRAW = bridge.property(WebGLRenderingContext.STATIC_DRAW, .{ .template = false, .readonly = true });
     pub const TRIANGLES = bridge.property(WebGLRenderingContext.TRIANGLES, .{ .template = false, .readonly = true });
     pub const VERTEX_SHADER = bridge.property(WebGLRenderingContext.VERTEX_SHADER, .{ .template = false, .readonly = true });

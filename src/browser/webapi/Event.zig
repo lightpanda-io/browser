@@ -65,6 +65,7 @@ pub const EventPhase = enum(u8) {
 
 pub const Type = union(enum) {
     generic,
+    close_event: *@import("event/CloseEvent.zig"),
     error_event: *@import("event/ErrorEvent.zig"),
     custom_event: *@import("event/CustomEvent.zig"),
     message_event: *@import("event/MessageEvent.zig"),
@@ -165,6 +166,7 @@ pub fn as(self: *Event, comptime T: type) *T {
 pub fn is(self: *Event, comptime T: type) ?*T {
     switch (self._type) {
         .generic => return if (T == Event) self else null,
+        .close_event => |e| return if (T == @import("event/CloseEvent.zig")) e else null,
         .error_event => |e| return if (T == @import("event/ErrorEvent.zig")) e else null,
         .custom_event => |e| return if (T == @import("event/CustomEvent.zig")) e else null,
         .message_event => |e| return if (T == @import("event/MessageEvent.zig")) e else null,

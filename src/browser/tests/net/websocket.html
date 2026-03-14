@@ -5,9 +5,13 @@
 testing.async(async () => {
   await new Promise((resolve, reject) => {
     const ws = new WebSocket('ws://127.0.0.1:9593/echo');
+    let step = 0;
     testing.expectEqual(WebSocket.CONNECTING, ws.readyState);
     testing.expectEqual('ws://127.0.0.1:9593/echo', ws.url);
     testing.expectEqual(WebSocket.OPEN, ws.OPEN);
+    testing.expectEqual('blob', ws.binaryType);
+    ws.binaryType = 'arraybuffer';
+    testing.expectEqual('arraybuffer', ws.binaryType);
 
     ws.onerror = () => reject(new Error('unexpected websocket error'));
     ws.onopen = () => {
@@ -15,10 +19,25 @@ testing.async(async () => {
       ws.send('ping');
     };
     ws.onmessage = (event) => {
-      testing.expectEqual('echo:ping', event.data);
-      ws.close();
+      if (step == 0) {
+        testing.expectEqual('echo:ping', event.data);
+        step = 1;
+        ws.send(new Uint8Array([1, 2, 3]));
+        return;
+      }
+
+      testing.expectEqual(1, step);
+      testing.expectEqual(true, event.data instanceof ArrayBuffer);
+      testing.expectEqual(new Uint8Array([1, 2, 3]), new Uint8Array(event.data));
+      step = 2;
+      ws.send('close-me');
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      testing.expectEqual(2, step);
+      testing.expectEqual(true, event instanceof CloseEvent);
+      testing.expectEqual(4001, event.code);
+      testing.expectEqual('server-close', event.reason);
+      testing.expectEqual(true, event.wasClean);
       testing.expectEqual(WebSocket.CLOSED, ws.readyState);
       resolve();
     };

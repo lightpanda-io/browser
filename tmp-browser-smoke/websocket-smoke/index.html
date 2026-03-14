@@ -55,6 +55,64 @@
           return;
         }
 
+        if (mode === 'binary-close') {
+          let step = 0;
+          ws.binaryType = 'arraybuffer';
+
+          ws.onopen = () => {
+            setState('WebSocket Binary Close Open', 'open');
+            ws.send('ping');
+          };
+
+          ws.onmessage = (event) => {
+            if (step === 0) {
+              if (event.data !== 'echo:ping') {
+                finished = true;
+                setState('WebSocket Binary Close Error', 'unexpected text: ' + event.data);
+                ws.close();
+                return;
+              }
+              step = 1;
+              ws.send(new Uint8Array([1, 2, 3]));
+              return;
+            }
+
+            if (!(event.data instanceof ArrayBuffer)) {
+              finished = true;
+              setState('WebSocket Binary Close Error', 'binary-not-arraybuffer');
+              ws.close();
+              return;
+            }
+
+            const bytes = Array.from(new Uint8Array(event.data)).join(',');
+            if (bytes !== '1,2,3') {
+              finished = true;
+              setState('WebSocket Binary Close Error', 'unexpected-bytes:' + bytes);
+              ws.close();
+              return;
+            }
+
+            step = 2;
+            ws.send('close-me');
+          };
+
+          ws.onclose = (event) => {
+            if (step !== 2) {
+              finished = true;
+              setState('WebSocket Binary Close Error', 'closed-before-binary');
+              return;
+            }
+            if (event.code !== 4001 || event.reason !== 'server-close' || event.wasClean !== true) {
+              finished = true;
+              setState('WebSocket Binary Close Error', 'bad-close:' + event.code + ':' + event.reason + ':' + event.wasClean);
+              return;
+            }
+            finished = true;
+            setState('WebSocket Binary Close Ready', 'binary+close ok');
+          };
+          return;
+        }
+
         ws.onerror = () => {
           if (finished) return;
           finished = true;
