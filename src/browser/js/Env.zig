@@ -382,8 +382,7 @@ pub fn runMicrotasks(self: *Env) void {
     }
 }
 
-pub fn runMacrotasks(self: *Env) !?u64 {
-    var ms_to_next_task: ?u64 = null;
+pub fn runMacrotasks(self: *Env) !void {
     for (self.contexts[0..self.context_count]) |ctx| {
         if (comptime builtin.is_test == false) {
             // I hate this comptime check as much as you do. But we have tests
@@ -398,13 +397,17 @@ pub fn runMacrotasks(self: *Env) !?u64 {
         var hs: js.HandleScope = undefined;
         const entered = ctx.enter(&hs);
         defer entered.exit();
-
-        const ms = (try ctx.scheduler.run()) orelse continue;
-        if (ms_to_next_task == null or ms < ms_to_next_task.?) {
-            ms_to_next_task = ms;
-        }
+        try ctx.scheduler.run();
     }
-    return ms_to_next_task;
+}
+
+pub fn msToNextMacrotask(self: *Env) ?u64 {
+    var next_task: u64 = std.math.maxInt(u64);
+    for (self.contexts[0..self.context_count]) |ctx| {
+        const candidate = ctx.scheduler.msToNextHigh() orelse continue;
+        next_task = @min(candidate, next_task);
+    }
+    return if (next_task == std.math.maxInt(u64)) null else next_task;
 }
 
 pub fn pumpMessageLoop(self: *const Env) void {

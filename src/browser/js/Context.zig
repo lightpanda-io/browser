@@ -252,6 +252,10 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
     return l.toLocal(global);
 }
 
+pub fn getIncumbent(self: *Context) *Page {
+    return fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).page;
+}
+
 pub fn stringToPersistedFunction(
     self: *Context,
     function_body: []const u8,
