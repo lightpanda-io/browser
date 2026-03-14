@@ -116,3 +116,24 @@ test "MCP.Server - Integration: synchronous smoke test" {
 
     try testing.expectJson(.{ .id = 1 }, out_alloc.writer.buffered());
 }
+
+test "MCP.Server - Integration: ping request returns an empty result" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    const input =
+        \\{"jsonrpc":"2.0","id":"ping-1","method":"ping"}
+    ;
+
+    var in_reader: std.io.Reader = .fixed(input);
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Self.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    try router.processRequests(server, &in_reader);
+
+    try testing.expectJson(.{ .id = "ping-1", .result = .{} }, out_alloc.writer.buffered());
+}
