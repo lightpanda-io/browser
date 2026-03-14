@@ -1053,7 +1053,7 @@ pub const CssProperties = struct {
 
 pub const CssCache = std.AutoHashMapUnmanaged(*Element, CssProperties);
 
-pub fn getCssProperties(el: *Element, page: *Page, doc_sheets: ?*StyleSheetList, cache: ?*CssCache) CssProperties {
+fn getCssProperties(el: *Element, page: *Page, doc_sheets: ?*StyleSheetList, cache: ?*CssCache) CssProperties {
     if (cache) |c| {
         if (c.get(el)) |props| return props;
     }
