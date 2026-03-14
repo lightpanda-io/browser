@@ -94,7 +94,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibilityCached(self.page, css_cache)) {
+        if (!el.checkVisibilityCached(css_cache, self.page)) {
             return;
         }
 

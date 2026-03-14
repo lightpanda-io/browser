@@ -218,7 +218,7 @@ pub fn classifyInteractivity(
     listener_targets: ListenerTargetMap,
     cache: ?*Element.CssCache,
 ) ?InteractivityType {
-    if (el.hasPointerEventsNoneCached(page, cache)) return null;
+    if (el.hasPointerEventsNone(cache, page)) return null;
 
     // 1. Native interactive by tag
     switch (el.getTag()) {

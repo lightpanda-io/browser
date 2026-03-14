@@ -1053,7 +1053,7 @@ pub const CssProperties = struct {
 
 pub const CssCache = std.AutoHashMapUnmanaged(*Element, CssProperties);
 
-fn getCssProperties(el: *Element, page: *Page, doc_sheets: ?*StyleSheetList, cache: ?*CssCache) CssProperties {
+fn getCssProperties(el: *Element, doc_sheets: ?*StyleSheetList, cache: ?*CssCache, page: *Page) CssProperties {
     if (cache) |c| {
         if (c.get(el)) |props| return props;
     }
@@ -1144,27 +1144,23 @@ fn getCssProperties(el: *Element, page: *Page, doc_sheets: ?*StyleSheetList, cac
     return props;
 }
 
-pub fn hasPointerEventsNoneCached(self: *Element, page: *Page, cache: ?*CssCache) bool {
+pub fn hasPointerEventsNone(self: *Element, cache: ?*CssCache, page: *Page) bool {
     const doc_sheets = page.document.getStyleSheets(page) catch null;
     var current: ?*Element = self;
     while (current) |el| {
-        const props = el.getCssProperties(page, doc_sheets, cache);
+        const props = el.getCssProperties(doc_sheets, cache, page);
         if (props.pointer_events_none) return true;
         current = el.parentElement();
     }
     return false;
 }
 
-pub fn hasPointerEventsNone(self: *Element, page: *Page) bool {
-    return self.hasPointerEventsNoneCached(page, null);
-}
-
-pub fn checkVisibilityCached(self: *Element, page: *Page, cache: ?*CssCache) bool {
+pub fn checkVisibilityCached(self: *Element, cache: ?*CssCache, page: *Page) bool {
     const doc_sheets = page.document.getStyleSheets(page) catch null;
     var current: ?*Element = self;
 
     while (current) |el| {
-        const props = getCssProperties(el, page, doc_sheets, cache);
+        const props = getCssProperties(el, doc_sheets, cache, page);
         if (props.display_none or props.visibility_hidden or props.opacity_zero) return false;
         current = el.parentElement();
     }
@@ -1173,7 +1169,7 @@ pub fn checkVisibilityCached(self: *Element, page: *Page, cache: ?*CssCache) boo
 }
 
 pub fn checkVisibility(self: *Element, page: *Page) bool {
-    return self.checkVisibilityCached(page, null);
+    return self.checkVisibilityCached(null, page);
 }
 
 fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {
