@@ -151,8 +151,13 @@ pub fn asNode(self: *CData) *Node {
 
 pub fn is(self: *CData, comptime T: type) ?*T {
     inline for (@typeInfo(Type).@"union".fields) |f| {
-        if (f.type == T and @field(Type, f.name) == self._type) {
-            return &@field(self._type, f.name);
+        if (@field(Type, f.name) == self._type) {
+            if (f.type == T) {
+                return &@field(self._type, f.name);
+            }
+            if (f.type == *T) {
+                return @field(self._type, f.name);
+            }
         }
     }
     return null;

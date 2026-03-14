@@ -1405,3 +1405,12 @@ test "URL: unescape" {
         try testing.expectEqual("hello%2", result);
     }
 }
+
+test "URL: getHost" {
+    try testing.expectEqualSlices(u8, "example.com:8080", getHost("https://example.com:8080/path"));
+    try testing.expectEqualSlices(u8, "example.com", getHost("https://example.com/path"));
+    try testing.expectEqualSlices(u8, "example.com:443", getHost("https://example.com:443/"));
+    try testing.expectEqualSlices(u8, "example.com", getHost("https://user:pass@example.com/page"));
+    try testing.expectEqualSlices(u8, "example.com:8080", getHost("https://user:pass@example.com:8080/page"));
+    try testing.expectEqualSlices(u8, "", getHost("not-a-url"));
+}

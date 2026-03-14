@@ -30,6 +30,7 @@ const Notification = @import("../Notification.zig");
 const CookieJar = @import("../browser/webapi/storage/Cookie.zig").Jar;
 const Robots = @import("../network/Robots.zig");
 const RobotStore = Robots.RobotStore;
+const WebBotAuth = @import("../network/WebBotAuth.zig");
 
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -702,6 +703,12 @@ fn makeRequest(self: *Client, conn: *Net.Connection, transfer: *Transfer) anyerr
         try conn.secretHeaders(&header_list, &self.network.config.http_headers); // Add headers that must be hidden from intercepts
         try conn.setHeaders(&header_list);
 
+        // If we have WebBotAuth, sign our request.
+        if (self.network.web_bot_auth) |*wba| {
+            const authority = URL.getHost(req.url);
+            try wba.signRequest(transfer.arena.allocator(), &header_list, authority);
+        }
+
         // Add cookies.
         if (header_list.cookies) |cookies| {
             try conn.setCookies(cookies);
@@ -926,7 +933,7 @@ pub const RequestCookie = struct {
 
         if (arr.items.len > 0) {
             try arr.append(temp, 0); //null terminate
-            headers.cookies = @ptrCast(arr.items.ptr);
+            headers.cookies = @as([*c]const u8, @ptrCast(arr.items.ptr));
         }
     }
 };

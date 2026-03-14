@@ -245,6 +245,46 @@ pub fn toJson(self: Value, allocator: Allocator) ![]u8 {
     return js.String.toSliceWithAlloc(.{ .local = local, .handle = str_handle }, allocator);
 }
 
+// Currently does not support host objects (Blob, File, etc.) or transferables
+// which require delegate callbacks to be implemented.
+pub fn structuredClone(self: Value) !Value {
+    const local = self.local;
+    const v8_context = local.handle;
+    const v8_isolate = local.isolate.handle;
+
+    const size, const data = blk: {
+        const serializer = v8.v8__ValueSerializer__New(v8_isolate, null) orelse return error.JsException;
+        defer v8.v8__ValueSerializer__DELETE(serializer);
+
+        var write_result: v8.MaybeBool = undefined;
+        v8.v8__ValueSerializer__WriteHeader(serializer);
+        v8.v8__ValueSerializer__WriteValue(serializer, v8_context, self.handle, &write_result);
+        if (!write_result.has_value or !write_result.value) {
+            return error.JsException;
+        }
+
+        var size: usize = undefined;
+        const data = v8.v8__ValueSerializer__Release(serializer, &size) orelse return error.JsException;
+        break :blk .{ size, data };
+    };
+
+    defer v8.v8__ValueSerializer__FreeBuffer(data);
+
+    const cloned_handle = blk: {
+        const deserializer = v8.v8__ValueDeserializer__New(v8_isolate, data, size, null) orelse return error.JsException;
+        defer v8.v8__ValueDeserializer__DELETE(deserializer);
+
+        var read_header_result: v8.MaybeBool = undefined;
+        v8.v8__ValueDeserializer__ReadHeader(deserializer, v8_context, &read_header_result);
+        if (!read_header_result.has_value or !read_header_result.value) {
+            return error.JsException;
+        }
+        break :blk v8.v8__ValueDeserializer__ReadValue(deserializer, v8_context) orelse return error.JsException;
+    };
+
+    return .{ .local = local, .handle = cloned_handle };
+}
+
 pub fn persist(self: Value) !Global {
     return self._persist(true);
 }

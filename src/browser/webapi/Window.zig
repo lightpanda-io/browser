@@ -412,6 +412,10 @@ pub fn atob(_: *const Window, input: []const u8, page: *Page) ![]const u8 {
     return decoded;
 }
 
+pub fn structuredClone(_: *const Window, value: js.Value) !js.Value {
+    return value.structuredClone();
+}
+
 pub fn getFrame(self: *Window, idx: usize) !?*Window {
     const page = self._page;
     const frames = page.frames.items;
@@ -797,6 +801,7 @@ pub const JsApi = struct {
     pub const btoa = bridge.function(Window.btoa, .{});
     pub const atob = bridge.function(Window.atob, .{ .dom_exception = true });
     pub const reportError = bridge.function(Window.reportError, .{});
+    pub const structuredClone = bridge.function(Window.structuredClone, .{});
     pub const getComputedStyle = bridge.function(Window.getComputedStyle, .{});
     pub const getSelection = bridge.function(Window.getSelection, .{});
 

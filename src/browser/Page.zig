@@ -1010,6 +1010,14 @@ pub fn scriptAddedCallback(self: *Page, comptime from_parser: bool, script: *Ele
         return;
     }
 
+    if (comptime from_parser) {
+        // parser-inserted scripts have force-async set to false, but only if
+        // they have src or non-empty content
+        if (script._src.len > 0 or script.asNode().firstChild() != null) {
+            script._force_async = false;
+        }
+    }
+
     self._script_manager.addFromElement(from_parser, script, "parsing") catch |err| {
         log.err(.page, "page.scriptAddedCallback", .{
             .err = err,
@@ -2643,6 +2651,8 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
         }
     }
 
+    const parent_is_connected = parent.isConnected();
+
     // Tri-state behavior for mutations:
     // 1. from_parser=true, parse_mode=document -> no mutations (initial document parse)
     // 2. from_parser=true, parse_mode=fragment -> mutations (innerHTML additions)
@@ -2658,6 +2668,15 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
             // When the parser adds the node, nodeIsReady is only called when the
             // nodeComplete() callback is executed.
             try self.nodeIsReady(false, child);
+
+            // Check if text was added to a script that hasn't started yet.
+            if (child._type == .cdata and parent_is_connected) {
+                if (parent.is(Element.Html.Script)) |script| {
+                    if (!script._executed) {
+                        try self.nodeIsReady(false, parent);
+                    }
+                }
+            }
         }
 
         // Notify mutation observers about childList change
@@ -2696,7 +2715,6 @@ pub fn _insertNodeRelative(self: *Page, comptime from_parser: bool, parent: *Nod
     }
 
     const parent_in_shadow = parent.is(ShadowRoot) != null or parent.isInShadowTree();
-    const parent_is_connected = parent.isConnected();
 
     if (!parent_in_shadow and !parent_is_connected) {
         return;

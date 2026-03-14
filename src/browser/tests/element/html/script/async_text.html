@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<script src="../../../testing.js"></script>
+
+<script id=force_async>
+{
+   // Dynamically created scripts have async=true by default
+   let s = document.createElement('script');
+   testing.expectEqual(true, s.async);
+
+   // Setting async=false clears the force async flag and removes attribute
+   s.async = false;
+   testing.expectEqual(false, s.async);
+   testing.expectEqual(false, s.hasAttribute('async'));
+
+   // Setting async=true adds the attribute
+   s.async = true;
+   testing.expectEqual(true, s.async);
+   testing.expectEqual(true, s.hasAttribute('async'));
+}
+</script>
+
+<script></script>
+<script id=empty>
+{
+   // Empty parser-inserted script should have async=true (force async retained)
+   let scripts = document.getElementsByTagName('script');
+   let emptyScript = scripts[scripts.length - 2];
+   testing.expectEqual(true, emptyScript.async);
+}
+</script>
+
+<script id=text_content>
+{
+   let s = document.createElement('script');
+   s.appendChild(document.createComment('COMMENT'));
+   s.appendChild(document.createTextNode('  TEXT  '));
+   s.appendChild(document.createProcessingInstruction('P', 'I'));
+   let a = s.appendChild(document.createElement('a'));
+   a.appendChild(document.createTextNode('ELEMENT'));
+
+   // script.text should return only direct Text node children
+   testing.expectEqual('  TEXT  ', s.text);
+   // script.textContent should return all descendant text
+   testing.expectEqual('  TEXT  ELEMENT', s.textContent);
+}
+</script>
+
+<script id=lazy_inline>
+{
+   // Empty script in DOM, then append text - should execute
+   window.lazyScriptRan = false;
+   let s = document.createElement('script');
+   document.head.appendChild(s);
+   // Script is in DOM but empty, so not yet executed
+   testing.expectEqual(false, window.lazyScriptRan);
+   // Append text node with code
+   s.appendChild(document.createTextNode('window.lazyScriptRan = true;'));
+   // Now it should have executed
+   testing.expectEqual(true, window.lazyScriptRan);
+}
+</script>

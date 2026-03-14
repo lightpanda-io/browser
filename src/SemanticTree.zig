@@ -233,7 +233,7 @@ fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]O
         if (child.is(Element)) |el| {
             if (el.getTag() == .option) {
                 if (el.is(Element.Html.Option)) |opt| {
-                    const text = opt.getText();
+                    const text = opt.getText(page);
                     const value = opt.getValue(page);
                     const selected = opt.getSelected();
                     try options.append(arena, .{ .text = text, .value = value, .selected = selected });
@@ -242,7 +242,7 @@ fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]O
                 var group_it = child.childrenIterator();
                 while (group_it.next()) |group_child| {
                     if (group_child.is(Element.Html.Option)) |opt| {
-                        const text = opt.getText();
+                        const text = opt.getText(page);
                         const value = opt.getValue(page);
                         const selected = opt.getSelected();
                         try options.append(arena, .{ .text = text, .value = value, .selected = selected });

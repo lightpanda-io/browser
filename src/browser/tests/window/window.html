@@ -125,6 +125,143 @@
   testing.expectEqual(screen, window.screen);
 </script>
 
+<script id=structuredClone>
+  // Basic types
+  testing.expectEqual(42, structuredClone(42));
+  testing.expectEqual('hello', structuredClone('hello'));
+  testing.expectEqual(true, structuredClone(true));
+  testing.expectEqual(null, structuredClone(null));
+  testing.expectEqual(undefined, structuredClone(undefined));
+
+  // Objects and arrays (these work with JSON too, but verify they're cloned)
+  const obj = { a: 1, b: { c: 2 } };
+  const clonedObj = structuredClone(obj);
+  testing.expectEqual(1, clonedObj.a);
+  testing.expectEqual(2, clonedObj.b.c);
+  clonedObj.b.c = 999;
+  testing.expectEqual(2, obj.b.c); // original unchanged
+
+  const arr = [1, [2, 3]];
+  const clonedArr = structuredClone(arr);
+  testing.expectEqual(1, clonedArr[0]);
+  testing.expectEqual(2, clonedArr[1][0]);
+  clonedArr[1][0] = 999;
+  testing.expectEqual(2, arr[1][0]); // original unchanged
+
+  // Date - JSON would stringify to ISO string
+  const date = new Date('2024-01-15T12:30:00Z');
+  const clonedDate = structuredClone(date);
+  testing.expectEqual(true, clonedDate instanceof Date);
+  testing.expectEqual(date.getTime(), clonedDate.getTime());
+  testing.expectEqual(date.toISOString(), clonedDate.toISOString());
+
+  // RegExp - JSON would stringify to {}
+  const regex = /test\d+/gi;
+  const clonedRegex = structuredClone(regex);
+  testing.expectEqual(true, clonedRegex instanceof RegExp);
+  testing.expectEqual(regex.source, clonedRegex.source);
+  testing.expectEqual(regex.flags, clonedRegex.flags);
+  testing.expectEqual(true, clonedRegex.test('test123'));
+
+  // Map - JSON can't handle
+  const map = new Map([['a', 1], ['b', 2]]);
+  const clonedMap = structuredClone(map);
+  testing.expectEqual(true, clonedMap instanceof Map);
+  testing.expectEqual(2, clonedMap.size);
+  testing.expectEqual(1, clonedMap.get('a'));
+  testing.expectEqual(2, clonedMap.get('b'));
+
+  // Set - JSON can't handle
+  const set = new Set([1, 2, 3]);
+  const clonedSet = structuredClone(set);
+  testing.expectEqual(true, clonedSet instanceof Set);
+  testing.expectEqual(3, clonedSet.size);
+  testing.expectEqual(true, clonedSet.has(1));
+  testing.expectEqual(true, clonedSet.has(2));
+  testing.expectEqual(true, clonedSet.has(3));
+
+  // ArrayBuffer
+  const buffer = new ArrayBuffer(8);
+  const view = new Uint8Array(buffer);
+  view[0] = 42;
+  view[7] = 99;
+  const clonedBuffer = structuredClone(buffer);
+  testing.expectEqual(true, clonedBuffer instanceof ArrayBuffer);
+  testing.expectEqual(8, clonedBuffer.byteLength);
+  const clonedView = new Uint8Array(clonedBuffer);
+  testing.expectEqual(42, clonedView[0]);
+  testing.expectEqual(99, clonedView[7]);
+
+  // TypedArray
+  const typedArr = new Uint32Array([100, 200, 300]);
+  const clonedTypedArr = structuredClone(typedArr);
+  testing.expectEqual(true, clonedTypedArr instanceof Uint32Array);
+  testing.expectEqual(3, clonedTypedArr.length);
+  testing.expectEqual(100, clonedTypedArr[0]);
+  testing.expectEqual(200, clonedTypedArr[1]);
+  testing.expectEqual(300, clonedTypedArr[2]);
+
+  // Special number values - JSON can't preserve these
+  testing.expectEqual(true, Number.isNaN(structuredClone(NaN)));
+  testing.expectEqual(Infinity, structuredClone(Infinity));
+  testing.expectEqual(-Infinity, structuredClone(-Infinity));
+
+  // Object with undefined value - JSON would omit it
+  const objWithUndef = { a: 1, b: undefined, c: 3 };
+  const clonedObjWithUndef = structuredClone(objWithUndef);
+  testing.expectEqual(1, clonedObjWithUndef.a);
+  testing.expectEqual(undefined, clonedObjWithUndef.b);
+  testing.expectEqual(true, 'b' in clonedObjWithUndef);
+  testing.expectEqual(3, clonedObjWithUndef.c);
+
+  // Error objects
+  const error = new Error('test error');
+  const clonedError = structuredClone(error);
+  testing.expectEqual(true, clonedError instanceof Error);
+  testing.expectEqual('test error', clonedError.message);
+
+  // TypeError
+  const typeError = new TypeError('type error');
+  const clonedTypeError = structuredClone(typeError);
+  testing.expectEqual(true, clonedTypeError instanceof TypeError);
+  testing.expectEqual('type error', clonedTypeError.message);
+
+  // BigInt
+  const bigInt = BigInt('9007199254740993');
+  const clonedBigInt = structuredClone(bigInt);
+  testing.expectEqual(bigInt, clonedBigInt);
+
+  // Circular references ARE supported by structuredClone (unlike JSON)
+  const circular = { a: 1 };
+  circular.self = circular;
+  const clonedCircular = structuredClone(circular);
+  testing.expectEqual(1, clonedCircular.a);
+  testing.expectEqual(clonedCircular, clonedCircular.self); // circular ref preserved
+
+  // Functions cannot be cloned - should throw
+  {
+    let threw = false;
+    try {
+      structuredClone(() => {});
+    } catch (err) {
+      threw = true;
+      // Just verify an error was thrown - V8's message format may vary
+    }
+    testing.expectEqual(true, threw);
+  }
+
+  // Symbols cannot be cloned - should throw
+  {
+    let threw = false;
+    try {
+      structuredClone(Symbol('test'));
+    } catch (err) {
+      threw = true;
+    }
+    testing.expectEqual(true, threw);
+  }
+</script>
+
 <script id=unhandled_rejection>
   {
     let unhandledCalled = 0;
