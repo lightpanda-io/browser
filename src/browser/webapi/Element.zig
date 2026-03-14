@@ -1148,7 +1148,7 @@ pub fn hasPointerEventsNoneCached(self: *Element, page: *Page, cache: ?*CssCache
     const doc_sheets = page.document.getStyleSheets(page) catch null;
     var current: ?*Element = self;
     while (current) |el| {
-        const props = getCssProperties(el, page, doc_sheets, cache);
+        const props = el.getCssProperties(page, doc_sheets, cache);
         if (props.pointer_events_none) return true;
         current = el.parentElement();
     }
