@@ -77,3 +77,33 @@
     testing.expectEqual('\uFFFDabc', CSS.escape('\x00abc'));
   }
 </script>
+
+<script id="checkVisibility">
+  {
+    const el = document.createElement("div");
+    document.documentElement.appendChild(el);
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.style.display = "none";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.style.display = "block";
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.style.visibility = "hidden";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.style.visibility = "collapse";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.style.visibility = "visible";
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.style.opacity = "0";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.style.opacity = "1";
+    testing.expectEqual(true, el.checkVisibility());
+    document.documentElement.removeChild(el);
+  }
+</script>

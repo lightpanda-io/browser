@@ -1041,20 +1041,135 @@ pub fn parentElement(self: *Element) ?*Element {
     return self._proto.parentElement();
 }
 
-pub fn checkVisibility(self: *Element, page: *Page) bool {
+const CSSStyleRule = @import("css/CSSStyleRule.zig");
+const StyleSheetList = @import("css/StyleSheetList.zig");
+
+pub const CssProperties = struct {
+    display_none: bool = false,
+    visibility_hidden: bool = false,
+    opacity_zero: bool = false,
+    pointer_events_none: bool = false,
+};
+
+pub const CssCache = std.AutoHashMapUnmanaged(*Element, CssProperties);
+
+fn getCssProperties(el: *Element, doc_sheets: ?*StyleSheetList, cache: ?*CssCache, page: *Page) CssProperties {
+    if (cache) |c| {
+        if (c.get(el)) |props| return props;
+    }
+
+    var props = CssProperties{};
+
+    // Check stylesheets first
+    if (doc_sheets) |sheets| {
+        for (0..sheets.length()) |i| {
+            const sheet = sheets.item(i) orelse continue;
+            const rules = sheet.getCssRules(page) catch continue;
+            for (0..rules.length()) |j| {
+                const rule = rules.item(j) orelse continue;
+                if (rule.is(CSSStyleRule)) |style_rule| {
+                    const selector = style_rule.getSelectorText();
+                    if (el.matches(selector, page) catch false) {
+                        const style = (style_rule.getStyle(page) catch continue).asCSSStyleDeclaration();
+
+                        const display = style.getPropertyValue("display", page);
+                        if (std.mem.eql(u8, display, "none")) {
+                            props.display_none = true;
+                        } else if (display.len > 0) {
+                            props.display_none = false;
+                        }
+
+                        const visibility = style.getPropertyValue("visibility", page);
+                        if (std.mem.eql(u8, visibility, "hidden") or std.mem.eql(u8, visibility, "collapse")) {
+                            props.visibility_hidden = true;
+                        } else if (visibility.len > 0) {
+                            props.visibility_hidden = false;
+                        }
+
+                        const opacity = style.getPropertyValue("opacity", page);
+                        if (std.mem.eql(u8, opacity, "0")) {
+                            props.opacity_zero = true;
+                        } else if (opacity.len > 0) {
+                            props.opacity_zero = false;
+                        }
+
+                        const pointer_events = style.getPropertyValue("pointer-events", page);
+                        if (std.mem.eql(u8, pointer_events, "none")) {
+                            props.pointer_events_none = true;
+                        } else if (pointer_events.len > 0) {
+                            props.pointer_events_none = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check inline styles overrides
+    if (el.getOrCreateStyle(page) catch null) |style| {
+        const decl = style.asCSSStyleDeclaration();
+        const display = decl.getPropertyValue("display", page);
+        if (std.mem.eql(u8, display, "none")) {
+            props.display_none = true;
+        } else if (display.len > 0) {
+            props.display_none = false;
+        }
+
+        const visibility = decl.getPropertyValue("visibility", page);
+        if (std.mem.eql(u8, visibility, "hidden") or std.mem.eql(u8, visibility, "collapse")) {
+            props.visibility_hidden = true;
+        } else if (visibility.len > 0) {
+            props.visibility_hidden = false;
+        }
+
+        const opacity = decl.getPropertyValue("opacity", page);
+        if (std.mem.eql(u8, opacity, "0")) {
+            props.opacity_zero = true;
+        } else if (opacity.len > 0) {
+            props.opacity_zero = false;
+        }
+
+        const pointer_events = decl.getPropertyValue("pointer-events", page);
+        if (std.mem.eql(u8, pointer_events, "none")) {
+            props.pointer_events_none = true;
+        } else if (pointer_events.len > 0) {
+            props.pointer_events_none = false;
+        }
+    }
+
+    if (cache) |c| {
+        c.put(page.call_arena, el, props) catch {};
+    }
+
+    return props;
+}
+
+pub fn hasPointerEventsNone(self: *Element, cache: ?*CssCache, page: *Page) bool {
+    const doc_sheets = page.document.getStyleSheets(page) catch null;
+    var current: ?*Element = self;
+    while (current) |el| {
+        const props = el.getCssProperties(doc_sheets, cache, page);
+        if (props.pointer_events_none) return true;
+        current = el.parentElement();
+    }
+    return false;
+}
+
+pub fn checkVisibilityCached(self: *Element, cache: ?*CssCache, page: *Page) bool {
+    const doc_sheets = page.document.getStyleSheets(page) catch null;
     var current: ?*Element = self;
 
     while (current) |el| {
-        if (el.getStyle(page)) |style| {
-            const display = style.asCSSStyleDeclaration().getPropertyValue("display", page);
-            if (std.mem.eql(u8, display, "none")) {
-                return false;
-            }
-        }
+        const props = getCssProperties(el, doc_sheets, cache, page);
+        if (props.display_none or props.visibility_hidden or props.opacity_zero) return false;
         current = el.parentElement();
     }
 
     return true;
+}
+
+pub fn checkVisibility(self: *Element, page: *Page) bool {
+    return self.checkVisibilityCached(null, page);
 }
 
 fn getElementDimensions(self: *Element, page: *Page) struct { width: f64, height: f64 } {

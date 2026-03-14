@@ -45,7 +45,8 @@ pub fn jsonStringify(self: @This(), jw: *std.json.Stringify) error{WriteFailed}!
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
+    var css_cache: Element.CssCache = .empty;
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, &css_cache) catch |err| {
         log.err(.app, "semantic tree json dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -58,7 +59,8 @@ pub fn textStringify(self: @This(), writer: *std.Io.Writer) error{WriteFailed}!v
         log.err(.app, "listener map failed", .{ .err = err });
         return error.WriteFailed;
     };
-    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets) catch |err| {
+    var css_cache: Element.CssCache = .empty;
+    self.walk(self.dom_node, &xpath_buffer, null, &visitor, 1, listener_targets, &css_cache) catch |err| {
         log.err(.app, "semantic tree text dump failed", .{ .err = err });
         return error.WriteFailed;
     };
@@ -82,7 +84,7 @@ const NodeData = struct {
     node_name: []const u8,
 };
 
-fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap) !void {
+fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_name: ?[]const u8, visitor: anytype, index: usize, listener_targets: interactive.ListenerTargetMap, css_cache: ?*Element.CssCache) !void {
     // 1. Skip non-content nodes
     if (node.is(Element)) |el| {
         const tag = el.getTag();
@@ -92,7 +94,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         if (tag == .datalist or tag == .option or tag == .optgroup) return;
 
         // Check visibility using the engine's checkVisibility which handles CSS display: none
-        if (!el.checkVisibility(self.page)) {
+        if (!el.checkVisibilityCached(css_cache, self.page)) {
             return;
         }
 
@@ -133,7 +135,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
         }
 
         if (el.is(Element.Html)) |html_el| {
-            if (interactive.classifyInteractivity(el, html_el, listener_targets) != null) {
+            if (interactive.classifyInteractivity(self.page, el, html_el, listener_targets, css_cache) != null) {
                 is_interactive = true;
             }
         }
@@ -213,7 +215,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
             }
             gop.value_ptr.* += 1;
 
-            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets);
+            try self.walk(child, xpath_buffer, name, visitor, gop.value_ptr.*, listener_targets, css_cache);
         }
     }
 
@@ -225,7 +227,7 @@ fn walk(self: @This(), node: *Node, xpath_buffer: *std.ArrayList(u8), parent_nam
 }
 
 fn extractSelectOptions(node: *Node, page: *Page, arena: std.mem.Allocator) ![]OptionData {
-    var options = std.ArrayListUnmanaged(OptionData){};
+    var options: std.ArrayList(OptionData) = .empty;
     var it = node.childrenIterator();
     while (it.next()) |child| {
         if (child.is(Element)) |el| {

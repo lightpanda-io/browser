@@ -172,16 +172,12 @@ pub fn setFloat(self: *CSSStyleDeclaration, value_: ?[]const u8, page: *Page) !v
 }
 
 pub fn getCssText(self: *const CSSStyleDeclaration, page: *Page) ![]const u8 {
-    if (self._element == null) return "";
-
     var buf = std.Io.Writer.Allocating.init(page.call_arena);
     try self.format(&buf.writer);
     return buf.written();
 }
 
 pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !void {
-    if (self._element == null) return;
-
     // Clear existing properties
     var node = self._properties.first;
     while (node) |n| {

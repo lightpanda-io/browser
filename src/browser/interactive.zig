@@ -133,6 +133,8 @@ pub fn collectInteractiveElements(
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(page, arena);
 
+    var css_cache: Element.CssCache = .empty;
+
     var results: std.ArrayList(InteractiveElement) = .empty;
 
     var tw = TreeWalker.Full.init(root, .{});
@@ -146,7 +148,7 @@ pub fn collectInteractiveElements(
             else => {},
         }
 
-        const itype = classifyInteractivity(el, html_el, listener_targets) orelse continue;
+        const itype = classifyInteractivity(page, el, html_el, listener_targets, &css_cache) orelse continue;
 
         const listener_types = getListenerTypes(
             el.asEventTarget(),
@@ -210,10 +212,14 @@ pub fn buildListenerTargetMap(page: *Page, arena: Allocator) !ListenerTargetMap 
 }
 
 pub fn classifyInteractivity(
+    page: *Page,
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
+    cache: ?*Element.CssCache,
 ) ?InteractivityType {
+    if (el.hasPointerEventsNone(cache, page)) return null;
+
     // 1. Native interactive by tag
     switch (el.getTag()) {
         .button, .summary, .details, .select, .textarea => return .native,
@@ -517,6 +523,11 @@ test "browser.interactive: disabled by fieldset" {
     try testing.expect(elements[0].disabled);
     // Button inside first legend is NOT disabled
     try testing.expect(!elements[1].disabled);
+}
+
+test "browser.interactive: pointer-events none" {
+    const elements = try testInteractive("<button style=\"pointer-events: none;\">Click me</button>");
+    try testing.expectEqual(0, elements.len);
 }
 
 test "browser.interactive: non-interactive div" {

@@ -94,10 +94,20 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
     if (self._sheet) |sheet| return sheet;
     const sheet = try CSSStyleSheet.initWithOwner(self.asElement(), page);
     self._sheet = sheet;
+
+    const text = try self.asNode().getTextContentAlloc(page.call_arena);
+    try sheet.replaceSync(text, page);
+
+    const sheets = try page.document.getStyleSheets(page);
+    try sheets.add(sheet, page);
+
     return sheet;
 }
 
 pub fn styleAddedCallback(self: *Style, page: *Page) !void {
+    // Force stylesheet initialization so rules are parsed immediately
+    _ = self.getSheet(page) catch null;
+
     // if we're planning on navigating to another page, don't trigger load event.
     if (page.isGoingAway()) {
         return;
