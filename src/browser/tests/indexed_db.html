@@ -97,3 +97,35 @@
     db2.close();
   });
 </script>
+
+<script id="indexed_db_index_lookup_persisted">
+  testing.async(async () => {
+    const db1 = await openDb('lp-index', 1, (upgradeDb) => {
+      const store = upgradeDb.createObjectStore('users');
+      store.createIndex('by_email', 'email');
+    });
+
+    const tx1 = db1.transaction('users');
+    const store1 = tx1.objectStore('users');
+    await requestResult(store1.put({ name: 'Ada', email: 'ada@example.com' }, 'user-1'));
+    const index1 = store1.index('by_email');
+    testing.expectEqual('by_email', index1.name);
+    testing.expectEqual('email', index1.keyPath);
+    testing.expectEqual('Ada', (await requestResult(index1.get('ada@example.com'))).name);
+    db1.close();
+
+    const db2 = await openDb('lp-index', 1);
+    const tx2 = db2.transaction('users');
+    const store2 = tx2.objectStore('users');
+    const index2 = store2.index('by_email');
+    testing.expectEqual('Ada', (await requestResult(index2.get('ada@example.com'))).name);
+
+    await requestResult(store2.put({ name: 'Ada Lovelace', email: 'ada@new.example.com' }, 'user-1'));
+    testing.expectEqual(null, await requestResult(index2.get('ada@example.com')));
+    testing.expectEqual('Ada Lovelace', (await requestResult(index2.get('ada@new.example.com'))).name);
+
+    await requestResult(store2.delete('user-1'));
+    testing.expectEqual(null, await requestResult(index2.get('ada@new.example.com')));
+    db2.close();
+  });
+</script>

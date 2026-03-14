@@ -76,6 +76,65 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/index-seed.html":
+            body = html(
+                "IndexedDB Loading - Lightpanda Browser",
+                "<script>"
+                "const req=indexedDB.open('lp-index-persist',1);"
+                "req.onupgradeneeded=()=>{"
+                "const store=req.result.createObjectStore('users');"
+                "store.createIndex('by_email','email');"
+                "};"
+                "req.onerror=()=>{document.title='IndexedDB Index Seed Error - Lightpanda Browser';};"
+                "req.onsuccess=()=>{"
+                "const db=req.result;"
+                "const tx=db.transaction('users');"
+                "const store=tx.objectStore('users');"
+                "const putReq=store.put({status:'ok',email:'ada@example.com'},'user-1');"
+                "putReq.onerror=()=>{document.title='IndexedDB Index Seed Error - Lightpanda Browser';};"
+                "putReq.onsuccess=()=>{document.title='IndexedDB Index Seeded - Lightpanda Browser';};"
+                "};"
+                "</script><h1>index-seed</h1>",
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if self.path == "/index-echo.html":
+            body = html(
+                "IndexedDB Loading - Lightpanda Browser",
+                "<script>"
+                "const req=indexedDB.open('lp-index-persist',1);"
+                "req.onupgradeneeded=()=>{document.title='IndexedDB Index Echo missing - Lightpanda Browser';};"
+                "req.onerror=()=>{document.title='IndexedDB Index Echo missing - Lightpanda Browser';};"
+                "req.onsuccess=()=>{"
+                "try{"
+                "const db=req.result;"
+                "const tx=db.transaction('users');"
+                "const store=tx.objectStore('users');"
+                "const index=store.index('by_email');"
+                "const getReq=index.get('ada@example.com');"
+                "getReq.onerror=()=>{document.title='IndexedDB Index Echo missing - Lightpanda Browser';};"
+                "getReq.onsuccess=()=>{"
+                "const value=getReq.result;"
+                "document.title=(value&&value.status==='ok'&&value.email==='ada@example.com'?'IndexedDB Index Echo ok - Lightpanda Browser':'IndexedDB Index Echo missing - Lightpanda Browser');"
+                "};"
+                "}catch(_err){document.title='IndexedDB Index Echo missing - Lightpanda Browser';}"
+                "};"
+                "</script><h1>index-echo</h1>",
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         body = html("Not Found - Lightpanda Browser", "<h1>Not Found</h1>")
         self.send_response(404)
         self.send_header("Content-Type", "text/html; charset=utf-8")

@@ -756,42 +756,56 @@ fn jsValueToTypedArray(comptime T: type, js_val: js.Value) !?[]T {
             if (js_val.isUint16Array()) {
                 if (byte_len == 0) return &[_]u16{};
                 const arr_ptr = @as([*]u16, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 2];
+                return arr_ptr[byte_offset / 2 .. byte_offset / 2 + byte_len / 2];
             }
         },
         i16 => {
             if (js_val.isInt16Array()) {
                 if (byte_len == 0) return &[_]i16{};
                 const arr_ptr = @as([*]i16, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 2];
+                return arr_ptr[byte_offset / 2 .. byte_offset / 2 + byte_len / 2];
             }
         },
         u32 => {
             if (js_val.isUint32Array()) {
                 if (byte_len == 0) return &[_]u32{};
                 const arr_ptr = @as([*]u32, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 4];
+                return arr_ptr[byte_offset / 4 .. byte_offset / 4 + byte_len / 4];
             }
         },
         i32 => {
             if (js_val.isInt32Array()) {
                 if (byte_len == 0) return &[_]i32{};
                 const arr_ptr = @as([*]i32, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 4];
+                return arr_ptr[byte_offset / 4 .. byte_offset / 4 + byte_len / 4];
+            }
+        },
+        f32 => {
+            if (js_val.isFloat32Array()) {
+                if (byte_len == 0) return &[_]f32{};
+                const arr_ptr = @as([*]f32, @ptrCast(@alignCast(data)));
+                return arr_ptr[byte_offset / 4 .. byte_offset / 4 + byte_len / 4];
+            }
+        },
+        f64 => {
+            if (js_val.isFloat64Array()) {
+                if (byte_len == 0) return &[_]f64{};
+                const arr_ptr = @as([*]f64, @ptrCast(@alignCast(data)));
+                return arr_ptr[byte_offset / 8 .. byte_offset / 8 + byte_len / 8];
             }
         },
         u64 => {
             if (js_val.isBigUint64Array()) {
                 if (byte_len == 0) return &[_]u64{};
                 const arr_ptr = @as([*]u64, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 8];
+                return arr_ptr[byte_offset / 8 .. byte_offset / 8 + byte_len / 8];
             }
         },
         i64 => {
             if (js_val.isBigInt64Array()) {
                 if (byte_len == 0) return &[_]i64{};
                 const arr_ptr = @as([*]i64, @ptrCast(@alignCast(data)));
-                return arr_ptr[byte_offset .. byte_offset + byte_len / 8];
+                return arr_ptr[byte_offset / 8 .. byte_offset / 8 + byte_len / 8];
             }
         },
         else => {},
@@ -914,6 +928,12 @@ fn probeJsValueToZig(self: *const Local, comptime T: type, js_val: js.Value) !Pr
                             return .{ .ok = {} };
                         },
                         i32 => if (js_val.isInt32Array()) {
+                            return .{ .ok = {} };
+                        },
+                        f32 => if (js_val.isFloat32Array()) {
+                            return .{ .ok = {} };
+                        },
+                        f64 => if (js_val.isFloat64Array()) {
                             return .{ .ok = {} };
                         },
                         u64 => if (js_val.isBigUint64Array()) {

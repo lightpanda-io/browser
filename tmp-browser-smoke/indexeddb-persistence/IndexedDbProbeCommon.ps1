@@ -92,6 +92,15 @@ function ConvertTo-IndexedDbEntryPattern([string]$Origin, [string]$DatabaseName,
   return [regex]::Escape("entry`t$originField`t$dbField`t$storeField`t$keyField`t$valueField")
 }
 
+function ConvertTo-IndexedDbIndexPattern([string]$Origin, [string]$DatabaseName, [string]$StoreName, [string]$IndexName, [string]$KeyPath) {
+  $originField = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Origin))
+  $dbField = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DatabaseName))
+  $storeField = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($StoreName))
+  $indexField = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($IndexName))
+  $keyPathField = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($KeyPath))
+  return [regex]::Escape("index`t$originField`t$dbField`t$storeField`t$indexField`t$keyPathField")
+}
+
 function Wait-IndexedDbFileMatch([string]$IndexedDbFile, [string]$Pattern, [int]$Attempts = 40) {
   for ($i = 0; $i -lt $Attempts; $i++) {
     $data = Read-IndexedDbFileData $IndexedDbFile

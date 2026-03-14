@@ -9,7 +9,7 @@ const String = @import("../../../string.zig").String;
 const Allocator = std.mem.Allocator;
 
 pub fn registerTypes() []const type {
-    return &.{ IDBFactory, IDBRequest, IDBOpenDBRequest, IDBDatabase, IDBTransaction, IDBObjectStore };
+    return &.{ IDBFactory, IDBRequest, IDBOpenDBRequest, IDBDatabase, IDBTransaction, IDBObjectStore, IDBIndex };
 }
 
 pub const Shed = struct {
@@ -197,6 +197,15 @@ pub const DatabaseData = struct {
         return self._stores.count();
     }
 
+    pub fn indexCount(self: *const DatabaseData) usize {
+        var count: usize = 0;
+        var it = self._stores.valueIterator();
+        while (it.next()) |store| {
+            count += store.*.indexCount();
+        }
+        return count;
+    }
+
     pub fn itemCount(self: *const DatabaseData) usize {
         var count: usize = 0;
         var it = self._stores.valueIterator();
@@ -207,8 +216,73 @@ pub const DatabaseData = struct {
     }
 };
 
+pub const IndexData = struct {
+    key_path: []u8 = &.{},
+    _entries: std.StringHashMapUnmanaged([]u8) = .empty,
+
+    pub fn deinit(self: *IndexData, allocator: Allocator) void {
+        allocator.free(self.key_path);
+        var it = self._entries.iterator();
+        while (it.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+            allocator.free(kv.value_ptr.*);
+        }
+        self._entries.deinit(allocator);
+        self.* = .{};
+    }
+
+    pub fn putPrimaryKey(self: *IndexData, allocator: Allocator, index_key: []const u8, primary_key: []const u8) !void {
+        const key_owned = try allocator.dupe(u8, index_key);
+        errdefer allocator.free(key_owned);
+        const primary_owned = try allocator.dupe(u8, primary_key);
+        errdefer allocator.free(primary_owned);
+
+        const gop = try self._entries.getOrPut(allocator, key_owned);
+        if (gop.found_existing) {
+            allocator.free(key_owned);
+            allocator.free(gop.value_ptr.*);
+        }
+        gop.value_ptr.* = primary_owned;
+    }
+
+    pub fn getPrimaryKey(self: *const IndexData, index_key: []const u8) ?[]const u8 {
+        return self._entries.get(index_key);
+    }
+
+    pub fn removePrimaryKey(self: *IndexData, allocator: Allocator, primary_key: []const u8) void {
+        var to_remove: ?[]const u8 = null;
+        var it = self._entries.iterator();
+        while (it.next()) |kv| {
+            if (std.mem.eql(u8, kv.value_ptr.*, primary_key)) {
+                to_remove = kv.key_ptr.*;
+                break;
+            }
+        }
+        if (to_remove) |key| {
+            if (self._entries.fetchRemove(key)) |removed| {
+                allocator.free(removed.key);
+                allocator.free(removed.value);
+            }
+        }
+    }
+
+    pub fn clearEntries(self: *IndexData, allocator: Allocator) void {
+        var it = self._entries.iterator();
+        while (it.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+            allocator.free(kv.value_ptr.*);
+        }
+        self._entries.clearAndFree(allocator);
+    }
+
+    pub fn entryCount(self: *const IndexData) usize {
+        return self._entries.count();
+    }
+};
+
 pub const ObjectStoreData = struct {
     _items: std.StringHashMapUnmanaged([]u8) = .empty,
+    _indexes: std.StringHashMapUnmanaged(*IndexData) = .empty,
 
     pub fn deinit(self: *ObjectStoreData, allocator: Allocator) void {
         var it = self._items.iterator();
@@ -217,6 +291,13 @@ pub const ObjectStoreData = struct {
             allocator.free(kv.value_ptr.*);
         }
         self._items.deinit(allocator);
+        var index_it = self._indexes.iterator();
+        while (index_it.next()) |kv| {
+            allocator.free(kv.key_ptr.*);
+            kv.value_ptr.*.deinit(allocator);
+            allocator.destroy(kv.value_ptr.*);
+        }
+        self._indexes.deinit(allocator);
         self.* = .{};
     }
 
@@ -232,6 +313,27 @@ pub const ObjectStoreData = struct {
             allocator.free(gop.value_ptr.*);
         }
         gop.value_ptr.* = value_owned;
+    }
+
+    pub fn getIndex(self: *const ObjectStoreData, name: []const u8) ?*IndexData {
+        return self._indexes.get(name);
+    }
+
+    pub fn createIndex(self: *ObjectStoreData, allocator: Allocator, name: []const u8, key_path: []const u8) !*IndexData {
+        const gop = try self._indexes.getOrPut(allocator, name);
+        if (gop.found_existing) {
+            return error.ConstraintError;
+        }
+
+        const index = try allocator.create(IndexData);
+        errdefer allocator.destroy(index);
+        index.* = .{
+            .key_path = try allocator.dupe(u8, key_path),
+        };
+
+        gop.key_ptr.* = try allocator.dupe(u8, name);
+        gop.value_ptr.* = index;
+        return index;
     }
 
     pub fn getJson(self: *const ObjectStoreData, key: []const u8) ?[]const u8 {
@@ -254,12 +356,62 @@ pub const ObjectStoreData = struct {
             allocator.free(kv.value_ptr.*);
         }
         self._items.clearAndFree(allocator);
+        var index_it = self._indexes.valueIterator();
+        while (index_it.next()) |index| {
+            index.*.clearEntries(allocator);
+        }
     }
 
     pub fn itemCount(self: *const ObjectStoreData) usize {
         return self._items.count();
     }
+
+    pub fn indexCount(self: *const ObjectStoreData) usize {
+        return self._indexes.count();
+    }
+
+    pub fn rebuildIndexes(self: *ObjectStoreData, storage_allocator: Allocator, temp_allocator: Allocator) !void {
+        var index_it = self._indexes.valueIterator();
+        while (index_it.next()) |index| {
+            index.*.clearEntries(storage_allocator);
+        }
+
+        var item_it = self._items.iterator();
+        while (item_it.next()) |item_kv| {
+            try self.updateIndexesForPut(storage_allocator, temp_allocator, item_kv.key_ptr.*, item_kv.value_ptr.*);
+        }
+    }
+
+    pub fn removePrimaryKeyFromIndexes(self: *ObjectStoreData, storage_allocator: Allocator, primary_key: []const u8) void {
+        var index_it = self._indexes.valueIterator();
+        while (index_it.next()) |index| {
+            index.*.removePrimaryKey(storage_allocator, primary_key);
+        }
+    }
+
+    pub fn updateIndexesForPut(self: *ObjectStoreData, storage_allocator: Allocator, temp_allocator: Allocator, primary_key: []const u8, json: []const u8) !void {
+        self.removePrimaryKeyFromIndexes(storage_allocator, primary_key);
+
+        var index_it = self._indexes.valueIterator();
+        while (index_it.next()) |index| {
+            const index_key = (try extractIndexKeyJson(temp_allocator, json, index.*.key_path)) orelse continue;
+            defer temp_allocator.free(index_key);
+            try index.*.putPrimaryKey(storage_allocator, index_key, primary_key);
+        }
+    }
 };
+
+fn extractIndexKeyJson(allocator: Allocator, object_json: []const u8, key_path: []const u8) !?[]const u8 {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, object_json, .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) {
+        return null;
+    }
+
+    const value = parsed.value.object.get(key_path) orelse return null;
+    return try std.json.Stringify.valueAlloc(allocator, value, .{});
+}
 
 pub const IDBFactory = struct {
     _page: *Page,
@@ -449,9 +601,33 @@ pub const IDBObjectStore = struct {
         return self._name;
     }
 
+    pub fn createIndex(self: *IDBObjectStore, name: []const u8, key_path: []const u8, page: *Page) !*IDBIndex {
+        const index_data = try self._data.createIndex(self._database._factory.storageAllocator(), name, key_path);
+        try self._data.rebuildIndexes(self._database._factory.storageAllocator(), page.call_arena);
+        return page._factory.create(IDBIndex{
+            ._page = page,
+            ._store = self,
+            ._name = try page.arena.dupe(u8, name),
+            ._key_path = index_data.key_path,
+            ._data = index_data,
+        });
+    }
+
+    pub fn index(self: *IDBObjectStore, name: []const u8, page: *Page) !*IDBIndex {
+        const index_data = self._data.getIndex(name) orelse return error.NotFoundError;
+        return page._factory.create(IDBIndex{
+            ._page = page,
+            ._store = self,
+            ._name = try page.arena.dupe(u8, name),
+            ._key_path = index_data.key_path,
+            ._data = index_data,
+        });
+    }
+
     pub fn put(self: *IDBObjectStore, value: js.Value.Temp, key: []const u8, page: *Page) !*IDBRequest {
         const json = try value.local(page.js.local.?).toJson(page.call_arena);
         try self._data.putJson(self._database._factory.storageAllocator(), key, json);
+        try self._data.updateIndexesForPut(self._database._factory.storageAllocator(), page.call_arena, key, json);
 
         const request = try page._factory.eventTarget(IDBRequest{
             ._proto = undefined,
@@ -480,8 +656,9 @@ pub const IDBObjectStore = struct {
         return request;
     }
 
-    pub fn @"delete"(self: *IDBObjectStore, key: []const u8, page: *Page) !*IDBRequest {
+    pub fn delete(self: *IDBObjectStore, key: []const u8, page: *Page) !*IDBRequest {
         _ = self._data.deleteKey(self._database._factory.storageAllocator(), key);
+        self._data.removePrimaryKeyFromIndexes(self._database._factory.storageAllocator(), key);
         const request = try page._factory.eventTarget(IDBRequest{
             ._proto = undefined,
             ._page = page,
@@ -516,10 +693,64 @@ pub const IDBObjectStore = struct {
         };
 
         pub const name = bridge.accessor(IDBObjectStore.getName, null, .{});
+        pub const createIndex = bridge.function(IDBObjectStore.createIndex, .{ .dom_exception = true });
+        pub const index = bridge.function(IDBObjectStore.index, .{ .dom_exception = true });
         pub const put = bridge.function(IDBObjectStore.put, .{ .dom_exception = true });
         pub const get = bridge.function(IDBObjectStore.get, .{ .dom_exception = true });
-        pub const delete = bridge.function(IDBObjectStore.@"delete", .{ .dom_exception = true });
+        pub const delete = bridge.function(IDBObjectStore.delete, .{ .dom_exception = true });
         pub const clear = bridge.function(IDBObjectStore.clear, .{ .dom_exception = true });
+    };
+};
+
+pub const IDBIndex = struct {
+    _page: *Page,
+    _store: *IDBObjectStore,
+    _name: []const u8,
+    _key_path: []const u8,
+    _data: *IndexData,
+
+    pub fn getName(self: *const IDBIndex) []const u8 {
+        return self._name;
+    }
+
+    pub fn getKeyPath(self: *const IDBIndex) []const u8 {
+        return self._key_path;
+    }
+
+    pub fn get(self: *IDBIndex, key: js.Value.Temp, page: *Page) !*IDBRequest {
+        const key_json = try key.local(page.js.local.?).toJson(page.call_arena);
+        const request = try page._factory.eventTarget(IDBRequest{
+            ._proto = undefined,
+            ._page = page,
+            ._transaction = self._store._transaction,
+        });
+
+        if (self._data.getPrimaryKey(key_json)) |primary_key| {
+            if (self._store._data.getJson(primary_key)) |json| {
+                request._result_json = json;
+            } else {
+                request._result_json = "null";
+            }
+        } else {
+            request._result_json = "null";
+        }
+
+        try scheduleRequestSuccess(page, request, "IDBIndex.get");
+        return request;
+    }
+
+    pub const JsApi = struct {
+        pub const bridge = js.Bridge(IDBIndex);
+
+        pub const Meta = struct {
+            pub const name = "IDBIndex";
+            pub const prototype_chain = bridge.prototypeChain();
+            pub var class_id: bridge.ClassId = undefined;
+        };
+
+        pub const name = bridge.accessor(IDBIndex.getName, null, .{});
+        pub const keyPath = bridge.accessor(IDBIndex.getKeyPath, null, .{});
+        pub const get = bridge.function(IDBIndex.get, .{ .dom_exception = true });
     };
 };
 

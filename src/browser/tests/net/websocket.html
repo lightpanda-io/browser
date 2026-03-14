@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=WebSocket#echo_send_close>
+testing.async(async () => {
+  await new Promise((resolve, reject) => {
+    const ws = new WebSocket('ws://127.0.0.1:9593/echo');
+    testing.expectEqual(WebSocket.CONNECTING, ws.readyState);
+    testing.expectEqual('ws://127.0.0.1:9593/echo', ws.url);
+    testing.expectEqual(WebSocket.OPEN, ws.OPEN);
+
+    ws.onerror = () => reject(new Error('unexpected websocket error'));
+    ws.onopen = () => {
+      testing.expectEqual(WebSocket.OPEN, ws.readyState);
+      ws.send('ping');
+    };
+    ws.onmessage = (event) => {
+      testing.expectEqual('echo:ping', event.data);
+      ws.close();
+    };
+    ws.onclose = () => {
+      testing.expectEqual(WebSocket.CLOSED, ws.readyState);
+      resolve();
+    };
+  });
+});
+</script>

@@ -238,6 +238,10 @@ Current state inside Gate 1:
   shed across tabs and browser restart, and that storage can be cleared from
   `browser://settings`, with bounded cross-tab, restart, and clear-IndexedDB
   headed probes
+- that same headed IndexedDB path now also keeps basic object-store index
+  definitions and indexed lookups persistent across tabs and browser restart,
+  with focused DOM tests plus a bounded headed probe proving indexed entries
+  survive restart and can still be read back by index name and key
 - headed `fetch(...)` now honors credentials policy correctly on authenticated
   pages, with bounded localhost probes proving:
   - default same-origin fetch keeps cookie plus inherited auth
@@ -387,6 +391,18 @@ Current state inside Gate 1:
   gate for `drawingBufferWidth` / `drawingBufferHeight`, proving resized WebGL
   buffer dimensions remain visible to page JS while a clear-colored surface
   still reaches the headed screenshot path
+- that same headed Win32 `webgl` path now also includes a first real
+  shader/program/buffer draw slice for `createShader`, `shaderSource`,
+  `compileShader`, `createProgram`, `attachShader`, `linkProgram`,
+  `createBuffer`, `bufferData`, `vertexAttribPointer`, and
+  `drawArrays(TRIANGLES, ...)`, with focused DOM tests plus a bounded headed
+  screenshot probe proving a red triangle reaches the real destination canvas
+  surface
+- the headed browser runtime now also exposes a first real `WebSocket`
+  browser-API slice with `CONNECTING` -> `OPEN` -> `CLOSED` state transitions,
+  `send`, `close`, `onopen`, `onmessage`, `onerror`, and `onclose`, with a
+  focused localhost DOM test plus a bounded headed echo probe proving text
+  frames round-trip on the live headed surface path
 - the current headed painter now also keeps simple block paragraphs with mixed
   direct text plus inline child elements on one shared inline row instead of
   splitting the direct text into a separate label band above the inline chips,

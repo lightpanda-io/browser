@@ -2819,6 +2819,14 @@ const BrowseIndexedDbStoreRef = struct {
     name: []const u8,
 };
 
+const BrowseIndexedDbIndexRef = struct {
+    origin: []const u8,
+    database: []const u8,
+    store: []const u8,
+    name: []const u8,
+    key_path: []const u8,
+};
+
 const BrowseIndexedDbItemRef = struct {
     origin: []const u8,
     database: []const u8,
@@ -2843,6 +2851,22 @@ fn browseIndexedDbStoreLessThan(a: BrowseIndexedDbStoreRef, b: BrowseIndexedDbSt
     const database_order = std.mem.order(u8, a.database, b.database);
     if (database_order != .eq) {
         return database_order == .lt;
+    }
+    return std.mem.order(u8, a.name, b.name) == .lt;
+}
+
+fn browseIndexedDbIndexLessThan(a: BrowseIndexedDbIndexRef, b: BrowseIndexedDbIndexRef) bool {
+    const origin_order = std.mem.order(u8, a.origin, b.origin);
+    if (origin_order != .eq) {
+        return origin_order == .lt;
+    }
+    const database_order = std.mem.order(u8, a.database, b.database);
+    if (database_order != .eq) {
+        return database_order == .lt;
+    }
+    const store_order = std.mem.order(u8, a.store, b.store);
+    if (store_order != .eq) {
+        return store_order == .lt;
     }
     return std.mem.order(u8, a.name, b.name) == .lt;
 }
@@ -2881,6 +2905,18 @@ fn insertionSortBrowseIndexedDbStores(entries: []BrowseIndexedDbStoreRef) void {
         const current = entries[i];
         var j = i;
         while (j > 0 and browseIndexedDbStoreLessThan(current, entries[j - 1])) : (j -= 1) {
+            entries[j] = entries[j - 1];
+        }
+        entries[j] = current;
+    }
+}
+
+fn insertionSortBrowseIndexedDbIndexes(entries: []BrowseIndexedDbIndexRef) void {
+    var i: usize = 1;
+    while (i < entries.len) : (i += 1) {
+        const current = entries[i];
+        var j = i;
+        while (j > 0 and browseIndexedDbIndexLessThan(current, entries[j - 1])) : (j -= 1) {
             entries[j] = entries[j - 1];
         }
         entries[j] = current;
@@ -2939,6 +2975,37 @@ fn collectBrowseIndexedDbStores(allocator: std.mem.Allocator, indexed_db_shed: *
         }
     }
     insertionSortBrowseIndexedDbStores(entries.items);
+    return entries;
+}
+
+fn collectBrowseIndexedDbIndexes(allocator: std.mem.Allocator, indexed_db_shed: *indexed_db.Shed) !std.ArrayListUnmanaged(BrowseIndexedDbIndexRef) {
+    var entries: std.ArrayListUnmanaged(BrowseIndexedDbIndexRef) = .{};
+    var origin_it = indexed_db_shed._origins.iterator();
+    while (origin_it.next()) |origin_kv| {
+        const origin = origin_kv.key_ptr.*;
+        const bucket = origin_kv.value_ptr.*;
+        var database_it = bucket._databases.iterator();
+        while (database_it.next()) |database_kv| {
+            const database_name = database_kv.key_ptr.*;
+            const database = database_kv.value_ptr.*;
+            var store_it = database._stores.iterator();
+            while (store_it.next()) |store_kv| {
+                const store_name = store_kv.key_ptr.*;
+                const store = store_kv.value_ptr.*;
+                var index_it = store._indexes.iterator();
+                while (index_it.next()) |index_kv| {
+                    try entries.append(allocator, .{
+                        .origin = origin,
+                        .database = database_name,
+                        .store = store_name,
+                        .name = index_kv.key_ptr.*,
+                        .key_path = index_kv.value_ptr.*.key_path,
+                    });
+                }
+            }
+        }
+    }
+    insertionSortBrowseIndexedDbIndexes(entries.items);
     return entries;
 }
 
@@ -3033,6 +3100,32 @@ fn loadBrowseIndexedDb(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) 
             continue;
         }
 
+        if (std.mem.startsWith(u8, line, "index\t")) {
+            var fields = std.mem.splitScalar(u8, line["index\t".len..], '\t');
+            const origin_raw = fields.next() orelse continue;
+            const database_raw = fields.next() orelse continue;
+            const store_raw = fields.next() orelse continue;
+            const index_raw = fields.next() orelse continue;
+            const key_path_raw = fields.next() orelse continue;
+
+            const origin = decodePersistedStorageField(allocator, origin_raw) catch continue;
+            defer allocator.free(origin);
+            const database_name = decodePersistedStorageField(allocator, database_raw) catch continue;
+            defer allocator.free(database_name);
+            const store_name = decodePersistedStorageField(allocator, store_raw) catch continue;
+            defer allocator.free(store_name);
+            const index_name = decodePersistedStorageField(allocator, index_raw) catch continue;
+            defer allocator.free(index_name);
+            const key_path = decodePersistedStorageField(allocator, key_path_raw) catch continue;
+            defer allocator.free(key_path);
+
+            const bucket = indexed_db_shed.getOrPutOrigin(allocator, origin) catch continue;
+            const database = bucket.getOrPutDatabase(allocator, database_name) catch continue;
+            const store = database.getOrPutStore(allocator, store_name) catch continue;
+            _ = store.createIndex(allocator, index_name, key_path) catch continue;
+            continue;
+        }
+
         if (!std.mem.startsWith(u8, line, "entry\t")) {
             continue;
         }
@@ -3063,6 +3156,21 @@ fn loadBrowseIndexedDb(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) 
         };
     }
 
+    var origin_it = indexed_db_shed._origins.iterator();
+    while (origin_it.next()) |origin_kv| {
+        const bucket = origin_kv.value_ptr.*;
+        var database_it = bucket._databases.iterator();
+        while (database_it.next()) |database_kv| {
+            const database = database_kv.value_ptr.*;
+            var store_it = database._stores.iterator();
+            while (store_it.next()) |store_kv| {
+                store_kv.value_ptr.*.rebuildIndexes(allocator, allocator) catch |err| {
+                    log.warn(.app, "load indexed db", .{ .err = err });
+                };
+            }
+        }
+    }
+
     return indexed_db_shed;
 }
 
@@ -3072,14 +3180,18 @@ fn hashBrowseIndexedDb(indexed_db_shed: *indexed_db.Shed) u64 {
     defer databases.deinit(std.heap.page_allocator);
     var stores = collectBrowseIndexedDbStores(std.heap.page_allocator, indexed_db_shed) catch return 0;
     defer stores.deinit(std.heap.page_allocator);
+    var indexes = collectBrowseIndexedDbIndexes(std.heap.page_allocator, indexed_db_shed) catch return 0;
+    defer indexes.deinit(std.heap.page_allocator);
     var items = collectBrowseIndexedDbItems(std.heap.page_allocator, indexed_db_shed) catch return 0;
     defer items.deinit(std.heap.page_allocator);
 
     const database_count = databases.items.len;
     const store_count = stores.items.len;
+    const index_count = indexes.items.len;
     const item_count = items.items.len;
     hasher.update(std.mem.asBytes(&database_count));
     hasher.update(std.mem.asBytes(&store_count));
+    hasher.update(std.mem.asBytes(&index_count));
     hasher.update(std.mem.asBytes(&item_count));
 
     for (databases.items) |entry| {
@@ -3095,6 +3207,18 @@ fn hashBrowseIndexedDb(indexed_db_shed: *indexed_db.Shed) u64 {
         hasher.update(entry.database);
         hasher.update(&.{0});
         hasher.update(entry.name);
+        hasher.update(&.{0});
+    }
+    for (indexes.items) |entry| {
+        hasher.update(entry.origin);
+        hasher.update(&.{0});
+        hasher.update(entry.database);
+        hasher.update(&.{0});
+        hasher.update(entry.store);
+        hasher.update(&.{0});
+        hasher.update(entry.name);
+        hasher.update(&.{0});
+        hasher.update(entry.key_path);
         hasher.update(&.{0});
     }
     for (items.items) |entry| {
@@ -3145,6 +3269,22 @@ fn saveBrowseIndexedDbForPath(
         const store_name = try encodePersistedStorageField(allocator, entry.name);
         defer allocator.free(store_name);
         try buf.writer.print("store\t{s}\t{s}\t{s}\n", .{ origin, database_name, store_name });
+    }
+
+    var indexes = try collectBrowseIndexedDbIndexes(allocator, indexed_db_shed);
+    defer indexes.deinit(allocator);
+    for (indexes.items) |entry| {
+        const origin = try encodePersistedStorageField(allocator, entry.origin);
+        defer allocator.free(origin);
+        const database_name = try encodePersistedStorageField(allocator, entry.database);
+        defer allocator.free(database_name);
+        const store_name = try encodePersistedStorageField(allocator, entry.store);
+        defer allocator.free(store_name);
+        const index_name = try encodePersistedStorageField(allocator, entry.name);
+        defer allocator.free(index_name);
+        const key_path = try encodePersistedStorageField(allocator, entry.key_path);
+        defer allocator.free(key_path);
+        try buf.writer.print("index\t{s}\t{s}\t{s}\t{s}\t{s}\n", .{ origin, database_name, store_name, index_name, key_path });
     }
 
     var items = try collectBrowseIndexedDbItems(allocator, indexed_db_shed);
@@ -7660,14 +7800,18 @@ test "saveBrowseIndexedDbForPath round trips persisted indexed db" {
     const first_db = try first_bucket.getOrPutDatabase(std.testing.allocator, "lp-db");
     first_db.version = 2;
     const first_store = try first_db.getOrPutStore(std.testing.allocator, "items");
+    _ = try first_store.createIndex(std.testing.allocator, "by_value", "value");
     try first_store.putJson(std.testing.allocator, "alpha", "{\"value\":1}");
     try first_store.putJson(std.testing.allocator, "beta", "{\"value\":2}");
+    try first_store.rebuildIndexes(std.testing.allocator, std.testing.allocator);
 
     const second_bucket = try source.getOrPutOrigin(std.testing.allocator, "http://127.0.0.1:8151");
     const second_db = try second_bucket.getOrPutDatabase(std.testing.allocator, "other-db");
     second_db.version = 1;
     const second_store = try second_db.getOrPutStore(std.testing.allocator, "entries");
+    _ = try second_store.createIndex(std.testing.allocator, "by_ok", "ok");
     try second_store.putJson(std.testing.allocator, "gamma", "{\"ok\":true}");
+    try second_store.rebuildIndexes(std.testing.allocator, std.testing.allocator);
 
     try saveBrowseIndexedDbForPath(std.testing.allocator, abs_dir, &source);
 
@@ -7682,15 +7826,24 @@ test "saveBrowseIndexedDbForPath round trips persisted indexed db" {
     const loaded_first_bucket = loaded._origins.get("http://127.0.0.1:8150") orelse return error.TestUnexpectedResult;
     const loaded_first_db = loaded_first_bucket.getDatabase("lp-db") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u32, 2), loaded_first_db.version);
+    try std.testing.expectEqual(@as(usize, 1), loaded_first_db.indexCount());
     const loaded_first_store = loaded_first_db.getStore("items") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("{\"value\":1}", loaded_first_store.getJson("alpha") orelse return error.TestUnexpectedResult);
     try std.testing.expectEqualStrings("{\"value\":2}", loaded_first_store.getJson("beta") orelse return error.TestUnexpectedResult);
+    const loaded_first_index = loaded_first_store.getIndex("by_value") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("value", loaded_first_index.key_path);
+    try std.testing.expectEqualStrings("alpha", loaded_first_index.getPrimaryKey("1") orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("beta", loaded_first_index.getPrimaryKey("2") orelse return error.TestUnexpectedResult);
 
     const loaded_second_bucket = loaded._origins.get("http://127.0.0.1:8151") orelse return error.TestUnexpectedResult;
     const loaded_second_db = loaded_second_bucket.getDatabase("other-db") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u32, 1), loaded_second_db.version);
+    try std.testing.expectEqual(@as(usize, 1), loaded_second_db.indexCount());
     const loaded_second_store = loaded_second_db.getStore("entries") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("{\"ok\":true}", loaded_second_store.getJson("gamma") orelse return error.TestUnexpectedResult);
+    const loaded_second_index = loaded_second_store.getIndex("by_ok") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("ok", loaded_second_index.key_path);
+    try std.testing.expectEqualStrings("gamma", loaded_second_index.getPrimaryKey("true") orelse return error.TestUnexpectedResult);
 }
 
 test "hashInternalBrowsePageState settings changes after cookie mutation" {

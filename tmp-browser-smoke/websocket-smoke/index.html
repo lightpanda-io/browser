@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WebSocket Echo Loading</title>
+  <style>
+    body {
+      margin: 0;
+      font: 16px/1.4 Consolas, "Courier New", monospace;
+      background: #f5f7fb;
+      color: #122033;
+    }
+    main {
+      padding: 24px;
+    }
+    pre {
+      padding: 16px;
+      border: 1px solid #c7d2e1;
+      background: #ffffff;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>WebSocket Echo</h1>
+    <pre id="log">connecting...</pre>
+  </main>
+  <script>
+    (() => {
+      const logEl = document.getElementById('log');
+      let finished = false;
+      const mode =
+        new URLSearchParams(location.search).get('mode') ||
+        (location.hash ? location.hash.slice(1) : '') ||
+        'echo';
+
+      function setState(title, message) {
+        document.title = title;
+        logEl.textContent = message;
+      }
+
+      try {
+        if (mode === 'global') {
+          setState('WebSocket Global ' + typeof WebSocket, 'typeof WebSocket = ' + typeof WebSocket);
+          return;
+        }
+
+        const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const ws = new WebSocket(scheme + location.host + '/echo');
+
+        if (mode === 'construct') {
+          setState('WebSocket Constructed', 'constructed');
+          ws.close();
+          return;
+        }
+
+        ws.onerror = () => {
+          if (finished) return;
+          finished = true;
+          setState('WebSocket Echo Error', 'error');
+        };
+
+        ws.onopen = () => {
+          setState('WebSocket Echo Open', 'open');
+          ws.send('ping');
+        };
+
+        ws.onmessage = (event) => {
+          if (event.data !== 'echo:ping') {
+            finished = true;
+            setState('WebSocket Echo Error', 'unexpected message: ' + event.data);
+            ws.close();
+            return;
+          }
+          finished = true;
+          setState('WebSocket Echo Ready', event.data);
+          ws.close();
+        };
+
+        ws.onclose = () => {
+          if (!finished) {
+            finished = true;
+            setState('WebSocket Echo Error', 'closed-before-echo');
+          }
+        };
+      } catch (err) {
+        setState('WebSocket Echo Error', String(err));
+      }
+    })();
+  </script>
+</body>
+</html>
