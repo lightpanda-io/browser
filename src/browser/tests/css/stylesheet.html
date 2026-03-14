@@ -492,7 +492,8 @@
 
     let replacedAsync = false;
     testing.async(async () => {
-        await sheet.replace('.async-test { margin: 10px; }');
+        const result = await sheet.replace('.async-test { margin: 10px; }');
+        testing.expectTrue(result === sheet);
         testing.expectEqual(1, sheet.cssRules.length);
         testing.expectEqual('.async-test', sheet.cssRules[0].selectorText);
         replacedAsync = true;

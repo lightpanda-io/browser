@@ -79,7 +79,7 @@ pub fn deleteRule(self: *CSSStyleSheet, index: u32, page: *Page) !void {
 
 pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise {
     try self.replaceSync(text, page);
-    return page.js.local.?.resolvePromise({});
+    return page.js.local.?.resolvePromise(self);
 }
 
 pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
