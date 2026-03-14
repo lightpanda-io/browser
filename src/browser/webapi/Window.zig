@@ -373,10 +373,11 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     const arena = try page.getArena(.{ .debug = "Window.schedule" });
     errdefer page.releaseArena(arena);
 
-    const origin = try self._location.getOrigin(page);
+    const origin = try page.window._location.getOrigin(page);
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
         .page = page,
+        .target = self,
         .arena = arena,
         .message = message,
         .origin = try arena.dupe(u8, origin),
@@ -702,6 +703,7 @@ const ScheduleCallback = struct {
 
 const PostMessageCallback = struct {
     page: *Page,
+    target: *Window,
     arena: Allocator,
     origin: []const u8,
     message: js.Value.Temp,
@@ -720,16 +722,17 @@ const PostMessageCallback = struct {
         defer self.deinit();
 
         const page = self.page;
-        const window = page.window;
+        const target = self.target;
+        const source = page.window;
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = self.message,
             .origin = self.origin,
-            .source = window,
+            .source = source,
             .bubbles = false,
             .cancelable = false,
         }, page)).asEvent();
-        try page._event_manager.dispatch(window.asEventTarget(), event);
+        try page._event_manager.dispatch(target.asEventTarget(), event);
 
         return null;
     }
