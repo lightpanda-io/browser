@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           # fetch submodules recusively, to get zig-js-runtime submodules also.
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           # fetch submodules recusively, to get zig-js-runtime submodules also.
@@ -83,7 +83,7 @@ jobs:
           echo "${{github.sha}}" > commit.txt
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-results
           path: |
@@ -109,7 +109,7 @@ jobs:
 
     steps:
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bench-results
 
