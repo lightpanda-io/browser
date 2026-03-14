@@ -228,6 +228,12 @@ pub const Writer = struct {
 
         try w.objectField("value");
         switch (value) {
+            .integer => |v| {
+                // CDP spec requires integer values to be serialized as strings.
+                var buf: [20]u8 = undefined;
+                const s = try std.fmt.bufPrint(&buf, "{d}", .{v});
+                try w.write(s);
+            },
             inline else => |v| try w.write(v),
         }
 
@@ -1212,4 +1218,25 @@ test "AXNode: writer" {
     // Check childIds array exists
     const child_ids = doc_node.get("childIds").?.array.items;
     try testing.expect(child_ids.len > 0);
+
+    // Find the h1 node and verify its level property is serialized as a string
+    for (nodes) |node_val| {
+        const obj = node_val.object;
+        const role_obj = obj.get("role") orelse continue;
+        const role_val = role_obj.object.get("value") orelse continue;
+        if (!std.mem.eql(u8, role_val.string, "heading")) continue;
+
+        const props = obj.get("properties").?.array.items;
+        for (props) |prop| {
+            const prop_obj = prop.object;
+            const name_str = prop_obj.get("name").?.string;
+            if (!std.mem.eql(u8, name_str, "level")) continue;
+            const level_value = prop_obj.get("value").?.object;
+            try testing.expectEqual("integer", level_value.get("type").?.string);
+            // CDP spec: integer values must be serialized as strings
+            try testing.expectEqual("1", level_value.get("value").?.string);
+            return;
+        }
+    }
+    return error.HeadingNodeNotFound;
 }
