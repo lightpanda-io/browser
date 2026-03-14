@@ -55,7 +55,8 @@ pub fn getOwnerRule(self: *const CSSStyleSheet) ?*CSSRule {
     return self._owner_rule;
 }
 
-pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, index: u32, page: *Page) !u32 {
+pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, page: *Page) !u32 {
+    const index = maybe_index orelse 0;
     var it = Parser.parseStylesheet(rule);
     const parsed_rule = it.next() orelse return error.SyntaxError;
 

@@ -447,6 +447,27 @@
 }
 </script>
 
+<script id="CSSStyleSheet_insertRule_default_index">
+{
+    const style = document.createElement('style');
+    document.head.appendChild(style);
+    const sheet = style.sheet;
+
+    testing.expectEqual(0, sheet.cssRules.length);
+
+    // Call without index, should default to 0
+    sheet.insertRule('.test-default { color: blue; }');
+    testing.expectEqual(1, sheet.cssRules.length);
+    testing.expectEqual('.test-default', sheet.cssRules[0].selectorText);
+
+    // Insert another rule without index, should default to 0 and push the first one to index 1
+    sheet.insertRule('.test-at-0 { color: red; }');
+    testing.expectEqual(2, sheet.cssRules.length);
+    testing.expectEqual('.test-at-0', sheet.cssRules[0].selectorText);
+    testing.expectEqual('.test-default', sheet.cssRules[1].selectorText);
+}
+</script>
+
 <script id="CSSStyleSheet_replaceSync">
 {
     const sheet = new CSSStyleSheet();
