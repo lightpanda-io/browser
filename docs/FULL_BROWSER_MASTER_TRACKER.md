@@ -234,6 +234,10 @@ Current state inside Gate 1:
 - headed `browse` tabs now also keep real per-tab `sessionStorage` state that
   survives same-tab navigation but does not leak across tabs or browser
   restart, with bounded same-tab, cross-tab, and restart headed probes
+- headed `browse` tabs now also share one persistent origin-scoped IndexedDB
+  shed across tabs and browser restart, and that storage can be cleared from
+  `browser://settings`, with bounded cross-tab, restart, and clear-IndexedDB
+  headed probes
 - headed `fetch(...)` now honors credentials policy correctly on authenticated
   pages, with bounded localhost probes proving:
   - default same-origin fetch keeps cookie plus inherited auth
@@ -558,10 +562,11 @@ Current known gap entering Gate 2:
 - explicit download requests, adopted root-attachment transfers, and other
   browser-managed resource flows still do not share one unified runtime path
   for transfer ownership, persistence, and policy
-- headed `browse` now has one shared persistent cookie jar and origin-scoped
-  `localStorage` store across tabs and restart, with settings clear paths for
-  both, but broader persisted profile state is still thin: cache policy,
-  stronger storage persistence, and an IndexedDB-class store are still open
+- headed `browse` now has one shared persistent cookie jar, origin-scoped
+  `localStorage` store, and origin-scoped IndexedDB store across tabs and
+  restart, with settings clear paths for all three, but broader persisted
+  profile state is still thin: cache policy and stronger profile persistence
+  beyond cookies/storage are still open
 - headed network images now ride the shared `Http` runtime path and inherit
   page/session cookies, sanitized referer, redirect-set cookies, URL-userinfo
   Basic Authorization, same-origin page-URL Basic auth inheritance, anonymous

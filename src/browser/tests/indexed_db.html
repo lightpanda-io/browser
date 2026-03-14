@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<script src="testing.js"></script>
+
+<script>
+  function openDb(name, version, onUpgrade) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(name, version);
+      request.onupgradeneeded = (event) => {
+        try {
+          if (onUpgrade) {
+            onUpgrade(request.result, event);
+          }
+        } catch (err) {
+          reject(err);
+        }
+      };
+      request.onerror = () => reject(new Error(request.error || 'open failed'));
+      request.onsuccess = () => resolve(request.result);
+    });
+  }
+
+  function requestResult(request) {
+    return new Promise((resolve, reject) => {
+      request.onerror = () => reject(new Error(request.error || 'request failed'));
+      request.onsuccess = () => resolve(request.result);
+    });
+  }
+</script>
+
+<script id="indexed_db_open_upgrade">
+  testing.async(async () => {
+    const db = await openDb('lp-basic', 1, (upgradeDb) => {
+      upgradeDb.createObjectStore('items');
+    });
+    testing.expectEqual('lp-basic', db.name);
+    testing.expectEqual(1, db.version);
+    const reopened = await openDb('lp-basic', 1);
+    testing.expectEqual('lp-basic', reopened.name);
+    testing.expectEqual(1, reopened.version);
+    reopened.close();
+    db.close();
+  });
+</script>
+
+<script id="indexed_db_put_get_delete_clear">
+  testing.async(async () => {
+    const db = await openDb('lp-ops', 1, (upgradeDb) => {
+      upgradeDb.createObjectStore('items');
+    });
+    const tx = db.transaction('items');
+    const store = tx.objectStore('items');
+
+    testing.expectEqual('items', store.name);
+    testing.expectEqual('alpha', await requestResult(store.put({ hello: 'world', n: 7 }, 'alpha')));
+
+    const alpha = await requestResult(store.get('alpha'));
+    testing.expectEqual('world', alpha.hello);
+    testing.expectEqual(7, alpha.n);
+
+    await requestResult(store.delete('alpha'));
+    testing.expectEqual(null, await requestResult(store.get('alpha')));
+
+    await requestResult(store.put({ value: 'one' }, 'one'));
+    await requestResult(store.put({ value: 'two' }, 'two'));
+    await requestResult(store.clear());
+    testing.expectEqual(null, await requestResult(store.get('one')));
+    testing.expectEqual(null, await requestResult(store.get('two')));
+
+    db.close();
+  });
+</script>
+
+<script id="indexed_db_version_upgrade">
+  testing.async(async () => {
+    const db1 = await openDb('lp-upgrade', 1, (upgradeDb) => {
+      upgradeDb.createObjectStore('one');
+    });
+    const tx1 = db1.transaction('one');
+    const store1 = tx1.objectStore('one');
+    await requestResult(store1.put({ ok: true }, 'persisted'));
+    db1.close();
+
+    const db2 = await openDb('lp-upgrade', 2, (upgradeDb) => {
+      upgradeDb.createObjectStore('two');
+    });
+    testing.expectEqual(2, db2.version);
+
+    const txOld = db2.transaction('one');
+    const oldStore = txOld.objectStore('one');
+    testing.expectEqual(true, (await requestResult(oldStore.get('persisted'))).ok);
+
+    const tx2 = db2.transaction('two');
+    const store2 = tx2.objectStore('two');
+    await requestResult(store2.put({ n: 2 }, 'two'));
+    testing.expectEqual(2, (await requestResult(store2.get('two'))).n);
+
+    db2.close();
+  });
+</script>

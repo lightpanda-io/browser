@@ -41,6 +41,7 @@ const MessageEvent = @import("event/MessageEvent.zig");
 const StorageEvent = @import("event/StorageEvent.zig");
 const MediaQueryList = @import("css/MediaQueryList.zig");
 const storage = @import("storage/storage.zig");
+const indexed_db = @import("storage/indexed_db.zig");
 const Element = @import("Element.zig");
 const CSSStyleProperties = @import("css/CSSStyleProperties.zig");
 const CustomElementRegistry = @import("CustomElementRegistry.zig");
@@ -66,8 +67,10 @@ _visual_viewport: *VisualViewport,
 _performance: Performance,
 _opaque_local_storage: storage.Lookup = .{},
 _opaque_session_storage: storage.Lookup = .{},
+_opaque_indexed_db_shed: indexed_db.Shed = .{},
 _local_storage: *storage.Lookup = undefined,
 _session_storage: *storage.Lookup = undefined,
+_indexed_db_factory: ?*indexed_db.IDBFactory = null,
 _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
@@ -172,6 +175,20 @@ pub fn getSessionStorage(self: *Window) *storage.Lookup {
     return self._session_storage;
 }
 
+pub fn getIndexedDB(self: *Window) !*indexed_db.IDBFactory {
+    if (self._indexed_db_factory) |factory| {
+        return factory;
+    }
+
+    const origin = try self._page.getOrigin(self._page.arena);
+    const factory = if (origin) |value|
+        try indexed_db.IDBFactory.init(self._page, self._page._session.indexed_db_shed, value, true)
+    else
+        try indexed_db.IDBFactory.init(self._page, &self._opaque_indexed_db_shed, "opaque", false);
+    self._indexed_db_factory = factory;
+    return factory;
+}
+
 pub fn unregisterStorageBucket(self: *Window) void {
     if (self._local_storage_listener_id) |listener_id| {
         self._local_storage.unregisterMutationListener(listener_id);
@@ -181,6 +198,7 @@ pub fn unregisterStorageBucket(self: *Window) void {
 
 pub fn syncStorageBucket(self: *Window) !void {
     self.unregisterStorageBucket();
+    self._indexed_db_factory = null;
 
     const origin = try self._page.getOrigin(self._page.arena);
     if (origin) |value| {
@@ -1001,6 +1019,7 @@ pub const JsApi = struct {
     pub const performance = bridge.accessor(Window.getPerformance, null, .{});
     pub const localStorage = bridge.accessor(Window.getLocalStorage, null, .{});
     pub const sessionStorage = bridge.accessor(Window.getSessionStorage, null, .{});
+    pub const indexedDB = bridge.accessor(Window.getIndexedDB, null, .{});
     pub const location = bridge.accessor(Window.getLocation, Window.setLocation, .{});
     pub const history = bridge.accessor(Window.getHistory, null, .{});
     pub const navigation = bridge.accessor(Window.getNavigation, null, .{});

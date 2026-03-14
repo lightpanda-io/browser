@@ -29,6 +29,7 @@ const PopupSource = @import("browser/PopupSource.zig").PopupSource;
 const CookieStore = @import("browser/webapi/storage/Cookie.zig");
 const CookieJar = CookieStore.Jar;
 const storage = @import("browser/webapi/storage/storage.zig");
+const indexed_db = @import("browser/webapi/storage/indexed_db.zig");
 
 pub const log = @import("log.zig");
 pub const js = @import("browser/js/js.zig");
@@ -286,6 +287,7 @@ const BROWSE_SESSION_FILE = "browse-session-v1.txt";
 const BROWSE_SETTINGS_FILE = "browse-settings-v1.txt";
 const BROWSE_COOKIES_FILE = "cookies-v1.txt";
 const BROWSE_LOCAL_STORAGE_FILE = "local-storage-v1.txt";
+const BROWSE_INDEXED_DB_FILE = "indexed-db-v1.txt";
 const BROWSE_DOWNLOADS_FILE = "downloads-v1.txt";
 const BROWSE_BOOKMARKS_FILE = "bookmarks.txt";
 const BROWSE_DOWNLOADS_DIR = "downloads";
@@ -970,15 +972,18 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     defer cookie_jar.deinit();
     var storage_shed = loadBrowseLocalStorage(app.allocator, app.app_dir_path);
     defer storage_shed.deinit(app.allocator);
+    var indexed_db_shed = loadBrowseIndexedDb(app.allocator, app.app_dir_path);
+    defer indexed_db_shed.deinit(app.allocator);
     var downloads = BrowseDownloads.init(app.allocator, app.app_dir_path);
     defer downloads.deinit(app.app_dir_path);
 
-    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url, &settings, &cookie_jar, &storage_shed, &downloads);
+    var active_tab_index: usize = try initializeBrowseTabs(app, &tabs, url, &settings, &cookie_jar, &storage_shed, &indexed_db_shed, &downloads);
     var displayed_tab_index: ?usize = null;
     var last_saved_session_hash: u64 = 0;
     var last_saved_settings_hash: u64 = 0;
     var last_saved_cookie_hash: u64 = hashBrowseCookies(&cookie_jar);
     var last_saved_local_storage_hash: u64 = hashBrowseLocalStorage(&storage_shed);
+    var last_saved_indexed_db_hash: u64 = hashBrowseIndexedDb(&indexed_db_shed);
     var shell: BrowseShell = .{
         .tabs = &tabs,
         .closed_tabs = &closed_tabs,
@@ -994,13 +999,14 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
     persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
     persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
     persistBrowseLocalStorageIfChanged(app, &storage_shed, &last_saved_local_storage_hash);
+    persistBrowseIndexedDbIfChanged(app, &indexed_db_shed, &last_saved_indexed_db_hash);
 
     browse_loop: while (!app.shutdown and !app.display.userClosed()) {
         var handled_command = false;
         while (app.display.nextBrowserCommand()) |command| {
             defer command.deinit(app.allocator);
             handled_command = true;
-            try handleBrowseCommand(app, &shell, normalizeActiveTabIndex(active_tab_index, tabs.items.len), &settings, &storage_shed, &downloads, command);
+            try handleBrowseCommand(app, &shell, normalizeActiveTabIndex(active_tab_index, tabs.items.len), &settings, &storage_shed, &indexed_db_shed, &downloads, command);
             if (tabs.items.len == 0) {
                 clearSavedBrowseSession(app);
                 break :browse_loop;
@@ -1027,7 +1033,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         }
         var pending_nav_index: usize = 0;
         while (pending_nav_index < tabs.items.len) : (pending_nav_index += 1) {
-            try processPendingBrowserNavigations(app, &shell, pending_nav_index, &settings, &storage_shed, &downloads);
+            try processPendingBrowserNavigations(app, &shell, pending_nav_index, &settings, &storage_shed, &indexed_db_shed, &downloads);
         }
         const settled_tab_count = tabs.items.len;
         var tab_index: usize = 0;
@@ -1057,6 +1063,7 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
             persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
             persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
             persistBrowseLocalStorageIfChanged(app, &storage_shed, &last_saved_local_storage_hash);
+            persistBrowseIndexedDbIfChanged(app, &indexed_db_shed, &last_saved_indexed_db_hash);
             downloads.persistIfChanged(app.app_dir_path);
             continue;
         }
@@ -1065,10 +1072,12 @@ pub fn browse(app: *App, url: [:0]const u8, opts: BrowseOpts) !void {
         persistBrowseSettingsIfChanged(app, &settings, &last_saved_settings_hash);
         persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
         persistBrowseLocalStorageIfChanged(app, &storage_shed, &last_saved_local_storage_hash);
+        persistBrowseIndexedDbIfChanged(app, &indexed_db_shed, &last_saved_indexed_db_hash);
         downloads.persistIfChanged(app.app_dir_path);
     }
     persistBrowseCookiesIfChanged(app, &cookie_jar, &last_saved_cookie_hash);
     persistBrowseLocalStorageIfChanged(app, &storage_shed, &last_saved_local_storage_hash);
+    persistBrowseIndexedDbIfChanged(app, &indexed_db_shed, &last_saved_indexed_db_hash);
 }
 
 fn handleBrowseCommand(
@@ -1077,22 +1086,24 @@ fn handleBrowseCommand(
     source_tab_index: usize,
     settings: *BrowseSettings,
     storage_shed: *storage.Shed,
+    indexed_db_shed: *indexed_db.Shed,
     downloads: *BrowseDownloads,
     command: BrowserCommand,
 ) anyerror!void {
     defer applyBrowsePopupPolicyToTabs(shell.tabs.items, settings.allow_script_popups);
     const shared_cookie_jar = browseSharedCookieJar(shell.tabs.items, source_tab_index);
     const shared_storage_shed = browseSharedStorageShed(shell.tabs.items, source_tab_index, storage_shed);
+    const shared_indexed_db_shed = browseSharedIndexedDbShed(shell.tabs.items, source_tab_index, indexed_db_shed);
     switch (command) {
         .tab_new => {
-            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed);
+            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
         },
         .tab_duplicate => {
             const source_index = normalizeActiveTabIndex(shell.active_tab_index.*, shell.tabs.items.len);
             const source_tab = shell.tabs.items[source_index];
             const source_url = browseTabPersistentUrl(source_tab);
-            const tab = try createBrowseTabWithCookieJar(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed);
+            const tab = try createBrowseTabWithCookieJar(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed);
             tab.zoom_percent = source_tab.zoom_percent;
             try tab.internal_filters.copyFrom(app.allocator, &source_tab.internal_filters);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
@@ -1107,7 +1118,7 @@ fn handleBrowseCommand(
             }
             const source_tab = shell.tabs.items[index];
             const source_url = browseTabPersistentUrl(source_tab);
-            const tab = try createBrowseTabWithCookieJar(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed);
+            const tab = try createBrowseTabWithCookieJar(app, null, source_tab.zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed);
             tab.zoom_percent = source_tab.zoom_percent;
             try tab.internal_filters.copyFrom(app.allocator, &source_tab.internal_filters);
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
@@ -1161,17 +1172,17 @@ fn handleBrowseCommand(
                 return;
             }
             if (index == shell.active_tab_index.*) {
-                try handleActiveBrowseCommand(app, shell, index, settings, browseSharedStorageShed(shell.tabs.items, index, storage_shed), downloads, .reload);
+                try handleActiveBrowseCommand(app, shell, index, settings, browseSharedStorageShed(shell.tabs.items, index, storage_shed), browseSharedIndexedDbShed(shell.tabs.items, index, indexed_db_shed), downloads, .reload);
                 return;
             }
             shell.active_tab_index.* = index;
             shell.tabs.items[index].last_presented_hash = 0;
-            try handleActiveBrowseCommand(app, shell, index, settings, browseSharedStorageShed(shell.tabs.items, index, storage_shed), downloads, .reload);
+            try handleActiveBrowseCommand(app, shell, index, settings, browseSharedStorageShed(shell.tabs.items, index, storage_shed), browseSharedIndexedDbShed(shell.tabs.items, index, indexed_db_shed), downloads, .reload);
         },
         .tab_reopen_closed => {
             var closed = popClosedBrowseTab(shell.closed_tabs) orelse return;
             defer closed.deinit(app.allocator);
-            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed);
+            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed);
             tab.zoom_percent = closed.zoom_percent;
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
@@ -1182,7 +1193,7 @@ fn handleBrowseCommand(
         .tab_reopen_closed_index => |index| {
             var closed = popClosedBrowseTabAtUiIndex(shell.closed_tabs, index) orelse return;
             defer closed.deinit(app.allocator);
-            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed);
+            const tab = try createBrowseTabWithCookieJar(app, null, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed);
             tab.zoom_percent = closed.zoom_percent;
             try appendBrowseTab(app.allocator, shell.tabs, tab, shell.active_tab_index, true);
             try navigateBrowseTabToOwnedUrl(tab, closed.url, .{
@@ -1332,7 +1343,7 @@ fn handleBrowseCommand(
                 }, "_blank", true, .anchor);
                 return;
             }
-            try handleActiveBrowseCommand(app, shell, active_index, settings, browseSharedStorageShed(shell.tabs.items, active_index, storage_shed), downloads, .{
+            try handleActiveBrowseCommand(app, shell, active_index, settings, browseSharedStorageShed(shell.tabs.items, active_index, storage_shed), browseSharedIndexedDbShed(shell.tabs.items, active_index, indexed_db_shed), downloads, .{
                 .navigate = activation.url,
             });
         },
@@ -1407,7 +1418,7 @@ fn handleBrowseCommand(
             if (source_tab_index >= shell.tabs.items.len) {
                 return;
             }
-            try handleActiveBrowseCommand(app, shell, source_tab_index, settings, storage_shed, downloads, command);
+            try handleActiveBrowseCommand(app, shell, source_tab_index, settings, storage_shed, indexed_db_shed, downloads, command);
         },
     }
 }
@@ -1418,6 +1429,7 @@ fn handleActiveBrowseCommand(
     tab_index: usize,
     settings: *BrowseSettings,
     storage_shed: *storage.Shed,
+    indexed_db_shed: *indexed_db.Shed,
     downloads: *BrowseDownloads,
     command: BrowserCommand,
 ) anyerror!void {
@@ -1463,7 +1475,7 @@ fn handleActiveBrowseCommand(
                         const current_internal_page = parseInternalBrowsePage(page.url);
                         const command_host_page = internalBrowseCommandHostPage(internal_command);
                         if (internalBrowseCommandUsesBrowseLoopHandler(internal_command)) {
-                            try handleBrowseCommand(app, shell, tab_index, settings, storage_shed, downloads, internal_command);
+                            try handleBrowseCommand(app, shell, tab_index, settings, storage_shed, indexed_db_shed, downloads, internal_command);
                             if (internalBrowseCommandKeepsCurrentPage(internal_command)) {
                                 if (command_host_page) |host_page| {
                                     if (current_internal_page != null and current_internal_page.? == host_page) {
@@ -1482,7 +1494,7 @@ fn handleActiveBrowseCommand(
                                 page.js.localScope(&route_scope);
                             }
                             defer if (owns_route_scope) route_scope.deinit();
-                            try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, downloads, internal_command);
+                            try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, indexed_db_shed, downloads, internal_command);
                             if (internalBrowseCommandKeepsCurrentPage(internal_command)) {
                                 if (command_host_page) |host_page| {
                                     if (current_internal_page != null and current_internal_page.? == host_page) {
@@ -1536,7 +1548,7 @@ fn handleActiveBrowseCommand(
             }
             if (parseInternalBrowsePage(page.url)) |internal_page| {
                 if (internal_page == .error_page) {
-                    try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, downloads, .error_retry);
+                    try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, indexed_db_shed, downloads, .error_retry);
                     return;
                 }
                 try openInternalBrowsePage(app, shell, tab_index, page, settings, downloads, internal_page);
@@ -1591,7 +1603,7 @@ fn handleActiveBrowseCommand(
         .bookmark_open => |index| {
             const bookmark_url = loadPersistedBookmarkAtIndex(app.allocator, app.app_dir_path, index) orelse return;
             defer app.allocator.free(bookmark_url);
-            try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, downloads, .{
+            try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, indexed_db_shed, downloads, .{
                 .navigate = bookmark_url,
             });
         },
@@ -1607,7 +1619,7 @@ fn handleActiveBrowseCommand(
         .download_source => |index| {
             const download_url = loadDownloadUrlAtIndex(app.allocator, downloads, index) orelse return;
             defer app.allocator.free(download_url);
-            try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, downloads, .{
+            try handleActiveBrowseCommand(app, shell, tab_index, settings, storage_shed, indexed_db_shed, downloads, .{
                 .navigate = download_url,
             });
         },
@@ -1692,6 +1704,9 @@ fn handleActiveBrowseCommand(
         .settings_clear_local_storage => {
             storage_shed.clearLocal();
         },
+        .settings_clear_indexed_db => {
+            indexed_db_shed.clear(app.allocator);
+        },
         .settings_default_zoom_in, .settings_default_zoom_out, .settings_default_zoom_reset => {
             settings.default_zoom_percent = applyDefaultZoomCommand(settings.default_zoom_percent, command);
         },
@@ -1724,6 +1739,7 @@ fn processPendingBrowserNavigations(
     tab_index: usize,
     settings: *BrowseSettings,
     storage_shed: *storage.Shed,
+    indexed_db_shed: *indexed_db.Shed,
     downloads: *BrowseDownloads,
 ) !void {
     if (tab_index >= shell.tabs.items.len) {
@@ -1741,7 +1757,7 @@ fn processPendingBrowserNavigations(
     }
 
     for (pending.items) |request| {
-        try handleActiveBrowseCommand(app, shell, tab_index, settings, browseSharedStorageShed(shell.tabs.items, tab_index, storage_shed), downloads, .{
+        try handleActiveBrowseCommand(app, shell, tab_index, settings, browseSharedStorageShed(shell.tabs.items, tab_index, storage_shed), browseSharedIndexedDbShed(shell.tabs.items, tab_index, indexed_db_shed), downloads, .{
             .navigate = request.url,
         });
     }
@@ -1874,6 +1890,16 @@ fn browseSharedStorageShed(tabs: []const *BrowseTab, preferred_index: usize, fal
     return tabs[0].session.storage_shed;
 }
 
+fn browseSharedIndexedDbShed(tabs: []const *BrowseTab, preferred_index: usize, fallback: *indexed_db.Shed) *indexed_db.Shed {
+    if (tabs.len == 0) {
+        return fallback;
+    }
+    if (preferred_index < tabs.len) {
+        return tabs[preferred_index].session.indexed_db_shed;
+    }
+    return tabs[0].session.indexed_db_shed;
+}
+
 fn openOrReuseTargetedBrowseTab(
     app: *App,
     tabs: *std.ArrayListUnmanaged(*BrowseTab),
@@ -1907,7 +1933,16 @@ fn openOrReuseTargetedBrowseTab(
         return;
     }
 
-    const tab = try createBrowseTabWithCookieJar(app, null, zoom_percent, allow_script_popups, downloads, browseSharedCookieJar(tabs.items, active_tab_index.*), browseSharedStorageShed(tabs.items, active_tab_index.*, tabs.items[active_tab_index.*].session.storage_shed));
+    const tab = try createBrowseTabWithCookieJar(
+        app,
+        null,
+        zoom_percent,
+        allow_script_popups,
+        downloads,
+        browseSharedCookieJar(tabs.items, active_tab_index.*),
+        browseSharedStorageShed(tabs.items, active_tab_index.*, tabs.items[active_tab_index.*].session.storage_shed),
+        browseSharedIndexedDbShed(tabs.items, active_tab_index.*, tabs.items[active_tab_index.*].session.indexed_db_shed),
+    );
     errdefer tab.deinit(app.allocator);
     tab.zoom_percent = zoom_percent;
     try setBrowseTabTargetName(app.allocator, tab, target_name);
@@ -2263,10 +2298,11 @@ fn initializeBrowseTabs(
     settings: *const BrowseSettings,
     shared_cookie_jar: *CookieJar,
     shared_storage_shed: *storage.Shed,
+    shared_indexed_db_shed: *indexed_db.Shed,
     downloads: *BrowseDownloads,
 ) !usize {
     if (!settings.restore_previous_session) {
-        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed));
+        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed));
         return 0;
     }
 
@@ -2274,7 +2310,7 @@ fn initializeBrowseTabs(
     defer saved.deinit(app.allocator);
 
     if (saved.tabs.items.len == 0) {
-        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed));
+        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed));
         return 0;
     }
 
@@ -2287,14 +2323,14 @@ fn initializeBrowseTabs(
             restored_url_z = try app.allocator.dupeZ(u8, saved_tab.url);
             break :blk restored_url_z.?;
         };
-        const tab = try createBrowseTabWithCookieJar(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed);
+        const tab = try createBrowseTabWithCookieJar(app, initial_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed);
         tab.zoom_percent = saved_tab.zoom_percent;
         try tabs.append(app.allocator, tab);
     }
 
     var active_index = normalizeActiveTabIndex(saved.active_index, tabs.items.len);
     if (shouldAppendStartupUrl(saved.tabs.items, startup_url)) {
-        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed));
+        try tabs.append(app.allocator, try createBrowseTabWithCookieJar(app, startup_url, settings.default_zoom_percent, settings.allow_script_popups, downloads, shared_cookie_jar, shared_storage_shed, shared_indexed_db_shed));
         active_index = tabs.items.len - 1;
     }
 
@@ -2768,6 +2804,379 @@ fn persistBrowseLocalStorageIfChanged(app: *App, storage_shed: *storage.Shed, la
     last_saved_hash.* = next_hash;
     saveBrowseLocalStorageForPath(app.allocator, app.app_dir_path, storage_shed) catch |err| {
         log.warn(.app, "save local storage", .{ .err = err });
+    };
+}
+
+const BrowseIndexedDbDatabaseRef = struct {
+    origin: []const u8,
+    name: []const u8,
+    version: u32,
+};
+
+const BrowseIndexedDbStoreRef = struct {
+    origin: []const u8,
+    database: []const u8,
+    name: []const u8,
+};
+
+const BrowseIndexedDbItemRef = struct {
+    origin: []const u8,
+    database: []const u8,
+    store: []const u8,
+    key: []const u8,
+    value: []const u8,
+};
+
+fn browseIndexedDbDatabaseLessThan(a: BrowseIndexedDbDatabaseRef, b: BrowseIndexedDbDatabaseRef) bool {
+    const origin_order = std.mem.order(u8, a.origin, b.origin);
+    if (origin_order != .eq) {
+        return origin_order == .lt;
+    }
+    return std.mem.order(u8, a.name, b.name) == .lt;
+}
+
+fn browseIndexedDbStoreLessThan(a: BrowseIndexedDbStoreRef, b: BrowseIndexedDbStoreRef) bool {
+    const origin_order = std.mem.order(u8, a.origin, b.origin);
+    if (origin_order != .eq) {
+        return origin_order == .lt;
+    }
+    const database_order = std.mem.order(u8, a.database, b.database);
+    if (database_order != .eq) {
+        return database_order == .lt;
+    }
+    return std.mem.order(u8, a.name, b.name) == .lt;
+}
+
+fn browseIndexedDbItemLessThan(a: BrowseIndexedDbItemRef, b: BrowseIndexedDbItemRef) bool {
+    const origin_order = std.mem.order(u8, a.origin, b.origin);
+    if (origin_order != .eq) {
+        return origin_order == .lt;
+    }
+    const database_order = std.mem.order(u8, a.database, b.database);
+    if (database_order != .eq) {
+        return database_order == .lt;
+    }
+    const store_order = std.mem.order(u8, a.store, b.store);
+    if (store_order != .eq) {
+        return store_order == .lt;
+    }
+    return std.mem.order(u8, a.key, b.key) == .lt;
+}
+
+fn insertionSortBrowseIndexedDbDatabases(entries: []BrowseIndexedDbDatabaseRef) void {
+    var i: usize = 1;
+    while (i < entries.len) : (i += 1) {
+        const current = entries[i];
+        var j = i;
+        while (j > 0 and browseIndexedDbDatabaseLessThan(current, entries[j - 1])) : (j -= 1) {
+            entries[j] = entries[j - 1];
+        }
+        entries[j] = current;
+    }
+}
+
+fn insertionSortBrowseIndexedDbStores(entries: []BrowseIndexedDbStoreRef) void {
+    var i: usize = 1;
+    while (i < entries.len) : (i += 1) {
+        const current = entries[i];
+        var j = i;
+        while (j > 0 and browseIndexedDbStoreLessThan(current, entries[j - 1])) : (j -= 1) {
+            entries[j] = entries[j - 1];
+        }
+        entries[j] = current;
+    }
+}
+
+fn insertionSortBrowseIndexedDbItems(entries: []BrowseIndexedDbItemRef) void {
+    var i: usize = 1;
+    while (i < entries.len) : (i += 1) {
+        const current = entries[i];
+        var j = i;
+        while (j > 0 and browseIndexedDbItemLessThan(current, entries[j - 1])) : (j -= 1) {
+            entries[j] = entries[j - 1];
+        }
+        entries[j] = current;
+    }
+}
+
+fn collectBrowseIndexedDbDatabases(allocator: std.mem.Allocator, indexed_db_shed: *indexed_db.Shed) !std.ArrayListUnmanaged(BrowseIndexedDbDatabaseRef) {
+    var entries: std.ArrayListUnmanaged(BrowseIndexedDbDatabaseRef) = .{};
+    var origin_it = indexed_db_shed._origins.iterator();
+    while (origin_it.next()) |origin_kv| {
+        const origin = origin_kv.key_ptr.*;
+        const bucket = origin_kv.value_ptr.*;
+        var database_it = bucket._databases.iterator();
+        while (database_it.next()) |database_kv| {
+            try entries.append(allocator, .{
+                .origin = origin,
+                .name = database_kv.key_ptr.*,
+                .version = database_kv.value_ptr.*.version,
+            });
+        }
+    }
+    insertionSortBrowseIndexedDbDatabases(entries.items);
+    return entries;
+}
+
+fn collectBrowseIndexedDbStores(allocator: std.mem.Allocator, indexed_db_shed: *indexed_db.Shed) !std.ArrayListUnmanaged(BrowseIndexedDbStoreRef) {
+    var entries: std.ArrayListUnmanaged(BrowseIndexedDbStoreRef) = .{};
+    var origin_it = indexed_db_shed._origins.iterator();
+    while (origin_it.next()) |origin_kv| {
+        const origin = origin_kv.key_ptr.*;
+        const bucket = origin_kv.value_ptr.*;
+        var database_it = bucket._databases.iterator();
+        while (database_it.next()) |database_kv| {
+            const database_name = database_kv.key_ptr.*;
+            const database = database_kv.value_ptr.*;
+            var store_it = database._stores.iterator();
+            while (store_it.next()) |store_kv| {
+                try entries.append(allocator, .{
+                    .origin = origin,
+                    .database = database_name,
+                    .name = store_kv.key_ptr.*,
+                });
+            }
+        }
+    }
+    insertionSortBrowseIndexedDbStores(entries.items);
+    return entries;
+}
+
+fn collectBrowseIndexedDbItems(allocator: std.mem.Allocator, indexed_db_shed: *indexed_db.Shed) !std.ArrayListUnmanaged(BrowseIndexedDbItemRef) {
+    var entries: std.ArrayListUnmanaged(BrowseIndexedDbItemRef) = .{};
+    var origin_it = indexed_db_shed._origins.iterator();
+    while (origin_it.next()) |origin_kv| {
+        const origin = origin_kv.key_ptr.*;
+        const bucket = origin_kv.value_ptr.*;
+        var database_it = bucket._databases.iterator();
+        while (database_it.next()) |database_kv| {
+            const database_name = database_kv.key_ptr.*;
+            const database = database_kv.value_ptr.*;
+            var store_it = database._stores.iterator();
+            while (store_it.next()) |store_kv| {
+                const store_name = store_kv.key_ptr.*;
+                const store = store_kv.value_ptr.*;
+                var item_it = store._items.iterator();
+                while (item_it.next()) |item_kv| {
+                    try entries.append(allocator, .{
+                        .origin = origin,
+                        .database = database_name,
+                        .store = store_name,
+                        .key = item_kv.key_ptr.*,
+                        .value = item_kv.value_ptr.*,
+                    });
+                }
+            }
+        }
+    }
+    insertionSortBrowseIndexedDbItems(entries.items);
+    return entries;
+}
+
+fn loadBrowseIndexedDb(allocator: std.mem.Allocator, app_dir_path: ?[]const u8) indexed_db.Shed {
+    var indexed_db_shed: indexed_db.Shed = .{};
+
+    const dir_path = app_dir_path orelse return indexed_db_shed;
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return indexed_db_shed;
+    defer dir.close();
+
+    const file = dir.openFile(BROWSE_INDEXED_DB_FILE, .{}) catch |err| switch (err) {
+        error.FileNotFound => return indexed_db_shed,
+        else => return indexed_db_shed,
+    };
+    defer file.close();
+
+    const data = file.readToEndAlloc(allocator, 4 * 1024 * 1024) catch return indexed_db_shed;
+    defer allocator.free(data);
+
+    var it = std.mem.splitScalar(u8, data, '\n');
+    while (it.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r\n\t ");
+        if (line.len == 0 or std.mem.eql(u8, line, "lightpanda-browse-indexed-db-v1")) {
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "db\t")) {
+            var fields = std.mem.splitScalar(u8, line["db\t".len..], '\t');
+            const origin_raw = fields.next() orelse continue;
+            const database_raw = fields.next() orelse continue;
+            const version_raw = fields.next() orelse continue;
+
+            const origin = decodePersistedStorageField(allocator, origin_raw) catch continue;
+            defer allocator.free(origin);
+            const database_name = decodePersistedStorageField(allocator, database_raw) catch continue;
+            defer allocator.free(database_name);
+            const version = std.fmt.parseInt(u32, version_raw, 10) catch continue;
+
+            const bucket = indexed_db_shed.getOrPutOrigin(allocator, origin) catch continue;
+            const database = bucket.getOrPutDatabase(allocator, database_name) catch continue;
+            database.version = version;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "store\t")) {
+            var fields = std.mem.splitScalar(u8, line["store\t".len..], '\t');
+            const origin_raw = fields.next() orelse continue;
+            const database_raw = fields.next() orelse continue;
+            const store_raw = fields.next() orelse continue;
+
+            const origin = decodePersistedStorageField(allocator, origin_raw) catch continue;
+            defer allocator.free(origin);
+            const database_name = decodePersistedStorageField(allocator, database_raw) catch continue;
+            defer allocator.free(database_name);
+            const store_name = decodePersistedStorageField(allocator, store_raw) catch continue;
+            defer allocator.free(store_name);
+
+            const bucket = indexed_db_shed.getOrPutOrigin(allocator, origin) catch continue;
+            const database = bucket.getOrPutDatabase(allocator, database_name) catch continue;
+            _ = database.getOrPutStore(allocator, store_name) catch continue;
+            continue;
+        }
+
+        if (!std.mem.startsWith(u8, line, "entry\t")) {
+            continue;
+        }
+
+        var fields = std.mem.splitScalar(u8, line["entry\t".len..], '\t');
+        const origin_raw = fields.next() orelse continue;
+        const database_raw = fields.next() orelse continue;
+        const store_raw = fields.next() orelse continue;
+        const key_raw = fields.next() orelse continue;
+        const value_raw = fields.next() orelse continue;
+
+        const origin = decodePersistedStorageField(allocator, origin_raw) catch continue;
+        defer allocator.free(origin);
+        const database_name = decodePersistedStorageField(allocator, database_raw) catch continue;
+        defer allocator.free(database_name);
+        const store_name = decodePersistedStorageField(allocator, store_raw) catch continue;
+        defer allocator.free(store_name);
+        const key = decodePersistedStorageField(allocator, key_raw) catch continue;
+        defer allocator.free(key);
+        const value = decodePersistedStorageField(allocator, value_raw) catch continue;
+        defer allocator.free(value);
+
+        const bucket = indexed_db_shed.getOrPutOrigin(allocator, origin) catch continue;
+        const database = bucket.getOrPutDatabase(allocator, database_name) catch continue;
+        const store = database.getOrPutStore(allocator, store_name) catch continue;
+        store.putJson(allocator, key, value) catch |err| {
+            log.warn(.app, "load indexed db", .{ .err = err });
+        };
+    }
+
+    return indexed_db_shed;
+}
+
+fn hashBrowseIndexedDb(indexed_db_shed: *indexed_db.Shed) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    var databases = collectBrowseIndexedDbDatabases(std.heap.page_allocator, indexed_db_shed) catch return 0;
+    defer databases.deinit(std.heap.page_allocator);
+    var stores = collectBrowseIndexedDbStores(std.heap.page_allocator, indexed_db_shed) catch return 0;
+    defer stores.deinit(std.heap.page_allocator);
+    var items = collectBrowseIndexedDbItems(std.heap.page_allocator, indexed_db_shed) catch return 0;
+    defer items.deinit(std.heap.page_allocator);
+
+    const database_count = databases.items.len;
+    const store_count = stores.items.len;
+    const item_count = items.items.len;
+    hasher.update(std.mem.asBytes(&database_count));
+    hasher.update(std.mem.asBytes(&store_count));
+    hasher.update(std.mem.asBytes(&item_count));
+
+    for (databases.items) |entry| {
+        hasher.update(entry.origin);
+        hasher.update(&.{0});
+        hasher.update(entry.name);
+        hasher.update(&.{0});
+        hasher.update(std.mem.asBytes(&entry.version));
+    }
+    for (stores.items) |entry| {
+        hasher.update(entry.origin);
+        hasher.update(&.{0});
+        hasher.update(entry.database);
+        hasher.update(&.{0});
+        hasher.update(entry.name);
+        hasher.update(&.{0});
+    }
+    for (items.items) |entry| {
+        hasher.update(entry.origin);
+        hasher.update(&.{0});
+        hasher.update(entry.database);
+        hasher.update(&.{0});
+        hasher.update(entry.store);
+        hasher.update(&.{0});
+        hasher.update(entry.key);
+        hasher.update(&.{0});
+        hasher.update(entry.value);
+        hasher.update(&.{0});
+    }
+    return hasher.final();
+}
+
+fn saveBrowseIndexedDbForPath(
+    allocator: std.mem.Allocator,
+    app_dir_path: ?[]const u8,
+    indexed_db_shed: *indexed_db.Shed,
+) !void {
+    const dir_path = app_dir_path orelse return;
+    var dir = try std.fs.openDirAbsolute(dir_path, .{});
+    defer dir.close();
+
+    var buf = std.Io.Writer.Allocating.init(allocator);
+    defer buf.deinit();
+    try buf.writer.writeAll("lightpanda-browse-indexed-db-v1\n");
+
+    var databases = try collectBrowseIndexedDbDatabases(allocator, indexed_db_shed);
+    defer databases.deinit(allocator);
+    for (databases.items) |entry| {
+        const origin = try encodePersistedStorageField(allocator, entry.origin);
+        defer allocator.free(origin);
+        const database_name = try encodePersistedStorageField(allocator, entry.name);
+        defer allocator.free(database_name);
+        try buf.writer.print("db\t{s}\t{s}\t{d}\n", .{ origin, database_name, entry.version });
+    }
+
+    var stores = try collectBrowseIndexedDbStores(allocator, indexed_db_shed);
+    defer stores.deinit(allocator);
+    for (stores.items) |entry| {
+        const origin = try encodePersistedStorageField(allocator, entry.origin);
+        defer allocator.free(origin);
+        const database_name = try encodePersistedStorageField(allocator, entry.database);
+        defer allocator.free(database_name);
+        const store_name = try encodePersistedStorageField(allocator, entry.name);
+        defer allocator.free(store_name);
+        try buf.writer.print("store\t{s}\t{s}\t{s}\n", .{ origin, database_name, store_name });
+    }
+
+    var items = try collectBrowseIndexedDbItems(allocator, indexed_db_shed);
+    defer items.deinit(allocator);
+    for (items.items) |entry| {
+        const origin = try encodePersistedStorageField(allocator, entry.origin);
+        defer allocator.free(origin);
+        const database_name = try encodePersistedStorageField(allocator, entry.database);
+        defer allocator.free(database_name);
+        const store_name = try encodePersistedStorageField(allocator, entry.store);
+        defer allocator.free(store_name);
+        const key = try encodePersistedStorageField(allocator, entry.key);
+        defer allocator.free(key);
+        const value = try encodePersistedStorageField(allocator, entry.value);
+        defer allocator.free(value);
+        try buf.writer.print("entry\t{s}\t{s}\t{s}\t{s}\t{s}\n", .{ origin, database_name, store_name, key, value });
+    }
+
+    try dir.writeFile(.{
+        .sub_path = BROWSE_INDEXED_DB_FILE,
+        .data = buf.written(),
+    });
+}
+
+fn persistBrowseIndexedDbIfChanged(app: *App, indexed_db_shed: *indexed_db.Shed, last_saved_hash: *u64) void {
+    const next_hash = hashBrowseIndexedDb(indexed_db_shed);
+    if (next_hash == last_saved_hash.*) {
+        return;
+    }
+    last_saved_hash.* = next_hash;
+    saveBrowseIndexedDbForPath(app.allocator, app.app_dir_path, indexed_db_shed) catch |err| {
+        log.warn(.app, "save indexed db", .{ .err = err });
     };
 }
 
@@ -3322,7 +3731,7 @@ fn createBrowseTab(
     allow_script_popups: bool,
     downloads: ?*BrowseDownloads,
 ) !*BrowseTab {
-    return createBrowseTabWithCookieJar(app, initial_url, default_zoom_percent, allow_script_popups, downloads, null, null);
+    return createBrowseTabWithCookieJar(app, initial_url, default_zoom_percent, allow_script_popups, downloads, null, null, null);
 }
 
 fn createBrowseTabWithCookieJar(
@@ -3333,6 +3742,7 @@ fn createBrowseTabWithCookieJar(
     downloads: ?*BrowseDownloads,
     shared_cookie_jar: ?*CookieJar,
     shared_storage_shed: ?*storage.Shed,
+    shared_indexed_db_shed: ?*indexed_db.Shed,
 ) !*BrowseTab {
     const tab = try app.allocator.create(BrowseTab);
     errdefer app.allocator.destroy(tab);
@@ -3347,6 +3757,7 @@ fn createBrowseTabWithCookieJar(
         .http_client = tab.http_client,
         .shared_cookie_jar = shared_cookie_jar,
         .shared_storage_shed = shared_storage_shed,
+        .shared_indexed_db_shed = shared_indexed_db_shed,
     });
     errdefer tab.browser.deinit();
     tab.browser.allow_script_popups = allow_script_popups;
@@ -4068,6 +4479,8 @@ fn parseInternalBrowseRoute(raw_url: []const u8) ?InternalBrowseRoute {
             .{ .command = .settings_clear_cookies }
         else if (std.ascii.eqlIgnoreCase(action, "clear-local-storage"))
             .{ .command = .settings_clear_local_storage }
+        else if (std.ascii.eqlIgnoreCase(action, "clear-indexed-db"))
+            .{ .command = .settings_clear_indexed_db }
         else if (std.ascii.eqlIgnoreCase(action, "default-zoom/in"))
             .{ .command = .settings_default_zoom_in }
         else if (std.ascii.eqlIgnoreCase(action, "default-zoom/out"))
@@ -4198,6 +4611,7 @@ fn internalBrowseCommandKeepsCurrentPage(command: BrowserCommand) bool {
         .settings_toggle_script_popups,
         .settings_clear_cookies,
         .settings_clear_local_storage,
+        .settings_clear_indexed_db,
         .settings_default_zoom_in,
         .settings_default_zoom_out,
         .settings_default_zoom_reset,
@@ -4240,6 +4654,9 @@ fn internalBrowseCommandUsesBrowseLoopHandler(command: BrowserCommand) bool {
         .download_sort_set,
         .download_filter_set,
         .download_filter_clear,
+        .settings_clear_cookies,
+        .settings_clear_local_storage,
+        .settings_clear_indexed_db,
         => true,
         else => false,
     };
@@ -4283,6 +4700,7 @@ fn internalBrowseCommandHostPage(command: BrowserCommand) ?InternalBrowsePage {
         .settings_toggle_script_popups,
         .settings_clear_cookies,
         .settings_clear_local_storage,
+        .settings_clear_indexed_db,
         .settings_default_zoom_in,
         .settings_default_zoom_out,
         .settings_default_zoom_reset,
@@ -4410,8 +4828,16 @@ fn hashInternalBrowsePageState(
             hasher.update(std.mem.asBytes(&cookie_hash));
             const local_storage_origin_count = tab.session.storage_shed.localOriginCount();
             const local_storage_item_count = tab.session.storage_shed.localItemCount();
+            const indexed_db_origin_count = tab.session.indexed_db_shed.originCount();
+            const indexed_db_database_count = tab.session.indexed_db_shed.databaseCount();
+            const indexed_db_store_count = tab.session.indexed_db_shed.storeCount();
+            const indexed_db_item_count = tab.session.indexed_db_shed.itemCount();
             hasher.update(std.mem.asBytes(&local_storage_origin_count));
             hasher.update(std.mem.asBytes(&local_storage_item_count));
+            hasher.update(std.mem.asBytes(&indexed_db_origin_count));
+            hasher.update(std.mem.asBytes(&indexed_db_database_count));
+            hasher.update(std.mem.asBytes(&indexed_db_store_count));
+            hasher.update(std.mem.asBytes(&indexed_db_item_count));
             break :blk hasher.final();
         },
     };
@@ -5821,6 +6247,10 @@ fn writeInternalSettingsPage(writer: anytype, tab: *BrowseTab, settings: *const 
     const cookie_count = tab.session.cookie_jar.cookies.items.len;
     const local_storage_origin_count = tab.session.storage_shed.localOriginCount();
     const local_storage_item_count = tab.session.storage_shed.localItemCount();
+    const indexed_db_origin_count = tab.session.indexed_db_shed.originCount();
+    const indexed_db_database_count = tab.session.indexed_db_shed.databaseCount();
+    const indexed_db_store_count = tab.session.indexed_db_shed.storeCount();
+    const indexed_db_item_count = tab.session.indexed_db_shed.itemCount();
     try writeInternalPageStart(
         writer,
         "Browser Settings",
@@ -5842,6 +6272,9 @@ fn writeInternalSettingsPage(writer: anytype, tab: *BrowseTab, settings: *const 
     try writer.writeAll("</li><li>Local storage: <strong>");
     try writer.print("{d} origins / {d} items</strong> ", .{ local_storage_origin_count, local_storage_item_count });
     try writeInternalActionLink(writer, "browser://settings/clear-local-storage", "Clear");
+    try writer.writeAll("</li><li>IndexedDB: <strong>");
+    try writer.print("{d} origins / {d} databases / {d} stores / {d} items</strong> ", .{ indexed_db_origin_count, indexed_db_database_count, indexed_db_store_count, indexed_db_item_count });
+    try writeInternalActionLink(writer, "browser://settings/clear-indexed-db", "Clear");
     try writer.writeAll("</li><li>Default zoom: <strong>");
     try writer.print("{d}%</strong> ", .{settings.default_zoom_percent});
     try writeInternalActionLink(writer, "browser://settings/default-zoom/out", "-");
@@ -6759,6 +7192,10 @@ test "parseInternalBrowseRoute recognizes interactive browser page actions" {
         parseInternalBrowseRoute("browser://settings/clear-local-storage").?,
     );
     try std.testing.expectEqualDeep(
+        InternalBrowseRoute{ .command = .settings_clear_indexed_db },
+        parseInternalBrowseRoute("browser://settings/clear-indexed-db").?,
+    );
+    try std.testing.expectEqualDeep(
         InternalBrowseRoute{ .command = .settings_set_homepage_to_current },
         parseInternalBrowseRoute("browser://settings/homepage/set-current").?,
     );
@@ -7073,6 +7510,8 @@ test "writeInternalStartPage includes preview sections and quick actions" {
 test "writeInternalSettingsPage renders storage and cookie controls" {
     var cookie_jar = CookieJar.init(std.testing.allocator);
     defer cookie_jar.deinit();
+    var indexed_db_shed: indexed_db.Shed = .{};
+    defer indexed_db_shed.deinit(std.testing.allocator);
 
     var session: Session = undefined;
     session.page = null;
@@ -7086,6 +7525,13 @@ test "writeInternalSettingsPage renders storage and cookie controls" {
     try local_bucket.local.setOwnedItem(std.testing.allocator, "lp_local_two", "two");
     session.storage_shed = &storage_shed;
     session.owned_storage_shed = null;
+    const indexed_db_bucket = try indexed_db_shed.getOrPutOrigin(std.testing.allocator, "http://127.0.0.1:8150");
+    const indexed_db_database = try indexed_db_bucket.getOrPutDatabase(std.testing.allocator, "lp-db");
+    indexed_db_database.version = 2;
+    const indexed_db_store = try indexed_db_database.getOrPutStore(std.testing.allocator, "items");
+    try indexed_db_store.putJson(std.testing.allocator, "alpha", "{\"hello\":\"world\"}");
+    session.indexed_db_shed = &indexed_db_shed;
+    session.owned_indexed_db_shed = null;
 
     var tab: BrowseTab = undefined;
     tab.session = &session;
@@ -7108,6 +7554,8 @@ test "writeInternalSettingsPage renders storage and cookie controls" {
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/clear-cookies") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "Local storage: <strong>1 origins / 2 items</strong>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/clear-local-storage") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "IndexedDB: <strong>1 origins / 1 databases / 1 stores / 1 items</strong>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "browser://settings/clear-indexed-db") != null);
 }
 
 test "saveBrowseCookiesForPath round trips persisted cookie jar" {
@@ -7196,11 +7644,62 @@ test "saveBrowseLocalStorageForPath round trips persisted local storage" {
     try std.testing.expectEqualStrings("ok", loaded_other_bucket.local.getItem("lp_other") orelse return error.TestUnexpectedResult);
 }
 
+test "saveBrowseIndexedDbForPath round trips persisted indexed db" {
+    const rel_dir = ".zig-cache/tmp/internal-indexed-db-roundtrip-test";
+    std.fs.cwd().makePath(rel_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    const abs_dir = try std.fs.cwd().realpathAlloc(std.testing.allocator, rel_dir);
+    defer std.testing.allocator.free(abs_dir);
+
+    var source: indexed_db.Shed = .{};
+    defer source.deinit(std.testing.allocator);
+
+    const first_bucket = try source.getOrPutOrigin(std.testing.allocator, "http://127.0.0.1:8150");
+    const first_db = try first_bucket.getOrPutDatabase(std.testing.allocator, "lp-db");
+    first_db.version = 2;
+    const first_store = try first_db.getOrPutStore(std.testing.allocator, "items");
+    try first_store.putJson(std.testing.allocator, "alpha", "{\"value\":1}");
+    try first_store.putJson(std.testing.allocator, "beta", "{\"value\":2}");
+
+    const second_bucket = try source.getOrPutOrigin(std.testing.allocator, "http://127.0.0.1:8151");
+    const second_db = try second_bucket.getOrPutDatabase(std.testing.allocator, "other-db");
+    second_db.version = 1;
+    const second_store = try second_db.getOrPutStore(std.testing.allocator, "entries");
+    try second_store.putJson(std.testing.allocator, "gamma", "{\"ok\":true}");
+
+    try saveBrowseIndexedDbForPath(std.testing.allocator, abs_dir, &source);
+
+    var loaded = loadBrowseIndexedDb(std.testing.allocator, abs_dir);
+    defer loaded.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), loaded.originCount());
+    try std.testing.expectEqual(@as(usize, 2), loaded.databaseCount());
+    try std.testing.expectEqual(@as(usize, 2), loaded.storeCount());
+    try std.testing.expectEqual(@as(usize, 3), loaded.itemCount());
+
+    const loaded_first_bucket = loaded._origins.get("http://127.0.0.1:8150") orelse return error.TestUnexpectedResult;
+    const loaded_first_db = loaded_first_bucket.getDatabase("lp-db") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 2), loaded_first_db.version);
+    const loaded_first_store = loaded_first_db.getStore("items") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("{\"value\":1}", loaded_first_store.getJson("alpha") orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("{\"value\":2}", loaded_first_store.getJson("beta") orelse return error.TestUnexpectedResult);
+
+    const loaded_second_bucket = loaded._origins.get("http://127.0.0.1:8151") orelse return error.TestUnexpectedResult;
+    const loaded_second_db = loaded_second_bucket.getDatabase("other-db") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u32, 1), loaded_second_db.version);
+    const loaded_second_store = loaded_second_db.getStore("entries") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("{\"ok\":true}", loaded_second_store.getJson("gamma") orelse return error.TestUnexpectedResult);
+}
+
 test "hashInternalBrowsePageState settings changes after cookie mutation" {
     var cookie_jar = CookieJar.init(std.testing.allocator);
     defer cookie_jar.deinit();
     var storage_shed: storage.Shed = .{};
     defer storage_shed.deinit(std.testing.allocator);
+    var indexed_db_shed: indexed_db.Shed = .{};
+    defer indexed_db_shed.deinit(std.testing.allocator);
 
     var session: Session = undefined;
     session.page = null;
@@ -7209,6 +7708,8 @@ test "hashInternalBrowsePageState settings changes after cookie mutation" {
     session.owned_cookie_jar = null;
     session.storage_shed = &storage_shed;
     session.owned_storage_shed = null;
+    session.indexed_db_shed = &indexed_db_shed;
+    session.owned_indexed_db_shed = null;
 
     var tab: BrowseTab = undefined;
     tab.session = &session;
@@ -7280,6 +7781,8 @@ test "hashInternalBrowsePageState settings changes after local storage mutation"
     defer cookie_jar.deinit();
     var storage_shed: storage.Shed = .{};
     defer storage_shed.deinit(std.testing.allocator);
+    var indexed_db_shed: indexed_db.Shed = .{};
+    defer indexed_db_shed.deinit(std.testing.allocator);
 
     var session: Session = undefined;
     session.page = null;
@@ -7288,6 +7791,8 @@ test "hashInternalBrowsePageState settings changes after local storage mutation"
     session.owned_cookie_jar = null;
     session.storage_shed = &storage_shed;
     session.owned_storage_shed = null;
+    session.indexed_db_shed = &indexed_db_shed;
+    session.owned_indexed_db_shed = null;
 
     var tab: BrowseTab = undefined;
     tab.session = &session;
@@ -7329,6 +7834,80 @@ test "hashInternalBrowsePageState settings changes after local storage mutation"
 
     const bucket = try storage_shed.getOrPut(std.testing.allocator, "http://127.0.0.1:8150");
     try bucket.local.setOwnedItem(std.testing.allocator, "lp_local_one", "one");
+
+    const after_hash = hashInternalBrowsePageState(
+        std.testing.allocator,
+        null,
+        &shell,
+        0,
+        &settings,
+        &downloads,
+        .settings,
+    );
+    try std.testing.expect(before_hash != after_hash);
+}
+
+test "hashInternalBrowsePageState settings changes after indexed db mutation" {
+    var cookie_jar = CookieJar.init(std.testing.allocator);
+    defer cookie_jar.deinit();
+    var storage_shed: storage.Shed = .{};
+    defer storage_shed.deinit(std.testing.allocator);
+    var indexed_db_shed: indexed_db.Shed = .{};
+    defer indexed_db_shed.deinit(std.testing.allocator);
+
+    var session: Session = undefined;
+    session.page = null;
+    session.navigation = .{ ._proto = undefined };
+    session.cookie_jar = &cookie_jar;
+    session.owned_cookie_jar = null;
+    session.storage_shed = &storage_shed;
+    session.owned_storage_shed = null;
+    session.indexed_db_shed = &indexed_db_shed;
+    session.owned_indexed_db_shed = null;
+
+    var tab: BrowseTab = undefined;
+    tab.session = &session;
+    tab.committed_surface = .{};
+    tab.error_state = .{};
+    tab.internal_filters = .{};
+    defer tab.internal_filters.deinit(std.testing.allocator);
+    tab.target_name = &.{};
+    tab.popup_source = .none;
+    tab.zoom_percent = 100;
+
+    var tab_items = [_]*BrowseTab{&tab};
+    var tabs = std.ArrayListUnmanaged(*BrowseTab){
+        .items = tab_items[0..],
+        .capacity = tab_items.len,
+    };
+    var closed_tabs = std.ArrayListUnmanaged(ClosedBrowseTab){};
+    defer closed_tabs.deinit(std.testing.allocator);
+    var active_index: usize = 0;
+    const shell: BrowseShell = .{
+        .tabs = &tabs,
+        .closed_tabs = &closed_tabs,
+        .active_tab_index = &active_index,
+    };
+    var settings = BrowseSettings{};
+    defer settings.deinit(std.testing.allocator);
+    var downloads = BrowseDownloads{ .allocator = std.testing.allocator };
+    defer downloads.deinit(null);
+
+    const before_hash = hashInternalBrowsePageState(
+        std.testing.allocator,
+        null,
+        &shell,
+        0,
+        &settings,
+        &downloads,
+        .settings,
+    );
+
+    const bucket = try indexed_db_shed.getOrPutOrigin(std.testing.allocator, "http://127.0.0.1:8150");
+    const database = try bucket.getOrPutDatabase(std.testing.allocator, "lp-db");
+    database.version = 1;
+    const store = try database.getOrPutStore(std.testing.allocator, "items");
+    try store.putJson(std.testing.allocator, "alpha", "{\"value\":1}");
 
     const after_hash = hashInternalBrowsePageState(
         std.testing.allocator,
@@ -8167,6 +8746,8 @@ test "internalBrowseCommandHostPage maps stateful internal actions" {
     try std.testing.expectEqual(@as(?InternalBrowsePage, .downloads), internalBrowseCommandHostPage(.download_filter_clear));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_set_homepage_to_current));
     try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_clear_cookies));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_clear_local_storage));
+    try std.testing.expectEqual(@as(?InternalBrowsePage, .settings), internalBrowseCommandHostPage(.settings_clear_indexed_db));
     try std.testing.expectEqual(@as(?InternalBrowsePage, null), internalBrowseCommandHostPage(.reload));
 }
 
@@ -8197,6 +8778,8 @@ test "internalBrowseCommandUsesBrowseLoopHandler includes indexed closed tab reo
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.{ .download_filter_set = "one" }));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.download_filter_clear));
     try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.settings_clear_cookies));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.settings_clear_local_storage));
+    try std.testing.expect(internalBrowseCommandUsesBrowseLoopHandler(.settings_clear_indexed_db));
     try std.testing.expect(!internalBrowseCommandUsesBrowseLoopHandler(.download_clear));
 }
 
@@ -8218,6 +8801,8 @@ test "internalBrowseCommandKeepsCurrentPage includes internal open in new tab ac
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_retry = 0 }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.{ .download_sort_set = .newest_first }));
     try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.settings_clear_cookies));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.settings_clear_local_storage));
+    try std.testing.expect(internalBrowseCommandKeepsCurrentPage(.settings_clear_indexed_db));
     try std.testing.expect(!internalBrowseCommandKeepsCurrentPage(.{ .download_source = 0 }));
 }
 

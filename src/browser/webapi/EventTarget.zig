@@ -44,6 +44,9 @@ pub const Type = union(enum) {
     screen_orientation: *@import("Screen.zig").Orientation,
     visual_viewport: *@import("VisualViewport.zig"),
     file_reader: *@import("FileReader.zig"),
+    idb_request: *@import("storage/indexed_db.zig").IDBRequest,
+    idb_open_db_request: *@import("storage/indexed_db.zig").IDBOpenDBRequest,
+    idb_database: *@import("storage/indexed_db.zig").IDBDatabase,
 };
 
 pub fn init(page: *Page) !*EventTarget {
@@ -138,6 +141,10 @@ pub fn format(self: *EventTarget, writer: *std.Io.Writer) !void {
         .screen => writer.writeAll("<Screen>"),
         .screen_orientation => writer.writeAll("<ScreenOrientation>"),
         .visual_viewport => writer.writeAll("<VisualViewport>"),
+        .file_reader => writer.writeAll("<FileReader>"),
+        .idb_request => writer.writeAll("<IDBRequest>"),
+        .idb_open_db_request => writer.writeAll("<IDBOpenDBRequest>"),
+        .idb_database => writer.writeAll("<IDBDatabase>"),
     };
 }
 
@@ -156,6 +163,9 @@ pub fn toString(self: *EventTarget) []const u8 {
         .screen_orientation => return "[object ScreenOrientation]",
         .visual_viewport => return "[object VisualViewport]",
         .file_reader => return "[object FileReader]",
+        .idb_request => return "[object IDBRequest]",
+        .idb_open_db_request => return "[object IDBOpenDBRequest]",
+        .idb_database => return "[object IDBDatabase]",
     };
 }
 

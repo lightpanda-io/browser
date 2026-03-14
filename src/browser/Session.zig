@@ -24,6 +24,7 @@ const log = @import("../log.zig");
 
 const js = @import("js/js.zig");
 const storage = @import("webapi/storage/storage.zig");
+const indexed_db = @import("webapi/storage/indexed_db.zig");
 const Navigation = @import("webapi/navigation/Navigation.zig");
 const History = @import("webapi/History.zig");
 pub const PopupSource = @import("PopupSource.zig").PopupSource;
@@ -111,6 +112,8 @@ owned_cookie_jar: ?storage.Cookie.Jar,
 storage_shed: *storage.Shed,
 owned_storage_shed: ?storage.Shed,
 session_storage_shed: storage.Shed,
+indexed_db_shed: *indexed_db.Shed,
+owned_indexed_db_shed: ?indexed_db.Shed,
 
 history: History,
 navigation: Navigation,
@@ -148,6 +151,8 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
         .cookie_jar = undefined,
         .owned_cookie_jar = null,
         .session_storage_shed = .{},
+        .indexed_db_shed = undefined,
+        .owned_indexed_db_shed = null,
         .allow_script_popups = browser.allow_script_popups,
     };
     if (browser.shared_cookie_jar) |shared_cookie_jar| {
@@ -162,6 +167,13 @@ pub fn init(self: *Session, browser: *Browser, notification: *Notification) !voi
     } else {
         self.owned_storage_shed = .{};
         self.storage_shed = &self.owned_storage_shed.?;
+    }
+    if (browser.shared_indexed_db_shed) |shared_indexed_db_shed| {
+        self.indexed_db_shed = shared_indexed_db_shed;
+        self.owned_indexed_db_shed = null;
+    } else {
+        self.owned_indexed_db_shed = .{};
+        self.indexed_db_shed = &self.owned_indexed_db_shed.?;
     }
 }
 
@@ -200,6 +212,10 @@ pub fn deinit(self: *Session) void {
     if (self.owned_storage_shed) |*owned_storage_shed| {
         owned_storage_shed.deinit(browser.app.allocator);
         self.owned_storage_shed = null;
+    }
+    if (self.owned_indexed_db_shed) |*owned_indexed_db_shed| {
+        owned_indexed_db_shed.deinit(browser.app.allocator);
+        self.owned_indexed_db_shed = null;
     }
     browser.arena_pool.release(self.arena);
 }

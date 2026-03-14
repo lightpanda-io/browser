@@ -104,6 +104,7 @@ pub const BrowserCommand = union(enum) {
     settings_toggle_script_popups,
     settings_clear_cookies,
     settings_clear_local_storage,
+    settings_clear_indexed_db,
     settings_default_zoom_in,
     settings_default_zoom_out,
     settings_default_zoom_reset,

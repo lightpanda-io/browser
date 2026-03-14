@@ -872,6 +872,7 @@ pub const JsApis = flattenTypes(&.{
     @import("../webapi/streams/TransformStream.zig"),
     @import("../webapi/Node.zig"),
     @import("../webapi/storage/storage.zig"),
+    @import("../webapi/storage/indexed_db.zig"),
     @import("../webapi/URL.zig"),
     @import("../webapi/Window.zig"),
     @import("../webapi/Performance.zig"),
