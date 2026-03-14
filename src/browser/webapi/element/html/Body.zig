@@ -36,6 +36,16 @@ pub fn asNode(self: *Body) *Node {
     return self.asElement().asNode();
 }
 
+/// Special-case: `body.onload` is actually an alias for `window.onload`.
+pub fn setOnLoad(_: *Body, callback: ?js.Function.Global, page: *Page) !void {
+    page.window._on_load = callback;
+}
+
+/// Special-case: `body.onload` is actually an alias for `window.onload`.
+pub fn getOnLoad(_: *Body, page: *Page) ?js.Function.Global {
+    return page.window._on_load;
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(Body);
 
@@ -44,6 +54,8 @@ pub const JsApi = struct {
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
     };
+
+    pub const onload = bridge.accessor(getOnLoad, setOnLoad, .{ .null_as_undefined = false });
 };
 
 pub const Build = struct {
