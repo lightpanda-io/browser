@@ -117,7 +117,12 @@ fn deleteCookies(cmd: anytype) !void {
         path: ?[]const u8 = null,
         partitionKey: ?CdpStorage.CookiePartitionKey = null,
     })) orelse return error.InvalidParams;
-    if (params.partitionKey != null) return error.NotImplemented;
+    // Silently ignore partitionKey since we don't support partitioned cookies (CHIPS).
+    // This allows Puppeteer's page.setCookie() to work, which sends deleteCookies
+    // with partitionKey as part of its cookie-setting workflow.
+    if (params.partitionKey != null) {
+        log.debug(.network, "partitionKey ignored in deleteCookies", .{});
+    }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
     const cookies = &bc.session.cookie_jar.cookies;
