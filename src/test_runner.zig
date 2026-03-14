@@ -501,7 +501,7 @@ pub const TrackingAllocator = struct {
         defer self.mutex.unlock();
 
         const result = self.parent_allocator.rawResize(old_mem, alignment, new_len, ra);
-        self.reallocation_count += 1; // TODO: only if result is not null?
+        if (result) self.reallocation_count += 1;
         return result;
     }
 
@@ -531,7 +531,7 @@ pub const TrackingAllocator = struct {
         defer self.mutex.unlock();
 
         const result = self.parent_allocator.rawRemap(memory, alignment, new_len, ret_addr);
-        self.reallocation_count += 1; // TODO: only if result is not null?
+        if (result != null) self.reallocation_count += 1;
         return result;
     }
 };
