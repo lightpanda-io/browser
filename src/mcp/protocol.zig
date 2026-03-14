@@ -238,6 +238,27 @@ test "MCP.protocol - request parsing" {
     try testing.expectString("1.0.0", init_params.value.clientInfo.version);
 }
 
+test "MCP.protocol - ping request parsing" {
+    defer testing.reset();
+    const raw_json =
+        \\{
+        \\  "jsonrpc": "2.0",
+        \\  "id": "123",
+        \\  "method": "ping"
+        \\}
+    ;
+
+    const parsed = try std.json.parseFromSlice(Request, testing.arena_allocator, raw_json, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const req = parsed.value;
+    try testing.expectString("2.0", req.jsonrpc);
+    try testing.expectString("ping", req.method);
+    try testing.expect(req.id.? == .string);
+    try testing.expectString("123", req.id.?.string);
+    try testing.expectEqual(null, req.params);
+}
+
 test "MCP.protocol - response formatting" {
     defer testing.reset();
     const response = Response{
