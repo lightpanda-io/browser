@@ -61,10 +61,9 @@ pub fn setValue(self: *Option, value: []const u8, page: *Page) !void {
     self._value = owned;
 }
 
-pub fn getText(self: *const Option) []const u8 {
+pub fn getText(self: *const Option, page: *Page) []const u8 {
     const node: *Node = @constCast(self.asConstElement().asConstNode());
-    const allocator = std.heap.page_allocator; // TODO: use proper allocator
-    return node.getTextContentAlloc(allocator) catch "";
+    return node.getTextContentAlloc(page.call_arena) catch "";
 }
 
 pub fn setText(self: *Option, value: []const u8, page: *Page) !void {
