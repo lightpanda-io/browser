@@ -419,3 +419,54 @@ pub const RulesIterator = struct {
         }
     }
 };
+
+const testing = std.testing;
+
+test "RulesIterator: single rule" {
+    var it = RulesIterator.init(".test { color: red; }");
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test", rule.selector);
+    try testing.expectEqualStrings(" color: red; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: multiple rules" {
+    var it = RulesIterator.init("h1 { margin: 0; } p { padding: 10px; }");
+
+    var rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("h1", rule.selector);
+    try testing.expectEqualStrings(" margin: 0; ", rule.block);
+
+    rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings("p", rule.selector);
+    try testing.expectEqualStrings(" padding: 10px; ", rule.block);
+
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: skips at-rules without block" {
+    var it = RulesIterator.init("@import url('style.css'); .test { color: red; }");
+
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test", rule.selector);
+    try testing.expectEqualStrings(" color: red; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: skips at-rules with block" {
+    var it = RulesIterator.init("@media screen { .test { color: blue; } } .test2 { color: green; }");
+
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test2", rule.selector);
+    try testing.expectEqualStrings(" color: green; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
+
+test "RulesIterator: comments and whitespace" {
+    var it = RulesIterator.init("  /* comment */  .test  /* comment */ { /* comment */ color: red; } \n\t");
+
+    const rule = it.next() orelse return error.MissingRule;
+    try testing.expectEqualStrings(".test", rule.selector);
+    try testing.expectEqualStrings(" /* comment */ color: red; ", rule.block);
+    try testing.expectEqual(@as(?Rule, null), it.next());
+}
