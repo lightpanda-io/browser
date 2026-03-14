@@ -848,12 +848,24 @@ fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
     if (self._parse_state == .pre) {
         // we lazily do this, because we might need the first chunk of data
         // to sniff the content type
-        const mime: Mime = blk: {
+        var mime: Mime = blk: {
             if (transfer.response_header.?.contentType()) |ct| {
                 break :blk try Mime.parse(ct);
             }
             break :blk Mime.sniff(data);
         } orelse .unknown;
+
+        // If the HTTP header didn't specify a charset and this is HTML,
+        // prescan the first 1024 bytes for a <meta charset> declaration.
+        if (mime.content_type == .text_html and std.mem.eql(u8, mime.charsetString(), "UTF-8")) {
+            if (Mime.prescanCharset(data)) |charset| {
+                if (charset.len <= 40) {
+                    @memcpy(mime.charset[0..charset.len], charset);
+                    mime.charset[charset.len] = 0;
+                    mime.charset_len = charset.len;
+                }
+            }
+        }
 
         if (comptime IS_DEBUG) {
             log.debug(.page, "navigate first chunk", .{
