@@ -430,7 +430,6 @@
 
     sheet.insertRule('.test { color: green; }', 0);
     testing.expectEqual(1, sheet.cssRules.length);
-    console.warn("constructor:", sheet.cssRules[0].constructor.name);
     testing.expectEqual('.test', sheet.cssRules[0].selectorText);
     testing.expectEqual('green', sheet.cssRules[0].style.color);
 
