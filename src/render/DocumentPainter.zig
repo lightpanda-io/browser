@@ -2419,6 +2419,48 @@ test "paintDocument emits webgl triangle canvas pixels for headed rendering" {
     try std.testing.expect(found);
 }
 
+test "paintDocument emits webgl varying-color canvas pixels for headed rendering" {
+    var page = try testing.pageTest("page/canvas_webgl_varying_render.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var found = false;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .canvas => |canvas| {
+                var red_pixels: usize = 0;
+                var green_pixels: usize = 0;
+                var blue_pixels: usize = 0;
+                var white_pixels: usize = 0;
+                var i: usize = 0;
+                while (i + 3 < canvas.pixels.len) : (i += 4) {
+                    const r = canvas.pixels[i + 0];
+                    const g = canvas.pixels[i + 1];
+                    const b = canvas.pixels[i + 2];
+                    const a = canvas.pixels[i + 3];
+                    if (a == 0) continue;
+                    if (r > 170 and g < 130 and b < 130) red_pixels += 1;
+                    if (r < 150 and g > 150 and b < 150) green_pixels += 1;
+                    if (r < 150 and g < 150 and b > 170) blue_pixels += 1;
+                    if (r > 200 and g > 200 and b > 200) white_pixels += 1;
+                }
+                try std.testing.expect(red_pixels > 50);
+                try std.testing.expect(green_pixels > 50);
+                try std.testing.expect(blue_pixels > 50);
+                try std.testing.expect(white_pixels > 2000);
+                found = true;
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expect(found);
+}
+
 test "paintDocument emits image request authorization from url userinfo" {
     var page = try testing.pageTest("page/auth_image.html");
     defer page._session.removePage();

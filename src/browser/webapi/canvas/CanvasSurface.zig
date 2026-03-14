@@ -219,6 +219,68 @@ pub fn fillTriangle(
     }
 }
 
+pub fn fillTriangleInterpolated(
+    self: *CanvasSurface,
+    a_color: color.RGBA,
+    ax: f64,
+    ay: f64,
+    b_color: color.RGBA,
+    bx: f64,
+    by: f64,
+    c_color: color.RGBA,
+    cx: f64,
+    cy: f64,
+) void {
+    if (!std.math.isFinite(ax) or !std.math.isFinite(ay) or !std.math.isFinite(bx) or !std.math.isFinite(by) or !std.math.isFinite(cx) or !std.math.isFinite(cy)) {
+        return;
+    }
+    if (self.width == 0 or self.height == 0) return;
+
+    const min_x_f = @min(ax, @min(bx, cx));
+    const min_y_f = @min(ay, @min(by, cy));
+    const max_x_f = @max(ax, @max(bx, cx));
+    const max_y_f = @max(ay, @max(by, cy));
+
+    var min_x = std.math.lossyCast(i32, @floor(min_x_f));
+    var min_y = std.math.lossyCast(i32, @floor(min_y_f));
+    var max_x = std.math.lossyCast(i32, @ceil(max_x_f));
+    var max_y = std.math.lossyCast(i32, @ceil(max_y_f));
+
+    min_x = std.math.clamp(min_x, 0, @as(i32, @intCast(self.width)));
+    min_y = std.math.clamp(min_y, 0, @as(i32, @intCast(self.height)));
+    max_x = std.math.clamp(max_x, 0, @as(i32, @intCast(self.width)));
+    max_y = std.math.clamp(max_y, 0, @as(i32, @intCast(self.height)));
+    if (min_x >= max_x or min_y >= max_y) return;
+
+    const area = edgeFunction(ax, ay, bx, by, cx, cy);
+    if (std.math.approxEqAbs(f64, area, 0, 0.000001)) return;
+
+    var y: i32 = min_y;
+    while (y < max_y) : (y += 1) {
+        var x: i32 = min_x;
+        while (x < max_x) : (x += 1) {
+            const px = @as(f64, @floatFromInt(x)) + 0.5;
+            const py = @as(f64, @floatFromInt(y)) + 0.5;
+            const w0 = edgeFunction(bx, by, cx, cy, px, py);
+            const w1 = edgeFunction(cx, cy, ax, ay, px, py);
+            const w2 = edgeFunction(ax, ay, bx, by, px, py);
+
+            if ((w0 >= 0 and w1 >= 0 and w2 >= 0) or (w0 <= 0 and w1 <= 0 and w2 <= 0)) {
+                const inv_area = 1.0 / area;
+                const alpha = w0 * inv_area;
+                const beta = w1 * inv_area;
+                const gamma = w2 * inv_area;
+                self.writePixel(@intCast(x), @intCast(y), .{
+                    .r = barycentricColorChannel(a_color.r, b_color.r, c_color.r, alpha, beta, gamma),
+                    .g = barycentricColorChannel(a_color.g, b_color.g, c_color.g, alpha, beta, gamma),
+                    .b = barycentricColorChannel(a_color.b, b_color.b, c_color.b, alpha, beta, gamma),
+                    .a = barycentricColorChannel(a_color.a, b_color.a, c_color.a, alpha, beta, gamma),
+                });
+            }
+        }
+    }
+}
+
 pub fn setPixel(self: *CanvasSurface, x: u32, y: u32, rgba: color.RGBA) void {
     self.writePixel(x, y, rgba);
 }
@@ -528,6 +590,13 @@ fn writePixel(self: *CanvasSurface, x: u32, y: u32, rgba: color.RGBA) void {
     self.pixels[index + 1] = rgba.g;
     self.pixels[index + 2] = rgba.b;
     self.pixels[index + 3] = rgba.a;
+}
+
+fn barycentricColorChannel(a: u8, b: u8, c: u8, alpha: f64, beta: f64, gamma: f64) u8 {
+    const value = @as(f64, @floatFromInt(a)) * alpha +
+        @as(f64, @floatFromInt(b)) * beta +
+        @as(f64, @floatFromInt(c)) * gamma;
+    return @intFromFloat(@round(std.math.clamp(value, 0, 255)));
 }
 
 fn measureTextWin32(

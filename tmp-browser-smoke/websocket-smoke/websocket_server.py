@@ -118,8 +118,8 @@ class Handler(socketserver.BaseRequestHandler):
             name, value = line.split(":", 1)
             headers[name.strip().lower()] = value.strip()
 
-        if headers.get("upgrade", "").lower() == "websocket" and path == "/echo":
-            self.handle_websocket(headers, remainder)
+        if headers.get("upgrade", "").lower() == "websocket" and path in ("/echo", "/protocol"):
+            self.handle_websocket(path, headers, remainder)
             return
 
         if method != "GET":
@@ -149,10 +149,15 @@ class Handler(socketserver.BaseRequestHandler):
         ).encode("ascii")
         self.request.sendall(head + body)
 
-    def handle_websocket(self, headers, remainder):
+    def handle_websocket(self, path, headers, remainder):
         key = headers.get("sec-websocket-key")
         if not key:
             return
+
+        protocol_header = headers.get("sec-websocket-protocol", "")
+        selected_protocol = ""
+        if "superchat" in [part.strip() for part in protocol_header.split(",") if part.strip()]:
+            selected_protocol = "superchat"
 
         accept = base64.b64encode(hashlib.sha1((key + GUID).encode("ascii")).digest()).decode("ascii")
         response = (
@@ -160,8 +165,13 @@ class Handler(socketserver.BaseRequestHandler):
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Accept: {accept}\r\n"
-            "\r\n"
-        ).encode("ascii")
+        )
+        if selected_protocol:
+            response += f"Sec-WebSocket-Protocol: {selected_protocol}\r\n"
+        if path == "/protocol":
+            response += "Sec-WebSocket-Extensions: permessage-test\r\n"
+        response += "\r\n"
+        response = response.encode("ascii")
         self.request.sendall(response)
 
         pending = remainder

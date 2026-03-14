@@ -44,3 +44,35 @@ testing.async(async () => {
   });
 });
 </script>
+
+<script id=WebSocket#subprotocol_negotiation>
+testing.async(async () => {
+  await new Promise((resolve, reject) => {
+    const ws = new WebSocket('ws://127.0.0.1:9593/protocol', ['chat', 'superchat']);
+    let gotBinary = false;
+    ws.binaryType = 'arraybuffer';
+
+    ws.onerror = () => reject(new Error('unexpected websocket subprotocol error'));
+    ws.onopen = () => {
+      testing.expectEqual(WebSocket.OPEN, ws.readyState);
+      testing.expectEqual('superchat', ws.protocol);
+      testing.expectEqual('permessage-test', ws.extensions);
+      ws.send(new Uint8Array([4, 5, 6]));
+    };
+    ws.onmessage = (event) => {
+      testing.expectEqual(false, gotBinary);
+      testing.expectEqual(true, event.data instanceof ArrayBuffer);
+      testing.expectEqual(new Uint8Array([4, 5, 6]), new Uint8Array(event.data));
+      gotBinary = true;
+      ws.close(1000, 'done');
+    };
+    ws.onclose = (event) => {
+      testing.expectEqual(true, gotBinary);
+      testing.expectEqual(1000, event.code);
+      testing.expectEqual('done', event.reason);
+      testing.expectEqual(true, event.wasClean);
+      resolve();
+    };
+  });
+});
+</script>

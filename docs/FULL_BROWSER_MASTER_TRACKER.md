@@ -246,6 +246,10 @@ Current state inside Gate 1:
   cursor iteration, with focused DOM tests plus a bounded headed cross-tab
   probe proving seeded cursor rows can be read back in sorted order from a
   sibling tab through both `objectStore.openCursor()` and `index.openCursor()`
+- that same headed IndexedDB path now also exposes real transaction `mode`
+  state on the JS surface for `readonly` vs `readwrite` single-store
+  transactions, with focused DOM coverage plus a bounded headed probe proving
+  page JS can observe the expected mode values before a successful write
 - headed `fetch(...)` now honors credentials policy correctly on authenticated
   pages, with bounded localhost probes proving:
   - default same-origin fetch keeps cookie plus inherited auth
@@ -407,6 +411,10 @@ Current state inside Gate 1:
   `ELEMENT_ARRAY_BUFFER`, and `drawElements(TRIANGLES, ..., UNSIGNED_SHORT, ...)`,
   with bounded headed screenshot coverage proving a uniform-colored indexed
   triangle reaches the real destination canvas surface
+- that same headed Win32 `webgl` path now also supports a first varying-color
+  attribute slice with two enabled vertex attributes, interpolated per-vertex
+  color fill, and bounded headed screenshot coverage proving red, green, and
+  blue regions reach the real destination canvas surface from one triangle
 - the headed browser runtime now also exposes a first real `WebSocket`
   browser-API slice with `CONNECTING` -> `OPEN` -> `CLOSED` state transitions,
   `send`, `close`, `onopen`, `onmessage`, `onerror`, and `onclose`, with a
@@ -417,6 +425,11 @@ Current state inside Gate 1:
   `CloseEvent` `code` / `reason` / `wasClean`, with a bounded headed localhost
   probe proving binary frames round-trip and server-initiated close details
   reach page JS on the live headed surface path
+- that same headed `WebSocket` runtime now also covers client-requested
+  subprotocol negotiation plus surfaced negotiated extensions, with a bounded
+  headed localhost probe proving a requested protocol list yields negotiated
+  `protocol === "superchat"`, `extensions === "permessage-test"`, binary
+  echo still works, and a clean client close reaches page JS correctly
 - the current headed painter now also keeps simple block paragraphs with mixed
   direct text plus inline child elements on one shared inline row instead of
   splitting the direct text into a separate label band above the inline chips,

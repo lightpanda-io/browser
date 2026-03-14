@@ -176,3 +176,21 @@
     db.close();
   });
 </script>
+
+<script id="indexed_db_transaction_mode">
+  testing.async(async () => {
+    const db = await openDb('lp-transaction-mode', 1, (upgradeDb) => {
+      upgradeDb.createObjectStore('users');
+    });
+
+    const readTx = db.transaction('users');
+    testing.expectEqual('readonly', readTx.mode);
+
+    const writeTx = db.transaction('users', 'readwrite');
+    testing.expectEqual('readwrite', writeTx.mode);
+    const users = writeTx.objectStore('users');
+    await requestResult(users.put({ name: 'Ada', email: 'ada@example.com' }, 'user-1'));
+
+    db.close();
+  });
+</script>

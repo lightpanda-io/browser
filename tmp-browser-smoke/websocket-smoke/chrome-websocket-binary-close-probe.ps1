@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 
 $root = 'C:\Users\adyba\src\lightpanda-browser\tmp-browser-smoke\websocket-smoke'
 $repo = 'C:\Users\adyba\src\lightpanda-browser'
-$browserExe = Join-Path $repo 'zig-out\bin\lightpanda.exe'
+$browserExe = if ($env:LIGHTPANDA_BROWSER_EXE) { $env:LIGHTPANDA_BROWSER_EXE } else { Join-Path $repo 'zig-out\bin\lightpanda.exe' }
 $serverScript = Join-Path $root 'websocket_server.py'
 $browserOut = Join-Path $root 'websocket-binary-close.browser.stdout.txt'
 $browserErr = Join-Path $root 'websocket-binary-close.browser.stderr.txt'

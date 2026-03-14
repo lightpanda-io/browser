@@ -50,6 +50,8 @@ _poll_scheduled: bool = false,
 _close_queued: bool = false,
 _stop_requested: bool = false,
 _retained: bool = false,
+_requested_protocols: []const []const u8 = &.{},
+_requested_protocol_header: []const u8 = "",
 _protocol: []const u8 = "",
 _extensions: []const u8 = "",
 _binary_type: BinaryType = .blob,
@@ -99,7 +101,7 @@ pub const OPEN: u8 = @intFromEnum(ReadyState.open);
 pub const CLOSING: u8 = @intFromEnum(ReadyState.closing);
 pub const CLOSED: u8 = @intFromEnum(ReadyState.closed);
 
-pub fn init(raw_url: [:0]const u8, page: *Page) !*WebSocket {
+pub fn init(raw_url: [:0]const u8, protocols_: ?js.Value.Temp, page: *Page) !*WebSocket {
     const arena = try page.getArena(.{ .debug = "WebSocket" });
     errdefer page.releaseArena(arena);
 
@@ -116,11 +118,15 @@ pub fn init(raw_url: [:0]const u8, page: *Page) !*WebSocket {
         return error.SyntaxError;
     }
 
+    const requested_protocol_config = try parseRequestedProtocols(protocols_, page, arena);
+
     const self = try page._factory.eventTargetWithAllocator(arena, WebSocket{
         ._page = page,
         ._proto = undefined,
         ._arena = arena,
         ._url = url,
+        ._requested_protocols = requested_protocol_config.protocols,
+        ._requested_protocol_header = requested_protocol_config.header,
     });
     try page.js.scheduler.add(self, WebSocket.poll, 0, .{
         .name = "WebSocket.poll",
@@ -295,6 +301,75 @@ pub fn close(self: *WebSocket, code_: ?u16, reason_: ?[]const u8) !void {
     };
 }
 
+fn parseRequestedProtocols(protocols_: ?js.Value.Temp, page: *Page, allocator: Allocator) !struct { protocols: []const []const u8, header: []const u8 } {
+    const temp = protocols_ orelse return .{ .protocols = &.{}, .header = "" };
+    const value = temp.local(page.js.local.?);
+
+    if (value.isString()) |protocol_string| {
+        const protocol = try protocol_string.toSliceWithAlloc(allocator);
+        try validateRequestedProtocol(protocol);
+        return .{
+            .protocols = try allocator.dupe([]const u8, &.{protocol}),
+            .header = protocol,
+        };
+    }
+
+    if (!value.isArray()) {
+        return error.SyntaxError;
+    }
+
+    const array = value.toArray();
+    const protocol_count: usize = array.len();
+    if (protocol_count == 0) {
+        return .{ .protocols = &.{}, .header = "" };
+    }
+
+    const protocols = try allocator.alloc([]const u8, protocol_count);
+    var header = std.ArrayList(u8).empty;
+    errdefer header.deinit(allocator);
+
+    for (0..protocol_count) |i| {
+        const item = try array.get(@intCast(i));
+        const item_string = item.isString() orelse return error.SyntaxError;
+        const protocol = try item_string.toSliceWithAlloc(allocator);
+        try validateRequestedProtocol(protocol);
+        for (protocols[0..i]) |existing| {
+            if (std.mem.eql(u8, existing, protocol)) {
+                return error.SyntaxError;
+            }
+        }
+        protocols[i] = protocol;
+        if (i > 0) {
+            try header.appendSlice(allocator, ", ");
+        }
+        try header.appendSlice(allocator, protocol);
+    }
+
+    return .{
+        .protocols = protocols,
+        .header = try header.toOwnedSlice(allocator),
+    };
+}
+
+fn validateRequestedProtocol(protocol: []const u8) !void {
+    if (protocol.len == 0) {
+        return error.SyntaxError;
+    }
+    for (protocol) |ch| {
+        if (!isWebSocketProtocolTokenChar(ch)) {
+            return error.SyntaxError;
+        }
+    }
+}
+
+fn isWebSocketProtocolTokenChar(ch: u8) bool {
+    if (ch <= 0x20 or ch >= 0x7f) return false;
+    return switch (ch) {
+        '(', ')', '<', '>', '@', ',', ';', ':', '\\', '"', '/', '[', ']', '?', '=', '{', '}' => false,
+        else => true,
+    };
+}
+
 fn connect(self: *WebSocket) !void {
     const request_url = try websocketHttpEquivalentUrl(self._arena, self._url);
     const host = URL.getHostname(self._url);
@@ -368,6 +443,9 @@ fn buildHandshakeRequest(self: *WebSocket, target: []const u8, request_url: [:0]
     try writer.writeAll("Connection: Upgrade\r\n");
     try writer.print("Sec-WebSocket-Key: {s}\r\n", .{sec_key_buf});
     try writer.writeAll("Sec-WebSocket-Version: 13\r\n");
+    if (self._requested_protocol_header.len > 0) {
+        try writer.print("Sec-WebSocket-Protocol: {s}\r\n", .{self._requested_protocol_header});
+    }
 
     if (try URL.getOrigin(self._arena, self._page.url)) |origin| {
         try writer.print("Origin: {s}\r\n", .{origin});
@@ -380,7 +458,8 @@ fn buildHandshakeRequest(self: *WebSocket, target: []const u8, request_url: [:0]
             std.ascii.eqlIgnoreCase(header.name, "host") or
             std.ascii.eqlIgnoreCase(header.name, "origin") or
             std.ascii.eqlIgnoreCase(header.name, "sec-websocket-key") or
-            std.ascii.eqlIgnoreCase(header.name, "sec-websocket-version"))
+            std.ascii.eqlIgnoreCase(header.name, "sec-websocket-version") or
+            std.ascii.eqlIgnoreCase(header.name, "sec-websocket-protocol"))
         {
             continue;
         }
@@ -417,6 +496,8 @@ fn validateHandshakeResponse(self: *WebSocket, stream: *std.net.Stream) !void {
     var saw_upgrade = false;
     var saw_connection = false;
     var saw_accept = false;
+    var selected_protocol: []const u8 = "";
+    var extensions: []const u8 = "";
 
     var lines = std.mem.splitSequence(u8, response_bytes, "\r\n");
     _ = lines.next();
@@ -432,6 +513,10 @@ fn validateHandshakeResponse(self: *WebSocket, stream: *std.net.Stream) !void {
             saw_connection = std.ascii.indexOfIgnoreCase(value, "upgrade") != null;
         } else if (std.ascii.eqlIgnoreCase(name, "sec-websocket-accept")) {
             saw_accept = value.len > 0;
+        } else if (std.ascii.eqlIgnoreCase(name, "sec-websocket-protocol")) {
+            selected_protocol = value;
+        } else if (std.ascii.eqlIgnoreCase(name, "sec-websocket-extensions")) {
+            extensions = value;
         }
     }
 
@@ -444,6 +529,30 @@ fn validateHandshakeResponse(self: *WebSocket, stream: *std.net.Stream) !void {
         });
         return error.NetworkError;
     }
+
+    if (self._requested_protocols.len == 0) {
+        if (selected_protocol.len > 0) {
+            return error.NetworkError;
+        }
+    } else {
+        if (selected_protocol.len == 0 or !containsRequestedProtocol(self._requested_protocols, selected_protocol)) {
+            return error.NetworkError;
+        }
+        self._protocol = try self._arena.dupe(u8, selected_protocol);
+    }
+
+    if (extensions.len > 0) {
+        self._extensions = try self._arena.dupe(u8, extensions);
+    }
+}
+
+fn containsRequestedProtocol(protocols: []const []const u8, selected: []const u8) bool {
+    for (protocols) |protocol| {
+        if (std.mem.eql(u8, protocol, selected)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn poll(ctx: *anyopaque) !?u32 {
@@ -759,7 +868,9 @@ fn readerMain(self: *WebSocket) void {
                     };
                     if (!self._close_sent) {
                         self.sendFrame(CLIENT_CLOSE_OPCODE, msg.data) catch |err| {
-                            log.warn(.http, "websocket.close_ack", .{ .url = self._url, .err = err });
+                            if (!isBenignCloseAckError(err)) {
+                                log.warn(.http, "websocket.close_ack", .{ .url = self._url, .err = err });
+                            }
                         };
                     }
                     self.queueClose(close_info) catch {};
@@ -798,6 +909,17 @@ fn parseCloseInfo(data: []const u8) !CloseInfo {
         .code = code,
         .reason = try dupCloseReason(data[2..]),
         .was_clean = true,
+    };
+}
+
+fn isBenignCloseAckError(err: anyerror) bool {
+    return switch (err) {
+        error.Closed,
+        error.ConnectionAborted,
+        error.ConnectionReset,
+        error.BrokenPipe,
+        => true,
+        else => false,
     };
 }
 
@@ -980,7 +1102,8 @@ fn testWebSocketServerMain(server: *TestWsServer) !void {
     var accept_buf: [28]u8 = undefined;
     _ = std.base64.standard.Encoder.encode(&accept_buf, &digest);
 
-    const response = try std.fmt.allocPrint(std.testing.allocator,
+    const response = try std.fmt.allocPrint(
+        std.testing.allocator,
         "HTTP/1.1 101 Switching Protocols\r\n" ++
             "Upgrade: websocket\r\n" ++
             "Connection: Upgrade\r\n" ++

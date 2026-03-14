@@ -47,7 +47,9 @@
         }
 
         const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-        const ws = new WebSocket(scheme + location.host + '/echo');
+        const endpoint = mode === 'subprotocol' ? '/protocol' : '/echo';
+        const protocols = mode === 'subprotocol' ? ['chat', 'superchat'] : undefined;
+        const ws = protocols ? new WebSocket(scheme + location.host + endpoint, protocols) : new WebSocket(scheme + location.host + endpoint);
 
         if (mode === 'construct') {
           setState('WebSocket Constructed', 'constructed');
@@ -109,6 +111,67 @@
             }
             finished = true;
             setState('WebSocket Binary Close Ready', 'binary+close ok');
+          };
+          return;
+        }
+
+        if (mode === 'subprotocol') {
+          ws.binaryType = 'arraybuffer';
+          let gotBinary = false;
+
+          ws.onerror = () => {
+            if (finished) return;
+            finished = true;
+            setState('WebSocket Subprotocol Error', 'error');
+          };
+
+          ws.onopen = () => {
+            if (ws.protocol !== 'superchat') {
+              finished = true;
+              setState('WebSocket Subprotocol Error', 'bad-protocol:' + ws.protocol);
+              ws.close();
+              return;
+            }
+            if (ws.extensions !== 'permessage-test') {
+              finished = true;
+              setState('WebSocket Subprotocol Error', 'bad-extensions:' + ws.extensions);
+              ws.close();
+              return;
+            }
+            ws.send(new Uint8Array([4, 5, 6]));
+          };
+
+          ws.onmessage = (event) => {
+            if (!(event.data instanceof ArrayBuffer)) {
+              finished = true;
+              setState('WebSocket Subprotocol Error', 'binary-not-arraybuffer');
+              ws.close();
+              return;
+            }
+            const bytes = Array.from(new Uint8Array(event.data)).join(',');
+            if (bytes !== '4,5,6') {
+              finished = true;
+              setState('WebSocket Subprotocol Error', 'unexpected-bytes:' + bytes);
+              ws.close();
+              return;
+            }
+            gotBinary = true;
+            ws.close(1000, 'done');
+          };
+
+          ws.onclose = (event) => {
+            if (!gotBinary) {
+              finished = true;
+              setState('WebSocket Subprotocol Error', 'closed-before-binary');
+              return;
+            }
+            if (event.code !== 1000 || event.reason !== 'done' || event.wasClean !== true) {
+              finished = true;
+              setState('WebSocket Subprotocol Error', 'bad-close:' + event.code + ':' + event.reason + ':' + event.wasClean);
+              return;
+            }
+            finished = true;
+            setState('WebSocket Subprotocol Ready', 'protocol+binary ok');
           };
           return;
         }

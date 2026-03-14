@@ -4,11 +4,11 @@ $root = 'C:\Users\adyba\src\lightpanda-browser\tmp-browser-smoke\websocket-smoke
 $repo = 'C:\Users\adyba\src\lightpanda-browser'
 $browserExe = if ($env:LIGHTPANDA_BROWSER_EXE) { $env:LIGHTPANDA_BROWSER_EXE } else { Join-Path $repo 'zig-out\bin\lightpanda.exe' }
 $serverScript = Join-Path $root 'websocket_server.py'
-$browserOut = Join-Path $root 'websocket-echo.browser.stdout.txt'
-$browserErr = Join-Path $root 'websocket-echo.browser.stderr.txt'
-$serverOut = Join-Path $root 'websocket-echo.server.stdout.txt'
-$serverErr = Join-Path $root 'websocket-echo.server.stderr.txt'
-$profileRoot = Join-Path $root 'profile-websocket-echo'
+$browserOut = Join-Path $root 'websocket-subprotocol.browser.stdout.txt'
+$browserErr = Join-Path $root 'websocket-subprotocol.browser.stderr.txt'
+$serverOut = Join-Path $root 'websocket-subprotocol.server.stdout.txt'
+$serverErr = Join-Path $root 'websocket-subprotocol.server.stderr.txt'
+$profileRoot = Join-Path $root 'profile-websocket-subprotocol'
 $appDataRoot = Join-Path $profileRoot 'lightpanda'
 
 Remove-Item $browserOut,$browserErr,$serverOut,$serverErr -Force -ErrorAction SilentlyContinue
@@ -44,7 +44,7 @@ function Stop-VerifiedProcess($TargetPid) {
 }
 
 $port = Get-FreePort
-$pageUrl = "http://127.0.0.1:$port/index.html"
+$pageUrl = "http://127.0.0.1:$port/index.html?mode=subprotocol"
 $server = $null
 $browser = $null
 $ready = $false
@@ -61,7 +61,7 @@ try {
       if ($resp.StatusCode -eq 200) { $ready = $true; break }
     } catch {}
   }
-  if (-not $ready) { throw 'websocket echo server did not become ready' }
+  if (-not $ready) { throw 'websocket subprotocol server did not become ready' }
 
   $env:APPDATA = $profileRoot
   $env:LOCALAPPDATA = $profileRoot
@@ -72,18 +72,18 @@ try {
     $proc = Get-Process -Id $browser.Id -ErrorAction SilentlyContinue
     if (-not $proc) { break }
     if ($proc.MainWindowHandle -eq 0) { continue }
-    if ($proc.MainWindowTitle -like '*WebSocket Echo Ready*') {
+    if ($proc.MainWindowTitle -like '*WebSocket Subprotocol Ready*') {
       $titleReady = $true
       break
     }
-    if ($proc.MainWindowTitle -like '*WebSocket Echo Error*') {
+    if ($proc.MainWindowTitle -like '*WebSocket Subprotocol Error*') {
       break
     }
   }
 
   if (-not $titleReady) {
     $lastTitle = (Get-Process -Id $browser.Id -ErrorAction SilentlyContinue).MainWindowTitle
-    throw "websocket echo page did not reach ready title; last title: $lastTitle"
+    throw "websocket subprotocol page did not reach ready title; last title: $lastTitle"
   }
 } catch {
   $failure = $_.Exception.Message

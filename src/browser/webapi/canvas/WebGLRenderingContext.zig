@@ -72,12 +72,14 @@ _current_program: ?*WebGLProgram = null,
 _bound_array_buffer: ?*WebGLBuffer = null,
 _bound_element_array_buffer: ?*WebGLBuffer = null,
 _attrib0: VertexAttribState = .{},
+_attrib1: VertexAttribState = .{},
 
 pub const WebGLShader = struct {
     _type: u32,
     _source: []const u8 = &.{},
     _compiled: bool = false,
     _attribute_name: []const u8 = &.{},
+    _secondary_attribute_name: []const u8 = &.{},
     _uniform_name: []const u8 = &.{},
     _fragment_color: color.RGBA = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
 
@@ -97,6 +99,7 @@ pub const WebGLProgram = struct {
     _fragment_shader: ?*WebGLShader = null,
     _linked: bool = false,
     _position_attribute_name: []const u8 = "a_position",
+    _color_attribute_name: []const u8 = &.{},
     _fragment_uniform_name: []const u8 = &.{},
     _fragment_color: color.RGBA = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
     _uniform_color: ?color.RGBA = null,
@@ -333,7 +336,8 @@ pub fn compileShader(_: *WebGLRenderingContext, shader: *WebGLShader) void {
     if (std.mem.indexOf(u8, shader._source, "void main") == null) return;
 
     if (shader._type == VERTEX_SHADER) {
-        shader._attribute_name = parseFirstAttributeName(shader._source) orelse "a_position";
+        shader._attribute_name = parseAttributeName(shader._source, 0) orelse "a_position";
+        shader._secondary_attribute_name = parseAttributeName(shader._source, 1) orelse &.{};
     } else {
         shader._uniform_name = parseFirstUniformName(shader._source) orelse &.{};
         if (parseFirstVec4Color(shader._source)) |rgba| {
@@ -372,6 +376,7 @@ pub fn linkProgram(self: *WebGLRenderingContext, program: *WebGLProgram) void {
         vertex_shader._attribute_name
     else
         "a_position";
+    program._color_attribute_name = vertex_shader._secondary_attribute_name;
     program._fragment_uniform_name = fragment_shader._uniform_name;
     program._fragment_color = fragment_shader._fragment_color;
     program._uniform_color = null;
@@ -419,6 +424,9 @@ pub fn getAttribLocation(_: *WebGLRenderingContext, program: *WebGLProgram, name
     if (std.mem.eql(u8, name, program._position_attribute_name)) {
         return 0;
     }
+    if (program._color_attribute_name.len > 0 and std.mem.eql(u8, name, program._color_attribute_name)) {
+        return 1;
+    }
     return -1;
 }
 
@@ -457,18 +465,25 @@ pub fn vertexAttribPointer(
     stride: i32,
     offset: i32,
 ) void {
-    if (index != 0) return;
-    self._attrib0.size = size;
-    self._attrib0.kind = kind;
-    self._attrib0.normalized = normalized;
-    self._attrib0.stride = stride;
-    self._attrib0.offset = offset;
-    self._attrib0.buffer = self._bound_array_buffer;
+    const attrib = switch (index) {
+        0 => &self._attrib0,
+        1 => &self._attrib1,
+        else => return,
+    };
+    attrib.size = size;
+    attrib.kind = kind;
+    attrib.normalized = normalized;
+    attrib.stride = stride;
+    attrib.offset = offset;
+    attrib.buffer = self._bound_array_buffer;
 }
 
 pub fn enableVertexAttribArray(self: *WebGLRenderingContext, index: u32) void {
-    if (index != 0) return;
-    self._attrib0.enabled = true;
+    switch (index) {
+        0 => self._attrib0.enabled = true,
+        1 => self._attrib1.enabled = true,
+        else => {},
+    }
 }
 
 pub fn viewport(self: *WebGLRenderingContext, x: i32, y: i32, width: i32, height: i32) void {
@@ -502,7 +517,11 @@ pub fn drawArrays(self: *WebGLRenderingContext, mode: u32, first: i32, count: i3
         const ax, const ay = clipToViewport(a, viewport_rect);
         const bx, const by = clipToViewport(b, viewport_rect);
         const cx, const cy = clipToViewport(c, viewport_rect);
-        self._surface.fillTriangle(fill_color, ax, ay, bx, by, cx, cy);
+        if (resolveTriangleVertexColors(self, program, vertex_index, vertex_index + 1, vertex_index + 2)) |colors| {
+            self._surface.fillTriangleInterpolated(colors[0], ax, ay, colors[1], bx, by, colors[2], cx, cy);
+        } else {
+            self._surface.fillTriangle(fill_color, ax, ay, bx, by, cx, cy);
+        }
     }
 }
 
@@ -536,7 +555,11 @@ pub fn drawElements(self: *WebGLRenderingContext, mode: u32, count: i32, kind: u
         const ax, const ay = clipToViewport(a, viewport_rect);
         const bx, const by = clipToViewport(b, viewport_rect);
         const cx, const cy = clipToViewport(c, viewport_rect);
-        self._surface.fillTriangle(fill_color, ax, ay, bx, by, cx, cy);
+        if (resolveTriangleVertexColors(self, program, ia, ib, ic)) |colors| {
+            self._surface.fillTriangleInterpolated(colors[0], ax, ay, colors[1], bx, by, colors[2], cx, cy);
+        } else {
+            self._surface.fillTriangle(fill_color, ax, ay, bx, by, cx, cy);
+        }
     }
 }
 
@@ -577,8 +600,9 @@ fn isShaderType(shader_type: u32) bool {
     return shader_type == VERTEX_SHADER or shader_type == FRAGMENT_SHADER;
 }
 
-fn parseFirstAttributeName(source: []const u8) ?[]const u8 {
+fn parseAttributeName(source: []const u8, wanted_index: usize) ?[]const u8 {
     var cursor: usize = 0;
+    var found_index: usize = 0;
     while (std.mem.indexOfPos(u8, source, cursor, "attribute")) |start| {
         var pos = start + "attribute".len;
         pos = skipWhitespace(source, pos);
@@ -593,7 +617,10 @@ fn parseFirstAttributeName(source: []const u8) ?[]const u8 {
         const name_start = pos;
         pos = consumeIdentifier(source, pos);
         if (pos > name_start) {
-            return source[name_start..pos];
+            if (found_index == wanted_index) {
+                return source[name_start..pos];
+            }
+            found_index += 1;
         }
         cursor = start + 1;
     }
@@ -652,6 +679,29 @@ fn programFillColor(program: *const WebGLProgram) color.RGBA {
     return program._uniform_color orelse program._fragment_color;
 }
 
+fn resolveTriangleVertexColors(
+    self: *const WebGLRenderingContext,
+    program: *const WebGLProgram,
+    a_index: i32,
+    b_index: i32,
+    c_index: i32,
+) ?[3]color.RGBA {
+    if (program._color_attribute_name.len == 0) return null;
+    if (!self._attrib1.enabled) return null;
+    if (self._attrib1.kind != FLOAT or self._attrib1.size < 3 or self._attrib1.offset < 0) return null;
+    const buffer = self._attrib1.buffer orelse return null;
+    if (buffer._bytes.len == 0) return null;
+
+    const stride_bytes = if (self._attrib1.stride > 0) self._attrib1.stride else self._attrib1.size * @as(i32, @sizeOf(f32));
+    if (stride_bytes <= 0) return null;
+
+    return .{
+        readVertexColor(buffer._bytes, self._attrib1, stride_bytes, a_index) orelse return null,
+        readVertexColor(buffer._bytes, self._attrib1, stride_bytes, b_index) orelse return null,
+        readVertexColor(buffer._bytes, self._attrib1, stride_bytes, c_index) orelse return null,
+    };
+}
+
 fn floatChannelToByte(value: f64) u8 {
     return @intFromFloat(@round(std.math.clamp(value, 0, 1) * 255.0));
 }
@@ -685,6 +735,28 @@ fn readVertex(bytes: []const u8, attrib: VertexAttribState, stride_bytes: i32, v
         .x = readF32(bytes, x_offset),
         .y = readF32(bytes, y_offset),
     };
+}
+
+fn readVertexColor(bytes: []const u8, attrib: VertexAttribState, stride_bytes: i32, vertex_index: i32) ?color.RGBA {
+    const base = attrib.offset + vertex_index * stride_bytes;
+    if (base < 0) return null;
+    const red_offset = @as(usize, @intCast(base));
+    const green_offset = red_offset + @sizeOf(f32);
+    const blue_offset = green_offset + @sizeOf(f32);
+    if (blue_offset + @sizeOf(f32) > bytes.len) return null;
+
+    var value = color.RGBA{
+        .r = floatChannelToByte(readF32(bytes, red_offset)),
+        .g = floatChannelToByte(readF32(bytes, green_offset)),
+        .b = floatChannelToByte(readF32(bytes, blue_offset)),
+        .a = 255,
+    };
+    if (attrib.size >= 4) {
+        const alpha_offset = blue_offset + @sizeOf(f32);
+        if (alpha_offset + @sizeOf(f32) > bytes.len) return null;
+        value.a = floatChannelToByte(readF32(bytes, alpha_offset));
+    }
+    return value;
 }
 
 fn typedArrayBytes(value: js.Value) ![]const u8 {

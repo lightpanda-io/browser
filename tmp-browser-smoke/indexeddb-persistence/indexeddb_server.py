@@ -199,6 +199,37 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
 
+        if self.path == "/transaction-mode.html":
+            body = html(
+                "IndexedDB Loading - Lightpanda Browser",
+                "<script>"
+                "const req=indexedDB.open('lp-transaction-mode-persist',1);"
+                "req.onupgradeneeded=()=>{"
+                "req.result.createObjectStore('users');"
+                "};"
+                "req.onerror=()=>{document.title='IndexedDB Transaction Mode Error - Lightpanda Browser';};"
+                "req.onsuccess=()=>{"
+                "try{"
+                "const db=req.result;"
+                "const readTx=db.transaction('users');"
+                "const writeTx=db.transaction('users','readwrite');"
+                "const ok=readTx.mode==='readonly'&&writeTx.mode==='readwrite';"
+                "const users=writeTx.objectStore('users');"
+                "const put=users.put({name:'Ada'},'user-1');"
+                "put.onsuccess=()=>{document.title=(ok?'IndexedDB Transaction Mode ok - Lightpanda Browser':'IndexedDB Transaction Mode Error - Lightpanda Browser');};"
+                "put.onerror=()=>{document.title='IndexedDB Transaction Mode Error - Lightpanda Browser';};"
+                "}catch(_err){document.title='IndexedDB Transaction Mode Error - Lightpanda Browser';}"
+                "};"
+                "</script><h1>transaction-mode</h1>",
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         body = html("Not Found - Lightpanda Browser", "<h1>Not Found</h1>")
         self.send_response(404)
         self.send_header("Content-Type", "text/html; charset=utf-8")

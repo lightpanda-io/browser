@@ -542,14 +542,15 @@ pub const IDBDatabase = struct {
     }
 
     pub fn transaction(self: *IDBDatabase, name: []const u8, mode_: ?[]const u8, _: *Page) !*IDBTransaction {
-        _ = mode_;
         if (self._data.getStore(name) == null) {
             return error.NotFoundError;
         }
+        const mode = try normalizeTransactionMode(mode_);
         return self._page._factory.create(IDBTransaction{
             ._page = self._page,
             ._database = self,
             ._store_name = try self._page.arena.dupe(u8, name),
+            ._mode = mode,
         });
     }
 
@@ -576,6 +577,11 @@ pub const IDBTransaction = struct {
     _page: *Page,
     _database: *IDBDatabase,
     _store_name: []const u8,
+    _mode: []const u8,
+
+    pub fn getMode(self: *const IDBTransaction) []const u8 {
+        return self._mode;
+    }
 
     pub fn objectStore(self: *IDBTransaction, name: []const u8, _: *Page) !*IDBObjectStore {
         if (!std.mem.eql(u8, name, self._store_name)) {
@@ -600,6 +606,7 @@ pub const IDBTransaction = struct {
             pub var class_id: bridge.ClassId = undefined;
         };
 
+        pub const mode = bridge.accessor(IDBTransaction.getMode, null, .{});
         pub const objectStore = bridge.function(IDBTransaction.objectStore, .{ .dom_exception = true });
     };
 };
@@ -1089,6 +1096,14 @@ fn scheduleRequestSuccess(page: *Page, request: *IDBRequest, name: []const u8) !
         .name = name,
         .low_priority = false,
     });
+}
+
+fn normalizeTransactionMode(mode_: ?[]const u8) ![]const u8 {
+    const mode = mode_ orelse "readonly";
+    if (!std.mem.eql(u8, mode, "readonly") and !std.mem.eql(u8, mode, "readwrite")) {
+        return error.TypeError;
+    }
+    return mode;
 }
 
 fn buildObjectStoreCursorEntries(store: *ObjectStoreData, page: *Page) ![]const CursorEntry {

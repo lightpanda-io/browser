@@ -1,6 +1,6 @@
 $script:Repo = "C:\Users\adyba\src\lightpanda-browser"
 $script:Root = Join-Path $script:Repo "tmp-browser-smoke\indexeddb-persistence"
-$script:BrowserExe = Join-Path $script:Repo "zig-out\bin\lightpanda.exe"
+$script:BrowserExe = if ($env:LIGHTPANDA_BROWSER_EXE) { $env:LIGHTPANDA_BROWSER_EXE } else { Join-Path $script:Repo "zig-out\bin\lightpanda.exe" }
 
 . "$script:Repo\tmp-browser-smoke\common\Win32Input.ps1"
 . "$script:Repo\tmp-browser-smoke\tabs\TabProbeCommon.ps1"
