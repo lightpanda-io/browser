@@ -168,13 +168,11 @@ pub fn CDPT(comptime TypeProvider: type) type {
 
             if (is_startup) {
                 dispatchStartupCommand(&command, input.method) catch |err| {
-                    command.sendError(-31999, @errorName(err), .{}) catch {};
-                    return err;
+                    command.sendError(-31999, @errorName(err), .{}) catch return err;
                 };
             } else {
                 dispatchCommand(&command, input.method) catch |err| {
-                    command.sendError(-31998, @errorName(err), .{}) catch {};
-                    return err;
+                    command.sendError(-31998, @errorName(err), .{}) catch return err;
                 };
             }
         }
@@ -924,18 +922,20 @@ test "cdp: invalid json" {
     // method is required
     try testing.expectError(error.InvalidJSON, ctx.processMessage(.{}));
 
-    try testing.expectError(error.InvalidMethod, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .method = "Target",
-    }));
+    });
     try ctx.expectSentError(-31998, "InvalidMethod", .{});
 
-    try testing.expectError(error.UnknownDomain, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .method = "Unknown.domain",
-    }));
+    });
+    try ctx.expectSentError(-31998, "UnknownDomain", .{});
 
-    try testing.expectError(error.UnknownMethod, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .method = "Target.over9000",
-    }));
+    });
+    try ctx.expectSentError(-31998, "UnknownMethod", .{});
 }
 
 test "cdp: invalid sessionId" {

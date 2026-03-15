@@ -556,7 +556,7 @@ test "cdp.target: disposeBrowserContext" {
     defer ctx.deinit();
 
     {
-        try testing.expectError(error.InvalidParams, ctx.processMessage(.{ .id = 7, .method = "Target.disposeBrowserContext" }));
+        try ctx.processMessage(.{ .id = 7, .method = "Target.disposeBrowserContext" });
         try ctx.expectSentError(-31998, "InvalidParams", .{ .id = 7 });
     }
 
@@ -609,7 +609,7 @@ test "cdp.target: createTarget" {
     defer ctx.deinit();
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     {
-        try testing.expectError(error.UnknownBrowserContextId, ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-8" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.createTarget", .params = .{ .browserContextId = "BID-8" } });
         try ctx.expectSentError(-31998, "UnknownBrowserContextId", .{ .id = 10 });
     }
 
@@ -626,13 +626,13 @@ test "cdp.target: closeTarget" {
     defer ctx.deinit();
 
     {
-        try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "X" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "X" } });
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
     }
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     {
-        try testing.expectError(error.TargetNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } });
         try ctx.expectSentError(-31998, "TargetNotLoaded", .{ .id = 10 });
     }
 
@@ -640,7 +640,7 @@ test "cdp.target: closeTarget" {
     _ = try bc.session.createPage();
     bc.target_id = "TID-000000000A".*;
     {
-        try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.closeTarget", .params = .{ .targetId = "TID-8" } });
         try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
     }
 
@@ -657,13 +657,13 @@ test "cdp.target: attachToTarget" {
     defer ctx.deinit();
 
     {
-        try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "X" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "X" } });
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
     }
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     {
-        try testing.expectError(error.TargetNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } });
         try ctx.expectSentError(-31998, "TargetNotLoaded", .{ .id = 10 });
     }
 
@@ -671,7 +671,7 @@ test "cdp.target: attachToTarget" {
     _ = try bc.session.createPage();
     bc.target_id = "TID-000000000B".*;
     {
-        try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.attachToTarget", .params = .{ .targetId = "TID-8" } });
         try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
     }
 
@@ -701,13 +701,13 @@ test "cdp.target: getTargetInfo" {
     }
 
     {
-        try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "X" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "X" } });
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
     }
 
     const bc = try ctx.loadBrowserContext(.{ .id = "BID-9" });
     {
-        try testing.expectError(error.TargetNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } });
         try ctx.expectSentError(-31998, "TargetNotLoaded", .{ .id = 10 });
     }
 
@@ -715,7 +715,7 @@ test "cdp.target: getTargetInfo" {
     _ = try bc.session.createPage();
     bc.target_id = "TID-000000000C".*;
     {
-        try testing.expectError(error.UnknownTargetId, ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Target.getTargetInfo", .params = .{ .targetId = "TID-8" } });
         try ctx.expectSentError(-31998, "UnknownTargetId", .{ .id = 10 });
     }
 
