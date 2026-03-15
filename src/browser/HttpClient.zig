@@ -110,6 +110,8 @@ use_proxy: bool,
 // Current TLS verification state, applied per-connection in makeRequest.
 tls_verify: bool = true,
 
+obey_robots: bool,
+
 cdp_client: ?CDPClient = null,
 
 // libcurl can monitor arbitrary sockets, this lets us use libcurl to poll
@@ -154,6 +156,7 @@ pub fn init(allocator: Allocator, network: *Network) !*Client {
         .http_proxy = http_proxy,
         .use_proxy = http_proxy != null,
         .tls_verify = network.config.tlsVerifyHost(),
+        .obey_robots = network.config.obeyRobots(),
         .transfer_pool = transfer_pool,
     };
 
@@ -257,34 +260,33 @@ pub fn tick(self: *Client, timeout_ms: u32) !PerformStatus {
 }
 
 pub fn request(self: *Client, req: Request) !void {
-    if (self.network.config.obeyRobots()) {
-        const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
-        errdefer self.allocator.free(robots_url);
-
-        // If we have this robots cached, we can take a fast path.
-        if (self.network.robot_store.get(robots_url)) |robot_entry| {
-            defer self.allocator.free(robots_url);
-
-            switch (robot_entry) {
-                // If we have a found robots entry, we check it.
-                .present => |robots| {
-                    const path = URL.getPathname(req.url);
-                    if (!robots.isAllowed(path)) {
-                        req.error_callback(req.ctx, error.RobotsBlocked);
-                        return;
-                    }
-                },
-                // Otherwise, we assume we won't find it again.
-                .absent => {},
-            }
-
-            return self.processRequest(req);
-        }
-
-        return self.fetchRobotsThenProcessRequest(robots_url, req);
+    if (self.obey_robots == false) {
+        return self.processRequest(req);
     }
 
-    return self.processRequest(req);
+    const robots_url = try URL.getRobotsUrl(self.allocator, req.url);
+    errdefer self.allocator.free(robots_url);
+
+    // If we have this robots cached, we can take a fast path.
+    if (self.network.robot_store.get(robots_url)) |robot_entry| {
+        defer self.allocator.free(robots_url);
+
+        switch (robot_entry) {
+            // If we have a found robots entry, we check it.
+            .present => |robots| {
+                const path = URL.getPathname(req.url);
+                if (!robots.isAllowed(path)) {
+                    req.error_callback(req.ctx, error.RobotsBlocked);
+                    return;
+                }
+            },
+            // Otherwise, we assume we won't find it again.
+            .absent => {},
+        }
+
+        return self.processRequest(req);
+    }
+    return self.fetchRobotsThenProcessRequest(robots_url, req);
 }
 
 fn processRequest(self: *Client, req: Request) !void {
