@@ -719,6 +719,22 @@ Current state inside Gate 3:
     on the real Win32 surface
   - slow image loads are present before screenshot export succeeds
   - delayed timer-driven content is present in the screenshot export path
+- legacy real-site compatibility moved another step forward:
+  - CSS shorthand expansion now lifts basic `background`, `border`, and
+    `font` declarations into the longhands the current headed painter actually
+    consumes
+  - native table-family elements plus legacy presentational HTML attributes now
+    produce a real centered table search layout instead of flattening into
+    generic block flow
+  - simple `float:left` / `float:right` docking now keeps later body flow below
+    the float band on the headed surface
+  - percentage child heights now resolve from an explicit ancestor height when
+    available instead of incorrectly expanding to the full viewport in common
+    cases like search-box inputs
+  - bounded headed probes now cover both the legacy centered table search shape
+    and left/right float docking, and a fresh live `google.com` capture no
+    longer crashes while visibly benefiting from the shorthand/background
+    compatibility slice
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

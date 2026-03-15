@@ -180,6 +180,12 @@ const FlexCrossAlignment = enum {
     end,
 };
 
+const FloatMode = enum {
+    none,
+    left,
+    right,
+};
+
 const Painter = struct {
     allocator: std.mem.Allocator,
     page: *Page,
@@ -580,6 +586,21 @@ const Painter = struct {
             cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
             return;
         }
+        if (block_like and isTableContainerDisplay(display)) {
+            const rect = try self.paintTableElement(
+                element,
+                decl,
+                tag,
+                x,
+                y,
+                width,
+                padding,
+                margins,
+                block_like,
+            );
+            cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
+            return;
+        }
         if (inline_content_flow) {
             const child_height = if (!canvas_surface_present)
                 try self.paintInlineFlowChildren(
@@ -635,17 +656,8 @@ const Painter = struct {
         const child_left = x + padding.left + child_indent;
         const child_top = y + padding.top + own_content_height + child_gap;
         const child_width = @max(@as(i32, 40), width - padding.left - padding.right - child_indent);
-        var child_cursor = FlowCursor.init(child_left, child_top, child_width);
-
-        if (!canvas_surface_present) {
-            var it = element.asNode().childrenIterator();
-            while (it.next()) |child| {
-                try self.paintNode(child, &child_cursor);
-            }
-        }
-
-        const child_height: i32 = if (has_child_elements)
-            child_cursor.consumedHeightSince(child_top)
+        const child_height: i32 = if (has_child_elements and !canvas_surface_present)
+            try self.paintBlockChildrenWithFloats(element, child_left, child_top, child_width)
         else
             0;
         const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
@@ -1104,6 +1116,245 @@ const Painter = struct {
         }
         if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
             try self.list.addControlRegion(self.allocator, region);
+        }
+
+        _ = margins;
+        return rect;
+    }
+
+    fn paintBlockChildrenWithFloats(
+        self: *Painter,
+        element: *Element,
+        child_left: i32,
+        child_top: i32,
+        child_width: i32,
+    ) !i32 {
+        var child_cursor = FlowCursor.init(child_left, child_top, child_width);
+        var float_left_x = child_left;
+        var float_right_x = child_left + child_width;
+        var float_row_y = child_top;
+        var float_row_bottom = child_top;
+        var float_active = false;
+
+        var it = element.asNode().childrenIterator();
+        while (it.next()) |child| {
+            if (child.is(Element)) |child_el| {
+                const float_mode = try resolveFloatMode(child_el, self.page);
+                if (float_mode != .none) {
+                    const float_width = try self.resolveFloatPaintWidth(child_el, child_width);
+                    if (float_width > 0) {
+                        if (!float_active) {
+                            float_left_x = child_left;
+                            float_right_x = child_left + child_width;
+                            float_row_y = child_cursor.cursor_y;
+                            float_row_bottom = child_cursor.cursor_y;
+                            float_active = true;
+                        }
+
+                        if (float_left_x + float_width > float_right_x) {
+                            float_row_y = float_row_bottom + 4;
+                            float_row_bottom = float_row_y;
+                            float_left_x = child_left;
+                            float_right_x = child_left + child_width;
+                        }
+
+                        const item_x = switch (float_mode) {
+                            .left => float_left_x,
+                            .right => float_right_x - float_width,
+                            .none => unreachable,
+                        };
+
+                        const previous_forced_node = self.forced_item_node;
+                        const previous_forced_width = self.forced_item_width;
+                        self.forced_item_node = child;
+                        self.forced_item_width = float_width;
+
+                        var float_cursor = FlowCursor.init(item_x, float_row_y, @max(@as(i32, 40), float_width));
+                        try self.paintNode(child, &float_cursor);
+
+                        self.forced_item_node = previous_forced_node;
+                        self.forced_item_width = previous_forced_width;
+
+                        const float_height = @max(@as(i32, 1), float_cursor.consumedHeightSince(float_row_y));
+                        switch (float_mode) {
+                            .left => float_left_x = item_x + float_width + 4,
+                            .right => float_right_x = item_x - 4,
+                            .none => {},
+                        }
+                        float_row_bottom = @max(float_row_bottom, float_row_y + float_height);
+                        continue;
+                    }
+                }
+            }
+
+            if (float_active) {
+                child_cursor.cursor_y = @max(child_cursor.cursor_y, float_row_bottom);
+                child_cursor.cursor_x = child_cursor.left;
+                child_cursor.line_height = 0;
+                float_active = false;
+            }
+
+            try self.paintNode(child, &child_cursor);
+        }
+
+        if (float_active) {
+            child_cursor.cursor_y = @max(child_cursor.cursor_y, float_row_bottom);
+            child_cursor.cursor_x = child_cursor.left;
+            child_cursor.line_height = 0;
+        }
+
+        return child_cursor.consumedHeightSince(child_top);
+    }
+
+    fn resolveFloatPaintWidth(self: *Painter, element: *Element, available_width: i32) !i32 {
+        const style = try self.page.window.getComputedStyle(element, null, self.page);
+        const decl = style.asCSSStyleDeclaration();
+        const display = resolvedDisplayValue(decl, self.page, element);
+        const explicit_width = resolveExplicitWidth(self, element, decl, self.page, element.getTag(), available_width);
+        if (explicit_width > 0) {
+            return std.math.clamp(explicit_width, 40, available_width);
+        }
+
+        const trimmed_display = std.mem.trim(u8, display, &std.ascii.whitespace);
+        if (!isInlineDisplay(trimmed_display) and !std.ascii.eqlIgnoreCase(trimmed_display, "inline-block")) {
+            return 0;
+        }
+
+        const measured = try self.measureNodePaintedBox(element.asNode(), available_width);
+        if (measured.width <= 0) {
+            return 0;
+        }
+        return std.math.clamp(measured.width, 40, available_width);
+    }
+
+    fn paintTableElement(
+        self: *Painter,
+        element: *Element,
+        decl: anytype,
+        tag: Element.Tag,
+        x: i32,
+        y: i32,
+        width: i32,
+        padding: EdgeSizes,
+        margins: EdgeSizes,
+        block_like: bool,
+    ) !Bounds {
+        var rows = std.ArrayList(*Element).empty;
+        defer rows.deinit(self.allocator);
+        try collectTableRows(self.allocator, element, &rows);
+
+        if (rows.items.len == 0) {
+            const height = resolveMinimumHeight(self, tag, block_like, 0);
+            return .{ .x = x, .y = y, .width = width, .height = height };
+        }
+
+        var column_count: usize = 0;
+        for (rows.items) |row| {
+            var cells = try collectTableCells(self.allocator, row);
+            defer cells.deinit(self.allocator);
+            column_count = @max(column_count, cells.items.len);
+        }
+        if (column_count == 0) {
+            const height = resolveMinimumHeight(self, tag, block_like, 0);
+            return .{ .x = x, .y = y, .width = width, .height = height };
+        }
+
+        const cell_spacing = tableCellSpacing(element);
+        const content_x = x + padding.left;
+        const content_y = y + padding.top;
+        const content_width = @max(@as(i32, 40), width - padding.left - padding.right);
+        const total_gap = cell_spacing * @as(i32, @intCast(@max(@as(usize, 0), column_count - 1)));
+        const columns_available = @max(@as(i32, 40), content_width - total_gap);
+
+        var column_widths = try self.allocator.alloc(i32, column_count);
+        defer self.allocator.free(column_widths);
+        @memset(column_widths, 0);
+
+        for (rows.items) |row| {
+            var cells = try collectTableCells(self.allocator, row);
+            defer cells.deinit(self.allocator);
+            for (cells.items, 0..) |cell, col_index| {
+                const cell_style = try self.page.window.getComputedStyle(cell, null, self.page);
+                const cell_decl = cell_style.asCSSStyleDeclaration();
+                const explicit_width = resolveExplicitWidth(self, cell, cell_decl, self.page, cell.getTag(), columns_available);
+                if (explicit_width > column_widths[col_index]) {
+                    column_widths[col_index] = explicit_width;
+                }
+            }
+        }
+
+        var specified_width_sum: i32 = 0;
+        var unspecified_columns: usize = 0;
+        for (column_widths) |col_width| {
+            if (col_width > 0) {
+                specified_width_sum += col_width;
+            } else {
+                unspecified_columns += 1;
+            }
+        }
+
+        const fallback_width = @max(@as(i32, 60), @divTrunc(columns_available, @as(i32, @intCast(column_count))));
+        const distributed_width = if (unspecified_columns > 0 and columns_available > specified_width_sum)
+            @max(@as(i32, 60), @divTrunc(columns_available - specified_width_sum, @as(i32, @intCast(unspecified_columns))))
+        else
+            fallback_width;
+        for (column_widths) |*col_width| {
+            if (col_width.* <= 0) {
+                col_width.* = distributed_width;
+            }
+        }
+
+        var row_y = content_y;
+        for (rows.items, 0..) |row, row_index| {
+            var cells = try collectTableCells(self.allocator, row);
+            defer cells.deinit(self.allocator);
+
+            var row_height: i32 = 0;
+            var cell_x = content_x;
+            for (column_widths, 0..) |cell_width, col_index| {
+                if (col_index < cells.items.len) {
+                    const cell = cells.items[col_index];
+                    const previous_forced_node = self.forced_item_node;
+                    const previous_forced_width = self.forced_item_width;
+                    self.forced_item_node = cell.asNode();
+                    self.forced_item_width = cell_width;
+
+                    var cell_cursor = FlowCursor.init(cell_x, row_y, @max(@as(i32, 40), cell_width));
+                    try self.paintNode(cell.asNode(), &cell_cursor);
+
+                    self.forced_item_node = previous_forced_node;
+                    self.forced_item_width = previous_forced_width;
+
+                    row_height = @max(row_height, cell_cursor.consumedHeightSince(row_y));
+                }
+
+                cell_x += cell_width;
+                if (col_index + 1 < column_widths.len) {
+                    cell_x += cell_spacing;
+                }
+            }
+
+            row_y += @max(row_height, self.opts.min_height);
+            if (row_index + 1 < rows.items.len) {
+                row_y += cell_spacing;
+            }
+        }
+
+        const rect = Bounds{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = @max(resolveMinimumHeight(self, tag, block_like, 0), padding.top + (row_y - content_y) + padding.bottom),
+        };
+
+        if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
+            try self.list.addStrokeRect(self.allocator, .{
+                .x = rect.x,
+                .y = rect.y,
+                .width = rect.width,
+                .height = rect.height,
+                .color = stroke,
+            });
         }
 
         _ = margins;
@@ -1771,6 +2022,13 @@ fn defaultDisplayForTag(tag: Element.Tag) []const u8 {
     return switch (tag) {
         .span, .anchor, .strong, .em, .code, .label => "inline",
         .img, .input, .button, .select, .textarea, .canvas => "inline-block",
+        .table => "table",
+        .caption => "table-caption",
+        .tr => "table-row",
+        .td, .th => "table-cell",
+        .tbody => "table-row-group",
+        .thead => "table-header-group",
+        .tfoot => "table-footer-group",
         else => "block",
     };
 }
@@ -1896,9 +2154,88 @@ fn isFlexDisplay(display: []const u8) bool {
     return std.ascii.eqlIgnoreCase(trimmed, "flex") or std.ascii.eqlIgnoreCase(trimmed, "inline-flex");
 }
 
+fn isTableContainerDisplay(display: []const u8) bool {
+    const trimmed = std.mem.trim(u8, display, &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(trimmed, "table") or std.ascii.eqlIgnoreCase(trimmed, "inline-table");
+}
+
+fn isTableRowDisplay(display: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, display, &std.ascii.whitespace), "table-row");
+}
+
+fn isTableCellDisplay(display: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, display, &std.ascii.whitespace), "table-cell");
+}
+
 fn isOutOfFlowPositioned(position: []const u8) bool {
     const trimmed = std.mem.trim(u8, position, &std.ascii.whitespace);
     return std.ascii.eqlIgnoreCase(trimmed, "absolute") or std.ascii.eqlIgnoreCase(trimmed, "fixed");
+}
+
+fn resolveFloatMode(element: *Element, page: *Page) !FloatMode {
+    const style = try page.window.getComputedStyle(element, null, page);
+    const decl = style.asCSSStyleDeclaration();
+    if (isOutOfFlowPositioned(resolveCssPropertyValue(decl, page, element, "position"))) {
+        return .none;
+    }
+
+    const float_value = std.mem.trim(u8, resolveCssPropertyValue(decl, page, element, "float"), &std.ascii.whitespace);
+    if (std.ascii.eqlIgnoreCase(float_value, "left")) return .left;
+    if (std.ascii.eqlIgnoreCase(float_value, "right")) return .right;
+    return .none;
+}
+
+fn tableCellSpacing(element: *Element) i32 {
+    if (element.getAttributeSafe(comptime .wrap("cellspacing"))) |raw| {
+        return parseIntegerAttributePx(raw);
+    }
+    return 0;
+}
+
+fn parseIntegerAttributePx(raw: []const u8) i32 {
+    const trimmed = std.mem.trim(u8, raw, &std.ascii.whitespace);
+    if (trimmed.len == 0) return 0;
+    return std.fmt.parseInt(i32, trimmed, 10) catch 0;
+}
+
+fn collectTableRows(
+    allocator: std.mem.Allocator,
+    table: *Element,
+    rows: *std.ArrayList(*Element),
+) !void {
+    var it = table.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const child_el = child.is(Element) orelse continue;
+        switch (child_el.getTag()) {
+            .tr => try rows.append(allocator, child_el),
+            .tbody, .thead, .tfoot => {
+                var row_it = child_el.asNode().childrenIterator();
+                while (row_it.next()) |row_child| {
+                    const row_el = row_child.is(Element) orelse continue;
+                    if (row_el.getTag() == .tr) {
+                        try rows.append(allocator, row_el);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn collectTableCells(
+    allocator: std.mem.Allocator,
+    row: *Element,
+) !std.ArrayList(*Element) {
+    var cells = std.ArrayList(*Element).empty;
+    var it = row.asNode().childrenIterator();
+    while (it.next()) |child| {
+        const child_el = child.is(Element) orelse continue;
+        switch (child_el.getTag()) {
+            .td, .th => try cells.append(allocator, child_el),
+            else => {},
+        }
+    }
+    return cells;
 }
 
 fn isOutOfFlowNode(node: *Node, page: *Page) !bool {
@@ -2270,7 +2607,12 @@ fn resolveExplicitWidth(self: *const Painter, element: *Element, decl: anytype, 
 }
 
 fn resolveExplicitHeight(self: *const Painter, element: *Element, decl: anytype, page: *Page, tag: Element.Tag, available_height: i32) i32 {
-    if (parseCssLengthPxWithContext(decl.getPropertyValue("height", page), available_height, self.opts.viewport_height)) |height| {
+    const raw_height = decl.getPropertyValue("height", page);
+    const height_basis = if (std.mem.indexOfScalar(u8, raw_height, '%') != null)
+        resolveAncestorExplicitHeight(self, element, page, available_height)
+    else
+        available_height;
+    if (parseCssLengthPxWithContext(raw_height, height_basis, self.opts.viewport_height)) |height| {
         return height;
     }
     if (tag == .canvas) {
@@ -2284,6 +2626,27 @@ fn resolveExplicitHeight(self: *const Painter, element: *Element, decl: anytype,
         }
     }
     return 0;
+}
+
+fn resolveAncestorExplicitHeight(self: *const Painter, element: *Element, page: *Page, fallback_height: i32) i32 {
+    var parent = element.asNode().parentElement();
+    while (parent) |candidate| {
+        const style = page.window.getComputedStyle(candidate, null, page) catch break;
+        const decl = style.asCSSStyleDeclaration();
+        const raw_height = decl.getPropertyValue("height", page);
+        if (std.mem.trim(u8, raw_height, &std.ascii.whitespace).len > 0 and std.mem.indexOfScalar(u8, raw_height, '%') == null) {
+            if (parseCssLengthPxWithContext(raw_height, fallback_height, self.opts.viewport_height)) |height| {
+                if (height > 0) return height;
+            }
+        }
+        if (candidate.getAttributeSafe(comptime .wrap("height"))) |attr_height| {
+            if (parseCssLengthPxWithContext(attr_height, fallback_height, self.opts.viewport_height)) |height| {
+                if (height > 0) return height;
+            }
+        }
+        parent = candidate.asNode().parentElement();
+    }
+    return fallback_height;
 }
 
 fn resolveMinimumHeight(self: *const Painter, tag: Element.Tag, block_like: bool, own_content_height: i32) i32 {
@@ -2300,13 +2663,9 @@ fn resolveMinimumHeight(self: *const Painter, tag: Element.Tag, block_like: bool
 }
 
 fn shouldPaintBackground(tag: Element.Tag, has_child_elements: bool) bool {
-    if (!has_child_elements) {
-        return true;
-    }
-    return switch (tag) {
-        .img, .input, .textarea, .button, .select, .canvas, .iframe => true,
-        else => false,
-    };
+    _ = tag;
+    _ = has_child_elements;
+    return true;
 }
 
 fn resolveChildIndent(tag: Element.Tag, has_child_elements: bool) i32 {
@@ -2314,7 +2673,7 @@ fn resolveChildIndent(tag: Element.Tag, has_child_elements: bool) i32 {
         return 0;
     }
     return switch (tag) {
-        .html, .body => 0,
+        .html, .body, .table, .tr, .td, .th, .tbody, .thead, .tfoot, .caption => 0,
         .ul, .ol => 18,
         else => 12,
     };
@@ -5164,6 +5523,132 @@ test "paintDocument grows flex row items with bounded docked siblings" {
     try std.testing.expect(gray.width >= 220);
     try std.testing.expect(gray.x > red.x + red.width);
     try std.testing.expect(blue.x > gray.x + gray.width);
+}
+
+test "paintDocument lays out legacy centered table search form" {
+    var page = try testing.pageTest("page/legacy_table_layout.html");
+    defer page._session.removePage();
+
+    const table = (try page.window._document.querySelector(.wrap("#search-table"), page)).?;
+    const row = (try page.window._document.querySelector(.wrap("#search-row"), page)).?;
+    const main_cell = (try page.window._document.querySelector(.wrap("#main-cell"), page)).?;
+    const side_cell = (try page.window._document.querySelector(.wrap("#side-cell"), page)).?;
+    const side_pill = (try page.window._document.querySelector(.wrap(".side-pill"), page)).?;
+    const logo = (try page.window._document.querySelector(.wrap(".logo"), page)).?;
+    const shell = (try page.window._document.querySelector(.wrap(".search-shell"), page)).?;
+
+    const table_style = try page.window.getComputedStyle(table, null, page);
+    const row_style = try page.window.getComputedStyle(row, null, page);
+    const main_style = try page.window.getComputedStyle(main_cell, null, page);
+    const side_style = try page.window.getComputedStyle(side_cell, null, page);
+    const side_pill_style = try page.window.getComputedStyle(side_pill, null, page);
+    const logo_style = try page.window.getComputedStyle(logo, null, page);
+    const shell_style = try page.window.getComputedStyle(shell, null, page);
+
+    try std.testing.expectEqualStrings("table", table_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    try std.testing.expectEqualStrings("table-row", row_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    try std.testing.expectEqualStrings("table-cell", main_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    try std.testing.expectEqualStrings("top", row_style.asCSSStyleDeclaration().getPropertyValue("vertical-align", page));
+    try std.testing.expectEqualStrings("center", main_style.asCSSStyleDeclaration().getPropertyValue("text-align", page));
+    try std.testing.expectEqualStrings("nowrap", main_style.asCSSStyleDeclaration().getPropertyValue("white-space", page));
+    try std.testing.expectEqualStrings("#4d88ff", logo_style.asCSSStyleDeclaration().getPropertyValue("background-color", page));
+    try std.testing.expectEqualStrings("#cfcfcf", shell_style.asCSSStyleDeclaration().getPropertyValue("background-color", page));
+    try std.testing.expectEqualStrings("#24a264", side_pill_style.asCSSStyleDeclaration().getPropertyValue("background-color", page));
+    try std.testing.expectEqualStrings("solid", shell_style.asCSSStyleDeclaration().getPropertyValue("border-style", page));
+    try std.testing.expectEqualStrings("1px", shell_style.asCSSStyleDeclaration().getPropertyValue("border-width", page));
+    try std.testing.expectEqualStrings("15px", (try page.window.getComputedStyle(
+        (try page.window._document.querySelector(.wrap(".lsb"), page)).?,
+        null,
+        page,
+    )).asCSSStyleDeclaration().getPropertyValue("font-size", page));
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var input_region: ?ControlRegion = null;
+    var shell_rect: ?Bounds = null;
+    var logo_rect: ?Bounds = null;
+    var green_rect: ?Bounds = null;
+    for (display_list.control_regions.items) |control| {
+        if (control.width > 300) {
+            input_region = control;
+        }
+    }
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 70 and rect.color.r <= 90 and rect.color.g >= 120 and rect.color.g <= 150 and rect.color.b >= 220) {
+                    logo_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+                if (rect.color.r >= 195 and rect.color.r <= 220 and rect.color.g >= 195 and rect.color.g <= 220 and rect.color.b >= 195 and rect.color.b <= 220) {
+                    shell_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+                if (rect.color.g >= 140 and rect.color.r <= 80 and rect.color.b <= 120) {
+                    green_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const input = input_region orelse return error.LegacyTableInputMissing;
+    const logo_box = logo_rect orelse return error.LegacyTableLogoMissing;
+    const shell_box = shell_rect orelse return error.LegacyTableShellMissing;
+    const side = green_rect orelse return error.LegacyTableSidePillMissing;
+
+    try std.testing.expect(logo_box.x >= 320);
+    try std.testing.expect(logo_box.x <= 380);
+    try std.testing.expect(shell_box.x >= 240);
+    try std.testing.expect(shell_box.x <= 300);
+    try std.testing.expect(shell_box.width >= 430);
+    try std.testing.expect(input.x >= shell_box.x);
+    try std.testing.expect(input.x <= shell_box.x + 24);
+    try std.testing.expect(input.width >= 420);
+    try std.testing.expect(input.height <= 40);
+    try std.testing.expect(side.x >= shell_box.x + shell_box.width);
+    try std.testing.expect(side.y <= shell_box.y + 12);
+    try std.testing.expectEqualStrings("left", side_style.asCSSStyleDeclaration().getPropertyValue("text-align", page));
+}
+
+test "paintDocument docks floated blocks and keeps body flow below them" {
+    var page = try testing.pageTest("page/float_dock_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 760,
+        .viewport_height = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    var green_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 100 and rect.color.b <= 100) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 170 and rect.color.r <= 80 and rect.color.g <= 140) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.g >= 140 and rect.color.r <= 120 and rect.color.b <= 120) {
+                    green_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.FloatLeftRectMissing;
+    const blue = blue_rect orelse return error.FloatRightRectMissing;
+    const green = green_rect orelse return error.FloatBodyRectMissing;
+
+    try std.testing.expect(red.x < 80);
+    try std.testing.expect(blue.x > 520);
+    try std.testing.expect(green.y >= red.y + red.height);
+    try std.testing.expect(green.y >= blue.y + blue.height);
 }
 
 test "paintDocument anchors absolute boxes to the viewport without consuming normal flow" {

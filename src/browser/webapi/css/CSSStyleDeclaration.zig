@@ -46,7 +46,7 @@ pub fn init(element: ?*Element, is_computed: bool, page: *Page) !*CSSStyleDeclar
             if (el.getAttributeSafe(comptime .wrap("style"))) |attr_value| {
                 var it = CssParser.parseDeclarationsList(attr_value);
                 while (it.next()) |declaration| {
-                    try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
+                    try self.applyDeclaration(declaration.name, declaration.value, declaration.important, page);
                 }
             }
         }
@@ -134,7 +134,7 @@ fn setPropertyImpl(self: *CSSStyleDeclaration, property_name: []const u8, value:
 pub fn applyDeclarationsText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !void {
     var it = CssParser.parseDeclarationsList(text);
     while (it.next()) |declaration| {
-        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
+        try self.applyDeclaration(declaration.name, declaration.value, declaration.important, page);
     }
 }
 
@@ -197,9 +197,131 @@ pub fn setCssText(self: *CSSStyleDeclaration, text: []const u8, page: *Page) !vo
     // Parse and set new properties
     var it = CssParser.parseDeclarationsList(text);
     while (it.next()) |declaration| {
-        try self.setPropertyImpl(declaration.name, declaration.value, declaration.important, page);
+        try self.applyDeclaration(declaration.name, declaration.value, declaration.important, page);
     }
     try self.syncStyleAttribute(page);
+}
+
+fn applyDeclaration(self: *CSSStyleDeclaration, property_name: []const u8, value: []const u8, important: bool, page: *Page) !void {
+    try self.setPropertyImpl(property_name, value, important, page);
+
+    const normalized = normalizePropertyName(property_name, &page.buf);
+    if (std.mem.eql(u8, normalized, "background")) {
+        try self.expandBackgroundShorthand(value, important, page);
+        return;
+    }
+    if (std.mem.eql(u8, normalized, "border")) {
+        try self.expandBorderShorthand(value, important, page);
+        return;
+    }
+    if (std.mem.eql(u8, normalized, "font")) {
+        try self.expandFontShorthand(value, important, page);
+    }
+}
+
+fn expandBackgroundShorthand(self: *CSSStyleDeclaration, value: []const u8, important: bool, page: *Page) !void {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return;
+
+    if (extractBackgroundColorToken(trimmed)) |color_token| {
+        try self.setPropertyImpl("background-color", color_token, important, page);
+    }
+}
+
+fn expandBorderShorthand(self: *CSSStyleDeclaration, value: []const u8, important: bool, page: *Page) !void {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return;
+
+    var tokens = tokenizeCssValue(trimmed, page.call_arena);
+    var width_token: ?[]const u8 = null;
+    var style_token: ?[]const u8 = null;
+    var color_token: ?[]const u8 = null;
+
+    while (tokens.next()) |token| {
+        if (token.len == 0) continue;
+
+        if (style_token == null and isBorderStyleToken(token)) {
+            style_token = token;
+            continue;
+        }
+        if (width_token == null and isBorderWidthToken(token)) {
+            width_token = token;
+            continue;
+        }
+        if (color_token == null and isLikelyColorToken(token)) {
+            color_token = token;
+        }
+    }
+
+    if (width_token) |token| {
+        try self.setPropertyImpl("border-width", token, important, page);
+    }
+    if (style_token) |token| {
+        try self.setPropertyImpl("border-style", token, important, page);
+    }
+    if (color_token) |token| {
+        try self.setPropertyImpl("border-color", token, important, page);
+    }
+}
+
+fn expandFontShorthand(self: *CSSStyleDeclaration, value: []const u8, important: bool, page: *Page) !void {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return;
+
+    var tokens = tokenizeCssValue(trimmed, page.call_arena);
+    var collected: std.ArrayList([]const u8) = .{};
+    defer collected.deinit(page.call_arena);
+    while (tokens.next()) |token| {
+        if (token.len == 0) continue;
+        try collected.append(page.call_arena, token);
+    }
+    if (collected.items.len == 0) return;
+
+    var style_token: ?[]const u8 = null;
+    var weight_token: ?[]const u8 = null;
+    var size_token: ?[]const u8 = null;
+    var line_height_token: ?[]const u8 = null;
+    var family_start: ?usize = null;
+
+    for (collected.items, 0..) |token, index| {
+        if (size_token == null) {
+            if (fontShorthandSizeAndLineHeight(token)) |size_line| {
+                size_token = size_line.size;
+                line_height_token = size_line.line_height;
+                family_start = index + 1;
+                break;
+            }
+            if (style_token == null and isFontStyleToken(token)) {
+                style_token = token;
+                continue;
+            }
+            if (weight_token == null and isFontWeightToken(token)) {
+                weight_token = token;
+                continue;
+            }
+        }
+    }
+
+    if (size_token == null or family_start == null or family_start.? >= collected.items.len) {
+        return;
+    }
+
+    const family = try std.mem.join(page.call_arena, " ", collected.items[family_start.?..]);
+    if (family.len == 0) return;
+
+    if (style_token) |token| {
+        try self.setPropertyImpl("font-style", token, important, page);
+    }
+    if (weight_token) |token| {
+        try self.setPropertyImpl("font-weight", token, important, page);
+    }
+    if (size_token) |token| {
+        try self.setPropertyImpl("font-size", token, important, page);
+    }
+    if (line_height_token) |token| {
+        try self.setPropertyImpl("line-height", token, important, page);
+    }
+    try self.setPropertyImpl("font-family", family, important, page);
 }
 
 pub fn format(self: *const CSSStyleDeclaration, writer: *std.Io.Writer) !void {
@@ -254,6 +376,12 @@ fn getDefaultPropertyValue(self: *const CSSStyleDeclaration, normalized_name: []
         return "rgba(0, 0, 0, 0)";
     }
 
+    if (self._element) |element| {
+        if (presentationalPropertyValue(element, normalized_name)) |value| {
+            return value;
+        }
+    }
+
     return "";
 }
 
@@ -263,7 +391,17 @@ fn getDefaultDisplay(element: *const Element) []const u8 {
             return switch (html._type) {
                 .anchor, .br, .span, .label, .time, .font, .mod, .quote => "inline",
                 .button, .canvas, .iframe, .img, .input, .select, .textarea => "inline-block",
-                .body, .div, .dl, .p, .heading, .form, .details, .dialog, .embed, .head, .html, .hr, .li, .link, .meta, .ol, .option, .script, .slot, .style, .template, .title, .ul, .media, .area, .base, .datalist, .directory, .fieldset, .legend, .map, .meter, .object, .optgroup, .output, .param, .picture, .pre, .progress, .source, .table, .table_caption, .table_cell, .table_col, .table_row, .table_section, .track => "block",
+                .table => "table",
+                .table_caption => "table-caption",
+                .table_cell => "table-cell",
+                .table_col => |table_col| if (std.ascii.eqlIgnoreCase(table_col._tag_name.str(), "colgroup")) "table-column-group" else "table-column",
+                .table_row => "table-row",
+                .table_section => |section| switch (section._tag) {
+                    .thead => "table-header-group",
+                    .tfoot => "table-footer-group",
+                    else => "table-row-group",
+                },
+                .body, .div, .dl, .p, .heading, .form, .details, .dialog, .embed, .head, .html, .hr, .li, .link, .meta, .ol, .option, .script, .slot, .style, .template, .title, .ul, .media, .area, .base, .datalist, .directory, .fieldset, .legend, .map, .meter, .object, .optgroup, .output, .param, .picture, .pre, .progress, .source, .track => "block",
                 .generic, .custom, .unknown, .data => blk: {
                     const tag = element.getTagNameLower();
                     if (isInlineTag(tag)) break :blk "inline";
@@ -301,6 +439,260 @@ fn getDefaultColor(element: *const Element) []const u8 {
         },
         .svg => return "rgb(0, 0, 0)",
     }
+}
+
+fn presentationalPropertyValue(element: *const Element, normalized_name: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, normalized_name, "text-align")) {
+        if (std.ascii.eqlIgnoreCase(element.getTagNameLower(), "center")) {
+            return "center";
+        }
+        if (element.getAttributeSafe(comptime .wrap("align"))) |attr_align| {
+            if (std.ascii.eqlIgnoreCase(attr_align, "left")) return "left";
+            if (std.ascii.eqlIgnoreCase(attr_align, "right")) return "right";
+            if (std.ascii.eqlIgnoreCase(attr_align, "center") or std.ascii.eqlIgnoreCase(attr_align, "middle")) return "center";
+            if (std.ascii.eqlIgnoreCase(attr_align, "justify")) return "justify";
+        }
+    }
+
+    if (std.mem.eql(u8, normalized_name, "vertical-align")) {
+        if (element.getAttributeSafe(comptime .wrap("valign"))) |valign| {
+            if (std.ascii.eqlIgnoreCase(valign, "top")) return "top";
+            if (std.ascii.eqlIgnoreCase(valign, "middle") or std.ascii.eqlIgnoreCase(valign, "center")) return "middle";
+            if (std.ascii.eqlIgnoreCase(valign, "bottom")) return "bottom";
+        }
+    }
+
+    if (std.mem.eql(u8, normalized_name, "white-space")) {
+        if (element.hasAttributeSafe(comptime .wrap("nowrap"))) {
+            return "nowrap";
+        }
+    }
+
+    if (std.mem.eql(u8, normalized_name, "width")) {
+        if (element.getAttributeSafe(comptime .wrap("width"))) |width| {
+            return std.mem.trim(u8, width, &std.ascii.whitespace);
+        }
+    }
+
+    if (std.mem.eql(u8, normalized_name, "height")) {
+        if (element.getAttributeSafe(comptime .wrap("height"))) |height| {
+            return std.mem.trim(u8, height, &std.ascii.whitespace);
+        }
+    }
+
+    return null;
+}
+
+const CssValueTokenizer = struct {
+    input: []const u8,
+    index: usize = 0,
+
+    fn next(self: *CssValueTokenizer) ?[]const u8 {
+        while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) : (self.index += 1) {}
+        if (self.index >= self.input.len) return null;
+
+        const start = self.index;
+        var depth: usize = 0;
+        var quote: u8 = 0;
+        while (self.index < self.input.len) : (self.index += 1) {
+            const c = self.input[self.index];
+            if (quote != 0) {
+                if (c == '\\' and self.index + 1 < self.input.len) {
+                    self.index += 1;
+                    continue;
+                }
+                if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+
+            switch (c) {
+                '"', '\'' => quote = c,
+                '(' => depth += 1,
+                ')' => {
+                    if (depth > 0) depth -= 1;
+                },
+                else => {},
+            }
+
+            if (depth == 0 and std.ascii.isWhitespace(c)) {
+                break;
+            }
+        }
+
+        const end = self.index;
+        while (self.index < self.input.len and std.ascii.isWhitespace(self.input[self.index])) : (self.index += 1) {}
+        return self.input[start..end];
+    }
+};
+
+fn tokenizeCssValue(input: []const u8, _: std.mem.Allocator) CssValueTokenizer {
+    return .{ .input = input };
+}
+
+fn extractBackgroundColorToken(value: []const u8) ?[]const u8 {
+    if (isLikelyColorToken(value)) return value;
+
+    var tokens = tokenizeCssValue(value, std.heap.page_allocator);
+    while (tokens.next()) |token| {
+        if (isLikelyColorToken(token)) {
+            return token;
+        }
+    }
+    return null;
+}
+
+fn isLikelyColorToken(token: []const u8) bool {
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    if (trimmed.len == 0) return false;
+    if (trimmed[0] == '#') return true;
+    if (std.ascii.startsWithIgnoreCase(trimmed, "rgb(") or
+        std.ascii.startsWithIgnoreCase(trimmed, "rgba(") or
+        std.ascii.startsWithIgnoreCase(trimmed, "hsl(") or
+        std.ascii.startsWithIgnoreCase(trimmed, "hsla("))
+    {
+        return true;
+    }
+
+    return asciiEqualsAnyIgnoreCase(trimmed, &.{
+        "transparent",
+        "black",
+        "white",
+        "red",
+        "green",
+        "blue",
+        "yellow",
+        "orange",
+        "purple",
+        "gray",
+        "grey",
+        "silver",
+        "maroon",
+        "navy",
+        "teal",
+        "aqua",
+        "lime",
+        "olive",
+        "fuchsia",
+        "currentcolor",
+    });
+}
+
+fn isBorderStyleToken(token: []const u8) bool {
+    return asciiEqualsAnyIgnoreCase(token, &.{
+        "none",
+        "hidden",
+        "dotted",
+        "dashed",
+        "solid",
+        "double",
+        "groove",
+        "ridge",
+        "inset",
+        "outset",
+    });
+}
+
+fn isBorderWidthToken(token: []const u8) bool {
+    if (asciiEqualsAnyIgnoreCase(token, &.{ "thin", "medium", "thick" })) {
+        return true;
+    }
+    return likelyCssLengthToken(token);
+}
+
+fn isFontStyleToken(token: []const u8) bool {
+    return asciiEqualsAnyIgnoreCase(token, &.{ "normal", "italic", "oblique" });
+}
+
+fn isFontWeightToken(token: []const u8) bool {
+    if (asciiEqualsAnyIgnoreCase(token, &.{ "normal", "bold", "bolder", "lighter" })) {
+        return true;
+    }
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    return std.fmt.parseInt(i32, trimmed, 10) catch 0 > 0;
+}
+
+const FontSizeLineHeight = struct {
+    size: []const u8,
+    line_height: ?[]const u8 = null,
+};
+
+fn fontShorthandSizeAndLineHeight(token: []const u8) ?FontSizeLineHeight {
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+
+    if (std.mem.indexOfScalar(u8, trimmed, '/')) |slash| {
+        const size = std.mem.trim(u8, trimmed[0..slash], &std.ascii.whitespace);
+        const line_height = std.mem.trim(u8, trimmed[slash + 1 ..], &std.ascii.whitespace);
+        if (likelyCssLengthToken(size) and line_height.len > 0) {
+            return .{ .size = size, .line_height = line_height };
+        }
+        return null;
+    }
+
+    if (likelyCssLengthToken(trimmed)) {
+        return .{ .size = trimmed };
+    }
+    return null;
+}
+
+fn likelyCssLengthToken(token: []const u8) bool {
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    if (trimmed.len == 0) return false;
+    if (std.mem.eql(u8, trimmed, "0")) return true;
+
+    var index: usize = 0;
+    if (trimmed[index] == '+' or trimmed[index] == '-') {
+        index += 1;
+    }
+
+    var saw_digit = false;
+    var saw_dot = false;
+    while (index < trimmed.len) : (index += 1) {
+        const c = trimmed[index];
+        if (std.ascii.isDigit(c)) {
+            saw_digit = true;
+            continue;
+        }
+        if (c == '.' and !saw_dot) {
+            saw_dot = true;
+            continue;
+        }
+        break;
+    }
+
+    if (!saw_digit) return false;
+    if (index >= trimmed.len) return true;
+
+    const unit = trimmed[index..];
+    return asciiEqualsAnyIgnoreCase(unit, &.{
+        "px",
+        "%",
+        "em",
+        "rem",
+        "vw",
+        "vh",
+        "vmin",
+        "vmax",
+        "pt",
+        "pc",
+        "cm",
+        "mm",
+        "in",
+        "ch",
+        "ex",
+    });
+}
+
+fn asciiEqualsAnyIgnoreCase(value: []const u8, candidates: []const []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    for (candidates) |candidate| {
+        if (std.ascii.eqlIgnoreCase(trimmed, candidate)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub const Property = struct {
