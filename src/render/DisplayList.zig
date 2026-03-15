@@ -13,6 +13,7 @@ pub const RectCommand = struct {
     width: i32,
     height: i32,
     z_index: i32 = 0,
+    corner_radius: i32 = 0,
     color: Color,
 };
 
@@ -372,6 +373,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.width));
                 hasher.update(std.mem.asBytes(&rect.height));
                 hasher.update(std.mem.asBytes(&rect.z_index));
+                hasher.update(std.mem.asBytes(&rect.corner_radius));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .stroke_rect => |rect| {
@@ -381,6 +383,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.width));
                 hasher.update(std.mem.asBytes(&rect.height));
                 hasher.update(std.mem.asBytes(&rect.z_index));
+                hasher.update(std.mem.asBytes(&rect.corner_radius));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .text => |text| {

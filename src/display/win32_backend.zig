@@ -4629,6 +4629,58 @@ fn fitImageRect(rect: c.RECT, image_width: u32, image_height: u32) c.RECT {
     };
 }
 
+fn rectCommandCornerDiameter(rect: c.RECT, radius: i32) c.INT {
+    if (radius <= 0) return 0;
+    const max_radius = @max(@as(i32, 0), @divTrunc(@min(rect.right - rect.left, rect.bottom - rect.top), 2));
+    return @as(c.INT, @intCast(std.math.clamp(radius, 0, max_radius) * 2));
+}
+
+fn drawPresentationFillRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
+    const brush = c.CreateSolidBrush(colorRef(rect_cmd.color));
+    if (brush == null) return;
+    defer _ = c.DeleteObject(brush);
+
+    if (rect_cmd.corner_radius <= 0) {
+        var fill_rect = rect;
+        _ = c.FillRect(hdc, &fill_rect, brush);
+        return;
+    }
+
+    const diameter = rectCommandCornerDiameter(rect, rect_cmd.corner_radius);
+    const region = c.CreateRoundRectRgn(rect.left, rect.top, rect.right + 1, rect.bottom + 1, diameter, diameter);
+    if (region == null) {
+        var fill_rect = rect;
+        _ = c.FillRect(hdc, &fill_rect, brush);
+        return;
+    }
+    defer _ = c.DeleteObject(region);
+
+    _ = c.FillRgn(hdc, region, brush);
+}
+
+fn drawPresentationStrokeRect(hdc: c.HDC, rect: c.RECT, rect_cmd: @import("../render/DisplayList.zig").RectCommand) void {
+    const brush = c.CreateSolidBrush(colorRef(rect_cmd.color));
+    if (brush == null) return;
+    defer _ = c.DeleteObject(brush);
+
+    if (rect_cmd.corner_radius <= 0) {
+        var stroke_rect = rect;
+        _ = c.FrameRect(hdc, &stroke_rect, brush);
+        return;
+    }
+
+    const diameter = rectCommandCornerDiameter(rect, rect_cmd.corner_radius);
+    const region = c.CreateRoundRectRgn(rect.left, rect.top, rect.right + 1, rect.bottom + 1, diameter, diameter);
+    if (region == null) {
+        var stroke_rect = rect;
+        _ = c.FrameRect(hdc, &stroke_rect, brush);
+        return;
+    }
+    defer _ = c.DeleteObject(region);
+
+    _ = c.FrameRgn(hdc, region, brush, 1, 1);
+}
+
 fn drawPresentationImage(
     backend: *Win32Backend,
     hdc: c.HDC,
@@ -4906,32 +4958,26 @@ fn renderPresentationDisplayList(
                 const top = scalePresentationValue(rect_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(rect_cmd.width, display_list.layout_scale));
                 const height = @max(1, scalePresentationValue(rect_cmd.height, display_list.layout_scale));
-                var rect = c.RECT{
+                const rect = c.RECT{
                     .left = client.left + PRESENTATION_MARGIN + left,
                     .top = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px,
                     .right = client.left + PRESENTATION_MARGIN + left + width,
                     .bottom = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px + height,
                 };
-                const brush = c.CreateSolidBrush(colorRef(rect_cmd.color));
-                if (brush == null) continue;
-                defer _ = c.DeleteObject(brush);
-                _ = c.FillRect(hdc, &rect, brush);
+                drawPresentationFillRect(hdc, rect, rect_cmd);
             },
             .stroke_rect => |rect_cmd| {
                 const left = scalePresentationValue(rect_cmd.x, display_list.layout_scale);
                 const top = scalePresentationValue(rect_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(rect_cmd.width, display_list.layout_scale));
                 const height = @max(1, scalePresentationValue(rect_cmd.height, display_list.layout_scale));
-                var rect = c.RECT{
+                const rect = c.RECT{
                     .left = client.left + PRESENTATION_MARGIN + left,
                     .top = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px,
                     .right = client.left + PRESENTATION_MARGIN + left + width,
                     .bottom = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px + height,
                 };
-                const brush = c.CreateSolidBrush(colorRef(rect_cmd.color));
-                if (brush == null) continue;
-                defer _ = c.DeleteObject(brush);
-                _ = c.FrameRect(hdc, &rect, brush);
+                drawPresentationStrokeRect(hdc, rect, rect_cmd);
             },
             .text => |text_cmd| {
                 const left = scalePresentationValue(text_cmd.x, display_list.layout_scale);

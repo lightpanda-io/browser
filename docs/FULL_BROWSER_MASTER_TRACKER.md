@@ -762,6 +762,15 @@ Current state inside Gate 3:
   - bounded tests and a headed sprite probe now prove repeated and non-repeated
     background image boxes render with the expected offset and size on the real
     screenshot path
+- box paint now also honors a practical uniform `border-radius` on headed
+  content boxes:
+  - fill and stroke rect commands now carry a corner radius through the shared
+    display-list path
+  - the Win32 headed surface now draws rounded fills and rounded borders for
+    nonzero radius boxes instead of flattening everything to square corners
+  - bounded tests plus a headed screenshot probe now prove a rounded pill box
+    clears its corners while an otherwise identical square box still fills its
+    corners on the real screenshot path
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

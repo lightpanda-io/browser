@@ -254,6 +254,7 @@ const Painter = struct {
                     .width = rect.width,
                     .height = rect.height,
                     .z_index = rect.z_index,
+                    .corner_radius = rect.corner_radius,
                     .color = rect.color,
                 }),
                 .stroke_rect => |rect| try self.list.addStrokeRect(self.allocator, .{
@@ -262,6 +263,7 @@ const Painter = struct {
                     .width = rect.width,
                     .height = rect.height,
                     .z_index = rect.z_index,
+                    .corner_radius = rect.corner_radius,
                     .color = rect.color,
                 }),
                 .text => |text| try self.list.addText(self.allocator, .{
@@ -709,6 +711,7 @@ const Painter = struct {
 
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const fg = resolveTextColor(decl, self.page, element, tag);
+        const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
 
         if (shouldPaintBox(tag)) {
             if (bg) |background| {
@@ -719,6 +722,7 @@ const Painter = struct {
                         .width = rect.width,
                         .height = rect.height,
                         .z_index = paint_z_index,
+                        .corner_radius = corner_radius,
                         .color = background,
                     });
                 }
@@ -729,6 +733,7 @@ const Painter = struct {
                     .width = rect.width,
                     .height = rect.height,
                     .z_index = paint_z_index,
+                    .corner_radius = corner_radius,
                     .color = .{ .r = 248, .g = 248, .b = 248 },
                 });
             } else if (tag == .img) {
@@ -738,6 +743,7 @@ const Painter = struct {
                     .width = rect.width,
                     .height = rect.height,
                     .z_index = paint_z_index,
+                    .corner_radius = corner_radius,
                     .color = .{ .r = 236, .g = 236, .b = 236 },
                 });
             }
@@ -751,6 +757,7 @@ const Painter = struct {
                 .width = rect.width,
                 .height = rect.height,
                 .z_index = paint_z_index,
+                .corner_radius = corner_radius,
                 .color = stroke,
             });
         }
@@ -882,6 +889,7 @@ const Painter = struct {
         };
 
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
+        const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (shouldPaintBox(tag)) {
             if (bg) |background| {
                 if (background.a > 0 and shouldPaintBackground(tag, true)) {
@@ -891,6 +899,7 @@ const Painter = struct {
                         .width = rect.width,
                         .height = rect.height,
                         .z_index = paint_z_index,
+                        .corner_radius = corner_radius,
                         .color = background,
                     });
                 }
@@ -904,6 +913,7 @@ const Painter = struct {
                 .width = rect.width,
                 .height = rect.height,
                 .z_index = paint_z_index,
+                .corner_radius = corner_radius,
                 .color = stroke,
             });
         }
@@ -1060,6 +1070,7 @@ const Painter = struct {
         };
 
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
+        const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (shouldPaintBox(tag)) {
             if (bg) |background| {
                 if (background.a > 0 and shouldPaintBackground(tag, true)) {
@@ -1069,6 +1080,7 @@ const Painter = struct {
                         .width = rect.width,
                         .height = rect.height,
                         .z_index = paint_z_index,
+                        .corner_radius = corner_radius,
                         .color = background,
                     });
                 }
@@ -1082,6 +1094,7 @@ const Painter = struct {
                 .width = rect.width,
                 .height = rect.height,
                 .z_index = paint_z_index,
+                .corner_radius = corner_radius,
                 .color = stroke,
             });
         }
@@ -1416,6 +1429,7 @@ const Painter = struct {
         };
 
         const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
+        const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
                 .x = rect.x,
@@ -1423,6 +1437,7 @@ const Painter = struct {
                 .width = rect.width,
                 .height = rect.height,
                 .z_index = paint_z_index,
+                .corner_radius = corner_radius,
                 .color = stroke,
             });
         }
@@ -2138,6 +2153,55 @@ fn resolveStrokeColor(decl: anytype, page: *Page, tag: Element.Tag) ?Color {
         return .{ .r = 180, .g = 180, .b = 180 };
     }
     return null;
+}
+
+fn resolveBorderRadiusPx(
+    decl: anytype,
+    page: *Page,
+    box_width: i32,
+    box_height: i32,
+    viewport_width: i32,
+    viewport_height: i32,
+) i32 {
+    const candidates = [_][]const u8{
+        decl.getPropertyValue("border-radius", page),
+        decl.getPropertyValue("border-top-left-radius", page),
+        decl.getPropertyValue("border-top-right-radius", page),
+        decl.getPropertyValue("border-bottom-right-radius", page),
+        decl.getPropertyValue("border-bottom-left-radius", page),
+    };
+    const reference = @max(@as(i32, 1), @min(box_width, box_height));
+    for (candidates) |candidate| {
+        if (parseBorderRadiusPx(candidate, reference, viewport_width, viewport_height)) |radius| {
+            return std.math.clamp(radius, 0, @divTrunc(reference, 2));
+        }
+    }
+    return 0;
+}
+
+fn parseBorderRadiusPx(
+    raw_value: []const u8,
+    reference: i32,
+    viewport_width: i32,
+    viewport_height: i32,
+) ?i32 {
+    const trimmed = std.mem.trim(u8, raw_value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+
+    const first_component = std.mem.trim(
+        u8,
+        if (std.mem.indexOfScalar(u8, trimmed, '/')) |slash_index|
+            trimmed[0..slash_index]
+        else
+            trimmed,
+        &std.ascii.whitespace,
+    );
+    if (first_component.len == 0) return null;
+    var tokens = std.mem.tokenizeAny(u8, first_component, " \t\r\n");
+    const first_token = std.mem.trim(u8, tokens.next() orelse return null, &std.ascii.whitespace);
+    if (first_token.len == 0) return null;
+    return parseCssLengthPxWithContext(first_token, reference, viewport_width) orelse
+        parseCssLengthPxWithContext(first_token, reference, viewport_height);
 }
 
 fn hasVisibleBorder(decl: anytype, page: *Page) bool {
@@ -5905,6 +5969,59 @@ test "paintDocument emits tiled and non-repeated background image commands" {
     try std.testing.expectEqual(@as(i32, 0), single_image.background_offset_y);
     try std.testing.expectEqual(@as(i32, 240), single_image.width);
     try std.testing.expectEqual(@as(i32, 40), single_image.height);
+}
+
+test "paintDocument carries border radius on box commands" {
+    var page = try testing.pageTest("page/border_radius_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var rounded_fill: ?Command = null;
+    var rounded_stroke: ?Command = null;
+    var square_fill: ?Command = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g >= 80) {
+                    rounded_fill = command;
+                } else if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    square_fill = command;
+                }
+            },
+            .stroke_rect => |rect| {
+                if (rect.color.b >= 120 and rect.color.r <= 60 and rect.color.g <= 100) {
+                    rounded_stroke = command;
+                }
+            },
+            else => {},
+        }
+    }
+
+    switch (rounded_fill orelse return error.RoundedFillMissing) {
+        .fill_rect => |rect| {
+            try std.testing.expectEqual(@as(i32, 26), rect.corner_radius);
+            try std.testing.expectEqual(@as(i32, 220), rect.width);
+            try std.testing.expectEqual(@as(i32, 52), rect.height);
+        },
+        else => return error.RoundedFillWrongCommand,
+    }
+    switch (rounded_stroke orelse return error.RoundedStrokeMissing) {
+        .stroke_rect => |rect| {
+            try std.testing.expectEqual(@as(i32, 26), rect.corner_radius);
+        },
+        else => return error.RoundedStrokeWrongCommand,
+    }
+    switch (square_fill orelse return error.SquareFillMissing) {
+        .fill_rect => |rect| {
+            try std.testing.expectEqual(@as(i32, 0), rect.corner_radius);
+        },
+        else => return error.SquareFillWrongCommand,
+    }
 }
 
 test "paintDocument docks floated blocks and keeps body flow below them" {
