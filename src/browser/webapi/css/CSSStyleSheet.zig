@@ -148,12 +148,95 @@ pub fn applyMatchingRules(self: *const CSSStyleSheet, element: *Element, decl: *
     if (self._disabled) return;
 
     for (self._rules) |entry| {
-        const matches = element.matches(entry.selector_text, page) catch continue;
+        const matches = try selectorTextMatchesCompat(element, entry.selector_text, page);
         if (!matches) {
             continue;
         }
         try decl.applyDeclarationsText(entry.declarations_text, page);
     }
+}
+
+fn selectorTextMatchesCompat(element: *Element, selector_text: []const u8, page: *Page) !bool {
+    return element.matches(selector_text, page) catch {
+        if (std.mem.indexOfScalar(u8, selector_text, ',') == null) {
+            return false;
+        }
+        return forgivingSelectorListMatches(element, selector_text, page);
+    };
+}
+
+fn forgivingSelectorListMatches(element: *Element, selector_text: []const u8, page: *Page) !bool {
+    var remaining = selector_text;
+    while (true) {
+        const trimmed = std.mem.trimLeft(u8, remaining, &std.ascii.whitespace);
+        if (trimmed.len == 0) return false;
+
+        const comma_pos = topLevelCommaIndex(trimmed);
+        const selector_input = std.mem.trim(u8, trimmed[0..comma_pos], &std.ascii.whitespace);
+        if (selector_input.len > 0) {
+            const matches = element.matches(selector_input, page) catch false;
+            if (matches) return true;
+        }
+
+        if (comma_pos >= trimmed.len) return false;
+        remaining = trimmed[comma_pos + 1 ..];
+    }
+}
+
+fn topLevelCommaIndex(input: []const u8) usize {
+    var depth: usize = 0;
+    var bracket_depth: usize = 0;
+    var in_quote: u8 = 0;
+    var i: usize = 0;
+    while (i < input.len) {
+        const c = input[i];
+        if (in_quote != 0) {
+            if (c == '\\') {
+                i += 1;
+                if (i < input.len) i += 1;
+            } else if (c == in_quote) {
+                in_quote = 0;
+                i += 1;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        switch (c) {
+            '\\' => {
+                i += 1;
+                if (i < input.len) i += 1;
+            },
+            '"', '\'' => {
+                in_quote = c;
+                i += 1;
+            },
+            '(' => {
+                depth += 1;
+                i += 1;
+            },
+            ')' => {
+                if (depth > 0) depth -= 1;
+                i += 1;
+            },
+            '[' => {
+                bracket_depth += 1;
+                i += 1;
+            },
+            ']' => {
+                if (bracket_depth > 0) bracket_depth -= 1;
+                i += 1;
+            },
+            ',' => {
+                if (depth == 0 and bracket_depth == 0) return i;
+                i += 1;
+            },
+            else => i += 1,
+        }
+    }
+
+    return input.len;
 }
 
 fn refreshRuleList(self: *CSSStyleSheet, page: *Page) !void {
@@ -816,6 +899,15 @@ test "formatSupportsEmbeddedBytes only retains ttf and otf bytes" {
     try std.testing.expect(formatSupportsEmbeddedBytes(.woff));
     try std.testing.expect(formatSupportsEmbeddedBytes(.woff2));
     try std.testing.expect(!formatSupportsEmbeddedBytes(.unknown));
+}
+
+test "applyMatchingRules keeps valid selector-list branches when one branch is unsupported" {
+    var page = try testing.pageTest("page/selector_forgiving_stylesheet.html");
+    defer page._session.removePage();
+
+    const duplicate = (try page.window._document.querySelector(.wrap(".dup"), page)).?;
+    const duplicate_style = try page.window.getComputedStyle(duplicate, null, page);
+    try std.testing.expectEqualStrings("none", duplicate_style.asCSSStyleDeclaration().getPropertyValue("display", page));
 }
 
 const testing = @import("../../../testing.zig");

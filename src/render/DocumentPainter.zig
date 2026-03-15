@@ -155,6 +155,8 @@ const FlexChildMeasure = struct {
     node: *Node,
     width: i32,
     height: i32,
+    flex_grow: f32 = 0,
+    align_self: FlexCrossAlignment = .auto,
 };
 
 const FlexLineMeasure = struct {
@@ -171,11 +173,20 @@ const Bounds = struct {
     height: i32,
 };
 
+const FlexCrossAlignment = enum {
+    auto,
+    start,
+    center,
+    end,
+};
+
 const Painter = struct {
     allocator: std.mem.Allocator,
     page: *Page,
     opts: PaintOpts,
     list: *DisplayList,
+    forced_item_node: ?*Node = null,
+    forced_item_width: i32 = 0,
 
     fn paintNode(self: *Painter, node: *Node, cursor: *FlowCursor) anyerror!void {
         switch (node._type) {
@@ -898,13 +909,26 @@ const Painter = struct {
         while (child_it.next()) |child| {
             if (!isFlexRenderableChild(child)) continue;
 
-            const measurement = try self.measureNodePaintedBox(child, content_width);
+            var flex_grow: f32 = 0;
+            var align_self: FlexCrossAlignment = .auto;
+            var flex_basis: ?i32 = null;
+            if (child.is(Element)) |child_element| {
+                const child_style = try self.page.window.getComputedStyle(child_element, null, self.page);
+                const child_decl = child_style.asCSSStyleDeclaration();
+                flex_grow = resolveFlexGrow(child_decl, self.page);
+                align_self = resolveFlexCrossAlignment(resolveCssPropertyValue(child_decl, self.page, child_element, "align-self"));
+                flex_basis = resolveFlexBasisPx(self, child_element, child_decl, content_width);
+            }
+
+            const measurement = try self.measureNodePaintedBox(child, flex_basis orelse content_width);
             if (measurement.width <= 0 and measurement.height <= 0) continue;
 
             try measured_children.append(self.allocator, .{
                 .node = child,
-                .width = std.math.clamp(measurement.width, @as(i32, 0), content_width),
+                .width = std.math.clamp(flex_basis orelse measurement.width, @as(i32, 0), content_width),
                 .height = measurement.height,
+                .flex_grow = flex_grow,
+                .align_self = align_self,
             });
         }
 
@@ -1002,6 +1026,7 @@ const Painter = struct {
             const free_horizontal_space = @max(@as(i32, 0), content_width - line.width);
             var child_x = rect.x + padding.left;
             var gap = main_gap;
+            var total_flex_grow: f32 = 0;
 
             if (std.ascii.eqlIgnoreCase(justify_content, "center")) {
                 child_x += @divTrunc(free_horizontal_space, 2);
@@ -1019,20 +1044,50 @@ const Painter = struct {
                 gap += extra;
             }
 
+            var grow_index = line.start_index;
+            while (grow_index < line.end_index) : (grow_index += 1) {
+                total_flex_grow += measured_children.items[grow_index].flex_grow;
+            }
+
+            var remaining_grow_space: i32 = free_horizontal_space;
+            var remaining_flex_grow = total_flex_grow;
+
             var child_index = line.start_index;
             while (child_index < line.end_index) : (child_index += 1) {
                 const child_measure = measured_children.items[child_index];
+                var child_width = child_measure.width;
+                if (total_flex_grow > 0 and free_horizontal_space > 0 and child_measure.flex_grow > 0) {
+                    const extra_width = if (child_index + 1 == line.end_index or remaining_flex_grow <= child_measure.flex_grow)
+                        remaining_grow_space
+                    else
+                        @as(i32, @intFromFloat(@floor(@as(f64, @floatFromInt(free_horizontal_space)) *
+                            (@as(f64, @floatCast(child_measure.flex_grow)) / @as(f64, @floatCast(total_flex_grow))))));
+                    child_width += extra_width;
+                    remaining_grow_space -= extra_width;
+                    remaining_flex_grow -= child_measure.flex_grow;
+                }
                 var item_y = child_y;
                 const free_vertical_space = @max(@as(i32, 0), line.height - child_measure.height);
-                if (std.ascii.eqlIgnoreCase(align_items, "center")) {
+                const item_align = effectiveFlexCrossAlignment(align_items, child_measure.align_self);
+                if (item_align == .center) {
                     item_y += @divTrunc(free_vertical_space, 2);
-                } else if (std.ascii.eqlIgnoreCase(align_items, "flex-end") or std.ascii.eqlIgnoreCase(align_items, "end")) {
+                } else if (item_align == .end) {
                     item_y += free_vertical_space;
                 }
 
-                var child_cursor = FlowCursor.init(child_x, item_y, @max(@as(i32, 40), child_measure.width));
-                try self.paintNode(child_measure.node, &child_cursor);
-                child_x += child_measure.width;
+                {
+                    const previous_forced_node = self.forced_item_node;
+                    const previous_forced_width = self.forced_item_width;
+                    self.forced_item_node = child_measure.node;
+                    self.forced_item_width = child_width;
+
+                    var child_cursor = FlowCursor.init(child_x, item_y, @max(@as(i32, 40), child_width));
+                    try self.paintNode(child_measure.node, &child_cursor);
+
+                    self.forced_item_node = previous_forced_node;
+                    self.forced_item_width = previous_forced_width;
+                }
+                child_x += child_width;
                 if (child_index + 1 < line.end_index) {
                     child_x += gap;
                 }
@@ -2013,6 +2068,57 @@ fn flexWrapEnabled(decl: anytype, page: *Page) bool {
     return std.ascii.eqlIgnoreCase(wrap, "wrap") or std.ascii.eqlIgnoreCase(wrap, "wrap-reverse");
 }
 
+fn resolveFlexGrow(decl: anytype, page: *Page) f32 {
+    if (parseCssFloatValue(decl.getPropertyValue("flex-grow", page))) |value| {
+        return @max(@as(f32, 0), value);
+    }
+
+    const shorthand = std.mem.trim(u8, decl.getPropertyValue("flex", page), &std.ascii.whitespace);
+    if (shorthand.len == 0) return 0;
+    if (std.ascii.eqlIgnoreCase(shorthand, "none")) return 0;
+    if (std.ascii.eqlIgnoreCase(shorthand, "auto")) return 1;
+
+    var it = std.mem.tokenizeAny(u8, shorthand, &std.ascii.whitespace);
+    const first = it.next() orelse return 0;
+    return @max(@as(f32, 0), parseCssFloatValue(first) orelse 0);
+}
+
+fn resolveFlexBasisPx(self: *const Painter, element: *Element, decl: anytype, available_width: i32) ?i32 {
+    if (parseCssLengthPxWithContext(decl.getPropertyValue("flex-basis", self.page), available_width, self.opts.viewport_width)) |value| {
+        return value;
+    }
+
+    const shorthand = std.mem.trim(u8, decl.getPropertyValue("flex", self.page), &std.ascii.whitespace);
+    if (shorthand.len != 0 and !std.ascii.eqlIgnoreCase(shorthand, "none") and !std.ascii.eqlIgnoreCase(shorthand, "auto")) {
+        var parts = std.mem.tokenizeAny(u8, shorthand, &std.ascii.whitespace);
+        _ = parts.next();
+        if (parts.next()) |maybe_shrink| {
+            _ = maybe_shrink;
+            if (parts.next()) |basis_token| {
+                if (parseCssLengthPxWithContext(basis_token, available_width, self.opts.viewport_width)) |value| {
+                    return value;
+                }
+            }
+        }
+    }
+
+    return resolveExplicitWidth(self, element, decl, self.page, element.getTag(), available_width);
+}
+
+fn resolveFlexCrossAlignment(value: []const u8) FlexCrossAlignment {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0 or std.ascii.eqlIgnoreCase(trimmed, "auto")) return .auto;
+    if (std.ascii.eqlIgnoreCase(trimmed, "center")) return .center;
+    if (std.ascii.eqlIgnoreCase(trimmed, "flex-end") or std.ascii.eqlIgnoreCase(trimmed, "end")) return .end;
+    if (std.ascii.eqlIgnoreCase(trimmed, "flex-start") or std.ascii.eqlIgnoreCase(trimmed, "start")) return .start;
+    return .auto;
+}
+
+fn effectiveFlexCrossAlignment(container_align_items: []const u8, align_self: FlexCrossAlignment) FlexCrossAlignment {
+    if (align_self != .auto) return align_self;
+    return resolveFlexCrossAlignment(container_align_items);
+}
+
 fn resolveAutoMarginAlignedX(cursor: FlowCursor, decl: anytype, page: *Page, width: i32, margins: EdgeSizes, default_x: i32) i32 {
     const margin_left = decl.getPropertyValue("margin-left", page);
     const margin_right = decl.getPropertyValue("margin-right", page);
@@ -2086,6 +2192,13 @@ fn resolveLayoutWidth(
         available_width,
         self.opts.viewport_width,
     );
+    if (self.forced_item_node == element.asNode() and self.forced_item_width > 0) {
+        var forced = std.math.clamp(self.forced_item_width, 60, available_width);
+        forced = @max(forced, min_width);
+        if (max_width) |limit| forced = @min(forced, limit);
+        return forced;
+    }
+
     if (block_like) {
         var resolved = std.math.clamp(
             if (explicit_width > 0) explicit_width else available_width,
@@ -2693,6 +2806,12 @@ fn edgeShorthandContainsAuto(value: []const u8, side: EdgeSide) bool {
         ]),
         else => isCssAuto(values[idx]),
     };
+}
+
+fn parseCssFloatValue(value: []const u8) ?f32 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseFloat(f32, trimmed) catch null;
 }
 
 fn parseCssLengthPxWithContext(value: []const u8, reference: i32, viewport: i32) ?i32 {
@@ -5008,6 +5127,43 @@ test "paintDocument wraps centered flex row children onto later lines" {
     try std.testing.expect(blue.x > red.x + 60);
     try std.testing.expect(green.x > 120);
     try std.testing.expect(green.x < 220);
+}
+
+test "paintDocument grows flex row items with bounded docked siblings" {
+    var page = try testing.pageTest("page/flex_grow_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_rect: ?Bounds = null;
+    var gray_rect: ?Bounds = null;
+    var blue_rect: ?Bounds = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 90 and rect.color.b <= 90) {
+                    red_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.r >= 130 and rect.color.r <= 190 and rect.color.g >= 130 and rect.color.g <= 190 and rect.color.b >= 130 and rect.color.b <= 190) {
+                    gray_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 150) {
+                    blue_rect = .{ .x = rect.x, .y = rect.y, .width = rect.width, .height = rect.height };
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_rect orelse return error.FlexGrowLeftBoxMissing;
+    const gray = gray_rect orelse return error.FlexGrowSearchBoxMissing;
+    const blue = blue_rect orelse return error.FlexGrowRightBoxMissing;
+
+    try std.testing.expect(gray.width >= 220);
+    try std.testing.expect(gray.x > red.x + red.width);
+    try std.testing.expect(blue.x > gray.x + gray.width);
 }
 
 test "paintDocument anchors absolute boxes to the viewport without consuming normal flow" {

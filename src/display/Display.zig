@@ -142,6 +142,8 @@ browse_screenshot_bmp_path: ?[]const u8 = null,
 browse_screenshot_bmp_attempted: bool = false,
 browse_screenshot_png_path: ?[]const u8 = null,
 browse_screenshot_png_attempted: bool = false,
+browse_navigation_state_seen: bool = false,
+browse_is_loading: bool = true,
 
 pub fn init(allocator: std.mem.Allocator, config: *const Config) Display {
     const requested_mode = config.browserMode();
@@ -251,6 +253,8 @@ pub fn resetViewport(self: *Display) void {
 }
 
 pub fn setNavigationState(self: *Display, can_go_back: bool, can_go_forward: bool, is_loading: bool, zoom_percent: i32) void {
+    self.browse_navigation_state_seen = true;
+    self.browse_is_loading = is_loading;
     switch (self.backend) {
         .headed_windows => |*backend| backend.setNavigationState(can_go_back, can_go_forward, is_loading, zoom_percent),
         else => {},
@@ -324,7 +328,7 @@ pub fn presentPageView(self: *Display, title: []const u8, url: []const u8, body:
     switch (self.backend) {
         .headed_windows => |*backend| {
             try backend.presentPageView(title, url, body, display_list);
-            if (browseScreenshotReady(body, display_list)) {
+            if (browseScreenshotReady(self.browse_navigation_state_seen, self.browse_is_loading, body, display_list)) {
                 if (self.browse_screenshot_bmp_path) |path| {
                     if (!self.browse_screenshot_bmp_attempted) {
                         self.browse_screenshot_bmp_attempted = true;
@@ -347,7 +351,16 @@ pub fn presentPageView(self: *Display, title: []const u8, url: []const u8, body:
     }
 }
 
-fn browseScreenshotReady(body: []const u8, display_list: ?*const DisplayList) bool {
+fn browseScreenshotReady(
+    navigation_state_seen: bool,
+    is_loading: bool,
+    body: []const u8,
+    display_list: ?*const DisplayList,
+) bool {
+    if (navigation_state_seen and is_loading) {
+        return false;
+    }
+
     const list = display_list orelse return false;
     if (list.content_height <= 0) {
         return false;
@@ -362,13 +375,13 @@ fn browseScreenshotReady(body: []const u8, display_list: ?*const DisplayList) bo
 }
 
 test "browseScreenshotReady ignores root placeholder presentations" {
-    try std.testing.expect(!browseScreenshotReady("", null));
+    try std.testing.expect(!browseScreenshotReady(false, true, "", null));
 
     var empty_list = DisplayList{};
     defer empty_list.deinit(std.testing.allocator);
 
-    try std.testing.expect(!browseScreenshotReady("", &empty_list));
-    try std.testing.expect(!browseScreenshotReady("real body", &empty_list));
+    try std.testing.expect(!browseScreenshotReady(true, false, "", &empty_list));
+    try std.testing.expect(!browseScreenshotReady(true, false, "real body", &empty_list));
 
     var painted_list = DisplayList{};
     defer painted_list.deinit(std.testing.allocator);
@@ -379,7 +392,7 @@ test "browseScreenshotReady ignores root placeholder presentations" {
         .height = 10,
         .color = .{ .r = 220, .g = 30, .b = 30 },
     });
-    try std.testing.expect(browseScreenshotReady("", &painted_list));
+    try std.testing.expect(browseScreenshotReady(true, false, "", &painted_list));
 }
 
 test "browseScreenshotReady requires positive painted height" {
@@ -393,11 +406,27 @@ test "browseScreenshotReady requires positive painted height" {
         .height = 20,
         .dom_path = &.{},
     });
-    try std.testing.expect(browseScreenshotReady("fallback text", &region_only));
+    try std.testing.expect(browseScreenshotReady(true, false, "fallback text", &region_only));
 
     var zero_height = DisplayList{};
     defer zero_height.deinit(std.testing.allocator);
-    try std.testing.expect(!browseScreenshotReady("fallback text", &zero_height));
+    try std.testing.expect(!browseScreenshotReady(true, false, "fallback text", &zero_height));
+}
+
+test "browseScreenshotReady waits for load completion" {
+    var painted_list = DisplayList{};
+    defer painted_list.deinit(std.testing.allocator);
+    try painted_list.addFillRect(std.testing.allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 20,
+        .height = 10,
+        .color = .{ .r = 220, .g = 30, .b = 30 },
+    });
+
+    try std.testing.expect(browseScreenshotReady(false, false, "", &painted_list));
+    try std.testing.expect(!browseScreenshotReady(true, true, "", &painted_list));
+    try std.testing.expect(browseScreenshotReady(true, false, "", &painted_list));
 }
 
 pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {

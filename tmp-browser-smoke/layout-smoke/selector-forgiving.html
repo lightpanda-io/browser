@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Selector Forgiving Layout</title>
+  <style>
+    .hero, ::-lp-unsupported-pseudo {
+      width: 220px;
+      height: 40px;
+      margin: 48px auto 0 auto;
+      background-color: rgb(220, 50, 50);
+    }
+
+    .dup, ::-lp-unsupported-pseudo {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero"></div>
+  <div class="dup" style="width:220px;height:40px;margin:16px auto 0 auto;background-color:rgb(40,110,220);"></div>
+</body>
+</html>

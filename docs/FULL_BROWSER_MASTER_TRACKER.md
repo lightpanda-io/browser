@@ -690,11 +690,20 @@ Current state inside Gate 3:
   (`>`, `+`, `~`, and descendant default) plus safer functional pseudo parsing
   across quoted strings, bracketed attribute values, nested parentheses, and
   top-level comma splitting
+- stylesheet rule application now also keeps valid selector-list branches when
+  a sibling branch is unsupported by the current engine, so common real-site
+  vendor or pseudo-element branches stop dropping the entire declarations block
 - fixed-position viewport anchoring now survives inline-content-flow containers
   instead of being re-offset into the parent content box, and the computed
   style path now defaults common controls and replaced elements like buttons,
   inputs, selects, textareas, images, canvas, and iframes to `inline-block`
   instead of `block`
+- flex row layout now also supports bounded item growth from `flex-grow` /
+  common `flex` shorthand handling, so header and search-bar style middle items
+  can expand between fixed siblings instead of staying at their intrinsic width
+- headed screenshot export now also refuses to capture while navigation is
+  still explicitly loading, with a bounded slow-image probe proving the export
+  waits for the real loaded image instead of the earlier pre-load placeholder
 - bounded headed probes now prove:
   - Promise-microtask selector failures no longer kill the headed browser
   - centered hero-style flex layouts reach the real Win32 surface
@@ -704,6 +713,11 @@ Current state inside Gate 3:
     multiple lines
   - fixed left/right viewport docking survives inline-flow containers while
     later normal flow stays below on the real Win32 surface
+  - forgiving stylesheet selector lists preserve the valid visual branch while
+    suppressing the duplicate invalid-branch artifact on the real Win32 surface
+  - flex-grow rows now expand the middle item between bounded red/blue siblings
+    on the real Win32 surface
+  - slow image loads are present before screenshot export succeeds
   - delayed timer-driven content is present in the screenshot export path
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine

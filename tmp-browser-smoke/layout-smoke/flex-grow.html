@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Flex Grow Layout</title>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: rgb(255, 255, 255);
+    }
+
+    body {
+      padding: 24px;
+    }
+
+    .toolbar {
+      width: 560px;
+      height: 88px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px;
+      border: 1px solid rgb(223, 225, 229);
+      background: rgb(248, 249, 250);
+    }
+
+    .left,
+    .right {
+      width: 96px;
+      height: 32px;
+      border: 0;
+    }
+
+    .left {
+      background-color: rgb(220, 50, 50);
+    }
+
+    .search {
+      width: 140px;
+      height: 40px;
+      flex-grow: 1;
+      background-color: rgb(160, 160, 160);
+      border: 0;
+    }
+
+    .right {
+      align-self: flex-end;
+      background-color: rgb(40, 110, 220);
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="left">L</button>
+    <input class="search" value="">
+    <button class="right">R</button>
+  </div>
+</body>
+</html>
