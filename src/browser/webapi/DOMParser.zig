@@ -86,15 +86,15 @@ pub fn parseFromString(
             var parser = Parser.init(arena, doc_node, page);
             parser.parseXML(html);
 
-            if (parser.err) |pe| {
-                return pe.err;
+            if (parser.err != null or doc_node.firstChild() == null) {
+                // Return a document with a <parsererror> element per spec.
+                const err_doc = try page._factory.document(XMLDocument{ ._proto = undefined });
+                var err_parser = Parser.init(arena, err_doc.asNode(), page);
+                err_parser.parseXML("<parsererror xmlns=\"http://www.mozilla.org/newlayout/xml/parsererror.xml\">error</parsererror>");
+                return err_doc.asDocument();
             }
 
-            const first_child = doc_node.firstChild() orelse {
-                // Empty XML or no root element - this is a parse error.
-                // TODO: Return a document with a <parsererror> element per spec.
-                return error.JsException;
-            };
+            const first_child = doc_node.firstChild().?;
 
             // If first node is a `ProcessingInstruction`, skip it.
             if (first_child.getNodeType() == 7) {
