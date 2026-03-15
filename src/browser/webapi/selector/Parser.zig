@@ -87,6 +87,7 @@ pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]
 
         var comma_pos: usize = trimmed.len;
         var depth: usize = 0;
+        var bracket_depth: usize = 0;
         var in_quote: u8 = 0; // 0 = not in quotes, '"' or '\'' = in that quote type
         var i: usize = 0;
         while (i < trimmed.len) {
@@ -124,8 +125,16 @@ pub fn parseList(arena: Allocator, input: []const u8, page: *Page) ParseError![]
                     if (depth > 0) depth -= 1;
                     i += 1;
                 },
+                '[' => {
+                    bracket_depth += 1;
+                    i += 1;
+                },
+                ']' => {
+                    if (bracket_depth > 0) bracket_depth -= 1;
+                    i += 1;
+                },
                 ',' => {
-                    if (depth == 0) {
+                    if (depth == 0 and bracket_depth == 0) {
                         comma_pos = i;
                         break;
                     }
@@ -289,6 +298,37 @@ pub fn parse(arena: Allocator, input: []const u8, page: *Page) ParseError!Select
     };
 }
 
+fn parseRelative(arena: Allocator, input: []const u8, page: *Page) ParseError!Selector.Selector {
+    var parser = Parser{ .input = input };
+    _ = parser.skipSpaces();
+
+    var relative: Selector.Combinator = .descendant;
+    switch (parser.peek()) {
+        '>' => {
+            parser.input = parser.input[1..];
+            relative = .child;
+        },
+        '+' => {
+            parser.input = parser.input[1..];
+            relative = .next_sibling;
+        },
+        '~' => {
+            parser.input = parser.input[1..];
+            relative = .subsequent_sibling;
+        },
+        else => {},
+    }
+
+    _ = parser.skipSpaces();
+    if (parser.peek() == 0) {
+        return error.InvalidSelector;
+    }
+
+    var selector = try parse(arena, parser.input, page);
+    selector.relative_combinator = relative;
+    return selector;
+}
+
 fn parsePart(self: *Parser, arena: Allocator, page: *Page) !Part {
     return switch (self.peek()) {
         '#' => .{ .id = try self.id(arena) },
@@ -351,20 +391,66 @@ fn peek(self: *const Parser) u8 {
 fn consumeUntilCommaOrParen(self: *Parser) []const u8 {
     const input = self.input;
     var depth: usize = 0;
+    var bracket_depth: usize = 0;
+    var in_quote: u8 = 0;
     var i: usize = 0;
 
-    while (i < input.len) : (i += 1) {
+    while (i < input.len) {
         const c = input[i];
+        if (in_quote != 0) {
+            if (c == '\\') {
+                i += 1;
+                if (i < input.len) i += 1;
+                continue;
+            }
+            if (c == in_quote) {
+                in_quote = 0;
+            }
+            i += 1;
+            continue;
+        }
+
         switch (c) {
-            '(' => depth += 1,
+            '\\' => {
+                i += 1;
+                if (i < input.len) i += 1;
+                continue;
+            },
+            '"', '\'' => {
+                in_quote = c;
+                i += 1;
+                continue;
+            },
+            '[' => {
+                bracket_depth += 1;
+                i += 1;
+                continue;
+            },
+            ']' => {
+                if (bracket_depth > 0) bracket_depth -= 1;
+                i += 1;
+                continue;
+            },
+            '(' => {
+                depth += 1;
+                i += 1;
+                continue;
+            },
             ')' => {
-                if (depth == 0) break;
-                depth -= 1;
+                if (depth == 0 and bracket_depth == 0) break;
+                if (depth > 0) depth -= 1;
+                i += 1;
+                continue;
             },
             ',' => {
-                if (depth == 0) break;
+                if (depth == 0 and bracket_depth == 0) break;
+                i += 1;
+                continue;
             },
-            else => {},
+            else => {
+                i += 1;
+                continue;
+            },
         }
     }
 
@@ -526,7 +612,7 @@ fn pseudoClass(self: *Parser, arena: Allocator, page: *Page) !Selector.PseudoCla
                 if (self.peek() == ')') break;
                 if (self.peek() == 0) return error.InvalidPseudoClass;
 
-                const selector = try parse(arena, self.consumeUntilCommaOrParen(), page);
+                const selector = try parseRelative(arena, self.consumeUntilCommaOrParen(), page);
                 try selectors.append(arena, selector);
 
                 _ = self.skipSpaces();
@@ -1609,4 +1695,23 @@ test "Selector: Parser.pseudoClass aliases vendor any-link and parses dir/open" 
         }
         try testing.expectEqual("", parser.input);
     }
+}
+
+test "Selector: Parser.pseudoClass parses has relative selectors and quoted commas" {
+    var page = try testing.pageTest("page/selector_has_relative.html");
+    defer page._session.removePage();
+    const arena = page.call_arena;
+
+    var parser = Parser{ .input = ":has(> .direct, + li.selected, ~ [data-note='alpha,beta'])" };
+    const pseudo = try parser.pseudoClass(arena, page);
+    switch (pseudo) {
+        .has => |selectors| {
+            try std.testing.expectEqual(@as(usize, 3), selectors.len);
+            try std.testing.expectEqual(Selector.Combinator.child, selectors[0].relative_combinator.?);
+            try std.testing.expectEqual(Selector.Combinator.next_sibling, selectors[1].relative_combinator.?);
+            try std.testing.expectEqual(Selector.Combinator.subsequent_sibling, selectors[2].relative_combinator.?);
+        },
+        else => return error.UnexpectedPseudoClass,
+    }
+    try testing.expectEqual("", parser.input);
 }

@@ -681,10 +681,20 @@ Current state inside Gate 3:
   `justify-content` spacing, and `align-items` vertical placement for common
   chip/button-style rows, plus selector compatibility for `:lang(...)`,
   `:dir(...)`, `:open`, and vendor `:-webkit-any-link` / `:-moz-any-link`
-- headed screenshot export now waits for a real painted presentation instead of
+- headed screenshot export now waits for a real painted presentation with
+  positive painted height and real draw or interactive regions instead of
   consuming the one-shot capture on the initial root placeholder frame, with a
   bounded delayed-content probe proving async timer-driven page content reaches
   the exported PNG
+- selector compatibility now also covers relative `:has(...)` combinators
+  (`>`, `+`, `~`, and descendant default) plus safer functional pseudo parsing
+  across quoted strings, bracketed attribute values, nested parentheses, and
+  top-level comma splitting
+- fixed-position viewport anchoring now survives inline-content-flow containers
+  instead of being re-offset into the parent content box, and the computed
+  style path now defaults common controls and replaced elements like buttons,
+  inputs, selects, textareas, images, canvas, and iframes to `inline-block`
+  instead of `block`
 - bounded headed probes now prove:
   - Promise-microtask selector failures no longer kill the headed browser
   - centered hero-style flex layouts reach the real Win32 surface
@@ -692,6 +702,8 @@ Current state inside Gate 3:
     Win32 surface
   - centered wrapped flex-row content reaches the real Win32 surface across
     multiple lines
+  - fixed left/right viewport docking survives inline-flow containers while
+    later normal flow stays below on the real Win32 surface
   - delayed timer-driven content is present in the screenshot export path
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine

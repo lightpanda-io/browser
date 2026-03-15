@@ -349,11 +349,16 @@ pub fn presentPageView(self: *Display, title: []const u8, url: []const u8, body:
 
 fn browseScreenshotReady(body: []const u8, display_list: ?*const DisplayList) bool {
     const list = display_list orelse return false;
+    if (list.content_height <= 0) {
+        return false;
+    }
+
     if (list.commands.items.len > 0) {
         return true;
     }
 
-    return std.mem.trim(u8, body, &std.ascii.whitespace).len > 0;
+    return std.mem.trim(u8, body, &std.ascii.whitespace).len > 0 and
+        (list.link_regions.items.len > 0 or list.control_regions.items.len > 0);
 }
 
 test "browseScreenshotReady ignores root placeholder presentations" {
@@ -363,7 +368,7 @@ test "browseScreenshotReady ignores root placeholder presentations" {
     defer empty_list.deinit(std.testing.allocator);
 
     try std.testing.expect(!browseScreenshotReady("", &empty_list));
-    try std.testing.expect(browseScreenshotReady("real body", &empty_list));
+    try std.testing.expect(!browseScreenshotReady("real body", &empty_list));
 
     var painted_list = DisplayList{};
     defer painted_list.deinit(std.testing.allocator);
@@ -375,6 +380,24 @@ test "browseScreenshotReady ignores root placeholder presentations" {
         .color = .{ .r = 220, .g = 30, .b = 30 },
     });
     try std.testing.expect(browseScreenshotReady("", &painted_list));
+}
+
+test "browseScreenshotReady requires positive painted height" {
+    var region_only = DisplayList{};
+    defer region_only.deinit(std.testing.allocator);
+
+    try region_only.addControlRegion(std.testing.allocator, .{
+        .x = 0,
+        .y = 10,
+        .width = 40,
+        .height = 20,
+        .dom_path = &.{},
+    });
+    try std.testing.expect(browseScreenshotReady("fallback text", &region_only));
+
+    var zero_height = DisplayList{};
+    defer zero_height.deinit(std.testing.allocator);
+    try std.testing.expect(!browseScreenshotReady("fallback text", &zero_height));
 }
 
 pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {

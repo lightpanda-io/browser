@@ -320,6 +320,8 @@ const Painter = struct {
             .page_margin = self.list.page_margin,
         };
         defer temp_list.deinit(self.allocator);
+        var out_of_flow_children: std.ArrayList(*Node) = .{};
+        defer out_of_flow_children.deinit(self.allocator);
 
         var temp_painter = Painter{
             .allocator = self.allocator,
@@ -330,6 +332,10 @@ const Painter = struct {
         var child_cursor = FlowCursor.init(0, 0, @max(@as(i32, 40), content_width));
         var child_it = element.asNode().childrenIterator();
         while (child_it.next()) |child| {
+            if (try isOutOfFlowNode(child, self.page)) {
+                try out_of_flow_children.append(self.allocator, child);
+                continue;
+            }
             try temp_painter.paintNode(child, &child_cursor);
         }
 
@@ -347,6 +353,12 @@ const Painter = struct {
         }
 
         try self.appendDisplayListWithOffset(&temp_list, offset_x, content_y);
+        if (out_of_flow_children.items.len > 0) {
+            var overlay_cursor = FlowCursor.init(content_x, content_y, @max(@as(i32, 40), content_width));
+            for (out_of_flow_children.items) |child| {
+                try self.paintNode(child, &overlay_cursor);
+            }
+        }
         return if (bounds) |child_bounds|
             @max(child_height, child_bounds.y + child_bounds.height)
         else
@@ -1834,7 +1846,23 @@ fn isOutOfFlowPositioned(position: []const u8) bool {
     return std.ascii.eqlIgnoreCase(trimmed, "absolute") or std.ascii.eqlIgnoreCase(trimmed, "fixed");
 }
 
-fn positioningContextLeft(element: *Element, cursor: FlowCursor) i32 {
+fn isOutOfFlowNode(node: *Node, page: *Page) !bool {
+    const element = node.is(Element) orelse return false;
+    const style = try page.window.getComputedStyle(element, null, page);
+    const decl = style.asCSSStyleDeclaration();
+    return isOutOfFlowPositioned(resolveCssPropertyValue(decl, page, element, "position"));
+}
+
+fn isFixedPosition(position: []const u8) bool {
+    const trimmed = std.mem.trim(u8, position, &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(trimmed, "fixed");
+}
+
+fn positioningContextLeft(self: *const Painter, element: *Element, cursor: FlowCursor, position: []const u8) i32 {
+    if (isFixedPosition(position)) {
+        _ = self;
+        return 0;
+    }
     const parent = element.asNode().parentElement() orelse return 0;
     return switch (parent.getTag()) {
         .html, .body => 0,
@@ -1842,7 +1870,10 @@ fn positioningContextLeft(element: *Element, cursor: FlowCursor) i32 {
     };
 }
 
-fn positioningContextTop(element: *Element, cursor: FlowCursor) i32 {
+fn positioningContextTop(element: *Element, cursor: FlowCursor, position: []const u8) i32 {
+    if (isFixedPosition(position)) {
+        return 0;
+    }
     const parent = element.asNode().parentElement() orelse return 0;
     return switch (parent.getTag()) {
         .html, .body => 0,
@@ -1850,7 +1881,10 @@ fn positioningContextTop(element: *Element, cursor: FlowCursor) i32 {
     };
 }
 
-fn positioningContextWidth(self: *const Painter, element: *Element, cursor: FlowCursor) i32 {
+fn positioningContextWidth(self: *const Painter, element: *Element, cursor: FlowCursor, position: []const u8) i32 {
+    if (isFixedPosition(position)) {
+        return self.opts.viewport_width;
+    }
     const parent = element.asNode().parentElement() orelse return self.opts.viewport_width;
     return switch (parent.getTag()) {
         .html, .body => self.opts.viewport_width,
@@ -1858,7 +1892,10 @@ fn positioningContextWidth(self: *const Painter, element: *Element, cursor: Flow
     };
 }
 
-fn positioningContextHeight(self: *const Painter, element: *Element, context_top: i32) i32 {
+fn positioningContextHeight(self: *const Painter, element: *Element, context_top: i32, position: []const u8) i32 {
+    if (isFixedPosition(position)) {
+        return self.opts.viewport_height;
+    }
     const parent = element.asNode().parentElement() orelse return self.opts.viewport_height;
     return switch (parent.getTag()) {
         .html, .body => self.opts.viewport_height,
@@ -1875,7 +1912,7 @@ fn resolveAvailableWidthForElement(
     out_of_flow_positioned: bool,
 ) i32 {
     const context_width = if (out_of_flow_positioned)
-        positioningContextWidth(self, element, cursor)
+        positioningContextWidth(self, element, cursor, resolveCssPropertyValue(decl, self.page, element, "position"))
     else
         cursor.width;
     const available_width = @max(@as(i32, 80), context_width - margins.horizontal());
@@ -1897,10 +1934,11 @@ fn resolveOutOfFlowPosition(
     margins: EdgeSizes,
     width: i32,
 ) FlowCursor.Position {
-    const context_left = positioningContextLeft(element, cursor);
-    const context_top = positioningContextTop(element, cursor);
-    const context_width = positioningContextWidth(self, element, cursor);
-    const context_height = positioningContextHeight(self, element, context_top);
+    const position = resolveCssPropertyValue(decl, self.page, element, "position");
+    const context_left = positioningContextLeft(self, element, cursor, position);
+    const context_top = positioningContextTop(element, cursor, position);
+    const context_width = positioningContextWidth(self, element, cursor, position);
+    const context_height = positioningContextHeight(self, element, context_top, position);
     const left = parseCssLengthPxWithContext(decl.getPropertyValue("left", self.page), context_width, self.opts.viewport_width);
     const right = parseCssLengthPxWithContext(decl.getPropertyValue("right", self.page), context_width, self.opts.viewport_width);
     const top = parseCssLengthPxWithContext(decl.getPropertyValue("top", self.page), context_height, self.opts.viewport_height);
@@ -5005,6 +5043,52 @@ test "paintDocument anchors absolute boxes to the viewport without consuming nor
     try std.testing.expect(saw_left);
     try std.testing.expect(saw_right);
     try std.testing.expect(saw_body);
+}
+
+test "paintDocument anchors fixed boxes to the viewport instead of the parent flow" {
+    var page = try testing.pageTest("page/fixed_position_layout.html");
+    defer page._session.removePage();
+
+    const fixed_left = (try page.window._document.querySelector(.wrap(".fixed-left"), page)).?;
+    const fixed_right = (try page.window._document.querySelector(.wrap(".fixed-right"), page)).?;
+    const fixed_left_style = try page.window.getComputedStyle(fixed_left, null, page);
+    const fixed_right_style = try page.window.getComputedStyle(fixed_right, null, page);
+    try std.testing.expectEqualStrings("inline-block", fixed_left_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+    try std.testing.expectEqualStrings("inline-block", fixed_right_style.asCSSStyleDeclaration().getPropertyValue("display", page));
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_text: ?TextCommand = null;
+    var blue_text: ?TextCommand = null;
+    var green_text: ?TextCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (text.color.r >= 180 and text.color.g <= 90 and text.color.b <= 90) {
+                    red_text = text;
+                } else if (text.color.b >= 180 and text.color.r <= 90 and text.color.g <= 150) {
+                    blue_text = text;
+                } else if (text.color.g >= 140 and text.color.r <= 100 and text.color.b <= 140) {
+                    green_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_text orelse return error.FixedLeftTextMissing;
+    const blue = blue_text orelse return error.FixedRightTextMissing;
+    const green = green_text orelse return error.FlowBoxTextMissing;
+
+    try std.testing.expect(red.x < 60);
+    try std.testing.expect(red.y < 30);
+    try std.testing.expect(blue.x > 760);
+    try std.testing.expect(blue.y < 30);
+    try std.testing.expect(green.y > 180);
 }
 
 test "paintDocument centers inline children when text-align is center" {

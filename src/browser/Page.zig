@@ -4797,6 +4797,23 @@ test "Page querySelector supports dir open and vendor any-link compatibility sel
     try testing.expectString("policy-details", details.getAttributeSafe(.wrap("id")).?);
 }
 
+test "Page querySelector supports has relative combinators and quoted comma arguments" {
+    var page = try testing.pageTest("page/selector_has_relative.html");
+    defer page._session.removePage();
+
+    const direct = (try page.window._document.querySelector(.wrap("section:has(> .direct-hit)"), page)).?;
+    try testing.expectString("parent_direct", direct.getAttributeSafe(.wrap("id")).?);
+
+    const attr_parent = (try page.window._document.querySelector(.wrap("section:has(> .missing, > [data-note='alpha,beta'])"), page)).?;
+    try testing.expectString("parent_attr", attr_parent.getAttributeSafe(.wrap("id")).?);
+
+    const adjacent = (try page.window._document.querySelector(.wrap("li:has(+ li.selected)"), page)).?;
+    try testing.expectString("item_one", adjacent.getAttributeSafe(.wrap("id")).?);
+
+    const following = (try page.window._document.querySelector(.wrap("li:has(~ li.selected)"), page)).?;
+    try testing.expectString("item_zero", following.getAttributeSafe(.wrap("id")).?);
+}
+
 test "Page Enter on focused anchor queues named target popup" {
     var page = try testing.pageTest("page/popup_target.html");
     defer page._session.removePage();

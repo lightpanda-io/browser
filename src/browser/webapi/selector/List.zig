@@ -681,22 +681,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
         .has => |selectors| {
             for (selectors) |selector| {
-                var child = node.firstChild();
-                while (child) |c| {
-                    const child_el = c.is(Node.Element) orelse {
-                        child = c.nextSibling();
-                        continue;
-                    };
-
-                    if (matches(child_el.asNode(), selector, scope, page)) {
-                        return true;
-                    }
-
-                    if (matchesHasDescendant(child_el, selector, scope, page)) {
-                        return true;
-                    }
-
-                    child = c.nextSibling();
+                if (matchesHasSelector(node, selector, page)) {
+                    return true;
                 }
             }
             return false;
@@ -756,19 +742,70 @@ fn matchesLanguage(node: *Node, expected: []const u8) bool {
     return false;
 }
 
-fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *Node, page: *Page) bool {
-    var child = el.asNode().firstChild();
+fn matchesHasSelector(anchor: *Node, selector: Selector.Selector, page: *Page) bool {
+    return switch (selector.relative_combinator orelse .descendant) {
+        .descendant => matchesHasDescendant(anchor, selector, page),
+        .child => matchesHasChild(anchor, selector, page),
+        .next_sibling => matchesHasAdjacentSibling(anchor, selector, page),
+        .subsequent_sibling => matchesHasFollowingSibling(anchor, selector, page),
+    };
+}
+
+fn matchesHasChild(anchor: *Node, selector: Selector.Selector, page: *Page) bool {
+    var child = anchor.firstChild();
     while (child) |c| {
-        const child_el = c.is(Node.Element) orelse {
+        if (c.is(Node.Element) == null) {
             child = c.nextSibling();
             continue;
-        };
+        }
+        if (matches(c, selector, anchor, page)) {
+            return true;
+        }
+        child = c.nextSibling();
+    }
+    return false;
+}
 
-        if (matches(child_el.asNode(), selector, scope, page)) {
+fn matchesHasAdjacentSibling(anchor: *Node, selector: Selector.Selector, page: *Page) bool {
+    var sibling = anchor.nextSibling();
+    while (sibling) |candidate| {
+        if (candidate.is(Node.Element) == null) {
+            sibling = candidate.nextSibling();
+            continue;
+        }
+        return matches(candidate, selector, anchor, page);
+    }
+    return false;
+}
+
+fn matchesHasFollowingSibling(anchor: *Node, selector: Selector.Selector, page: *Page) bool {
+    var sibling = anchor.nextSibling();
+    while (sibling) |candidate| {
+        if (candidate.is(Node.Element) == null) {
+            sibling = candidate.nextSibling();
+            continue;
+        }
+        if (matches(candidate, selector, anchor, page)) {
+            return true;
+        }
+        sibling = candidate.nextSibling();
+    }
+    return false;
+}
+
+fn matchesHasDescendant(anchor: *Node, selector: Selector.Selector, page: *Page) bool {
+    var child = anchor.firstChild();
+    while (child) |c| {
+        if (c.is(Node.Element) == null) {
+            child = c.nextSibling();
+            continue;
+        }
+
+        if (matches(c, selector, anchor, page)) {
             return true;
         }
 
-        if (matchesHasDescendant(child_el, selector, scope, page)) {
+        if (matchesHasDescendant(c, selector, page)) {
             return true;
         }
 

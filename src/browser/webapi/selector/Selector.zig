@@ -291,8 +291,17 @@ pub const Segment = struct {
 pub const Selector = struct {
     first: Compound,
     segments: []const Segment,
+    relative_combinator: ?Combinator = null,
 
     pub fn format(self: Selector, writer: *std.Io.Writer) !void {
+        if (self.relative_combinator) |relative| {
+            switch (relative) {
+                .descendant => {},
+                .child => try writer.writeAll("> "),
+                .next_sibling => try writer.writeAll("+ "),
+                .subsequent_sibling => try writer.writeAll("~ "),
+            }
+        }
         try self.first.format(writer);
         for (self.segments) |segment| {
             try segment.format(writer);

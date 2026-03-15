@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Fixed Position Smoke</title>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: rgb(255, 255, 255);
+    }
+    .stage {
+      margin-top: 150px;
+      margin-left: 80px;
+      width: 320px;
+      padding: 16px;
+      border: 1px solid rgb(180, 180, 180);
+      background: rgb(245, 245, 245);
+    }
+    .fixed-left {
+      position: fixed;
+      top: 0;
+      left: 0;
+      color: rgb(220, 50, 50);
+    }
+    .fixed-right {
+      position: fixed;
+      top: 0;
+      right: 0;
+      color: rgb(40, 110, 220);
+    }
+    .flow-box {
+      margin-top: 24px;
+      color: rgb(40, 170, 90);
+    }
+  </style>
+</head>
+<body>
+  <section class="stage">
+    <button class="fixed-left">fixed left</button>
+    <button class="fixed-right">fixed right</button>
+    <button class="flow-box">flow box</button>
+  </section>
+</body>
+</html>
