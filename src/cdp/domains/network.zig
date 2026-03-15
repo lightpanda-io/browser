@@ -122,7 +122,7 @@ fn deleteCookies(cmd: anytype) !void {
     // This allows Puppeteer's page.setCookie() to work, which sends deleteCookies
     // with partitionKey as part of its cookie-setting workflow.
     if (params.partitionKey != null) {
-        log.debug(.network, "partitionKey ignored in deleteCookies", .{});
+        log.warn(.not_implemented, "partition key", .{.src = "deleteCookies"});
     }
 
     const bc = cmd.browser_context orelse return error.BrowserContextNotLoaded;
