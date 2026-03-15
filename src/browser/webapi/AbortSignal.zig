@@ -176,6 +176,9 @@ const TimeoutCallback = struct {
 
     fn run(ctx: *anyopaque) !?u32 {
         const self: *TimeoutCallback = @ptrCast(@alignCast(ctx));
+        var ls: js.Local.Scope = undefined;
+        self.page.js.localScope(&ls);
+        defer ls.deinit();
         self.signal.abort(.{ .string = "TimeoutError" }, self.page) catch |err| {
             log.warn(.app, "abort signal timeout", .{ .err = err });
         };

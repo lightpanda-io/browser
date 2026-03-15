@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head>
+  <title>Selector Microtask Pending</title>
+</head>
+<body>
+  <script>
+    window.addEventListener('load', () => {
+      Promise.resolve().then(() => {
+        document.title = 'Selector Microtask Survived';
+        document.querySelector(':definitely-unsupported');
+      });
+    });
+  </script>
+</body>
+</html>

@@ -21,6 +21,7 @@ const builtin = @import("builtin");
 
 const log = @import("../log.zig");
 const String = @import("../string.zig").String;
+const testing = @import("../testing.zig");
 
 const js = @import("js/js.zig");
 const Page = @import("Page.zig");
@@ -227,6 +228,30 @@ const DispatchDirectOptions = struct {
     inject_target: bool = true,
 };
 
+fn isRecoverableDispatchError(err: anyerror) bool {
+    const DOMException = @import("webapi/DOMException.zig");
+    if (DOMException.fromError(err) != null) {
+        return true;
+    }
+
+    return switch (err) {
+        error.JSExecCallback,
+        error.CompilationError,
+        error.ExecutionError,
+        error.JsException,
+        => true,
+        else => false,
+    };
+}
+
+fn swallowDispatchError(comptime context: []const u8, err: anyerror) void {
+    if (!isRecoverableDispatchError(err)) {
+        log.warn(.event, context, .{ .err = err });
+        return;
+    }
+    log.warn(.event, context, .{ .err = err });
+}
+
 // Direct dispatch for non-DOM targets (Window, XHR, AbortSignal) or DOM nodes with
 // property handlers. No propagation - just calls the handler and registered listeners.
 // Handler can be: null, ?js.Function.Global, ?js.Function.Temp, or js.Function
@@ -259,8 +284,7 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
         if (func.callWithThis(void, target, .{event})) {
             was_dispatched = true;
         } else |err| {
-            // a non-JS error
-            log.warn(.event, opts.context, .{ .err = err });
+            swallowDispatchError(opts.context, err);
         }
     }
 
@@ -328,15 +352,21 @@ pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, 
         event._current_target = target;
 
         switch (listener.function) {
-            .value => |value| try ls.toLocal(value).callWithThis(void, target, .{event}),
+            .value => |value| ls.toLocal(value).callWithThis(void, target, .{event}) catch |err| {
+                swallowDispatchError(opts.context, err);
+            },
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
-                try ls.local.eval(str, null);
+                ls.local.eval(str, null) catch |err| {
+                    swallowDispatchError(opts.context, err);
+                };
             },
             .object => |obj_global| {
                 const obj = ls.toLocal(obj_global);
                 if (try obj.getFunction("handleEvent")) |handleEvent| {
-                    try handleEvent.callWithThis(void, obj, .{event});
+                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
+                        swallowDispatchError(opts.context, err);
+                    };
                 }
             },
         }
@@ -481,7 +511,9 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
             was_handled = true;
             event._current_target = target_et;
 
-            try ls.toLocal(inline_handler).callWithThis(void, target_et, .{event});
+            ls.toLocal(inline_handler).callWithThis(void, target_et, .{event}) catch |err| {
+                swallowDispatchError("dispatch.inline", err);
+            };
 
             if (event._stop_propagation) {
                 return;
@@ -609,15 +641,21 @@ fn dispatchPhase(self: *EventManager, list: *std.DoublyLinkedList, current_targe
         }
 
         switch (listener.function) {
-            .value => |value| try local.toLocal(value).callWithThis(void, current_target, .{event}),
+            .value => |value| local.toLocal(value).callWithThis(void, current_target, .{event}) catch |err| {
+                swallowDispatchError("dispatchPhase", err);
+            },
             .string => |string| {
                 const str = try page.call_arena.dupeZ(u8, string.str());
-                try local.eval(str, null);
+                local.eval(str, null) catch |err| {
+                    swallowDispatchError("dispatchPhase", err);
+                };
             },
             .object => |obj_global| {
                 const obj = local.toLocal(obj_global);
                 if (try obj.getFunction("handleEvent")) |handleEvent| {
-                    try handleEvent.callWithThis(void, obj, .{event});
+                    handleEvent.callWithThis(void, obj, .{event}) catch |err| {
+                        swallowDispatchError("dispatchPhase", err);
+                    };
                 }
             },
         }
@@ -905,3 +943,23 @@ const ActivationState = struct {
         try page._event_manager.dispatch(target, event);
     }
 };
+
+test "dispatch contains selector syntax errors inside load listeners" {
+    var page = try testing.pageTest("page/selector_error_containment.html");
+    defer page._session.removePage();
+
+    _ = page._session.wait(250);
+
+    const title = (try page.getTitle()) orelse return error.MissingTitle;
+    try std.testing.expectEqualStrings("Selector Error Survived", title);
+}
+
+test "dispatch contains selector syntax errors inside promise microtasks" {
+    var page = try testing.pageTest("page/selector_error_microtask_containment.html");
+    defer page._session.removePage();
+
+    _ = page._session.wait(250);
+
+    const title = (try page.getTitle()) orelse return error.MissingTitle;
+    try std.testing.expectEqualStrings("Selector Microtask Survived", title);
+}

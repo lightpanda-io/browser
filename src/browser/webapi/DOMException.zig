@@ -39,6 +39,14 @@ pub fn init(message: ?[]const u8, name: ?[]const u8) DOMException {
 pub fn fromError(err: anyerror) ?DOMException {
     return switch (err) {
         error.SyntaxError => .{ ._code = .syntax_error },
+        error.InvalidIDSelector => .{ ._code = .syntax_error },
+        error.InvalidClassSelector => .{ ._code = .syntax_error },
+        error.InvalidAttributeSelector => .{ ._code = .syntax_error },
+        error.InvalidPseudoClass => .{ ._code = .syntax_error },
+        error.InvalidNthPattern => .{ ._code = .syntax_error },
+        error.UnknownPseudoClass => .{ ._code = .syntax_error },
+        error.InvalidTagSelector => .{ ._code = .syntax_error },
+        error.InvalidSelector => .{ ._code = .syntax_error },
         error.InvalidCharacterError => .{ ._code = .invalid_character_error },
         error.NotFound => .{ ._code = .not_found },
         error.NotSupported => .{ ._code = .not_supported },

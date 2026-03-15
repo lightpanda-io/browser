@@ -117,6 +117,9 @@ const PostMessageCallback = struct {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
         defer self.deinit();
         const page = self.page;
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
 
         if (self.port._closed) {
             return null;

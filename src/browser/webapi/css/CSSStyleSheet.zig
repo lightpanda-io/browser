@@ -148,7 +148,8 @@ pub fn applyMatchingRules(self: *const CSSStyleSheet, element: *Element, decl: *
     if (self._disabled) return;
 
     for (self._rules) |entry| {
-        if (!(try element.matches(entry.selector_text, page))) {
+        const matches = element.matches(entry.selector_text, page) catch continue;
+        if (!matches) {
             continue;
         }
         try decl.applyDeclarationsText(entry.declarations_text, page);

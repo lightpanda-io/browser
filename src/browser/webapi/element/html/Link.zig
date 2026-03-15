@@ -185,6 +185,9 @@ const StylesheetLoadCallback = struct {
         if (callback.page.isGoingAway()) {
             return null;
         }
+        var ls: js.Local.Scope = undefined;
+        callback.page.js.localScope(&ls);
+        defer ls.deinit();
 
         const sheet = (try callback.link.getSheet(callback.page)) orelse return null;
         _ = sheet;

@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: #ffffff;
+    }
+    .hero {
+      width: min(584px, calc(100% - 52px));
+      max-width: 584px;
+      margin-left: auto;
+      margin-right: auto;
+      padding: 16px;
+      text-align: center;
+      border: 1px solid #dfe1e5;
+      background: #f8f9fa;
+    }
+    .hero h1 {
+      margin: 0 0 12px 0;
+      font-size: 32px;
+    }
+    .hero input {
+      width: 540px;
+      max-width: 540px;
+      height: 36px;
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>Search</h1>
+    <input value="Centered search" />
+  </div>
+</body>
+</html>

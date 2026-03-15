@@ -1027,6 +1027,9 @@ const RequestCallback = struct {
 
         const page = self.page;
         const request = self.request;
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
         const event_type = if (request._error == null) "success" else "error";
         const event = try Event.initTrusted(try String.init(page.arena, event_type, .{}), null, page);
         try page._event_manager.dispatchDirect(
@@ -1054,6 +1057,9 @@ const OpenRequestCallback = struct {
 
         const page = self.page;
         const request = self.request;
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
 
         if (request._error) |_| {
             const error_event = try Event.initTrusted(try String.init(page.arena, "error", .{}), null, page);

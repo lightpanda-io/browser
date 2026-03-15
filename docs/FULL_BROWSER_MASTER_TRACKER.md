@@ -67,6 +67,18 @@ The fork already has a real headed Windows foundation:
   inline child chips and links for the current simple mixed-inline path,
   instead of splitting the paragraph into a separate text band above the inline
   controls
+- invalid or unsupported selector syntax in page JS and stylesheet matching no
+  longer tears down headed mode; selector syntax errors now stay in-page as JS
+  failures while invalid stylesheet selectors are skipped safely
+- headed JS microtask checkpoints now run inside the target context with a real
+  V8 handle scope, removing the clean Google startup `HandleScope::CreateHandle`
+  fatal seen during Promise-heavy page initialization repros
+- the first real CSS/layout compatibility slice is in place for headed
+  documents: `min(...)`, `max(...)`, `clamp(...)`, `%`, `vw`, and `vh` lengths;
+  block auto-margin centering; flex-column centering; centered inline child
+  flow for `text-align:center`; and absolute out-of-flow positioning, with
+  focused painter tests plus bounded headed runtime probes for microtask
+  containment, centered flex hero layout, and absolute corner docking
 
 ## Achieved Gates
 
@@ -647,7 +659,7 @@ Current known gap entering Gate 2:
 
 ### Gate 3: Layout Engine Replacement
 
-Status: Planned
+Status: Active
 
 Goal:
 - replace the remaining dummy and heuristic layout paths with a real layout
@@ -659,6 +671,19 @@ Exit criteria:
 - positioning, overflow, fixed/sticky basics, margin/padding/border handling,
   and intrinsic sizing are implemented
 - form controls and replaced elements layout correctly in normal documents
+
+Current state inside Gate 3:
+- the first compatibility slice is landed for common real-site layout pressure:
+  safer selector failure containment, length resolution for `%`/`vw`/`vh` plus
+  `min(...)`/`max(...)`/`clamp(...)`, auto-margin centering, flex-column
+  centering, centered inline child flow, and absolute corner positioning
+- bounded headed probes now prove:
+  - Promise-microtask selector failures no longer kill the headed browser
+  - centered hero-style flex layouts reach the real Win32 surface
+  - absolute left/right corner docking plus later normal flow reach the real
+    Win32 surface
+- the remaining gap is still large: this is a pragmatic compatibility slice,
+  not a full layout engine
 
 ### Gate 4: Paint, Text, And Compositing
 

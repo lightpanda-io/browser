@@ -924,6 +924,9 @@ const PostMessageCallback = struct {
 
         const page = self.page;
         const window = page.window;
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
 
         const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
             .data = self.message,
@@ -962,6 +965,9 @@ const StorageEventCallback = struct {
 
         const page = self.page;
         const window = self.window;
+        var ls: js.Local.Scope = undefined;
+        page.js.localScope(&ls);
+        defer ls.deinit();
         const event = (try StorageEvent.initTrusted(comptime .wrap("storage"), .{
             .key = self.key,
             .oldValue = self.old_value,

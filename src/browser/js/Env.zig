@@ -363,6 +363,14 @@ pub fn runMicrotasks(self: *Env) void {
             if (ctx.suspended) {
                 continue;
             }
+
+            // Promise callbacks and queued JS microtasks can re-enter host
+            // bindings. Run the checkpoint inside the target context so those
+            // callbacks have a real V8 HandleScope and current context.
+            var hs: js.HandleScope = undefined;
+            const entered = ctx.enter(&hs);
+            defer entered.exit();
+
             v8.v8__MicrotaskQueue__PerformCheckpoint(ctx.microtask_queue, v8_isolate);
         }
     }
@@ -485,6 +493,9 @@ fn promiseRejectCallback(message_handle: v8.PromiseRejectMessage) callconv(.c) v
     const v8_isolate = v8.v8__Object__GetIsolate(@ptrCast(promise_handle)).?;
     const js_isolate = js.Isolate{ .handle = v8_isolate };
     const ctx = Context.fromIsolate(js_isolate);
+    var handle_scope: js.HandleScope = undefined;
+    handle_scope.init(js_isolate);
+    defer handle_scope.deinit();
 
     const local = js.Local{
         .ctx = ctx,

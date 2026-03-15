@@ -738,7 +738,21 @@ pub fn cloneNode(self: *Node, deep_: ?bool, page: *Page) CloneError!*Node {
                 .processing_instruction => |pi| page.createProcessingInstruction(pi._target, data),
             };
         },
-        .element => |el| return el.clone(deep, page),
+        .element => |el| return el.clone(deep, page) catch |err| switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.StringTooLarge => error.StringTooLarge,
+            error.NotSupported => error.NotSupported,
+            error.NotImplemented => error.NotImplemented,
+            error.InvalidCharacterError => error.InvalidCharacterError,
+            error.IFrameLoadError => error.IFrameLoadError,
+            error.TooManyContexts => error.TooManyContexts,
+            error.LinkLoadError => error.LinkLoadError,
+            error.StyleLoadError => error.StyleLoadError,
+            error.TypeError => error.TypeError,
+            error.CompilationError => error.CompilationError,
+            error.JsException => error.JsException,
+            else => error.CloneError,
+        },
         .document => return error.NotSupported,
         .document_type => |dt| {
             const cloned = dt.clone(page) catch return error.CloneError;

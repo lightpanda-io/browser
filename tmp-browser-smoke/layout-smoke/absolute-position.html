@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Absolute Position Layout</title>
+  <style>
+    html, body {
+      margin: 0;
+      background: rgb(255, 255, 255);
+    }
+    .left {
+      position: absolute;
+      left: 20px;
+      top: 20px;
+      width: 140px;
+      font-size: 48px;
+      line-height: 1;
+      font-weight: 700;
+      color: rgb(220, 50, 50);
+    }
+    .right {
+      position: absolute;
+      right: 20px;
+      top: 20px;
+      width: 180px;
+      font-size: 48px;
+      line-height: 1;
+      font-weight: 700;
+      text-align: right;
+      color: rgb(220, 40, 220);
+    }
+    .flow {
+      margin-top: 140px;
+      font-size: 48px;
+      line-height: 1;
+      font-weight: 700;
+      color: rgb(40, 190, 40);
+    }
+  </style>
+</head>
+<body>
+  <div class="left">LEFT</div>
+  <div class="right">RIGHT</div>
+  <div class="flow">FLOW</div>
+</body>
+</html>

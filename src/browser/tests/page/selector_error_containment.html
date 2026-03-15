@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head>
+  <title>Selector Error Pending</title>
+</head>
+<body>
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        document.title = 'Selector Error Survived';
+      }, 0);
+
+      document.querySelector(':definitely-unsupported');
+    });
+  </script>
+</body>
+</html>

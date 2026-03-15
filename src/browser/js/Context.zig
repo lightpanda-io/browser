@@ -658,6 +658,9 @@ fn resolveModuleCallback(
     _ = import_attributes;
 
     const self = module_resolution_context orelse return null;
+    var hs: js.HandleScope = undefined;
+    hs.init(self.isolate);
+    defer hs.deinit();
     const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -723,6 +726,9 @@ pub fn dynamicModuleCallback(
     _ = import_attrs;
 
     const self = fromC(c_context.?);
+    var hs: js.HandleScope = undefined;
+    hs.init(self.isolate);
+    defer hs.deinit();
     const local = js.Local{
         .ctx = self,
         .handle = c_context.?,
@@ -768,8 +774,10 @@ pub fn dynamicModuleCallback(
 }
 
 pub fn metaObjectCallback(c_context: ?*v8.Context, c_module: ?*v8.Module, c_meta: ?*v8.Value) callconv(.c) void {
-    // @HandleScope  implement this without a fat context/local..
     const self = fromC(c_context.?);
+    var hs: js.HandleScope = undefined;
+    hs.init(self.isolate);
+    defer hs.deinit();
     var local = js.Local{
         .ctx = self,
         .handle = c_context.?,
