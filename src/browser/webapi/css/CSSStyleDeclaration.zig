@@ -226,6 +226,39 @@ fn expandBackgroundShorthand(self: *CSSStyleDeclaration, value: []const u8, impo
     if (extractBackgroundColorToken(trimmed)) |color_token| {
         try self.setPropertyImpl("background-color", color_token, important, page);
     }
+
+    var tokens = tokenizeCssValue(trimmed, page.call_arena);
+    var image_token: ?[]const u8 = null;
+    var repeat_token: ?[]const u8 = null;
+    var position_tokens = std.ArrayList([]const u8).empty;
+    defer position_tokens.deinit(page.call_arena);
+
+    while (tokens.next()) |token| {
+        if (token.len == 0) continue;
+
+        if (image_token == null and isBackgroundImageToken(token)) {
+            image_token = token;
+            continue;
+        }
+        if (repeat_token == null and isBackgroundRepeatToken(token)) {
+            repeat_token = token;
+            continue;
+        }
+        if (isBackgroundPositionToken(token) and position_tokens.items.len < 2) {
+            try position_tokens.append(page.call_arena, token);
+        }
+    }
+
+    if (image_token) |token| {
+        try self.setPropertyImpl("background-image", token, important, page);
+    }
+    if (repeat_token) |token| {
+        try self.setPropertyImpl("background-repeat", token, important, page);
+    }
+    if (position_tokens.items.len > 0) {
+        const background_position = try std.mem.join(page.call_arena, " ", position_tokens.items);
+        try self.setPropertyImpl("background-position", background_position, important, page);
+    }
 }
 
 fn expandBorderShorthand(self: *CSSStyleDeclaration, value: []const u8, important: bool, page: *Page) !void {
@@ -576,6 +609,32 @@ fn isLikelyColorToken(token: []const u8) bool {
         "olive",
         "fuchsia",
         "currentcolor",
+    });
+}
+
+fn isBackgroundImageToken(token: []const u8) bool {
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    if (trimmed.len == 0) return false;
+    return std.ascii.startsWithIgnoreCase(trimmed, "url(") or std.ascii.eqlIgnoreCase(trimmed, "none");
+}
+
+fn isBackgroundRepeatToken(token: []const u8) bool {
+    return asciiEqualsAnyIgnoreCase(token, &.{
+        "repeat",
+        "repeat-x",
+        "repeat-y",
+        "no-repeat",
+    });
+}
+
+fn isBackgroundPositionToken(token: []const u8) bool {
+    if (likelyCssLengthToken(token)) return true;
+    return asciiEqualsAnyIgnoreCase(token, &.{
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "center",
     });
 }
 

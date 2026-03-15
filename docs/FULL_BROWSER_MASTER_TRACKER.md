@@ -752,6 +752,16 @@ Current state inside Gate 3:
   - bounded headed probes now cover absolute positioned overlap with topmost
     click targeting plus the tiny-placeholder screenshot race in addition to
     the earlier delayed-content screenshot gate
+- CSS background-image compatibility now also has a first real box-paint slice:
+  - inline `background:` shorthand now expands basic `url(...)`, repeat, and
+    position tokens into `background-image`, `background-repeat`, and
+    `background-position`
+  - headed background images now paint through the shared image request path
+    with box clipping plus `repeat-x`, `repeat-y`, and `no-repeat` tiling on
+    the Win32 surface instead of being ignored outright
+  - bounded tests and a headed sprite probe now prove repeated and non-repeated
+    background image boxes render with the expected offset and size on the real
+    screenshot path
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

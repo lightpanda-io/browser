@@ -4640,14 +4640,19 @@ fn drawPresentationImage(
     backend.image_cache_lock.lock();
     defer backend.image_cache_lock.unlock();
 
+    const is_background = image_cmd.draw_mode == .background;
     const owned_key = imageRequestCacheKey(backend.allocator, image_cmd) catch {
-        drawPresentationImagePlaceholder(hdc, rect, image_cmd);
+        if (!is_background) {
+            drawPresentationImagePlaceholder(hdc, rect, image_cmd);
+        }
         return;
     };
     errdefer backend.allocator.free(owned_key);
 
     const gop = backend.image_cache.getOrPut(backend.allocator, owned_key) catch {
-        drawPresentationImagePlaceholder(hdc, rect, image_cmd);
+        if (!is_background) {
+            drawPresentationImagePlaceholder(hdc, rect, image_cmd);
+        }
         return;
     };
     if (gop.found_existing) {
@@ -4663,7 +4668,14 @@ fn drawPresentationImage(
     }
 
     if (cached.state != .loaded or cached.gp_image == null) {
-        drawPresentationImagePlaceholder(hdc, rect, image_cmd);
+        if (!is_background) {
+            drawPresentationImagePlaceholder(hdc, rect, image_cmd);
+        }
+        return;
+    }
+
+    if (is_background) {
+        drawPresentationBackgroundImage(hdc, rect, image_cmd, cached);
         return;
     }
 
@@ -4686,6 +4698,88 @@ fn drawPresentationImage(
     if (status != GDIP_STATUS_OK) {
         drawPresentationImagePlaceholder(hdc, rect, image_cmd);
     }
+}
+
+fn drawPresentationBackgroundImage(
+    hdc: c.HDC,
+    rect: c.RECT,
+    image_cmd: ImageCommand,
+    cached: *const CachedImage,
+) void {
+    if (cached.gp_image == null or cached.width == 0 or cached.height == 0) {
+        return;
+    }
+    if (rect.right <= rect.left or rect.bottom <= rect.top) {
+        return;
+    }
+
+    const tile_width = @as(i32, @intCast(cached.width));
+    const tile_height = @as(i32, @intCast(cached.height));
+    if (tile_width <= 0 or tile_height <= 0) {
+        return;
+    }
+
+    const saved_dc = c.SaveDC(hdc);
+    if (saved_dc == 0) {
+        return;
+    }
+    defer _ = c.RestoreDC(hdc, saved_dc);
+
+    if (c.IntersectClipRect(hdc, rect.left, rect.top, rect.right, rect.bottom) == c.ERROR) {
+        return;
+    }
+
+    var graphics: ?*GpGraphics = null;
+    if (GdipCreateFromHDC(hdc, &graphics) != GDIP_STATUS_OK or graphics == null) {
+        return;
+    }
+    defer _ = GdipDeleteGraphics(graphics.?);
+
+    const origin_x = rect.left + image_cmd.background_offset_x;
+    const origin_y = rect.top + image_cmd.background_offset_y;
+    const start_x = if (image_cmd.repeat_x)
+        backgroundTileStart(origin_x, tile_width, rect.left)
+    else
+        origin_x;
+    const start_y = if (image_cmd.repeat_y)
+        backgroundTileStart(origin_y, tile_height, rect.top)
+    else
+        origin_y;
+
+    var y = start_y;
+    while (true) {
+        var x = start_x;
+        while (true) {
+            _ = GdipDrawImageRectI(
+                graphics.?,
+                cached.gp_image.?,
+                x,
+                y,
+                tile_width,
+                tile_height,
+            );
+
+            if (!image_cmd.repeat_x) break;
+            x += tile_width;
+            if (x >= rect.right) break;
+        }
+
+        if (!image_cmd.repeat_y) break;
+        y += tile_height;
+        if (y >= rect.bottom) break;
+    }
+}
+
+fn backgroundTileStart(origin: i32, tile_size: i32, clip_min: i32) i32 {
+    if (tile_size <= 0) return origin;
+    var start = origin;
+    while (start > clip_min) {
+        start -= tile_size;
+    }
+    while (start + tile_size <= clip_min) {
+        start += tile_size;
+    }
+    return start;
 }
 
 fn drawPresentationCanvas(

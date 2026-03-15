@@ -284,6 +284,11 @@ const Painter = struct {
                     .width = image.width,
                     .height = image.height,
                     .z_index = image.z_index,
+                    .draw_mode = image.draw_mode,
+                    .background_offset_x = image.background_offset_x,
+                    .background_offset_y = image.background_offset_y,
+                    .repeat_x = image.repeat_x,
+                    .repeat_y = image.repeat_y,
                     .url = image.url,
                     .alt = image.alt,
                     .request_include_credentials = image.request_include_credentials,
@@ -737,6 +742,7 @@ const Painter = struct {
                 });
             }
         }
+        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index);
 
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
@@ -890,6 +896,7 @@ const Painter = struct {
                 }
             }
         }
+        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index);
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
                 .x = rect.x,
@@ -1067,6 +1074,7 @@ const Painter = struct {
                 }
             }
         }
+        try appendResolvedBackgroundImage(self, decl, rect, paint_z_index);
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
                 .x = rect.x,
@@ -1980,6 +1988,16 @@ const ImageRequestContext = struct {
     authorization_value: []u8 = &.{},
 };
 
+const BackgroundPosition = struct {
+    x: i32 = 0,
+    y: i32 = 0,
+};
+
+const BackgroundRepeat = struct {
+    x: bool = true,
+    y: bool = true,
+};
+
 fn resolveImageRequestContext(page: *Page, resolved_url: [:0]const u8) !ImageRequestContext {
     var headers = try page._session.browser.http_client.newHeaders();
     defer headers.deinit();
@@ -2002,6 +2020,102 @@ fn resolveImageRequestContext(page: *Page, resolved_url: [:0]const u8) !ImageReq
         }
     }
     return context;
+}
+
+fn appendResolvedBackgroundImage(
+    self: *Painter,
+    decl: anytype,
+    rect: anytype,
+    z_index: i32,
+) !void {
+    const raw_background_image = std.mem.trim(u8, decl.getPropertyValue("background-image", self.page), &std.ascii.whitespace);
+    if (raw_background_image.len == 0 or std.ascii.eqlIgnoreCase(raw_background_image, "none")) {
+        return;
+    }
+
+    const image_url = extractBackgroundImageUrl(raw_background_image) orelse return;
+    const resolved = try URL.resolve(self.page.call_arena, self.page.base(), image_url, .{ .encode = true });
+    const resolved_z = try self.page.call_arena.dupeZ(u8, resolved);
+    const request_context = try resolveImageRequestContext(self.page, resolved_z);
+    const repeat = resolveBackgroundRepeat(decl, self.page);
+    const position = resolveBackgroundPosition(
+        decl,
+        self.page,
+        rect.width,
+        rect.height,
+        self.opts.viewport_width,
+        self.opts.viewport_height,
+    );
+
+    try self.list.addImage(self.allocator, .{
+        .x = rect.x,
+        .y = rect.y,
+        .width = rect.width,
+        .height = rect.height,
+        .z_index = z_index,
+        .draw_mode = .background,
+        .background_offset_x = position.x,
+        .background_offset_y = position.y,
+        .repeat_x = repeat.x,
+        .repeat_y = repeat.y,
+        .url = @constCast(resolved),
+        .alt = @constCast(""),
+        .request_include_credentials = true,
+        .request_cookie_value = request_context.cookie_value,
+        .request_referer_value = request_context.referer_value,
+        .request_authorization_value = request_context.authorization_value,
+    });
+}
+
+fn extractBackgroundImageUrl(raw_background_image: []const u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, raw_background_image, &std.ascii.whitespace);
+    if (!std.ascii.startsWithIgnoreCase(trimmed, "url(") or trimmed.len < 5 or trimmed[trimmed.len - 1] != ')') {
+        return null;
+    }
+
+    var inner = std.mem.trim(u8, trimmed[4 .. trimmed.len - 1], &std.ascii.whitespace);
+    if (inner.len >= 2 and ((inner[0] == '"' and inner[inner.len - 1] == '"') or (inner[0] == '\'' and inner[inner.len - 1] == '\''))) {
+        inner = inner[1 .. inner.len - 1];
+    }
+    return if (inner.len > 0) inner else null;
+}
+
+fn resolveBackgroundRepeat(decl: anytype, page: *Page) BackgroundRepeat {
+    const raw = std.mem.trim(u8, decl.getPropertyValue("background-repeat", page), &std.ascii.whitespace);
+    if (raw.len == 0) return .{};
+    if (std.ascii.eqlIgnoreCase(raw, "no-repeat")) return .{ .x = false, .y = false };
+    if (std.ascii.eqlIgnoreCase(raw, "repeat-x")) return .{ .x = true, .y = false };
+    if (std.ascii.eqlIgnoreCase(raw, "repeat-y")) return .{ .x = false, .y = true };
+    return .{};
+}
+
+fn resolveBackgroundPosition(
+    decl: anytype,
+    page: *Page,
+    reference_width: i32,
+    reference_height: i32,
+    viewport_width: i32,
+    viewport_height: i32,
+) BackgroundPosition {
+    const raw = std.mem.trim(u8, decl.getPropertyValue("background-position", page), &std.ascii.whitespace);
+    if (raw.len == 0) return .{};
+
+    var tokens = std.mem.tokenizeAny(u8, raw, " \t\r\n");
+    const x_token = tokens.next() orelse return .{};
+    const y_token = tokens.next() orelse x_token;
+    return .{
+        .x = parseBackgroundPositionComponent(x_token, reference_width, viewport_width),
+        .y = parseBackgroundPositionComponent(y_token, reference_height, viewport_height),
+    };
+}
+
+fn parseBackgroundPositionComponent(token: []const u8, reference: i32, viewport: i32) i32 {
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    if (trimmed.len == 0) return 0;
+    if (std.ascii.eqlIgnoreCase(trimmed, "left") or std.ascii.eqlIgnoreCase(trimmed, "top")) return 0;
+    if (std.ascii.eqlIgnoreCase(trimmed, "center")) return 0;
+    if (std.ascii.eqlIgnoreCase(trimmed, "right") or std.ascii.eqlIgnoreCase(trimmed, "bottom")) return 0;
+    return parseCssLengthPxWithContext(trimmed, reference, viewport) orelse 0;
 }
 
 fn imageRequestIncludesCredentials(element: *Element) bool {
@@ -5738,6 +5852,59 @@ test "paintDocument lays out legacy centered table search form" {
     try std.testing.expect(side.x >= shell_box.x + shell_box.width);
     try std.testing.expect(side.y <= shell_box.y + 12);
     try std.testing.expectEqualStrings("left", side_style.asCSSStyleDeclaration().getPropertyValue("text-align", page));
+}
+
+test "paintDocument emits tiled and non-repeated background image commands" {
+    var page = try testing.pageTest("page/background_image_layout.html");
+    defer page._session.removePage();
+
+    const band = (try page.window._document.querySelector(.wrap("#band"), page)).?;
+    const badge = (try page.window._document.querySelector(.wrap("#badge"), page)).?;
+    const band_style = try page.window.getComputedStyle(band, null, page);
+    const badge_style = try page.window.getComputedStyle(badge, null, page);
+
+    try std.testing.expect(std.mem.indexOf(u8, band_style.asCSSStyleDeclaration().getPropertyValue("background-image", page), "background_sprite.png") != null);
+    try std.testing.expectEqualStrings("repeat-x", band_style.asCSSStyleDeclaration().getPropertyValue("background-repeat", page));
+    try std.testing.expectEqualStrings("0 -40px", band_style.asCSSStyleDeclaration().getPropertyValue("background-position", page));
+    try std.testing.expect(std.mem.indexOf(u8, badge_style.asCSSStyleDeclaration().getPropertyValue("background-image", page), "background_sprite.png") != null);
+    try std.testing.expectEqualStrings("no-repeat", badge_style.asCSSStyleDeclaration().getPropertyValue("background-repeat", page));
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var repeated: ?ImageCommand = null;
+    var single: ?ImageCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (image.draw_mode != .background) continue;
+                if (std.mem.indexOf(u8, image.url, "background_sprite.png") == null) continue;
+                if (image.repeat_x and !image.repeat_y) {
+                    repeated = image;
+                } else if (!image.repeat_x and !image.repeat_y) {
+                    single = image;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const repeated_image = repeated orelse return error.BackgroundRepeatImageMissing;
+    const single_image = single orelse return error.BackgroundSingleImageMissing;
+
+    try std.testing.expectEqual(ImageCommand.DrawMode.background, repeated_image.draw_mode);
+    try std.testing.expectEqual(@as(i32, -40), repeated_image.background_offset_y);
+    try std.testing.expectEqual(@as(i32, 0), repeated_image.background_offset_x);
+    try std.testing.expectEqual(@as(i32, 240), repeated_image.width);
+    try std.testing.expectEqual(@as(i32, 32), repeated_image.height);
+    try std.testing.expectEqual(ImageCommand.DrawMode.background, single_image.draw_mode);
+    try std.testing.expectEqual(@as(i32, 0), single_image.background_offset_x);
+    try std.testing.expectEqual(@as(i32, 0), single_image.background_offset_y);
+    try std.testing.expectEqual(@as(i32, 240), single_image.width);
+    try std.testing.expectEqual(@as(i32, 40), single_image.height);
 }
 
 test "paintDocument docks floated blocks and keeps body flow below them" {

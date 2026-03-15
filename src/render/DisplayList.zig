@@ -54,11 +54,21 @@ pub const ControlRegion = struct {
 };
 
 pub const ImageCommand = struct {
+    pub const DrawMode = enum(u8) {
+        fit,
+        background,
+    };
+
     x: i32,
     y: i32,
     width: i32,
     height: i32,
     z_index: i32 = 0,
+    draw_mode: DrawMode = .fit,
+    background_offset_x: i32 = 0,
+    background_offset_y: i32 = 0,
+    repeat_x: bool = false,
+    repeat_y: bool = false,
     url: []u8,
     alt: []u8,
     request_include_credentials: bool = true,
@@ -130,6 +140,11 @@ pub const Command = union(enum) {
                 .width = image.width,
                 .height = image.height,
                 .z_index = image.z_index,
+                .draw_mode = image.draw_mode,
+                .background_offset_x = image.background_offset_x,
+                .background_offset_y = image.background_offset_y,
+                .repeat_x = image.repeat_x,
+                .repeat_y = image.repeat_y,
                 .url = try allocator.dupe(u8, image.url),
                 .alt = try allocator.dupe(u8, image.alt),
                 .request_include_credentials = image.request_include_credentials,
@@ -287,6 +302,11 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .width = image.width,
         .height = image.height,
         .z_index = image.z_index,
+        .draw_mode = image.draw_mode,
+        .background_offset_x = image.background_offset_x,
+        .background_offset_y = image.background_offset_y,
+        .repeat_x = image.repeat_x,
+        .repeat_y = image.repeat_y,
         .url = try allocator.dupe(u8, image.url),
         .alt = try allocator.dupe(u8, image.alt),
         .request_include_credentials = image.request_include_credentials,
@@ -385,6 +405,11 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.width));
                 hasher.update(std.mem.asBytes(&image.height));
                 hasher.update(std.mem.asBytes(&image.z_index));
+                hasher.update(std.mem.asBytes(&image.draw_mode));
+                hasher.update(std.mem.asBytes(&image.background_offset_x));
+                hasher.update(std.mem.asBytes(&image.background_offset_y));
+                hasher.update(std.mem.asBytes(&image.repeat_x));
+                hasher.update(std.mem.asBytes(&image.repeat_y));
                 hasher.update(image.url);
                 hasher.update(image.alt);
                 hasher.update(std.mem.asBytes(&image.request_include_credentials));
