@@ -790,6 +790,14 @@ Current state inside Gate 3:
   - bounded tests plus headed probes now cover intrinsic image sizing,
     responsive image shrink-to-fit behavior, semantic background positioning,
     and semantic background sizing on the real screenshot path
+  - `overflow:hidden` now clips both painted descendants and headed
+    interaction for block and flex containers, while generic block/flex
+    `height`, `min-height`, and `max-height` now affect the used box height
+    instead of acting like loose hints
+  - `document.elementFromPoint(...)` now respects ancestor overflow clipping,
+    and headed Win32 input no longer synthesizes anchor/control clicks through
+    the DOM path when no rendered link/control region exists at that client
+    point
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

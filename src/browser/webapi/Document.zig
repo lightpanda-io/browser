@@ -602,11 +602,8 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, page: *Page) !?*Element
     while (stack.items.len > 0) {
         const node = stack.pop() orelse break;
         if (node.is(Element)) |element| {
-            if (element.checkVisibility(page)) {
-                const rect = element.getBoundingClientRectForVisible(page);
-                if (x >= rect.getLeft() and x <= rect.getRight() and y >= rect.getTop() and y <= rect.getBottom()) {
-                    topmost = element;
-                }
+            if (elementContainsVisiblePoint(element, x, y, page)) {
+                topmost = element;
             }
         }
 
@@ -619,6 +616,66 @@ pub fn elementFromPoint(self: *Document, x: f64, y: f64, page: *Page) !?*Element
     }
 
     return topmost;
+}
+
+const OverflowAxis = enum {
+    x,
+    y,
+};
+
+fn elementContainsVisiblePoint(element: *Element, x: f64, y: f64, page: *Page) bool {
+    if (!element.checkVisibility(page)) {
+        return false;
+    }
+
+    const rect = element.getBoundingClientRectForVisible(page);
+    if (!rectContainsPoint(rect, x, y)) {
+        return false;
+    }
+
+    return pointWithinAncestorOverflowClip(element, x, y, page);
+}
+
+fn rectContainsPoint(rect: anytype, x: f64, y: f64) bool {
+    return x >= rect.getLeft() and x <= rect.getRight() and
+        y >= rect.getTop() and y <= rect.getBottom();
+}
+
+fn pointWithinAncestorOverflowClip(element: *Element, x: f64, y: f64, page: *Page) bool {
+    var current = element.parentElement();
+    while (current) |ancestor| {
+        const clip_x = elementOverflowClipsAxis(ancestor, page, .x);
+        const clip_y = elementOverflowClipsAxis(ancestor, page, .y);
+        if (clip_x or clip_y) {
+            const rect = ancestor.getBoundingClientRectForVisible(page);
+            if (clip_x and (x < rect.getLeft() or x > rect.getRight())) {
+                return false;
+            }
+            if (clip_y and (y < rect.getTop() or y > rect.getBottom())) {
+                return false;
+            }
+        }
+        current = ancestor.parentElement();
+    }
+    return true;
+}
+
+fn elementOverflowClipsAxis(element: *Element, page: *Page, axis: OverflowAxis) bool {
+    const style = page.window.getComputedStyle(element, null, page) catch return false;
+    const decl = style.asCSSStyleDeclaration();
+    if (overflowValueClips(decl.getPropertyValue("overflow", page))) {
+        return true;
+    }
+    return switch (axis) {
+        .x => overflowValueClips(decl.getPropertyValue("overflow-x", page)),
+        .y => overflowValueClips(decl.getPropertyValue("overflow-y", page)),
+    };
+}
+
+fn overflowValueClips(value: []const u8) bool {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(trimmed, "hidden") or
+        std.ascii.eqlIgnoreCase(trimmed, "clip");
 }
 
 pub fn elementsFromPoint(self: *Document, x: f64, y: f64, page: *Page) ![]const *Element {

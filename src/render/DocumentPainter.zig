@@ -9,6 +9,7 @@ const testing = @import("../testing.zig");
 const DisplayList = @import("DisplayList.zig").DisplayList;
 const Command = @import("DisplayList.zig").Command;
 const Color = @import("DisplayList.zig").Color;
+const RectCommand = @import("DisplayList.zig").RectCommand;
 const TextCommand = @import("DisplayList.zig").TextCommand;
 const LinkRegion = @import("DisplayList.zig").LinkRegion;
 const ControlRegion = @import("DisplayList.zig").ControlRegion;
@@ -16,6 +17,7 @@ const ImageCommand = @import("DisplayList.zig").ImageCommand;
 const CanvasCommand = @import("DisplayList.zig").CanvasCommand;
 const FontFaceResource = @import("DisplayList.zig").FontFaceResource;
 const FontFaceFormat = @import("DisplayList.zig").FontFaceFormat;
+const ClipRect = @import("DisplayList.zig").ClipRect;
 const CSSStyleSheet = @import("../browser/webapi/css/CSSStyleSheet.zig");
 const win = if (builtin.os.tag == .windows) @cImport({
     @cDefine("WIN32_LEAN_AND_MEAN", "1");
@@ -58,6 +60,7 @@ pub fn paintDocument(allocator: std.mem.Allocator, page: *Page, opts: PaintOpts)
         @max(@as(i32, 160), opts.viewport_width - (opts.page_margin * 2)),
     );
     try painter.paintNode(root, &cursor);
+    list.recomputeContentHeight();
     try appendLoadedFontFacesToDisplayList(allocator, page, &list);
     return list;
 }
@@ -173,6 +176,75 @@ const Bounds = struct {
     height: i32,
 };
 
+fn clipRectFromBounds(bounds: Bounds) ClipRect {
+    return .{
+        .x = bounds.x,
+        .y = bounds.y,
+        .width = bounds.width,
+        .height = bounds.height,
+    };
+}
+
+fn translateClipRect(clip_rect: ClipRect, dx: i32, dy: i32) ClipRect {
+    return .{
+        .x = clip_rect.x + dx,
+        .y = clip_rect.y + dy,
+        .width = clip_rect.width,
+        .height = clip_rect.height,
+    };
+}
+
+fn intersectClipRects(lhs: ClipRect, rhs: ClipRect) ?ClipRect {
+    const left = @max(lhs.x, rhs.x);
+    const top = @max(lhs.y, rhs.y);
+    const right = @min(lhs.x + lhs.width, rhs.x + rhs.width);
+    const bottom = @min(lhs.y + lhs.height, rhs.y + rhs.height);
+    if (right <= left or bottom <= top) return null;
+    return .{
+        .x = left,
+        .y = top,
+        .width = right - left,
+        .height = bottom - top,
+    };
+}
+
+fn emptyClipRect(anchor: ClipRect) ClipRect {
+    return .{
+        .x = anchor.x,
+        .y = anchor.y,
+        .width = 0,
+        .height = 0,
+    };
+}
+
+fn combineTranslatedClipRect(existing_clip_rect: ?ClipRect, dx: i32, dy: i32, parent_clip_rect: ?ClipRect) ?ClipRect {
+    const shifted = if (existing_clip_rect) |clip_rect| translateClipRect(clip_rect, dx, dy) else null;
+    if (parent_clip_rect) |parent_clip| {
+        return if (shifted) |child_clip|
+            intersectClipRects(child_clip, parent_clip) orelse emptyClipRect(parent_clip)
+        else
+            parent_clip;
+    }
+    return shifted;
+}
+
+fn intersectBoundsWithClipRect(bounds: Bounds, clip_rect: ?ClipRect) ?Bounds {
+    if (clip_rect) |clip| {
+        const left = @max(bounds.x, clip.x);
+        const top = @max(bounds.y, clip.y);
+        const right = @min(bounds.x + bounds.width, clip.x + clip.width);
+        const bottom = @min(bounds.y + bounds.height, clip.y + clip.height);
+        if (right <= left or bottom <= top) return null;
+        return .{
+            .x = left,
+            .y = top,
+            .width = right - left,
+            .height = bottom - top,
+        };
+    }
+    return bounds;
+}
+
 const FlexCrossAlignment = enum {
     auto,
     start,
@@ -245,6 +317,7 @@ const Painter = struct {
         source: *const DisplayList,
         dx: i32,
         dy: i32,
+        parent_clip_rect: ?ClipRect,
     ) !void {
         for (source.commands.items) |command| {
             switch (command) {
@@ -255,6 +328,7 @@ const Painter = struct {
                     .height = rect.height,
                     .z_index = rect.z_index,
                     .corner_radius = rect.corner_radius,
+                    .clip_rect = combineTranslatedClipRect(rect.clip_rect, dx, dy, parent_clip_rect),
                     .color = rect.color,
                 }),
                 .stroke_rect => |rect| try self.list.addStrokeRect(self.allocator, .{
@@ -264,6 +338,7 @@ const Painter = struct {
                     .height = rect.height,
                     .z_index = rect.z_index,
                     .corner_radius = rect.corner_radius,
+                    .clip_rect = combineTranslatedClipRect(rect.clip_rect, dx, dy, parent_clip_rect),
                     .color = rect.color,
                 }),
                 .text => |text| try self.list.addText(self.allocator, .{
@@ -276,6 +351,7 @@ const Painter = struct {
                     .font_family = text.font_family,
                     .font_weight = text.font_weight,
                     .italic = text.italic,
+                    .clip_rect = combineTranslatedClipRect(text.clip_rect, dx, dy, parent_clip_rect),
                     .color = text.color,
                     .underline = text.underline,
                     .text = text.text,
@@ -286,6 +362,7 @@ const Painter = struct {
                     .width = image.width,
                     .height = image.height,
                     .z_index = image.z_index,
+                    .clip_rect = combineTranslatedClipRect(image.clip_rect, dx, dy, parent_clip_rect),
                     .draw_mode = image.draw_mode,
                     .background_offset_x = image.background_offset_x,
                     .background_offset_y = image.background_offset_y,
@@ -315,6 +392,7 @@ const Painter = struct {
                     .width = canvas.width,
                     .height = canvas.height,
                     .z_index = canvas.z_index,
+                    .clip_rect = combineTranslatedClipRect(canvas.clip_rect, dx, dy, parent_clip_rect),
                     .pixel_width = canvas.pixel_width,
                     .pixel_height = canvas.pixel_height,
                     .pixels = try self.allocator.dupe(u8, canvas.pixels),
@@ -323,29 +401,121 @@ const Painter = struct {
         }
 
         for (source.link_regions.items) |region| {
-            try self.list.addLinkRegion(self.allocator, .{
+            const shifted = Bounds{
                 .x = region.x + dx,
                 .y = region.y + dy,
                 .width = region.width,
                 .height = region.height,
-                .z_index = region.z_index,
-                .url = region.url,
-                .dom_path = region.dom_path,
-                .download_filename = region.download_filename,
-                .open_in_new_tab = region.open_in_new_tab,
-                .target_name = region.target_name,
-            });
+            };
+            if (intersectBoundsWithClipRect(shifted, parent_clip_rect)) |clipped| {
+                try self.list.addLinkRegion(self.allocator, .{
+                    .x = clipped.x,
+                    .y = clipped.y,
+                    .width = clipped.width,
+                    .height = clipped.height,
+                    .z_index = region.z_index,
+                    .url = region.url,
+                    .dom_path = region.dom_path,
+                    .download_filename = region.download_filename,
+                    .open_in_new_tab = region.open_in_new_tab,
+                    .target_name = region.target_name,
+                });
+            }
         }
 
         for (source.control_regions.items) |region| {
-            try self.list.addControlRegion(self.allocator, .{
+            const shifted = Bounds{
                 .x = region.x + dx,
                 .y = region.y + dy,
                 .width = region.width,
                 .height = region.height,
-                .z_index = region.z_index,
-                .dom_path = region.dom_path,
-            });
+            };
+            if (intersectBoundsWithClipRect(shifted, parent_clip_rect)) |clipped| {
+                try self.list.addControlRegion(self.allocator, .{
+                    .x = clipped.x,
+                    .y = clipped.y,
+                    .width = clipped.width,
+                    .height = clipped.height,
+                    .z_index = region.z_index,
+                    .dom_path = region.dom_path,
+                });
+            }
+        }
+    }
+
+    fn applyClipRectToRecentOutput(
+        self: *Painter,
+        command_start: usize,
+        link_start: usize,
+        control_start: usize,
+        clip_rect: ClipRect,
+    ) void {
+        for (self.list.commands.items[command_start..]) |*command| {
+            switch (command.*) {
+                .fill_rect => |*rect| rect.clip_rect = if (rect.clip_rect) |existing|
+                    intersectClipRects(existing, clip_rect) orelse emptyClipRect(clip_rect)
+                else
+                    clip_rect,
+                .stroke_rect => |*rect| rect.clip_rect = if (rect.clip_rect) |existing|
+                    intersectClipRects(existing, clip_rect) orelse emptyClipRect(clip_rect)
+                else
+                    clip_rect,
+                .text => |*text| text.clip_rect = if (text.clip_rect) |existing|
+                    intersectClipRects(existing, clip_rect) orelse emptyClipRect(clip_rect)
+                else
+                    clip_rect,
+                .image => |*image| image.clip_rect = if (image.clip_rect) |existing|
+                    intersectClipRects(existing, clip_rect) orelse emptyClipRect(clip_rect)
+                else
+                    clip_rect,
+                .canvas => |*canvas| canvas.clip_rect = if (canvas.clip_rect) |existing|
+                    intersectClipRects(existing, clip_rect) orelse emptyClipRect(clip_rect)
+                else
+                    clip_rect,
+            }
+        }
+
+        var link_index = self.list.link_regions.items.len;
+        while (link_index > link_start) {
+            link_index -= 1;
+            const region = self.list.link_regions.items[link_index];
+            if (intersectBoundsWithClipRect(.{
+                .x = region.x,
+                .y = region.y,
+                .width = region.width,
+                .height = region.height,
+            }, clip_rect)) |clipped| {
+                self.list.link_regions.items[link_index].x = clipped.x;
+                self.list.link_regions.items[link_index].y = clipped.y;
+                self.list.link_regions.items[link_index].width = clipped.width;
+                self.list.link_regions.items[link_index].height = clipped.height;
+            } else {
+                const removed = self.list.link_regions.orderedRemove(link_index);
+                self.allocator.free(removed.url);
+                self.allocator.free(removed.dom_path);
+                self.allocator.free(removed.download_filename);
+                self.allocator.free(removed.target_name);
+            }
+        }
+
+        var control_index = self.list.control_regions.items.len;
+        while (control_index > control_start) {
+            control_index -= 1;
+            const region = self.list.control_regions.items[control_index];
+            if (intersectBoundsWithClipRect(.{
+                .x = region.x,
+                .y = region.y,
+                .width = region.width,
+                .height = region.height,
+            }, clip_rect)) |clipped| {
+                self.list.control_regions.items[control_index].x = clipped.x;
+                self.list.control_regions.items[control_index].y = clipped.y;
+                self.list.control_regions.items[control_index].width = clipped.width;
+                self.list.control_regions.items[control_index].height = clipped.height;
+            } else {
+                const removed = self.list.control_regions.orderedRemove(control_index);
+                self.allocator.free(removed.dom_path);
+            }
         }
     }
 
@@ -394,7 +564,7 @@ const Painter = struct {
             offset_x -= child_bounds.x;
         }
 
-        try self.appendDisplayListWithOffset(&temp_list, offset_x, content_y);
+        try self.appendDisplayListWithOffset(&temp_list, offset_x, content_y, null);
         if (out_of_flow_children.items.len > 0) {
             var overlay_cursor = FlowCursor.init(content_x, content_y, @max(@as(i32, 40), content_width));
             for (out_of_flow_children.items) |child| {
@@ -630,6 +800,9 @@ const Painter = struct {
             return;
         }
         if (inline_content_flow) {
+            const child_command_start = self.list.commands.items.len;
+            const child_link_start = self.list.link_regions.items.len;
+            const child_control_start = self.list.control_regions.items.len;
             const child_height = if (!canvas_surface_present)
                 try self.paintInlineFlowChildren(
                     element,
@@ -641,16 +814,31 @@ const Painter = struct {
             else
                 0;
             const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
-            const height = @max(
-                resolveMinimumHeight(self, tag, block_like, 0),
-                @max(explicit_height, padding.top + child_height + padding.bottom),
+            const css_min_height = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+            const css_max_height = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+            const min_required_height = @max(resolveMinimumHeight(self, tag, block_like, 0), css_min_height);
+            const height = clampBoxHeight(
+                min_required_height,
+                css_max_height,
+                if (explicit_height > 0)
+                    explicit_height
+                else
+                    padding.top + child_height + padding.bottom,
             );
-            const rect = .{
+            const rect: Bounds = .{
                 .x = x,
                 .y = y,
                 .width = width,
                 .height = height,
             };
+            if (clipsOverflowContents(decl, self.page)) {
+                self.applyClipRectToRecentOutput(
+                    child_command_start,
+                    child_link_start,
+                    child_control_start,
+                    clipRectFromBounds(rect),
+                );
+            }
 
             if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
                 try self.list.addStrokeRect(self.allocator, .{
@@ -659,6 +847,7 @@ const Painter = struct {
                     .width = rect.width,
                     .height = rect.height,
                     .z_index = paint_z_index,
+                    .clip_rect = null,
                     .color = stroke,
                 });
             }
@@ -711,14 +900,25 @@ const Painter = struct {
         } else 0;
         const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
         const min_height = resolveMinimumHeight(self, tag, block_like, own_content_height);
-        const height = @max(min_height, @max(explicit_height, padding.top + own_content_height + child_gap + child_height + padding.bottom));
+        const css_min_height = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+        const css_max_height = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+        const min_required_height = @max(min_height, css_min_height);
+        const height = clampBoxHeight(
+            min_required_height,
+            css_max_height,
+            if (explicit_height > 0)
+                explicit_height
+            else
+                padding.top + own_content_height + child_gap + child_height + padding.bottom,
+        );
 
-        const rect = .{
+        const rect: Bounds = .{
             .x = x,
             .y = y,
             .width = width,
             .height = height,
         };
+        const overflow_clip_rect = if (clipsOverflowContents(decl, self.page)) clipRectFromBounds(rect) else null;
 
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const fg = resolveTextColor(decl, self.page, element, tag);
@@ -734,6 +934,7 @@ const Painter = struct {
                         .height = rect.height,
                         .z_index = paint_z_index,
                         .corner_radius = corner_radius,
+                        .clip_rect = null,
                         .color = background,
                     });
                 }
@@ -745,6 +946,7 @@ const Painter = struct {
                     .height = rect.height,
                     .z_index = paint_z_index,
                     .corner_radius = corner_radius,
+                    .clip_rect = null,
                     .color = .{ .r = 248, .g = 248, .b = 248 },
                 });
             } else if (tag == .img) {
@@ -755,6 +957,7 @@ const Painter = struct {
                     .height = rect.height,
                     .z_index = paint_z_index,
                     .corner_radius = corner_radius,
+                    .clip_rect = null,
                     .color = .{ .r = 236, .g = 236, .b = 236 },
                 });
             }
@@ -769,6 +972,7 @@ const Painter = struct {
                 .height = rect.height,
                 .z_index = paint_z_index,
                 .corner_radius = corner_radius,
+                .clip_rect = null,
                 .color = stroke,
             });
         }
@@ -782,10 +986,14 @@ const Painter = struct {
         else
             null;
         if (image_command) |command| {
-            try self.list.addImage(self.allocator, command);
+            var clipped_command = command;
+            clipped_command.clip_rect = overflow_clip_rect;
+            try self.list.addImage(self.allocator, clipped_command);
         }
         if (canvas_command) |command| {
-            try self.list.addCanvas(self.allocator, command);
+            var clipped_command = command;
+            clipped_command.clip_rect = overflow_clip_rect;
+            try self.list.addCanvas(self.allocator, clipped_command);
         }
 
         if (label.len > 0 and shouldPaintText(tag) and image_command == null and canvas_command == null) {
@@ -817,6 +1025,7 @@ const Painter = struct {
                 .font_family = @constCast(font_family),
                 .font_weight = font_weight,
                 .italic = italic,
+                .clip_rect = overflow_clip_rect,
                 .color = fg,
                 .underline = shouldUnderlineText(element, decl, self.page, tag),
                 .text = label,
@@ -831,7 +1040,7 @@ const Painter = struct {
         }
 
         if (child_display_list) |*list| {
-            try self.appendDisplayListWithOffset(list, 0, 0);
+            try self.appendDisplayListWithOffset(list, 0, 0, overflow_clip_rect);
         }
 
         if (out_of_flow_positioned) {
@@ -885,20 +1094,24 @@ const Painter = struct {
         const total_gap_height = gap * gap_count;
         const content_height = child_total_height + total_gap_height;
         const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
-        const min_height_css = parseCssLengthPxWithContext(
-            decl.getPropertyValue("min-height", self.page),
-            self.opts.viewport_height,
-            self.opts.viewport_height,
-        ) orelse 0;
-        const container_content_height = @max(content_height, @max(explicit_height - padding.vertical(), min_height_css - padding.vertical()));
+        const min_height_css = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+        const max_height_css = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+        const min_required_height = @max(resolveMinimumHeight(self, tag, block_like, 0), min_height_css);
 
         const rect: Bounds = .{
             .x = x,
             .y = y,
             .width = width,
-            .height = @max(resolveMinimumHeight(self, tag, block_like, 0), padding.top + container_content_height + padding.bottom),
+            .height = clampBoxHeight(
+                min_required_height,
+                max_height_css,
+                if (explicit_height > 0)
+                    explicit_height
+                else
+                    padding.top + content_height + padding.bottom,
+            ),
         };
-
+        const container_content_height = @max(@as(i32, 0), rect.height - padding.vertical());
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (shouldPaintBox(tag)) {
@@ -911,6 +1124,7 @@ const Painter = struct {
                         .height = rect.height,
                         .z_index = paint_z_index,
                         .corner_radius = corner_radius,
+                        .clip_rect = null,
                         .color = background,
                     });
                 }
@@ -925,10 +1139,14 @@ const Painter = struct {
                 .height = rect.height,
                 .z_index = paint_z_index,
                 .corner_radius = corner_radius,
+                .clip_rect = null,
                 .color = stroke,
             });
         }
 
+        const child_command_start = self.list.commands.items.len;
+        const child_link_start = self.list.link_regions.items.len;
+        const child_control_start = self.list.control_regions.items.len;
         var child_y = rect.y + padding.top;
         const free_vertical_space = @max(@as(i32, 0), container_content_height - content_height);
         if (std.ascii.eqlIgnoreCase(justify_content, "center")) {
@@ -953,6 +1171,15 @@ const Painter = struct {
             if (index + 1 < measured_children.items.len) {
                 child_y += gap;
             }
+        }
+
+        if (clipsOverflowContents(decl, self.page)) {
+            self.applyClipRectToRecentOutput(
+                child_command_start,
+                child_link_start,
+                child_control_start,
+                clipRectFromBounds(rect),
+            );
         }
 
         if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
@@ -1066,20 +1293,23 @@ const Painter = struct {
         }
 
         const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
-        const min_height_css = parseCssLengthPxWithContext(
-            decl.getPropertyValue("min-height", self.page),
-            self.opts.viewport_height,
-            self.opts.viewport_height,
-        ) orelse 0;
-        const container_content_height = @max(content_height, @max(explicit_height - padding.vertical(), min_height_css - padding.vertical()));
+        const min_height_css = resolveCssMinHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+        const max_height_css = resolveCssMaxHeightPx(self, element, decl, self.page, self.opts.viewport_height);
+        const min_required_height = @max(resolveMinimumHeight(self, tag, block_like, 0), min_height_css);
 
         const rect: Bounds = .{
             .x = x,
             .y = y,
             .width = width,
-            .height = @max(resolveMinimumHeight(self, tag, block_like, 0), padding.top + container_content_height + padding.bottom),
+            .height = clampBoxHeight(
+                min_required_height,
+                max_height_css,
+                if (explicit_height > 0)
+                    explicit_height
+                else
+                    padding.top + content_height + padding.bottom,
+            ),
         };
-
         const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
         const corner_radius = resolveBorderRadiusPx(decl, self.page, rect.width, rect.height, self.opts.viewport_width, self.opts.viewport_height);
         if (shouldPaintBox(tag)) {
@@ -1092,6 +1322,7 @@ const Painter = struct {
                         .height = rect.height,
                         .z_index = paint_z_index,
                         .corner_radius = corner_radius,
+                        .clip_rect = null,
                         .color = background,
                     });
                 }
@@ -1106,10 +1337,14 @@ const Painter = struct {
                 .height = rect.height,
                 .z_index = paint_z_index,
                 .corner_radius = corner_radius,
+                .clip_rect = null,
                 .color = stroke,
             });
         }
 
+        const child_command_start = self.list.commands.items.len;
+        const child_link_start = self.list.link_regions.items.len;
+        const child_control_start = self.list.control_regions.items.len;
         var child_y = rect.y + padding.top;
         for (lines.items, 0..) |line, line_index| {
             const item_count: i32 = @intCast(line.end_index - line.start_index);
@@ -1187,6 +1422,15 @@ const Painter = struct {
             if (line_index + 1 < lines.items.len) {
                 child_y += cross_gap;
             }
+        }
+
+        if (clipsOverflowContents(decl, self.page)) {
+            self.applyClipRectToRecentOutput(
+                child_command_start,
+                child_link_start,
+                child_control_start,
+                clipRectFromBounds(rect),
+            );
         }
 
         if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
@@ -3122,6 +3366,52 @@ fn resolveExplicitHeight(self: *const Painter, element: *Element, decl: anytype,
     return 0;
 }
 
+fn resolveCssHeightConstraint(
+    self: *const Painter,
+    element: *Element,
+    decl: anytype,
+    page: *Page,
+    property_name: []const u8,
+    available_height: i32,
+) ?i32 {
+    const raw_value = decl.getPropertyValue(property_name, page);
+    if (raw_value.len == 0) return null;
+    const height_basis = if (std.mem.indexOfScalar(u8, raw_value, '%') != null)
+        resolveAncestorExplicitHeight(self, element, page, available_height)
+    else
+        available_height;
+    return parseCssLengthPxWithContext(raw_value, height_basis, self.opts.viewport_height);
+}
+
+fn resolveCssMinHeightPx(
+    self: *const Painter,
+    element: *Element,
+    decl: anytype,
+    page: *Page,
+    available_height: i32,
+) i32 {
+    return resolveCssHeightConstraint(self, element, decl, page, "min-height", available_height) orelse 0;
+}
+
+fn resolveCssMaxHeightPx(
+    self: *const Painter,
+    element: *Element,
+    decl: anytype,
+    page: *Page,
+    available_height: i32,
+) ?i32 {
+    return resolveCssHeightConstraint(self, element, decl, page, "max-height", available_height);
+}
+
+fn clampBoxHeight(min_required: i32, max_allowed: ?i32, requested: i32) i32 {
+    var resolved = @max(requested, min_required);
+    if (max_allowed) |max_height| {
+        resolved = @min(resolved, max_height);
+        resolved = @max(resolved, min_required);
+    }
+    return @max(@as(i32, 1), resolved);
+}
+
 const IntrinsicImageDimensions = struct {
     width: i32,
     height: i32,
@@ -3154,6 +3444,18 @@ fn resolveAncestorExplicitHeight(self: *const Painter, element: *Element, page: 
         parent = candidate.asNode().parentElement();
     }
     return fallback_height;
+}
+
+fn clipsOverflowContents(decl: anytype, page: *Page) bool {
+    const overflow = std.mem.trim(u8, decl.getPropertyValue("overflow", page), &std.ascii.whitespace);
+    if (std.ascii.eqlIgnoreCase(overflow, "hidden") or std.ascii.eqlIgnoreCase(overflow, "clip")) {
+        return true;
+    }
+
+    const overflow_x = std.mem.trim(u8, decl.getPropertyValue("overflow-x", page), &std.ascii.whitespace);
+    const overflow_y = std.mem.trim(u8, decl.getPropertyValue("overflow-y", page), &std.ascii.whitespace);
+    return (std.ascii.eqlIgnoreCase(overflow_x, "hidden") and std.ascii.eqlIgnoreCase(overflow_y, "hidden")) or
+        (std.ascii.eqlIgnoreCase(overflow_x, "clip") and std.ascii.eqlIgnoreCase(overflow_y, "clip"));
 }
 
 fn resolveMinimumHeight(self: *const Painter, tag: Element.Tag, block_like: bool, own_content_height: i32) i32 {
@@ -6375,6 +6677,130 @@ test "paintDocument emits semantic background-size modes" {
     try std.testing.expectEqual(ImageCommand.BackgroundSizeMode.explicit, backgrounds.items[3].background_size_mode);
     try std.testing.expectEqual(ImageCommand.BackgroundSizeComponentMode.percent, backgrounds.items[3].background_size_width_mode);
     try std.testing.expectEqual(@as(i32, 7500), backgrounds.items[3].background_size_width_percent_bp);
+}
+
+test "paintDocument clips block descendants when overflow hidden" {
+    var page = try testing.pageTest("page/overflow_hidden_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var blue_fill: ?RectCommand = null;
+    var red_fill: ?RectCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.b >= 180 and rect.color.r <= 80 and rect.color.g <= 150) {
+                    blue_fill = rect;
+                } else if (rect.color.r >= 180 and rect.color.g <= 100 and rect.color.b <= 100) {
+                    red_fill = rect;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const blue = blue_fill orelse return error.OverflowBlueFillMissing;
+    const red = red_fill orelse return error.OverflowRedFillMissing;
+    const clip = blue.clip_rect orelse return error.OverflowBlueClipMissing;
+
+    try std.testing.expectEqual(@as(i32, 120), clip.width);
+    try std.testing.expectEqual(@as(i32, 80), clip.height);
+    try std.testing.expect(red.y >= clip.y + clip.height + 14);
+    try std.testing.expect(display_list.content_height <= red.y + red.height);
+}
+
+test "paintDocument clips flex descendants when overflow hidden" {
+    var page = try testing.pageTest("page/flex_overflow_hidden_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var blue_fill: ?RectCommand = null;
+    var green_fill: ?RectCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.b >= 180 and rect.color.r <= 80 and rect.color.g <= 150) {
+                    blue_fill = rect;
+                } else if (rect.color.g >= 130 and rect.color.r <= 100 and rect.color.b <= 120) {
+                    green_fill = rect;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const blue = blue_fill orelse return error.FlexOverflowBlueFillMissing;
+    const green = green_fill orelse return error.FlexOverflowGreenFillMissing;
+    const clip = blue.clip_rect orelse return error.FlexOverflowBlueClipMissing;
+
+    try std.testing.expectEqual(@as(i32, 140), clip.width);
+    try std.testing.expectEqual(@as(i32, 80), clip.height);
+    try std.testing.expect(green.y >= clip.y + clip.height + 14);
+}
+
+test "paintDocument honors generic block min-height and max-height" {
+    var page = try testing.pageTest("page/min_max_height_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 520,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_fill: ?RectCommand = null;
+    var blue_fill: ?RectCommand = null;
+    var green_fill: ?RectCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r >= 180 and rect.color.g <= 100 and rect.color.b <= 100) {
+                    red_fill = rect;
+                } else if (rect.color.b >= 180 and rect.color.r <= 80 and rect.color.g <= 150) {
+                    blue_fill = rect;
+                } else if (rect.color.g >= 130 and rect.color.r <= 100 and rect.color.b <= 120) {
+                    green_fill = rect;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_fill orelse return error.MinHeightFillMissing;
+    const blue = blue_fill orelse return error.MaxHeightFillMissing;
+    const green = green_fill orelse return error.MaxHeightFooterMissing;
+    const clip = blue.clip_rect orelse return error.MaxHeightClipMissing;
+
+    try std.testing.expectEqual(@as(i32, 90), red.height);
+    try std.testing.expectEqual(@as(i32, 120), clip.width);
+    try std.testing.expectEqual(@as(i32, 80), clip.height);
+    try std.testing.expect(green.y >= clip.y + clip.height + 14);
+}
+
+test "paintDocument clips hidden link regions to overflow containers" {
+    var page = try testing.pageTest("page/overflow_hidden_link_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), display_list.link_regions.items.len);
+    const region = display_list.link_regions.items[0];
+    try std.testing.expectEqual(@as(i32, 120), region.width);
+    try std.testing.expectEqual(@as(i32, 80), region.height);
 }
 
 test "paintDocument docks floated blocks and keeps body flow below them" {

@@ -295,6 +295,7 @@ pub const Win32Backend = struct {
         y: f64,
         button: Page.MouseButton,
         modifiers: Page.MouseModifiers,
+        rendered_interactive_hit: bool = false,
     };
 
     const MouseMoveEvent = struct {
@@ -801,6 +802,9 @@ pub const Win32Backend = struct {
                 .mouse_up => |mouse| {
                     try page.triggerMouseUp(mouse.x, mouse.y, mouse.button, mouse.modifiers);
                     if (mouse.button == .main) {
+                        if (!mouse.rendered_interactive_hit and try page.mouseClickRequiresRenderedInteractiveTarget(mouse.x, mouse.y)) {
+                            continue;
+                        }
                         try page.triggerMouseClickWithModifiers(mouse.x, mouse.y, .main, mouse.modifiers);
                     }
                 },
@@ -5047,6 +5051,44 @@ fn imageRequestCacheKey(allocator: std.mem.Allocator, image: ImageCommand) ![]u8
     });
 }
 
+fn scaledPresentationClipRect(
+    client: c.RECT,
+    display_list: DisplayList,
+    scroll_px: i32,
+    clip_rect: DisplayList.ClipRect,
+) c.RECT {
+    const left = scalePresentationValue(clip_rect.x, display_list.layout_scale);
+    const top = scalePresentationValue(clip_rect.y, display_list.layout_scale);
+    const width = @max(1, scalePresentationValue(clip_rect.width, display_list.layout_scale));
+    const height = @max(1, scalePresentationValue(clip_rect.height, display_list.layout_scale));
+    return .{
+        .left = client.left + PRESENTATION_MARGIN + left,
+        .top = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px,
+        .right = client.left + PRESENTATION_MARGIN + left + width,
+        .bottom = PRESENTATION_HEADER_HEIGHT + 8 + top - scroll_px + height,
+    };
+}
+
+fn saveClipRectIfNeeded(
+    hdc: c.HDC,
+    client: c.RECT,
+    display_list: DisplayList,
+    scroll_px: i32,
+    clip_rect: ?DisplayList.ClipRect,
+) ?c_int {
+    if (clip_rect) |clip| {
+        const scaled = scaledPresentationClipRect(client, display_list, scroll_px, clip);
+        if (scaled.right <= scaled.left or scaled.bottom <= scaled.top) {
+            return null;
+        }
+        const saved_dc = c.SaveDC(hdc);
+        if (saved_dc == 0) return null;
+        _ = c.IntersectClipRect(hdc, scaled.left, scaled.top, scaled.right, scaled.bottom);
+        return saved_dc;
+    }
+    return null;
+}
+
 fn renderPresentationDisplayList(
     backend: *Win32Backend,
     hdc: c.HDC,
@@ -5078,6 +5120,15 @@ fn renderPresentationDisplayList(
         const command = display_list.commands.items[command_index];
         switch (command) {
             .fill_rect => |rect_cmd| {
+                if (rect_cmd.clip_rect) |clip| {
+                    if (clip.width <= 0 or clip.height <= 0) continue;
+                }
+                const saved_dc = saveClipRectIfNeeded(hdc, client, display_list, scroll_px, rect_cmd.clip_rect);
+                defer {
+                    if (saved_dc) |state| {
+                        _ = c.RestoreDC(hdc, state);
+                    }
+                }
                 const left = scalePresentationValue(rect_cmd.x, display_list.layout_scale);
                 const top = scalePresentationValue(rect_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(rect_cmd.width, display_list.layout_scale));
@@ -5091,6 +5142,15 @@ fn renderPresentationDisplayList(
                 drawPresentationFillRect(hdc, rect, rect_cmd);
             },
             .stroke_rect => |rect_cmd| {
+                if (rect_cmd.clip_rect) |clip| {
+                    if (clip.width <= 0 or clip.height <= 0) continue;
+                }
+                const saved_dc = saveClipRectIfNeeded(hdc, client, display_list, scroll_px, rect_cmd.clip_rect);
+                defer {
+                    if (saved_dc) |state| {
+                        _ = c.RestoreDC(hdc, state);
+                    }
+                }
                 const left = scalePresentationValue(rect_cmd.x, display_list.layout_scale);
                 const top = scalePresentationValue(rect_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(rect_cmd.width, display_list.layout_scale));
@@ -5104,6 +5164,15 @@ fn renderPresentationDisplayList(
                 drawPresentationStrokeRect(hdc, rect, rect_cmd);
             },
             .text => |text_cmd| {
+                if (text_cmd.clip_rect) |clip| {
+                    if (clip.width <= 0 or clip.height <= 0) continue;
+                }
+                const saved_dc = saveClipRectIfNeeded(hdc, client, display_list, scroll_px, text_cmd.clip_rect);
+                defer {
+                    if (saved_dc) |state| {
+                        _ = c.RestoreDC(hdc, state);
+                    }
+                }
                 const left = scalePresentationValue(text_cmd.x, display_list.layout_scale);
                 const top = scalePresentationValue(text_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(text_cmd.width, display_list.layout_scale));
@@ -5175,6 +5244,15 @@ fn renderPresentationDisplayList(
                 _ = c.SetTextColor(hdc, previous);
             },
             .image => |image_cmd| {
+                if (image_cmd.clip_rect) |clip| {
+                    if (clip.width <= 0 or clip.height <= 0) continue;
+                }
+                const saved_dc = saveClipRectIfNeeded(hdc, client, display_list, scroll_px, image_cmd.clip_rect);
+                defer {
+                    if (saved_dc) |state| {
+                        _ = c.RestoreDC(hdc, state);
+                    }
+                }
                 const left = scalePresentationValue(image_cmd.x, display_list.layout_scale);
                 const top = scalePresentationValue(image_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(image_cmd.width, display_list.layout_scale));
@@ -5188,6 +5266,15 @@ fn renderPresentationDisplayList(
                 drawPresentationImage(backend, hdc, rect, image_cmd, snapshot.url, snapshot.image_request_cookie_jar);
             },
             .canvas => |canvas_cmd| {
+                if (canvas_cmd.clip_rect) |clip| {
+                    if (clip.width <= 0 or clip.height <= 0) continue;
+                }
+                const saved_dc = saveClipRectIfNeeded(hdc, client, display_list, scroll_px, canvas_cmd.clip_rect);
+                defer {
+                    if (saved_dc) |state| {
+                        _ = c.RestoreDC(hdc, state);
+                    }
+                }
                 const left = scalePresentationValue(canvas_cmd.x, display_list.layout_scale);
                 const top = scalePresentationValue(canvas_cmd.y, display_list.layout_scale);
                 const width = @max(1, scalePresentationValue(canvas_cmd.width, display_list.layout_scale));
@@ -7134,6 +7221,9 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     presentationClientToPage(backend, client_pos.x, client_pos.y) orelse return 0
                 else
                     client_pos;
+                const rendered_interactive_hit = msg == c.WM_LBUTTONUP and presentationHasContent(backend) and
+                    (presentationHasNavigateAtClientPoint(backend, client_pos.x, client_pos.y) or
+                        presentationHasControlAtClientPoint(backend, client_pos.x, client_pos.y));
                 const button: Page.MouseButton = switch (msg) {
                     c.WM_MBUTTONUP => .auxiliary,
                     c.WM_RBUTTONUP => .secondary,
@@ -7145,6 +7235,7 @@ fn wndProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callco
                     .y = pos.y,
                     .button = button,
                     .modifiers = mouseModifiersFromWParam(wparam),
+                    .rendered_interactive_hit = rendered_interactive_hit,
                 } });
             }
             return 0;

@@ -8,6 +8,10 @@
   <div id="parent" style="width: 100px; height: 50px;">
     <div id="child" style="width: 80px; height: 30px;">Child</div>
   </div>
+  <div id="clip-parent" style="width: 120px; height: 80px; overflow: hidden;">
+    <a id="clip-link" href="#clip-target" style="display:block;width:220px;height:140px;">Clipped Link</a>
+  </div>
+  <div id="clip-footer" style="width: 120px; height: 24px;">Footer</div>
 </body>
 
 <script id="basic_usage">
@@ -107,6 +111,26 @@
 
   // Clean up
   newDiv.remove();
+}
+</script>
+
+<script id="overflow_hidden_clips_hit_testing">
+{
+  const clipLink = document.getElementById('clip-link');
+  const clipFooter = document.getElementById('clip-footer');
+  const linkRect = clipLink.getBoundingClientRect();
+  const footerRect = clipFooter.getBoundingClientRect();
+
+  const visibleX = linkRect.left + 10;
+  const visibleY = linkRect.top + 10;
+  testing.expectEqual(clipLink, document.elementFromPoint(visibleX, visibleY));
+
+  const hiddenX = (footerRect.left + footerRect.right) / 2;
+  const hiddenY = (footerRect.top + footerRect.bottom) / 2;
+  const hiddenElement = document.elementFromPoint(hiddenX, hiddenY);
+
+  testing.expectTrue(hiddenElement !== clipLink);
+  testing.expectTrue(hiddenElement === clipFooter || hiddenElement?.tagName === 'BODY' || hiddenElement?.tagName === 'HTML');
 }
 </script>
 

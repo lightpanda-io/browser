@@ -7,6 +7,13 @@ pub const Color = struct {
     a: u8 = 255,
 };
 
+pub const ClipRect = struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+};
+
 pub const RectCommand = struct {
     x: i32,
     y: i32,
@@ -14,6 +21,7 @@ pub const RectCommand = struct {
     height: i32,
     z_index: i32 = 0,
     corner_radius: i32 = 0,
+    clip_rect: ?ClipRect = null,
     color: Color,
 };
 
@@ -27,6 +35,7 @@ pub const TextCommand = struct {
     font_family: []u8 = &.{},
     font_weight: i32 = 400,
     italic: bool = false,
+    clip_rect: ?ClipRect = null,
     color: Color,
     underline: bool = false,
     text: []u8,
@@ -85,6 +94,7 @@ pub const ImageCommand = struct {
     width: i32,
     height: i32,
     z_index: i32 = 0,
+    clip_rect: ?ClipRect = null,
     draw_mode: DrawMode = .fit,
     background_offset_x: i32 = 0,
     background_offset_y: i32 = 0,
@@ -115,6 +125,7 @@ pub const CanvasCommand = struct {
     width: i32,
     height: i32,
     z_index: i32 = 0,
+    clip_rect: ?ClipRect = null,
     pixel_width: u32,
     pixel_height: u32,
     pixels: []u8,
@@ -162,6 +173,7 @@ pub const Command = union(enum) {
                 .font_family = try allocator.dupe(u8, text.font_family),
                 .font_weight = text.font_weight,
                 .italic = text.italic,
+                .clip_rect = text.clip_rect,
                 .color = text.color,
                 .underline = text.underline,
                 .text = try allocator.dupe(u8, text.text),
@@ -172,6 +184,7 @@ pub const Command = union(enum) {
                 .width = image.width,
                 .height = image.height,
                 .z_index = image.z_index,
+                .clip_rect = image.clip_rect,
                 .draw_mode = image.draw_mode,
                 .background_offset_x = image.background_offset_x,
                 .background_offset_y = image.background_offset_y,
@@ -201,6 +214,7 @@ pub const Command = union(enum) {
                 .width = canvas.width,
                 .height = canvas.height,
                 .z_index = canvas.z_index,
+                .clip_rect = canvas.clip_rect,
                 .pixel_width = canvas.pixel_width,
                 .pixel_height = canvas.pixel_height,
                 .pixels = try allocator.dupe(u8, canvas.pixels),
@@ -331,6 +345,7 @@ pub fn addText(self: *DisplayList, allocator: std.mem.Allocator, text: TextComma
         .font_family = try allocator.dupe(u8, text.font_family),
         .font_weight = text.font_weight,
         .italic = text.italic,
+        .clip_rect = text.clip_rect,
         .color = text.color,
         .underline = text.underline,
         .text = try allocator.dupe(u8, text.text),
@@ -345,6 +360,7 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .width = image.width,
         .height = image.height,
         .z_index = image.z_index,
+        .clip_rect = image.clip_rect,
         .draw_mode = image.draw_mode,
         .background_offset_x = image.background_offset_x,
         .background_offset_y = image.background_offset_y,
@@ -372,7 +388,17 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
 }
 
 pub fn addCanvas(self: *DisplayList, allocator: std.mem.Allocator, canvas: CanvasCommand) !void {
-    try self.commands.append(allocator, .{ .canvas = canvas });
+    try self.commands.append(allocator, .{ .canvas = .{
+        .x = canvas.x,
+        .y = canvas.y,
+        .width = canvas.width,
+        .height = canvas.height,
+        .z_index = canvas.z_index,
+        .clip_rect = canvas.clip_rect,
+        .pixel_width = canvas.pixel_width,
+        .pixel_height = canvas.pixel_height,
+        .pixels = canvas.pixels,
+    } });
     self.content_height = @max(self.content_height, canvas.y + canvas.height);
 }
 
@@ -427,6 +453,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.height));
                 hasher.update(std.mem.asBytes(&rect.z_index));
                 hasher.update(std.mem.asBytes(&rect.corner_radius));
+                hasher.update(std.mem.asBytes(&rect.clip_rect));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .stroke_rect => |rect| {
@@ -437,6 +464,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.height));
                 hasher.update(std.mem.asBytes(&rect.z_index));
                 hasher.update(std.mem.asBytes(&rect.corner_radius));
+                hasher.update(std.mem.asBytes(&rect.clip_rect));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .text => |text| {
@@ -450,6 +478,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(text.font_family);
                 hasher.update(std.mem.asBytes(&text.font_weight));
                 hasher.update(std.mem.asBytes(&text.italic));
+                hasher.update(std.mem.asBytes(&text.clip_rect));
                 hasher.update(std.mem.asBytes(&text.color));
                 hasher.update(std.mem.asBytes(&text.underline));
                 hasher.update(text.text);
@@ -461,6 +490,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.width));
                 hasher.update(std.mem.asBytes(&image.height));
                 hasher.update(std.mem.asBytes(&image.z_index));
+                hasher.update(std.mem.asBytes(&image.clip_rect));
                 hasher.update(std.mem.asBytes(&image.draw_mode));
                 hasher.update(std.mem.asBytes(&image.background_offset_x));
                 hasher.update(std.mem.asBytes(&image.background_offset_y));
@@ -491,6 +521,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&canvas.width));
                 hasher.update(std.mem.asBytes(&canvas.height));
                 hasher.update(std.mem.asBytes(&canvas.z_index));
+                hasher.update(std.mem.asBytes(&canvas.clip_rect));
                 hasher.update(std.mem.asBytes(&canvas.pixel_width));
                 hasher.update(std.mem.asBytes(&canvas.pixel_height));
                 hasher.update(canvas.pixels);
@@ -526,4 +557,33 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(std.mem.asBytes(&font_face.format));
         hasher.update(font_face.bytes);
     }
+}
+
+pub fn recomputeContentHeight(self: *DisplayList) void {
+    self.content_height = 0;
+
+    for (self.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| self.content_height = @max(self.content_height, clippedCommandBottom(rect.y, rect.height, rect.clip_rect)),
+            .stroke_rect => |rect| self.content_height = @max(self.content_height, clippedCommandBottom(rect.y, rect.height, rect.clip_rect)),
+            .text => |text| self.content_height = @max(self.content_height, clippedCommandBottom(text.y, @max(text.height, text.font_size + 8), text.clip_rect)),
+            .image => |image| self.content_height = @max(self.content_height, clippedCommandBottom(image.y, image.height, image.clip_rect)),
+            .canvas => |canvas| self.content_height = @max(self.content_height, clippedCommandBottom(canvas.y, canvas.height, canvas.clip_rect)),
+        }
+    }
+
+    for (self.link_regions.items) |region| {
+        self.content_height = @max(self.content_height, region.y + region.height);
+    }
+    for (self.control_regions.items) |region| {
+        self.content_height = @max(self.content_height, region.y + region.height);
+    }
+}
+
+fn clippedCommandBottom(y: i32, height: i32, clip_rect: ?ClipRect) i32 {
+    const command_bottom = y + height;
+    if (clip_rect) |clip| {
+        return @min(command_bottom, clip.y + clip.height);
+    }
+    return command_bottom;
 }

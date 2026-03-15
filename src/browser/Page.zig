@@ -3384,6 +3384,16 @@ pub fn triggerMouseClickWithResult(
     return self.triggerMouseButtonEventResult("click", x, y, button, modifiers);
 }
 
+pub fn mouseClickRequiresRenderedInteractiveTarget(self: *Page, x: f64, y: f64) !bool {
+    const target = (try self.window._document.elementFromPoint(x, y, self)) orelse return false;
+    const html_element = findClickableHtmlAncestor(target.asNode()) orelse return false;
+    return switch (html_element._type) {
+        .anchor, .input, .button, .select, .textarea => true,
+        .label => false,
+        else => false,
+    };
+}
+
 pub fn triggerMouseClickOnNodePathWithResult(
     self: *Page,
     path: []const u16,
