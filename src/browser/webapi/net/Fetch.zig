@@ -192,7 +192,8 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     self._page.js.localScope(&ls);
     defer ls.deinit();
 
-    ls.toLocal(self._resolver).reject("fetch error", @errorName(err));
+    // fetch() must reject with a TypeError on network errors per spec
+    ls.toLocal(self._resolver).rejectError("fetch error", .{ .type_error = @errorName(err) });
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
