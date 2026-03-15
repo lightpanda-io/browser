@@ -60,6 +60,26 @@ pub const ImageCommand = struct {
         background,
     };
 
+    pub const BackgroundPositionMode = enum(u8) {
+        offset,
+        center,
+        far,
+        percent,
+    };
+
+    pub const BackgroundSizeMode = enum(u8) {
+        natural,
+        explicit,
+        contain,
+        cover,
+    };
+
+    pub const BackgroundSizeComponentMode = enum(u8) {
+        auto,
+        px,
+        percent,
+    };
+
     x: i32,
     y: i32,
     width: i32,
@@ -68,6 +88,17 @@ pub const ImageCommand = struct {
     draw_mode: DrawMode = .fit,
     background_offset_x: i32 = 0,
     background_offset_y: i32 = 0,
+    background_position_x_mode: BackgroundPositionMode = .offset,
+    background_position_y_mode: BackgroundPositionMode = .offset,
+    background_position_x_percent_bp: i32 = 0,
+    background_position_y_percent_bp: i32 = 0,
+    background_size_mode: BackgroundSizeMode = .natural,
+    background_size_width_mode: BackgroundSizeComponentMode = .auto,
+    background_size_height_mode: BackgroundSizeComponentMode = .auto,
+    background_size_width: i32 = 0,
+    background_size_height: i32 = 0,
+    background_size_width_percent_bp: i32 = 0,
+    background_size_height_percent_bp: i32 = 0,
     repeat_x: bool = false,
     repeat_y: bool = false,
     url: []u8,
@@ -144,6 +175,17 @@ pub const Command = union(enum) {
                 .draw_mode = image.draw_mode,
                 .background_offset_x = image.background_offset_x,
                 .background_offset_y = image.background_offset_y,
+                .background_position_x_mode = image.background_position_x_mode,
+                .background_position_y_mode = image.background_position_y_mode,
+                .background_position_x_percent_bp = image.background_position_x_percent_bp,
+                .background_position_y_percent_bp = image.background_position_y_percent_bp,
+                .background_size_mode = image.background_size_mode,
+                .background_size_width_mode = image.background_size_width_mode,
+                .background_size_height_mode = image.background_size_height_mode,
+                .background_size_width = image.background_size_width,
+                .background_size_height = image.background_size_height,
+                .background_size_width_percent_bp = image.background_size_width_percent_bp,
+                .background_size_height_percent_bp = image.background_size_height_percent_bp,
                 .repeat_x = image.repeat_x,
                 .repeat_y = image.repeat_y,
                 .url = try allocator.dupe(u8, image.url),
@@ -306,6 +348,17 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .draw_mode = image.draw_mode,
         .background_offset_x = image.background_offset_x,
         .background_offset_y = image.background_offset_y,
+        .background_position_x_mode = image.background_position_x_mode,
+        .background_position_y_mode = image.background_position_y_mode,
+        .background_position_x_percent_bp = image.background_position_x_percent_bp,
+        .background_position_y_percent_bp = image.background_position_y_percent_bp,
+        .background_size_mode = image.background_size_mode,
+        .background_size_width_mode = image.background_size_width_mode,
+        .background_size_height_mode = image.background_size_height_mode,
+        .background_size_width = image.background_size_width,
+        .background_size_height = image.background_size_height,
+        .background_size_width_percent_bp = image.background_size_width_percent_bp,
+        .background_size_height_percent_bp = image.background_size_height_percent_bp,
         .repeat_x = image.repeat_x,
         .repeat_y = image.repeat_y,
         .url = try allocator.dupe(u8, image.url),
@@ -411,6 +464,17 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.draw_mode));
                 hasher.update(std.mem.asBytes(&image.background_offset_x));
                 hasher.update(std.mem.asBytes(&image.background_offset_y));
+                hasher.update(std.mem.asBytes(&image.background_position_x_mode));
+                hasher.update(std.mem.asBytes(&image.background_position_y_mode));
+                hasher.update(std.mem.asBytes(&image.background_position_x_percent_bp));
+                hasher.update(std.mem.asBytes(&image.background_position_y_percent_bp));
+                hasher.update(std.mem.asBytes(&image.background_size_mode));
+                hasher.update(std.mem.asBytes(&image.background_size_width_mode));
+                hasher.update(std.mem.asBytes(&image.background_size_height_mode));
+                hasher.update(std.mem.asBytes(&image.background_size_width));
+                hasher.update(std.mem.asBytes(&image.background_size_height));
+                hasher.update(std.mem.asBytes(&image.background_size_width_percent_bp));
+                hasher.update(std.mem.asBytes(&image.background_size_height_percent_bp));
                 hasher.update(std.mem.asBytes(&image.repeat_x));
                 hasher.update(std.mem.asBytes(&image.repeat_y));
                 hasher.update(image.url);

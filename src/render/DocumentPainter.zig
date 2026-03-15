@@ -289,6 +289,17 @@ const Painter = struct {
                     .draw_mode = image.draw_mode,
                     .background_offset_x = image.background_offset_x,
                     .background_offset_y = image.background_offset_y,
+                    .background_position_x_mode = image.background_position_x_mode,
+                    .background_position_y_mode = image.background_position_y_mode,
+                    .background_position_x_percent_bp = image.background_position_x_percent_bp,
+                    .background_position_y_percent_bp = image.background_position_y_percent_bp,
+                    .background_size_mode = image.background_size_mode,
+                    .background_size_width_mode = image.background_size_width_mode,
+                    .background_size_height_mode = image.background_size_height_mode,
+                    .background_size_width = image.background_size_width,
+                    .background_size_height = image.background_size_height,
+                    .background_size_width_percent_bp = image.background_size_width_percent_bp,
+                    .background_size_height_percent_bp = image.background_size_height_percent_bp,
                     .repeat_x = image.repeat_x,
                     .repeat_y = image.repeat_y,
                     .url = image.url,
@@ -2006,6 +2017,20 @@ const ImageRequestContext = struct {
 const BackgroundPosition = struct {
     x: i32 = 0,
     y: i32 = 0,
+    x_mode: ImageCommand.BackgroundPositionMode = .offset,
+    y_mode: ImageCommand.BackgroundPositionMode = .offset,
+    x_percent_bp: i32 = 0,
+    y_percent_bp: i32 = 0,
+};
+
+const BackgroundSize = struct {
+    mode: ImageCommand.BackgroundSizeMode = .natural,
+    width_mode: ImageCommand.BackgroundSizeComponentMode = .auto,
+    height_mode: ImageCommand.BackgroundSizeComponentMode = .auto,
+    width: i32 = 0,
+    height: i32 = 0,
+    width_percent_bp: i32 = 0,
+    height_percent_bp: i32 = 0,
 };
 
 const BackgroundRepeat = struct {
@@ -2061,6 +2086,14 @@ fn appendResolvedBackgroundImage(
         self.opts.viewport_width,
         self.opts.viewport_height,
     );
+    const size = resolveBackgroundSize(
+        decl,
+        self.page,
+        rect.width,
+        rect.height,
+        self.opts.viewport_width,
+        self.opts.viewport_height,
+    );
 
     try self.list.addImage(self.allocator, .{
         .x = rect.x,
@@ -2071,6 +2104,17 @@ fn appendResolvedBackgroundImage(
         .draw_mode = .background,
         .background_offset_x = position.x,
         .background_offset_y = position.y,
+        .background_position_x_mode = position.x_mode,
+        .background_position_y_mode = position.y_mode,
+        .background_position_x_percent_bp = position.x_percent_bp,
+        .background_position_y_percent_bp = position.y_percent_bp,
+        .background_size_mode = size.mode,
+        .background_size_width_mode = size.width_mode,
+        .background_size_height_mode = size.height_mode,
+        .background_size_width = size.width,
+        .background_size_height = size.height,
+        .background_size_width_percent_bp = size.width_percent_bp,
+        .background_size_height_percent_bp = size.height_percent_bp,
         .repeat_x = repeat.x,
         .repeat_y = repeat.y,
         .url = @constCast(resolved),
@@ -2116,21 +2160,144 @@ fn resolveBackgroundPosition(
     if (raw.len == 0) return .{};
 
     var tokens = std.mem.tokenizeAny(u8, raw, " \t\r\n");
-    const x_token = tokens.next() orelse return .{};
-    const y_token = tokens.next() orelse x_token;
+    const first = tokens.next() orelse return .{};
+    const second = tokens.next();
+    const first_axis = parseBackgroundPositionAxis(first, reference_width, reference_height, viewport_width, viewport_height) orelse return .{};
+    const second_axis = if (second) |token|
+        parseBackgroundPositionAxis(token, reference_width, reference_height, viewport_width, viewport_height)
+    else
+        null;
+
+    var x_axis = BackgroundAxisPosition{};
+    var y_axis = BackgroundAxisPosition{ .mode = .center };
+
+    if (second_axis == null) {
+        if (first_axis.prefers_y and !first_axis.prefers_x) {
+            x_axis = .{ .mode = .center };
+            y_axis = first_axis;
+        } else if (first_axis.mode == .center) {
+            x_axis = first_axis;
+            y_axis = first_axis;
+        } else {
+            x_axis = first_axis;
+        }
+    } else {
+        const second_value = second_axis.?;
+        if ((first_axis.prefers_y and !first_axis.prefers_x) or (second_value.prefers_x and !second_value.prefers_y)) {
+            x_axis = second_value;
+            y_axis = first_axis;
+        } else {
+            x_axis = first_axis;
+            y_axis = second_value;
+        }
+    }
+
     return .{
-        .x = parseBackgroundPositionComponent(x_token, reference_width, viewport_width),
-        .y = parseBackgroundPositionComponent(y_token, reference_height, viewport_height),
+        .x = x_axis.offset,
+        .y = y_axis.offset,
+        .x_mode = x_axis.mode,
+        .y_mode = y_axis.mode,
+        .x_percent_bp = x_axis.percent_bp,
+        .y_percent_bp = y_axis.percent_bp,
     };
 }
 
-fn parseBackgroundPositionComponent(token: []const u8, reference: i32, viewport: i32) i32 {
+fn resolveBackgroundSize(
+    decl: anytype,
+    page: *Page,
+    reference_width: i32,
+    reference_height: i32,
+    viewport_width: i32,
+    viewport_height: i32,
+) BackgroundSize {
+    const raw = std.mem.trim(u8, decl.getPropertyValue("background-size", page), &std.ascii.whitespace);
+    if (raw.len == 0) return .{};
+    if (std.ascii.eqlIgnoreCase(raw, "contain")) return .{ .mode = .contain };
+    if (std.ascii.eqlIgnoreCase(raw, "cover")) return .{ .mode = .cover };
+
+    var tokens = std.mem.tokenizeAny(u8, raw, " \t\r\n");
+    const first = tokens.next() orelse return .{};
+    const second = tokens.next();
+    const width = parseBackgroundSizeComponent(first, reference_width, viewport_width) orelse return .{};
+    const height = if (second) |token|
+        parseBackgroundSizeComponent(token, reference_height, viewport_height)
+    else
+        null;
+
+    return .{
+        .mode = .explicit,
+        .width_mode = width.mode,
+        .height_mode = if (height) |value| value.mode else .auto,
+        .width = width.value,
+        .height = if (height) |value| value.value else 0,
+        .width_percent_bp = width.percent_bp,
+        .height_percent_bp = if (height) |value| value.percent_bp else 0,
+    };
+}
+
+const BackgroundAxisPosition = struct {
+    mode: ImageCommand.BackgroundPositionMode = .offset,
+    offset: i32 = 0,
+    percent_bp: i32 = 0,
+    prefers_x: bool = true,
+    prefers_y: bool = true,
+};
+
+fn parseBackgroundPositionAxis(
+    token: []const u8,
+    reference_width: i32,
+    reference_height: i32,
+    viewport_width: i32,
+    viewport_height: i32,
+) ?BackgroundAxisPosition {
     const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
-    if (trimmed.len == 0) return 0;
-    if (std.ascii.eqlIgnoreCase(trimmed, "left") or std.ascii.eqlIgnoreCase(trimmed, "top")) return 0;
-    if (std.ascii.eqlIgnoreCase(trimmed, "center")) return 0;
-    if (std.ascii.eqlIgnoreCase(trimmed, "right") or std.ascii.eqlIgnoreCase(trimmed, "bottom")) return 0;
-    return parseCssLengthPxWithContext(trimmed, reference, viewport) orelse 0;
+    if (trimmed.len == 0) return null;
+    if (std.ascii.eqlIgnoreCase(trimmed, "left")) return .{ .mode = .offset, .offset = 0, .prefers_x = true, .prefers_y = false };
+    if (std.ascii.eqlIgnoreCase(trimmed, "right")) return .{ .mode = .far, .prefers_x = true, .prefers_y = false };
+    if (std.ascii.eqlIgnoreCase(trimmed, "top")) return .{ .mode = .offset, .offset = 0, .prefers_x = false, .prefers_y = true };
+    if (std.ascii.eqlIgnoreCase(trimmed, "bottom")) return .{ .mode = .far, .prefers_x = false, .prefers_y = true };
+    if (std.ascii.eqlIgnoreCase(trimmed, "center")) return .{ .mode = .center };
+    if (std.mem.endsWith(u8, trimmed, "%")) {
+        const raw = std.mem.trim(u8, trimmed[0 .. trimmed.len - 1], &std.ascii.whitespace);
+        const percent = std.fmt.parseFloat(f64, raw) catch return null;
+        return .{
+            .mode = .percent,
+            .percent_bp = @as(i32, @intFromFloat(@round(percent * 100.0))),
+        };
+    }
+    return .{
+        .mode = .offset,
+        .offset = parseCssLengthPxWithContext(trimmed, reference_width, viewport_width) orelse
+            parseCssLengthPxWithContext(trimmed, reference_height, viewport_height) orelse return null,
+    };
+}
+
+const BackgroundSizeComponent = struct {
+    mode: ImageCommand.BackgroundSizeComponentMode = .auto,
+    value: i32 = 0,
+    percent_bp: i32 = 0,
+};
+
+fn parseBackgroundSizeComponent(
+    token: []const u8,
+    reference: i32,
+    viewport: i32,
+) ?BackgroundSizeComponent {
+    const trimmed = std.mem.trim(u8, token, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    if (std.ascii.eqlIgnoreCase(trimmed, "auto")) return .{ .mode = .auto };
+    if (std.mem.endsWith(u8, trimmed, "%")) {
+        const raw = std.mem.trim(u8, trimmed[0 .. trimmed.len - 1], &std.ascii.whitespace);
+        const percent = std.fmt.parseFloat(f64, raw) catch return null;
+        return .{
+            .mode = .percent,
+            .percent_bp = @as(i32, @intFromFloat(@round(percent * 100.0))),
+        };
+    }
+    return .{
+        .mode = .px,
+        .value = parseCssLengthPxWithContext(trimmed, reference, viewport) orelse return null,
+    };
 }
 
 fn imageRequestIncludesCredentials(element: *Element) bool {
@@ -2816,6 +2983,8 @@ fn resolveLayoutWidth(
     italic: bool,
 ) i32 {
     const explicit_width = resolveExplicitWidth(self, element, decl, page, tag, available_width);
+    const explicit_height = resolveExplicitHeight(self, element, decl, page, tag, self.opts.viewport_height);
+    const intrinsic_image = if (tag == .img) resolveIntrinsicImageDimensions(element, page) else null;
     const min_width = parseCssLengthPxWithContext(
         decl.getPropertyValue("min-width", page),
         available_width,
@@ -2833,6 +3002,22 @@ fn resolveLayoutWidth(
         return forced;
     }
 
+    if (tag == .img) {
+        var resolved_image_width = explicit_width;
+        if (resolved_image_width <= 0) {
+            resolved_image_width = if (intrinsic_image) |dims|
+                if (explicit_height > 0 and dims.height > 0)
+                    @max(1, @divTrunc(dims.width * explicit_height, dims.height))
+                else
+                    dims.width
+            else
+                180;
+        }
+        resolved_image_width = @max(resolved_image_width, min_width);
+        if (max_width) |limit| resolved_image_width = @min(resolved_image_width, limit);
+        return std.math.clamp(resolved_image_width, 1, available_width);
+    }
+
     if (block_like) {
         var resolved = std.math.clamp(
             if (explicit_width > 0) explicit_width else available_width,
@@ -2847,7 +3032,13 @@ fn resolveLayoutWidth(
     var preferred = explicit_width;
     if (preferred <= 0) {
         preferred = switch (tag) {
-            .img => 180,
+            .img => if (intrinsic_image) |dims|
+                if (explicit_height > 0 and dims.height > 0)
+                    @max(1, @divTrunc(dims.width * explicit_height, dims.height))
+                else
+                    dims.width
+            else
+                180,
             .textarea => 240,
             .input, .select => 180,
             else => @max(self.opts.inline_min_width, estimateTextWidth(label, font_size, font_family, font_weight, italic) + 16),
@@ -2870,13 +3061,17 @@ fn resolveOwnContentHeight(
     font_weight: i32,
     italic: bool,
 ) i32 {
-    _ = self;
-    _ = element;
-    _ = decl;
     var height: i32 = 0;
 
     if (tag == .img) {
-        height = @max(height, 120);
+        const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
+        if (explicit_height > 0) {
+            height = @max(height, explicit_height);
+        } else if (resolveIntrinsicImageDimensions(element, self.page)) |dims| {
+            height = @max(height, @max(@as(i32, 1), @divTrunc(content_width * dims.height, dims.width)));
+        } else {
+            height = @max(height, 120);
+        }
     } else if (tag == .textarea) {
         height = @max(height, 100);
     } else if (tag == .input or tag == .button or tag == .select) {
@@ -2927,6 +3122,19 @@ fn resolveExplicitHeight(self: *const Painter, element: *Element, decl: anytype,
     return 0;
 }
 
+const IntrinsicImageDimensions = struct {
+    width: i32,
+    height: i32,
+};
+
+fn resolveIntrinsicImageDimensions(element: *Element, page: *Page) ?IntrinsicImageDimensions {
+    const image = element.is(Element.Html.Image) orelse return null;
+    const width: i32 = @intCast(image.getNaturalWidth(page));
+    const height: i32 = @intCast(image.getNaturalHeight(page));
+    if (width <= 0 or height <= 0) return null;
+    return .{ .width = width, .height = height };
+}
+
 fn resolveAncestorExplicitHeight(self: *const Painter, element: *Element, page: *Page, fallback_height: i32) i32 {
     var parent = element.asNode().parentElement();
     while (parent) |candidate| {
@@ -2974,7 +3182,7 @@ fn resolveChildIndent(tag: Element.Tag, has_child_elements: bool) i32 {
     return switch (tag) {
         .html, .body, .table, .tr, .td, .th, .tbody, .thead, .tfoot, .caption => 0,
         .ul, .ol => 18,
-        else => 12,
+        else => 0,
     };
 }
 
@@ -6022,6 +6230,151 @@ test "paintDocument carries border radius on box commands" {
         },
         else => return error.SquareFillWrongCommand,
     }
+}
+
+test "paintDocument uses intrinsic image dimensions and aspect ratio" {
+    var page = try testing.pageTest("page/intrinsic_image_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var images: std.ArrayList(ImageCommand) = .empty;
+    defer images.deinit(std.testing.allocator);
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| if (std.mem.indexOf(u8, image.url, "layout_tall_blue.png") != null) {
+                try images.append(std.testing.allocator, image);
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), images.items.len);
+    std.mem.sort(ImageCommand, images.items, {}, struct {
+        fn lessThan(_: void, lhs: ImageCommand, rhs: ImageCommand) bool {
+            return lhs.y < rhs.y;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqual(@as(i32, 40), images.items[0].width);
+    try std.testing.expectEqual(@as(i32, 80), images.items[0].height);
+    try std.testing.expectEqual(@as(i32, 20), images.items[1].width);
+    try std.testing.expectEqual(@as(i32, 40), images.items[1].height);
+    try std.testing.expectEqual(@as(i32, 20), images.items[2].width);
+    try std.testing.expectEqual(@as(i32, 40), images.items[2].height);
+}
+
+test "paintDocument emits semantic background-position modes" {
+    var page = try testing.pageTest("page/background_position_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 520,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var backgrounds: std.ArrayList(ImageCommand) = .empty;
+    defer backgrounds.deinit(std.testing.allocator);
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (image.draw_mode == .background and std.mem.indexOf(u8, image.url, "layout_tall_blue.png") != null) {
+                    try backgrounds.append(std.testing.allocator, image);
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), backgrounds.items.len);
+    std.mem.sort(ImageCommand, backgrounds.items, {}, struct {
+        fn lessThan(_: void, lhs: ImageCommand, rhs: ImageCommand) bool {
+            return lhs.y < rhs.y;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.percent, backgrounds.items[0].background_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.percent, backgrounds.items[0].background_position_y_mode);
+    try std.testing.expectEqual(@as(i32, 2500), backgrounds.items[0].background_position_x_percent_bp);
+    try std.testing.expectEqual(@as(i32, 5000), backgrounds.items[0].background_position_y_percent_bp);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.center, backgrounds.items[1].background_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.center, backgrounds.items[1].background_position_y_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.far, backgrounds.items[2].background_position_x_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundPositionMode.far, backgrounds.items[2].background_position_y_mode);
+}
+
+test "paintDocument clamps responsive images with max-width and preserves aspect ratio" {
+    var page = try testing.pageTest("page/responsive_image_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 360,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var responsive: ?ImageCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (std.mem.indexOf(u8, image.url, "layout_tall_blue.png") != null) {
+                    responsive = image;
+                    break;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const image = responsive orelse return error.ResponsiveImageMissing;
+    try std.testing.expectEqual(@as(i32, 120), image.width);
+    try std.testing.expectEqual(@as(i32, 240), image.height);
+}
+
+test "paintDocument emits semantic background-size modes" {
+    var page = try testing.pageTest("page/background_size_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 640,
+        .viewport_height = 700,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var backgrounds: std.ArrayList(ImageCommand) = .empty;
+    defer backgrounds.deinit(std.testing.allocator);
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .image => |image| {
+                if (image.draw_mode == .background and std.mem.indexOf(u8, image.url, "layout_tall_blue.png") != null) {
+                    try backgrounds.append(std.testing.allocator, image);
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 4), backgrounds.items.len);
+    std.mem.sort(ImageCommand, backgrounds.items, {}, struct {
+        fn lessThan(_: void, lhs: ImageCommand, rhs: ImageCommand) bool {
+            return lhs.y < rhs.y;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqual(ImageCommand.BackgroundSizeMode.contain, backgrounds.items[0].background_size_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundSizeMode.cover, backgrounds.items[1].background_size_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundSizeMode.explicit, backgrounds.items[2].background_size_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundSizeComponentMode.px, backgrounds.items[2].background_size_width_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundSizeComponentMode.auto, backgrounds.items[2].background_size_height_mode);
+    try std.testing.expectEqual(@as(i32, 80), backgrounds.items[2].background_size_width);
+    try std.testing.expectEqual(ImageCommand.BackgroundSizeMode.explicit, backgrounds.items[3].background_size_mode);
+    try std.testing.expectEqual(ImageCommand.BackgroundSizeComponentMode.percent, backgrounds.items[3].background_size_width_mode);
+    try std.testing.expectEqual(@as(i32, 7500), backgrounds.items[3].background_size_width_percent_bp);
 }
 
 test "paintDocument docks floated blocks and keeps body flow below them" {

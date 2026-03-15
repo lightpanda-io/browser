@@ -771,6 +771,25 @@ Current state inside Gate 3:
   - bounded tests plus a headed screenshot probe now prove a rounded pill box
     clears its corners while an otherwise identical square box still fills its
     corners on the real screenshot path
+- intrinsic replaced-element sizing and richer background sizing/positioning
+  are now covered on the headed surface:
+  - `img` layout now uses natural dimensions and aspect-ratio backfill when
+    width or height is omitted, instead of defaulting generic block boxes to
+    container width
+  - responsive `img` layout now clamps through `max-width` while preserving
+    aspect ratio on the real headed surface
+  - CSS background parsing no longer loses later declarations after an
+    unquoted `url(...)`, and background shorthand now lifts `background-size`
+    in addition to image/repeat/position
+  - headed background images now carry semantic `background-position`
+    modes for pixel offsets, keywords, and percentages instead of collapsing
+    everything into raw offsets
+  - headed background images now also honor first-pass `background-size`
+    semantics for `contain`, `cover`, explicit lengths, and percentages on the
+    Win32 surface instead of always painting at natural size
+  - bounded tests plus headed probes now cover intrinsic image sizing,
+    responsive image shrink-to-fit behavior, semantic background positioning,
+    and semantic background sizing on the real screenshot path
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

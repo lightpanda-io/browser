@@ -251,7 +251,7 @@ fn isColon(token: Tokenizer.Token) bool {
 
 fn isBlockStart(token: Tokenizer.Token) bool {
     return switch (token) {
-        .curly_bracket_block, .square_bracket_block, .parenthesis_block, .function => true,
+        .curly_bracket_block, .square_bracket_block, .parenthesis_block => true,
         else => false,
     };
 }
@@ -292,4 +292,26 @@ fn isBang(token: Tokenizer.Token) bool {
         .delim => |c| c == '!',
         else => false,
     };
+}
+
+test "parseDeclarationsList splits url-valued declarations followed by semicolons" {
+    var it = parseDeclarationsList("background-image:url(layout_tall_blue.png);background-repeat:no-repeat;background-position:center center;background-size:contain");
+
+    const first = it.next() orelse return error.MissingFirstDeclaration;
+    try std.testing.expectEqualStrings("background-image", first.name);
+    try std.testing.expectEqualStrings("url(layout_tall_blue.png)", first.value);
+
+    const second = it.next() orelse return error.MissingSecondDeclaration;
+    try std.testing.expectEqualStrings("background-repeat", second.name);
+    try std.testing.expectEqualStrings("no-repeat", second.value);
+
+    const third = it.next() orelse return error.MissingThirdDeclaration;
+    try std.testing.expectEqualStrings("background-position", third.name);
+    try std.testing.expectEqualStrings("center center", third.value);
+
+    const fourth = it.next() orelse return error.MissingFourthDeclaration;
+    try std.testing.expectEqualStrings("background-size", fourth.name);
+    try std.testing.expectEqualStrings("contain", fourth.value);
+
+    try std.testing.expectEqual(@as(?Declaration, null), it.next());
 }

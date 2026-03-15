@@ -231,10 +231,31 @@ fn expandBackgroundShorthand(self: *CSSStyleDeclaration, value: []const u8, impo
     var image_token: ?[]const u8 = null;
     var repeat_token: ?[]const u8 = null;
     var position_tokens = std.ArrayList([]const u8).empty;
+    var size_tokens = std.ArrayList([]const u8).empty;
+    var parsing_size = false;
     defer position_tokens.deinit(page.call_arena);
+    defer size_tokens.deinit(page.call_arena);
 
     while (tokens.next()) |token| {
         if (token.len == 0) continue;
+
+        if (std.mem.eql(u8, token, "/")) {
+            parsing_size = true;
+            continue;
+        }
+
+        if (std.mem.indexOfScalar(u8, token, '/')) |slash| {
+            const left = std.mem.trim(u8, token[0..slash], &std.ascii.whitespace);
+            const right = std.mem.trim(u8, token[slash + 1 ..], &std.ascii.whitespace);
+            if (left.len > 0 and isBackgroundPositionToken(left) and position_tokens.items.len < 2) {
+                try position_tokens.append(page.call_arena, left);
+            }
+            if (right.len > 0 and isBackgroundSizeToken(right) and size_tokens.items.len < 2) {
+                try size_tokens.append(page.call_arena, right);
+                parsing_size = true;
+            }
+            continue;
+        }
 
         if (image_token == null and isBackgroundImageToken(token)) {
             image_token = token;
@@ -242,6 +263,10 @@ fn expandBackgroundShorthand(self: *CSSStyleDeclaration, value: []const u8, impo
         }
         if (repeat_token == null and isBackgroundRepeatToken(token)) {
             repeat_token = token;
+            continue;
+        }
+        if (parsing_size and isBackgroundSizeToken(token) and size_tokens.items.len < 2) {
+            try size_tokens.append(page.call_arena, token);
             continue;
         }
         if (isBackgroundPositionToken(token) and position_tokens.items.len < 2) {
@@ -258,6 +283,10 @@ fn expandBackgroundShorthand(self: *CSSStyleDeclaration, value: []const u8, impo
     if (position_tokens.items.len > 0) {
         const background_position = try std.mem.join(page.call_arena, " ", position_tokens.items);
         try self.setPropertyImpl("background-position", background_position, important, page);
+    }
+    if (size_tokens.items.len > 0) {
+        const background_size = try std.mem.join(page.call_arena, " ", size_tokens.items);
+        try self.setPropertyImpl("background-size", background_size, important, page);
     }
 }
 
@@ -635,6 +664,15 @@ fn isBackgroundPositionToken(token: []const u8) bool {
         "top",
         "bottom",
         "center",
+    });
+}
+
+fn isBackgroundSizeToken(token: []const u8) bool {
+    if (likelyCssLengthToken(token)) return true;
+    return asciiEqualsAnyIgnoreCase(token, &.{
+        "auto",
+        "contain",
+        "cover",
     });
 }
 

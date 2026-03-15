@@ -4765,8 +4765,9 @@ fn drawPresentationBackgroundImage(
         return;
     }
 
-    const tile_width = @as(i32, @intCast(cached.width));
-    const tile_height = @as(i32, @intCast(cached.height));
+    const tile_size = resolveBackgroundTileSize(rect, image_cmd, cached.width, cached.height);
+    const tile_width = tile_size.width;
+    const tile_height = tile_size.height;
     if (tile_width <= 0 or tile_height <= 0) {
         return;
     }
@@ -4787,8 +4788,22 @@ fn drawPresentationBackgroundImage(
     }
     defer _ = GdipDeleteGraphics(graphics.?);
 
-    const origin_x = rect.left + image_cmd.background_offset_x;
-    const origin_y = rect.top + image_cmd.background_offset_y;
+    const origin_x = backgroundAxisOrigin(
+        rect.left,
+        rect.right - rect.left,
+        tile_width,
+        image_cmd.background_position_x_mode,
+        image_cmd.background_offset_x,
+        image_cmd.background_position_x_percent_bp,
+    );
+    const origin_y = backgroundAxisOrigin(
+        rect.top,
+        rect.bottom - rect.top,
+        tile_height,
+        image_cmd.background_position_y_mode,
+        image_cmd.background_offset_y,
+        image_cmd.background_position_y_percent_bp,
+    );
     const start_x = if (image_cmd.repeat_x)
         backgroundTileStart(origin_x, tile_width, rect.left)
     else
@@ -4820,6 +4835,115 @@ fn drawPresentationBackgroundImage(
         y += tile_height;
         if (y >= rect.bottom) break;
     }
+}
+
+const TileSize = struct {
+    width: i32,
+    height: i32,
+};
+
+fn resolveBackgroundTileSize(
+    rect: c.RECT,
+    image_cmd: ImageCommand,
+    image_width: u32,
+    image_height: u32,
+) TileSize {
+    const natural_width = @as(i32, @intCast(image_width));
+    const natural_height = @as(i32, @intCast(image_height));
+    if (natural_width <= 0 or natural_height <= 0) {
+        return .{ .width = 0, .height = 0 };
+    }
+
+    const box_width = rect.right - rect.left;
+    const box_height = rect.bottom - rect.top;
+    if (box_width <= 0 or box_height <= 0) {
+        return .{ .width = natural_width, .height = natural_height };
+    }
+
+    return switch (image_cmd.background_size_mode) {
+        .natural => .{ .width = natural_width, .height = natural_height },
+        .contain => scaledBackgroundTileSize(box_width, box_height, natural_width, natural_height, true),
+        .cover => scaledBackgroundTileSize(box_width, box_height, natural_width, natural_height, false),
+        .explicit => explicitBackgroundTileSize(box_width, box_height, natural_width, natural_height, image_cmd),
+    };
+}
+
+fn scaledBackgroundTileSize(
+    box_width: i32,
+    box_height: i32,
+    natural_width: i32,
+    natural_height: i32,
+    contain: bool,
+) TileSize {
+    const width_scale = @as(f64, @floatFromInt(box_width)) / @as(f64, @floatFromInt(natural_width));
+    const height_scale = @as(f64, @floatFromInt(box_height)) / @as(f64, @floatFromInt(natural_height));
+    const scale = if (contain) @min(width_scale, height_scale) else @max(width_scale, height_scale);
+    return .{
+        .width = @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(natural_width)) * scale)))),
+        .height = @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(natural_height)) * scale)))),
+    };
+}
+
+fn explicitBackgroundTileSize(
+    box_width: i32,
+    box_height: i32,
+    natural_width: i32,
+    natural_height: i32,
+    image_cmd: ImageCommand,
+) TileSize {
+    var resolved_width = backgroundSizeComponentPixels(
+        box_width,
+        image_cmd.background_size_width_mode,
+        image_cmd.background_size_width,
+        image_cmd.background_size_width_percent_bp,
+    );
+    var resolved_height = backgroundSizeComponentPixels(
+        box_height,
+        image_cmd.background_size_height_mode,
+        image_cmd.background_size_height,
+        image_cmd.background_size_height_percent_bp,
+    );
+
+    if (resolved_width <= 0 and resolved_height <= 0) {
+        return .{ .width = natural_width, .height = natural_height };
+    }
+    if (resolved_width <= 0) {
+        resolved_width = @max(1, @divTrunc(resolved_height * natural_width, natural_height));
+    }
+    if (resolved_height <= 0) {
+        resolved_height = @max(1, @divTrunc(resolved_width * natural_height, natural_width));
+    }
+    return .{ .width = resolved_width, .height = resolved_height };
+}
+
+fn backgroundSizeComponentPixels(
+    reference: i32,
+    mode: ImageCommand.BackgroundSizeComponentMode,
+    value: i32,
+    percent_bp: i32,
+) i32 {
+    return switch (mode) {
+        .auto => 0,
+        .px => value,
+        .percent => @divTrunc(reference * percent_bp, 10_000),
+    };
+}
+
+fn backgroundAxisOrigin(
+    axis_min: i32,
+    axis_span: i32,
+    tile_span: i32,
+    mode: ImageCommand.BackgroundPositionMode,
+    offset: i32,
+    percent_bp: i32,
+) i32 {
+    const free_space = axis_span - tile_span;
+    return axis_min + switch (mode) {
+        .offset => offset,
+        .center => @divTrunc(free_space, 2),
+        .far => free_space,
+        .percent => @divTrunc(free_space * percent_bp, 10_000),
+    };
 }
 
 fn backgroundTileStart(origin: i32, tile_size: i32, clip_min: i32) i32 {
