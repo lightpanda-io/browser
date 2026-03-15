@@ -594,6 +594,7 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return el.getAttributeSafe(comptime .wrap("readonly")) == null;
         },
         .default => return false,
+        .open => return el.getAttributeSafe(comptime .wrap("open")) != null,
 
         // User interaction
         .hover => return false,
@@ -609,12 +610,9 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         .focus_visible => return false,
 
         // Link states
-        .link => return false,
+        .link => return matchesAnyLink(el),
         .visited => return false,
-        .any_link => {
-            if (el.getTag() != .anchor) return false;
-            return el.getAttributeSafe(comptime .wrap("href")) != null;
-        },
+        .any_link => return matchesAnyLink(el),
         .target => {
             const element_id = el.getAttributeSafe(comptime .wrap("id")) orelse return false;
             const location = page.document._location orelse return false;
@@ -655,7 +653,8 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
         },
 
         // Functional
-        .lang => return false,
+        .dir => |direction| return resolveDirection(node) == direction,
+        .lang => |expected| return matchesLanguage(node, expected),
         .not => |selectors| {
             for (selectors) |selector| {
                 if (matches(node, selector, scope, page)) {
@@ -703,6 +702,58 @@ fn matchesPseudoClass(el: *Node.Element, pseudo: Selector.PseudoClass, scope: *N
             return false;
         },
     }
+}
+
+fn matchesAnyLink(el: *Node.Element) bool {
+    switch (el.getTag()) {
+        .anchor, .area, .link => {},
+        else => return false,
+    }
+    return el.getAttributeSafe(comptime .wrap("href")) != null;
+}
+
+fn resolveDirection(node: *Node) Selector.Direction {
+    var current: ?*Node = node;
+    while (current) |candidate| {
+        if (candidate.is(Node.Element)) |element| {
+            if (element.getAttributeSafe(comptime .wrap("dir"))) |dir| {
+                const trimmed = std.mem.trim(u8, dir, &std.ascii.whitespace);
+                if (std.ascii.eqlIgnoreCase(trimmed, "rtl")) {
+                    return .rtl;
+                }
+                if (std.ascii.eqlIgnoreCase(trimmed, "ltr")) {
+                    return .ltr;
+                }
+            }
+        }
+        current = candidate.parentNode();
+    }
+    return .ltr;
+}
+
+fn matchesLanguage(node: *Node, expected: []const u8) bool {
+    const trimmed_expected = std.mem.trim(u8, expected, &std.ascii.whitespace);
+    if (trimmed_expected.len == 0) return false;
+
+    var current: ?*Node = node;
+    while (current) |candidate| {
+        if (candidate.is(Node.Element)) |element| {
+            if (element.getAttributeSafe(comptime .wrap("lang"))) |lang| {
+                const trimmed_lang = std.mem.trim(u8, lang, &std.ascii.whitespace);
+                if (trimmed_lang.len < trimmed_expected.len) {
+                    current = candidate.parentNode();
+                    continue;
+                }
+                if (!std.ascii.eqlIgnoreCase(trimmed_lang[0..trimmed_expected.len], trimmed_expected)) {
+                    current = candidate.parentNode();
+                    continue;
+                }
+                return trimmed_lang.len == trimmed_expected.len or trimmed_lang[trimmed_expected.len] == '-';
+            }
+        }
+        current = candidate.parentNode();
+    }
+    return false;
 }
 
 fn matchesHasDescendant(el: *Node.Element, selector: Selector.Selector, scope: *Node, page: *Page) bool {

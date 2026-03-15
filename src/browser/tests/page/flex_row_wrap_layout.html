@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: #ffffff;
+    }
+    body {
+      padding: 24px;
+    }
+    .toolbar {
+      width: 320px;
+      margin-left: auto;
+      margin-right: auto;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      padding: 12px;
+      border: 1px solid #dfe1e5;
+      background: #f8f9fa;
+    }
+    .chip {
+      width: 120px;
+      height: 48px;
+      font-weight: 700;
+      border: 0;
+    }
+    .chip.red {
+      color: rgb(220, 50, 50);
+    }
+    .chip.blue {
+      color: rgb(40, 110, 220);
+    }
+    .chip.green {
+      color: rgb(40, 170, 90);
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="chip red">ONE</button>
+    <button class="chip blue">TWO</button>
+    <button class="chip green">THREE</button>
+  </div>
+</body>
+</html>

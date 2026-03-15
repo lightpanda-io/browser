@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Flex Row Wrap Layout</title>
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100vh;
+      background: rgb(255, 255, 255);
+    }
+    body {
+      padding-top: 60px;
+    }
+    .toolbar {
+      width: 320px;
+      margin-left: auto;
+      margin-right: auto;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+      padding: 12px;
+      border: 1px solid rgb(210, 214, 219);
+      background: rgb(248, 249, 250);
+    }
+    .chip {
+      width: 120px;
+      height: 48px;
+      border: 0;
+    }
+    .chip.red {
+      color: rgb(220, 50, 50);
+    }
+    .chip.blue {
+      color: rgb(40, 110, 220);
+    }
+    .chip.green {
+      color: rgb(40, 170, 90);
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button class="chip red"></button>
+    <button class="chip blue"></button>
+    <button class="chip green"></button>
+  </div>
+</body>
+</html>

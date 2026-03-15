@@ -1,0 +1,35 @@
+<!doctype html>
+<html dir="rtl" lang="ar-EG">
+<head>
+  <style>
+    body {
+      margin: 0;
+      background: #ffffff;
+    }
+    body:dir(rtl) .banner {
+      text-align: center;
+      padding: 16px 0;
+    }
+    a:-webkit-any-link {
+      color: rgb(220, 50, 50);
+      font-weight: 700;
+    }
+    details:open {
+      display: block;
+      width: 180px;
+      padding: 12px;
+      background: rgb(40, 110, 220);
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div class="banner">
+    <a id="policy-link" href="/policy">Policy</a>
+  </div>
+  <details id="policy-details" open>
+    <summary>Open</summary>
+    <div>Visible</div>
+  </details>
+</body>
+</html>

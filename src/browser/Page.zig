@@ -4782,6 +4782,21 @@ test "Page handleClick queues named target anchor popup" {
     );
 }
 
+test "Page querySelector supports dir open and vendor any-link compatibility selectors" {
+    var page = try testing.pageTest("page/selector_compat.html");
+    defer page._session.removePage();
+
+    const link = (try page.window._document.querySelector(.wrap("body:dir(rtl) a:lang(ar):-webkit-any-link"), page)).?;
+    try testing.expectEqual(.anchor, link.getTag());
+    try testing.expectString("policy-link", link.getAttributeSafe(.wrap("id")).?);
+
+    try testing.expect(try link.matches(":link", page));
+
+    const details = (try page.window._document.querySelector(.wrap("details:open"), page)).?;
+    try testing.expectEqual(.details, details.getTag());
+    try testing.expectString("policy-details", details.getAttributeSafe(.wrap("id")).?);
+}
+
 test "Page Enter on focused anchor queues named target popup" {
     var page = try testing.pageTest("page/popup_target.html");
     defer page._session.removePage();

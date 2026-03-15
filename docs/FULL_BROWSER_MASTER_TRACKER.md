@@ -677,11 +677,22 @@ Current state inside Gate 3:
   safer selector failure containment, length resolution for `%`/`vw`/`vh` plus
   `min(...)`/`max(...)`/`clamp(...)`, auto-margin centering, flex-column
   centering, centered inline child flow, and absolute corner positioning
+- that same slice now also covers a first row-direction flex path with wrap,
+  `justify-content` spacing, and `align-items` vertical placement for common
+  chip/button-style rows, plus selector compatibility for `:lang(...)`,
+  `:dir(...)`, `:open`, and vendor `:-webkit-any-link` / `:-moz-any-link`
+- headed screenshot export now waits for a real painted presentation instead of
+  consuming the one-shot capture on the initial root placeholder frame, with a
+  bounded delayed-content probe proving async timer-driven page content reaches
+  the exported PNG
 - bounded headed probes now prove:
   - Promise-microtask selector failures no longer kill the headed browser
   - centered hero-style flex layouts reach the real Win32 surface
   - absolute left/right corner docking plus later normal flow reach the real
     Win32 surface
+  - centered wrapped flex-row content reaches the real Win32 surface across
+    multiple lines
+  - delayed timer-driven content is present in the screenshot export path
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

@@ -157,6 +157,13 @@ const FlexChildMeasure = struct {
     height: i32,
 };
 
+const FlexLineMeasure = struct {
+    start_index: usize,
+    end_index: usize,
+    width: i32,
+    height: i32,
+};
+
 const Bounds = struct {
     x: i32,
     y: i32,
@@ -522,18 +529,31 @@ const Painter = struct {
         if (!inline_leaf) {
             x = resolveAutoMarginAlignedX(cursor.*, decl, self.page, width, margins, x);
         }
-        if (block_like and isFlexColumnContainer(display, decl, self.page)) {
-            const rect = try self.paintFlexColumnElement(
-                element,
-                decl,
-                tag,
-                x,
-                y,
-                width,
-                padding,
-                margins,
-                block_like,
-            );
+        if (block_like and isFlexDisplay(display)) {
+            const rect = if (isFlexColumnContainer(display, decl, self.page))
+                try self.paintFlexColumnElement(
+                    element,
+                    decl,
+                    tag,
+                    x,
+                    y,
+                    width,
+                    padding,
+                    margins,
+                    block_like,
+                )
+            else
+                try self.paintFlexRowElement(
+                    element,
+                    decl,
+                    tag,
+                    x,
+                    y,
+                    width,
+                    padding,
+                    margins,
+                    block_like,
+                );
             cursor.advanceBlock(rect, margins, flowSpacingAfter(tag, block_like));
             return;
         }
@@ -826,6 +846,189 @@ const Painter = struct {
             child_y += child_measure.height;
             if (index + 1 < measured_children.items.len) {
                 child_y += gap;
+            }
+        }
+
+        if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+            try self.list.addLinkRegion(self.allocator, region);
+        }
+        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+            try self.list.addControlRegion(self.allocator, region);
+        }
+
+        _ = margins;
+        return rect;
+    }
+
+    fn paintFlexRowElement(
+        self: *Painter,
+        element: *Element,
+        decl: anytype,
+        tag: Element.Tag,
+        x: i32,
+        y: i32,
+        width: i32,
+        padding: EdgeSizes,
+        margins: EdgeSizes,
+        block_like: bool,
+    ) !Bounds {
+        const content_width = @max(@as(i32, 40), width - padding.left - padding.right);
+        const main_gap = resolveFlexRowMainGapPx(decl, self.page);
+        const cross_gap = resolveFlexRowCrossGapPx(decl, self.page);
+        const wrap_enabled = flexWrapEnabled(decl, self.page);
+        const justify_content = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "justify-content"), &std.ascii.whitespace);
+        const align_items = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "align-items"), &std.ascii.whitespace);
+
+        var measured_children: std.ArrayList(FlexChildMeasure) = .empty;
+        defer measured_children.deinit(self.allocator);
+
+        var child_it = element.asNode().childrenIterator();
+        while (child_it.next()) |child| {
+            if (!isFlexRenderableChild(child)) continue;
+
+            const measurement = try self.measureNodePaintedBox(child, content_width);
+            if (measurement.width <= 0 and measurement.height <= 0) continue;
+
+            try measured_children.append(self.allocator, .{
+                .node = child,
+                .width = std.math.clamp(measurement.width, @as(i32, 0), content_width),
+                .height = measurement.height,
+            });
+        }
+
+        var lines: std.ArrayList(FlexLineMeasure) = .empty;
+        defer lines.deinit(self.allocator);
+
+        var line_start: usize = 0;
+        var line_width: i32 = 0;
+        var line_height: i32 = 0;
+        var line_count: usize = 0;
+        for (measured_children.items, 0..) |child_measure, index| {
+            const next_width = if (line_count == 0)
+                child_measure.width
+            else
+                line_width + main_gap + child_measure.width;
+
+            if (wrap_enabled and line_count > 0 and next_width > content_width) {
+                try lines.append(self.allocator, .{
+                    .start_index = line_start,
+                    .end_index = index,
+                    .width = line_width,
+                    .height = line_height,
+                });
+                line_start = index;
+                line_width = child_measure.width;
+                line_height = child_measure.height;
+                line_count = 1;
+                continue;
+            }
+
+            line_width = next_width;
+            line_height = @max(line_height, child_measure.height);
+            line_count += 1;
+        }
+
+        if (line_count > 0) {
+            try lines.append(self.allocator, .{
+                .start_index = line_start,
+                .end_index = measured_children.items.len,
+                .width = line_width,
+                .height = line_height,
+            });
+        }
+
+        var content_height: i32 = 0;
+        for (lines.items, 0..) |line, index| {
+            content_height += line.height;
+            if (index + 1 < lines.items.len) {
+                content_height += cross_gap;
+            }
+        }
+
+        const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
+        const min_height_css = parseCssLengthPxWithContext(
+            decl.getPropertyValue("min-height", self.page),
+            self.opts.viewport_height,
+            self.opts.viewport_height,
+        ) orelse 0;
+        const container_content_height = @max(content_height, @max(explicit_height - padding.vertical(), min_height_css - padding.vertical()));
+
+        const rect: Bounds = .{
+            .x = x,
+            .y = y,
+            .width = width,
+            .height = @max(resolveMinimumHeight(self, tag, block_like, 0), padding.top + container_content_height + padding.bottom),
+        };
+
+        const bg = parseCssColor(resolveCssPropertyValue(decl, self.page, element, "background-color"));
+        if (shouldPaintBox(tag)) {
+            if (bg) |background| {
+                if (background.a > 0 and shouldPaintBackground(tag, true)) {
+                    try self.list.addFillRect(self.allocator, .{
+                        .x = rect.x,
+                        .y = rect.y,
+                        .width = rect.width,
+                        .height = rect.height,
+                        .color = background,
+                    });
+                }
+            }
+        }
+        if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
+            try self.list.addStrokeRect(self.allocator, .{
+                .x = rect.x,
+                .y = rect.y,
+                .width = rect.width,
+                .height = rect.height,
+                .color = stroke,
+            });
+        }
+
+        var child_y = rect.y + padding.top;
+        for (lines.items, 0..) |line, line_index| {
+            const item_count: i32 = @intCast(line.end_index - line.start_index);
+            const free_horizontal_space = @max(@as(i32, 0), content_width - line.width);
+            var child_x = rect.x + padding.left;
+            var gap = main_gap;
+
+            if (std.ascii.eqlIgnoreCase(justify_content, "center")) {
+                child_x += @divTrunc(free_horizontal_space, 2);
+            } else if (std.ascii.eqlIgnoreCase(justify_content, "flex-end") or std.ascii.eqlIgnoreCase(justify_content, "end")) {
+                child_x += free_horizontal_space;
+            } else if (std.ascii.eqlIgnoreCase(justify_content, "space-between") and item_count > 1) {
+                gap += @divTrunc(free_horizontal_space, item_count - 1);
+            } else if (std.ascii.eqlIgnoreCase(justify_content, "space-around") and item_count > 0) {
+                const extra = @divTrunc(free_horizontal_space, item_count);
+                child_x += @divTrunc(extra, 2);
+                gap += extra;
+            } else if (std.ascii.eqlIgnoreCase(justify_content, "space-evenly") and item_count > 0) {
+                const extra = @divTrunc(free_horizontal_space, item_count + 1);
+                child_x += extra;
+                gap += extra;
+            }
+
+            var child_index = line.start_index;
+            while (child_index < line.end_index) : (child_index += 1) {
+                const child_measure = measured_children.items[child_index];
+                var item_y = child_y;
+                const free_vertical_space = @max(@as(i32, 0), line.height - child_measure.height);
+                if (std.ascii.eqlIgnoreCase(align_items, "center")) {
+                    item_y += @divTrunc(free_vertical_space, 2);
+                } else if (std.ascii.eqlIgnoreCase(align_items, "flex-end") or std.ascii.eqlIgnoreCase(align_items, "end")) {
+                    item_y += free_vertical_space;
+                }
+
+                var child_cursor = FlowCursor.init(child_x, item_y, @max(@as(i32, 40), child_measure.width));
+                try self.paintNode(child_measure.node, &child_cursor);
+                child_x += child_measure.width;
+                if (child_index + 1 < line.end_index) {
+                    child_x += gap;
+                }
+            }
+
+            child_y += line.height;
+            if (line_index + 1 < lines.items.len) {
+                child_y += cross_gap;
             }
         }
 
@@ -1726,9 +1929,16 @@ fn resolveOutOfFlowPosition(
 fn isFlexColumnContainer(display: []const u8, decl: anytype, page: *Page) bool {
     if (!isFlexDisplay(display)) return false;
     const direction = std.mem.trim(u8, decl.getPropertyValue("flex-direction", page), &std.ascii.whitespace);
-    return direction.len == 0 or
-        std.ascii.eqlIgnoreCase(direction, "column") or
+    return std.ascii.eqlIgnoreCase(direction, "column") or
         std.ascii.eqlIgnoreCase(direction, "column-reverse");
+}
+
+fn isFlexRowContainer(display: []const u8, decl: anytype, page: *Page) bool {
+    if (!isFlexDisplay(display)) return false;
+    const direction = std.mem.trim(u8, decl.getPropertyValue("flex-direction", page), &std.ascii.whitespace);
+    return direction.len == 0 or
+        std.ascii.eqlIgnoreCase(direction, "row") or
+        std.ascii.eqlIgnoreCase(direction, "row-reverse");
 }
 
 fn isFlexRenderableChild(node: *Node) bool {
@@ -1748,6 +1958,21 @@ fn resolveFlexGapPx(decl: anytype, page: *Page) i32 {
     const row_gap = parseCssLengthPxWithContext(decl.getPropertyValue("row-gap", page), 0, 0);
     if (row_gap) |value| return value;
     return parseCssLengthPxWithContext(decl.getPropertyValue("gap", page), 0, 0) orelse 0;
+}
+
+fn resolveFlexRowMainGapPx(decl: anytype, page: *Page) i32 {
+    const column_gap = parseCssLengthPxWithContext(decl.getPropertyValue("column-gap", page), 0, 0);
+    if (column_gap) |value| return value;
+    return parseCssLengthPxWithContext(decl.getPropertyValue("gap", page), 0, 0) orelse 0;
+}
+
+fn resolveFlexRowCrossGapPx(decl: anytype, page: *Page) i32 {
+    return resolveFlexGapPx(decl, page);
+}
+
+fn flexWrapEnabled(decl: anytype, page: *Page) bool {
+    const wrap = std.mem.trim(u8, decl.getPropertyValue("flex-wrap", page), &std.ascii.whitespace);
+    return std.ascii.eqlIgnoreCase(wrap, "wrap") or std.ascii.eqlIgnoreCase(wrap, "wrap-reverse");
 }
 
 fn resolveAutoMarginAlignedX(cursor: FlowCursor, decl: anytype, page: *Page, width: i32, margins: EdgeSizes, default_x: i32) i32 {
@@ -2415,15 +2640,19 @@ fn edgeShorthandContainsAuto(value: []const u8, side: EdgeSide) bool {
     };
     return switch (count) {
         1 => isCssAuto(values[0]),
-        2 => isCssAuto(values[switch (side) {
-            .top, .bottom => 0,
-            .right, .left => 1,
-        }]),
-        3 => isCssAuto(values[switch (side) {
-            .top => 0,
-            .right, .left => 1,
-            .bottom => 2,
-        }]),
+        2 => isCssAuto(values[
+            switch (side) {
+                .top, .bottom => 0,
+                .right, .left => 1,
+            }
+        ]),
+        3 => isCssAuto(values[
+            switch (side) {
+                .top => 0,
+                .right, .left => 1,
+                .bottom => 2,
+            }
+        ]),
         else => isCssAuto(values[idx]),
     };
 }
@@ -4701,6 +4930,46 @@ test "paintDocument centers a flex column hero container" {
     try std.testing.expect(heading.x < 360);
     try std.testing.expect(heading.y > 180);
     try std.testing.expect(heading.y < input.y);
+}
+
+test "paintDocument wraps centered flex row children onto later lines" {
+    var page = try testing.pageTest("page/flex_row_wrap_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 420,
+        .viewport_height = 420,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var red_text: ?TextCommand = null;
+    var blue_text: ?TextCommand = null;
+    var green_text: ?TextCommand = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .text => |text| {
+                if (text.color.r >= 180 and text.color.g <= 90 and text.color.b <= 90) {
+                    red_text = text;
+                } else if (text.color.b >= 180 and text.color.r <= 90 and text.color.g <= 150) {
+                    blue_text = text;
+                } else if (text.color.g >= 140 and text.color.r <= 100 and text.color.b <= 140) {
+                    green_text = text;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const red = red_text orelse return error.RedChipTextMissing;
+    const blue = blue_text orelse return error.BlueChipTextMissing;
+    const green = green_text orelse return error.GreenChipTextMissing;
+
+    try std.testing.expectApproxEqAbs(@as(f64, @floatFromInt(red.y)), @as(f64, @floatFromInt(blue.y)), 4.0);
+    try std.testing.expect(green.y >= red.y + red.height + 8);
+    try std.testing.expect(red.x > 40);
+    try std.testing.expect(blue.x > red.x + 60);
+    try std.testing.expect(green.x > 120);
+    try std.testing.expect(green.x < 220);
 }
 
 test "paintDocument anchors absolute boxes to the viewport without consuming normal flow" {

@@ -324,25 +324,57 @@ pub fn presentPageView(self: *Display, title: []const u8, url: []const u8, body:
     switch (self.backend) {
         .headed_windows => |*backend| {
             try backend.presentPageView(title, url, body, display_list);
-            if (self.browse_screenshot_bmp_path) |path| {
-                if (!self.browse_screenshot_bmp_attempted) {
-                    self.browse_screenshot_bmp_attempted = true;
-                    if (!backend.saveBitmap(path)) {
-                        log.warn(.app, "headed bmp export failed", .{ .path = path });
+            if (browseScreenshotReady(body, display_list)) {
+                if (self.browse_screenshot_bmp_path) |path| {
+                    if (!self.browse_screenshot_bmp_attempted) {
+                        self.browse_screenshot_bmp_attempted = true;
+                        if (!backend.saveBitmap(path)) {
+                            log.warn(.app, "headed bmp export failed", .{ .path = path });
+                        }
                     }
                 }
-            }
-            if (self.browse_screenshot_png_path) |path| {
-                if (!self.browse_screenshot_png_attempted) {
-                    self.browse_screenshot_png_attempted = true;
-                    if (!backend.savePng(path)) {
-                        log.warn(.app, "headed png export failed", .{ .path = path });
+                if (self.browse_screenshot_png_path) |path| {
+                    if (!self.browse_screenshot_png_attempted) {
+                        self.browse_screenshot_png_attempted = true;
+                        if (!backend.savePng(path)) {
+                            log.warn(.app, "headed png export failed", .{ .path = path });
+                        }
                     }
                 }
             }
         },
         else => {},
     }
+}
+
+fn browseScreenshotReady(body: []const u8, display_list: ?*const DisplayList) bool {
+    const list = display_list orelse return false;
+    if (list.commands.items.len > 0) {
+        return true;
+    }
+
+    return std.mem.trim(u8, body, &std.ascii.whitespace).len > 0;
+}
+
+test "browseScreenshotReady ignores root placeholder presentations" {
+    try std.testing.expect(!browseScreenshotReady("", null));
+
+    var empty_list = DisplayList{};
+    defer empty_list.deinit(std.testing.allocator);
+
+    try std.testing.expect(!browseScreenshotReady("", &empty_list));
+    try std.testing.expect(browseScreenshotReady("real body", &empty_list));
+
+    var painted_list = DisplayList{};
+    defer painted_list.deinit(std.testing.allocator);
+    try painted_list.addFillRect(std.testing.allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 20,
+        .height = 10,
+        .color = .{ .r = 220, .g = 30, .b = 30 },
+    });
+    try std.testing.expect(browseScreenshotReady("", &painted_list));
 }
 
 pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {
