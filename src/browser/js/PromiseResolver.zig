@@ -70,9 +70,9 @@ const RejectError = union(enum) {
 pub fn rejectError(self: PromiseResolver, comptime source: []const u8, err: RejectError) void {
     const handle = switch (err) {
         .type_error => |str| self.local.isolate.createTypeError(str),
-        .generic => |str| self.local.isolate.createError(str)
+        .generic => |str| self.local.isolate.createError(str),
     };
-    self._reject(js.Value{.handle = handle, .local = self.local}) catch |reject_err| {
+    self._reject(js.Value{ .handle = handle, .local = self.local }) catch |reject_err| {
         log.err(.bug, "rejectError", .{ .source = source, .err = reject_err, .persistent = false });
     };
 }
