@@ -203,3 +203,15 @@
     testing.expectEqual(true, response.body !== null);
   });
 </script>
+
+<script id=error>
+  testing.async(async (restore) => {
+    try {
+      await fetch('http://198.51.100.1:0');
+      testing.expectTrue(false); // force failure
+    } catch (err) {
+      restore();
+      testing.expectTrue(err instanceof TypeError)
+    }
+  });
+</script>

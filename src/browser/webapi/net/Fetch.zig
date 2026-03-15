@@ -193,9 +193,7 @@ fn httpErrorCallback(ctx: *anyopaque, err: anyerror) void {
     defer ls.deinit();
 
     // fetch() must reject with a TypeError on network errors per spec
-    const err_handle = ls.local.isolate.createTypeError("Failed to fetch");
-    const err_val = js.Value{ .local = ls.local, .handle = err_handle };
-    ls.toLocal(self._resolver).reject("fetch error", err_val);
+    ls.toLocal(self._resolver).rejectError("fetch error", .{ .type_error = @errorName(err) });
 }
 
 fn httpShutdownCallback(ctx: *anyopaque) void {
