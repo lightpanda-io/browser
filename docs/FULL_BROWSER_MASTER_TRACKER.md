@@ -735,6 +735,23 @@ Current state inside Gate 3:
     and left/right float docking, and a fresh live `google.com` capture no
     longer crashes while visibly benefiting from the shorthand/background
     compatibility slice
+- the next positioned/stability slice is now landed:
+  - later absolutely positioned siblings now anchor to the containing block
+    instead of being re-based off the evolving child flow cursor
+  - positioned boxes and interactive regions now carry effective `z-index`
+    order through both headed paint and headed hit-testing, so overlapping
+    later-row overlays can paint and click in the expected topmost order
+  - generic block descendants now paint after the ancestor background/border
+    phase instead of being hidden under later parent box fills on the shared
+    display-list path
+  - explicit CSS `height` no longer pollutes own-content height for generic
+    block containers, so normal-flow children stop being pushed down by the
+    full container box height
+  - headed screenshot export now also rejects tiny early paint noise instead of
+    treating a 1x1 placeholder draw as a ready frame
+  - bounded headed probes now cover absolute positioned overlap with topmost
+    click targeting plus the tiny-placeholder screenshot race in addition to
+    the earlier delayed-content screenshot gate
 - the remaining gap is still large: this is a pragmatic compatibility slice,
   not a full layout engine
 

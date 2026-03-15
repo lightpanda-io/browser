@@ -253,6 +253,7 @@ const Painter = struct {
                     .y = rect.y + dy,
                     .width = rect.width,
                     .height = rect.height,
+                    .z_index = rect.z_index,
                     .color = rect.color,
                 }),
                 .stroke_rect => |rect| try self.list.addStrokeRect(self.allocator, .{
@@ -260,6 +261,7 @@ const Painter = struct {
                     .y = rect.y + dy,
                     .width = rect.width,
                     .height = rect.height,
+                    .z_index = rect.z_index,
                     .color = rect.color,
                 }),
                 .text => |text| try self.list.addText(self.allocator, .{
@@ -267,6 +269,7 @@ const Painter = struct {
                     .y = text.y + dy,
                     .width = text.width,
                     .height = text.height,
+                    .z_index = text.z_index,
                     .font_size = text.font_size,
                     .font_family = text.font_family,
                     .font_weight = text.font_weight,
@@ -280,6 +283,7 @@ const Painter = struct {
                     .y = image.y + dy,
                     .width = image.width,
                     .height = image.height,
+                    .z_index = image.z_index,
                     .url = image.url,
                     .alt = image.alt,
                     .request_include_credentials = image.request_include_credentials,
@@ -292,6 +296,7 @@ const Painter = struct {
                     .y = canvas.y + dy,
                     .width = canvas.width,
                     .height = canvas.height,
+                    .z_index = canvas.z_index,
                     .pixel_width = canvas.pixel_width,
                     .pixel_height = canvas.pixel_height,
                     .pixels = try self.allocator.dupe(u8, canvas.pixels),
@@ -305,6 +310,7 @@ const Painter = struct {
                 .y = region.y + dy,
                 .width = region.width,
                 .height = region.height,
+                .z_index = region.z_index,
                 .url = region.url,
                 .dom_path = region.dom_path,
                 .download_filename = region.download_filename,
@@ -319,6 +325,7 @@ const Painter = struct {
                 .y = region.y + dy,
                 .width = region.width,
                 .height = region.height,
+                .z_index = region.z_index,
                 .dom_path = region.dom_path,
             });
         }
@@ -453,12 +460,14 @@ const Painter = struct {
         );
         const height = @max(font_size + 8, estimateTextHeight(segment, width, font_size, font_family, font_weight, italic) + 8);
         const pos = cursor.beginInlineLeaf(width, .{});
+        const paint_z_index = try resolvePaintZIndex(parent, parent_decl, self.page);
 
         try self.list.addText(self.allocator, .{
             .x = pos.x,
             .y = pos.y,
             .width = width,
             .height = height,
+            .z_index = paint_z_index,
             .font_size = font_size,
             .font_family = @constCast(font_family),
             .font_weight = font_weight,
@@ -510,6 +519,7 @@ const Painter = struct {
         const inline_content_flow = block_like and try usesInlineContentFlowContainer(element, decl, self.page, display);
         const position_value = resolveCssPropertyValue(decl, self.page, element, "position");
         const out_of_flow_positioned = isOutOfFlowPositioned(position_value);
+        const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
 
         const label = if (canvas_surface_present)
             try self.allocator.dupe(u8, "")
@@ -630,6 +640,7 @@ const Painter = struct {
                     .y = rect.y,
                     .width = rect.width,
                     .height = rect.height,
+                    .z_index = paint_z_index,
                     .color = stroke,
                 });
             }
@@ -654,12 +665,32 @@ const Painter = struct {
         const child_gap: i32 = if (has_child_elements and own_content_height > 0) 8 else 0;
         const child_indent = resolveChildIndent(tag, has_child_elements);
         const child_left = x + padding.left + child_indent;
+        const child_containing_top = y + padding.top;
         const child_top = y + padding.top + own_content_height + child_gap;
         const child_width = @max(@as(i32, 40), width - padding.left - padding.right - child_indent);
-        const child_height: i32 = if (has_child_elements and !canvas_surface_present)
-            try self.paintBlockChildrenWithFloats(element, child_left, child_top, child_width)
-        else
-            0;
+        var child_display_list: ?DisplayList = null;
+        defer if (child_display_list) |*list| list.deinit(self.allocator);
+        const child_height: i32 = if (has_child_elements and !canvas_surface_present) child_height: {
+            var temp_list = DisplayList{
+                .layout_scale = self.list.layout_scale,
+                .page_margin = self.list.page_margin,
+            };
+            var temp_painter = Painter{
+                .allocator = self.allocator,
+                .page = self.page,
+                .opts = self.opts,
+                .list = &temp_list,
+            };
+            const height = try temp_painter.paintBlockChildrenWithFloats(
+                element,
+                child_left,
+                child_containing_top,
+                child_top,
+                child_width,
+            );
+            child_display_list = temp_list;
+            break :child_height height;
+        } else 0;
         const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
         const min_height = resolveMinimumHeight(self, tag, block_like, own_content_height);
         const height = @max(min_height, @max(explicit_height, padding.top + own_content_height + child_gap + child_height + padding.bottom));
@@ -682,6 +713,7 @@ const Painter = struct {
                         .y = rect.y,
                         .width = rect.width,
                         .height = rect.height,
+                        .z_index = paint_z_index,
                         .color = background,
                     });
                 }
@@ -691,6 +723,7 @@ const Painter = struct {
                     .y = rect.y,
                     .width = rect.width,
                     .height = rect.height,
+                    .z_index = paint_z_index,
                     .color = .{ .r = 248, .g = 248, .b = 248 },
                 });
             } else if (tag == .img) {
@@ -699,6 +732,7 @@ const Painter = struct {
                     .y = rect.y,
                     .width = rect.width,
                     .height = rect.height,
+                    .z_index = paint_z_index,
                     .color = .{ .r = 236, .g = 236, .b = 236 },
                 });
             }
@@ -710,16 +744,17 @@ const Painter = struct {
                 .y = rect.y,
                 .width = rect.width,
                 .height = rect.height,
+                .z_index = paint_z_index,
                 .color = stroke,
             });
         }
 
         const image_command = if (tag == .img)
-            try resolvedImageCommand(element, self.page, rect.x, rect.y, rect.width, rect.height)
+            try resolvedImageCommand(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)
         else
             null;
         const canvas_command = if (tag == .canvas)
-            try resolvedCanvasCommand(self.allocator, element, rect.x, rect.y, rect.width, rect.height)
+            try resolvedCanvasCommand(self.allocator, element, rect.x, rect.y, rect.width, rect.height, paint_z_index)
         else
             null;
         if (image_command) |command| {
@@ -753,6 +788,7 @@ const Painter = struct {
                 .y = rect.y + padding.top + 4,
                 .width = text_area_width,
                 .height = text_height,
+                .z_index = paint_z_index,
                 .font_size = font_size,
                 .font_family = @constCast(font_family),
                 .font_weight = font_weight,
@@ -763,11 +799,15 @@ const Painter = struct {
             });
         }
 
-        if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+        if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addLinkRegion(self.allocator, region);
         }
-        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addControlRegion(self.allocator, region);
+        }
+
+        if (child_display_list) |*list| {
+            try self.appendDisplayListWithOffset(list, 0, 0);
         }
 
         if (out_of_flow_positioned) {
@@ -792,6 +832,7 @@ const Painter = struct {
         margins: EdgeSizes,
         block_like: bool,
     ) !Bounds {
+        const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
         const content_width = @max(@as(i32, 40), width - padding.left - padding.right);
         const gap = resolveFlexGapPx(decl, self.page);
         const justify_content = std.mem.trim(u8, resolveCssPropertyValue(decl, self.page, element, "justify-content"), &std.ascii.whitespace);
@@ -843,6 +884,7 @@ const Painter = struct {
                         .y = rect.y,
                         .width = rect.width,
                         .height = rect.height,
+                        .z_index = paint_z_index,
                         .color = background,
                     });
                 }
@@ -854,6 +896,7 @@ const Painter = struct {
                 .y = rect.y,
                 .width = rect.width,
                 .height = rect.height,
+                .z_index = paint_z_index,
                 .color = stroke,
             });
         }
@@ -884,10 +927,10 @@ const Painter = struct {
             }
         }
 
-        if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+        if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addLinkRegion(self.allocator, region);
         }
-        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addControlRegion(self.allocator, region);
         }
 
@@ -907,6 +950,7 @@ const Painter = struct {
         margins: EdgeSizes,
         block_like: bool,
     ) !Bounds {
+        const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
         const content_width = @max(@as(i32, 40), width - padding.left - padding.right);
         const main_gap = resolveFlexRowMainGapPx(decl, self.page);
         const cross_gap = resolveFlexRowCrossGapPx(decl, self.page);
@@ -1017,6 +1061,7 @@ const Painter = struct {
                         .y = rect.y,
                         .width = rect.width,
                         .height = rect.height,
+                        .z_index = paint_z_index,
                         .color = background,
                     });
                 }
@@ -1028,6 +1073,7 @@ const Painter = struct {
                 .y = rect.y,
                 .width = rect.width,
                 .height = rect.height,
+                .z_index = paint_z_index,
                 .color = stroke,
             });
         }
@@ -1111,10 +1157,10 @@ const Painter = struct {
             }
         }
 
-        if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+        if (try resolvedLinkRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addLinkRegion(self.allocator, region);
         }
-        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height)) |region| {
+        if (try resolvedControlRegion(element, self.page, rect.x, rect.y, rect.width, rect.height, paint_z_index)) |region| {
             try self.list.addControlRegion(self.allocator, region);
         }
 
@@ -1126,10 +1172,13 @@ const Painter = struct {
         self: *Painter,
         element: *Element,
         child_left: i32,
+        child_containing_top: i32,
         child_top: i32,
         child_width: i32,
     ) !i32 {
         var child_cursor = FlowCursor.init(child_left, child_top, child_width);
+        var out_of_flow_children: std.ArrayList(*Node) = .{};
+        defer out_of_flow_children.deinit(self.allocator);
         var float_left_x = child_left;
         var float_right_x = child_left + child_width;
         var float_row_y = child_top;
@@ -1138,6 +1187,10 @@ const Painter = struct {
 
         var it = element.asNode().childrenIterator();
         while (it.next()) |child| {
+            if (try isOutOfFlowNode(child, self.page)) {
+                try out_of_flow_children.append(self.allocator, child);
+                continue;
+            }
             if (child.is(Element)) |child_el| {
                 const float_mode = try resolveFloatMode(child_el, self.page);
                 if (float_mode != .none) {
@@ -1201,6 +1254,13 @@ const Painter = struct {
             child_cursor.cursor_y = @max(child_cursor.cursor_y, float_row_bottom);
             child_cursor.cursor_x = child_cursor.left;
             child_cursor.line_height = 0;
+        }
+
+        if (out_of_flow_children.items.len > 0) {
+            var overlay_cursor = FlowCursor.init(child_left, child_containing_top, child_width);
+            for (out_of_flow_children.items) |child| {
+                try self.paintNode(child, &overlay_cursor);
+            }
         }
 
         return child_cursor.consumedHeightSince(child_top);
@@ -1347,12 +1407,14 @@ const Painter = struct {
             .height = @max(resolveMinimumHeight(self, tag, block_like, 0), padding.top + (row_y - content_y) + padding.bottom),
         };
 
+        const paint_z_index = try resolvePaintZIndex(element, decl, self.page);
         if (resolveStrokeColor(decl, self.page, tag)) |stroke| {
             try self.list.addStrokeRect(self.allocator, .{
                 .x = rect.x,
                 .y = rect.y,
                 .width = rect.width,
                 .height = rect.height,
+                .z_index = paint_z_index,
                 .color = stroke,
             });
         }
@@ -1518,12 +1580,15 @@ const Painter = struct {
         const download_filename = element.getAttributeSafe(comptime .wrap("download")) orelse "";
         const open_in_new_tab = linkOpensFreshTab(element);
         const target_name = linkTargetName(element);
+        const style = try self.page.window.getComputedStyle(element, null, self.page);
+        const paint_z_index = try resolvePaintZIndex(element, style.asCSSStyleDeclaration(), self.page);
         for (fragments.items) |fragment| {
             try self.list.addLinkRegion(self.allocator, .{
                 .x = fragment.x,
                 .y = fragment.y,
                 .width = fragment.width,
                 .height = fragment.height,
+                .z_index = paint_z_index,
                 .url = @constCast(resolved),
                 .dom_path = dom_path,
                 .download_filename = @constCast(download_filename),
@@ -1607,6 +1672,7 @@ fn resolvedLinkRegion(
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32,
 ) !?LinkRegion {
     const href = element.getAttributeSafe(comptime .wrap("href")) orelse return null;
     if (href.len == 0) {
@@ -1620,6 +1686,7 @@ fn resolvedLinkRegion(
         .y = y,
         .width = width,
         .height = height,
+        .z_index = z_index,
         .url = @constCast(resolved),
         .dom_path = dom_path,
         .download_filename = @constCast(element.getAttributeSafe(comptime .wrap("download")) orelse ""),
@@ -1635,6 +1702,7 @@ fn resolvedControlRegion(
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32,
 ) !?ControlRegion {
     const html = element.is(Element.Html) orelse return null;
     switch (html._type) {
@@ -1648,6 +1716,7 @@ fn resolvedControlRegion(
         .y = y,
         .width = width,
         .height = height,
+        .z_index = z_index,
         .dom_path = try encodeNodePath(page.call_arena, element.asNode()),
     };
 }
@@ -1838,6 +1907,16 @@ fn commandBoundsLessThan(a: CommandBounds, b: CommandBounds) bool {
     return a.width < b.width;
 }
 
+fn commandZIndexForTest(command: Command) i32 {
+    return switch (command) {
+        .fill_rect => |rect| rect.z_index,
+        .stroke_rect => |rect| rect.z_index,
+        .text => |text| text.z_index,
+        .image => |image| image.z_index,
+        .canvas => |canvas| canvas.z_index,
+    };
+}
+
 fn resolvedImageCommand(
     element: *Element,
     page: *Page,
@@ -1845,6 +1924,7 @@ fn resolvedImageCommand(
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32,
 ) !?ImageCommand {
     const src = element.getAttributeSafe(comptime .wrap("src")) orelse return null;
     if (src.len == 0) {
@@ -1861,6 +1941,7 @@ fn resolvedImageCommand(
         .y = y,
         .width = width,
         .height = height,
+        .z_index = z_index,
         .url = @constCast(resolved),
         .alt = @constCast(alt),
         .request_include_credentials = include_credentials,
@@ -1877,6 +1958,7 @@ fn resolvedCanvasCommand(
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32,
 ) !?CanvasCommand {
     const canvas = element.is(Element.Html.Canvas) orelse return null;
     const surface = canvas.getSurface() orelse return null;
@@ -1885,6 +1967,7 @@ fn resolvedCanvasCommand(
         .y = y,
         .width = width,
         .height = height,
+        .z_index = z_index,
         .pixel_width = surface.width,
         .pixel_height = surface.height,
         .pixels = try surface.copyPixels(allocator),
@@ -2356,6 +2439,42 @@ fn resolveOutOfFlowPosition(
     };
 }
 
+fn resolvePaintZIndex(element: *Element, decl: anytype, page: *Page) !i32 {
+    if (resolveElementZIndex(element, decl, page)) |z_index| {
+        return z_index;
+    }
+
+    var parent = element.asNode().parentElement();
+    while (parent) |candidate| {
+        const style = try page.window.getComputedStyle(candidate, null, page);
+        if (resolveElementZIndex(candidate, style.asCSSStyleDeclaration(), page)) |z_index| {
+            return z_index;
+        }
+        parent = candidate.asNode().parentElement();
+    }
+
+    return 0;
+}
+
+fn resolveElementZIndex(element: *Element, decl: anytype, page: *Page) ?i32 {
+    const position = resolveCssPropertyValue(decl, page, element, "position");
+    if (!isStackingPositioned(position)) {
+        return null;
+    }
+
+    const raw = std.mem.trim(u8, decl.getPropertyValue("z-index", page), &std.ascii.whitespace);
+    if (raw.len == 0 or std.ascii.eqlIgnoreCase(raw, "auto")) {
+        return null;
+    }
+    return parseCssIntegerValue(raw);
+}
+
+fn isStackingPositioned(position: []const u8) bool {
+    const trimmed = std.mem.trim(u8, position, &std.ascii.whitespace);
+    if (trimmed.len == 0) return false;
+    return !std.ascii.eqlIgnoreCase(trimmed, "static");
+}
+
 fn isFlexColumnContainer(display: []const u8, decl: anytype, page: *Page) bool {
     if (!isFlexDisplay(display)) return false;
     const direction = std.mem.trim(u8, decl.getPropertyValue("flex-direction", page), &std.ascii.whitespace);
@@ -2573,8 +2692,10 @@ fn resolveOwnContentHeight(
     font_weight: i32,
     italic: bool,
 ) i32 {
-    const explicit_height = resolveExplicitHeight(self, element, decl, self.page, tag, self.opts.viewport_height);
-    var height = explicit_height;
+    _ = self;
+    _ = element;
+    _ = decl;
+    var height: i32 = 0;
 
     if (tag == .img) {
         height = @max(height, 120);
@@ -3171,6 +3292,12 @@ fn parseCssFloatValue(value: []const u8) ?f32 {
     const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
     if (trimmed.len == 0) return null;
     return std.fmt.parseFloat(f32, trimmed) catch null;
+}
+
+fn parseCssIntegerValue(value: []const u8) ?i32 {
+    const trimmed = std.mem.trim(u8, value, &std.ascii.whitespace);
+    if (trimmed.len == 0) return null;
+    return std.fmt.parseInt(i32, trimmed, 10) catch null;
 }
 
 fn parseCssLengthPxWithContext(value: []const u8, reference: i32, viewport: i32) ?i32 {
@@ -5684,6 +5811,51 @@ test "paintDocument anchors absolute boxes to the viewport without consuming nor
     try std.testing.expect(saw_left);
     try std.testing.expect(saw_right);
     try std.testing.expect(saw_body);
+}
+
+test "paintDocument anchors later absolute siblings to the containing block and carries z-index" {
+    var page = try testing.pageTest("page/absolute_zindex_layout.html");
+    defer page._session.removePage();
+
+    var display_list = try paintDocument(std.testing.allocator, page, .{
+        .viewport_width = 960,
+        .viewport_height = 720,
+    });
+    defer display_list.deinit(std.testing.allocator);
+
+    var dark_rect: ?Command = null;
+    var blue_rect: ?Command = null;
+    var red_rect: ?Command = null;
+    var green_rect: ?Command = null;
+    for (display_list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| {
+                if (rect.color.r <= 50 and rect.color.g <= 50 and rect.color.b <= 50) {
+                    dark_rect = command;
+                } else if (rect.color.b >= 180 and rect.color.r <= 90 and rect.color.g <= 130) {
+                    blue_rect = command;
+                } else if (rect.color.r >= 180 and rect.color.g <= 100 and rect.color.b <= 100) {
+                    red_rect = command;
+                } else if (rect.color.g >= 140 and rect.color.r <= 100 and rect.color.b <= 140) {
+                    green_rect = command;
+                }
+            },
+            else => {},
+        }
+    }
+
+    const dark = dark_rect orelse return error.AbsoluteZIndexDarkBarMissing;
+    const blue = blue_rect orelse return error.AbsoluteZIndexLowOverlayMissing;
+    const red = red_rect orelse return error.AbsoluteZIndexHighOverlayMissing;
+    const green = green_rect orelse return error.AbsoluteZIndexBodyMissing;
+
+    try std.testing.expect(commandBounds(dark).?.y < 60);
+    try std.testing.expect(commandBounds(blue).?.y < 60);
+    try std.testing.expect(commandBounds(red).?.y < 60);
+    try std.testing.expect(commandBounds(green).?.y >= 120);
+    try std.testing.expect(commandBounds(green).?.y < 220);
+    try std.testing.expect(commandZIndexForTest(red) > commandZIndexForTest(blue));
+    try std.testing.expect(commandZIndexForTest(blue) > commandZIndexForTest(dark));
 }
 
 test "paintDocument anchors fixed boxes to the viewport instead of the parent flow" {

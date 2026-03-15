@@ -26,6 +26,7 @@ const HttpClient = Http.Client;
 const Notification = @import("../Notification.zig");
 const BrowserCommand = @import("BrowserCommand.zig").BrowserCommand;
 const Display = @import("Display.zig");
+const DisplayCommand = @import("../render/DisplayList.zig").Command;
 const DisplayList = @import("../render/DisplayList.zig").DisplayList;
 const DisplayColor = @import("../render/DisplayList.zig").Color;
 const ImageCommand = @import("../render/DisplayList.zig").ImageCommand;
@@ -1523,20 +1524,43 @@ fn cancelPendingPresentationCommand(backend: *Win32Backend) void {
     }
 }
 
+fn presentationCommandZIndex(command: DisplayCommand) i32 {
+    return switch (command) {
+        .fill_rect => |rect| rect.z_index,
+        .stroke_rect => |rect| rect.z_index,
+        .text => |text| text.z_index,
+        .image => |image| image.z_index,
+        .canvas => |canvas| canvas.z_index,
+    };
+}
+
+fn regionHitOrderBetter(candidate_z: i32, candidate_index: usize, best_z: i32, best_index: usize) bool {
+    if (candidate_z != best_z) return candidate_z > best_z;
+    return candidate_index > best_index;
+}
+
 fn findPresentationLinkRegionLocked(backend: *Win32Backend, x: f64, y: f64) ?DisplayList.LinkRegion {
     const display_list = backend.presentation_display_list orelse return null;
     const point = presentationClientToDisplayListLocked(backend, x, y) orelse return null;
     const px: i32 = @intFromFloat(point.x);
     const py: i32 = @intFromFloat(point.y);
-    var index = display_list.link_regions.items.len;
-    while (index > 0) {
-        index -= 1;
-        const region = display_list.link_regions.items[index];
+    return topmostLinkRegionAtDisplayListPoint(&display_list, px, py);
+}
+
+fn topmostLinkRegionAtDisplayListPoint(display_list: *const DisplayList, px: i32, py: i32) ?DisplayList.LinkRegion {
+    var best_region: ?DisplayList.LinkRegion = null;
+    var best_z: i32 = std.math.minInt(i32);
+    var best_index: usize = 0;
+    for (display_list.link_regions.items, 0..) |region, index| {
         if (px >= region.x and py >= region.y and px < region.x + region.width and py < region.y + region.height) {
-            return region;
+            if (best_region == null or regionHitOrderBetter(region.z_index, index, best_z, best_index)) {
+                best_region = region;
+                best_z = region.z_index;
+                best_index = index;
+            }
         }
     }
-    return null;
+    return best_region;
 }
 
 fn findPresentationControlRegionLocked(backend: *Win32Backend, x: f64, y: f64) ?DisplayList.ControlRegion {
@@ -1544,15 +1568,23 @@ fn findPresentationControlRegionLocked(backend: *Win32Backend, x: f64, y: f64) ?
     const point = presentationClientToDisplayListLocked(backend, x, y) orelse return null;
     const px: i32 = @intFromFloat(point.x);
     const py: i32 = @intFromFloat(point.y);
-    var index = display_list.control_regions.items.len;
-    while (index > 0) {
-        index -= 1;
-        const region = display_list.control_regions.items[index];
+    return topmostControlRegionAtDisplayListPoint(&display_list, px, py);
+}
+
+fn topmostControlRegionAtDisplayListPoint(display_list: *const DisplayList, px: i32, py: i32) ?DisplayList.ControlRegion {
+    var best_region: ?DisplayList.ControlRegion = null;
+    var best_z: i32 = std.math.minInt(i32);
+    var best_index: usize = 0;
+    for (display_list.control_regions.items, 0..) |region, index| {
         if (px >= region.x and py >= region.y and px < region.x + region.width and py < region.y + region.height) {
-            return region;
+            if (best_region == null or regionHitOrderBetter(region.z_index, index, best_z, best_index)) {
+                best_region = region;
+                best_z = region.z_index;
+                best_index = index;
+            }
         }
     }
-    return null;
+    return best_region;
 }
 
 fn presentationTabEntryCount(backend: *Win32Backend) usize {
@@ -4755,7 +4787,25 @@ fn renderPresentationDisplayList(
     current_find_match: ?usize,
 ) void {
     const display_list = snapshot.display_list orelse return;
+    var command_indices: std.ArrayListUnmanaged(usize) = .{};
+    defer command_indices.deinit(backend.allocator);
+    command_indices.ensureTotalCapacity(backend.allocator, display_list.commands.items.len) catch return;
     for (display_list.commands.items, 0..) |command, command_index| {
+        _ = command;
+        var insert_at = command_indices.items.len;
+        while (insert_at > 0) {
+            const previous_index = command_indices.items[insert_at - 1];
+            const previous_z = presentationCommandZIndex(display_list.commands.items[previous_index]);
+            const current_z = presentationCommandZIndex(display_list.commands.items[command_index]);
+            if (previous_z < current_z) break;
+            if (previous_z == current_z and previous_index < command_index) break;
+            insert_at -= 1;
+        }
+        command_indices.insert(backend.allocator, insert_at, command_index) catch return;
+    }
+
+    for (command_indices.items) |command_index| {
+        const command = display_list.commands.items[command_index];
         switch (command) {
             .fill_rect => |rect_cmd| {
                 const left = scalePresentationValue(rect_cmd.x, display_list.layout_scale);
@@ -8429,4 +8479,92 @@ test "win32 address bar hit test excludes chrome buttons" {
 test "win32 key repeat detection from lparam" {
     try std.testing.expect(!keyRepeatFromLParam(0));
     try std.testing.expect(keyRepeatFromLParam(@bitCast(@as(isize, 1 << 30))));
+}
+
+test "win32 topmostLinkRegionAtDisplayListPoint prefers higher z-index then later region" {
+    var display_list = DisplayList{};
+    defer display_list.deinit(std.testing.allocator);
+
+    var low_url = [_]u8{ 'h', 't', 't', 'p', ':', '/', '/', 'l', 'o', 'w', '/' };
+    var high_url = [_]u8{ 'h', 't', 't', 'p', ':', '/', '/', 'h', 'i', 'g', 'h', '/' };
+    var later_url = [_]u8{ 'h', 't', 't', 'p', ':', '/', '/', 'l', 'a', 't', 'e', 'r', '/' };
+    var empty_path = [_]u16{};
+    var empty_text = [_]u8{};
+
+    try display_list.addLinkRegion(std.testing.allocator, .{
+        .x = 10,
+        .y = 10,
+        .width = 60,
+        .height = 40,
+        .z_index = 1,
+        .url = low_url[0..],
+        .dom_path = empty_path[0..],
+        .download_filename = empty_text[0..],
+        .open_in_new_tab = false,
+        .target_name = empty_text[0..],
+    });
+    try display_list.addLinkRegion(std.testing.allocator, .{
+        .x = 20,
+        .y = 16,
+        .width = 60,
+        .height = 40,
+        .z_index = 3,
+        .url = high_url[0..],
+        .dom_path = empty_path[0..],
+        .download_filename = empty_text[0..],
+        .open_in_new_tab = false,
+        .target_name = empty_text[0..],
+    });
+    try display_list.addLinkRegion(std.testing.allocator, .{
+        .x = 20,
+        .y = 16,
+        .width = 60,
+        .height = 40,
+        .z_index = 3,
+        .url = later_url[0..],
+        .dom_path = empty_path[0..],
+        .download_filename = empty_text[0..],
+        .open_in_new_tab = false,
+        .target_name = empty_text[0..],
+    });
+
+    const region = topmostLinkRegionAtDisplayListPoint(&display_list, 30, 30) orelse return error.TopmostLinkRegionMissing;
+    try std.testing.expectEqualStrings("http://later/", region.url);
+}
+
+test "win32 topmostControlRegionAtDisplayListPoint prefers higher z-index then later region" {
+    var display_list = DisplayList{};
+    defer display_list.deinit(std.testing.allocator);
+
+    var path_low = [_]u16{ 1, 2 };
+    var path_high = [_]u16{ 3, 4 };
+    var path_later = [_]u16{ 5, 6 };
+
+    try display_list.addControlRegion(std.testing.allocator, .{
+        .x = 10,
+        .y = 10,
+        .width = 50,
+        .height = 30,
+        .z_index = 1,
+        .dom_path = path_low[0..],
+    });
+    try display_list.addControlRegion(std.testing.allocator, .{
+        .x = 14,
+        .y = 12,
+        .width = 50,
+        .height = 30,
+        .z_index = 2,
+        .dom_path = path_high[0..],
+    });
+    try display_list.addControlRegion(std.testing.allocator, .{
+        .x = 14,
+        .y = 12,
+        .width = 50,
+        .height = 30,
+        .z_index = 2,
+        .dom_path = path_later[0..],
+    });
+
+    const region = topmostControlRegionAtDisplayListPoint(&display_list, 20, 20) orelse return error.TopmostControlRegionMissing;
+    try std.testing.expectEqualSlices(u16, &.{ 5, 6 }, region.dom_path);
 }

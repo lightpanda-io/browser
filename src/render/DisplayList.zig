@@ -12,6 +12,7 @@ pub const RectCommand = struct {
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32 = 0,
     color: Color,
 };
 
@@ -20,6 +21,7 @@ pub const TextCommand = struct {
     y: i32,
     width: i32,
     height: i32 = 0,
+    z_index: i32 = 0,
     font_size: i32 = 16,
     font_family: []u8 = &.{},
     font_weight: i32 = 400,
@@ -34,6 +36,7 @@ pub const LinkRegion = struct {
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32 = 0,
     url: []u8,
     dom_path: []u16 = &.{},
     download_filename: []u8 = &.{},
@@ -46,6 +49,7 @@ pub const ControlRegion = struct {
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32 = 0,
     dom_path: []u16 = &.{},
 };
 
@@ -54,6 +58,7 @@ pub const ImageCommand = struct {
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32 = 0,
     url: []u8,
     alt: []u8,
     request_include_credentials: bool = true,
@@ -67,6 +72,7 @@ pub const CanvasCommand = struct {
     y: i32,
     width: i32,
     height: i32,
+    z_index: i32 = 0,
     pixel_width: u32,
     pixel_height: u32,
     pixels: []u8,
@@ -109,6 +115,7 @@ pub const Command = union(enum) {
                 .y = text.y,
                 .width = text.width,
                 .height = text.height,
+                .z_index = text.z_index,
                 .font_size = text.font_size,
                 .font_family = try allocator.dupe(u8, text.font_family),
                 .font_weight = text.font_weight,
@@ -122,6 +129,7 @@ pub const Command = union(enum) {
                 .y = image.y,
                 .width = image.width,
                 .height = image.height,
+                .z_index = image.z_index,
                 .url = try allocator.dupe(u8, image.url),
                 .alt = try allocator.dupe(u8, image.alt),
                 .request_include_credentials = image.request_include_credentials,
@@ -134,6 +142,7 @@ pub const Command = union(enum) {
                 .y = canvas.y,
                 .width = canvas.width,
                 .height = canvas.height,
+                .z_index = canvas.z_index,
                 .pixel_width = canvas.pixel_width,
                 .pixel_height = canvas.pixel_height,
                 .pixels = try allocator.dupe(u8, canvas.pixels),
@@ -213,6 +222,7 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .y = region.y,
             .width = region.width,
             .height = region.height,
+            .z_index = region.z_index,
             .url = try allocator.dupe(u8, region.url),
             .dom_path = try allocator.dupe(u16, region.dom_path),
             .download_filename = try allocator.dupe(u8, region.download_filename),
@@ -227,6 +237,7 @@ pub fn cloneOwned(self: *const DisplayList, allocator: std.mem.Allocator) !Displ
             .y = region.y,
             .width = region.width,
             .height = region.height,
+            .z_index = region.z_index,
             .dom_path = try allocator.dupe(u16, region.dom_path),
         });
     }
@@ -257,6 +268,7 @@ pub fn addText(self: *DisplayList, allocator: std.mem.Allocator, text: TextComma
         .y = text.y,
         .width = text.width,
         .height = text.height,
+        .z_index = text.z_index,
         .font_size = text.font_size,
         .font_family = try allocator.dupe(u8, text.font_family),
         .font_weight = text.font_weight,
@@ -274,6 +286,7 @@ pub fn addImage(self: *DisplayList, allocator: std.mem.Allocator, image: ImageCo
         .y = image.y,
         .width = image.width,
         .height = image.height,
+        .z_index = image.z_index,
         .url = try allocator.dupe(u8, image.url),
         .alt = try allocator.dupe(u8, image.alt),
         .request_include_credentials = image.request_include_credentials,
@@ -295,6 +308,7 @@ pub fn addLinkRegion(self: *DisplayList, allocator: std.mem.Allocator, region: L
         .y = region.y,
         .width = region.width,
         .height = region.height,
+        .z_index = region.z_index,
         .url = try allocator.dupe(u8, region.url),
         .dom_path = try allocator.dupe(u16, region.dom_path),
         .download_filename = try allocator.dupe(u8, region.download_filename),
@@ -310,6 +324,7 @@ pub fn addControlRegion(self: *DisplayList, allocator: std.mem.Allocator, region
         .y = region.y,
         .width = region.width,
         .height = region.height,
+        .z_index = region.z_index,
         .dom_path = try allocator.dupe(u16, region.dom_path),
     });
     self.content_height = @max(self.content_height, region.y + region.height);
@@ -336,6 +351,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.y));
                 hasher.update(std.mem.asBytes(&rect.width));
                 hasher.update(std.mem.asBytes(&rect.height));
+                hasher.update(std.mem.asBytes(&rect.z_index));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .stroke_rect => |rect| {
@@ -344,6 +360,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&rect.y));
                 hasher.update(std.mem.asBytes(&rect.width));
                 hasher.update(std.mem.asBytes(&rect.height));
+                hasher.update(std.mem.asBytes(&rect.z_index));
                 hasher.update(std.mem.asBytes(&rect.color));
             },
             .text => |text| {
@@ -352,6 +369,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&text.y));
                 hasher.update(std.mem.asBytes(&text.width));
                 hasher.update(std.mem.asBytes(&text.height));
+                hasher.update(std.mem.asBytes(&text.z_index));
                 hasher.update(std.mem.asBytes(&text.font_size));
                 hasher.update(text.font_family);
                 hasher.update(std.mem.asBytes(&text.font_weight));
@@ -366,6 +384,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&image.y));
                 hasher.update(std.mem.asBytes(&image.width));
                 hasher.update(std.mem.asBytes(&image.height));
+                hasher.update(std.mem.asBytes(&image.z_index));
                 hasher.update(image.url);
                 hasher.update(image.alt);
                 hasher.update(std.mem.asBytes(&image.request_include_credentials));
@@ -379,6 +398,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
                 hasher.update(std.mem.asBytes(&canvas.y));
                 hasher.update(std.mem.asBytes(&canvas.width));
                 hasher.update(std.mem.asBytes(&canvas.height));
+                hasher.update(std.mem.asBytes(&canvas.z_index));
                 hasher.update(std.mem.asBytes(&canvas.pixel_width));
                 hasher.update(std.mem.asBytes(&canvas.pixel_height));
                 hasher.update(canvas.pixels);
@@ -392,6 +412,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(std.mem.asBytes(&region.y));
         hasher.update(std.mem.asBytes(&region.width));
         hasher.update(std.mem.asBytes(&region.height));
+        hasher.update(std.mem.asBytes(&region.z_index));
         hasher.update(region.url);
         hasher.update(std.mem.sliceAsBytes(region.dom_path));
         hasher.update(region.download_filename);
@@ -404,6 +425,7 @@ pub fn hashInto(self: *const DisplayList, hasher: anytype) void {
         hasher.update(std.mem.asBytes(&region.y));
         hasher.update(std.mem.asBytes(&region.width));
         hasher.update(std.mem.asBytes(&region.height));
+        hasher.update(std.mem.asBytes(&region.z_index));
         hasher.update(std.mem.sliceAsBytes(region.dom_path));
     }
     for (self.font_faces.items) |font_face| {

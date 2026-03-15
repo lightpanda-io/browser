@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tiny Placeholder Screenshot</title>
+  <script>
+    window.addEventListener('load', () => {
+      const dot = document.getElementById('dot');
+      const real = document.getElementById('real');
+      dot.style.display = 'block';
+      setTimeout(() => {
+        real.style.display = 'block';
+        document.title = 'Tiny Placeholder Ready';
+      }, 650);
+    });
+  </script>
+</head>
+<body style="margin:0;background:#fff">
+  <div id="dot" style="display:none;width:1px;height:1px;background:#d33"></div>
+  <div id="real" style="display:none;width:220px;height:40px;margin:40px;background:#26a65b"></div>
+</body>
+</html>

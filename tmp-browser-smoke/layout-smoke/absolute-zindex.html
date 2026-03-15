@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Absolute Z Index Layout</title>
+</head>
+<body style="margin:0;background:#f5f5f5;font-family:sans-serif">
+  <div style="position:relative;width:420px;height:190px;margin:24px auto;background:#f0f0f0;border:1px solid #b8b8b8">
+    <div style="height:86px;background:#cfe8ff">Flow spacer</div>
+    <div style="position:absolute;top:0;left:0;width:100%;height:30px;background:#222;z-index:1"></div>
+    <a href="/zindex-low.html" style="position:absolute;top:4px;left:12px;width:190px;height:22px;background:#2f58d7;color:#fff;z-index:2;text-decoration:none">Low Overlay</a>
+    <a href="/zindex-high.html" style="position:absolute;top:8px;left:28px;width:190px;height:18px;background:#d64242;color:#fff;z-index:3;text-decoration:none">High Overlay</a>
+    <div style="margin-top:10px;height:54px;background:#24a264;color:#fff">Body flow</div>
+  </div>
+</body>
+</html>

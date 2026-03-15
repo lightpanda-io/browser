@@ -366,12 +366,40 @@ fn browseScreenshotReady(
         return false;
     }
 
-    if (list.commands.items.len > 0) {
+    if (displayListHasSubstantivePresentationCommands(list)) {
         return true;
     }
 
     return std.mem.trim(u8, body, &std.ascii.whitespace).len > 0 and
-        (list.link_regions.items.len > 0 or list.control_regions.items.len > 0);
+        displayListHasSubstantiveInteractiveRegions(list);
+}
+
+fn displayListHasSubstantivePresentationCommands(list: *const DisplayList) bool {
+    for (list.commands.items) |command| {
+        switch (command) {
+            .fill_rect => |rect| if (isSubstantivePresentationBox(rect.width, rect.height)) return true,
+            .stroke_rect => |rect| if (isSubstantivePresentationBox(rect.width, rect.height)) return true,
+            .text => |text| if (text.text.len > 0 and isSubstantivePresentationBox(text.width, @max(text.height, text.font_size + 8))) return true,
+            .image => |image| if (isSubstantivePresentationBox(image.width, image.height)) return true,
+            .canvas => |canvas| if (isSubstantivePresentationBox(canvas.width, canvas.height)) return true,
+        }
+    }
+    return false;
+}
+
+fn isSubstantivePresentationBox(width: i32, height: i32) bool {
+    if (width <= 0 or height <= 0) return false;
+    return width >= 96 or height >= 32 or width * height >= 4096;
+}
+
+fn displayListHasSubstantiveInteractiveRegions(list: *const DisplayList) bool {
+    for (list.link_regions.items) |region| {
+        if (region.width > 0 and region.height > 0 and region.width * region.height >= 128) return true;
+    }
+    for (list.control_regions.items) |region| {
+        if (region.width > 0 and region.height > 0 and region.width * region.height >= 128) return true;
+    }
+    return false;
 }
 
 test "browseScreenshotReady ignores root placeholder presentations" {
@@ -427,6 +455,30 @@ test "browseScreenshotReady waits for load completion" {
     try std.testing.expect(browseScreenshotReady(false, false, "", &painted_list));
     try std.testing.expect(!browseScreenshotReady(true, true, "", &painted_list));
     try std.testing.expect(browseScreenshotReady(true, false, "", &painted_list));
+}
+
+test "browseScreenshotReady ignores tiny early paint noise" {
+    var tiny = DisplayList{};
+    defer tiny.deinit(std.testing.allocator);
+    try tiny.addFillRect(std.testing.allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 1,
+        .height = 1,
+        .color = .{ .r = 255, .g = 0, .b = 0 },
+    });
+    try std.testing.expect(!browseScreenshotReady(true, false, "", &tiny));
+
+    var real = DisplayList{};
+    defer real.deinit(std.testing.allocator);
+    try real.addFillRect(std.testing.allocator, .{
+        .x = 0,
+        .y = 0,
+        .width = 120,
+        .height = 20,
+        .color = .{ .r = 255, .g = 0, .b = 0 },
+    });
+    try std.testing.expect(browseScreenshotReady(true, false, "", &real));
 }
 
 pub fn chooseFiles(self: *Display, accept: []const u8, multiple: bool) ?ChosenFiles {
