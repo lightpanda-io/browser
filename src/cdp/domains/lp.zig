@@ -207,9 +207,6 @@ fn scrollNode(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    const x = params.x orelse 0;
-    const y = params.y orelse 0;
-
     const input_node_id = params.nodeId orelse params.backendNodeId;
 
     var target_node: ?*DOMNode = null;
@@ -218,7 +215,7 @@ fn scrollNode(cmd: anytype) !void {
         target_node = node.dom;
     }
 
-    lp.actions.scroll(target_node, x, y, page) catch |err| {
+    lp.actions.scroll(target_node, params.x, params.y, page) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };

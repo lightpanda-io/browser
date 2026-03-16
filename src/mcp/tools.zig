@@ -494,9 +494,6 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         return server.sendError(id, .PageNotLoaded, "Page not loaded");
     };
 
-    const x = args.x orelse 0;
-    const y = args.y orelse 0;
-
     var target_node: ?*DOMNode = null;
     if (args.backendNodeId) |node_id| {
         const node = server.node_registry.lookup_by_id.get(node_id) orelse {
@@ -505,7 +502,7 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         target_node = node.dom;
     }
 
-    lp.actions.scroll(target_node, x, y, page) catch |err| {
+    lp.actions.scroll(target_node, args.x, args.y, page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an element");
         }

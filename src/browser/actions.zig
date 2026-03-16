@@ -63,21 +63,21 @@ pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
     _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch {};
 }
 
-pub fn scroll(node: ?*DOMNode, x: i32, y: i32, page: *Page) !void {
+pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
     if (node) |n| {
         const el = n.is(Element) orelse return error.InvalidNodeType;
 
-        if (x != 0) {
-            el.setScrollLeft(x, page) catch {};
+        if (x) |val| {
+            el.setScrollLeft(val, page) catch {};
         }
-        if (y != 0) {
-            el.setScrollTop(y, page) catch {};
+        if (y) |val| {
+            el.setScrollTop(val, page) catch {};
         }
 
         const scroll_evt = try Event.initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
         _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch {};
     } else {
-        page.window.scrollTo(.{ .x = x }, y, page) catch |err| {
+        page.window.scrollTo(.{ .x = x orelse 0 }, y, page) catch |err| {
             lp.log.err(.app, "scroll failed", .{ .err = err });
             return error.ActionFailed;
         };
