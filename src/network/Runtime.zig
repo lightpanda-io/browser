@@ -308,9 +308,12 @@ pub fn run(self: *Runtime) void {
 
         const socket = posix.accept(listener.socket, null, null, posix.SOCK.NONBLOCK) catch |err| {
             switch (err) {
-                error.SocketNotListening, error.ConnectionAborted => {
+                error.SocketNotListening => {
                     self.pollfds[1] = .{ .fd = -1, .events = 0, .revents = 0 };
                     self.listener = null;
+                },
+                error.ConnectionAborted => {
+                    lp.log.warn(.app, "accept connection aborted", .{});
                 },
                 error.WouldBlock => {},
                 else => {

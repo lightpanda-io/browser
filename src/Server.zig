@@ -242,7 +242,10 @@ pub const Client = struct {
     fn stop(self: *Client) void {
         switch (self.mode) {
             .http => {},
-            .cdp => |*cdp| cdp.browser.env.terminate(),
+            .cdp => |*cdp| {
+                cdp.browser.env.terminate();
+                self.ws.sendClose();
+            },
         }
         self.ws.shutdown();
     }
