@@ -633,7 +633,7 @@ test "cdp.page: getFrameTree" {
     defer ctx.deinit();
 
     {
-        try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{ .id = 10, .method = "Page.getFrameTree", .params = .{ .targetId = "X" } }));
+        try ctx.processMessage(.{ .id = 10, .method = "Page.getFrameTree", .params = .{ .targetId = "X" } });
         try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 10 });
     }
 

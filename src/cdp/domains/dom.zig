@@ -550,11 +550,12 @@ test "cdp.dom: getSearchResults unknown search id" {
     var ctx = testing.context();
     defer ctx.deinit();
 
-    try testing.expectError(error.BrowserContextNotLoaded, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .id = 8,
         .method = "DOM.getSearchResults",
         .params = .{ .searchId = "Nope", .fromIndex = 0, .toIndex = 10 },
-    }));
+    });
+    try ctx.expectSentError(-31998, "BrowserContextNotLoaded", .{ .id = 8 });
 }
 
 test "cdp.dom: search flow" {
@@ -604,11 +605,12 @@ test "cdp.dom: search flow" {
     try ctx.expectSentResult(null, .{ .id = 16 });
 
     // make sure the delete actually did something
-    try testing.expectError(error.SearchResultNotFound, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .id = 17,
         .method = "DOM.getSearchResults",
         .params = .{ .searchId = "0", .fromIndex = 0, .toIndex = 1 },
-    }));
+    });
+    try ctx.expectSentError(-31998, "SearchResultNotFound", .{ .id = 17 });
 }
 
 test "cdp.dom: querySelector unknown search id" {
@@ -645,11 +647,12 @@ test "cdp.dom: querySelector Node not found" {
     });
     try ctx.expectSentResult(.{ .searchId = "0", .resultCount = 2 }, .{ .id = 3 });
 
-    try testing.expectError(error.NodeNotFoundForGivenId, ctx.processMessage(.{
+    try ctx.processMessage(.{
         .id = 4,
         .method = "DOM.querySelector",
         .params = .{ .nodeId = 1, .selector = "a" },
-    }));
+    });
+    try ctx.expectSentError(-31998, "NodeNotFoundForGivenId", .{ .id = 4 });
 
     try ctx.processMessage(.{
         .id = 5,

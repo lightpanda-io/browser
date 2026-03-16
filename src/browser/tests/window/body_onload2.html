@@ -1,15 +1,15 @@
 <!DOCTYPE html>
-<body onload="loaded()"></body>
+<body onload="loadEvent = event"></body>
 <script src="../testing.js"></script>
 
 <script id=bodyOnLoad2>
-  let called = 0;
-  function loaded(e) {
-    called += 1;
-  }
+  // Per spec, the handler is compiled as: function(event) { loadEvent = event }
+  // Verify: handler fires, "event" parameter is a proper Event, and handler is a function.
+  let loadEvent = null;
 
   testing.eventually(() => {
-    testing.expectEqual(1, called);
+    testing.expectEqual("function", typeof document.body.onload);
+    testing.expectTrue(loadEvent instanceof Event);
+    testing.expectEqual("load", loadEvent.type);
   });
 </script>
-

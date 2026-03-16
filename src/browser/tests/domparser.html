@@ -11,9 +11,9 @@
   }
 
   {
-    // Empty XML is a parse error (no root element)
     const parser = new DOMParser();
-    testing.expectError('Error', () => parser.parseFromString('', 'text/xml'));
+    let d = parser.parseFromString('', 'text/xml');
+    testing.expectEqual('<parsererror>error</parsererror>', new XMLSerializer().serializeToString(d));
   }
 }
 </script>

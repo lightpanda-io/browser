@@ -1091,7 +1091,6 @@ pub fn iframeAddedCallback(self: *Page, iframe: *IFrame) !void {
         log.warn(.page, "iframe navigate failure", .{ .url = url, .err = err });
         self._pending_loads -= 1;
         iframe._window = null;
-        page_frame.deinit(true);
         return error.IFrameLoadError;
     };
 

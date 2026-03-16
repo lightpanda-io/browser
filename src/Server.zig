@@ -295,7 +295,7 @@ pub const Client = struct {
         }
 
         var cdp = &self.mode.cdp;
-        var last_message = timestamp(.monotonic);
+        var last_message = milliTimestamp(.monotonic);
         var ms_remaining = self.ws.timeout_ms;
 
         while (true) {
@@ -304,7 +304,7 @@ pub const Client = struct {
                     if (self.readSocket() == false) {
                         return;
                     }
-                    last_message = timestamp(.monotonic);
+                    last_message = milliTimestamp(.monotonic);
                     ms_remaining = self.ws.timeout_ms;
                 },
                 .no_page => {
@@ -319,16 +319,18 @@ pub const Client = struct {
                     if (self.readSocket() == false) {
                         return;
                     }
-                    last_message = timestamp(.monotonic);
+                    last_message = milliTimestamp(.monotonic);
                     ms_remaining = self.ws.timeout_ms;
                 },
                 .done => {
-                    const elapsed = timestamp(.monotonic) - last_message;
-                    if (elapsed > ms_remaining) {
+                    const now = milliTimestamp(.monotonic);
+                    const elapsed = now - last_message;
+                    if (elapsed >= ms_remaining) {
                         log.info(.app, "CDP timeout", .{});
                         return;
                     }
                     ms_remaining -= @intCast(elapsed);
+                    last_message = now;
                 },
             }
         }
@@ -501,6 +503,7 @@ fn buildJSONVersionResponse(
 }
 
 pub const timestamp = @import("datetime.zig").timestamp;
+pub const milliTimestamp = @import("datetime.zig").milliTimestamp;
 
 const testing = std.testing;
 test "server: buildJSONVersionResponse" {
