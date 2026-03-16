@@ -332,6 +332,45 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     // a v8 context, we can get our context out
     v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, 1, @ptrCast(context));
 
+    // Inject window.chrome stub to appear as a Chrome browser.
+    // Anti-bot scripts check for the existence of window.chrome as a
+    // primary signal. This creates a minimal but realistic chrome object.
+    {
+        const chrome_init =
+            \\Object.defineProperty(this, 'chrome', {
+            \\  value: Object.freeze({
+            \\    app: Object.freeze({
+            \\      isInstalled: false,
+            \\      InstallState: Object.freeze({DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'}),
+            \\      RunningState: Object.freeze({CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'})
+            \\    }),
+            \\    runtime: Object.freeze({
+            \\      OnInstalledReason: Object.freeze({CHROME_UPDATE:'chrome_update',INSTALL:'install',SHARED_MODULE_UPDATE:'shared_module_update',UPDATE:'update'}),
+            \\      OnRestartRequiredReason: Object.freeze({APP_UPDATE:'app_update',OS_UPDATE:'os_update',PERIODIC:'periodic'}),
+            \\      PlatformArch: Object.freeze({ARM:'arm',ARM64:'arm64',MIPS:'mips',MIPS64:'mips64',X86_32:'x86-32',X86_64:'x86-64'}),
+            \\      PlatformNaclArch: Object.freeze({ARM:'arm',MIPS:'mips',MIPS64:'mips64',X86_32:'x86-32',X86_64:'x86-64'}),
+            \\      PlatformOs: Object.freeze({ANDROID:'android',CROS:'cros',FUCHSIA:'fuchsia',LINUX:'linux',MAC:'mac',OPENBSD:'openbsd',WIN:'win'}),
+            \\      RequestUpdateCheckStatus: Object.freeze({NO_UPDATE:'no_update',THROTTLED:'throttled',UPDATE_AVAILABLE:'update_available'}),
+            \\      id: undefined,
+            \\      connect: function(){},
+            \\      sendMessage: function(){}
+            \\    }),
+            \\    csi: function(){return{}},
+            \\    loadTimes: function(){return{}}
+            \\  }),
+            \\  writable: false,
+            \\  enumerable: true,
+            \\  configurable: false
+            \\});
+        ;
+        const code = v8.v8__String__NewFromUtf8(isolate.handle, chrome_init.ptr, v8.kNormal, @intCast(chrome_init.len));
+        if (code) |c| {
+            if (v8.v8__Script__Compile(v8_context, c, null)) |script| {
+                _ = v8.v8__Script__Run(script, v8_context);
+            }
+        }
+    }
+
     const count = self.context_count;
     if (count >= self.contexts.len) {
         return error.TooManyContexts;

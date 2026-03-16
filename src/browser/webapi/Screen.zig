@@ -57,7 +57,7 @@ pub const JsApi = struct {
     pub const width = bridge.property(1920, .{ .template = false });
     pub const height = bridge.property(1080, .{ .template = false });
     pub const availWidth = bridge.property(1920, .{ .template = false });
-    pub const availHeight = bridge.property(1040, .{ .template = false });
+    pub const availHeight = bridge.property(1032, .{ .template = false });
     pub const colorDepth = bridge.property(24, .{ .template = false });
     pub const pixelDepth = bridge.property(24, .{ .template = false });
     pub const orientation = bridge.accessor(Screen.getOrientation, null, .{});

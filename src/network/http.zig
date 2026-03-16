@@ -67,10 +67,33 @@ pub const Headers = struct {
     cookies: ?[*c]const u8,
 
     pub fn init(user_agent: [:0]const u8) !Headers {
-        const header_list = libcurl.curl_slist_append(null, user_agent);
+        var header_list = libcurl.curl_slist_append(null, user_agent);
         if (header_list == null) {
             return error.OutOfMemory;
         }
+
+        // Chrome-compatible default headers for anti-bot evasion.
+        // These headers are sent by Chrome on every navigation request
+        // and their absence is a strong bot detection signal.
+        const chrome_headers = [_][*c]const u8{
+            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language: en-US,en;q=0.9",
+            "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\", \"Google Chrome\";v=\"131\"",
+            "sec-ch-ua-mobile: ?0",
+            "sec-ch-ua-platform: \"Windows\"",
+            "Sec-Fetch-Dest: document",
+            "Sec-Fetch-Mode: navigate",
+            "Sec-Fetch-Site: none",
+            "Sec-Fetch-User: ?1",
+            "Upgrade-Insecure-Requests: 1",
+        };
+        for (chrome_headers) |hdr| {
+            header_list = libcurl.curl_slist_append(header_list, hdr);
+            if (header_list == null) {
+                return error.OutOfMemory;
+            }
+        }
+
         return .{ .headers = header_list, .cookies = null };
     }
 

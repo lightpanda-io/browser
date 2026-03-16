@@ -32,6 +32,15 @@ pub fn getUserAgent(_: *const Navigator, page: *Page) []const u8 {
     return page._session.browser.app.config.http_headers.user_agent;
 }
 
+pub fn getAppVersion(_: *const Navigator, page: *Page) []const u8 {
+    const ua = page._session.browser.app.config.http_headers.user_agent;
+    // appVersion is the user agent string after "Mozilla/"
+    if (std.mem.indexOf(u8, ua, "Mozilla/")) |idx| {
+        return ua[idx + 8 ..];
+    }
+    return "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+}
+
 pub fn getLanguages(_: *const Navigator) [1][]const u8 {
     return .{"en-US"};
 }
@@ -133,24 +142,24 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    // Read-only properties
+    // Read-only properties - Chrome-compatible values
     pub const userAgent = bridge.accessor(Navigator.getUserAgent, null, .{});
     pub const appName = bridge.property("Netscape", .{ .template = false });
-    pub const appCodeName = bridge.property("Netscape", .{ .template = false });
-    pub const appVersion = bridge.property("1.0", .{ .template = false });
+    pub const appCodeName = bridge.property("Mozilla", .{ .template = false });
+    pub const appVersion = bridge.accessor(Navigator.getAppVersion, null, .{});
     pub const platform = bridge.accessor(Navigator.getPlatform, null, .{});
     pub const language = bridge.property("en-US", .{ .template = false });
     pub const languages = bridge.accessor(Navigator.getLanguages, null, .{});
     pub const onLine = bridge.property(true, .{ .template = false });
     pub const cookieEnabled = bridge.property(true, .{ .template = false });
-    pub const hardwareConcurrency = bridge.property(4, .{ .template = false });
+    pub const hardwareConcurrency = bridge.property(8, .{ .template = false });
     pub const maxTouchPoints = bridge.property(0, .{ .template = false });
-    pub const vendor = bridge.property("", .{ .template = false });
+    pub const vendor = bridge.property("Google Inc.", .{ .template = false });
     pub const product = bridge.property("Gecko", .{ .template = false });
+    pub const productSub = bridge.property("20030107", .{ .template = false });
     pub const webdriver = bridge.property(false, .{ .template = false });
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const doNotTrack = bridge.property(null, .{ .template = false });
-    pub const globalPrivacyControl = bridge.property(true, .{ .template = false });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true });
     pub const unregisterProtocolHandler = bridge.function(Navigator.unregisterProtocolHandler, .{ .dom_exception = true });
 

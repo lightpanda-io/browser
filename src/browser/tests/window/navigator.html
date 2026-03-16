@@ -5,9 +5,11 @@
   // Navigator should be accessible from window
   testing.expectEqual(navigator, window.navigator);
   testing.expectEqual(true, navigator.userAgent.length > 0);
-  testing.expectEqual(true, navigator.userAgent.includes('Lightpanda'));
+  testing.expectEqual(true, navigator.userAgent.includes('Chrome'));
   testing.expectEqual('Netscape', navigator.appName);
-  testing.expectEqual('1.0', navigator.appVersion);
+  testing.expectEqual('Mozilla', navigator.appCodeName);
+  testing.expectEqual(true, navigator.appVersion.length > 0);
+  testing.expectEqual(true, navigator.appVersion.includes('AppleWebKit'));
   testing.expectEqual(true, navigator.platform.length > 0);
 
   // Platform should be one of the known values
@@ -20,10 +22,18 @@
   testing.expectEqual(true, navigator.onLine);
   testing.expectEqual(true, navigator.cookieEnabled);
   testing.expectEqual(true, navigator.hardwareConcurrency > 0);
-  testing.expectEqual(4, navigator.hardwareConcurrency);
+  testing.expectEqual(8, navigator.hardwareConcurrency);
   testing.expectEqual(0, navigator.maxTouchPoints);
-  testing.expectEqual('', navigator.vendor);
+  testing.expectEqual('Google Inc.', navigator.vendor);
   testing.expectEqual('Gecko', navigator.product);
+  testing.expectEqual('20030107', navigator.productSub);
   testing.expectEqual(false, navigator.javaEnabled());
   testing.expectEqual(false, navigator.webdriver);
+
+  // Chrome stealth: window.chrome object must exist
+  testing.expectEqual(true, typeof window.chrome === 'object');
+  testing.expectEqual(true, typeof window.chrome.runtime === 'object');
+  testing.expectEqual(true, typeof window.chrome.app === 'object');
+  testing.expectEqual(false, window.chrome.app.isInstalled);
+  testing.expectEqual(true, window.isSecureContext);
 </script>

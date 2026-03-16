@@ -816,15 +816,18 @@ pub const JsApi = struct {
     pub const scroll = bridge.function(Window.scrollTo, .{});
     pub const scrollBy = bridge.function(Window.scrollBy, .{});
 
-    // Return false since we don't have secure-context-only APIs implemented
-    // (webcam, geolocation, clipboard, etc.)
-    // This is safer and could help avoid processing errors by hinting at
-    // sites not to try to access those features
-    pub const isSecureContext = bridge.property(false, .{ .template = false });
+    // Chrome reports isSecureContext=true for HTTPS pages
+    pub const isSecureContext = bridge.property(true, .{ .template = false });
 
     pub const innerWidth = bridge.property(1920, .{ .template = false });
     pub const innerHeight = bridge.property(1080, .{ .template = false });
+    pub const outerWidth = bridge.property(1920, .{ .template = false });
+    pub const outerHeight = bridge.property(1040, .{ .template = false });
     pub const devicePixelRatio = bridge.property(1, .{ .template = false });
+    pub const screenX = bridge.property(0, .{ .template = false });
+    pub const screenY = bridge.property(0, .{ .template = false });
+    pub const screenLeft = bridge.property(0, .{ .template = false });
+    pub const screenTop = bridge.property(0, .{ .template = false });
 
     // This should return a window-like object in specific conditions. Would be
     // pretty complicated to properly support I think.
