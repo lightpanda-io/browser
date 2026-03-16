@@ -309,15 +309,30 @@ pub fn sniff(body: []const u8) ?Mime {
     if (content[0] != '<') {
         if (std.mem.startsWith(u8, content, &.{ 0xEF, 0xBB, 0xBF })) {
             // UTF-8 BOM
-            return .{ .content_type = .{ .text_plain = {} } };
+            return .{
+                .content_type = .{ .text_plain = {} },
+                .charset = default_charset,
+                .charset_len = default_charset_len,
+                .is_default_charset = false,
+            };
         }
         if (std.mem.startsWith(u8, content, &.{ 0xFE, 0xFF })) {
             // UTF-16 big-endian BOM
-            return .{ .content_type = .{ .text_plain = {} } };
+            return .{
+                .content_type = .{ .text_plain = {} },
+                .charset = .{ 'U', 'T', 'F', '-', '1', '6', 'B', 'E' } ++ .{0} ** 33,
+                .charset_len = 8,
+                .is_default_charset = false,
+            };
         }
         if (std.mem.startsWith(u8, content, &.{ 0xFF, 0xFE })) {
             // UTF-16 little-endian BOM
-            return .{ .content_type = .{ .text_plain = {} } };
+            return .{
+                .content_type = .{ .text_plain = {} },
+                .charset = .{ 'U', 'T', 'F', '-', '1', '6', 'L', 'E' } ++ .{0} ** 33,
+                .charset_len = 8,
+                .is_default_charset = false,
+            };
         }
         return null;
     }
@@ -671,6 +686,24 @@ test "Mime: sniff" {
 
     try expectHTML("<!-->");
     try expectHTML("    \n\t <!-->");
+
+    {
+        const mime = Mime.sniff(&.{ 0xEF, 0xBB, 0xBF }).?;
+        try testing.expectEqual(.text_plain, std.meta.activeTag(mime.content_type));
+        try testing.expectEqual("UTF-8", mime.charsetString());
+    }
+
+    {
+        const mime = Mime.sniff(&.{ 0xFE, 0xFF }).?;
+        try testing.expectEqual(.text_plain, std.meta.activeTag(mime.content_type));
+        try testing.expectEqual("UTF-16BE", mime.charsetString());
+    }
+
+    {
+        const mime = Mime.sniff(&.{ 0xFF, 0xFE }).?;
+        try testing.expectEqual(.text_plain, std.meta.activeTag(mime.content_type));
+        try testing.expectEqual("UTF-16LE", mime.charsetString());
+    }
 }
 
 const Expectation = struct {
