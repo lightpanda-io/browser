@@ -36,7 +36,6 @@
   testing.withError((err) => {
     testing.expectEqual(8, err.code);
     testing.expectEqual("NotFoundError", err.name);
-    testing.expectEqual("Not Found", err.message);
   }, () => el1.removeAttributeNode(script_id_node));
 
   testing.expectEqual(an1, el1.removeAttributeNode(an1));

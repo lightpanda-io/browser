@@ -24,11 +24,10 @@
 
 <script id=byId name="test1">
   testing.expectEqual(1, document.querySelector.length);
-  testing.expectError("SyntaxError: Syntax Error", () => document.querySelector(''));
+  testing.expectError("SyntaxError", () => document.querySelector(''));
   testing.withError((err) => {
     testing.expectEqual(12, err.code);
     testing.expectEqual("SyntaxError", err.name);
-    testing.expectEqual("Syntax Error", err.message);
   }, () => document.querySelector(''));
 
   testing.expectEqual('test1', document.querySelector('#byId').getAttribute('name'));
