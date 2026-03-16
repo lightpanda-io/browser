@@ -28,6 +28,8 @@ const EventTarget = @import("../EventTarget.zig");
 const UIEvent = @import("UIEvent.zig");
 const PointerEvent = @import("PointerEvent.zig");
 
+const Allocator = std.mem.Allocator;
+
 const MouseEvent = @This();
 
 pub const MouseButton = enum(u8) {
@@ -83,12 +85,21 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
     const arena = try page.getArena(.{ .debug = "MouseEvent" });
     errdefer page.releaseArena(arena);
     const type_string = try String.init(arena, typ, .{});
+    return initWithTrusted(arena, type_string, _opts, false, page);
+}
 
+pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*MouseEvent {
+    const arena = try page.getArena(.{ .debug = "MouseEvent.trusted" });
+    errdefer page.releaseArena(arena);
+    return initWithTrusted(arena, typ, _opts, true, page);
+}
+
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*MouseEvent {
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(
         arena,
-        type_string,
+        typ,
         MouseEvent{
             ._type = .generic,
             ._proto = undefined,
@@ -106,7 +117,7 @@ pub fn init(typ: []const u8, _opts: ?Options, page: *Page) !*MouseEvent {
         },
     );
 
-    Event.populatePrototypes(event, opts, false);
+    Event.populatePrototypes(event, opts, trusted);
     return event;
 }
 
