@@ -3271,7 +3271,7 @@ pub fn triggerMouseClick(self: *Page, x: f64, y: f64) !void {
             .type = self._type,
         });
     }
-    const event = (try @import("webapi/event/MouseEvent.zig").init("click", .{
+    const event = (try @import("webapi/event/MouseEvent.zig").initTrusted(comptime .wrap("click"), .{
         .bubbles = true,
         .cancelable = true,
         .composed = true,
