@@ -37,6 +37,7 @@ pub fn registerTypes() []const type {
 
 const IntersectionObserver = @This();
 
+_rc: u8 = 0,
 _arena: Allocator,
 _callback: js.Function.Temp,
 _observing: std.ArrayList(*Element) = .{},
@@ -93,12 +94,24 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
 }
 
 pub fn deinit(self: *IntersectionObserver, shutdown: bool, session: *Session) void {
-    self._callback.release();
-    if ((comptime IS_DEBUG) and !shutdown) {
-        std.debug.assert(self._observing.items.len == 0);
+    const rc = self._rc;
+    if (comptime IS_DEBUG) {
+        std.debug.assert(rc != 0);
     }
 
-    session.releaseArena(self._arena);
+    if (rc == 1 or shutdown) {
+        self._callback.release();
+        if ((comptime IS_DEBUG) and !shutdown) {
+            std.debug.assert(self._observing.items.len == 0);
+        }
+        session.releaseArena(self._arena);
+    } else {
+        self._rc = rc - 1;
+    }
+}
+
+pub fn acquireRef(self: *IntersectionObserver) void {
+    self._rc += 1;
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void {
@@ -111,7 +124,7 @@ pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void
 
     // Register with page if this is our first observation
     if (self._observing.items.len == 0) {
-        page.js.strongRef(self);
+        self._rc += 1;
         try page.registerIntersectionObserver(self);
     }
 
@@ -148,20 +161,26 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
     }
 
     if (self._observing.items.len == 0) {
-        page.js.safeWeakRef(self);
+        self.deinit(false, page._session);
     }
 }
 
 pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
-    page.unregisterIntersectionObserver(self);
-    self._observing.clearRetainingCapacity();
     self._previous_states.clearRetainingCapacity();
 
     for (self._pending_entries.items) |entry| {
         entry.deinit(false, page._session);
     }
     self._pending_entries.clearRetainingCapacity();
-    page.js.safeWeakRef(self);
+
+    const observing_count = self._observing.items.len;
+    self._observing.clearRetainingCapacity();
+
+    if (observing_count > 0) {
+        self.deinit(false, page._session);
+    }
+
+    page.unregisterIntersectionObserver(self);
 }
 
 pub fn takeRecords(self: *IntersectionObserver, page: *Page) ![]*IntersectionObserverEntry {
