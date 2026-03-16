@@ -59,7 +59,11 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .version => {
-            std.debug.print("{s}\n", .{lp.build_config.git_commit});
+            if (lp.build_config.git_tag) |tag| {
+                std.debug.print("{s} ({s})\n", .{ tag, lp.build_config.git_commit });
+            } else {
+                std.debug.print("{s}\n", .{lp.build_config.git_commit});
+            }
             return std.process.cleanExit();
         },
         else => {},
