@@ -230,6 +230,7 @@ pub const Writer = struct {
         switch (value) {
             .integer => |v| {
                 // CDP spec requires integer values to be serialized as strings.
+                // 20 bytes is enough for the decimal representation of a 64-bit integer.
                 var buf: [20]u8 = undefined;
                 const s = try std.fmt.bufPrint(&buf, "{d}", .{v});
                 try w.write(s);
