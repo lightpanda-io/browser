@@ -24,66 +24,58 @@ const Event = @import("webapi/Event.zig");
 const Page = @import("Page.zig");
 
 pub fn click(node: *DOMNode, page: *Page) !void {
-    if (node.is(Element)) |el| {
-        if (el.is(Element.Html)) |html_el| {
-            html_el.click(page) catch |err| {
-                lp.log.err(.app, "click failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        } else {
-            return error.InvalidNodeType;
-        }
+    if (node.is(Element.Html)) |html_el| {
+        html_el.click(page) catch |err| {
+            lp.log.err(.app, "click failed", .{ .err = err });
+            return error.ActionFailed;
+        };
     } else {
         return error.InvalidNodeType;
     }
 }
 
 pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
-    if (node.is(Element)) |el| {
-        if (el.is(Element.Html.Input)) |input| {
-            input.setValue(text, page) catch |err| {
-                lp.log.err(.app, "fill input failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        } else if (el.is(Element.Html.TextArea)) |textarea| {
-            textarea.setValue(text, page) catch |err| {
-                lp.log.err(.app, "fill textarea failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        } else if (el.is(Element.Html.Select)) |select| {
-            select.setValue(text, page) catch |err| {
-                lp.log.err(.app, "fill select failed", .{ .err = err });
-                return error.ActionFailed;
-            };
-        } else {
-            return error.InvalidNodeType;
-        }
+    const el = node.is(Element) orelse return error.InvalidNodeType;
 
-        const input_evt = try Event.initTrusted(comptime lp.String.wrap("input"), .{ .bubbles = true }, page);
-        _ = page._event_manager.dispatch(el.asEventTarget(), input_evt) catch {};
-
-        const change_evt = try Event.initTrusted(comptime lp.String.wrap("change"), .{ .bubbles = true }, page);
-        _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch {};
+    if (el.is(Element.Html.Input)) |input| {
+        input.setValue(text, page) catch |err| {
+            lp.log.err(.app, "fill input failed", .{ .err = err });
+            return error.ActionFailed;
+        };
+    } else if (el.is(Element.Html.TextArea)) |textarea| {
+        textarea.setValue(text, page) catch |err| {
+            lp.log.err(.app, "fill textarea failed", .{ .err = err });
+            return error.ActionFailed;
+        };
+    } else if (el.is(Element.Html.Select)) |select| {
+        select.setValue(text, page) catch |err| {
+            lp.log.err(.app, "fill select failed", .{ .err = err });
+            return error.ActionFailed;
+        };
     } else {
         return error.InvalidNodeType;
     }
+
+    const input_evt = try Event.initTrusted(comptime lp.String.wrap("input"), .{ .bubbles = true }, page);
+    _ = page._event_manager.dispatch(el.asEventTarget(), input_evt) catch {};
+
+    const change_evt = try Event.initTrusted(comptime lp.String.wrap("change"), .{ .bubbles = true }, page);
+    _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch {};
 }
 
 pub fn scroll(node: ?*DOMNode, x: i32, y: i32, page: *Page) !void {
     if (node) |n| {
-        if (n.is(Element)) |el| {
-            if (x != 0) {
-                el.setScrollLeft(x, page) catch {};
-            }
-            if (y != 0) {
-                el.setScrollTop(y, page) catch {};
-            }
+        const el = n.is(Element) orelse return error.InvalidNodeType;
 
-            const scroll_evt = try Event.initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
-            _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch {};
-        } else {
-            return error.InvalidNodeType;
+        if (x != 0) {
+            el.setScrollLeft(x, page) catch {};
         }
+        if (y != 0) {
+            el.setScrollTop(y, page) catch {};
+        }
+
+        const scroll_evt = try Event.initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
+        _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch {};
     } else {
         page.window.scrollTo(.{ .x = x }, y, page) catch |err| {
             lp.log.err(.app, "scroll failed", .{ .err = err });
