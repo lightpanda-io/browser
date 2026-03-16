@@ -25,6 +25,7 @@ params: []const u8 = "",
 // We keep 41 for null-termination since HTML parser expects in this format.
 charset: [41]u8 = default_charset,
 charset_len: usize = default_charset_len,
+is_default_charset: bool = true,
 
 /// String "UTF-8" continued by null characters.
 const default_charset = .{ 'U', 'T', 'F', '-', '8' } ++ .{0} ** 36;
@@ -130,6 +131,7 @@ pub fn parse(input: []u8) !Mime {
 
     var charset: [41]u8 = default_charset;
     var charset_len: usize = default_charset_len;
+    var has_explicit_charset = false;
 
     var it = std.mem.splitScalar(u8, params, ';');
     while (it.next()) |attr| {
@@ -156,6 +158,7 @@ pub fn parse(input: []u8) !Mime {
                 // Null-terminate right after attribute value.
                 charset[attribute_value.len] = 0;
                 charset_len = attribute_value.len;
+                has_explicit_charset = true;
             },
         }
     }
@@ -165,6 +168,7 @@ pub fn parse(input: []u8) !Mime {
         .charset = charset,
         .charset_len = charset_len,
         .content_type = content_type,
+        .is_default_charset = !has_explicit_charset,
     };
 }
 
@@ -212,7 +216,7 @@ pub fn prescanCharset(html: []const u8) ?[]const u8 {
 
         // Look for http-equiv="content-type" with content="...;charset=X"
         if (findAttrValue(attrs, "http-equiv")) |he| {
-            if (asciiEqlIgnoreCase(he, "content-type")) {
+            if (std.ascii.eqlIgnoreCase(he, "content-type")) {
                 if (findAttrValue(attrs, "content")) |content| {
                     if (extractCharsetFromContentType(content)) |charset| {
                         return charset;
@@ -248,7 +252,11 @@ fn findAttrValue(attrs: []const u8, name: []const u8) ?[]const u8 {
 
         // Skip whitespace around =
         while (pos < attrs.len and (attrs[pos] == ' ' or attrs[pos] == '\t')) pos += 1;
-        if (pos >= attrs.len or attrs[pos] != '=') continue;
+        if (pos >= attrs.len or attrs[pos] != '=') {
+            // No '=' found - skip this token. Advance at least one byte to avoid infinite loop.
+            if (pos == attr_start) pos += 1;
+            continue;
+        }
         pos += 1; // skip '='
         while (pos < attrs.len and (attrs[pos] == ' ' or attrs[pos] == '\t')) pos += 1;
         if (pos >= attrs.len) return null;
@@ -274,7 +282,7 @@ fn findAttrValue(attrs: []const u8, name: []const u8) ?[]const u8 {
             }
         };
 
-        if (asciiEqlIgnoreCase(attr_name, name)) return value;
+        if (std.ascii.eqlIgnoreCase(attr_name, name)) return value;
     }
     return null;
 }
@@ -283,20 +291,12 @@ fn extractCharsetFromContentType(content: []const u8) ?[]const u8 {
     var it = std.mem.splitScalar(u8, content, ';');
     while (it.next()) |part| {
         const trimmed = std.mem.trimLeft(u8, part, &.{ ' ', '\t' });
-        if (trimmed.len > 8 and asciiEqlIgnoreCase(trimmed[0..8], "charset=")) {
+        if (trimmed.len > 8 and std.ascii.eqlIgnoreCase(trimmed[0..8], "charset=")) {
             const val = std.mem.trim(u8, trimmed[8..], &.{ ' ', '\t', '"', '\'' });
             if (val.len > 0 and val.len <= 40) return val;
         }
     }
     return null;
-}
-
-fn asciiEqlIgnoreCase(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        if (std.ascii.toLower(ca) != std.ascii.toLower(cb)) return false;
-    }
-    return true;
 }
 
 pub fn sniff(body: []const u8) ?Mime {
@@ -725,14 +725,17 @@ test "Mime: prescanCharset" {
     );
 
     // No charset found
-    try testing.expectEqual(@as(?[]const u8, null), Mime.prescanCharset("<html><head><title>Test</title>"));
-    try testing.expectEqual(@as(?[]const u8, null), Mime.prescanCharset(""));
-    try testing.expectEqual(@as(?[]const u8, null), Mime.prescanCharset("no html here"));
+    try testing.expectEqual(null, Mime.prescanCharset("<html><head><title>Test</title>"));
+    try testing.expectEqual(null, Mime.prescanCharset(""));
+    try testing.expectEqual(null, Mime.prescanCharset("no html here"));
+
+    // Self-closing meta without charset must not loop forever
+    try testing.expectEqual(null, Mime.prescanCharset("<meta foo=\"bar\"/>"));
 
     // Charset after 1024 bytes should not be found
     var long_html: [1100]u8 = undefined;
     @memset(&long_html, ' ');
     const suffix = "<meta charset=\"windows-1252\">";
     @memcpy(long_html[1050 .. 1050 + suffix.len], suffix);
-    try testing.expectEqual(@as(?[]const u8, null), Mime.prescanCharset(&long_html));
+    try testing.expectEqual(null, Mime.prescanCharset(&long_html));
 }

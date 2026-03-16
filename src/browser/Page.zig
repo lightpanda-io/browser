@@ -855,9 +855,9 @@ fn pageDataCallback(transfer: *HttpClient.Transfer, data: []const u8) !void {
             break :blk Mime.sniff(data);
         } orelse .unknown;
 
-        // If the HTTP header didn't specify a charset and this is HTML,
+        // If the HTTP Content-Type header didn't specify a charset and this is HTML,
         // prescan the first 1024 bytes for a <meta charset> declaration.
-        if (mime.content_type == .text_html and std.mem.eql(u8, mime.charsetString(), "UTF-8")) {
+        if (mime.content_type == .text_html and mime.is_default_charset) {
             if (Mime.prescanCharset(data)) |charset| {
                 if (charset.len <= 40) {
                     @memcpy(mime.charset[0..charset.len], charset);
