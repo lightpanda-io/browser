@@ -197,18 +197,20 @@ pub fn trackTemp(self: *Context, global: v8.Global) !void {
 }
 
 pub fn weakRef(self: *Context, obj: anytype) void {
-    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const resolved = js.Local.resolveValue(obj);
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
         }
         return;
     };
-    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
+    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, resolved.finalizer_from_v8, v8.kParameter);
 }
 
 pub fn safeWeakRef(self: *Context, obj: anytype) void {
-    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const resolved = js.Local.resolveValue(obj);
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);
@@ -216,11 +218,12 @@ pub fn safeWeakRef(self: *Context, obj: anytype) void {
         return;
     };
     v8.v8__Global__ClearWeak(&fc.global);
-    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, bridge.Struct(@TypeOf(obj)).JsApi.Meta.finalizer.from_v8, v8.kParameter);
+    v8.v8__Global__SetWeakFinalizer(&fc.global, fc, resolved.finalizer_from_v8, v8.kParameter);
 }
 
 pub fn strongRef(self: *Context, obj: anytype) void {
-    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(obj)) orelse {
+    const resolved = js.Local.resolveValue(obj);
+    const fc = self.origin.finalizer_callbacks.get(@intFromPtr(resolved.ptr)) orelse {
         if (comptime IS_DEBUG) {
             // should not be possible
             std.debug.assert(false);

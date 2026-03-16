@@ -548,7 +548,9 @@ fn processQueuedNavigation(self: *Session) !void {
             continue;
         }
 
-        try self.processFrameNavigation(page, qn);
+        self.processFrameNavigation(page, qn) catch |err| {
+            log.warn(.page, "frame navigation", .{ .url = qn.url, .err = err });
+        };
     }
 
     // Clear the queue after first pass
@@ -588,7 +590,8 @@ fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !v
 
     errdefer iframe._window = null;
 
-    if (page._parent_notified) {
+    const parent_notified = page._parent_notified;
+    if (parent_notified) {
         // we already notified the parent that we had loaded
         parent._pending_loads += 1;
     }
@@ -598,7 +601,19 @@ fn processFrameNavigation(self: *Session, page: *Page, qn: *QueuedNavigation) !v
     page.* = undefined;
 
     try Page.init(page, frame_id, self, parent);
-    errdefer page.deinit(true);
+    errdefer {
+        for (parent.frames.items, 0..) |frame, i| {
+            if (frame == page) {
+                parent.frames_sorted = false;
+                _ = parent.frames.swapRemove(i);
+                break;
+            }
+        }
+        if (parent_notified) {
+            parent._pending_loads -= 1;
+        }
+        page.deinit(true);
+    }
 
     page.iframe = iframe;
     iframe._window = page.window;
