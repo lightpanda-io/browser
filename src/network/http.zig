@@ -37,7 +37,7 @@ pub const ENABLE_DEBUG = false;
 ///   - Extension permutation: randomizes TLS extension order (Chrome does this)
 ///   - Min protocol TLS 1.2: Chrome doesn't offer TLS 1.0/1.1
 fn sslCtxCallback(_: ?*libcurl.Curl, ssl_ctx_raw: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_uint {
-    const ctx: *bssl.SSL_CTX = @ptrCast(@alignCast(ssl_ctx_raw)) ;
+    const ctx: *bssl.SSL_CTX = @ptrCast(@alignCast(ssl_ctx_raw));
     // GREASE — Chrome inserts random cipher suites, extensions, and named groups
     // that servers must ignore per RFC 8701. Without this, the ClientHello lacks
     // GREASE values and doesn't match Chrome's JA3/JA4 fingerprint.

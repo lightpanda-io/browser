@@ -187,6 +187,29 @@ Here are the key features we have implemented:
 - [x] Proxy support
 - [x] Network interception
 - [x] Respect `robots.txt` with option `--obey_robots`
+- [x] Chrome 131 stealth mode (anti-bot evasion)
+
+### Chrome Stealth Mode
+
+Lightpanda includes built-in anti-bot evasion to appear as a real Chrome 131 browser. This allows AI agents to navigate sites protected by WAFs (Cloudflare, DataDome, reCAPTCHA v3) without being detected as a bot.
+
+**TLS Fingerprint (JA3/JA4)**
+- Chrome 131 cipher suite ordering (TLS 1.2 + TLS 1.3)
+- Elliptic curve preferences: X25519, P-256, P-384
+- BoringSSL GREASE (RFC 8701) — random unknown values in ClientHello
+- TLS extension permutation — randomized extension order per connection
+- Minimum TLS 1.2 (Chrome never offers TLS 1.0/1.1)
+- HTTP/2 with ALPN negotiation
+
+**Browser Fingerprint**
+- `navigator` properties: userAgent, platform, hardwareConcurrency, deviceMemory, vendor, languages, plugins (5 PDF viewers)
+- `navigator.userAgentData` with brands, mobile, platform, and getHighEntropyValues()
+- `window.chrome` object with runtime, app, csi(), loadTimes() — all using V8 FunctionTemplate so `toString()` returns `[native code]`
+- `CSS.supports()` allowlist with all 639 Chrome 131 CSS properties
+- `performance.now()` with Chrome's 100µs rounding (not Firefox's 5µs)
+- WebGL: ANGLE/Direct3D11 renderer string matching Windows Chrome
+- Global constructor stubs: RTCPeerConnection, MediaStream, Bluetooth, USB, BatteryManager, Notification
+- Chrome-compatible HTTP headers: Sec-CH-UA, Sec-Fetch-Site/Mode/Dest, Accept
 
 NOTE: There are hundreds of Web APIs. Developing a browser (even just for headless mode) is a huge task. Coverage will increase over time.
 
@@ -201,7 +224,7 @@ install it with the right version in order to build the project.
 
 Lightpanda also depends on
 [zig-js-runtime](https://github.com/lightpanda-io/zig-js-runtime/) (with v8),
-[Libcurl](https://curl.se/libcurl/) and [html5ever](https://github.com/servo/html5ever).
+[Libcurl](https://curl.se/libcurl/), [BoringSSL](https://boringssl.googlesource.com/boringssl/), [nghttp2](https://nghttp2.org/) and [html5ever](https://github.com/servo/html5ever).
 
 To be able to build the v8 engine for zig-js-runtime, you have to install some libs:
 
