@@ -167,6 +167,12 @@ pub const CurlOption = enum(c.CURLoption) {
     header_function = c.CURLOPT_HEADERFUNCTION,
     write_data = c.CURLOPT_WRITEDATA,
     write_function = c.CURLOPT_WRITEFUNCTION,
+    // TLS fingerprint options — used to match Chrome 131's JA3/JA4 fingerprint
+    ssl_cipher_list = c.CURLOPT_SSL_CIPHER_LIST,
+    tls13_ciphers = c.CURLOPT_TLS13_CIPHERS,
+    ssl_ec_curves = c.CURLOPT_SSL_EC_CURVES,
+    ssl_enable_alpn = c.CURLOPT_SSL_ENABLE_ALPN,
+    http_version = c.CURLOPT_HTTP_VERSION,
 };
 
 pub const CurlMOption = enum(c.CURLMoption) {

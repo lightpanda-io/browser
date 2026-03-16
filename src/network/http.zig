@@ -354,6 +354,27 @@ pub const Connection = struct {
         // empty string means: use whatever's available
         try libcurl.curl_easy_setopt(easy, .accept_encoding, "");
 
+        // TLS fingerprint — Chrome 131 cipher suite ordering.
+        // Without this, the default BoringSSL cipher order produces a different
+        // JA3/JA4 hash than Chrome, causing WAFs (Cloudflare, DataDome) to
+        // reject the connection at the TLS level before any JS executes.
+        try libcurl.curl_easy_setopt(easy, .ssl_cipher_list,
+            "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:" ++
+            "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:" ++
+            "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:" ++
+            "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:" ++
+            "ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES256-SHA:" ++
+            "AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA:AES256-SHA",
+        );
+        try libcurl.curl_easy_setopt(easy, .tls13_ciphers,
+            "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256",
+        );
+        // Chrome 131 elliptic curve preferences (X25519 first, then P-256, P-384)
+        try libcurl.curl_easy_setopt(easy, .ssl_ec_curves, "X25519:P-256:P-384");
+        // Force HTTP/2 with ALPN (Chrome always negotiates h2)
+        try libcurl.curl_easy_setopt(easy, .ssl_enable_alpn, true);
+        try libcurl.curl_easy_setopt(easy, .http_version, @as(c_long, 2));
+
         // debug
         if (comptime ENABLE_DEBUG) {
             try libcurl.curl_easy_setopt(easy, .verbose, true);
