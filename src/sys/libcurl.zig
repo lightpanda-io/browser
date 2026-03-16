@@ -173,6 +173,8 @@ pub const CurlOption = enum(c.CURLoption) {
     ssl_ec_curves = c.CURLOPT_SSL_EC_CURVES,
     ssl_enable_alpn = c.CURLOPT_SSL_ENABLE_ALPN,
     http_version = c.CURLOPT_HTTP_VERSION,
+    ssl_ctx_function = c.CURLOPT_SSL_CTX_FUNCTION,
+    ssl_ctx_data = c.CURLOPT_SSL_CTX_DATA,
 };
 
 pub const CurlMOption = enum(c.CURLMoption) {
@@ -536,6 +538,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .ssl_verify_peer,
         .proxy_ssl_verify_host,
         .proxy_ssl_verify_peer,
+        .ssl_enable_alpn,
         => blk: {
             const n: c_long = switch (@typeInfo(@TypeOf(value))) {
                 .bool => switch (option) {
@@ -552,6 +555,7 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .max_redirs,
         .follow_location,
         .post_field_size,
+        .http_version,
         => blk: {
             const n: c_long = switch (@typeInfo(@TypeOf(value))) {
                 .comptime_int, .int => @intCast(value),
@@ -569,6 +573,9 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
         .user_pwd,
         .proxy_user_pwd,
         .copy_post_fields,
+        .ssl_cipher_list,
+        .tls13_ciphers,
+        .ssl_ec_curves,
         => blk: {
             const s: ?[*]const u8 = value;
             break :blk c.curl_easy_setopt(easy, opt, s);
@@ -644,6 +651,19 @@ pub fn curl_easy_setopt(easy: *Curl, comptime option: CurlOption, value: anytype
                 else => @compileError("expected Zig function or null for " ++ @tagName(option) ++ ", got " ++ @typeName(@TypeOf(value))),
             };
             break :blk c.curl_easy_setopt(easy, opt, cb);
+        },
+
+        .ssl_ctx_function => blk: {
+            const cb: c.curl_ssl_ctx_callback = value;
+            break :blk c.curl_easy_setopt(easy, opt, cb);
+        },
+
+        .ssl_ctx_data => blk: {
+            const ptr: ?*anyopaque = switch (@typeInfo(@TypeOf(value))) {
+                .null => null,
+                else => @ptrCast(value),
+            };
+            break :blk c.curl_easy_setopt(easy, opt, ptr);
         },
     };
     try errorCheck(code);

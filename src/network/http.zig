@@ -29,6 +29,28 @@ const log = @import("lightpanda").log;
 const assert = @import("lightpanda").assert;
 
 pub const ENABLE_DEBUG = false;
+
+/// SSL_CTX callback — called by libcurl after creating the SSL context but
+/// before the TLS handshake. Configures BoringSSL-specific features that
+/// cannot be set through curl options alone:
+///   - GREASE: inserts random unknown values in ClientHello to match Chrome
+///   - Extension permutation: randomizes TLS extension order (Chrome does this)
+///   - Min protocol TLS 1.2: Chrome doesn't offer TLS 1.0/1.1
+fn sslCtxCallback(_: ?*libcurl.Curl, ssl_ctx_raw: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_uint {
+    const ctx: *bssl.SSL_CTX = @ptrCast(@alignCast(ssl_ctx_raw)) ;
+    // GREASE — Chrome inserts random cipher suites, extensions, and named groups
+    // that servers must ignore per RFC 8701. Without this, the ClientHello lacks
+    // GREASE values and doesn't match Chrome's JA3/JA4 fingerprint.
+    bssl.SSL_CTX_set_grease_enabled(ctx, 1);
+    // Extension permutation — Chrome randomizes the order of TLS extensions in
+    // each ClientHello. Without this, extensions appear in a fixed order that
+    // differs from real Chrome and is trivially fingerprinted.
+    bssl.SSL_CTX_set_permute_extensions(ctx, 1);
+    // Minimum TLS 1.2 — Chrome never offers TLS 1.0 or 1.1. Setting this
+    // ensures the ClientHello version field matches Chrome.
+    _ = bssl.SSL_CTX_set_min_proto_version(ctx, bssl.TLS1_2_VERSION);
+    return 0; // CURLE_OK
+}
 const IS_DEBUG = builtin.mode == .Debug;
 
 pub const Blob = libcurl.CurlBlob;
@@ -41,6 +63,11 @@ const errorFromCode = libcurl.errorFromCode;
 const errorMFromCode = libcurl.errorMFromCode;
 const errorCheck = libcurl.errorCheck;
 const errorMCheck = libcurl.errorMCheck;
+
+// BoringSSL C API — used by sslCtxCallback to configure TLS fingerprint
+const bssl = @cImport({
+    @cInclude("openssl/ssl.h");
+});
 
 pub fn curl_version() [*c]const u8 {
     return libcurl.curl_version();
@@ -374,6 +401,11 @@ pub const Connection = struct {
         // Force HTTP/2 with ALPN (Chrome always negotiates h2)
         try libcurl.curl_easy_setopt(easy, .ssl_enable_alpn, true);
         try libcurl.curl_easy_setopt(easy, .http_version, @as(c_long, 2));
+
+        // BoringSSL GREASE + extension permutation via SSL_CTX callback.
+        // This makes the TLS fingerprint match real Chrome by adding GREASE
+        // values and randomizing extension order in the ClientHello.
+        try libcurl.curl_easy_setopt(easy, .ssl_ctx_function, &sslCtxCallback);
 
         // debug
         if (comptime ENABLE_DEBUG) {

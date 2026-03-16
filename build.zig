@@ -217,6 +217,9 @@ fn linkCurl(b: *Build, mod: *Build.Module, is_tsan: bool) !void {
 
     const boringssl = buildBoringSsl(b, target, mod.optimize.?);
     for (boringssl) |lib| curl.root_module.linkLibrary(lib);
+    // Also link BoringSSL to main module so http.zig can use SSL_CTX API
+    // for TLS fingerprint configuration (GREASE, extension permutation).
+    for (boringssl) |lib| mod.linkLibrary(lib);
 
     switch (target.result.os.tag) {
         .macos => {
