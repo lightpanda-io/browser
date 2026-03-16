@@ -310,15 +310,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         }
 
         const owned_url = try arena.dupeZ(u8, url);
+        if (cacheable and !gop.found_existing) {
+            gop.key_ptr.* = owned_url;
+        }
         const m = try compileModule(local, src, owned_url);
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
             lp.assert(gop.value_ptr.module == null, "Context.module has module", .{});
             gop.value_ptr.module = try m.persist();
-            if (!gop.found_existing) {
-                gop.key_ptr.* = owned_url;
-            }
         }
 
         break :blk .{ m, owned_url };
