@@ -57,12 +57,12 @@ pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
     }
 
     const input_evt: *Event = try .initTrusted(comptime lp.String.wrap("input"), .{ .bubbles = true }, page);
-    _ = page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
+    page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
         lp.log.err(.app, "dispatch input event failed", .{ .err = err });
     };
 
     const change_evt: *Event = try .initTrusted(comptime lp.String.wrap("change"), .{ .bubbles = true }, page);
-    _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
+    page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
         lp.log.err(.app, "dispatch change event failed", .{ .err = err });
     };
 }
@@ -85,7 +85,7 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
         }
 
         const scroll_evt: *Event = try .initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
-        _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch |err| {
+        page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch |err| {
             lp.log.err(.app, "dispatch scroll event failed", .{ .err = err });
         };
     } else {
