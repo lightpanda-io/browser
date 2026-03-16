@@ -5,6 +5,7 @@ const log = lp.log;
 const js = lp.js;
 
 const Element = @import("../browser/webapi/Element.zig");
+const DOMNode = @import("../browser/webapi/Node.zig");
 const Selector = @import("../browser/webapi/selector/Selector.zig");
 const protocol = @import("protocol.zig");
 const Server = @import("Server.zig");
@@ -444,18 +445,12 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         return server.sendError(id, .InvalidParams, "Node not found");
     };
 
-    if (node.dom.is(Element)) |el| {
-        if (el.is(Element.Html)) |html_el| {
-            html_el.click(page) catch |err| {
-                log.err(.mcp, "click failed", .{ .err = err });
-                return server.sendError(id, .InternalError, "Failed to click element");
-            };
-        } else {
+    lp.actions.clickNode(node.dom, page) catch |err| {
+        if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
-    } else {
-        return server.sendError(id, .InvalidParams, "Node is not an element");
-    }
+        return server.sendError(id, .InternalError, "Failed to click element");
+    };
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Clicked successfully." }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
@@ -476,35 +471,12 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return server.sendError(id, .InvalidParams, "Node not found");
     };
 
-    if (node.dom.is(Element)) |el| {
-        if (el.is(Element.Html.Input)) |input| {
-            input.setValue(args.text, page) catch |err| {
-                log.err(.mcp, "fill input failed", .{ .err = err });
-                return server.sendError(id, .InternalError, "Failed to fill input");
-            };
-        } else if (el.is(Element.Html.TextArea)) |textarea| {
-            textarea.setValue(args.text, page) catch |err| {
-                log.err(.mcp, "fill textarea failed", .{ .err = err });
-                return server.sendError(id, .InternalError, "Failed to fill textarea");
-            };
-        } else if (el.is(Element.Html.Select)) |select| {
-            select.setValue(args.text, page) catch |err| {
-                log.err(.mcp, "fill select failed", .{ .err = err });
-                return server.sendError(id, .InternalError, "Failed to fill select");
-            };
-        } else {
+    lp.actions.fillNode(node.dom, args.text, page) catch |err| {
+        if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an input, textarea or select");
         }
-
-        const Event = @import("../browser/webapi/Event.zig");
-        const input_evt = try Event.initTrusted(comptime lp.String.wrap("input"), .{ .bubbles = true }, page);
-        _ = page._event_manager.dispatch(el.asEventTarget(), input_evt) catch {};
-
-        const change_evt = try Event.initTrusted(comptime lp.String.wrap("change"), .{ .bubbles = true }, page);
-        _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch {};
-    } else {
-        return server.sendError(id, .InvalidParams, "Node is not an element");
-    }
+        return server.sendError(id, .InternalError, "Failed to fill element");
+    };
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Filled successfully." }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
@@ -525,36 +497,24 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
     const x = args.x orelse 0;
     const y = args.y orelse 0;
 
+    var target_node: ?*DOMNode = null;
     if (args.backendNodeId) |node_id| {
         const node = server.node_registry.lookup_by_id.get(node_id) orelse {
             return server.sendError(id, .InvalidParams, "Node not found");
         };
+        target_node = node.dom;
+    }
 
-        if (node.dom.is(Element)) |el| {
-            if (args.x != null) {
-                el.setScrollLeft(x, page) catch {};
-            }
-            if (args.y != null) {
-                el.setScrollTop(y, page) catch {};
-            }
-
-            const Event = @import("../browser/webapi/Event.zig");
-            const scroll_evt = try Event.initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
-            _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch {};
-        } else {
+    lp.actions.scrollNode(target_node, x, y, page) catch |err| {
+        if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an element");
         }
-    } else {
-        page.window.scrollTo(.{ .x = x }, y, page) catch |err| {
-            log.err(.mcp, "scroll failed", .{ .err = err });
-            return server.sendError(id, .InternalError, "Failed to scroll");
-        };
-    }
+        return server.sendError(id, .InternalError, "Failed to scroll");
+    };
 
     const content = [_]protocol.TextContent([]const u8){.{ .text = "Scrolled successfully." }};
     try server.sendResult(id, protocol.CallToolResult([]const u8){ .content = &content });
 }
-
 fn parseArguments(comptime T: type, arena: std.mem.Allocator, arguments: ?std.json.Value, server: *Server, id: std.json.Value, tool_name: []const u8) !T {
     if (arguments == null) {
         try server.sendError(id, .InvalidParams, "Missing arguments");
