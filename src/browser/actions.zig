@@ -56,11 +56,15 @@ pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
         return error.InvalidNodeType;
     }
 
-    const input_evt = try Event.initTrusted(comptime lp.String.wrap("input"), .{ .bubbles = true }, page);
-    _ = page._event_manager.dispatch(el.asEventTarget(), input_evt) catch {};
+    const input_evt: *Event = try .initTrusted(comptime lp.String.wrap("input"), .{ .bubbles = true }, page);
+    _ = page._event_manager.dispatch(el.asEventTarget(), input_evt) catch |err| {
+        lp.log.err(.app, "dispatch input event failed", .{ .err = err });
+    };
 
-    const change_evt = try Event.initTrusted(comptime lp.String.wrap("change"), .{ .bubbles = true }, page);
-    _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch {};
+    const change_evt: *Event = try .initTrusted(comptime lp.String.wrap("change"), .{ .bubbles = true }, page);
+    _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch |err| {
+        lp.log.err(.app, "dispatch change event failed", .{ .err = err });
+    };
 }
 
 pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
@@ -68,14 +72,22 @@ pub fn scroll(node: ?*DOMNode, x: ?i32, y: ?i32, page: *Page) !void {
         const el = n.is(Element) orelse return error.InvalidNodeType;
 
         if (x) |val| {
-            el.setScrollLeft(val, page) catch {};
+            el.setScrollLeft(val, page) catch |err| {
+                lp.log.err(.app, "setScrollLeft failed", .{ .err = err });
+                return error.ActionFailed;
+            };
         }
         if (y) |val| {
-            el.setScrollTop(val, page) catch {};
+            el.setScrollTop(val, page) catch |err| {
+                lp.log.err(.app, "setScrollTop failed", .{ .err = err });
+                return error.ActionFailed;
+            };
         }
 
-        const scroll_evt = try Event.initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
-        _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch {};
+        const scroll_evt: *Event = try .initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
+        _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch |err| {
+            lp.log.err(.app, "dispatch scroll event failed", .{ .err = err });
+        };
     } else {
         page.window.scrollTo(.{ .x = x orelse 0 }, y, page) catch |err| {
             lp.log.err(.app, "scroll failed", .{ .err = err });
