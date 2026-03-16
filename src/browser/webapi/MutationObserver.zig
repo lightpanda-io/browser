@@ -39,6 +39,7 @@ pub fn registerTypes() []const type {
 
 const MutationObserver = @This();
 
+_rc: u8 = 0,
 _arena: Allocator,
 _callback: js.Function.Temp,
 _observing: std.ArrayList(Observing) = .{},
@@ -86,12 +87,24 @@ pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
 }
 
 pub fn deinit(self: *MutationObserver, shutdown: bool, session: *Session) void {
-    self._callback.release();
-    if ((comptime IS_DEBUG) and !shutdown) {
-        std.debug.assert(self._observing.items.len == 0);
+    const rc = self._rc;
+    if (comptime IS_DEBUG) {
+        std.debug.assert(rc != 0);
     }
 
-    session.releaseArena(self._arena);
+    if (rc == 1 or shutdown) {
+        self._callback.release();
+        if ((comptime IS_DEBUG) and !shutdown) {
+            std.debug.assert(self._observing.items.len == 0);
+        }
+        session.releaseArena(self._arena);
+    } else {
+        self._rc = rc - 1;
+    }
+}
+
+pub fn acquireRef(self: *MutationObserver) void {
+    self._rc += 1;
 }
 
 pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
@@ -158,7 +171,7 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 
     // Register with page if this is our first observation
     if (self._observing.items.len == 0) {
-        page.js.strongRef(self);
+        self._rc += 1;
         try page.registerMutationObserver(self);
     }
 
@@ -169,13 +182,18 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 }
 
 pub fn disconnect(self: *MutationObserver, page: *Page) void {
-    page.unregisterMutationObserver(self);
-    self._observing.clearRetainingCapacity();
     for (self._pending_records.items) |record| {
         record.deinit(false, page._session);
     }
     self._pending_records.clearRetainingCapacity();
-    page.js.safeWeakRef(self);
+
+    const observing_count = self._observing.items.len;
+    self._observing.clearRetainingCapacity();
+
+    if (observing_count > 0) {
+        self.deinit(false, page._session);
+    }
+    page.unregisterMutationObserver(self);
 }
 
 pub fn takeRecords(self: *MutationObserver, page: *Page) ![]*MutationRecord {
