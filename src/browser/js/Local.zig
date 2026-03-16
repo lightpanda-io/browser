@@ -261,7 +261,7 @@ pub fn mapZigInstanceToJs(self: *const Local, js_obj_handle: ?*const v8.Object, 
                 // the type is empty and can create an empty instance.
             }
 
-            // dont' use js_obj.persist(), because we don't want to track this in
+            // don't use js_obj.persist(), because we don't want to track this in
             // context.global_objects, we want to track it in context.identity_map.
             v8.v8__Global__New(isolate.handle, js_obj.handle, gop.value_ptr);
             if (@hasDecl(JsApi.Meta, "finalizer")) {

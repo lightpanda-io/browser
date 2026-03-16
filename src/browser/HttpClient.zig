@@ -43,7 +43,7 @@ pub const ResponseHead = Net.ResponseHead;
 pub const HeaderIterator = Net.HeaderIterator;
 
 // This is loosely tied to a browser Page. Loading all the <scripts>, doing
-// XHR requests, and loading imports all happens through here. Sine the app
+// XHR requests, and loading imports all happens through here. Since the app
 // currently supports 1 browser and 1 page at-a-time, we only have 1 Client and
 // re-use it from page to page. This allows us better re-use of the various
 // buffers/caches (including keepalive connections) that libcurl has.
@@ -62,7 +62,7 @@ active: usize,
 // The client doesn't track intercepted transfers. If a request is intercepted,
 // the client forgets about it and requires the interceptor to continue or abort
 // it. That works well, except if we only rely on active, we might think there's
-// no more network activity when, with interecepted requests, there might be more
+// no more network activity when, with intercepted requests, there might be more
 // in the future. (We really only need this to properly emit a 'networkIdle' and
 // 'networkAlmostIdle' Page.lifecycleEvent in CDP).
 intercepted: usize,
@@ -309,8 +309,8 @@ fn processRequest(self: *Client, req: Request) !void {
     transfer._intercept_state = .pending;
 
     if (req.blocking == false) {
-        // The request was interecepted, but it isn't a blocking request, so we
-        // dont' need to block this call. The request will be unblocked
+        // The request was intercepted, but it isn't a blocking request, so we
+        // don't need to block this call. The request will be unblocked
         // asynchronously via either continueTransfer or abortTransfer
         return;
     }
@@ -434,7 +434,7 @@ fn robotsDoneCallback(ctx_ptr: *anyopaque) !void {
 
     var queued = ctx.client.pending_robots_queue.fetchRemove(
         ctx.robots_url,
-    ) orelse @panic("Client.robotsDoneCallbacke empty queue");
+    ) orelse @panic("Client.robotsDoneCallback empty queue");
     defer queued.value.deinit(ctx.client.allocator);
 
     for (queued.value.items) |queued_req| {
@@ -476,7 +476,7 @@ fn robotsShutdownCallback(ctx_ptr: *anyopaque) void {
 
     var queued = ctx.client.pending_robots_queue.fetchRemove(
         ctx.robots_url,
-    ) orelse @panic("Client.robotsErrorCallback empty queue");
+    ) orelse @panic("Client.robotsShutdownCallback empty queue");
     defer queued.value.deinit(ctx.client.allocator);
 
     for (queued.value.items) |queued_req| {
@@ -529,7 +529,7 @@ fn waitForInterceptedResponse(self: *Client, transfer: *Transfer) !bool {
 }
 
 // Above, request will not process if there's an interception request. In such
-// cases, the interecptor is expected to call resume to continue the transfer
+// cases, the interceptor is expected to call resume to continue the transfer
 // or transfer.abort() to abort it.
 fn process(self: *Client, transfer: *Transfer) !void {
     // libcurl doesn't allow recursive calls, if we're in a `perform()` operation
@@ -575,7 +575,7 @@ pub fn abortTransfer(self: *Client, transfer: *Transfer) void {
 pub fn fulfillTransfer(self: *Client, transfer: *Transfer, status: u16, headers: []const Net.Header, body: ?[]const u8) !void {
     if (comptime IS_DEBUG) {
         std.debug.assert(transfer._intercept_state != .not_intercepted);
-        log.debug(.http, "filfull transfer", .{ .intercepted = self.intercepted });
+        log.debug(.http, "fulfill transfer", .{ .intercepted = self.intercepted });
     }
     self.intercepted -= 1;
 
@@ -816,7 +816,7 @@ fn processMessages(self: *Client) !bool {
                 }
                 transfer._intercept_state = .pending;
 
-                // Wether or not this is a blocking request, we're not going
+                // Whether or not this is a blocking request, we're not going
                 // to process it now. We can end the transfer, which will
                 // release the easy handle back into the pool. The transfer
                 // is still valid/alive (just has no handle).
