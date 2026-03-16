@@ -104,13 +104,27 @@ pub fn getMessage(self: *const DOMException) []const u8 {
     }
     return switch (self._code) {
         .none => "",
-        .invalid_character_error => "Invalid Character",
         .index_size_error => "Index or size is negative or greater than the allowed amount",
-        .syntax_error => "Syntax Error",
-        .not_supported => "Not Supported",
-        .not_found => "Not Found",
-        .hierarchy_error => "Hierarchy Error",
-        else => @tagName(self._code),
+        .hierarchy_error => "The operation would yield an incorrect node tree",
+        .wrong_document_error => "The object is in the wrong document",
+        .invalid_character_error => "The string contains invalid characters",
+        .no_modification_allowed_error => "The object can not be modified",
+        .not_found => "The object can not be found here",
+        .not_supported => "The operation is not supported",
+        .inuse_attribute_error => "The attribute already in use",
+        .invalid_state_error => "The object is in an invalid state",
+        .syntax_error => "The string did not match the expected pattern",
+        .invalid_modification_error => "The object can not be modified in this way",
+        .namespace_error => "The operation is not allowed by Namespaces in XML",
+        .invalid_access_error => "The object does not support the operation or argument",
+        .security_error => "The operation is insecure",
+        .network_error => "A network error occurred",
+        .abort_error => "The operation was aborted",
+        .url_mismatch_error => "The given URL does not match another URL",
+        .quota_exceeded_error => "The quota has been exceeded",
+        .timeout_error => "The operation timed out",
+        .invalid_node_type_error => "The supplied node is incorrect or has an incorrect ancestor for this operation",
+        .data_clone_error => "The object can not be cloned",
     };
 }
 
