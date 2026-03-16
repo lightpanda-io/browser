@@ -321,3 +321,63 @@ test "cdp.lp: getStructuredData" {
     const result = ctx.client.?.sent.items[0].object.get("result").?.object;
     try testing.expect(result.get("structuredData") != null);
 }
+
+test "cdp.lp: action tools" {
+    var ctx = testing.context();
+    defer ctx.deinit();
+
+    const bc = try ctx.loadBrowserContext(.{});
+    const page = try bc.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = bc.session.wait(5000);
+
+    // Test Click
+    const btn = page.document.getElementById("btn", page).?.asNode();
+    const btn_id = (try bc.node_registry.register(btn)).id;
+    try ctx.processMessage(.{
+        .id = 1,
+        .method = "LP.clickNode",
+        .params = .{ .backendNodeId = btn_id },
+    });
+
+    // Test Fill Input
+    const inp = page.document.getElementById("inp", page).?.asNode();
+    const inp_id = (try bc.node_registry.register(inp)).id;
+    try ctx.processMessage(.{
+        .id = 2,
+        .method = "LP.fillNode",
+        .params = .{ .backendNodeId = inp_id, .text = "hello" },
+    });
+
+    // Test Fill Select
+    const sel = page.document.getElementById("sel", page).?.asNode();
+    const sel_id = (try bc.node_registry.register(sel)).id;
+    try ctx.processMessage(.{
+        .id = 3,
+        .method = "LP.fillNode",
+        .params = .{ .backendNodeId = sel_id, .text = "opt2" },
+    });
+
+    // Test Scroll
+    const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+    const scrollbox_id = (try bc.node_registry.register(scrollbox)).id;
+    try ctx.processMessage(.{
+        .id = 4,
+        .method = "LP.scrollNode",
+        .params = .{ .backendNodeId = scrollbox_id, .y = 50 },
+    });
+
+    // Evaluate assertions
+    var ls: lp.js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: lp.js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
+
+    try testing.expect(result.isTrue());
+}

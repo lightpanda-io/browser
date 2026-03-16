@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <button id="btn" onclick="window.clicked = true;">Click Me</button>
+    <input id="inp" oninput="window.inputVal = this.value" onchange="window.changed = true;">
+    <select id="sel" onchange="window.selChanged = this.value">
+        <option value="opt1">Option 1</option>
+        <option value="opt2">Option 2</option>
+    </select>
+    <div id="scrollbox" style="width: 100px; height: 100px; overflow: scroll;" onscroll="window.scrolled = true;">
+        <div style="height: 500px;">Long content</div>
+    </div>
+</body>
+</html>

@@ -630,3 +630,66 @@ test "MCP - evaluate error reporting" {
         \\}
     , out_alloc.writer.buffered());
 }
+
+test "MCP - Actions: click, fill, scroll" {
+    defer testing.reset();
+    const allocator = testing.allocator;
+    const app = testing.test_app;
+
+    var out_alloc: std.io.Writer.Allocating = .init(testing.arena_allocator);
+    defer out_alloc.deinit();
+
+    var server = try Server.init(allocator, app, &out_alloc.writer);
+    defer server.deinit();
+
+    const aa = testing.arena_allocator;
+    const page = try server.session.createPage();
+    const url = "http://localhost:9582/src/browser/tests/mcp_actions.html";
+    try page.navigate(url, .{ .reason = .address_bar, .kind = .{ .push = null } });
+    _ = server.session.wait(5000);
+
+    // Test Click
+    const btn = page.document.getElementById("btn", page).?.asNode();
+    const btn_id = (try server.node_registry.register(btn)).id;
+    var btn_id_buf: [12]u8 = undefined;
+    const btn_id_str = std.fmt.bufPrint(&btn_id_buf, "{d}", .{btn_id}) catch unreachable;
+    const click_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"click\",\"arguments\":{\"backendNodeId\":", btn_id_str, "}}}" });
+    try router.handleMessage(server, aa, click_msg);
+
+    // Test Fill Input
+    const inp = page.document.getElementById("inp", page).?.asNode();
+    const inp_id = (try server.node_registry.register(inp)).id;
+    var inp_id_buf: [12]u8 = undefined;
+    const inp_id_str = std.fmt.bufPrint(&inp_id_buf, "{d}", .{inp_id}) catch unreachable;
+    const fill_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", inp_id_str, ",\"text\":\"hello\"}}}" });
+    try router.handleMessage(server, aa, fill_msg);
+
+    // Test Fill Select
+    const sel = page.document.getElementById("sel", page).?.asNode();
+    const sel_id = (try server.node_registry.register(sel)).id;
+    var sel_id_buf: [12]u8 = undefined;
+    const sel_id_str = std.fmt.bufPrint(&sel_id_buf, "{d}", .{sel_id}) catch unreachable;
+    const fill_sel_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"fill\",\"arguments\":{\"backendNodeId\":", sel_id_str, ",\"text\":\"opt2\"}}}" });
+    try router.handleMessage(server, aa, fill_sel_msg);
+
+    // Test Scroll
+    const scrollbox = page.document.getElementById("scrollbox", page).?.asNode();
+    const scrollbox_id = (try server.node_registry.register(scrollbox)).id;
+    var scroll_id_buf: [12]u8 = undefined;
+    const scroll_id_str = std.fmt.bufPrint(&scroll_id_buf, "{d}", .{scrollbox_id}) catch unreachable;
+    const scroll_msg = try std.mem.concat(aa, u8, &.{ "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"scroll\",\"arguments\":{\"backendNodeId\":", scroll_id_str, ",\"y\":50}}}" });
+    try router.handleMessage(server, aa, scroll_msg);
+
+    // Evaluate assertions
+    var ls: js.Local.Scope = undefined;
+    page.js.localScope(&ls);
+    defer ls.deinit();
+
+    var try_catch: js.TryCatch = undefined;
+    try_catch.init(&ls.local);
+    defer try_catch.deinit();
+
+    const result = try ls.local.compileAndRun("window.clicked === true && window.inputVal === 'hello' && window.changed === true && window.selChanged === 'opt2' && window.scrolled === true", null);
+
+    try testing.expect(result.isTrue());
+}
