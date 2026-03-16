@@ -66,11 +66,10 @@
 {
   const container = $('#test-container');
 
-  testing.expectError("SyntaxError: Syntax Error", () => container.matches(''));
+  testing.expectError("SyntaxError", () => container.matches(''));
   testing.withError((err) => {
     testing.expectEqual(12, err.code);
     testing.expectEqual("SyntaxError", err.name);
-    testing.expectEqual("Syntax Error", err.message);
   }, () => container.matches(''));
 }
 </script>

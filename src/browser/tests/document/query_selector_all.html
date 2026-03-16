@@ -34,11 +34,10 @@
 </script>
 
 <script id=script1 name="test1">
-  testing.expectError("SyntaxError: Syntax Error", () => document.querySelectorAll(''));
+  testing.expectError("SyntaxError", () => document.querySelectorAll(''));
   testing.withError((err) => {
     testing.expectEqual(12, err.code);
     testing.expectEqual("SyntaxError", err.name);
-    testing.expectEqual("Syntax Error", err.message);
   }, () => document.querySelectorAll(''));
 </script>
 

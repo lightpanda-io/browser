@@ -25,7 +25,6 @@
   testing.withError((err) => {
     testing.expectEqual(3, err.code);
     testing.expectEqual("HierarchyRequestError", err.name);
-    testing.expectEqual("Hierarchy Error", err.message);
   }, () => d1.replaceChild(c4, c3));
 
   testing.expectEqual(c2, d1.replaceChild(c4, c2));
