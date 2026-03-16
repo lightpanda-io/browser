@@ -371,6 +371,53 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
         }
     }
 
+    // Inject navigator.userAgentData (NavigatorUAData API).
+    // Chrome exposes this on navigator for Client Hints.
+    // Anti-bot systems check for its existence and structure.
+    {
+        const ua_data_init =
+            \\(function() {
+            \\  var brands = Object.freeze([
+            \\    Object.freeze({brand:'Chromium',version:'131'}),
+            \\    Object.freeze({brand:'Not_A Brand',version:'24'}),
+            \\    Object.freeze({brand:'Google Chrome',version:'131'})
+            \\  ]);
+            \\  var uaData = Object.create(null);
+            \\  Object.defineProperties(uaData, {
+            \\    brands: {value:brands,enumerable:true},
+            \\    mobile: {value:false,enumerable:true},
+            \\    platform: {value:'Windows',enumerable:true},
+            \\    getHighEntropyValues: {value:function(hints){
+            \\      return Promise.resolve({
+            \\        architecture:'x86',
+            \\        bitness:'64',
+            \\        brands:brands,
+            \\        fullVersionList:Object.freeze([
+            \\          Object.freeze({brand:'Chromium',version:'131.0.6778.86'}),
+            \\          Object.freeze({brand:'Not_A Brand',version:'24.0.0.0'}),
+            \\          Object.freeze({brand:'Google Chrome',version:'131.0.6778.86'})
+            \\        ]),
+            \\        mobile:false,
+            \\        model:'',
+            \\        platform:'Windows',
+            \\        platformVersion:'15.0.0',
+            \\        uaFullVersion:'131.0.6778.86'
+            \\      });
+            \\    },enumerable:true},
+            \\    toJSON: {value:function(){return{brands:brands,mobile:false,platform:'Windows'}},enumerable:true}
+            \\  });
+            \\  Object.freeze(uaData);
+            \\  if(this.navigator){Object.defineProperty(this.navigator,'userAgentData',{value:uaData,writable:false,enumerable:true,configurable:false})}
+            \\})();
+        ;
+        const code = v8.v8__String__NewFromUtf8(isolate.handle, ua_data_init.ptr, v8.kNormal, @intCast(ua_data_init.len));
+        if (code) |c| {
+            if (v8.v8__Script__Compile(v8_context, c, null)) |script| {
+                _ = v8.v8__Script__Run(script, v8_context);
+            }
+        }
+    }
+
     const count = self.context_count;
     if (count >= self.contexts.len) {
         return error.TooManyContexts;

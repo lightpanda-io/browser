@@ -92,10 +92,46 @@ pub fn escape(_: *const CSS, value: []const u8, page: *Page) ![]const u8 {
     return result;
 }
 
+/// CSS.supports() - validates CSS property/value pairs against Chrome 131's
+/// supported set. Anti-bot systems test for browser-specific properties
+/// (e.g. -moz-appearance is Firefox-only) and expect correct false results.
 pub fn supports(_: *const CSS, property_or_condition: []const u8, value: ?[]const u8) bool {
-    _ = property_or_condition;
-    _ = value;
-    return true;
+    if (value) |_| {
+        // Two-argument form: CSS.supports(property, value)
+        return isSupportedProperty(property_or_condition);
+    }
+    // One-argument form: CSS.supports(conditionText)
+    // Check for browser-specific prefixes that Chrome doesn't support
+    return !containsUnsupportedCondition(property_or_condition);
+}
+
+fn isSupportedProperty(property: []const u8) bool {
+    // Reject Firefox-only properties
+    if (std.mem.startsWith(u8, property, "-moz-")) return false;
+    // Reject old WebKit-only properties not in Chrome
+    // Chrome supports -webkit- prefix for many properties, so allow those
+    if (std.mem.startsWith(u8, property, "-ms-")) return false;
+    if (std.mem.startsWith(u8, property, "-o-")) return false;
+
+    // Known unsupported properties in Chrome 131
+    const unsupported = std.StaticStringMap(void).initComptime(.{
+        .{ "-moz-appearance", {} },
+        .{ "-moz-osx-font-smoothing", {} },
+        .{ "-moz-user-select", {} },
+        .{ "-moz-tab-size", {} },
+        .{ "-moz-orient", {} },
+        .{ "overflow-clip-box", {} },
+        .{ "scrollbar-width", {} },
+    });
+    return !unsupported.has(property);
+}
+
+fn containsUnsupportedCondition(condition: []const u8) bool {
+    // Check if the condition string contains Firefox/other-browser-only properties
+    if (std.mem.indexOf(u8, condition, "-moz-") != null) return true;
+    if (std.mem.indexOf(u8, condition, "-ms-") != null) return true;
+    if (std.mem.indexOf(u8, condition, "-o-") != null) return true;
+    return false;
 }
 
 fn escapeLen(comptime is_first: bool, c: u8) usize {

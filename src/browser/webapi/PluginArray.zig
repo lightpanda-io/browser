@@ -26,20 +26,51 @@ const PluginArray = @This();
 
 _pad: bool = false,
 
+/// Chrome 131 reports 5 PDF-related plugins. An empty PluginArray is a
+/// bot fingerprint signal for anti-bot systems.
+const chrome_plugins = [_]Plugin{
+    .{ ._name = "PDF Viewer", ._description = "Portable Document Format", ._filename = "internal-pdf-viewer" },
+    .{ ._name = "Chrome PDF Viewer", ._description = "Portable Document Format", ._filename = "internal-pdf-viewer" },
+    .{ ._name = "Chromium PDF Viewer", ._description = "Portable Document Format", ._filename = "internal-pdf-viewer" },
+    .{ ._name = "Microsoft Edge PDF Viewer", ._description = "Portable Document Format", ._filename = "internal-pdf-viewer" },
+    .{ ._name = "WebKit built-in PDF", ._description = "Portable Document Format", ._filename = "internal-pdf-viewer" },
+};
+
 pub fn refresh(_: *const PluginArray) void {}
-pub fn getAtIndex(_: *const PluginArray, index: usize) ?*Plugin {
-    _ = index;
+
+pub fn getAtIndex(_: *const PluginArray, index: usize) ?*const Plugin {
+    if (index < chrome_plugins.len) {
+        return &chrome_plugins[index];
+    }
     return null;
 }
 
-pub fn getByName(_: *const PluginArray, name: []const u8) ?*Plugin {
-    _ = name;
+pub fn getByName(_: *const PluginArray, name: []const u8) ?*const Plugin {
+    for (&chrome_plugins) |*p| {
+        if (std.mem.eql(u8, p._name, name)) {
+            return p;
+        }
+    }
     return null;
 }
 
-// Cannot be constructed, and we currently never return any, so no reason to
-// implement anything on it (for now)
+const std = @import("std");
+
 const Plugin = struct {
+    _name: []const u8,
+    _description: []const u8,
+    _filename: []const u8,
+
+    pub fn getName(self: *const Plugin) []const u8 {
+        return self._name;
+    }
+    pub fn getDescription(self: *const Plugin) []const u8 {
+        return self._description;
+    }
+    pub fn getFilename(self: *const Plugin) []const u8 {
+        return self._filename;
+    }
+
     pub const JsApi = struct {
         pub const bridge = js.Bridge(Plugin);
         pub const Meta = struct {
@@ -48,6 +79,11 @@ const Plugin = struct {
             pub var class_id: bridge.ClassId = undefined;
             pub const empty_with_no_proto = true;
         };
+
+        pub const @"name" = bridge.accessor(Plugin.getName, null, .{});
+        pub const description = bridge.accessor(Plugin.getDescription, null, .{});
+        pub const filename = bridge.accessor(Plugin.getFilename, null, .{});
+        pub const length = bridge.property(1, .{ .template = false });
     };
 };
 
@@ -61,7 +97,7 @@ pub const JsApi = struct {
         pub const empty_with_no_proto = true;
     };
 
-    pub const length = bridge.property(0, .{ .template = false });
+    pub const length = bridge.property(5, .{ .template = false });
     pub const refresh = bridge.function(PluginArray.refresh, .{});
     pub const @"[int]" = bridge.indexed(PluginArray.getAtIndex, null, .{ .null_as_undefined = true });
     pub const @"[str]" = bridge.namedIndexed(PluginArray.getByName, null, null, .{ .null_as_undefined = true });

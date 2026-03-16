@@ -15,13 +15,13 @@ _entries: std.ArrayList(*Entry) = .{},
 _timing: PerformanceTiming = .{},
 _navigation: PerformanceNavigation = .{},
 
-/// Get high-resolution timestamp in microseconds, rounded to 5μs increments
-/// to match browser behavior (prevents fingerprinting)
+/// Get high-resolution timestamp in microseconds, rounded to 100μs increments
+/// to match Chrome behavior (Chrome rounds to 100μs, Firefox uses 5μs)
 fn highResTimestamp() u64 {
     const ts = datetime.timespec();
     const micros = @as(u64, @intCast(ts.sec)) * 1_000_000 + @as(u64, @intCast(@divTrunc(ts.nsec, 1_000)));
-    // Round to nearest 5 microseconds (like Firefox default)
-    const rounded = @divTrunc(micros + 2, 5) * 5;
+    // Round to nearest 100 microseconds (Chrome default)
+    const rounded = @divTrunc(micros + 50, 100) * 100;
     return rounded;
 }
 

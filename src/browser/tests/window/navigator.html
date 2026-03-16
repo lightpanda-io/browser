@@ -29,6 +29,13 @@
   testing.expectEqual('20030107', navigator.productSub);
   testing.expectEqual(false, navigator.javaEnabled());
   testing.expectEqual(false, navigator.webdriver);
+  testing.expectEqual(8, navigator.deviceMemory);
+
+  // Navigator.userAgentData (NavigatorUAData API)
+  testing.expectEqual(true, typeof navigator.userAgentData === 'object');
+  testing.expectEqual(false, navigator.userAgentData.mobile);
+  testing.expectEqual('Windows', navigator.userAgentData.platform);
+  testing.expectEqual(3, navigator.userAgentData.brands.length);
 
   // Chrome stealth: window.chrome object must exist
   testing.expectEqual(true, typeof window.chrome === 'object');

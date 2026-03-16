@@ -62,36 +62,83 @@ pub const Header = struct {
     value: []const u8,
 };
 
+/// Request type for dynamic Sec-Fetch header generation.
+pub const RequestType = enum {
+    /// Top-level navigation (Sec-Fetch-Dest: document, Mode: navigate)
+    navigation,
+    /// Sub-resource like images, scripts, styles (Sec-Fetch-Dest: empty, Mode: no-cors)
+    subresource,
+    /// XHR/Fetch API calls (Sec-Fetch-Dest: empty, Mode: cors)
+    xhr,
+};
+
 pub const Headers = struct {
     headers: ?*libcurl.CurlSList,
     cookies: ?[*c]const u8,
 
     pub fn init(user_agent: [:0]const u8) !Headers {
+        return initWithType(user_agent, .navigation);
+    }
+
+    pub fn initWithType(user_agent: [:0]const u8, req_type: RequestType) !Headers {
         var header_list = libcurl.curl_slist_append(null, user_agent);
         if (header_list == null) {
             return error.OutOfMemory;
         }
 
         // Chrome-compatible default headers for anti-bot evasion.
-        // These headers are sent by Chrome on every navigation request
-        // and their absence is a strong bot detection signal.
-        const chrome_headers = [_][*c]const u8{
-            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        // Common headers sent on all request types.
+        const common_headers = [_][*c]const u8{
             "Accept-Language: en-US,en;q=0.9",
             "sec-ch-ua: \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\", \"Google Chrome\";v=\"131\"",
             "sec-ch-ua-mobile: ?0",
             "sec-ch-ua-platform: \"Windows\"",
-            "Sec-Fetch-Dest: document",
-            "Sec-Fetch-Mode: navigate",
-            "Sec-Fetch-Site: none",
-            "Sec-Fetch-User: ?1",
-            "Upgrade-Insecure-Requests: 1",
         };
-        for (chrome_headers) |hdr| {
+        for (common_headers) |hdr| {
             header_list = libcurl.curl_slist_append(header_list, hdr);
-            if (header_list == null) {
-                return error.OutOfMemory;
-            }
+            if (header_list == null) return error.OutOfMemory;
+        }
+
+        // Dynamic Sec-Fetch-* headers based on request type
+        switch (req_type) {
+            .navigation => {
+                const nav_headers = [_][*c]const u8{
+                    "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                    "Sec-Fetch-Dest: document",
+                    "Sec-Fetch-Mode: navigate",
+                    "Sec-Fetch-Site: none",
+                    "Sec-Fetch-User: ?1",
+                    "Upgrade-Insecure-Requests: 1",
+                };
+                for (nav_headers) |hdr| {
+                    header_list = libcurl.curl_slist_append(header_list, hdr);
+                    if (header_list == null) return error.OutOfMemory;
+                }
+            },
+            .subresource => {
+                const sub_headers = [_][*c]const u8{
+                    "Accept: */*",
+                    "Sec-Fetch-Dest: empty",
+                    "Sec-Fetch-Mode: no-cors",
+                    "Sec-Fetch-Site: same-origin",
+                };
+                for (sub_headers) |hdr| {
+                    header_list = libcurl.curl_slist_append(header_list, hdr);
+                    if (header_list == null) return error.OutOfMemory;
+                }
+            },
+            .xhr => {
+                const xhr_headers = [_][*c]const u8{
+                    "Accept: */*",
+                    "Sec-Fetch-Dest: empty",
+                    "Sec-Fetch-Mode: cors",
+                    "Sec-Fetch-Site: same-origin",
+                };
+                for (xhr_headers) |hdr| {
+                    header_list = libcurl.curl_slist_append(header_list, hdr);
+                    if (header_list == null) return error.OutOfMemory;
+                }
+            },
         }
 
         return .{ .headers = header_list, .cookies = null };

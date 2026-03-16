@@ -166,8 +166,8 @@ pub fn getParameter(_: *const WebGLRenderingContext, pname: u32) []const u8 {
     return switch (pname) {
         // UNMASKED_VENDOR_WEBGL
         0x9245 => "Google Inc. (NVIDIA)",
-        // UNMASKED_RENDERER_WEBGL
-        0x9246 => "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 SUPER, OpenGL 4.5)",
+        // UNMASKED_RENDERER_WEBGL (Direct3D11 matches Windows UA)
+        0x9246 => "ANGLE (NVIDIA, NVIDIA GeForce GTX 1650 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)",
         // VERSION
         0x1F02 => "WebGL 1.0 (OpenGL ES 2.0 Chromium)",
         // SHADING_LANGUAGE_VERSION

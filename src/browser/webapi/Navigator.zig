@@ -158,6 +158,7 @@ pub const JsApi = struct {
     pub const product = bridge.property("Gecko", .{ .template = false });
     pub const productSub = bridge.property("20030107", .{ .template = false });
     pub const webdriver = bridge.property(false, .{ .template = false });
+    pub const deviceMemory = bridge.property(8, .{ .template = false });
     pub const plugins = bridge.accessor(Navigator.getPlugins, null, .{});
     pub const doNotTrack = bridge.property(null, .{ .template = false });
     pub const registerProtocolHandler = bridge.function(Navigator.registerProtocolHandler, .{ .dom_exception = true });
