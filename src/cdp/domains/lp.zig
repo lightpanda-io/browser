@@ -32,6 +32,9 @@ pub fn processMessage(cmd: anytype) !void {
         getSemanticTree,
         getInteractiveElements,
         getStructuredData,
+        clickNode,
+        fillNode,
+        scrollNode,
     }, cmd.input.action) orelse return error.UnknownMethod;
 
     switch (action) {
@@ -39,6 +42,9 @@ pub fn processMessage(cmd: anytype) !void {
         .getSemanticTree => return getSemanticTree(cmd),
         .getInteractiveElements => return getInteractiveElements(cmd),
         .getStructuredData => return getStructuredData(cmd),
+        .clickNode => return clickNode(cmd),
+        .fillNode => return fillNode(cmd),
+        .scrollNode => return scrollNode(cmd),
     }
 }
 
@@ -144,6 +150,126 @@ fn getStructuredData(cmd: anytype) !void {
     return cmd.sendResult(.{
         .structuredData = data,
     }, .{});
+}
+
+fn clickNode(cmd: anytype) !void {
+    const Params = struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+    };
+    const params = (try cmd.params(Params)) orelse Params{};
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
+    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.InvalidNodeId;
+
+    if (node.dom.is(DOMNode.Element)) |el| {
+        if (el.is(DOMNode.Element.Html)) |html_el| {
+            html_el.click(page) catch |err| {
+                log.err(.cdp, "click failed", .{ .err = err });
+                return error.InternalError;
+            };
+        } else {
+            return error.InvalidParam;
+        }
+    } else {
+        return error.InvalidParam;
+    }
+
+    return cmd.sendResult(.{}, .{});
+}
+
+fn fillNode(cmd: anytype) !void {
+    const Params = struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        text: []const u8,
+    };
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
+    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.InvalidNodeId;
+
+    if (node.dom.is(DOMNode.Element)) |el| {
+        if (el.is(DOMNode.Element.Html.Input)) |input| {
+            input.setValue(params.text, page) catch |err| {
+                log.err(.cdp, "fill input failed", .{ .err = err });
+                return error.InternalError;
+            };
+        } else if (el.is(DOMNode.Element.Html.TextArea)) |textarea| {
+            textarea.setValue(params.text, page) catch |err| {
+                log.err(.cdp, "fill textarea failed", .{ .err = err });
+                return error.InternalError;
+            };
+        } else if (el.is(DOMNode.Element.Html.Select)) |select| {
+            select.setValue(params.text, page) catch |err| {
+                log.err(.cdp, "fill select failed", .{ .err = err });
+                return error.InternalError;
+            };
+        } else {
+            return error.InvalidParam;
+        }
+
+        const Event = @import("../../browser/webapi/Event.zig");
+        const input_evt = try Event.initTrusted(comptime lp.String.wrap("input"), .{ .bubbles = true }, page);
+        _ = page._event_manager.dispatch(el.asEventTarget(), input_evt) catch {};
+
+        const change_evt = try Event.initTrusted(comptime lp.String.wrap("change"), .{ .bubbles = true }, page);
+        _ = page._event_manager.dispatch(el.asEventTarget(), change_evt) catch {};
+    } else {
+        return error.InvalidParam;
+    }
+
+    return cmd.sendResult(.{}, .{});
+}
+
+fn scrollNode(cmd: anytype) !void {
+    const Params = struct {
+        nodeId: ?Node.Id = null,
+        backendNodeId: ?Node.Id = null,
+        x: ?i32 = null,
+        y: ?i32 = null,
+    };
+    const params = (try cmd.params(Params)) orelse Params{};
+
+    const bc = cmd.browser_context orelse return error.NoBrowserContext;
+    const page = bc.session.currentPage() orelse return error.PageNotLoaded;
+
+    const x = params.x orelse 0;
+    const y = params.y orelse 0;
+
+    const input_node_id = params.nodeId orelse params.backendNodeId;
+
+    if (input_node_id) |node_id| {
+        const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
+
+        if (node.dom.is(DOMNode.Element)) |el| {
+            if (params.x != null) {
+                el.setScrollLeft(x, page) catch {};
+            }
+            if (params.y != null) {
+                el.setScrollTop(y, page) catch {};
+            }
+
+            const Event = @import("../../browser/webapi/Event.zig");
+            const scroll_evt = try Event.initTrusted(comptime lp.String.wrap("scroll"), .{ .bubbles = true }, page);
+            _ = page._event_manager.dispatch(el.asEventTarget(), scroll_evt) catch {};
+        } else {
+            return error.InvalidParam;
+        }
+    } else {
+        page.window.scrollTo(.{ .x = x }, y, page) catch |err| {
+            log.err(.cdp, "scroll failed", .{ .err = err });
+            return error.InternalError;
+        };
+    }
+
+    return cmd.sendResult(.{}, .{});
 }
 
 const testing = @import("../testing.zig");
