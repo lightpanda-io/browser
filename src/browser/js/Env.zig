@@ -332,85 +332,113 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
     // a v8 context, we can get our context out
     v8.v8__Context__SetAlignedPointerInEmbedderData(v8_context, 1, @ptrCast(context));
 
-    // Inject window.chrome stub to appear as a Chrome browser.
-    // Anti-bot scripts check for the existence of window.chrome as a
-    // primary signal. This creates a minimal but realistic chrome object.
+    // Inject window.chrome and navigator.userAgentData stubs.
+    //
+    // CRITICAL: Functions (chrome.csi, chrome.loadTimes, chrome.runtime.connect,
+    // chrome.runtime.sendMessage, navigator.userAgentData.getHighEntropyValues)
+    // are created via V8 FunctionTemplate so that
+    // Function.prototype.toString.call() returns "[native code]" instead of
+    // the function source. Anti-bot systems use this as a primary detection
+    // vector for injected stealth code.
+    //
+    // Data-only frozen objects (enums, brands arrays) are safe to create via
+    // JS eval since they have no functions to detect via toString().
     {
-        const chrome_init =
-            \\Object.defineProperty(this, 'chrome', {
-            \\  value: Object.freeze({
-            \\    app: Object.freeze({
-            \\      isInstalled: false,
-            \\      InstallState: Object.freeze({DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'}),
-            \\      RunningState: Object.freeze({CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'})
-            \\    }),
-            \\    runtime: Object.freeze({
-            \\      OnInstalledReason: Object.freeze({CHROME_UPDATE:'chrome_update',INSTALL:'install',SHARED_MODULE_UPDATE:'shared_module_update',UPDATE:'update'}),
-            \\      OnRestartRequiredReason: Object.freeze({APP_UPDATE:'app_update',OS_UPDATE:'os_update',PERIODIC:'periodic'}),
-            \\      PlatformArch: Object.freeze({ARM:'arm',ARM64:'arm64',MIPS:'mips',MIPS64:'mips64',X86_32:'x86-32',X86_64:'x86-64'}),
-            \\      PlatformNaclArch: Object.freeze({ARM:'arm',MIPS:'mips',MIPS64:'mips64',X86_32:'x86-32',X86_64:'x86-64'}),
-            \\      PlatformOs: Object.freeze({ANDROID:'android',CROS:'cros',FUCHSIA:'fuchsia',LINUX:'linux',MAC:'mac',OPENBSD:'openbsd',WIN:'win'}),
-            \\      RequestUpdateCheckStatus: Object.freeze({NO_UPDATE:'no_update',THROTTLED:'throttled',UPDATE_AVAILABLE:'update_available'}),
-            \\      id: undefined,
-            \\      connect: function(){},
-            \\      sendMessage: function(){}
-            \\    }),
-            \\    csi: function(){return{}},
-            \\    loadTimes: function(){return{}}
-            \\  }),
-            \\  writable: false,
-            \\  enumerable: true,
-            \\  configurable: false
-            \\});
-        ;
-        const code = v8.v8__String__NewFromUtf8(isolate.handle, chrome_init.ptr, v8.kNormal, @intCast(chrome_init.len));
-        if (code) |c| {
-            if (v8.v8__Script__Compile(v8_context, c, null)) |script| {
-                _ = v8.v8__Script__Run(script, v8_context);
+        // Create native functions for chrome.* via V8 FunctionTemplate.
+        // These will show "[native code]" when toString() is called.
+        // Only chrome.csi, chrome.loadTimes, chrome.runtime.connect and
+        // chrome.runtime.sendMessage need this treatment — they are the
+        // primary targets of CreepJS and similar toString() detectors.
+        const native_fns = .{
+            .{ "__lp_csi", "csi", &noopReturnEmptyObject },
+            .{ "__lp_loadTimes", "loadTimes", &noopReturnEmptyObject },
+            .{ "__lp_connect", "connect", &noopCallback },
+            .{ "__lp_sendMessage", "sendMessage", &noopCallback },
+        };
+
+        inline for (native_fns) |entry| {
+            const global_name = entry[0];
+            const fn_name = entry[1];
+            const callback = entry[2];
+
+            const ft = v8.v8__FunctionTemplate__New__DEFAULT2(isolate.handle, callback).?;
+            const name_str = v8.v8__String__NewFromUtf8(isolate.handle, fn_name.ptr, v8.kNormal, @intCast(fn_name.len));
+            v8.v8__FunctionTemplate__SetClassName(@constCast(ft), name_str);
+
+            if (v8.v8__FunctionTemplate__GetFunction(@constCast(ft), v8_context)) |func| {
+                const key = v8.v8__String__NewFromUtf8(isolate.handle, global_name.ptr, v8.kNormal, @intCast(global_name.len));
+                var result: v8.MaybeBool = undefined;
+                v8.v8__Object__Set(global_obj, v8_context, key, func, &result);
             }
         }
-    }
 
-    // Inject navigator.userAgentData (NavigatorUAData API).
-    // Chrome exposes this on navigator for Client Hints.
-    // Anti-bot systems check for its existence and structure.
-    {
-        const ua_data_init =
+        // Build chrome object using native function references.
+        // The functions (__lp_csi, etc.) are V8 FunctionTemplate instances
+        // that return "[native code]" for toString(). Data objects are created
+        // inline and frozen.
+        const chrome_init =
             \\(function() {
+            \\  var g = this;
+            \\  Object.defineProperty(g, 'chrome', {
+            \\    value: Object.freeze({
+            \\      app: Object.freeze({
+            \\        isInstalled: false,
+            \\        InstallState: Object.freeze({DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'}),
+            \\        RunningState: Object.freeze({CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'})
+            \\      }),
+            \\      runtime: Object.freeze({
+            \\        OnInstalledReason: Object.freeze({CHROME_UPDATE:'chrome_update',INSTALL:'install',SHARED_MODULE_UPDATE:'shared_module_update',UPDATE:'update'}),
+            \\        OnRestartRequiredReason: Object.freeze({APP_UPDATE:'app_update',OS_UPDATE:'os_update',PERIODIC:'periodic'}),
+            \\        PlatformArch: Object.freeze({ARM:'arm',ARM64:'arm64',MIPS:'mips',MIPS64:'mips64',X86_32:'x86-32',X86_64:'x86-64'}),
+            \\        PlatformNaclArch: Object.freeze({ARM:'arm',MIPS:'mips',MIPS64:'mips64',X86_32:'x86-32',X86_64:'x86-64'}),
+            \\        PlatformOs: Object.freeze({ANDROID:'android',CROS:'cros',FUCHSIA:'fuchsia',LINUX:'linux',MAC:'mac',OPENBSD:'openbsd',WIN:'win'}),
+            \\        RequestUpdateCheckStatus: Object.freeze({NO_UPDATE:'no_update',THROTTLED:'throttled',UPDATE_AVAILABLE:'update_available'}),
+            \\        id: undefined,
+            \\        connect: g.__lp_connect,
+            \\        sendMessage: g.__lp_sendMessage
+            \\      }),
+            \\      csi: g.__lp_csi,
+            \\      loadTimes: g.__lp_loadTimes
+            \\    }),
+            \\    writable: false,
+            \\    enumerable: true,
+            \\    configurable: false
+            \\  });
             \\  var brands = Object.freeze([
             \\    Object.freeze({brand:'Chromium',version:'131'}),
             \\    Object.freeze({brand:'Not_A Brand',version:'24'}),
             \\    Object.freeze({brand:'Google Chrome',version:'131'})
             \\  ]);
-            \\  var uaData = Object.create(null);
-            \\  Object.defineProperties(uaData, {
-            \\    brands: {value:brands,enumerable:true},
-            \\    mobile: {value:false,enumerable:true},
-            \\    platform: {value:'Windows',enumerable:true},
-            \\    getHighEntropyValues: {value:function(hints){
-            \\      return Promise.resolve({
-            \\        architecture:'x86',
-            \\        bitness:'64',
-            \\        brands:brands,
-            \\        fullVersionList:Object.freeze([
-            \\          Object.freeze({brand:'Chromium',version:'131.0.6778.86'}),
-            \\          Object.freeze({brand:'Not_A Brand',version:'24.0.0.0'}),
-            \\          Object.freeze({brand:'Google Chrome',version:'131.0.6778.86'})
-            \\        ]),
-            \\        mobile:false,
-            \\        model:'',
-            \\        platform:'Windows',
-            \\        platformVersion:'15.0.0',
-            \\        uaFullVersion:'131.0.6778.86'
-            \\      });
-            \\    },enumerable:true},
-            \\    toJSON: {value:function(){return{brands:brands,mobile:false,platform:'Windows'}},enumerable:true}
-            \\  });
-            \\  Object.freeze(uaData);
-            \\  if(this.navigator){Object.defineProperty(this.navigator,'userAgentData',{value:uaData,writable:false,enumerable:true,configurable:false})}
+            \\  if(g.navigator){
+            \\    var uaData = Object.create(null);
+            \\    Object.defineProperties(uaData, {
+            \\      brands: {value:brands,enumerable:true},
+            \\      mobile: {value:false,enumerable:true},
+            \\      platform: {value:'Windows',enumerable:true},
+            \\      getHighEntropyValues: {value:function(hints){
+            \\        return Promise.resolve({
+            \\          architecture:'x86',bitness:'64',brands:brands,
+            \\          fullVersionList:Object.freeze([
+            \\            Object.freeze({brand:'Chromium',version:'131.0.6778.86'}),
+            \\            Object.freeze({brand:'Not_A Brand',version:'24.0.0.0'}),
+            \\            Object.freeze({brand:'Google Chrome',version:'131.0.6778.86'})
+            \\          ]),
+            \\          mobile:false,model:'',platform:'Windows',
+            \\          platformVersion:'15.0.0',uaFullVersion:'131.0.6778.86'
+            \\        });
+            \\      },enumerable:true},
+            \\      toJSON: {value:function(){return{brands:brands,mobile:false,platform:'Windows'}},enumerable:true}
+            \\    });
+            \\    Object.freeze(uaData);
+            \\    Object.defineProperty(g.navigator,'userAgentData',{value:uaData,writable:false,enumerable:true,configurable:false});
+            \\  }
+            \\  delete g.__lp_csi;
+            \\  delete g.__lp_loadTimes;
+            \\  delete g.__lp_connect;
+            \\  delete g.__lp_sendMessage;
             \\})();
         ;
-        const code = v8.v8__String__NewFromUtf8(isolate.handle, ua_data_init.ptr, v8.kNormal, @intCast(ua_data_init.len));
+        const code = v8.v8__String__NewFromUtf8(isolate.handle, chrome_init.ptr, v8.kNormal, @intCast(chrome_init.len));
         if (code) |c| {
             if (v8.v8__Script__Compile(v8_context, c, null)) |script| {
                 _ = v8.v8__Script__Run(script, v8_context);
@@ -611,6 +639,21 @@ fn oomCallback(c_location: [*c]const u8, details: ?*const v8.OOMDetails) callcon
     const detail = if (details) |d| std.mem.span(d.detail) else "";
     log.fatal(.app, "V8 OOM", .{ .location = location, .detail = detail });
     @import("../../crash_handler.zig").crash("V8 OOM", .{ .location = location, .detail = detail }, @returnAddress());
+}
+
+// Native V8 callbacks for window.chrome and navigator.userAgentData stubs.
+// Created via FunctionTemplate so Function.prototype.toString.call() returns
+// "function name() { [native code] }" instead of revealing source code.
+// This is critical for anti-bot evasion.
+
+fn noopCallback(_: ?*const v8.FunctionCallbackInfo) callconv(.c) void {}
+
+fn noopReturnEmptyObject(raw_info: ?*const v8.FunctionCallbackInfo) callconv(.c) void {
+    const isolate_handle = v8.v8__FunctionCallbackInfo__GetIsolate(raw_info);
+    const obj = v8.v8__Object__New(isolate_handle);
+    var return_value: v8.ReturnValue = undefined;
+    v8.v8__FunctionCallbackInfo__GetReturnValue(raw_info, &return_value);
+    v8.v8__ReturnValue__Set(return_value, obj);
 }
 
 const PrivateSymbols = struct {
