@@ -35,7 +35,7 @@ jobs:
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lightpanda-build-release
           path: |
@@ -59,7 +59,7 @@ jobs:
           CGO_ENABLED=0 go build
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wptrunner
           path: |
@@ -91,14 +91,14 @@ jobs:
         run: ./wpt manifest
 
       - name: download lightpanda release
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 
       - run: chmod a+x ./lightpanda
 
       - name: download wptrunner
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wptrunner
 
@@ -116,7 +116,7 @@ jobs:
           echo "${{github.sha}}" > commit.txt
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wpt-results
           path: |
@@ -139,7 +139,7 @@ jobs:
 
     steps:
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wpt-results
 
