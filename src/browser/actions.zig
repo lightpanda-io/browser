@@ -23,8 +23,8 @@ const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
 const Page = @import("Page.zig");
 
-pub fn clickNode(dom_node: *DOMNode, page: *Page) !void {
-    if (dom_node.is(Element)) |el| {
+pub fn click(node: *DOMNode, page: *Page) !void {
+    if (node.is(Element)) |el| {
         if (el.is(Element.Html)) |html_el| {
             html_el.click(page) catch |err| {
                 lp.log.err(.app, "click failed", .{ .err = err });
@@ -38,8 +38,8 @@ pub fn clickNode(dom_node: *DOMNode, page: *Page) !void {
     }
 }
 
-pub fn fillNode(dom_node: *DOMNode, text: []const u8, page: *Page) !void {
-    if (dom_node.is(Element)) |el| {
+pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
+    if (node.is(Element)) |el| {
         if (el.is(Element.Html.Input)) |input| {
             input.setValue(text, page) catch |err| {
                 lp.log.err(.app, "fill input failed", .{ .err = err });
@@ -69,8 +69,8 @@ pub fn fillNode(dom_node: *DOMNode, text: []const u8, page: *Page) !void {
     }
 }
 
-pub fn scrollNode(dom_node: ?*DOMNode, x: i32, y: i32, page: *Page) !void {
-    if (dom_node) |n| {
+pub fn scroll(node: ?*DOMNode, x: i32, y: i32, page: *Page) !void {
+    if (node) |n| {
         if (n.is(Element)) |el| {
             if (x != 0) {
                 el.setScrollLeft(x, page) catch {};

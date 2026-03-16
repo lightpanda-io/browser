@@ -165,7 +165,7 @@ fn clickNode(cmd: anytype) !void {
     const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.clickNode(node.dom, page) catch |err| {
+    lp.actions.click(node.dom, page) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };
@@ -187,7 +187,7 @@ fn fillNode(cmd: anytype) !void {
     const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
     const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.InvalidNodeId;
 
-    lp.actions.fillNode(node.dom, params.text, page) catch |err| {
+    lp.actions.fill(node.dom, params.text, page) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };
@@ -218,7 +218,7 @@ fn scrollNode(cmd: anytype) !void {
         target_node = node.dom;
     }
 
-    lp.actions.scrollNode(target_node, x, y, page) catch |err| {
+    lp.actions.scroll(target_node, x, y, page) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
         return error.InternalError;
     };

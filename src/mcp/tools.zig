@@ -445,7 +445,7 @@ fn handleClick(server: *Server, arena: std.mem.Allocator, id: std.json.Value, ar
         return server.sendError(id, .InvalidParams, "Node not found");
     };
 
-    lp.actions.clickNode(node.dom, page) catch |err| {
+    lp.actions.click(node.dom, page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an HTML element");
         }
@@ -471,7 +471,7 @@ fn handleFill(server: *Server, arena: std.mem.Allocator, id: std.json.Value, arg
         return server.sendError(id, .InvalidParams, "Node not found");
     };
 
-    lp.actions.fillNode(node.dom, args.text, page) catch |err| {
+    lp.actions.fill(node.dom, args.text, page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an input, textarea or select");
         }
@@ -505,7 +505,7 @@ fn handleScroll(server: *Server, arena: std.mem.Allocator, id: std.json.Value, a
         target_node = node.dom;
     }
 
-    lp.actions.scrollNode(target_node, x, y, page) catch |err| {
+    lp.actions.scroll(target_node, x, y, page) catch |err| {
         if (err == error.InvalidNodeType) {
             return server.sendError(id, .InvalidParams, "Node is not an element");
         }
