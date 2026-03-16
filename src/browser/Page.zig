@@ -709,11 +709,14 @@ pub fn scriptsCompletedLoading(self: *Page) void {
 }
 
 pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
-    blk: {
-        var ls: JS.Local.Scope = undefined;
-        self.js.localScope(&ls);
-        defer ls.deinit();
+    var ls: JS.Local.Scope = undefined;
+    self.js.localScope(&ls);
+    defer ls.deinit();
 
+    const entered = self.js.enter(&ls.handle_scope);
+    defer entered.exit();
+
+    blk: {
         const event = Event.initTrusted(comptime .wrap("load"), .{}, self) catch |err| {
             log.err(.page, "iframe event init", .{ .err = err, .url = iframe._src });
             break :blk;
@@ -722,6 +725,7 @@ pub fn iframeCompletedLoading(self: *Page, iframe: *IFrame) void {
             log.warn(.js, "iframe onload", .{ .err = err, .url = iframe._src });
         };
     }
+
     self.pendingLoadCompleted();
 }
 

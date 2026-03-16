@@ -66,6 +66,7 @@ _on_load: ?js.Function.Global = null,
 _on_pageshow: ?js.Function.Global = null,
 _on_popstate: ?js.Function.Global = null,
 _on_error: ?js.Function.Global = null,
+_on_message: ?js.Function.Global = null,
 _on_unhandled_rejection: ?js.Function.Global = null, // TODO: invoke on error
 _location: *Location,
 _timer_id: u30 = 0,
@@ -206,6 +207,14 @@ pub fn getOnError(self: *const Window) ?js.Function.Global {
 
 pub fn setOnError(self: *Window, setter: ?FunctionSetter) void {
     self._on_error = getFunctionFromSetter(setter);
+}
+
+pub fn getOnMessage(self: *const Window) ?js.Function.Global {
+    return self._on_message;
+}
+
+pub fn setOnMessage(self: *Window, setter: ?FunctionSetter) void {
+    self._on_message = getFunctionFromSetter(setter);
 }
 
 pub fn getOnUnhandledRejection(self: *const Window) ?js.Function.Global {
@@ -369,19 +378,26 @@ pub fn postMessage(self: *Window, message: js.Value.Temp, target_origin: ?[]cons
     // In a full implementation, we would validate the origin
     _ = target_origin;
 
-    // postMessage queues a task (not a microtask), so use the scheduler
-    const arena = try page.getArena(.{ .debug = "Window.schedule" });
-    errdefer page.releaseArena(arena);
+    // self = the window that will get the message
+    // page = the context calling postMessage
+    const target_page = self._page;
+    const source_window = target_page.js.getIncumbent().window;
 
-    const origin = try self._location.getOrigin(page);
+    const arena = try target_page.getArena(.{ .debug = "Window.postMessage" });
+    errdefer target_page.releaseArena(arena);
+
+    // Origin should be the source window's origin (where the message came from)
+    const origin = try source_window._location.getOrigin(page);
     const callback = try arena.create(PostMessageCallback);
     callback.* = .{
-        .page = page,
         .arena = arena,
         .message = message,
+        .page = target_page,
+        .source = source_window,
         .origin = try arena.dupe(u8, origin),
     };
-    try page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
+
+    try target_page.js.scheduler.add(callback, PostMessageCallback.run, 0, .{
         .name = "postMessage",
         .low_priority = false,
         .finalizer = PostMessageCallback.cancelled,
@@ -702,6 +718,7 @@ const ScheduleCallback = struct {
 
 const PostMessageCallback = struct {
     page: *Page,
+    source: *Window,
     arena: Allocator,
     origin: []const u8,
     message: js.Value.Temp,
@@ -712,7 +729,7 @@ const PostMessageCallback = struct {
 
     fn cancelled(ctx: *anyopaque) void {
         const self: *PostMessageCallback = @ptrCast(@alignCast(ctx));
-        self.page.releaseArena(self.arena);
+        self.deinit();
     }
 
     fn run(ctx: *anyopaque) !?u32 {
@@ -722,14 +739,17 @@ const PostMessageCallback = struct {
         const page = self.page;
         const window = page.window;
 
-        const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
-            .data = self.message,
-            .origin = self.origin,
-            .source = window,
-            .bubbles = false,
-            .cancelable = false,
-        }, page)).asEvent();
-        try page._event_manager.dispatch(window.asEventTarget(), event);
+        const event_target = window.asEventTarget();
+        if (page._event_manager.hasDirectListeners(event_target, "message", window._on_message)) {
+            const event = (try MessageEvent.initTrusted(comptime .wrap("message"), .{
+                .data = self.message,
+                .origin = self.origin,
+                .source = self.source,
+                .bubbles = false,
+                .cancelable = false,
+            }, page)).asEvent();
+            try page._event_manager.dispatchDirect(event_target, event, window._on_message, .{ .context = "window.postMessage" });
+        }
 
         return null;
     }
@@ -783,6 +803,7 @@ pub const JsApi = struct {
     pub const onpageshow = bridge.accessor(Window.getOnPageShow, Window.setOnPageShow, .{});
     pub const onpopstate = bridge.accessor(Window.getOnPopState, Window.setOnPopState, .{});
     pub const onerror = bridge.accessor(Window.getOnError, Window.setOnError, .{});
+    pub const onmessage = bridge.accessor(Window.getOnMessage, Window.setOnMessage, .{});
     pub const onunhandledrejection = bridge.accessor(Window.getOnUnhandledRejection, Window.setOnUnhandledRejection, .{});
     pub const fetch = bridge.function(Window.fetch, .{});
     pub const queueMicrotask = bridge.function(Window.queueMicrotask, .{});

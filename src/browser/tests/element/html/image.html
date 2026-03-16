@@ -37,7 +37,7 @@
     testing.expectEqual('test.png', img.getAttribute('src'));
 
     img.src = '/absolute/path.png';
-    testing.expectEqual(testing.ORIGIN + 'absolute/path.png', img.src);
+    testing.expectEqual(testing.ORIGIN + '/absolute/path.png', img.src);
     testing.expectEqual('/absolute/path.png', img.getAttribute('src'));
 
     img.src = 'https://example.com/image.png';
