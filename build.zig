@@ -30,8 +30,19 @@ pub fn build(b: *Build) !void {
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
 
+    // Try to get version from git tag (e.g., v0.2.6), fallback to manifest.version
+    const git_version: ?[]const u8 = blk: {
+        if (b.enable_cache) break :blk null;
+        const git_describe = b.addSystemCommand(&.{ "git", "describe", "--tags", "--exact-match" });
+        git_describe.captureStdOut();
+        git_describe.expect_exit_code = 1; // Don't fail if not on a tag
+        break :blk git_describe.captureStdOutOrNull();
+    };
+
+    const version = git_version orelse manifest.version;
+
     var opts = b.addOptions();
-    opts.addOption([]const u8, "version", manifest.version);
+    opts.addOption([]const u8, "version", version);
     opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
