@@ -436,6 +436,18 @@ pub fn createContext(self: *Env, page: *Page) !*Context {
             \\  delete g.__lp_loadTimes;
             \\  delete g.__lp_connect;
             \\  delete g.__lp_sendMessage;
+            \\  // Global constructor stubs - Chrome exposes these interfaces even when
+            \\  // hardware is unavailable. typeof X === 'undefined' is a bot signal.
+            \\  if(!g.RTCPeerConnection){g.RTCPeerConnection=function RTCPeerConnection(){throw new DOMException('Not supported','NotSupportedError')};g.RTCPeerConnection.prototype={};g.RTCPeerConnection.generateCertificate=function(){return Promise.reject(new DOMException('Not supported','NotSupportedError'))}}
+            \\  if(!g.RTCSessionDescription){g.RTCSessionDescription=function RTCSessionDescription(){throw new TypeError('Illegal constructor')}}
+            \\  if(!g.RTCIceCandidate){g.RTCIceCandidate=function RTCIceCandidate(){throw new TypeError('Illegal constructor')}}
+            \\  if(!g.MediaStream){g.MediaStream=function MediaStream(){throw new TypeError('Illegal constructor')}}
+            \\  if(!g.Bluetooth){g.Bluetooth=function Bluetooth(){throw new TypeError('Illegal constructor')}}
+            \\  if(!g.USB){g.USB=function USB(){throw new TypeError('Illegal constructor')}}
+            \\  if(!g.BatteryManager){g.BatteryManager=function BatteryManager(){throw new TypeError('Illegal constructor')}}
+            \\  if(!g.Notification){g.Notification=function Notification(){throw new TypeError('Illegal constructor')};g.Notification.permission='default';g.Notification.requestPermission=function(){return Promise.resolve('denied')}}
+            \\  if(g.navigator&&!g.navigator.permissions){Object.defineProperty(g.navigator,'permissions',{value:Object.freeze({query:function(){return Promise.resolve({state:'prompt',onchange:null})}}),enumerable:true})}
+            \\  if(g.navigator&&!g.navigator.getBattery){g.navigator.getBattery=function(){return Promise.resolve({charging:true,chargingTime:0,dischargingTime:Infinity,level:1})}}
             \\})();
         ;
         const code = v8.v8__String__NewFromUtf8(isolate.handle, chrome_init.ptr, v8.kNormal, @intCast(chrome_init.len));
