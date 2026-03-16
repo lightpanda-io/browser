@@ -157,13 +157,13 @@ fn clickNode(cmd: anytype) !void {
         nodeId: ?Node.Id = null,
         backendNodeId: ?Node.Id = null,
     };
-    const params = (try cmd.params(Params)) orelse Params{};
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
-    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.InvalidNodeId;
+    const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
+    const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
     lp.actions.click(node.dom, page) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
@@ -184,8 +184,8 @@ fn fillNode(cmd: anytype) !void {
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    const input_node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
-    const node = bc.node_registry.lookup_by_id.get(input_node_id) orelse return error.InvalidNodeId;
+    const node_id = params.nodeId orelse params.backendNodeId orelse return error.InvalidParam;
+    const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
 
     lp.actions.fill(node.dom, params.text, page) catch |err| {
         if (err == error.InvalidNodeType) return error.InvalidParam;
@@ -202,15 +202,15 @@ fn scrollNode(cmd: anytype) !void {
         x: ?i32 = null,
         y: ?i32 = null,
     };
-    const params = (try cmd.params(Params)) orelse Params{};
+    const params = (try cmd.params(Params)) orelse return error.InvalidParam;
 
     const bc = cmd.browser_context orelse return error.NoBrowserContext;
     const page = bc.session.currentPage() orelse return error.PageNotLoaded;
 
-    const input_node_id = params.nodeId orelse params.backendNodeId;
+    const maybe_node_id = params.nodeId orelse params.backendNodeId;
 
     var target_node: ?*DOMNode = null;
-    if (input_node_id) |node_id| {
+    if (maybe_node_id) |node_id| {
         const node = bc.node_registry.lookup_by_id.get(node_id) orelse return error.InvalidNodeId;
         target_node = node.dom;
     }
