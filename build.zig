@@ -27,12 +27,14 @@ pub fn build(b: *Build) !void {
     const manifest = Manifest.init(b);
 
     const git_commit = b.option([]const u8, "git_commit", "Current git commit");
+    const git_tag = b.option([]const u8, "git_tag", "Git tag for release builds");
     const prebuilt_v8_path = b.option([]const u8, "prebuilt_v8_path", "Path to prebuilt libc_v8.a");
     const snapshot_path = b.option([]const u8, "snapshot_path", "Path to v8 snapshot");
 
     var opts = b.addOptions();
     opts.addOption([]const u8, "version", manifest.version);
     opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
+    opts.addOption(?[]const u8, "git_tag", git_tag);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;
