@@ -491,7 +491,7 @@ fn acceptConnections(self: *Runtime) void {
                 error.ConnectionAborted => {
                     lp.log.warn(.app, "accept connection aborted", .{});
                     continue;
-            },
+                },
                 else => {
                     lp.log.err(.app, "accept error", .{ .err = err });
                     continue;

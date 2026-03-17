@@ -115,6 +115,8 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             };
             defer server.deinit();
 
+            try sighandler.on(lp.Server.shutdown, .{server});
+
             app.network.run();
         },
         .fetch => |opts| {
