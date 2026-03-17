@@ -94,7 +94,16 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             };
 
             var server = lp.Server.init(app, address) catch |err| {
-                log.fatal(.app, "server run error", .{ .err = err });
+                if (err == error.AddressInUse) {
+                    log.fatal(.app, "address already in use", .{
+                        .host = opts.host,
+                        .port = opts.port,
+                        .hint = "Another process is already listening on this address. " ++
+                            "Stop the other process or use --port to choose a different port.",
+                    });
+                } else {
+                    log.fatal(.app, "server run error", .{ .err = err });
+                }
                 return err;
             };
             defer server.deinit();
