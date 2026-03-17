@@ -261,7 +261,6 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             break :blk .normal;
         },
     };
-    handover = true;
 
     const is_blocking = script.mode == .normal;
     if (is_blocking == false) {
@@ -273,7 +272,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             if (is_blocking == false) {
                 self.scriptList(script).remove(&script.node);
             }
-            script.deinit();
+            // Let the outer errdefer handle releasing the arena if client.request fails
         }
 
         try self.client.request(.{
@@ -292,6 +291,7 @@ pub fn addFromElement(self: *ScriptManager, comptime from_parser: bool, script_e
             .done_callback = Script.doneCallback,
             .error_callback = Script.errorCallback,
         });
+        handover = true;
 
         if (comptime IS_DEBUG) {
             var ls: js.Local.Scope = undefined;
