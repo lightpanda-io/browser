@@ -59,7 +59,11 @@ fn run(allocator: Allocator, main_arena: Allocator) !void {
             return std.process.cleanExit();
         },
         .version => {
-            std.debug.print("{s}\n", .{lp.build_config.git_commit});
+            const version = if (std.mem.eql(u8, lp.build_config.git_version, "dev"))
+                lp.build_config.git_commit
+            else
+                lp.build_config.git_version;
+            std.debug.print("{s}\n", .{version});
             return std.process.cleanExit();
         },
         else => {},
