@@ -21,17 +21,24 @@ const lp = @import("../lightpanda.zig");
 const DOMNode = @import("webapi/Node.zig");
 const Element = @import("webapi/Element.zig");
 const Event = @import("webapi/Event.zig");
+const MouseEvent = @import("webapi/event/MouseEvent.zig");
 const Page = @import("Page.zig");
 
 pub fn click(node: *DOMNode, page: *Page) !void {
-    if (node.is(Element.Html)) |html_el| {
-        html_el.click(page) catch |err| {
-            lp.log.err(.app, "click failed", .{ .err = err });
-            return error.ActionFailed;
-        };
-    } else {
-        return error.InvalidNodeType;
-    }
+    const el = node.is(Element) orelse return error.InvalidNodeType;
+
+    const mouse_event: *MouseEvent = try .initTrusted(comptime .wrap("click"), .{
+        .bubbles = true,
+        .cancelable = true,
+        .composed = true,
+        .clientX = 0,
+        .clientY = 0,
+    }, page);
+
+    page._event_manager.dispatch(el.asEventTarget(), mouse_event.asEvent()) catch |err| {
+        lp.log.err(.app, "click failed", .{ .err = err });
+        return error.ActionFailed;
+    };
 }
 
 pub fn fill(node: *DOMNode, text: []const u8, page: *Page) !void {
