@@ -308,6 +308,7 @@ pub fn Reader(comptime EXPECT_MASK: bool) type {
 pub const WsConnection = struct {
     // CLOSE, 2 length, code
     const CLOSE_NORMAL = [_]u8{ 136, 2, 3, 232 }; // code: 1000
+    const CLOSE_GOING_AWAY = [_]u8{ 136, 2, 3, 233 }; // code: 1001
     const CLOSE_TOO_BIG = [_]u8{ 136, 2, 3, 241 }; // 1009
     const CLOSE_PROTOCOL_ERROR = [_]u8{ 136, 2, 3, 234 }; //code: 1002
     // "private-use" close codes must be from 4000-49999
@@ -581,6 +582,10 @@ pub const WsConnection = struct {
         var socklen: posix.socklen_t = @sizeOf(std.net.Address);
         try posix.getpeername(self.socket, &address.any, &socklen);
         return address;
+    }
+
+    pub fn sendClose(self: *WsConnection) void {
+        self.send(&CLOSE_GOING_AWAY) catch {};
     }
 
     pub fn shutdown(self: *WsConnection) void {
