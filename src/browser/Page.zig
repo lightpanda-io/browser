@@ -3522,13 +3522,16 @@ fn asUint(comptime string: anytype) std.meta.Int(
 
 const testing = @import("../testing.zig");
 test "WebApi: Page" {
-    const filter: testing.LogFilter = .init(.http);
+    const filter: testing.LogFilter = .init(&.{ .http, .js });
     defer filter.deinit();
 
     try testing.htmlRunner("page", .{});
 }
 
 test "WebApi: Frames" {
+    const filter: testing.LogFilter = .init(&.{.js});
+    defer filter.deinit();
+
     try testing.htmlRunner("frames", .{});
 }
 

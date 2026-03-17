@@ -616,12 +616,12 @@ fn testHTTPHandler(req: *std.http.Server.Request) !void {
 pub const LogFilter = struct {
     old_filter: []const log.Scope,
 
-    /// Sets the log filter to only include the specified scope.
+    /// Sets the log filter to suppress the specified scope(s).
     /// Returns a LogFilter that should be deinitialized to restore previous filters.
-    pub fn init(comptime scope: log.Scope) LogFilter {
+    pub fn init(comptime scopes: []const log.Scope) LogFilter {
+        comptime std.debug.assert(@TypeOf(scopes) == []const log.Scope);
         const old_filter = log.opts.filter_scopes;
-        const new_filter = comptime &[_]log.Scope{scope};
-        log.opts.filter_scopes = new_filter;
+        log.opts.filter_scopes = scopes;
         return .{ .old_filter = old_filter };
     }
 
