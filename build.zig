@@ -34,7 +34,7 @@ pub fn build(b: *Build) !void {
     var opts = b.addOptions();
     opts.addOption([]const u8, "version", manifest.version);
     opts.addOption([]const u8, "git_commit", git_commit orelse "dev");
-    opts.addOption([]const u8, "git_version", git_version orelse "dev");
+    opts.addOption(?[]const u8, "git_version", git_version orelse null);
     opts.addOption(?[]const u8, "snapshot_path", snapshot_path);
 
     const enable_tsan = b.option(bool, "tsan", "Enable Thread Sanitizer") orelse false;

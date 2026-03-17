@@ -153,7 +153,7 @@ const LightPandaEvent = struct {
         try writer.write(builtin.cpu.arch);
 
         try writer.objectField("version");
-        try writer.write(build_config.git_commit);
+        try writer.write(build_config.git_version orelse build_config.git_commit);
 
         try writer.objectField("event");
         try writer.write(@tagName(std.meta.activeTag(self.event)));
