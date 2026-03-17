@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+<body></body>
+
+<!-
+<script id="inline_display_none">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.style.display = "none";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.style.display = "block";
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.remove();
+  }
+</script>
+
+<script id="inline_visibility_hidden">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    el.style.visibility = "hidden";
+    // Without visibilityProperty option, visibility:hidden is not checked
+    testing.expectEqual(true, el.checkVisibility());
+    // With visibilityProperty: true, visibility:hidden is detected
+    testing.expectEqual(false, el.checkVisibility({ visibilityProperty: true }));
+
+    el.style.visibility = "collapse";
+    testing.expectEqual(false, el.checkVisibility({ visibilityProperty: true }));
+
+    el.style.visibility = "visible";
+    testing.expectEqual(true, el.checkVisibility({ visibilityProperty: true }));
+
+    el.remove();
+  }
+</script>
+
+<script id="inline_opacity_zero">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    el.style.opacity = "0";
+    // Without checkOpacity option, opacity:0 is not checked
+    testing.expectEqual(true, el.checkVisibility());
+    // With checkOpacity: true, opacity:0 is detected
+    testing.expectEqual(false, el.checkVisibility({ checkOpacity: true }));
+
+    el.style.opacity = "0.5";
+    testing.expectEqual(true, el.checkVisibility({ checkOpacity: true }));
+
+    el.style.opacity = "1";
+    testing.expectEqual(true, el.checkVisibility({ checkOpacity: true }));
+
+    el.remove();
+  }
+</script>
+
+<script id="parent_hidden_hides_child">
+  {
+    const parent = document.createElement("div");
+    const child = document.createElement("span");
+    parent.appendChild(child);
+    document.body.appendChild(parent);
+
+    testing.expectEqual(true, child.checkVisibility());
+
+    // display:none on parent hides children (no option needed)
+    parent.style.display = "none";
+    testing.expectEqual(false, child.checkVisibility());
+
+    // visibility:hidden on parent - needs visibilityProperty option
+    parent.style.display = "block";
+    parent.style.visibility = "hidden";
+    testing.expectEqual(true, child.checkVisibility()); // without option
+    testing.expectEqual(false, child.checkVisibility({ visibilityProperty: true }));
+
+    // opacity:0 on parent - needs checkOpacity option
+    parent.style.visibility = "visible";
+    parent.style.opacity = "0";
+    testing.expectEqual(true, child.checkVisibility()); // without option
+    testing.expectEqual(false, child.checkVisibility({ checkOpacity: true }));
+
+    parent.remove();
+  }
+</script>
+
+<style id="style-basic">
+  .hidden-by-class { display: none; }
+  .visible-by-class { display: block; }
+</style>
+<script id="style_tag_basic">
+  {
+    const el = document.createElement("div");
+    document.body.appendChild(el);
+
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.className = "hidden-by-class";
+    testing.expectEqual(false, el.checkVisibility());
+
+    el.className = "visible-by-class";
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.className = "";
+    el.remove();
+  }
+</script>
+
+<style id="style-specificity">
+  .spec-hidden { display: none; }
+  #spec-visible { display: block; }
+</style>
+<script id="specificity_id_beats_class">
+  {
+    const el = document.createElement("div");
+    el.id = "spec-visible";
+    el.className = "spec-hidden";
+    document.body.appendChild(el);
+
+    // ID selector (#spec-visible: display:block) should beat class selector (.spec-hidden: display:none)
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.remove();
+  }
+</script>
+
+<style id="style-order-1">
+  .order-test { display: none; }
+</style>
+<style id="style-order-2">
+  .order-test { display: block; }
+</style>
+<script id="rule_order_later_wins">
+  {
+    const el = document.createElement("div");
+    el.className = "order-test";
+    document.body.appendChild(el);
+
+    // Second style block should win (display: block)
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.remove();
+  }
+</script>
+
+<style id="style-override">
+  .should-be-hidden { display: none; }
+</style>
+<script id="inline_overrides_stylesheet">
+  {
+    const el = document.createElement("div");
+    el.className = "should-be-hidden";
+    document.body.appendChild(el);
+
+    testing.expectEqual(false, el.checkVisibility());
+
+    // Inline style should override
+    el.style.display = "block";
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.remove();
+  }
+</script>
+
+<script id="dynamic_style_element">
+  {
+    const el = document.createElement("div");
+    el.className = "dynamic-style-test";
+    document.body.appendChild(el);
+
+    testing.expectEqual(true, el.checkVisibility());
+
+    // Add a style element
+    const style = document.createElement("style");
+    style.textContent = ".dynamic-style-test { display: none; }";
+    document.head.appendChild(style);
+
+    testing.expectEqual(false, el.checkVisibility());
+
+    // Remove the style element
+    style.remove();
+    testing.expectEqual(true, el.checkVisibility());
+
+    el.remove();
+  }
+</script>
+
+<script id="deep_nesting">
+  {
+    const levels = 5;
+    let current = document.body;
+    const elements = [];
+
+    for (let i = 0; i < levels; i++) {
+      const el = document.createElement("div");
+      current.appendChild(el);
+      elements.push(el);
+      current = el;
+    }
+
+    // All should be visible
+    for (let i = 0; i < levels; i++) {
+      testing.expectEqual(true, elements[i].checkVisibility());
+    }
+
+    // Hide middle element
+    elements[2].style.display = "none";
+
+    // Elements 0, 1 should still be visible
+    testing.expectEqual(true, elements[0].checkVisibility());
+    testing.expectEqual(true, elements[1].checkVisibility());
+
+    // Elements 2, 3, 4 should be hidden
+    testing.expectEqual(false, elements[2].checkVisibility());
+    testing.expectEqual(false, elements[3].checkVisibility());
+    testing.expectEqual(false, elements[4].checkVisibility());
+
+    elements[0].remove();
+  }
+</script>

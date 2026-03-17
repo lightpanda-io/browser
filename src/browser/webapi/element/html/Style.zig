@@ -106,7 +106,10 @@ pub fn getSheet(self: *Style, page: *Page) !?*CSSStyleSheet {
 
 pub fn styleAddedCallback(self: *Style, page: *Page) !void {
     // Force stylesheet initialization so rules are parsed immediately
-    _ = self.getSheet(page) catch null;
+    if (self.getSheet(page) catch null) |sheet| {
+        // Notify StyleManager about the new stylesheet
+        page._style_manager.sheetAdded(sheet) catch {};
+    }
 
     // if we're planning on navigating to another page, don't trigger load event.
     if (page.isGoingAway()) {

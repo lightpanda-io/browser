@@ -133,7 +133,7 @@ pub fn collectInteractiveElements(
     // so classify and getListenerTypes are both O(1) per element.
     const listener_targets = try buildListenerTargetMap(page, arena);
 
-    var css_cache: Element.CssCache = .empty;
+    var css_cache: Element.PointerEventsCache = .empty;
 
     var results: std.ArrayList(InteractiveElement) = .empty;
 
@@ -216,7 +216,7 @@ pub fn classifyInteractivity(
     el: *Element,
     html_el: *Element.Html,
     listener_targets: ListenerTargetMap,
-    cache: ?*Element.CssCache,
+    cache: ?*Element.PointerEventsCache,
 ) ?InteractivityType {
     if (el.hasPointerEventsNone(cache, page)) return null;
 

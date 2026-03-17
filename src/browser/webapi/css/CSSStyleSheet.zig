@@ -69,12 +69,19 @@ pub fn insertRule(self: *CSSStyleSheet, rule: []const u8, maybe_index: ?u32, pag
 
     const rules = try self.getCssRules(page);
     try rules.insert(index, style_rule._proto, page);
+
+    // Notify StyleManager that rules have changed
+    page._style_manager.sheetModified();
+
     return index;
 }
 
 pub fn deleteRule(self: *CSSStyleSheet, index: u32, page: *Page) !void {
     const rules = try self.getCssRules(page);
     try rules.remove(index);
+
+    // Notify StyleManager that rules have changed
+    page._style_manager.sheetModified();
 }
 
 pub fn replace(self: *CSSStyleSheet, text: []const u8, page: *Page) !js.Promise {
@@ -99,6 +106,9 @@ pub fn replaceSync(self: *CSSStyleSheet, text: []const u8, page: *Page) !void {
         try rules.insert(index, style_rule._proto, page);
         index += 1;
     }
+
+    // Notify StyleManager that rules have changed
+    page._style_manager.sheetModified();
 }
 
 pub const JsApi = struct {

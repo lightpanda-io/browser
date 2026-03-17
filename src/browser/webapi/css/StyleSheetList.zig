@@ -24,6 +24,15 @@ pub fn add(self: *StyleSheetList, sheet: *CSSStyleSheet, page: *Page) !void {
     try self._sheets.append(page.arena, sheet);
 }
 
+pub fn remove(self: *StyleSheetList, sheet: *CSSStyleSheet) void {
+    for (self._sheets.items, 0..) |s, i| {
+        if (s == sheet) {
+            _ = self._sheets.orderedRemove(i);
+            return;
+        }
+    }
+}
+
 pub const JsApi = struct {
     pub const bridge = js.Bridge(StyleSheetList);
 
