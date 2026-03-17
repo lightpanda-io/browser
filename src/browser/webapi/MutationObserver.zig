@@ -86,7 +86,7 @@ pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
 }
 
 pub fn deinit(self: *MutationObserver, shutdown: bool, session: *Session) void {
-     if (shutdown) {
+    if (shutdown) {
         self._callback.release();
         session.releaseArena(self._arena);
     } else if (comptime IS_DEBUG) {
