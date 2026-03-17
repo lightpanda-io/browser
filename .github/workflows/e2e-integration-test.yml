@@ -23,8 +23,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
 
       - uses: ./.github/actions/install
 

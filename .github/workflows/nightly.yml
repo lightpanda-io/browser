@@ -5,6 +5,7 @@ env:
   AWS_SECRET_ACCESS_KEY: ${{ secrets.NIGHTLY_BUILD_AWS_SECRET_ACCESS_KEY }}
   AWS_BUCKET: ${{ vars.NIGHTLY_BUILD_AWS_BUCKET }}
   AWS_REGION: ${{ vars.NIGHTLY_BUILD_AWS_REGION }}
+
   RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || 'nightly' }}
   GIT_VERSION_FLAG: ${{ github.ref_type == 'tag' && format('-Dgit_version={0}', github.ref_name) || '' }}
 
@@ -34,8 +35,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
 
       - uses: ./.github/actions/install
         with:
@@ -76,8 +75,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
 
       - uses: ./.github/actions/install
         with:
@@ -120,8 +117,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
 
       - uses: ./.github/actions/install
         with:
@@ -162,8 +157,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          # fetch submodules recusively, to get zig-js-runtime submodules also.
-          submodules: recursive
 
       - uses: ./.github/actions/install
         with:
