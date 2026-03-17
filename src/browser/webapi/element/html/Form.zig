@@ -120,9 +120,42 @@ pub fn submit(self: *Form, page: *Page) !void {
 /// https://html.spec.whatwg.org/multipage/forms.html#dom-form-requestsubmit
 /// Like submit(), but fires the submit event and validates the form.
 pub fn requestSubmit(self: *Form, submitter: ?*Element, page: *Page) !void {
-    // TODO check the submitter is a submit button if not null.
-    const submitter_element = submitter orelse self.asElement();
+    const submitter_element = if (submitter) |s| blk: {
+        // The submitter must be a submit button.
+        if (!isSubmitButton(s)) return error.TypeError;
+
+        // The submitter's form owner must be this form element.
+        const submitter_form = getFormOwner(s, page);
+        if (submitter_form == null or submitter_form.? != self) return error.NotFound;
+
+        break :blk s;
+    } else self.asElement();
+
     return page.submitForm(submitter_element, self, .{});
+}
+
+/// Returns true if the element is a submit button per the HTML spec:
+/// - <input type="submit"> or <input type="image">
+/// - <button type="submit"> (including default, since button's default type is "submit")
+fn isSubmitButton(element: *Element) bool {
+    if (element.is(Input)) |input| {
+        return input._input_type == .submit or input._input_type == .image;
+    }
+    if (element.is(Button)) |button| {
+        return std.mem.eql(u8, button.getType(), "submit");
+    }
+    return false;
+}
+
+/// Returns the form owner of a submittable element (Input or Button).
+fn getFormOwner(element: *Element, page: *Page) ?*Form {
+    if (element.is(Input)) |input| {
+        return input.getForm(page);
+    }
+    if (element.is(Button)) |button| {
+        return button.getForm(page);
+    }
+    return null;
 }
 
 pub const JsApi = struct {
@@ -140,7 +173,7 @@ pub const JsApi = struct {
     pub const elements = bridge.accessor(Form.getElements, null, .{});
     pub const length = bridge.accessor(Form.getLength, null, .{});
     pub const submit = bridge.function(Form.submit, .{});
-    pub const requestSubmit = bridge.function(Form.requestSubmit, .{});
+    pub const requestSubmit = bridge.function(Form.requestSubmit, .{ .dom_exception = true });
 };
 
 const testing = @import("../../../../testing.zig");
