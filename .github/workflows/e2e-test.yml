@@ -61,7 +61,7 @@ jobs:
         run: zig build -Dprebuilt_v8_path=v8/libc_v8.a -Doptimize=ReleaseFast -Dcpu=x86_64 -Dgit_commit=$(git rev-parse --short ${{ github.sha }})
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lightpanda-build-release
           path: |
@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
@@ -84,7 +84,7 @@ jobs:
       - run: npm install
 
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 
@@ -126,7 +126,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
@@ -134,7 +134,7 @@ jobs:
       - run: npm install
 
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 
@@ -189,32 +189,35 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
 
-      - run: echo "${{ secrets.WBA_PRIVATE_KEY_PEM }}" > private_key.pem
-
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 
       - run: chmod a+x ./lightpanda
 
       - name: run wba test
+        shell: bash
         run: |
+
           node webbotauth/validator.js &
           VALIDATOR_PID=$!
           sleep 2
 
-          ./lightpanda fetch http://127.0.0.1:8989/ \
-            --web_bot_auth_key_file private_key.pem \
+          exec 3<<< "${{ secrets.WBA_PRIVATE_KEY_PEM }}"
+
+          ./lightpanda fetch --dump http://127.0.0.1:8989/ \
+            --web_bot_auth_key_file /proc/self/fd/3 \
             --web_bot_auth_keyid ${{ vars.WBA_KEY_ID }} \
             --web_bot_auth_domain ${{ vars.WBA_DOMAIN }}
 
           wait $VALIDATOR_PID
+          exec 3>&-
 
   cdp-and-hyperfine-bench:
     name: cdp-and-hyperfine-bench
@@ -239,7 +242,7 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: 'lightpanda-io/demo'
           fetch-depth: 0
@@ -247,7 +250,7 @@ jobs:
       - run: npm install
 
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 
@@ -333,7 +336,7 @@ jobs:
           echo "${{github.sha}}" > commit.txt
 
       - name: upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-results
           path: |
@@ -361,7 +364,7 @@ jobs:
 
     steps:
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bench-results
 
@@ -379,7 +382,7 @@ jobs:
 
     steps:
       - name: download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: lightpanda-build-release
 

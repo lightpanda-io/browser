@@ -401,7 +401,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                 // scheduler.run could trigger new http transfers, so do not
                 // store http_client.active BEFORE this call and then use
                 // it AFTER.
-                const ms_to_next_task = try browser.runMacrotasks();
+                try browser.runMacrotasks();
 
                 // Each call to this runs scheduled load events.
                 try page.dispatchLoad();
@@ -423,16 +423,16 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                         std.debug.assert(http_client.intercepted == 0);
                     }
 
-                    var ms: u64 = ms_to_next_task orelse blk: {
-                        if (wait_ms - ms_remaining < 100) {
-                            if (comptime builtin.is_test) {
-                                return .done;
-                            }
-                            // Look, we want to exit ASAP, but we don't want
-                            // to exit so fast that we've run none of the
-                            // background jobs.
-                            break :blk 50;
-                        }
+                    var ms = blk: {
+                        // if (wait_ms - ms_remaining < 100) {
+                        //     if (comptime builtin.is_test) {
+                        //         return .done;
+                        //     }
+                        //     // Look, we want to exit ASAP, but we don't want
+                        //     // to exit so fast that we've run none of the
+                        //     // background jobs.
+                        //     break :blk 50;
+                        // }
 
                         if (browser.hasBackgroundTasks()) {
                             // _we_ have nothing to run, but v8 is working on
@@ -441,9 +441,7 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                             break :blk 20;
                         }
 
-                        // No http transfers, no cdp extra socket, no
-                        // scheduled tasks, we're done.
-                        return .done;
+                        break :blk browser.msToNextMacrotask() orelse return .done;
                     };
 
                     if (ms > ms_remaining) {
@@ -470,9 +468,9 @@ fn _wait(self: *Session, page: *Page, wait_ms: u32) !WaitResult {
                     // We're here because we either have active HTTP
                     // connections, or exit_when_done == false (aka, there's
                     // an cdp_socket registered with the http client).
-                    // We should continue to run lowPriority tasks, so we
-                    // minimize how long we'll poll for network I/O.
-                    var ms_to_wait = @min(200, ms_to_next_task orelse 200);
+                    // We should continue to run tasks, so we minimize how long
+                    // we'll poll for network I/O.
+                    var ms_to_wait = @min(200, browser.msToNextMacrotask() orelse 200);
                     if (ms_to_wait > 10 and browser.hasBackgroundTasks()) {
                         // if we have background tasks, we don't want to wait too
                         // long for a message from the client. We want to go back

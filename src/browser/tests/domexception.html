@@ -127,7 +127,7 @@
 
   testing.withError((err) => {
     testing.expectEqual(3, err.code);
-    testing.expectEqual('Hierarchy Error', err.message);
+    testing.expectEqual('HierarchyRequestError', err.name);
     testing.expectEqual(true, err instanceof DOMException);
     testing.expectEqual(true, err instanceof Error);
   }, () => link.appendChild(content));

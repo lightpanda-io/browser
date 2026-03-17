@@ -74,9 +74,10 @@ pub fn add(self: *Scheduler, ctx: *anyopaque, cb: Callback, run_in_ms: u32, opts
     });
 }
 
-pub fn run(self: *Scheduler) !?u64 {
-    _ = try self.runQueue(&self.low_priority);
-    return self.runQueue(&self.high_priority);
+pub fn run(self: *Scheduler) !void {
+    const now = milliTimestamp(.monotonic);
+    try self.runQueue(&self.low_priority, now);
+    try self.runQueue(&self.high_priority, now);
 }
 
 pub fn hasReadyTasks(self: *Scheduler) bool {
@@ -84,16 +85,23 @@ pub fn hasReadyTasks(self: *Scheduler) bool {
     return queueuHasReadyTask(&self.low_priority, now) or queueuHasReadyTask(&self.high_priority, now);
 }
 
-fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
-    if (queue.count() == 0) {
-        return null;
-    }
-
+pub fn msToNextHigh(self: *Scheduler) ?u64 {
+    const task = self.high_priority.peek() orelse return null;
     const now = milliTimestamp(.monotonic);
+    if (task.run_at <= now) {
+        return 0;
+    }
+    return @intCast(task.run_at - now);
+}
+
+fn runQueue(self: *Scheduler, queue: *Queue, now: u64) !void {
+    if (queue.count() == 0) {
+        return;
+    }
 
     while (queue.peek()) |*task_| {
         if (task_.run_at > now) {
-            return @intCast(task_.run_at - now);
+            return;
         }
         var task = queue.remove();
         if (comptime IS_DEBUG) {
@@ -114,7 +122,7 @@ fn runQueue(self: *Scheduler, queue: *Queue) !?u64 {
             try self.low_priority.add(task);
         }
     }
-    return null;
+    return;
 }
 
 fn queueuHasReadyTask(queue: *Queue, now: u64) bool {

@@ -28,6 +28,8 @@ const EventTarget = @import("../EventTarget.zig");
 const UIEvent = @import("UIEvent.zig");
 const PointerEvent = @import("PointerEvent.zig");
 
+const Allocator = std.mem.Allocator;
+
 const MouseEvent = @This();
 
 pub const MouseButton = enum(u8) {
@@ -92,7 +94,7 @@ pub fn initTrusted(typ: String, _opts: ?Options, page: *Page) !*MouseEvent {
     return initWithTrusted(arena, typ, _opts, true, page);
 }
 
-fn initWithTrusted(arena: std.mem.Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*MouseEvent {
+fn initWithTrusted(arena: Allocator, typ: String, _opts: ?Options, trusted: bool, page: *Page) !*MouseEvent {
     const opts = _opts orelse Options{};
 
     const event = try page._factory.uiEvent(

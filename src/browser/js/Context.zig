@@ -167,12 +167,11 @@ pub fn setOrigin(self: *Context, key: ?[]const u8) !void {
     const env = self.env;
     const isolate = env.isolate;
 
+    lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
+
     const origin = try self.session.getOrCreateOrigin(key);
     errdefer self.session.releaseOrigin(origin);
-
-    try self.origin.transferTo(origin);
-    lp.assert(self.origin.rc == 1, "Ref opaque origin", .{ .rc = self.origin.rc });
-    self.origin.deinit(env.app);
+    try origin.takeover(self.origin);
 
     self.origin = origin;
 
@@ -255,6 +254,10 @@ pub fn toLocal(self: *Context, global: anytype) js.Local.ToLocalReturnType(@Type
     return l.toLocal(global);
 }
 
+pub fn getIncumbent(self: *Context) *Page {
+    return fromC(v8.v8__Isolate__GetIncumbentContext(self.env.isolate.handle).?).page;
+}
+
 pub fn stringToPersistedFunction(
     self: *Context,
     function_body: []const u8,
@@ -306,15 +309,15 @@ pub fn module(self: *Context, comptime want_result: bool, local: *const js.Local
         }
 
         const owned_url = try arena.dupeZ(u8, url);
+        if (cacheable and !gop.found_existing) {
+            gop.key_ptr.* = owned_url;
+        }
         const m = try compileModule(local, src, owned_url);
 
         if (cacheable) {
             // compileModule is synchronous - nothing can modify the cache during compilation
             lp.assert(gop.value_ptr.module == null, "Context.module has module", .{});
             gop.value_ptr.module = try m.persist();
-            if (!gop.found_existing) {
-                gop.key_ptr.* = owned_url;
-            }
         }
 
         break :blk .{ m, owned_url };
