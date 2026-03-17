@@ -37,7 +37,6 @@ pub fn registerTypes() []const type {
 
 const IntersectionObserver = @This();
 
-_rc: u8 = 0,
 _arena: Allocator,
 _callback: js.Function.Temp,
 _observing: std.ArrayList(*Element) = .{},
@@ -94,24 +93,12 @@ pub fn init(callback: js.Function.Temp, options: ?ObserverInit, page: *Page) !*I
 }
 
 pub fn deinit(self: *IntersectionObserver, shutdown: bool, session: *Session) void {
-    const rc = self._rc;
-    if (comptime IS_DEBUG) {
-        std.debug.assert(rc != 0);
-    }
-
-    if (rc == 1 or shutdown) {
+    if (shutdown) {
         self._callback.release();
-        if ((comptime IS_DEBUG) and !shutdown) {
-            std.debug.assert(self._observing.items.len == 0);
-        }
         session.releaseArena(self._arena);
-    } else {
-        self._rc = rc - 1;
+    } else if (comptime IS_DEBUG) {
+        std.debug.assert(false);
     }
-}
-
-pub fn acquireRef(self: *IntersectionObserver) void {
-    self._rc += 1;
 }
 
 pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void {
@@ -124,7 +111,6 @@ pub fn observe(self: *IntersectionObserver, target: *Element, page: *Page) !void
 
     // Register with page if this is our first observation
     if (self._observing.items.len == 0) {
-        self._rc += 1;
         try page.registerIntersectionObserver(self);
     }
 
@@ -159,10 +145,6 @@ pub fn unobserve(self: *IntersectionObserver, target: *Element, page: *Page) voi
             break;
         }
     }
-
-    if (self._observing.items.len == 0) {
-        self.deinit(false, page._session);
-    }
 }
 
 pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
@@ -173,13 +155,7 @@ pub fn disconnect(self: *IntersectionObserver, page: *Page) void {
     }
     self._pending_entries.clearRetainingCapacity();
 
-    const observing_count = self._observing.items.len;
     self._observing.clearRetainingCapacity();
-
-    if (observing_count > 0) {
-        self.deinit(false, page._session);
-    }
-
     page.unregisterIntersectionObserver(self);
 }
 
@@ -382,7 +358,6 @@ pub const JsApi = struct {
         pub const name = "IntersectionObserver";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
         pub const finalizer = bridge.finalizer(IntersectionObserver.deinit);
     };
 

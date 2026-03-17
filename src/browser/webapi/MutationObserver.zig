@@ -39,7 +39,6 @@ pub fn registerTypes() []const type {
 
 const MutationObserver = @This();
 
-_rc: u8 = 0,
 _arena: Allocator,
 _callback: js.Function.Temp,
 _observing: std.ArrayList(Observing) = .{},
@@ -87,24 +86,12 @@ pub fn init(callback: js.Function.Temp, page: *Page) !*MutationObserver {
 }
 
 pub fn deinit(self: *MutationObserver, shutdown: bool, session: *Session) void {
-    const rc = self._rc;
-    if (comptime IS_DEBUG) {
-        std.debug.assert(rc != 0);
-    }
-
-    if (rc == 1 or shutdown) {
+    if (shutdown) {
         self._callback.release();
-        if ((comptime IS_DEBUG) and !shutdown) {
-            std.debug.assert(self._observing.items.len == 0);
-        }
         session.releaseArena(self._arena);
-    } else {
-        self._rc = rc - 1;
+    } else if (comptime IS_DEBUG) {
+        std.debug.assert(false);
     }
-}
-
-pub fn acquireRef(self: *MutationObserver) void {
-    self._rc += 1;
 }
 
 pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, page: *Page) !void {
@@ -171,7 +158,6 @@ pub fn observe(self: *MutationObserver, target: *Node, options: ObserveOptions, 
 
     // Register with page if this is our first observation
     if (self._observing.items.len == 0) {
-        self._rc += 1;
         try page.registerMutationObserver(self);
     }
 
@@ -187,12 +173,7 @@ pub fn disconnect(self: *MutationObserver, page: *Page) void {
     }
     self._pending_records.clearRetainingCapacity();
 
-    const observing_count = self._observing.items.len;
     self._observing.clearRetainingCapacity();
-
-    if (observing_count > 0) {
-        self.deinit(false, page._session);
-    }
     page.unregisterMutationObserver(self);
 }
 
@@ -459,7 +440,6 @@ pub const JsApi = struct {
         pub const name = "MutationObserver";
         pub const prototype_chain = bridge.prototypeChain();
         pub var class_id: bridge.ClassId = undefined;
-        pub const weak = true;
         pub const finalizer = bridge.finalizer(MutationObserver.deinit);
     };
 
