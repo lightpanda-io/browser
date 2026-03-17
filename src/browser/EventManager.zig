@@ -233,6 +233,12 @@ const DispatchDirectOptions = struct {
 pub fn dispatchDirect(self: *EventManager, target: *EventTarget, event: *Event, handler: anytype, comptime opts: DispatchDirectOptions) !void {
     const page = self.page;
 
+    // Set window.event to the currently dispatching event (WHATWG spec)
+    const window = page.window;
+    const prev_event = window._current_event;
+    window._current_event = event;
+    defer window._current_event = prev_event;
+
     event.acquireRef();
     defer event.deinit(false, page._session);
 
@@ -398,6 +404,13 @@ fn dispatchNode(self: *EventManager, target: *Node, event: *Event, comptime opts
     }
 
     const page = self.page;
+
+    // Set window.event to the currently dispatching event (WHATWG spec)
+    const window = page.window;
+    const prev_event = window._current_event;
+    window._current_event = event;
+    defer window._current_event = prev_event;
+
     var was_handled = false;
 
     // Create a single scope for all event handlers in this dispatch.

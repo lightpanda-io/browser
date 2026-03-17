@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<script src="../testing.js"></script>
+
+<script id=windowEventUndefinedOutsideHandler>
+testing.expectEqual(undefined, window.event);
+</script>
+
+<script id=windowEventSetDuringWindowHandler>
+var capturedEvent = null;
+
+window.addEventListener('test-event', function(e) {
+  capturedEvent = window.event;
+});
+
+var ev = new Event('test-event');
+window.dispatchEvent(ev);
+
+testing.expectEqual(ev, capturedEvent);
+testing.expectEqual(undefined, window.event);
+</script>
+
+<script id=windowEventRestoredAfterHandler>
+var captured2 = null;
+
+window.addEventListener('test-event-2', function(e) {
+  captured2 = window.event;
+});
+
+var ev2 = new Event('test-event-2');
+window.dispatchEvent(ev2);
+
+testing.expectEqual(ev2, captured2);
+testing.expectEqual(undefined, window.event);
+</script>
